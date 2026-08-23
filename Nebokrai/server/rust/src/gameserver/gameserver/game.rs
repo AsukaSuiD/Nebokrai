@@ -76,6 +76,7 @@ use crate::nets::netserver::mynetserver::{
 use crate::nets::servers::ServerHostError;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
+use crate::setup::changebody::CChangeBodyConf;
 use crate::setup::contributesetup::CContributeSetup;
 use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::gmlist::CGMList;
@@ -718,6 +719,7 @@ pub(crate) struct CGame {
     synthesis: CSynthesis,
     new_skill_monster_conf: NewSkillMonsterConf,
     goods_destroy_setup: GoodsDestroySetup,
+    change_body_conf: CChangeBodyConf,
     dupli_region_setup: Option<CDupliRegionSetup>,
     move_check_cells: MoveCheckCellRegistry,
     player_ranks: Option<CPlayerRanks>,
@@ -759,6 +761,7 @@ impl CGame {
             synthesis: CSynthesis::default(),
             new_skill_monster_conf: NewSkillMonsterConf::default(),
             goods_destroy_setup: GoodsDestroySetup::default(),
+            change_body_conf: CChangeBodyConf::default(),
             dupli_region_setup: None,
             move_check_cells: MoveCheckCellRegistry::new(),
             player_ranks: None,
@@ -1032,6 +1035,10 @@ impl CGame {
 
     pub(crate) const fn goods_destroy_setup_mut(&mut self) -> &mut GoodsDestroySetup {
         &mut self.goods_destroy_setup
+    }
+
+    pub(crate) const fn change_body_conf_mut(&mut self) -> &mut CChangeBodyConf {
+        &mut self.change_body_conf
     }
 
     pub(crate) const fn dupli_region_setup(&self) -> Option<&CDupliRegionSetup> {

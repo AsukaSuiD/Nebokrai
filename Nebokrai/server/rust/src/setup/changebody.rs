@@ -1,13 +1,19 @@
-//! Ограничения смены тела `CChangeBodyConf` из WorldServer, подтверждённые
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Ограничения смены тела `CChangeBodyConf` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/changebody.h/.cpp`.
 //!
 //! Owner очищает vector до открытия XML, принимает direct `Goods` children
 //! `RestrictionsGoodsList` и пишет signed count с `u32` items. Missing `index`
 //! очищает результат; diagnostics сохраняют StringTable IDs `GS1148..1151`.
 //! `quick-xml` заменяет TinyXML.
+//! Game decoder немедленно очищает vector и сохраняет каждый полный `u32`;
+//! safe short-buffer оставляет подтверждённый decoded prefix.
 
-use quick_xml::events::{BytesStart, Event};
+use std::error::Error;
+use std::fmt;
+
 use quick_xml::Reader;
+use quick_xml::events::{BytesStart, Event};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CChangeBodyConf {
@@ -37,6 +43,10 @@ pub(crate) enum ChangeBodySerializeError {
 impl CChangeBodyConf {
     pub(crate) fn clear(&mut self) {
         self.restrictions_goods.clear();
+    }
+
+    pub(crate) fn restrictions_goods(&self) -> &[u32] {
+        &self.restrictions_goods
     }
 
     pub(crate) fn load_from_bytes(&mut self, source: &[u8]) -> Result<(), ChangeBodyLoadError> {
@@ -117,6 +127,58 @@ impl CChangeBodyConf {
         }
         Ok(())
     }
+
+    /// Воспроизводит `CChangeBodyConf::DecordFromByteArray` GameServer.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<usize, ChangeBodyDecodeError> {
+        self.restrictions_goods.clear();
+        let count = read_wire_i32(source, cursor)?;
+        self.restrictions_goods
+            .try_reserve(count.max(0) as usize)
+            .map_err(ChangeBodyDecodeError::Allocation)?;
+        for _ in 0..count.max(0) {
+            self.restrictions_goods.push(read_wire_u32(source, cursor)?);
+        }
+        Ok(self.restrictions_goods.len())
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum ChangeBodyDecodeError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    Allocation(std::collections::TryReserveError),
+}
+
+impl fmt::Display for ChangeBodyDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "ChangeBody snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::Allocation(_) => formatter.write_str("не удалось выделить ChangeBody snapshot"),
+        }
+    }
+}
+
+impl Error for ChangeBodyDecodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation(source) => Some(source),
+            _ => None,
+        }
+    }
 }
 
 fn required_index(start: &BytesStart<'_>) -> Result<u32, ChangeBodyLoadError> {
@@ -131,7 +193,11 @@ fn required_index(start: &BytesStart<'_>) -> Result<u32, ChangeBodyLoadError> {
 }
 
 fn legacy_atol(value: &[u8]) -> i32 {
-    let mut bytes = value.iter().copied().skip_while(u8::is_ascii_whitespace).peekable();
+    let mut bytes = value
+        .iter()
+        .copied()
+        .skip_while(u8::is_ascii_whitespace)
+        .peekable();
     let negative = matches!(bytes.peek(), Some(b'-'));
     if matches!(bytes.peek(), Some(b'-' | b'+')) {
         bytes.next();
@@ -146,8 +212,39 @@ fn legacy_atol(value: &[u8]) -> i32 {
         result = result.saturating_mul(10).saturating_add(i32::from(digit));
     }
     if parsed {
-        if negative { result.saturating_neg() } else { result }
+        if negative {
+            result.saturating_neg()
+        } else {
+            result
+        }
     } else {
         0
     }
+}
+
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, ChangeBodyDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, ChangeBodyDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], ChangeBodyDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(ChangeBodyDecodeError::UnexpectedEnd {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер ChangeBody scalar уже проверен"))
 }

@@ -39,6 +39,7 @@ use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
 use crate::public::dupliregionsetup::DupliRegionDecodeError;
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpDecodeError, BattleFairyExpDecodeReport};
+use crate::setup::changebody::ChangeBodyDecodeError;
 use crate::setup::contributesetup::ContributeSetupDecodeError;
 use crate::setup::gmlist::{GmListDecodeError, GmListDecodeReport};
 use crate::setup::goodsdestructionconfig::{GoodsDestroyDecodeError, GoodsDestroyDecodeReport};
@@ -72,6 +73,7 @@ const FAIRY_EXP_SELECTOR: i32 = 0x20;
 const SYNTHESIS_SELECTOR: i32 = 0x21;
 const NEW_SKILL_MONSTER_SELECTOR: i32 = 0x22;
 const GOODS_DESTROY_SELECTOR: i32 = 0x23;
+const CHANGE_BODY_SELECTOR: i32 = 0x24;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -161,6 +163,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     Synthesis(SynthesisDecodeReport),
     NewSkillMonster(NewSkillMonsterDecodeReport),
     GoodsDestroy(GoodsDestroyDecodeReport),
+    ChangeBody { entries: usize },
     ThingSetup { entries: usize },
 }
 
@@ -183,6 +186,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     Synthesis(SynthesisDecodeError),
     NewSkillMonster(NewSkillMonsterDecodeError),
     GoodsDestroy(GoodsDestroyDecodeError),
+    ChangeBody(ChangeBodyDecodeError),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -211,6 +215,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::Synthesis(error) => error.fmt(formatter),
             Self::NewSkillMonster(error) => error.fmt(formatter),
             Self::GoodsDestroy(error) => error.fmt(formatter),
+            Self::ChangeBody(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -236,6 +241,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::Synthesis(error) => Some(error),
             Self::NewSkillMonster(error) => Some(error),
             Self::GoodsDestroy(error) => Some(error),
+            Self::ChangeBody(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -435,6 +441,17 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             };
             add_log_text("Initial SI_GOODS_DESTROY_CONF...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::GoodsDestroy(report)))
+        }
+        CHANGE_BODY_SELECTOR => {
+            let entries = match game
+                .change_body_conf_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(entries) => entries,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::ChangeBody(error))),
+            };
+            add_log_text("Initial SI_CHANGE_BODY...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::ChangeBody { entries }))
         }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game
