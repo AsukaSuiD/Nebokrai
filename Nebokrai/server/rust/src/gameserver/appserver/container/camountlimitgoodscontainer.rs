@@ -15,10 +15,31 @@
 //! listener messages, player AI tree, codec и mode-dependent release ниже
 //! остаются RAW до замыкания соседних owners.
 
+use super::ccontainer::ContainerListenerHandle;
 use super::cgoodscontainer::CGoodsContainer;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AmountLimitGoodsAdded {
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) identity: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+    pub(crate) replaced: Option<CGoods>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AmountLimitGoodsRemoved {
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+    pub(crate) goods: CGoods,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CAmountLimitGoodsContainer {
@@ -149,6 +170,61 @@ impl CAmountLimitGoodsContainer {
     pub(crate) fn contents_weight(&self, factory: &CGoodsFactory) -> u32 {
         self.goods.iter().fold(0u32, |weight, goods| {
             weight.wrapping_add(goods.weight(factory))
+        })
+    }
+
+    /// Замыкает storage-часть exact `Add(CBaseObject*)`; player AI tree и
+    /// ordered listener callbacks описаны отчётом для runtime dispatcher-а.
+    pub(crate) fn add_goods(
+        &mut self,
+        goods: CGoods,
+        factory: &CGoodsFactory,
+    ) -> Result<AmountLimitGoodsAdded, CGoods> {
+        if self.is_full(factory) {
+            return Err(goods);
+        }
+        let identity = goods.identity();
+        let amount = goods.amount();
+        let (position, replaced) = if let Some(position) = self
+            .goods
+            .iter()
+            .position(|stored| stored.identity().ex_id == identity.ex_id)
+        {
+            let replaced = std::mem::replace(&mut self.goods[position], goods);
+            (position as u32, Some(replaced))
+        } else {
+            let position = self.goods.len() as u32;
+            self.goods.push(goods);
+            (position, None)
+        };
+        Ok(AmountLimitGoodsAdded {
+            owner_id: self.base.owner_id(),
+            position,
+            identity,
+            amount,
+            listeners: self.base.base().listeners().to_vec(),
+            replaced,
+        })
+    }
+
+    /// Storage-часть exact `Remove(CGUID)`: locked object не извлекается;
+    /// listener traversal и message assembly остаются в returned report.
+    pub(crate) fn remove_goods(&mut self, ex_id: CGuid) -> Option<AmountLimitGoodsRemoved> {
+        if self.is_locked(ex_id) {
+            return None;
+        }
+        let position = self
+            .goods
+            .iter()
+            .position(|goods| goods.identity().ex_id == ex_id)?;
+        let goods = self.goods.remove(position);
+        let amount = goods.amount();
+        Some(AmountLimitGoodsRemoved {
+            owner_id: self.base.owner_id(),
+            position: position as u32,
+            amount,
+            listeners: self.base.base().listeners().to_vec(),
+            goods,
         })
     }
 }
