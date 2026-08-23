@@ -83,6 +83,8 @@ use crate::setup::incrementshoplist::CIncrementShopList;
 use crate::setup::leitingsetup::CThingSetup;
 use crate::setup::logsystem::CLogSystem;
 use crate::setup::playerlist::CPlayerList;
+use crate::setup::preciousboxconf::PreciousBoxConf;
+use crate::setup::prisonconf::PrisonConf;
 use crate::setup::regionsetup::CRegionSetup;
 use crate::setup::tradelist::CTradeList;
 use crate::transport::bind_tcp_ipv4;
@@ -706,6 +708,8 @@ pub(crate) struct CGame {
     da_kong_xiang_qian: CDaKongXiangQian,
     region_setup: CRegionSetup,
     hit_level_setup: CHitLevelSetup,
+    prison_conf: PrisonConf,
+    precious_box_conf: PreciousBoxConf,
     dupli_region_setup: Option<CDupliRegionSetup>,
     move_check_cells: MoveCheckCellRegistry,
     player_ranks: Option<CPlayerRanks>,
@@ -741,6 +745,8 @@ impl CGame {
             da_kong_xiang_qian: CDaKongXiangQian::default(),
             region_setup: CRegionSetup::default(),
             hit_level_setup: CHitLevelSetup::default(),
+            prison_conf: PrisonConf::default(),
+            precious_box_conf: PreciousBoxConf::default(),
             dupli_region_setup: None,
             move_check_cells: MoveCheckCellRegistry::new(),
             player_ranks: None,
@@ -990,6 +996,14 @@ impl CGame {
 
     pub(crate) const fn hit_level_setup_mut(&mut self) -> &mut CHitLevelSetup {
         &mut self.hit_level_setup
+    }
+
+    pub(crate) const fn prison_conf_mut(&mut self) -> &mut PrisonConf {
+        &mut self.prison_conf
+    }
+
+    pub(crate) const fn precious_box_conf_mut(&mut self) -> &mut PreciousBoxConf {
+        &mut self.precious_box_conf
     }
 
     pub(crate) const fn dupli_region_setup(&self) -> Option<&CDupliRegionSetup> {

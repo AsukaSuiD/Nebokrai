@@ -1,5 +1,7 @@
-//! Тюремная конфигурация `PrisonConf` из WorldServer, подтверждённая
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Тюремная конфигурация `PrisonConf` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/setup/prisonconf.h/.cpp`.
 //!
 //! Loader очищает signed-byte map, но при ошибке открытия сохраняет прежний
 //! PK threshold; до первой загрузки он остаётся `None`. Direction читается как
@@ -7,6 +9,9 @@
 //!
 //! Wire пишет threshold, signed count и десятибайтные records без padding.
 //! Duplicate country заменяет значение; `BTreeMap<i8, _>` сохраняет порядок.
+//! Game decoder сначала очищает map, затем публикует threshold и только полные
+//! records. Safe short-buffer сохраняет этот подтверждённый partial state;
+//! безразмерному C++ pointer с неизвестным UB Rust побочных эффектов не задаёт.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -83,6 +88,10 @@ impl PrisonConf {
         self.prison_params.get(&country)
     }
 
+    pub(crate) fn prison_params(&self) -> &BTreeMap<i8, PrisonParam> {
+        &self.prison_params
+    }
+
     pub(crate) fn clear_prison_params(&mut self) {
         self.prison_params.clear();
     }
@@ -109,6 +118,34 @@ impl PrisonConf {
             destination.push(param.direction as u8);
         }
         Ok(())
+    }
+
+    /// Воспроизводит `PrisonConf::DecordFromByteArray` GameServer.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<usize, PrisonConfDecodeError> {
+        self.prison_params.clear();
+        self.pk_value_enter = Some(read_wire_i32(source, cursor)?);
+        let count = read_wire_i32(source, cursor)?;
+        for _ in 0..count.max(0) {
+            let country = read_wire_i8(source, cursor)?;
+            let region = read_wire_i32(source, cursor)?;
+            let x = read_wire_i16(source, cursor)?;
+            let y = read_wire_i16(source, cursor)?;
+            let direction = read_wire_i8(source, cursor)?;
+            self.prison_params.insert(
+                country,
+                PrisonParam {
+                    region,
+                    x,
+                    y,
+                    direction,
+                },
+            );
+        }
+        Ok(self.prison_params.len())
     }
 }
 
@@ -177,6 +214,25 @@ impl fmt::Display for PrisonConfSerializeError {
 
 impl Error for PrisonConfSerializeError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PrisonConfDecodeError {
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for PrisonConfDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "PrisonConf snapshot обрывается на {}: нужно {}, доступно {}",
+            self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for PrisonConfDecodeError {}
+
 fn next_token<'source>(
     tokens: &mut impl Iterator<Item = &'source [u8]>,
     field: &'static str,
@@ -215,4 +271,33 @@ fn invalid_long(field: &'static str, token: &[u8]) -> PrisonConfFormatError {
     }
 }
 
-// singleton и оставшихся call-site деталей, а не как Rust-реализация.
+fn read_wire_i8(source: &[u8], cursor: &mut usize) -> Result<i8, PrisonConfDecodeError> {
+    Ok(i8::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_i16(source: &[u8], cursor: &mut usize) -> Result<i16, PrisonConfDecodeError> {
+    Ok(i16::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, PrisonConfDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], PrisonConfDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(PrisonConfDecodeError {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер PrisonConf scalar уже проверен"))
+}

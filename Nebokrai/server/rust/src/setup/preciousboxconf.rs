@@ -1,5 +1,7 @@
-//! Precious Box `PreciousBoxConf` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Precious Box `PreciousBoxConf` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/setup/preciousboxconf.h/.cpp`.
 //!
 //! Wire пишет ordered boxes, odds groups и 17 значимых bytes каждого item;
 //! три padding bytes C++ record не передаются.
@@ -7,13 +9,16 @@
 //! XML loader очищает `_box_conf` и `_box`, но публикует records только в
 //! `_box_conf`, тогда как serializer читает `_box`. Поэтому после reload
 //! subtype `0x1E` остаётся пустым. `quick-xml` и owned maps заменяют TinyXML/STL.
+//! Game decoder очищает только `_box` и публикует box после полного разбора
+//! его временного odds-vector. Safe short-buffer поэтому оставляет прежние
+//! полные box-ы, но не текущий; неизвестный UB безразмерного pointer отброшен.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use quick_xml::events::{BytesStart, Event};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PreciousBoxItem {
@@ -78,7 +83,9 @@ impl PreciousBoxLoadDiagnostic {
     pub(crate) fn log_payload(&self) -> Vec<u8> {
         match self {
             Self::MissingNum => b"PreciousBox Must Has Num".to_vec(),
-            Self::DuplicateNum(number) => format!("Ignore Repeat PreciousBox Num {number}! ").into_bytes(),
+            Self::DuplicateNum(number) => {
+                format!("Ignore Repeat PreciousBox Num {number}! ").into_bytes()
+            }
             Self::MissingProbability => b"PreciousBox Probability Is NULL!".to_vec(),
             Self::MissingOriginalName => b"PreciousBox Goods OriName Is NULL!".to_vec(),
             Self::MissingGoodsIndex(name) => {
@@ -114,6 +121,10 @@ impl PreciousBoxConf {
     pub(crate) fn clear(&mut self) {
         self.box_config.clear();
         self.boxes.clear();
+    }
+
+    pub(crate) fn boxes(&self) -> &BTreeMap<i32, PreciousBox> {
+        &self.boxes
     }
 
     pub(crate) fn load_from_bytes(
@@ -230,7 +241,9 @@ impl PreciousBoxConf {
                             });
                         }
                     }
-                    None => report.diagnostics.push(PreciousBoxLoadDiagnostic::MissingNum),
+                    None => report
+                        .diagnostics
+                        .push(PreciousBoxLoadDiagnostic::MissingNum),
                 }
             }
         } else if depth == 2 && name.as_ref() == ODDS {
@@ -302,7 +315,10 @@ impl PreciousBoxConf {
                 }
             }
         } else if depth == 1 && name == BOX {
-            if let Some(active_box) = active_box.take().filter(|box_conf| !box_conf.odds.is_empty()) {
+            if let Some(active_box) = active_box
+                .take()
+                .filter(|box_conf| !box_conf.odds.is_empty())
+            {
                 self.box_config.insert(
                     active_box.number,
                     PreciousBoxConfig {
@@ -343,6 +359,59 @@ impl PreciousBoxConf {
             }
         }
         Ok(())
+    }
+
+    /// Воспроизводит `PreciousBoxConf::DecordFromByteArray` GameServer.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<usize, PreciousBoxDecodeError> {
+        self.boxes.clear();
+        let box_count = read_wire_i32(source, cursor)?;
+        for _ in 0..box_count.max(0) {
+            let box_id = read_wire_i32(source, cursor)?;
+            let odds_count = read_wire_i32(source, cursor)?;
+            let mut odds_groups = Vec::new();
+            odds_groups
+                .try_reserve(odds_count.max(0) as usize)
+                .map_err(|source| PreciousBoxDecodeError::Allocation {
+                    field: PreciousBoxDecodeField::Odds { box_id },
+                    source,
+                })?;
+
+            for odds_index in 0..odds_count.max(0) {
+                let min_odds = read_wire_i32(source, cursor)?;
+                let max_odds = read_wire_i32(source, cursor)?;
+                let item_count = read_wire_i32(source, cursor)?;
+                let mut items = Vec::new();
+                items
+                    .try_reserve(item_count.max(0) as usize)
+                    .map_err(|source| PreciousBoxDecodeError::Allocation {
+                        field: PreciousBoxDecodeField::Items {
+                            box_id,
+                            odds_index: odds_index as usize,
+                        },
+                        source,
+                    })?;
+                for _ in 0..item_count.max(0) {
+                    items.push(PreciousBoxItem {
+                        item_idx: read_wire_i32(source, cursor)?,
+                        min_level: read_wire_i32(source, cursor)?,
+                        max_level: read_wire_i32(source, cursor)?,
+                        amount: read_wire_i32(source, cursor)?,
+                        broadcast: read_wire_u8(source, cursor)? != 0,
+                    });
+                }
+                odds_groups.push(PreciousBoxOdds {
+                    min_odds,
+                    max_odds,
+                    items,
+                });
+            }
+            self.boxes.insert(box_id, PreciousBox { odds: odds_groups });
+        }
+        Ok(self.boxes.len())
     }
 }
 
@@ -401,7 +470,11 @@ fn legacy_atol(value: &[u8]) -> i32 {
 }
 
 fn legacy_atoi(value: &[u8]) -> i32 {
-    let mut bytes = value.iter().copied().skip_while(u8::is_ascii_whitespace).peekable();
+    let mut bytes = value
+        .iter()
+        .copied()
+        .skip_while(u8::is_ascii_whitespace)
+        .peekable();
     let negative = matches!(bytes.peek(), Some(b'-'));
     if matches!(bytes.peek(), Some(b'-' | b'+')) {
         bytes.next();
@@ -416,7 +489,11 @@ fn legacy_atoi(value: &[u8]) -> i32 {
         result = result.saturating_mul(10).saturating_add(i32::from(digit));
     }
     if parsed {
-        if negative { result.saturating_neg() } else { result }
+        if negative {
+            result.saturating_neg()
+        } else {
+            result
+        }
     } else {
         0
     }
@@ -459,6 +536,63 @@ impl fmt::Display for PreciousBoxSerializeError {
 
 impl Error for PreciousBoxSerializeError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PreciousBoxDecodeField {
+    Odds { box_id: i32 },
+    Items { box_id: i32, odds_index: usize },
+}
+
+impl fmt::Display for PreciousBoxDecodeField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Odds { box_id } => write!(formatter, "odds box {box_id}"),
+            Self::Items { box_id, odds_index } => {
+                write!(formatter, "items odds {odds_index} box {box_id}")
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum PreciousBoxDecodeError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    Allocation {
+        field: PreciousBoxDecodeField,
+        source: std::collections::TryReserveError,
+    },
+}
+
+impl fmt::Display for PreciousBoxDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "PreciousBox snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::Allocation { field, .. } => {
+                write!(formatter, "не удалось выделить память для {field}")
+            }
+        }
+    }
+}
+
+impl Error for PreciousBoxDecodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::UnexpectedEnd { .. } => None,
+            Self::Allocation { source, .. } => Some(source),
+        }
+    }
+}
+
 fn write_count(
     destination: &mut Vec<u8>,
     count: usize,
@@ -469,4 +603,29 @@ fn write_count(
     Ok(())
 }
 
-// singleton, Game decoder-а и random owner-а, а не как Rust-реализация.
+fn read_wire_u8(source: &[u8], cursor: &mut usize) -> Result<u8, PreciousBoxDecodeError> {
+    Ok(u8::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, PreciousBoxDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], PreciousBoxDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(PreciousBoxDecodeError::UnexpectedEnd {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер PreciousBox scalar уже проверен"))
+}

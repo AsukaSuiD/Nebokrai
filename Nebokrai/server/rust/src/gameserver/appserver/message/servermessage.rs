@@ -45,6 +45,8 @@ use crate::setup::incrementshoplist::IncrementShopDecodeError;
 use crate::setup::leitingsetup::ThingSetupCodecError;
 use crate::setup::logsystem::LogSystemDecodeError;
 use crate::setup::playerlist::{PlayerListDecodeError, PlayerListDecodeReport};
+use crate::setup::preciousboxconf::PreciousBoxDecodeError;
+use crate::setup::prisonconf::PrisonConfDecodeError;
 use crate::setup::regionsetup::RegionSetupDecodeError;
 use crate::setup::tradelist::TradeListDecodeError;
 
@@ -60,6 +62,8 @@ const REGION_SETUP_SELECTOR: i32 = 0x11;
 const HIT_LEVEL_SELECTOR: i32 = 0x14;
 const PLAYER_RANKS_SELECTOR: i32 = 0x17;
 const DUPLI_REGION_SELECTOR: i32 = 0x1a;
+const PRISON_CONF_SELECTOR: i32 = 0x1d;
+const PRECIOUS_BOX_CONF_SELECTOR: i32 = 0x1e;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -143,6 +147,8 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     HitLevel { entries: usize },
     PlayerRanks { entries: usize },
     DupliRegions { entries: usize },
+    PrisonConf { entries: usize },
+    PreciousBoxConf { entries: usize },
     ThingSetup { entries: usize },
 }
 
@@ -159,6 +165,8 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     HitLevel(HitLevelDecodeError),
     PlayerRanks(PlayerRanksDecodeError),
     DupliRegions(DupliRegionDecodeError),
+    PrisonConf(PrisonConfDecodeError),
+    PreciousBoxConf(PreciousBoxDecodeError),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -181,6 +189,8 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::HitLevel(error) => error.fmt(formatter),
             Self::PlayerRanks(error) => error.fmt(formatter),
             Self::DupliRegions(error) => error.fmt(formatter),
+            Self::PrisonConf(error) => error.fmt(formatter),
+            Self::PreciousBoxConf(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -200,6 +210,8 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::HitLevel(error) => Some(error),
             Self::PlayerRanks(error) => Some(error),
             Self::DupliRegions(error) => Some(error),
+            Self::PrisonConf(error) => Some(error),
+            Self::PreciousBoxConf(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -330,6 +342,32 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             let entries = setup.entries().len();
             add_log_text("Initial SI_DUPLIREGIONSETUP...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::DupliRegions { entries }))
+        }
+        PRISON_CONF_SELECTOR => {
+            let entries = match game
+                .prison_conf_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(entries) => entries,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::PrisonConf(error))),
+            };
+            add_log_text("Initial SI_PRISON_CONF...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::PrisonConf { entries }))
+        }
+        PRECIOUS_BOX_CONF_SELECTOR => {
+            let entries = match game
+                .precious_box_conf_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(entries) => entries,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::PreciousBoxConf(error)));
+                }
+            };
+            add_log_text("Initial SI_PRECIOUSBOX_CONF...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::PreciousBoxConf {
+                entries,
+            }))
         }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game
