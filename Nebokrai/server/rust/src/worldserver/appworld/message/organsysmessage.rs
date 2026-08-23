@@ -1114,18 +1114,17 @@ impl ConfederationCreationEffects for WorldUnionApplicationEffects<'_> {
     }
 }
 
-struct WorldFactionCreationEffects<'game, 'callbacks, 'effects, 'invalid, 'log> {
+struct WorldFactionCreationEffects<'game, 'callbacks, 'effects, 'log> {
     game: &'game CGame,
     callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
-    check_invalid_organizing_string: &'invalid mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
     persistent_name_exists: bool,
     faction_create_log_enabled: bool,
     write_faction_create_log: &'log mut dyn FnMut(i32, &[u8], i32, &[u8]),
 }
 
-impl FactionCreationEffects for WorldFactionCreationEffects<'_, '_, '_, '_, '_> {
+impl FactionCreationEffects for WorldFactionCreationEffects<'_, '_, '_, '_> {
     fn check_invalid_organizing_string(&mut self, name: &mut Vec<u8>, strict: bool) -> bool {
-        (self.check_invalid_organizing_string)(name, strict)
+        self.game.check_invalid_string(name, strict)
     }
 
     fn persistent_player_name_exists(&mut self, _name: &[u8]) -> bool {
@@ -1192,10 +1191,9 @@ impl UnionFireOutEffects for WorldUnionFireOutEffects<'_, '_, '_> {
 }
 
 /// Тонкий text-filter/string/player/log adapter faction `0x60113`.
-struct WorldFactionDubEffects<'game, 'callbacks, 'effects, 'filter, 'update, 'log> {
+struct WorldFactionDubEffects<'game, 'callbacks, 'effects, 'update, 'log> {
     game: &'game CGame,
     callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
-    check_invalid_string: &'filter mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
     update_player: &'update mut dyn FnMut(i32),
     use_log_system: bool,
     faction_title_log_enabled: bool,
@@ -1203,7 +1201,7 @@ struct WorldFactionDubEffects<'game, 'callbacks, 'effects, 'filter, 'update, 'lo
         &'log mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
 }
 
-impl FactionOrganizingInfoContext for WorldFactionDubEffects<'_, '_, '_, '_, '_, '_> {
+impl FactionOrganizingInfoContext for WorldFactionDubEffects<'_, '_, '_, '_, '_> {
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>> {
         Some((self.callbacks.world_string)(string_id))
     }
@@ -1213,9 +1211,9 @@ impl FactionOrganizingInfoContext for WorldFactionDubEffects<'_, '_, '_, '_, '_,
     }
 }
 
-impl FactionDubContext for WorldFactionDubEffects<'_, '_, '_, '_, '_, '_> {
+impl FactionDubContext for WorldFactionDubEffects<'_, '_, '_, '_, '_> {
     fn check_invalid_string(&mut self, value: &mut Vec<u8>, mode: bool) -> bool {
-        (self.check_invalid_string)(value, mode)
+        self.game.check_invalid_string(value, mode)
     }
 
     fn format_world_string(
@@ -2423,7 +2421,6 @@ pub(crate) async fn dispatch_create_faction(
     rs_player: &mut TiberiusRsPlayer,
     player_database: Option<&mut WorldTdsClient>,
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
-    check_invalid_organizing_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
     faction_create_log_enabled: bool,
     write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
 ) -> Option<Result<OrganizingCreateFactionDispatch, OrganizingCreateFactionBlock>> {
@@ -2522,7 +2519,6 @@ pub(crate) async fn dispatch_create_faction(
     let mut effects = WorldFactionCreationEffects {
         game,
         callbacks,
-        check_invalid_organizing_string,
         persistent_name_exists: false,
         faction_create_log_enabled,
         write_faction_create_log,
@@ -3860,7 +3856,6 @@ pub(crate) fn dispatch_faction_dub(
     game: &CGame,
     organizing: &mut COrganizingCtrl,
     callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
-    check_invalid_string: &mut dyn FnMut(&mut Vec<u8>, bool) -> bool,
     use_log_system: bool,
     faction_title_log_enabled: bool,
     write_faction_title_log: &mut dyn FnMut(
@@ -3902,7 +3897,6 @@ pub(crate) fn dispatch_faction_dub(
     let mut effects = WorldFactionDubEffects {
         game,
         callbacks,
-        check_invalid_string,
         update_player,
         use_log_system,
         faction_title_log_enabled,
