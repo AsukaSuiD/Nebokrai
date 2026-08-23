@@ -8427,6 +8427,12 @@ impl CGame {
         self.write_log_queue.push(command)
     }
 
+    /// Передаёт process-callback-ам producer того же FIFO, не открывая им
+    /// mutable доступ к `CGame` во время одного MainLoop-прохода.
+    pub(crate) fn write_log_queue(&self) -> WorldWriteLogQueue {
+        self.write_log_queue.clone()
+    }
+
     /// Ставит единственную созданную `CLargess::LoadLargess` запись в общий FIFO.
     pub(crate) fn publish_largess_load_log(
         &self,
