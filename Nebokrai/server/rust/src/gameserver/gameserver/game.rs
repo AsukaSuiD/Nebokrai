@@ -82,6 +82,7 @@ use std::time::Duration;
 
 use rustix::system::uname;
 
+use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyCombineCheck;
 use crate::gameserver::appserver::country::countryhandler::CCountryHandler;
 use crate::gameserver::appserver::country::countryparam::CCountryParam;
 use crate::gameserver::appserver::country::countrywarsys::CountryWarSys;
@@ -1979,6 +1980,20 @@ impl CGame {
 
     pub(crate) fn find_player(&self, player_id: i32) -> Option<&CPlayer> {
         self.players.get(&player_id)
+    }
+
+    /// Замыкает caller `goodsmessage` с runtime player-map и рецептом,
+    /// опубликованным WorldServer selector-ом `SI_BATLLE_FAIRY_COMBINE`.
+    /// Отсутствующий player не создаёт уведомления или пакет, как outer
+    /// lookup исходного `CheckBattleFairyCombine`.
+    pub(crate) fn check_battle_fairy_combine(&self, player_id: i32) -> BattleFairyCombineCheck {
+        self.find_player(player_id)
+            .map_or_else(BattleFairyCombineCheck::default, |player| {
+                player.check_battle_fairy_combine(
+                    &self.goods_factory,
+                    self.battle_fairy_property.compose(),
+                )
+            })
     }
 
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
