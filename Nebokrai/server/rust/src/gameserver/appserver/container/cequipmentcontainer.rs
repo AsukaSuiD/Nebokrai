@@ -18,8 +18,9 @@
 //! Add/remove/swap сохраняют player facts как явный runtime-вход, partial
 //! timed/AI/package effects, typed skill/property/message callbacks и rollback
 //! loss. Интеграция этих effects с player dispatcher-ом, fairy/battle-fairy и
-//! codec ниже остаётся RAW до materialization связанных owners; достигнутое
-//! ядро не выдаётся за весь контейнер.
+//! goods payload codec остаются границами связанных owners; внешний equipment
+//! codec уже сохраняет wire-order и partial decode. Достигнутое ядро не
+//! выдаётся за весь контейнер.
 
 use std::collections::BTreeMap;
 
@@ -314,6 +315,51 @@ pub(crate) enum EquipmentSwapOutcome {
         rollback: EquipmentAddBlockedReport,
         garbage_collected: ShapeIdentity,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentContainerCodecError {
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        available: usize,
+    },
+    NegativeGoodsCount {
+        count: i32,
+    },
+}
+
+#[must_use = "entry outcome может вернуть rejected owned goods"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentUnserializedEntry {
+    DecoderReturnedNull {
+        position: u32,
+    },
+    Added {
+        position: u32,
+        add: EquipmentAddedReport,
+        to_add_extension_delta: u32,
+        write_pack_expand_log: bool,
+    },
+    Rejected {
+        position: u32,
+        goods: CGoods,
+        add: EquipmentAddBlockedReport,
+    },
+}
+
+#[must_use = "report содержит cleared ownership и все применённые entries"]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct EquipmentUnserializeReport {
+    pub(crate) cleared: Vec<EquipmentClearedGoods>,
+    pub(crate) entries: Vec<EquipmentUnserializedEntry>,
+}
+
+#[must_use = "failure сохраняет уже очищенный и частично заполненный state"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentUnserializeFailure {
+    pub(crate) error: EquipmentContainerCodecError,
+    pub(crate) report: EquipmentUnserializeReport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -855,18 +901,186 @@ impl CEquipmentContainer {
         }
     }
 
+    /// Outer wire-owner `Serialize`: count включает только товары с живой
+    /// catalog-записью, затем идут signed i32 column и payload `CGoods`.
+    pub(crate) fn serialize_with<Encode>(
+        &self,
+        destination: &mut Vec<u8>,
+        factory: &CGoodsFactory,
+        include_ex_data: bool,
+        mut encode_goods: Encode,
+    ) where
+        Encode: FnMut(&CGoods, bool, &mut Vec<u8>),
+    {
+        destination.extend_from_slice(&(self.goods_amount(factory) as i32).to_le_bytes());
+        for (column, goods) in &self.equipment {
+            if factory
+                .query_goods_base_properties(goods.base_properties_index())
+                .is_none()
+            {
+                continue;
+            }
+            destination.extend_from_slice(&(column.position() as i32).to_le_bytes());
+            encode_goods(goods, include_ex_data, destination);
+        }
+    }
+
+    /// Outer `Unserialize` очищает container до чтения count, продолжает после
+    /// null decoder-а или rejected Add и добавляет отдельный positive-only
+    /// `bToAdd` package delta уже после успешного Add.
+    pub(crate) fn unserialize_with<Decode, Runtime>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        factory: &CGoodsFactory,
+        to_add_enabled: bool,
+        mut decode_goods: Decode,
+        mut runtime_for_goods: Runtime,
+        register_with_goods_ai: &mut dyn FnMut(&CGoods),
+        on_cleared: &mut dyn FnMut(EquipmentColumn, &CGoods, &[ContainerListenerHandle]),
+    ) -> Result<EquipmentUnserializeReport, EquipmentUnserializeFailure>
+    where
+        Decode: FnMut(&[u8], &mut usize) -> Option<CGoods>,
+        Runtime: FnMut(&CGoods) -> EquipmentAddRuntimeFacts,
+    {
+        let mut report = EquipmentUnserializeReport {
+            cleared: self.clear_observing(on_cleared),
+            entries: Vec::new(),
+        };
+        let count = match Self::read_codec_i32(source, cursor, "goods count") {
+            Ok(count) => count,
+            Err(error) => return Err(EquipmentUnserializeFailure { error, report }),
+        };
+        if count < 0 {
+            return Err(EquipmentUnserializeFailure {
+                error: EquipmentContainerCodecError::NegativeGoodsCount { count },
+                report,
+            });
+        }
+
+        for _ in 0..count as u32 {
+            let position = match Self::read_codec_i32(source, cursor, "goods position") {
+                Ok(position) => position as u32,
+                Err(error) => return Err(EquipmentUnserializeFailure { error, report }),
+            };
+            let Some(goods) = decode_goods(source, cursor) else {
+                report
+                    .entries
+                    .push(EquipmentUnserializedEntry::DecoderReturnedNull { position });
+                continue;
+            };
+            let runtime = runtime_for_goods(&goods);
+            let mut incoming = Some(goods);
+            match self.add_at(
+                position,
+                &mut incoming,
+                factory,
+                runtime,
+                register_with_goods_ai,
+            ) {
+                EquipmentAddOutcome::Blocked(add) => {
+                    report.entries.push(EquipmentUnserializedEntry::Rejected {
+                        position,
+                        goods: incoming
+                            .take()
+                            .expect("rejected equipment Add сохраняет decoded goods"),
+                        add,
+                    });
+                }
+                EquipmentAddOutcome::Added(add) => {
+                    let to_add_extension = if to_add_enabled {
+                        self.equipment
+                            .get(&add.column)
+                            .filter(|goods| goods.query_attribute(GAP_GOODS_PACKAGE_EXTENTION))
+                            .filter(|goods| {
+                                goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 1)
+                                    == 2
+                            })
+                            .map(|goods| {
+                                goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 2)
+                            })
+                    } else {
+                        None
+                    };
+                    let to_add_extension_delta = to_add_extension
+                        .filter(|extension| 0 < *extension)
+                        .map_or(0, |extension| extension as u32);
+                    self.expanded_package_num = self
+                        .expanded_package_num
+                        .wrapping_add(to_add_extension_delta);
+                    report.entries.push(EquipmentUnserializedEntry::Added {
+                        position,
+                        add,
+                        to_add_extension_delta,
+                        write_pack_expand_log: to_add_extension.is_some()
+                            && runtime.owner_player.is_some(),
+                    });
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    fn read_codec_i32(
+        source: &[u8],
+        cursor: &mut usize,
+        field: &'static str,
+    ) -> Result<i32, EquipmentContainerCodecError> {
+        let offset = *cursor;
+        let Some(end) = offset.checked_add(4) else {
+            return Err(EquipmentContainerCodecError::UnexpectedEnd {
+                field,
+                offset,
+                available: source.len().saturating_sub(offset),
+            });
+        };
+        *cursor = end;
+        let Some(bytes) = source.get(offset..end) else {
+            return Err(EquipmentContainerCodecError::UnexpectedEnd {
+                field,
+                offset,
+                available: source.len().saturating_sub(offset),
+            });
+        };
+        Ok(i32::from_le_bytes(
+            bytes.try_into().expect("codec slice имеет четыре байта"),
+        ))
+    }
+
     /// Internal self-callback должен быть применён dispatcher-ом перед
     /// перечисленными external listeners для каждого report-а.
     pub(crate) fn clear(&mut self) -> Vec<EquipmentClearedGoods> {
+        self.clear_observing(&mut |_, _, _| {})
+    }
+
+    /// Observer вызывается пока текущий goods ещё доступен в своей колонке;
+    /// после возврата ownership переносится в ordered report.
+    fn clear_observing(
+        &mut self,
+        observer: &mut dyn FnMut(EquipmentColumn, &CGoods, &[ContainerListenerHandle]),
+    ) -> Vec<EquipmentClearedGoods> {
         let listeners = self.base.base().listeners().to_vec();
-        std::mem::take(&mut self.equipment)
-            .into_iter()
-            .map(|(column, goods)| EquipmentClearedGoods {
+        let columns: Vec<_> = self.equipment.keys().copied().collect();
+        let mut reports = Vec::with_capacity(columns.len());
+        for column in columns {
+            observer(
+                column,
+                self.equipment
+                    .get(&column)
+                    .expect("clear column взята из текущей map"),
+                &listeners,
+            );
+            let goods = self
+                .equipment
+                .remove(&column)
+                .expect("clear observer не меняет owning map");
+            reports.push(EquipmentClearedGoods {
                 column,
                 goods,
                 listeners: listeners.clone(),
-            })
-            .collect()
+            });
+        }
+        reports
     }
 
     pub(crate) fn release(&mut self) -> EquipmentReleaseReport {
