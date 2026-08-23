@@ -40,6 +40,7 @@ use crate::gameserver::gameserver::game::{CGame, GameNetworkInitializationError}
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
+use crate::public::ciqing::{CiQingDecodeError, CiQingDecodeReport, CiQingSerializationBlock};
 use crate::public::dakongxiangqian::{DaKongDecodeError, DaKongDecodeReport};
 use crate::public::dupliregionsetup::DupliRegionDecodeError;
 use crate::public::equipmentcomposelist::{
@@ -56,6 +57,7 @@ use crate::setup::hitlevelsetup::HitLevelDecodeError;
 use crate::setup::honorelimilateconfig::HonorEliminateDecodeError;
 use crate::setup::incrementshoplist::IncrementShopDecodeError;
 use crate::setup::leitingsetup::ThingSetupCodecError;
+use crate::setup::lingbao::{LingBaoDecodeError, LingBaoDecodeReport};
 use crate::setup::logsystem::LogSystemDecodeError;
 use crate::setup::newskillmonsterlist::{NewSkillMonsterDecodeError, NewSkillMonsterDecodeReport};
 use crate::setup::playerlist::{PlayerListDecodeError, PlayerListDecodeReport};
@@ -92,6 +94,7 @@ const EQUIPMENT_COMPOSE_SELECTOR: i32 = 0x30;
 const WORDS_FILTER_SELECTOR: i32 = 0x31;
 const JJC_REGION_LEVEL_SELECTOR: i32 = 0x32;
 const TAO_ZHUANG_SELECTOR: i32 = 0x34;
+const CI_QING_LING_BAO_SELECTOR: i32 = 0x35;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -224,6 +227,11 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
         items: usize,
         broadcast: Result<i32, SendMessageError>,
     },
+    CiQingLingBao {
+        ci_qing: CiQingDecodeReport,
+        ling_bao: LingBaoDecodeReport,
+        broadcast: Result<i32, SendMessageError>,
+    },
     ThingSetup {
         entries: usize,
     },
@@ -258,6 +266,9 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     JjcRegionLevel(JjcRegionLevelDecodeError),
     TaoZhuang(TaoZhuangDecodeError),
     TaoZhuangSerialize(TaoZhuangSerializationBlock),
+    CiQing(CiQingDecodeError),
+    LingBao(LingBaoDecodeError),
+    CiQingSerialize(CiQingSerializationBlock),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -296,6 +307,9 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::JjcRegionLevel(error) => error.fmt(formatter),
             Self::TaoZhuang(error) => error.fmt(formatter),
             Self::TaoZhuangSerialize(error) => error.fmt(formatter),
+            Self::CiQing(error) => error.fmt(formatter),
+            Self::LingBao(error) => error.fmt(formatter),
+            Self::CiQingSerialize(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -331,6 +345,9 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::JjcRegionLevel(error) => Some(error),
             Self::TaoZhuang(error) => Some(error),
             Self::TaoZhuangSerialize(error) => Some(error),
+            Self::CiQing(error) => Some(error),
+            Self::LingBao(error) => Some(error),
+            Self::CiQingSerialize(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -672,6 +689,33 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             Some(Ok(GameOwnedStartupSnapshotReport::TaoZhuang {
                 skill_ids: decoded.skill_ids,
                 items: decoded.items,
+                broadcast,
+            }))
+        }
+        CI_QING_LING_BAO_SELECTOR => {
+            let ci_qing = match game.ci_qing_setup_mut().de_byte_from_array(source, cursor) {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::CiQing(error))),
+            };
+            let ling_bao = match game
+                .ling_bao_setup_mut()
+                .decode_from_array_ling_bao(source, cursor)
+            {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::LingBao(error))),
+            };
+
+            let mut payload = Vec::new();
+            if let Err(error) = game.ci_qing_setup().add_byte_to_array(&mut payload) {
+                return Some(Err(GameOwnedStartupSnapshotError::CiQingSerialize(error)));
+            }
+            let mut notice = CMessage::new(0x000C_010D);
+            notice.base_mut().add(&payload);
+            let broadcast = notice.send_all(game.current_net_server());
+            add_log_text(b"Add CiQingSetup...ok!");
+            Some(Ok(GameOwnedStartupSnapshotReport::CiQingLingBao {
+                ci_qing,
+                ling_bao,
                 broadcast,
             }))
         }

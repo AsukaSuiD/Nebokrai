@@ -1,5 +1,10 @@
-//! LingBao `CLingBaoSetup` из WorldServer, подтверждённый
-//! `worldserver.exe` и `worldserver.pdb`.
+//! LingBao `CLingBaoSetup` из WorldServer и GameServer.
+//!
+//! Loader/serializer подтверждены парой
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, decoder
+//! `DecodeFromArrayLingBao` —
+//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`. Исходный owner PDB:
+//! `e:\svn\fengyun_russia_dev\server\setup\lingbao.cpp/.h`.
 //!
 //! Wire пишет signed multimap count, key C-string, ticket и три vector-секции
 //! с records по 8, 5 и 3 `u32`. Равные byte-keys сохраняют insertion order.
@@ -7,6 +12,9 @@
 //! Loader очищает map, игнорирует labels позиционного token stream и при
 //! missing resource оставляет state пустым. Повреждённый хвост останавливается
 //! после последней полной записи.
+//! Game decoder также сначала очищает multimap и публикует только полные
+//! records; равные names остаются в insertion order. Динамическая byte-string
+//! заменяет старый 256-byte stack buffer без воспроизведения overflow.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -217,6 +225,70 @@ impl CLingBaoSetup {
         destination.extend_from_slice(&payload);
         Ok(())
     }
+
+    /// Декодирует Game projection непосредственно после CiQing payload.
+    pub(crate) fn decode_from_array_ling_bao(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<LingBaoDecodeReport, LingBaoDecodeError> {
+        self.clear();
+        let count = read_wire_i32(source, cursor, "entry count")?;
+        let mut entries = 0;
+        for _ in 0..count.max(0) {
+            let name = read_wire_c_string(source, cursor, "entry name")?;
+            let ticket = read_wire_u32(source, cursor, "ticket")?;
+            let first_count = read_wire_i32(source, cursor, "first-node count")?;
+            let second_count = read_wire_i32(source, cursor, "second-node count")?;
+            let third_count = read_wire_i32(source, cursor, "third-node count")?;
+
+            let mut first = Vec::new();
+            for _ in 0..first_count.max(0) {
+                first.push(LingBaoFirstNode {
+                    node_type: read_wire_u32(source, cursor, "first node type")?,
+                    use_ticket: read_wire_u32(source, cursor, "first use ticket")?,
+                    probability_1: read_wire_u32(source, cursor, "first probability 1")?,
+                    add_value_1: read_wire_u32(source, cursor, "first add value 1")?,
+                    probability_2: read_wire_u32(source, cursor, "first probability 2")?,
+                    add_value_2: read_wire_u32(source, cursor, "first add value 2")?,
+                    probability_3: read_wire_u32(source, cursor, "first probability 3")?,
+                    add_value_3: read_wire_u32(source, cursor, "first add value 3")?,
+                });
+            }
+
+            let mut second = Vec::new();
+            for _ in 0..second_count.max(0) {
+                second.push(LingBaoSecondNode {
+                    node_type: read_wire_u32(source, cursor, "second node type")?,
+                    probability: read_wire_u32(source, cursor, "second probability")?,
+                    use_ticket: read_wire_u32(source, cursor, "second use ticket")?,
+                    add_value_min: read_wire_u32(source, cursor, "second add value min")?,
+                    add_value_max: read_wire_u32(source, cursor, "second add value max")?,
+                });
+            }
+
+            let mut third = Vec::new();
+            for _ in 0..third_count.max(0) {
+                third.push(LingBaoThirdNode {
+                    node_type: read_wire_u32(source, cursor, "third node type")?,
+                    use_ticket: read_wire_u32(source, cursor, "third use ticket")?,
+                    use_ticket_max: read_wire_u32(source, cursor, "third use ticket max")?,
+                });
+            }
+
+            self.insert(
+                name,
+                LingBaoNodeInfo {
+                    ticket,
+                    first,
+                    second,
+                    third,
+                },
+            );
+            entries += 1;
+        }
+        Ok(LingBaoDecodeReport { entries })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -383,6 +455,95 @@ impl fmt::Display for LingBaoSerializationBlock {
 }
 
 impl Error for LingBaoSerializationBlock {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LingBaoDecodeReport {
+    pub(crate) entries: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LingBaoDecodeError {
+    pub(crate) field: &'static str,
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for LingBaoDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "LingBao snapshot, поле {} на {}: нужно {}, доступно {}",
+            self.field, self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for LingBaoDecodeError {}
+
+fn read_wire_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, LingBaoDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(
+        source, cursor, field,
+    )?))
+}
+
+fn read_wire_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u32, LingBaoDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(
+        source, cursor, field,
+    )?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<[u8; N], LingBaoDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(LingBaoDecodeError {
+            field,
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер LingBao scalar уже проверен"))
+}
+
+fn read_wire_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<Vec<u8>, LingBaoDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(relative_end) = source
+        .get(offset..)
+        .and_then(|tail| tail.iter().position(|byte| *byte == 0))
+    else {
+        return Err(LingBaoDecodeError {
+            field,
+            offset,
+            needed: available.saturating_add(1),
+            available,
+        });
+    };
+    let end = offset + relative_end;
+    *cursor = end + 1;
+    Ok(source[offset..end].to_vec())
+}
 
 fn write_ling_bao_count(
     destination: &mut Vec<u8>,

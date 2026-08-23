@@ -76,6 +76,7 @@ use crate::nets::netserver::mynetserver::{
     CMyNetServer, GameServerEvent, GameServerEventPublisher,
 };
 use crate::nets::servers::ServerHostError;
+use crate::public::ciqing::CCiQingSetup;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::equipmentcomposelist::EquipmentComposeList;
@@ -91,6 +92,7 @@ use crate::setup::hitlevelsetup::CHitLevelSetup;
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::incrementshoplist::CIncrementShopList;
 use crate::setup::leitingsetup::CThingSetup;
+use crate::setup::lingbao::CLingBaoSetup;
 use crate::setup::logsystem::CLogSystem;
 use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
 use crate::setup::playerlist::CPlayerList;
@@ -729,6 +731,8 @@ pub(crate) struct CGame {
     words_filter: CWordsFilter,
     jjc_level_data: BTreeMap<i32, i32>,
     tao_zhuang_setup: CTaoZhuangSetup,
+    ci_qing_setup: CCiQingSetup,
+    ling_bao_setup: CLingBaoSetup,
     synthesis: CSynthesis,
     new_skill_monster_conf: NewSkillMonsterConf,
     goods_destroy_setup: GoodsDestroySetup,
@@ -778,6 +782,8 @@ impl CGame {
             words_filter: CWordsFilter::default(),
             jjc_level_data: BTreeMap::new(),
             tao_zhuang_setup: CTaoZhuangSetup::default(),
+            ci_qing_setup: CCiQingSetup::default(),
+            ling_bao_setup: CLingBaoSetup::default(),
             synthesis: CSynthesis::default(),
             new_skill_monster_conf: NewSkillMonsterConf::default(),
             goods_destroy_setup: GoodsDestroySetup::default(),
@@ -1096,6 +1102,22 @@ impl CGame {
 
     pub(crate) const fn tao_zhuang_setup_mut(&mut self) -> &mut CTaoZhuangSetup {
         &mut self.tao_zhuang_setup
+    }
+
+    pub(crate) const fn ci_qing_setup(&self) -> &CCiQingSetup {
+        &self.ci_qing_setup
+    }
+
+    pub(crate) const fn ci_qing_setup_mut(&mut self) -> &mut CCiQingSetup {
+        &mut self.ci_qing_setup
+    }
+
+    pub(crate) const fn ling_bao_setup(&self) -> &CLingBaoSetup {
+        &self.ling_bao_setup
+    }
+
+    pub(crate) const fn ling_bao_setup_mut(&mut self) -> &mut CLingBaoSetup {
+        &mut self.ling_bao_setup
     }
 
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {

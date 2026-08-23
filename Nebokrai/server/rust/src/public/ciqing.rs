@@ -1,7 +1,10 @@
 //! Конфигурация CiQing Miracle.
 //!
-//! Источник контракта `CCiQingSetup::ReadSetupFile/AddByteToArray` — World/Game
-//! EXE/PDB и `ciqing.h`. Queries, RNG и Game runtime в этот owner не входят.
+//! `CCiQingSetup::ReadSetupFile/AddByteToArray` подтверждены точными
+//! World/Game EXE/PDB, а `DeByteFromArray` —
+//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`. Исходный owner:
+//! `e:\svn\fengyun_russia_dev\public\ciqing.cpp/.h`. Queries, RNG и применение
+//! к player в этот проход не входят.
 //!
 //! Wire содержит три insertion-order секции: make records по шесть `u32`,
 //! compose records и improve records по три `u32`; все counts signed `i32`.
@@ -23,6 +26,11 @@
 //! default values и продолжал declared loops; Rust сохраняет это для
 //! представимых counts, но отклоняет count больше размера самого source, чтобы
 //! не переносить конфигурационный DoS/OOM как часть поведения Miracle.
+//! Game decoder очищает три vector-а, сохраняет только полные records и
+//! безопасно трактует отрицательные counts как пустые секции вместо legacy
+//! unbounded-read. Второй `source_a` wire scalar читается и намеренно
+//! отбрасывается: парный serializer всегда дублирует первый, а named owner не
+//! назначает несовместимому payload придуманную игровую семантику.
 
 use std::error::Error;
 use std::fmt;
@@ -241,6 +249,89 @@ impl CCiQingSetup {
         destination.extend_from_slice(&payload);
         Ok(())
     }
+
+    /// Декодирует Game `DeByteFromArray`, продвигая общий startup cursor.
+    pub(crate) fn de_byte_from_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<CiQingDecodeReport, CiQingDecodeError> {
+        self.clear();
+
+        let make_count = read_wire_i32(source, cursor, "make count")?;
+        for _ in 0..make_count.max(0) {
+            self.make.push(CiQingMakeNode {
+                destination_base_index: read_wire_u32(
+                    source,
+                    cursor,
+                    "make destination base index",
+                )?,
+                equipment_position: read_wire_u32(
+                    source,
+                    cursor,
+                    "make equipment position",
+                )?,
+                source_a_base_index: read_wire_u32(
+                    source,
+                    cursor,
+                    "make source A base index",
+                )?,
+                source_a_count: read_wire_u32(source, cursor, "make source A count")?,
+                source_b_base_index: read_wire_u32(
+                    source,
+                    cursor,
+                    "make source B base index",
+                )?,
+                source_b_count: read_wire_u32(source, cursor, "make source B count")?,
+            });
+        }
+
+        let compose_count = read_wire_i32(source, cursor, "compose count")?;
+        for _ in 0..compose_count.max(0) {
+            let source_a_base_index =
+                read_wire_u32(source, cursor, "compose source A base index")?;
+            let _duplicated_source_a =
+                read_wire_u32(source, cursor, "compose duplicated source A")?;
+            let source_b_base_index =
+                read_wire_u32(source, cursor, "compose source B base index")?;
+            let money = read_wire_u32(source, cursor, "compose money")?;
+            let compose_probability =
+                read_wire_u32(source, cursor, "compose probability")?;
+            let crystal_count = read_wire_u32(source, cursor, "compose crystal count")?;
+            let result_count = read_wire_i32(source, cursor, "compose result count")?;
+            let mut results = Vec::new();
+            for _ in 0..result_count.max(0) {
+                results.push((
+                    read_wire_u32(source, cursor, "compose result probability")?,
+                    read_wire_u32(source, cursor, "compose result base index")?,
+                ));
+            }
+            self.compose.push(CiQingComposeNode {
+                source_a_base_index,
+                source_b_base_index,
+                compose_probability,
+                money,
+                crystal_count,
+                declared_result_count: result_count.max(0) as u32,
+                results,
+            });
+        }
+
+        let improve_count = read_wire_i32(source, cursor, "improve count")?;
+        for _ in 0..improve_count.max(0) {
+            self.improve.push(CiQingImproveNode {
+                level: read_wire_u32(source, cursor, "improve level")?,
+                base_index: read_wire_u32(source, cursor, "improve base index")?,
+                probability: read_wire_u32(source, cursor, "improve probability")?,
+            });
+        }
+
+        Ok(CiQingDecodeReport {
+            make: self.make.len(),
+            compose: self.compose.len(),
+            improve: self.improve.len(),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,6 +359,74 @@ impl fmt::Display for CiQingSerializationBlock {
 }
 
 impl Error for CiQingSerializationBlock {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingDecodeReport {
+    pub(crate) make: usize,
+    pub(crate) compose: usize,
+    pub(crate) improve: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingDecodeError {
+    pub(crate) field: &'static str,
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for CiQingDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "CiQing snapshot, поле {} на {}: нужно {}, доступно {}",
+            self.field, self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for CiQingDecodeError {}
+
+fn read_wire_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, CiQingDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(
+        source, cursor, field,
+    )?))
+}
+
+fn read_wire_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u32, CiQingDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(
+        source, cursor, field,
+    )?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<[u8; N], CiQingDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(CiQingDecodeError {
+            field,
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер CiQing scalar уже проверен"))
+}
 
 fn write_ciqing_count(
     destination: &mut Vec<u8>,
