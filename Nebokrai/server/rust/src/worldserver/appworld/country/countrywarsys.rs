@@ -1,14 +1,8 @@
-//! WorldServer-владелец country-war state `CountryWarSys`.
+//! WorldServer-владелец country-war state `CountryWarSys` из точной пары
+//! EXE/PDB и исходного owner-а `appworld/country/countrywarsys.cpp`.
 //!
-//! `AddToByteArray` RVA `0x0008F800`, `player_declare` RVA `0x00091B00`,
-//! `on_war_start/on_war_end` RVA `0x00090EC0/0x00091100`,
-//! `end_war` RVA `0x0008F890`, пять phase callbacks RVA
-//! `0x0008F490/0x0008FA00/0x0008FB40/0x0008FC80/0x00091530`,
-//! `on_flag_destory` (исходное PDB-написание) RVA `0x00091E00`, `initialize`
-//! RVA `0x00092220`, top-info callbacks RVA `0x000916C0/0x000918E0` и
-//! `reload` RVA `0x00092DF0` реализованы в Rust. Точная пара доказательных
-//! артефактов — `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
-//! исходник: `appworld/country/countrywarsys.cpp`.
+//! Контракт охватывает сериализацию, объявление войны, phase callbacks,
+//! `on_flag_destory` (исходное PDB-написание), initialize/reload и top-info.
 //!
 //! PDB/static map хранит `CountryWarRegion` размером `0x0C`: clear-byte с
 //! padding, signed defend и attack country. `BTreeMap` сохраняет map-order.
@@ -17,32 +11,28 @@
 //! `0x7FF22` с low byte входной страны; full signed equality выбирает defender
 //! result `2/1` либо attacker result `1/2`. После optional `WS0105/WS0106`
 //! форматирования стороны всегда обнуляются и country-info `0x7FA03` уходит
-//! даже при пустом тексте. Потерянный Ghidra stack-key region lookup и порядок
-//! state/message/result/clear подтверждены exact EXE `0x00491E69..0x00492142`.
+//! даже при пустом тексте. Сохраняется порядок state/message/result/clear.
 //! Region, localization, country-map и network owners остаются явной context-
 //! границей; concrete adapter теперь подключён к `ProcessMessage(0x60318)`.
 //! Неизвестность в этих владельцах сохраняет уже выполненные предыдущие эффекты.
 //! Переполнение исходного 256-byte `_sprintf` не воспроизводится: нормальный
 //! output сохраняется, oversized localization безопасно ограничивается 255
-//! байтами под C-string NUL как внутренний UB без доказанного gameplay-эффекта.
-//! `player_declare` подтверждён exact `0x00491B00..0x00491DFD`: online-player,
+//! байтами под C-string NUL как внутренний UB без gameplay-эффекта.
+//! `player_declare` требует online-player,
 //! чужая target-country, последовательные `IsKing/IsMinister(5)`, первый
 //! свободный region, живой `pRegion`, затем проверки только defend-country.
 //! При успехе state меняется до `0x7FF1F`, результаты обеих рассылок
 //! игнорируются, лишний lookup `WS0103` перезаписывается `WS0104`, и функция
-//! возвращает true. Linux-донор добавлял source/tail gates, fallback региона и
 //! rollback при отказе очереди; эти полезные, но неоригинальные политики сюда
 //! не перенесены. 512-byte `_sprintf` overflow безопасно ограничен нормальным
 //! C-string payload в 511 байт без изменения штатного результата.
 //!
-//! `initialize` подтверждён RAW и точным disassembly
-//! `0x00492220..0x00492DCA`. Он очищает только `_country_wars`, читает восемь
+//! `initialize` очищает только `_country_wars`, читает восемь
 //! пар `label + signed long`, затем последовательно сканирует две секции `#`
 //! через общий `<end>`-ограничитель. `_war_regions` заранее не очищается, а
 //! каждая встреченная запись полностью обнуляет соответствующее состояние.
 //! Вторая секция имеет машинную странность: stack key обнуляется один раз и
 //! никогда не увеличивается, поэтому все допустимые времена пишутся под ID `0`
-//! и последняя запись заменяет предыдущую. Linux-донор выдумывал возрастающие
 //! ID; это исправлено по EXE. `TagTime` сохраняет исходный colon/`atoi` parser
 //! и минутную арифметику, `BTreeMap`, byte slices и `CTimer` заменяют только
 //! `ifstream`, STL и singleton plumbing. Неполные/нечисловые восемь параметров
@@ -51,7 +41,7 @@
 //! Оба старых ленивых доступа к singleton (`get_instance` и
 //! `get_country_war_sys`) не несут самостоятельной игровой семантики: один
 //! `CountryWarSys::default()` создаётся внешним lifecycle owner-ом, а
-//! достигнутые пути получают этот же живой `&mut CountryWarSys` через
+//! действующие пути получают этот же живой `&mut CountryWarSys` через
 //! `WorldMainLoopOwners`. Так исключены статическое выделение и lifetime/leak
 //! оригинала без изменения состояния, wire или порядка side effects.
 //!
@@ -64,7 +54,6 @@
 //! missing-file и восьми проверок порядка передаются существующему World
 //! log-owner-у в месте вызова.
 //!
-//! `end_war` сохраняет ещё одно отличие от Linux-донора: exact EXE обнуляет
 //! только defender/attacker, не трогая `state_clear`, и затем безусловно
 //! рассылает `0x7FF1D`. `reload` в map-order безусловно читает и передаёт в
 //! `KillTimeEvent` девять ID, затем вызывает `end_war -> initialize`.
@@ -76,9 +65,9 @@
 //!
 //! Phase callbacks сохраняют точный side-effect порядок. `DeclareBegin`
 //! сначала обходит country IDs `1..=4`, назначая war-result `0` только живым
-//! странам, затем рассылает `0x7FF17` и публикует `WS0095`. Exact
-//! `0x00491565..0x0049159F` подтверждает один и тот же stack-byte как ключ
-//! `find/operator[]`, исправляя ложное раздвоение переменных в RAW. Остальные
+//! странам, затем рассылает `0x7FF17` и публикует `WS0095`.
+//! подтверждает один и тот же stack-byte как ключ
+//! `find/operator[]`, исправляя ложное раздвоение переменных в оригинал. Остальные
 //! пары: `DeclareEnd = 0x7FF18/WS0096`, `PrepareBegin = 0x7FF19/WS0097`,
 //! `PrepareEnd = 0x7FF1A/WS0098`; clear callback только рассылает `0x7FF1E`.
 //! Timer parameter во всех пяти функциях не читается. Lookup null превращается
@@ -89,30 +78,30 @@
 //! `on_war_start_info/on_war_end_info` делают observable `operator[]` по
 //! входному war ID до проверки времени; отсутствующий key поэтому вставляет
 //! value-initialized zero schedule. Только target строго позже local now
-//! достигает публикации. Duration вычисляется exact как
+//! достигает публикации. Duration вычисляется как
 //! `(difference.minute * 60 + difference.second) * 1000` с 32-битным
 //! wrapping и намеренно игнорирует hour/day. После `WS0099/WS0100` lookup и
 //! форматирования concrete `CCountryHandler::AddOneTopInfo(2, duration, text)`
-//! вызывается до concrete `SendTopInfoToClient` с возвращённым ID. Exact wire
+//! вызывается до concrete `SendTopInfoToClient` с возвращённым ID. wire
 //! `0x7FA04` теперь принадлежит `CCountryHandler`, а delivery сохранён в report.
 //!
-//! `on_war_start` подтверждён exact `0x00490EC0..0x004910F7`: сначала
+//! `on_war_start` подтверждён: сначала
 //! безусловный `0x7FF1B`, затем map-order обход записей с двумя ненулевыми
 //! сторонами. Для каждой такой записи clear-byte становится `1` до region
 //! lookup; отсутствующий/null region пропускает только `WS0092`, не откатывая
-//! state. Exact `0x00490F4A..0x00490F86` использует один region ID и для
-//! `find`, и для `operator[]`, исправляя ложный stack-key RAW. В `_sprintf`
+//! state. использует один region ID и для
+//! `find`, и для `operator[]`, исправляя ложный stack-key оригинал. В `_sprintf`
 //! передавались именно `szCountryName[country][0x40]`, поэтому concrete
 //! adapter теперь форматирует именами стран, а не их числовыми ID. Старый
 //! 256-byte overflow безопасно ограничен 255 видимыми байтами.
 //!
-//! `on_war_end` подтверждён exact `0x00491100..0x0049152B`. После `0x7FF1C`
+//! `on_war_end` подтверждён. После `0x7FF1C`
 //! он обрабатывает только `state_clear && defend != 0 && attack != 0`: живой
 //! region получает `WS0093`, затем результаты существующих defender и attacker
 //! сбрасываются в этом порядке. Независимо от region lookup запись после этого
 //! очищается целиком. В конце observable `operator[]` вставляет нулевой schedule
 //! для отсутствующего war ID и, если `ClearTime > now`, публикует `WS0094` тем
-//! же минутно-секундным duration, `AddOneTopInfo` и exact `0x7FA04` owner-ом.
+//! же минутно-секундным duration, `AddOneTopInfo` и `0x7FA04` owner-ом.
 //! Девять callback-token-ов, зарегистрированных `initialize`, теперь
 //! распознаются `WorldTimerHandler` по тем же значениям и исполняются внутри
 //! `CTimer::Run`; входной signed parameter остаётся war ID. Это заменяет только
@@ -121,7 +110,7 @@
 //! one-shot без выдуманной повторной регистрации.
 //!
 //! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
-//! padding`, затем defender и attacker. Парный Game EXE RVA `0x000EBD60`
+//! padding`, затем defender и attacker. Парный Game EXE
 //! трактует те же 12 bytes как defender, attacker, `state_clear + padding` —
 //! это подтверждённое несовпадение поставленных бинарников, а не повод молча
 //! менять World wire. Неинициализированный padding старого World нормализован
@@ -161,8 +150,8 @@ pub(crate) enum CountryWarCallbackKind {
 }
 
 impl<Callback: PartialEq> CountryWarCallbacks<Callback> {
-    /// Сопоставляет invocation с тем же typed token, который был передан при
-    /// регистрации; `PartialEq` заменяет только сравнение callback pointer-а.
+ /// Сопоставляет invocation с тем же typed token, который был передан при
+ /// регистрации; `PartialEq` заменяет только сравнение callback pointer-а.
     pub(crate) fn kind(&self, callback: Callback) -> Option<CountryWarCallbackKind> {
         if callback == self.clear {
             Some(CountryWarCallbackKind::Clear)
@@ -312,8 +301,8 @@ impl Default for CountryWarLoadReport {
 
 #[derive(Clone, Debug)]
 struct CountryWarTime {
-    // Exact EXE записывает event DeclarEnd в поле DeclarBeginEventID и при
-    // достижимом DeclarBegin затем перезаписывает его вторым ID.
+ // записывает event DeclarEnd в поле DeclarBeginEventID и при
+ // достижимом DeclarBegin затем перезаписывает его вторым ID.
     declare_begin_event_id: Option<TimerId>,
     declare_begin_time: TagTime,
     declare_end_event_id: Option<TimerId>,
@@ -349,19 +338,19 @@ pub(crate) struct CountryWarVictoryRegion {
 pub(crate) trait CountryWarVictoryContext {
     type Block;
 
-    /// Повторяет `s_mapRegionList.find/operator[]` и non-null `pRegion` gate.
+ /// Повторяет `s_mapRegionList.find/operator[]` и non-null `pRegion` gate.
     fn region(&mut self, region_id: i32) -> Result<Option<CountryWarVictoryRegion>, Self::Block>;
 
-    /// Повторяет отдельный `GetCountry(low byte)`; ID `0` даёт false.
+ /// Повторяет отдельный `GetCountry(low byte)`; ID `0` даёт false.
     fn country_exists(&mut self, country: u8) -> Result<bool, Self::Block>;
 
-    /// Синхронно повторяет `CMessage::SendAll`; старый return игнорировался.
+ /// Синхронно повторяет `CMessage::SendAll`; старый return игнорировался.
     fn send_all(&mut self, message: &CMessage) -> i32;
 
-    /// Пишет result уже доказанно существующей стране.
+ /// Пишет result уже доказанно существующей стране.
     fn set_country_war_result(&mut self, country: u8, result: i32) -> Result<(), Self::Block>;
 
-    /// Повторяет `GetStringByID` и старую 256-byte `_sprintf` границу.
+ /// Повторяет `GetStringByID` и старую 256-byte `_sprintf` границу.
     fn format_victory_notice(
         &mut self,
         string_id: &'static [u8],
@@ -370,8 +359,8 @@ pub(crate) trait CountryWarVictoryContext {
         region_name: &[u8],
     ) -> Result<Vec<u8>, Self::Block>;
 
-    /// Вызывает concrete `CCountryHandler::send_info_to_client` с исходными
-    /// title `-366` и color `0xFFFF0000`.
+ /// Вызывает concrete `CCountryHandler::send_info_to_client` с исходными
+ /// title `-366` и color.
     fn send_country_info(
         &mut self,
         text: &[u8],
@@ -480,8 +469,8 @@ pub(crate) enum CountryWarDeclarationPlayer {
 pub(crate) trait CountryWarDeclarationContext {
     fn online_player_country(&mut self, player_id: i32) -> CountryWarDeclarationPlayer;
 
-    /// Повторяет последовательные `IsKing`, затем `IsMinister(player, 5)`,
-    /// включая их king-log при отрицательных проверках.
+ /// Повторяет последовательные `IsKing`, затем `IsMinister(player, 5)`,
+ /// включая их king-log при отрицательных проверках.
     fn declaration_authority(
         &mut self,
         country: u8,
@@ -544,7 +533,7 @@ impl CountryWarPhase {
 pub(crate) trait CountryWarPhaseContext {
     type Block;
 
-    /// Повторяет `GetCountry(1..=4)` и назначает result только живой стране.
+ /// Повторяет `GetCountry(1..=4)` и назначает result только живой стране.
     fn reset_country_war_result_if_present(
         &mut self,
         country: u8,
@@ -552,8 +541,8 @@ pub(crate) trait CountryWarPhaseContext {
 
     fn send_all(&mut self, message: &CMessage) -> Result<i32, SendMessageError>;
 
-    /// Выполняет `GetStringByID`, null -> empty и штатную no-argument ветвь
-    /// старого `_sprintf(char[256], localized_format)`.
+ /// Выполняет `GetStringByID`, null -> empty и штатную no-argument ветвь
+ /// старого `_sprintf(char[256], localized_format)`.
     fn format_phase_notice(
         &mut self,
         string_id: &'static [u8],
@@ -613,13 +602,13 @@ impl CountryWarTopInfoKind {
 pub(crate) trait CountryWarTopInfoContext {
     type Block;
 
-    /// Выполняет GetStringByID/null-empty и штатное no-argument форматирование.
+ /// Выполняет GetStringByID/null-empty и штатное no-argument форматирование.
     fn format_top_info_notice(
         &mut self,
         string_id: &'static [u8],
     ) -> Result<Vec<u8>, Self::Block>;
 
-    /// Вызывает concrete `CCountryHandler::AddOneTopInfo`.
+ /// Вызывает concrete `CCountryHandler::AddOneTopInfo`.
     fn add_top_info(
         &mut self,
         timer_flag: i32,
@@ -628,7 +617,7 @@ pub(crate) trait CountryWarTopInfoContext {
         get_tick: &mut dyn FnMut() -> u32,
     ) -> i32;
 
-    /// Вызывает concrete `CCountryHandler::SendTopInfoToClient`.
+ /// Вызывает concrete `CCountryHandler::SendTopInfoToClient`.
     fn send_top_info(
         &mut self,
         top_info_id: i32,
@@ -716,11 +705,11 @@ pub(crate) struct CountryWarSys {
 }
 
 impl CountryWarSys {
-    /// Загружает `setup/CountryWarSys.ini` и регистрирует исходные calendar events.
-    ///
-    /// `source` уже разрешён внешним resource owner-ом. Это заменяет только
-    /// `ifstream`; token-order, первый `<end>`, повторное использование stream,
-    /// map-key `0` и все timer-ветки сохранены по EXE `0x00492220..0x00492DCA`.
+ /// Загружает `setup/CountryWarSys.ini` и регистрирует исходные calendar events.
+ ///
+ /// `source` уже разрешён внешним resource owner-ом. Это заменяет только
+ /// `ifstream`; token-order, первый `<end>`, повторное использование stream,
+ /// map-key `0` и все timer-ветки сохранены по EXE.
     pub(crate) fn initialize<Callback, Log>(
         &mut self,
         source: Option<&[u8]>,
@@ -792,8 +781,8 @@ impl CountryWarSys {
                 continue;
             }
 
-            // VERIFIED_DISASSEMBLY: exact `0x00492AE2` всегда передаёт
-            // stack long, обнулённый один раз в `0x0049257F`, без increment.
+ // всегда передаёт
+ // stack long, обнулённый один раз в, без increment.
             self.country_wars.insert(0, candidate);
             report.accepted_records = report.accepted_records.wrapping_add(1);
         }
@@ -806,7 +795,7 @@ impl CountryWarSys {
         Ok(report)
     }
 
-    /// Отменяет все старые event-ID, завершает войны и повторяет `initialize`.
+ /// Отменяет все старые event-ID, завершает войны и повторяет `initialize`.
     pub(crate) fn reload<Callback, Log, SendAll>(
         &mut self,
         source: Option<&[u8]>,
@@ -862,7 +851,7 @@ impl CountryWarSys {
         })
     }
 
-    /// Сбрасывает только обе стороны каждой войны и рассылает exact `0x7FF1D`.
+ /// Сбрасывает только обе стороны каждой войны и рассылает `0x7FF1D`.
     pub(crate) fn end_war<SendAll>(&mut self, mut send_all: SendAll) -> CountryWarEndReport
     where
         SendAll: FnMut(&CMessage) -> Result<i32, SendMessageError>,
@@ -903,8 +892,8 @@ impl CountryWarSys {
             .map(|(&region_id, _)| region_id)
     }
 
-    /// Выполняет пять callbacks, чей внешний контракт ограничен country reset,
-    /// одним broadcast и optional phase-info.
+ /// Выполняет пять callbacks, чей внешний контракт ограничен country reset,
+ /// одним broadcast и optional phase-info.
     pub(crate) fn run_phase<Context>(
         &mut self,
         phase: CountryWarPhase,
@@ -966,8 +955,8 @@ impl CountryWarSys {
         Ok(report)
     }
 
-    /// Выполняет exact World `on_war_start`: общий broadcast, перевод
-    /// назначенных регионов в war-state и optional `WS0092` для живого региона.
+ /// Выполняет World `on_war_start`: общий broadcast, перевод
+ /// назначенных регионов в war-state и optional `WS0092` для живого региона.
     pub(crate) fn run_war_start<Context>(
         &mut self,
         _war_id: i32,
@@ -1035,8 +1024,8 @@ impl CountryWarSys {
         Ok(report)
     }
 
-    /// Выполняет exact World `on_war_end`: завершает только начатые войны,
-    /// сбрасывает их стороны и затем публикует отсчёт до `ClearTime`.
+ /// Выполняет World `on_war_end`: завершает только начатые войны,
+ /// сбрасывает их стороны и затем публикует отсчёт до `ClearTime`.
     pub(crate) fn run_war_end<Context, GetTick>(
         &mut self,
         war_id: i32,
@@ -1162,7 +1151,7 @@ impl CountryWarSys {
         Ok(report)
     }
 
-    /// Выполняет `on_war_start_info/on_war_end_info` поверх живого top-info owner-а.
+ /// Выполняет `on_war_start_info/on_war_end_info` поверх живого top-info owner-а.
     pub(crate) fn run_top_info<Context, GetTick>(
         &mut self,
         kind: CountryWarTopInfoKind,
@@ -1329,8 +1318,8 @@ impl CountryWarSys {
         let state_wire = state_message.as_wire_bytes().to_vec();
         let state_delivery = context.send_all(&state_message);
 
-        // Exact сначала копировал WS0103 в 512-byte buffer, затем полностью
-        // перезаписывал его результатом sprintf(WS0104). Сам lookup сохраняем.
+ // сначала копировал WS0103 в 512-byte buffer, затем полностью
+ // перезаписывал его результатом sprintf(WS0104). Сам lookup сохраняем.
         let discarded_ws0103 = context.world_string(b"WS0103");
         let notice = context.format_declaration_notice(
             attack_country,
@@ -1374,7 +1363,7 @@ impl CountryWarSys {
             let mut victory_side = None;
 
             if region.is_some() {
-                // Оригинал выполняет оба lookup независимо, затем общий gate.
+ // Оригинал выполняет оба lookup независимо, затем общий gate.
                 let defend_exists = context.country_exists(defend_country as u8)?;
                 let attack_exists = context.country_exists(attack_country as u8)?;
                 if defend_exists && attack_exists {
@@ -1444,7 +1433,7 @@ struct CountryWarOffsets {
 }
 
 impl CountryWarTime {
-    /// Повторяет value-insert `map::operator[]` для отсутствующего war ID.
+ /// Повторяет value-insert `map::operator[]` для отсутствующего war ID.
     fn zero_initialized() -> Self {
         let zero_time = TagTime::default();
         let zero_event = Some(TimerId::from_raw(0));
@@ -1606,8 +1595,8 @@ impl CountryWarTime {
                 }
             }
         } else {
-            // Exact сначала уже оставил clear-event на ClearTime, затем ставит
-            // второй на now и теряет ID первого через overwrite поля.
+ // сначала уже оставил clear-event на ClearTime, затем ставит
+ // второй на now и теряет ID первого через overwrite поля.
             self.clear_event_id = Some(timer.set_time_event(now, callbacks.clear, war_id));
             registered = registered.wrapping_add(1);
         }

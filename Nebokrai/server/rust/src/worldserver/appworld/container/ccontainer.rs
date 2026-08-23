@@ -1,14 +1,7 @@
 //! Владелец базового контейнера исторического `WorldServer`.
 //!
-//! Статус constructor/destructor RVA `0x000E0DB0/0x000E0AE0`, folded
-//! `CWorldRegion::tagWeatherTime::tagOption` destructor RVA `0x0003EAD0` и
-//! `AddListener` RVA `0x000E0DF0` и virtual GUID forwarder-ы
-//! `0x000E0A00..0x000E0A60` — `IMPLEMENTED`. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\ccontainer.cpp:22,34,237`.
+//! Owner реализует listener registration, virtual GUID forwarders и cleanup;
+//! источник контракта — точная пара WorldServer EXE/PDB.
 //!
 //! Original vector хранит не владеющие `CContainerListener*`, отвергает null
 //! и повторный pointer, а destructor/`Release` освобождает только сам vector.
@@ -32,14 +25,14 @@ pub(crate) struct CContainerState {
 }
 
 impl CContainerState {
-    /// Создаёт exact пустой listener-vector constructor-а `0x004E0DB0`.
+ /// Создаёт пустой listener-vector constructor-а.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             listeners: Vec::new(),
         }
     }
 
-    /// Регистрирует non-null listener один раз по identity исходного pointer-а.
+ /// Регистрирует non-null listener один раз по identity исходного pointer-а.
     pub(crate) fn add_listener(&mut self, listener: Option<&SharedContainerListener>) -> i32 {
         let Some(listener) = listener else {
             return 0;
@@ -52,7 +45,7 @@ impl CContainerState {
         1
     }
 
-    /// Освобождает только non-owning registry, как folded base `Release`.
+ /// Освобождает только non-owning registry, как folded base `Release`.
     pub(crate) fn release(&mut self) {
         self.listeners.clear();
     }
@@ -106,7 +99,7 @@ pub(crate) fn remove_by_object_guid<Storage: ContainerGuidStorage>(
 }
 
 /// Базовый virtual `Remove(GUID, void*)` не имел storage и всегда возвращал
-/// null; generic result сохраняет это без raw pointer-а.
+/// null; generic result сохраняет это без оригинал pointer-а.
 pub(crate) const fn remove_base_by_guid<Removed>(_ex_id: &CGuid) -> Option<Removed> {
     None
 }

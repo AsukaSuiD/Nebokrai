@@ -1,13 +1,13 @@
 //! Владелец `CWorldCityRegion` исторического WorldServer.
 //!
-//! Constructor RVA `0x00079850`, `LoadCitySetup` RVA `0x00079930`, virtual
-//! `Load` RVA `0x00079F10` и serializer RVA `0x00079570` — `IMPLEMENTED`.
-//! Конструктор копирования вложенного `tagBuild` RVA `0x00079660` также
-//! `IMPLEMENTED`: он копирует одиннадцать signed `long` в порядке wire-а, а
+//! Constructor, `LoadCitySetup`, virtual
+//! `Load` и serializer — часть контракта owner-а.
+//! Конструктор копирования вложенного `tagBuild` также
+//! действует: он копирует одиннадцать signed `long` в порядке wire-а, а
 //! затем оба C-string значения `strName` и `strScript`. `WorldCityBuild` хранит
 //! эти поля именованно, а обычный `Clone` Rust заменяет только копирование
 //! MSVC `std::string` без переноса SSO и обработки исключений.
-//! Exact EXE подтверждает композицию: один `CWorldWarRegion`, list gates по
+//! подтверждает композицию: один `CWorldWarRegion`, list gates по
 //! `+0x12C`, defence `tagRegionSetup` по `+0x138`; constructor задаёт war
 //! `3/3/2`, но defence setup не инициализирует. `.city` очищает gates только
 //! после успешного open, читает в первом разделе `0x2C` scalar bytes +
@@ -20,14 +20,11 @@
 //! а не подставляет два видимых лишних token-а или нули.
 //! City Load принимает успех лишь при успешных War/City loads, включённом base
 //! return setup и совпадении own ID с обоими return-region ID; offsets guard-а
-//! `+0xC8/+0xAC/+0x138/+0x8` подтверждены disassembly.
-//! `DecordFromByteArray` RVA `0x00079530` и `SetEnterPosXY` RVA `0x00079DA0`
-//! `IMPLEMENTED`; decoder делегирует no-op War owner, не меняет cursor и
+//! `+0xC8/+0xAC/+0x138/+0x8` подтверждены оригинал.
+//! `DecordFromByteArray` и `SetEnterPosXY`
+//! действует; decoder делегирует no-op War owner, не меняет cursor и
 //! возвращает `true`. Доказанный STL/compiler noise удалён, обычные destructors
 //! заменены `Drop`.
-//! Точная пара `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! SHA-256 EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
 //! source `worldcityregion.cpp:19,31,48,122,147`. Rust layout старый ABI не
 //! копирует.
 
@@ -99,7 +96,7 @@ struct WorldCityBuild {
 }
 
 impl WorldCityBuild {
-    /// Возвращает scalar-prefix в точном порядке legacy wire-а.
+ /// Возвращает scalar-prefix в точном порядке legacy wire-а.
     const fn wire_scalars(&self) -> [i32; 11] {
         [
             self.id,
@@ -202,7 +199,7 @@ impl CWorldCityRegion {
         Ok(WorldCityRegionLoadOutcome { counts, loaded })
     }
 
-    /// Missing `.city` не очищает прежнее состояние и возвращает legacy `0`.
+ /// Missing `.city` не очищает прежнее состояние и возвращает legacy `0`.
     pub(crate) fn load_city_bytes<ResolveName>(
         &mut self,
         bytes: Option<&[u8]>,
@@ -301,7 +298,7 @@ impl CWorldCityRegion {
         Ok(true)
     }
 
-    /// Derived override делегирует no-op War decoder и всегда возвращает `true`.
+ /// Derived override делегирует no-op War decoder и всегда возвращает `true`.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],
@@ -314,7 +311,7 @@ impl CWorldCityRegion {
         true
     }
 
-    /// Переносит defender/attacker только в активных Mass/Fight состояниях.
+ /// Переносит defender/attacker только в активных Mass/Fight состояниях.
     pub(crate) fn set_enter_pos_xy<'a, FindRegion, Random>(
         &self,
         player: Option<&mut CPlayer>,
@@ -331,9 +328,9 @@ impl CWorldCityRegion {
         if state != ECityState::Fight && state != ECityState::Mass {
             return Ok(());
         }
-        // Исходный владелец RVA `0x00079DA0` разыменовывает `pPlayer` без
-        // проверки только в активном состоянии; достижимая реакция null
-        // неизвестна.
+ // Исходный владелец разыменовывает `pPlayer` без
+ // проверки только в активном состоянии; достижимая реакция null
+ // неизвестна.
         let player = player.ok_or(WorldCityRegionEnterBlock::ActiveStateMissingPlayer)?;
         let mut tile_x = player
             .get_tile_x()
@@ -372,8 +369,8 @@ impl CWorldCityRegion {
                     .base()
                     .get_return_point(Some(&*player), country_param)
                     .map_err(WorldCityRegionEnterBlock::BaseReturnPoint)?;
-                // RVA 0x00079DA0 оставляет оба span-регистра нулевыми в attacker
-                // branch; это наблюдаемая странность, а не сокращение RECT.
+ // оставляет оба span-регистра нулевыми в attacker
+ // branch; это наблюдаемая странность, а не сокращение RECT.
                 (point.region_id, point.left, point.top, 0, 0)
             };
 

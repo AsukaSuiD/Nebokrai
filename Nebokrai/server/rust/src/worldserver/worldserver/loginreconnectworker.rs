@@ -1,18 +1,14 @@
-//! Системный owner повторного подключения WorldServer к LoginServer.
+//! Управляемый reconnect worker направления WorldServer -> LoginServer.
 //!
-//! Источник: `WorldServer/worldserver/game.cpp:2246,4883`, RVA
-//! `0x00004320/0x000033B0`, точная пара `Nworldserver.exe + WorldServer.pdb`.
-//! `CreateConnectLoginThread` сначала ставил exit-флаг предыдущего worker-а,
-//! безусловно ждал его handle, закрывал handle и только затем создавал новый.
-//! Сам worker проверял флаг до первой паузы, затем делал `Sleep(8000)`, одну
-//! попытку reconnect и проверял флаг лишь после неуспеха. `JoinHandle`,
-//! `AtomicBool` и Tokio `Handle` заменяют CRT/Win32 plumbing; восьмисекундная
-//! cadence и порядок stop/join/start остаются явными.
+//! Источник контракта — точная пара WorldServer EXE/PDB. Worker выполняет
+//! первый reconnect сразу, затем повторяет попытку с исходной cadence, пока
+//! соединение не опубликовано либо owned shutdown не отменит ожидание.
+//! Replacement client передаётся main-loop через typed handoff, поэтому смена
+//! network-owner-а происходит в его исходной позиции и не обгоняет сообщения.
 //!
-//! Worker не захватывает mutable `CGame`: `WorldLoginReconnectSpec` содержит
-//! snapshot setup и клонируемый отправитель единственной World FIFO. Поэтому
-//! новый client всё ещё проходит тот же `ProcessMessage` handoff, а фоновый
-//! поток не получает доступ к player, setup или transport-server состоянию.
+//! Tokio task/cancellation заменяет Win32 thread message и handle; stop всегда
+//! дожидается завершения задачи. Endpoint order, reconnect result и
+//! control-send publication остаются у `CGame`.
 
 use std::io;
 use std::sync::Arc;
@@ -45,7 +41,7 @@ pub(crate) struct WorldLoginReconnectWorker {
 }
 
 impl WorldLoginReconnectWorker {
-    /// Создаёт новый worker после полного join предыдущего owner-а.
+ /// Создаёт новый worker после полного join предыдущего owner-а.
     pub(crate) fn start(
         spec: WorldLoginReconnectSpec,
         runtime: Handle,
@@ -61,12 +57,12 @@ impl WorldLoginReconnectWorker {
         })
     }
 
-    /// Соответствует записи `bConnectThreadExit = true`.
+ /// Соответствует записи `bConnectThreadExit = true`.
     pub(crate) fn request_exit(&self) {
         self.signal.exit.store(true, Ordering::Relaxed);
     }
 
-    /// Выполняет exact wait/close-пару в safe форме ownership `JoinHandle`.
+ /// Выполняет wait/close-пару в safe форме ownership `JoinHandle`.
     pub(crate) fn join(&mut self) -> Option<WorldLoginReconnectWorkerCompletion> {
         self.handle.take().map(|handle| match handle.join() {
             Ok(outcome) => WorldLoginReconnectWorkerCompletion::Returned(outcome),
@@ -74,7 +70,7 @@ impl WorldLoginReconnectWorker {
         })
     }
 
-    /// Выставляет exit и ждёт worker; пауза 8 s намеренно не прерывается.
+ /// Выставляет exit и ждёт worker; пауза 8 s намеренно не прерывается.
     pub(crate) fn stop(&mut self) -> Option<WorldLoginReconnectWorkerCompletion> {
         self.request_exit();
         self.join()

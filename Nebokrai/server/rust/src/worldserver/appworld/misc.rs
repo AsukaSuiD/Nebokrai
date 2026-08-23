@@ -1,19 +1,14 @@
 //! Узкий process-global owner суточного номера копии ShengSiShiSu.
 //!
-//! `GetCopyNum` RVA `0x000A0DC0`, `AddCopyNum` RVA `0x000A0DD0`,
-//! `ClearCopyNum` RVA `0x000A0DE0` и
-//! `RegisterClearShengSiShiSuCopyNumTime` RVA `0x000A0E50` имеют статус
-//! `IMPLEMENTED`. Exact `GetCopyNum` читает signed DWORD по VA `0x0056B5E8`,
-//! а PE `.data` содержит initial bytes `01 00 00 00`. `AddCopyNum` выполняет
+//! `GetCopyNum`, `AddCopyNum`,
+//! `ClearCopyNum` и
+//! `RegisterClearShengSiShiSuCopyNumTime` входят в контракт owner-а.
+//! `GetCopyNum` читает signed DWORD с initial value `1`. `AddCopyNum` выполняет
 //! обычное 32-битное сложение с единицей без overflow gate; `AtomicI32`
 //! заменяет только возможную межпоточную data race и сохраняет wrapping bits.
-//! Декомпилятор: Ghidra 12.1.2; точная пара указана у raw provenance ниже.
-//! Сырой C++ ниже является комментарием, а не Rust-реализацией.
 //!
-//! Поздний Rust-донор верно определил начальное значение и назначение owner-а,
-//! но его fail-closed overflow был новым поведением и здесь не перенесён.
 //! Первое событие ставится на следующий день с часом/минутой/секундой `0`, но
-//! сохраняет текущие milliseconds: exact `0x004A0EB0..0x004A0EBF` обнуляет
+//! сохраняет текущие milliseconds: обнуляет
 //! три WORD `hour/minute/second`, но не соседний `milliseconds`. Callback
 //! сначала возвращает номер к `1`,
 //! затем одним новым local-time snapshot ставит следующее событие ровно через
@@ -33,7 +28,7 @@ pub(crate) fn get_copy_num() -> i32 {
     COPY_NUMBER.load(Ordering::Relaxed)
 }
 
-/// Увеличивает номер с exact 32-битным wrapping оригинала.
+/// Увеличивает номер с 32-битным wrapping оригинала.
 pub(crate) fn add_copy_num() -> i32 {
     COPY_NUMBER.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
 }
@@ -71,7 +66,7 @@ impl CopyNumberTimerState {
         matches!(self.event_id, Some(current) if current.get() == event_id.get())
     }
 
-    /// Ставит первое событие на ближайшую следующую legacy-полночь.
+ /// Ставит первое событие на ближайшую следующую legacy-полночь.
     pub(crate) fn register<Callback: Copy>(
         &mut self,
         current_time: TagTime,
@@ -93,7 +88,7 @@ impl CopyNumberTimerState {
         })
     }
 
-    /// Выполняет reset до вычисления следующего события, как `ClearCopyNum`.
+ /// Выполняет reset до вычисления следующего события, как `ClearCopyNum`.
     pub(crate) fn prepare_reset(
         &self,
         current_time: TagTime,
@@ -110,7 +105,7 @@ impl CopyNumberTimerState {
         })
     }
 
-    /// Фиксирует exact результат повторного `SetTimeEvent` callback-а.
+ /// Фиксирует результат повторного `SetTimeEvent` callback-а.
     pub(crate) fn finish_reset(
         &mut self,
         report: &mut CopyNumberResetReport,

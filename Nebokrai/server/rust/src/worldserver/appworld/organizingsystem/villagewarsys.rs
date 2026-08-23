@@ -1,24 +1,22 @@
 //! Владелец расписания деревенских войн `CVillageWarSys` WorldServer.
 //!
-//! `Initialize` RVA `0x0006BA20`, constructor `0x00069C10`,
-//! `GetRegionState` `0x00068EF0`, `IsVilRegionLeftClearTime` `0x00068FA0` и
-//! `GetCityStateByWarNum` `0x000690C0`, фазовые callbacks declare/start/end
-//! `0x00069E00/0x0006A040/0x0006A240` и clear-player `0x0006A480` имеют
-//! статус `IMPLEMENTED`. Countdown callbacks `0x0006A510/0x0006A7D0` и weekly
-//! end/rearm `0x0006AA90`, результат `OnFacWinVillage` `0x0006AFE0` и заявка
-//! `ApplyForVillageWar` `0x0006CCF0`, `ReLoad` `0x0006CB70` и полный
-//! `AddToByteArray` snapshot `0x00068E00` имеют статус `IMPLEMENTED`. Точная пара:
+//! `Initialize`, constructor,
+//! `GetRegionState`, `IsVilRegionLeftClearTime` и
+//! `GetCityStateByWarNum`, фазовые callbacks declare/start/end
+//! и clear-player имеют
+//! end/rearm, результат `OnFacWinVillage` и заявка
+//! `ApplyForVillageWar`, `ReLoad` и полный
+//! `AddToByteArray` snapshot действуют. Источник контракта — точная пара WorldServer EXE/PDB.
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; source
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\villagewarsys.cpp`.
 //!
-//! PDB задаёт `tagVilWarSetup` размером `0x98`: signed ID/region IDs, шесть
+//! Layout сохраняет `tagVilWarSetup` размером `0x98`: signed ID/region IDs, шесть
 //! `tagTime`, шесть unsigned event IDs, `eCityState`, ordered list faction IDs
 //! и signed weekly flag. Rust заменяет `std::map/list` на `BTreeMap/Vec`, а
 //! event ID до фактической регистрации хранит как `Option<TimerId>`: reload
 //! старого объекта читал неинициализированные ID у уже прошедших фаз, и эта
 //! отдельная UB-граница не получает придуманного поведения.
 //! Конструкторы по умолчанию и копирования `tagVilWarSetup`, а также `operator=` из владельца
-//! `union.cpp` достигнуты здесь: запись создаётся только после разбора всех
+//! `union.cpp` действуют здесь: запись создаётся только после разбора всех
 //! значимых полей, а `Clone` копирует их вместе с упорядоченным списком
 //! фракций. Поэтому Rust намеренно не материализует старое промежуточное
 //! состояние с неинициализированными знаковыми ID/ID событий.
@@ -35,7 +33,7 @@
 //!
 //! Timer function pointers заменены переданными `Copy` callback keys. Phase
 //! callbacks сначала меняют state, затем строят точный World `CMessage` с
-//! signed war number и рассылают opcodes `0x7FE2F/30/31/33`. Достигнутые
+//! signed war number и рассылают opcodes `0x7FE2F/30/31/33`. Действующие
 //! MainLoop передаёт callback-ам живые region, localization, organizing-info,
 //! country, top-info и war-log owners через единый узкий контекст, сохраняя
 //! исходный порядок. End callback доказанно снова ставит
@@ -45,9 +43,9 @@
 //! сначала рассылает `0x7FE32` и очищает faction list, затем проверяет не более
 //! пяти следующих недель тем же неполным endpoint-overlap и регистрирует шесть
 //! событий в исходном порядке. Второй параметр callback-а не читался. Faction-
-//! snapshot `0x00069990` дописывает signed war ID, 32-битный count и ordered
-//! signed faction IDs; exact EXE `0x00469A83` подтверждает итоговый `true`.
-//! `IsAlreadyDeclarForWar` `0x00069AE0` ищет faction только в schedule со
+//! snapshot дописывает signed war ID, 32-битный count и ordered
+//! signed faction IDs; подтверждает итоговый `true`.
+//! `IsAlreadyDeclarForWar` ищет faction только в schedule со
 //! state, отличным от `CIS_NO`, не меняя исходные списки.
 //! `OnFacWinVillage` сначала убивает end-info/end events, проверяет war и
 //! village regions и только затем читает прежнего владельца. После общего
@@ -57,16 +55,16 @@
 //! не читается: его stack-slot оригинал использовал под вычисленный union ID.
 //! `ApplyForVillageWar` сохраняет master/faction/две region/level/state/owner/
 //! union/owned-city/duplicate gates, затем дописывает faction ID, рассылает
-//! exact `0x7FE36` snapshot и публикует `WS0289`. Level-rejection использует
-//! title `WS0121` и text `WS0288`; третий `long` не читается. Exact EXE
-//! `0x0046D0D5` возвращает `true` только после war-log, все отказы — `false`.
+//! `0x7FE36` snapshot и публикует `WS0289`. Level-rejection использует
+//! title `WS0121` и text `WS0288`; третий `long` не читается.
+//! возвращает `true` только после war-log, все отказы — `false`.
 //! DB-вызовов в этом owner-е нет; STL/string/SEH cleanup удалён как noise.
 //! `ReLoad` в map-order безусловно убивает IDs в порядке declare/start-info/
 //! start/end-info/end/clear, копирует map, завершает активные копии и вызывает
 //! `Initialize`. Не назначенный `Option<TimerId>` блокирует только конкретный
 //! неизвестный kill после сохранения предыдущих. Weekly end перед initialize
 //! регистрирует промежуточные events, которые старый код не отменял перед
-//! очисткой map; странность сохранена. Exact `0x0046CCE0` принудительно
+//! очисткой map; странность сохранена. принудительно
 //! возвращает `true` после initialize, не используя его старый result.
 //! Полный snapshot начинает с 32-битного count, затем для каждой записи в
 //! map-order копирует prefix `0x8C`, отдельный count и ordered faction IDs;
@@ -74,7 +72,7 @@
 //! неинициализированных байта stateless allocator-base `std::list`, а event IDs
 //! до регистрации также могли быть неинициализированы. Rust нормализует эти
 //! ненаблюдаемые значения к нулю: парный decoder из
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, RVA `0x0005F320`,
+//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`,,
 //! пересоздаёт list, отдельно читает count/IDs и event IDs не использует. Это
 //! доказанный downstream-compatible слой, а не заявление о старых residue bytes.
 //! Некорректное чтение, переполнение ID и недоказанная знаковая календарная
@@ -111,7 +109,7 @@ pub(crate) enum VillageWarCallbackKind {
 }
 
 impl<Callback: PartialEq> VillageWarCallbacks<Callback> {
-    /// Сопоставляет сработавший типизированный идентификатор с исходной фазой таймера.
+ /// Сопоставляет сработавший типизированный идентификатор с исходной фазой таймера.
     pub(crate) fn kind(&self, callback: &Callback) -> Option<VillageWarCallbackKind> {
         [
             (&self.declare, VillageWarCallbackKind::Declare),
@@ -139,12 +137,12 @@ pub(crate) struct VillageWarAnnouncement {
 pub(crate) trait VillageWarPhaseContext {
     type Block;
 
-    /// Синхронно повторяет `CMessage::SendAll`; старый return игнорировался.
+ /// Синхронно повторяет `CMessage::SendAll`; старый return игнорировался.
     fn send_all(&mut self, message: &CMessage) -> i32;
 
-    /// При существующем region форматирует `world_string_id` его именем,
-    /// отправляет organizing-info с `-366/0xFFFF0000`, затем при указанном
-    /// флаге ставит `m_bIsWarring=true` странам `1..=4` и пишет строку в `war`.
+ /// При существующем region форматирует `world_string_id` его именем,
+ /// отправляет organizing-info с `-366/`, затем при указанном
+ /// флаге ставит `m_bIsWarring=true` странам `1..=4` и пишет строку в `war`.
     fn announce(&mut self, request: VillageWarAnnouncement) -> Result<(), Self::Block>;
 }
 
@@ -156,7 +154,7 @@ pub(crate) struct VillageWarPhaseReport {
     pub(crate) announcement_requested: bool,
 }
 
-/// Параметры одного exact timer-2 top-info countdown-а.
+/// Параметры одного timer-2 top-info countdown-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct VillageWarCountdownRequest {
     pub(crate) war_number: i32,
@@ -165,14 +163,14 @@ pub(crate) struct VillageWarCountdownRequest {
     pub(crate) duration_ms: i32,
 }
 
-/// Граница region lookup и уже достигнутого organizing top-info owner-а.
+/// Граница region lookup и уже действующего organizing top-info owner-а.
 pub(crate) trait VillageWarCountdownContext {
     type Block;
 
     fn region_exists(&mut self, region_id: i32) -> Result<bool, Self::Block>;
 
-    /// Разрешает `world_string_id`, вызывает `AddOneTopInfo(2, duration, text)`,
-    /// затем `SendTopInfoToClient` с возвращённым ID и теми же полями.
+ /// Разрешает `world_string_id`, вызывает `AddOneTopInfo(2, duration, text)`,
+ /// затем `SendTopInfoToClient` с возвращённым ID и теми же полями.
     fn publish_countdown(&mut self, request: VillageWarCountdownRequest)
     -> Result<(), Self::Block>;
 }
@@ -223,7 +221,7 @@ pub(crate) trait VillageWarResultContext {
 
     fn region(&mut self, region_id: i32) -> Result<Option<VillageWarResultRegion>, Self::Block>;
 
-    /// Читает virtual owner getter только в достигнутом исходном месте.
+ /// Читает virtual owner getter только в действующем исходном месте.
     fn region_owner_faction_id(&mut self, region_id: i32) -> Result<i32, Self::Block>;
 
     fn faction(&mut self, faction_id: i32) -> Result<Option<VillageWarResultFaction>, Self::Block>;
@@ -239,12 +237,12 @@ pub(crate) trait VillageWarResultContext {
 
     fn add_owned_city(&mut self, faction_id: i32, region_id: i32) -> Result<(), Self::Block>;
 
-    /// Вызывает исходный virtual `ClearOwnedCity()` без region parameter.
+ /// Вызывает исходный virtual `ClearOwnedCity()` без region parameter.
     fn clear_owned_city(&mut self, faction_id: i32) -> Result<(), Self::Block>;
 
     fn add_village_war_victor_count(&mut self, faction_id: i32) -> Result<(), Self::Block>;
 
-    /// Форматирует `GetStringByID` в старую 256-byte `_sprintf` границу.
+ /// Форматирует `GetStringByID` в старую 256-byte `_sprintf` границу.
     fn format_world_string(
         &mut self,
         string_id: &'static [u8],
@@ -313,8 +311,8 @@ pub(crate) trait VillageWarApplicationContext {
 
     fn region_name(&mut self, region_id: i32) -> Result<Vec<u8>, Self::Block>;
 
-    /// Локализует title/text по порядку и отправляет player-targeted overload
-    /// с legacy arguments `-1, -1, 0xFFFF0000`.
+ /// Локализует title/text по порядку и отправляет player-targeted overload
+ /// с legacy arguments `-1, -1, `.
     fn send_level_rejection(
         &mut self,
         player_id: i32,
@@ -322,7 +320,7 @@ pub(crate) trait VillageWarApplicationContext {
         text_string_id: &'static [u8],
     ) -> Result<(), Self::Block>;
 
-    /// Форматирует локализацию в исходную 500-byte `_sprintf` границу.
+ /// Форматирует локализацию в исходную 500-byte `_sprintf` границу.
     fn format_world_string(
         &mut self,
         string_id: &'static [u8],
@@ -446,7 +444,7 @@ impl CVillageWarSys {
         }
     }
 
-    /// Загружает расписания и регистрирует достигнутые calendar events.
+ /// Загружает расписания и регистрирует действующие calendar events.
     pub(crate) fn initialize<Callback: Copy>(
         &mut self,
         source: Option<&[u8]>,
@@ -504,7 +502,7 @@ impl CVillageWarSys {
         Ok(report)
     }
 
-    /// Отменяет старые events, завершает активные копии и заново загружает файл.
+ /// Отменяет старые events, завершает активные копии и заново загружает файл.
     pub(crate) fn reload<Callback, SendAll>(
         &mut self,
         source: Option<&[u8]>,
@@ -563,7 +561,7 @@ impl CVillageWarSys {
         Ok(report)
     }
 
-    /// Дописывает полный World->Game snapshot в исходном map/field порядке.
+ /// Дописывает полный World->Game snapshot в исходном map/field порядке.
     pub(crate) fn add_to_byte_array(&self, output: &mut Vec<u8>) -> bool {
         append_u32(output, self.village_wars.len() as u32);
         for setup in self.village_wars.values() {
@@ -584,11 +582,11 @@ impl CVillageWarSys {
             append_i32(output, setup.village_region_id);
             append_i32(output, setup.region_state as i32);
 
-            // RVA 0x00068E00 копирует ещё четыре неинициализированных bytes
-            // пустого allocator-base `std::list`. GameServer RVA 0x0005F320
-            // перезаписывает ими тот же stateless allocator, но отдельно
-            // создаёт `_Myhead`, читает count и ни разу не читает event IDs.
-            // Нули — узкий compatibility-layer, а не заявленные старые bytes.
+ // копирует ещё четыре неинициализированных bytes
+ // пустого allocator-base `std::list`. GameServer
+ // перезаписывает ими тот же stateless allocator, но отдельно
+ // создаёт `_Myhead`, читает count и ни разу не читает event IDs.
+ // Нули — узкий compatibility-layer, а не заявленные старые bytes.
             output.extend_from_slice(&[0; 4]);
             append_u32(output, setup.declaring_factions.len() as u32);
             for &faction_id in &setup.declaring_factions {
@@ -598,7 +596,7 @@ impl CVillageWarSys {
         true
     }
 
-    /// Возвращает state первой записи в map-order для данного региона и времени.
+ /// Возвращает state первой записи в map-order для данного региона и времени.
     pub(crate) fn get_region_state_at(&self, region_id: i32, now: TagTime) -> ECityState {
         self.village_wars
             .values()
@@ -614,7 +612,7 @@ impl CVillageWarSys {
         self.get_region_state_at(region_id, TagTime::local_now())
     }
 
-    /// Сохраняет исходную полуоткрытую границу `[clear, end)` деревни.
+ /// Сохраняет исходную полуоткрытую границу `[clear, end)` деревни.
     pub(crate) fn is_village_region_left_clear_time_at(
         &self,
         region_id: i32,
@@ -637,7 +635,7 @@ impl CVillageWarSys {
             .map_or(ECityState::No, |setup| setup.region_state)
     }
 
-    /// Дописывает один exact faction-list snapshot для GameServer.
+ /// Дописывает один faction-list snapshot для GameServer.
     pub(crate) fn update_apply_war_factions_to_game_server(
         &self,
         war_number: i32,
@@ -655,14 +653,14 @@ impl CVillageWarSys {
         true
     }
 
-    /// Проверяет faction во всех не завершённых village-war заявках.
+ /// Проверяет faction во всех не завершённых village-war заявках.
     pub(crate) fn is_already_declared_for_war(&self, faction_id: i32) -> bool {
         self.village_wars.values().any(|setup| {
             setup.region_state != ECityState::No && setup.declaring_factions.contains(&faction_id)
         })
     }
 
-    /// Принимает village-war заявку только после всей исходной цепочки gates.
+ /// Принимает village-war заявку только после всей исходной цепочки gates.
     pub(crate) fn apply_for_village_war<Context>(
         &mut self,
         player_id: i32,
@@ -743,12 +741,12 @@ impl CVillageWarSys {
         Ok(report)
     }
 
-    /// Копирует полную запись по ID, как старый assignment operator.
+ /// Копирует полную запись по ID, как старый assignment operator.
     pub(crate) fn get_village_war_setup_by_time(&self, war_number: i32) -> Option<VillageWarSetup> {
         self.village_wars.get(&war_number).cloned()
     }
 
-    /// Переводит найденную войну в declare-state и публикует фазу.
+ /// Переводит найденную войну в declare-state и публикует фазу.
     pub(crate) fn on_declare_war<Context: VillageWarPhaseContext + ?Sized>(
         &mut self,
         war_number: i32,
@@ -764,7 +762,7 @@ impl CVillageWarSys {
         )
     }
 
-    /// Переводит найденную войну в fight-state и публикует фазу.
+ /// Переводит найденную войну в fight-state и публикует фазу.
     pub(crate) fn on_attack_village_start<Context: VillageWarPhaseContext + ?Sized>(
         &mut self,
         war_number: i32,
@@ -780,14 +778,14 @@ impl CVillageWarSys {
         )
     }
 
-    /// Завершает найденную войну и публикует исходную end-фазу.
+ /// Завершает найденную войну и публикует исходную end-фазу.
     pub(crate) fn on_attack_village_end<Context: VillageWarPhaseContext + ?Sized>(
         &mut self,
         war_number: i32,
         context: &mut Context,
     ) -> Result<VillageWarPhaseReport, Context::Block> {
-        // RVA 0x0006A240 снова ставит `true` всем четырём странам. Это
-        // подтверждённая странность callback-а, а не исправляемый typo.
+ // снова ставит `true` всем четырём странам. Это
+ // подтверждённая странность callback-а, а не исправляемый typo.
         self.apply_phase(
             war_number,
             ECityState::No,
@@ -798,7 +796,7 @@ impl CVillageWarSys {
         )
     }
 
-    /// Рассылает clear-player только для существующего schedule ID.
+ /// Рассылает clear-player только для существующего schedule ID.
     pub(crate) fn on_clear_player<Context: VillageWarPhaseContext + ?Sized>(
         &self,
         war_number: i32,
@@ -896,7 +894,7 @@ impl CVillageWarSys {
         })
     }
 
-    /// Завершает schedule, очищает заявки и ищет первый из пяти weekly slots.
+ /// Завершает schedule, очищает заявки и ищет первый из пяти weekly slots.
     pub(crate) fn on_village_war_end<Callback, SendAll>(
         &mut self,
         war_number: i32,
@@ -964,7 +962,7 @@ impl CVillageWarSys {
         })
     }
 
-    /// Завершает досрочную village-war победу и публикует исходные тексты.
+ /// Завершает досрочную village-war победу и публикует исходные тексты.
     #[allow(
         clippy::too_many_arguments,
         reason = "четыре legacy long и timer/context сохраняют исходную callback-границу"
@@ -1405,10 +1403,10 @@ fn new_village_schedule(
     clear_offset: i32,
     is_every_week: bool,
 ) -> Result<VillageWarSetup, VillageWarLoadError> {
-    // Вместо конструктора по умолчанию, оставлявшего ID полей и событий
-    // неинициализированными до записи парсером, Rust создаёт запись только с
-    // уже известными полями. Это устраняет внутреннее UB, не меняя достигнутое
-    // расписание, его Clone/присваивание или wire-снимок.
+ // Вместо конструктора по умолчанию, оставлявшего ID полей и событий
+ // неинициализированными до записи парсером, Rust создаёт запись только с
+ // уже известными полями. Это устраняет внутреннее UB, не меняя действующее
+ // расписание, его Clone/присваивание или wire-снимок.
     Ok(VillageWarSetup {
         id,
         war_region_id,

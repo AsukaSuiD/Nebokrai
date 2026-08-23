@@ -1,17 +1,12 @@
 //! Владелец bank-container исторического `WorldServer`.
 //!
-//! Состояние конструктора и деструктора RVA `0x000D7FE0/0x000D8060`,
-//! `Release/Clear` RVA `0x000D8040/0x000D8050` и унаследованного wallet-codec
-//! RVA `0x000D5EF0/0x000D6030`, а также lock-gated `Find/Remove/Add/AddFromDB`
-//! RVA `0x000D8000/0x000D8010/0x000D8020/0x000D8030/0x000D80E0`
-//! реализованы в Rust. Точная пара доказательных артефактов:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cbank.cpp:16,29,150,161`.
+//! Состояние конструктора и деструктора,
+//! `Release/Clear` и унаследованного wallet-codec
+//! а также lock-gated `Find/Remove/Add/AddFromDB`
 //!
-//! Exact PDB задаёт класс размером `0x2C`: base `CWallet` по `+0x0` и
+//! входят в контракт owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
+//!
+//! Layout сохраняет класс размером `0x2C`: base `CWallet` по `+0x0` и
 //! единственное собственное поле `bool m_bLocked` по `+0x28`. Constructor
 //! создаёт обычный wallet-state и `false`; `Clear` и `Release` сначала также
 //! снимают lock, затем делегируют различающимся wallet-операциям. Destructor
@@ -28,8 +23,8 @@
 //!
 //! `CWallet` служит узким compatibility-layer для доказанных base-state и
 //! codec-а. `Option<Box<CGoods>>` заменяет nullable pointer и
-//! `GarbageCollect`, а встроенный listener остаётся ранее доказанным no-op RVA
-//! `0x000DBD10`.
+//! `GarbageCollect`, а встроенный listener остаётся ранее доказанным no-op
+//!
 //!
 //! `Find`, `Remove` и обе перегрузки `Add` проверяют lock до wallet-вызова.
 //! `AddFromDB` отличается: сначала inherited positional `GetGoods` проверяет
@@ -47,14 +42,14 @@ use super::cwallet::CWallet;
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
 use crate::public::guid::CGuid;
 
-/// Достигнутое состояние исходного `CBank`, не копия его 32-битного ABI.
+/// Действующее состояние исходного `CBank`, не копия его 32-битного ABI.
 pub(crate) struct CBank {
     wallet_state: CWallet,
     locked: bool,
 }
 
 impl CBank {
-    /// Создаёт пустой unlocked bank с inherited owner `0/0`.
+ /// Создаёт пустой unlocked bank с inherited owner `0/0`.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             wallet_state: CWallet::with_constructor_defaults(),
@@ -62,19 +57,19 @@ impl CBank {
         }
     }
 
-    /// Снимает lock и очищает slot, сохраняя inherited owner type/ID.
+ /// Снимает lock и очищает slot, сохраняя inherited owner type/ID.
     pub(crate) fn clear(&mut self) {
         self.locked = false;
         self.wallet_state.clear();
     }
 
-    /// Снимает lock, сбрасывает inherited owner type/ID и уничтожает slot.
+ /// Снимает lock, сбрасывает inherited owner type/ID и уничтожает slot.
     pub(crate) fn release(&mut self) {
         self.locked = false;
         self.wallet_state.release();
     }
 
-    /// Проверяет достижение exact max-stack единственного товара.
+ /// Проверяет достижение max-stack единственного товара.
     pub(crate) fn is_full(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -82,29 +77,29 @@ impl CBank {
         self.wallet_state.is_full(registry)
     }
 
-    /// Возвращает товар только для унаследованной единственной позиции `0`.
+ /// Возвращает товар только для унаследованной единственной позиции `0`.
     pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
         self.wallet_state.get_goods(position)
     }
 
-    /// Возвращает mutable DB-view slot-а независимо от lock, как collision lookup.
+ /// Возвращает mutable DB-view slot-а независимо от lock, как collision lookup.
     pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         self.wallet_state.get_goods_mut(position)
     }
 
-    /// Возвращает число занятых bank-slot-ов: ноль либо один.
+ /// Возвращает число занятых bank-slot-ов: ноль либо один.
     pub(crate) const fn get_goods_amount(&self) -> u32 {
         self.wallet_state.get_goods_amount()
     }
 
-    /// Ищет товар только в unlocked bank.
+ /// Ищет товар только в unlocked bank.
     pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         (!self.locked)
             .then(|| self.wallet_state.find(ex_id))
             .flatten()
     }
 
-    /// Вынимает товар только из unlocked bank.
+ /// Вынимает товар только из unlocked bank.
     pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
         if self.locked {
             return None;
@@ -112,7 +107,7 @@ impl CBank {
         self.wallet_state.remove(ex_id)
     }
 
-    /// Делегирует object-перегрузку `Add` только из unlocked state.
+ /// Делегирует object-перегрузку `Add` только из unlocked state.
     pub(crate) fn add(
         &mut self,
         goods: Box<CGoods>,
@@ -125,7 +120,7 @@ impl CBank {
         self.wallet_state.add(goods, gold_coin_index, registry)
     }
 
-    /// Делегирует positional `Add` только из unlocked state.
+ /// Делегирует positional `Add` только из unlocked state.
     pub(crate) fn add_at(
         &mut self,
         position: u32,
@@ -140,7 +135,7 @@ impl CBank {
             .add_at(position, goods, gold_coin_index, registry)
     }
 
-    /// Проверяет positional collision раньше lock и затем делегирует DB-вставку.
+ /// Проверяет positional collision раньше lock и затем делегирует DB-вставку.
     pub(crate) fn add_from_db(&mut self, position: u32, goods: Box<CGoods>) -> Option<Box<CGoods>> {
         if self.wallet_state.get_goods(position).is_some() || self.locked {
             return Some(goods);
@@ -148,7 +143,7 @@ impl CBank {
         self.wallet_state.add_from_db(position, goods)
     }
 
-    /// Сохраняет exact qualified `CWallet`-вызов largess, обходящий bank lock.
+ /// Сохраняет qualified `CWallet`-вызов largess, обходящий bank lock.
     pub(crate) fn add_gold_coin_of_largess(
         &mut self,
         position: u32,
@@ -159,7 +154,7 @@ impl CBank {
             .add_gold_coin_of_largess(position, goods, gold_coin_limit)
     }
 
-    /// Замораживает единственный bank-slot без изменения lock-state.
+ /// Замораживает единственный bank-slot без изменения lock-state.
     pub(crate) fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -167,7 +162,7 @@ impl CBank {
         self.wallet_state.db_save_entries(registry)
     }
 
-    /// Кодирует унаследованный marker/goods-wire без сериализации lock-а.
+ /// Кодирует унаследованный marker/goods-wire без сериализации lock-а.
     pub(crate) fn serialize(
         &self,
         destination: &mut Vec<u8>,
@@ -176,7 +171,7 @@ impl CBank {
         self.wallet_state.serialize(destination, include_child)
     }
 
-    /// Снимает lock и декодирует унаследованный marker/goods-wire после `Release`.
+ /// Снимает lock и декодирует унаследованный marker/goods-wire после `Release`.
     pub(crate) fn unserialize(
         &mut self,
         source: &[u8],

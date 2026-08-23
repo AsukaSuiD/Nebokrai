@@ -1,62 +1,48 @@
-//! Country-map владелец исторического `WorldServer`.
+//! Country-map владелец WorldServer из точной пары EXE/PDB.
 //!
-//! Статус `CCountryHandler::GetCountry` RVA `0x00036C40`,
-//! `AddToByteArray` RVA `0x000449F0`,
-//! `send_info_to_client` RVA `0x00044760`, `SendTopInfoToClient` RVA
-//! `0x00044800`, `GenerateSaveData` RVA `0x00044970`,
-//! `SetNewDay` RVA `0x00044A70`, `Initialize` RVA `0x00044B10`,
-//! `Append` RVA `0x000452B0`,
-//! `AddOneTopInfo` RVA `0x00045130` и полный `Run` RVA `0x00045040` —
-//! `IMPLEMENTED`; singleton-доступ, конструктор, `Release` и destructor также
-//! выражены через безопасное Rust-владение. Точная
-//! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
-//! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryhandler.h`
-//! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\country\countryhandler.cpp:49,157,204`.
+//! Контракт охватывает serialization, initialize/release, save generation,
+//! top-info, суточное обновление и полный `Run`.
 //!
-//! Exact PDB задаёт `m_pCountrys` по `+0x0C` как
+//! Layout сохраняет `m_pCountrys` по `+0x0C` как
 //! `std::map<unsigned char, CCountry*>`. Generator проходит его в unsigned
 //! key-order, пропускает null country, вызывает concrete `CloneSaveData` и
 //! только для non-null результата вызывает `CGame::AppendDBCountry`. Rust
 //! `BTreeMap<u8, Option<Box<_>>>` сохраняет map-order и nullable value, а owned
 //! `CountrySaveSnapshot` заменяет отдельный heap-object без Windows ABI.
 //! Allocation failure не получает выдуманного продолжения старой null/UB
-//! ветви. Полный raw-блок generator-а и inlined STL traversal удалены.
+//! ветви. Полный оригинал-блок generator-а и inlined STL traversal удалены.
 //! Для вложенного city-war вызова `CCountry::SetKing`, которому одновременно
 //! нужен mutable governance-контекст, owner временно снимается из существующего
-//! nullable slot и безусловно возвращается после вызова. Это устраняет raw
+//! nullable slot и безусловно возвращается после вызова. Это устраняет оригинал
 //! alias `CCountry*`/singleton handler средствами ownership; map key, lifetime
 //! между сообщениями и наблюдаемый порядок country side effects не меняются.
 //!
-//! `AddOneTopInfo` использует отдельный process-static signed ID с exact
-//! initial `1` по `0x0056A9F0`, wrapping увеличивает его до clock-call, затем
+//! `AddOneTopInfo` использует отдельный process-static signed ID с
+//! initial `1`; wrapping увеличивает его до clock-call, затем
 //! запись добавляется в хвост. `Run` снимает отдельный wrapping tick для каждой
 //! top-info записи и удаляет все `timer == 2 && param <= elapsed`, продолжая
-//! обход после erase; это подтверждено exact EXE `0x00445060..0x004450AD`.
+//! обход после erase.
 //! Затем country-map обходится в unsigned key-order. Concrete `CCountry::AI`
 //! вызывается только при ненулевом king ID и непустом king name; его typed
-//! report сохраняется рядом с map key. Raw разыменовывал null country, но
+//! report сохраняется рядом с map key. оригинал разыменовывал null country, но
 //! nullable slot Rust появляется только внутри синхронного
 //! `take_country_owner`/`restore_country_owner` для снятия borrow-alias.
 //! Повторный вход `Run` в этот промежуток не является игровым состоянием;
 //! отсутствие owner-а поэтому пропускается как устранённый internal lifecycle
 //! defect, а не публикуется новым external `CountryRunBlock`.
 //! `send_info_to_client` строит `0x7FA03` из четырёх consecutive unsigned long
-//! и C-строки; один overload target `0x00423C00` для обоих нулей/title/color
-//! подтверждён exact EXE.
+//! и C-строки; один overload target для обоих нулей/title/color
+//! подтверждён.
 //! `SendTopInfoToClient` тем же сетевым owner-ом строит `0x7FA04` из нулевого
 //! player ID, signed top-info ID, timer flag, parameter и C-строки; return
 //! исходный void игнорировал, typed delivery сохраняется вызывающим adapter-ом.
-//! `SetNewDay` exact `0x00444A70..0x00444B04` проходит unsigned country-key
+//! `SetNewDay` проходит unsigned country-key
 //! map-order, пропускает null values и вызывает `CCountry::SetNewDay` с тем же
 //! signed day. `BTreeMap` заменяет только MSVC tree traversal.
 //! `Append` отвергает null, затем делает `operator[]` по country byte и
 //! безусловно заменяет value. Rust сохраняет last-write-wins, но освобождает
 //! прежний owned country вместо исходной внутренней утечки pointer-а.
-//! `Initialize` exact `0x00444B10..0x00444B4D` снимает local day-of-month и
+//! `Initialize` снимает local day-of-month и
 //! записывает `m_nDay` до `CDBCountry::Load`; при false немедленно возвращает
 //! false, при true вызывает `SetNewDay(m_nDay)` и возвращает true. Источник
 //! локального времени передан caller-ом, а DB owner/connection — явно вместо
@@ -182,11 +168,11 @@ pub(crate) enum CountryAppendDisposition {
 }
 
 pub(crate) trait CountryInfoDeliveryContext {
-    /// Синхронно повторяет `CMessage::SendAll`; старый return игнорировался.
+ /// Синхронно повторяет `CMessage::SendAll`; старый return игнорировался.
     fn send_all(&mut self, message: &CMessage) -> i32;
 }
 
-/// Достигнутая save-часть исходного singleton owner-а.
+/// Действующая save-часть исходного singleton owner-а.
 pub(crate) struct CCountryHandler {
     countries: BTreeMap<u8, Option<Box<CCountry>>>,
     top_infos: VecDeque<CountryTopInfo>,
@@ -196,9 +182,9 @@ pub(crate) struct CCountryHandler {
 /// Итог consuming `CCountryHandler::Release`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryHandlerReleaseReport {
-    /// Число живых country-owner-ов, удалённых до освобождения map storage.
+ /// Число живых country-owner-ов, удалённых до освобождения map storage.
     pub(crate) released_countries: usize,
-    /// Число top-info записей, уничтоженных вместе с handler-ом.
+ /// Число top-info записей, уничтоженных вместе с handler-ом.
     pub(crate) released_top_infos: usize,
 }
 
@@ -209,7 +195,7 @@ impl Default for CCountryHandler {
 }
 
 impl CCountryHandler {
-    /// Повторяет exact `Append`: null reject, затем `operator[]` overwrite.
+ /// Повторяет `Append`: null reject, затем `operator[]` overwrite.
     pub(crate) fn append_country(
         &mut self,
         country: Option<Box<CCountry>>,
@@ -225,7 +211,7 @@ impl CCountryHandler {
         }
     }
 
-    /// Повторяет exact ordered map traversal `CCountryHandler::SetNewDay`.
+ /// Повторяет ordered map traversal `CCountryHandler::SetNewDay`.
     pub(crate) fn set_new_day<Context: CountrySetNewDayContext + ?Sized>(
         &mut self,
         requested_day: i32,
@@ -251,7 +237,7 @@ impl CCountryHandler {
         }
     }
 
-    /// Создаёт доказанный пустой country-map.
+ /// Создаёт доказанный пустой country-map.
     pub(crate) const fn with_reached_save_state() -> Self {
         Self {
             countries: BTreeMap::new(),
@@ -260,11 +246,11 @@ impl CCountryHandler {
         }
     }
 
-    /// Потребляет singleton owner, как `Release` после удаления всех country.
-    ///
-    /// Старый метод virtual-удалял каждый ненулевой `CCountry*`, затем удалял
-    /// сам process-global handler. Rust возвращает счётчики до обычного Drop;
-    /// map/list nodes, vtable и deleting-destructor не являются контрактом.
+ /// Потребляет singleton owner, как `Release` после удаления всех country.
+ ///
+ /// Старый метод virtual-удалял каждый ненулевой `CCountry*`, затем удалял
+ /// сам process-global handler. Rust возвращает счётчики до обычного Drop;
+ /// map/list nodes, vtable и deleting-destructor не являются контрактом.
     pub(crate) fn release(self) -> CountryHandlerReleaseReport {
         CountryHandlerReleaseReport {
             released_countries: self.countries.values().flatten().count(),
@@ -272,7 +258,7 @@ impl CCountryHandler {
         }
     }
 
-    /// Повторяет exact Initialize: local day записывается до DB load.
+ /// Повторяет Initialize: local day записывается до DB load.
     pub(crate) async fn initialize<Database, Context>(
         &mut self,
         local_day: i32,
@@ -299,7 +285,7 @@ impl CCountryHandler {
         }
     }
 
-    /// Дописывает точную ordered country-map для initial-config subtype `0x19`.
+ /// Дописывает точную ordered country-map для initial-config subtype `0x19`.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -324,7 +310,7 @@ impl CCountryHandler {
         Ok(())
     }
 
-    /// Возвращает живую страну по unsigned ID; ноль всегда равен `nullptr`.
+ /// Возвращает живую страну по unsigned ID; ноль всегда равен `nullptr`.
     pub(crate) fn get_country(&self, country_id: u8) -> Option<&CCountry> {
         if country_id == 0 {
             return None;
@@ -339,8 +325,8 @@ impl CCountryHandler {
         self.countries.get_mut(&country_id)?.as_deref_mut()
     }
 
-    /// Временно передаёт concrete country-owner координирующему контексту.
-    /// Это Rust-замена одновременного `CCountry*` и singleton handler alias.
+ /// Временно передаёт concrete country-owner координирующему контексту.
+ /// Это Rust-замена одновременного `CCountry*` и singleton handler alias.
     pub(crate) fn take_country_owner(&mut self, country_id: u8) -> Option<Box<CCountry>> {
         if country_id == 0 {
             return None;
@@ -348,7 +334,7 @@ impl CCountryHandler {
         self.countries.get_mut(&country_id)?.take()
     }
 
-    /// Возвращает ранее снятый owner в тот же существующий nullable slot.
+ /// Возвращает ранее снятый owner в тот же существующий nullable slot.
     pub(crate) fn restore_country_owner(&mut self, country_id: u8, owner: Box<CCountry>) {
         let slot = self
             .countries
@@ -358,7 +344,7 @@ impl CCountryHandler {
         *slot = Some(owner);
     }
 
-    /// Пишет reached `m_lCountryWarRes`; miss/null сохраняет исходный no-op.
+ /// Пишет reached `m_lCountryWarRes`; miss/null сохраняет исходный no-op.
     pub(crate) fn set_country_war_result(&mut self, country_id: u8, result: i32) -> bool {
         let Some(country) = self.get_country_mut(country_id) else {
             return false;
@@ -367,7 +353,7 @@ impl CCountryHandler {
         true
     }
 
-    /// Строит exact `0x7FA03` и синхронно передаёт его исходному SendAll-owner-у.
+ /// Строит `0x7FA03` и синхронно передаёт его исходному SendAll-owner-у.
     pub(crate) fn send_info_to_client<Context: CountryInfoDeliveryContext + ?Sized>(
         &self,
         info: &CStr,
@@ -384,8 +370,8 @@ impl CCountryHandler {
         context.send_all(&message)
     }
 
-    /// Строит exact `0x7FA04`: нулевой player ID, top-info ID, timer flag,
-    /// parameter и C-string, затем синхронный `SendAll`.
+ /// Строит `0x7FA04`: нулевой player ID, top-info ID, timer flag,
+ /// parameter и C-string, затем синхронный `SendAll`.
     pub(crate) fn send_top_info_to_client<Context: CountryInfoDeliveryContext + ?Sized>(
         &self,
         top_info_id: i32,
@@ -409,14 +395,14 @@ impl CCountryHandler {
         context.send_all(&message)
     }
 
-    /// Дописывает отдельную save-копию каждой живой страны в DB-list.
+ /// Дописывает отдельную save-копию каждой живой страны в DB-list.
     pub(crate) fn generate_save_data(&self, game: &CGame, limits: CountryKingSaveLimits) {
         for country in self.countries.values().flatten() {
             game.append_db_country(country.clone_save_data(limits));
         }
     }
 
-    /// Добавляет top-info в хвост и возвращает прежний process-static ID.
+ /// Добавляет top-info в хвост и возвращает прежний process-static ID.
     pub(crate) fn add_one_top_info<GetTick>(
         &mut self,
         timer_flag: i32,
@@ -443,7 +429,7 @@ impl CCountryHandler {
         id
     }
 
-    /// Выполняет top-info expiry и условные country AI в исходном порядке.
+ /// Выполняет top-info expiry и условные country AI в исходном порядке.
     pub(crate) fn run<GetTick, Context>(
         &mut self,
         _minute_delta: i32,

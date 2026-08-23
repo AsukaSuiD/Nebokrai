@@ -1,25 +1,18 @@
 //! Владелец `CVariableList` исторического WorldServer из `variablelist.cpp`.
 //!
-//! Статусы `LoadVarList` RVA `0x000A1320`, `LoadOneVar` `0x000A1680`,
-//! `SetVarValue` RVA `0x000A11B0/0x000A1240`, `SaveVarData` RVA `0x000A1930`
-//! `AddToByteArray` RVA `0x000A1B10` и `LoadVarData` `0x000A1630` —
-//! `IMPLEMENTED`; посторонние copy/destructor
+//! `SetVarValue`, `SaveVarData`
+//! `AddToByteArray` и `LoadVarData` —
+//! действует; посторонние copy/destructor
 //! `CBattleFairyProperty::tagCompose` ниже также выражены живым owner-ом
 //! `goods::cbattlefairyproperty`, а оставшиеся блоки — compiler/STL cleanup.
-//! Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\script\variablelist.cpp`.
 //!
-//! PDB задаёт `CVariableList` как `m_lVarNum: signed long` и
+//! Layout сохраняет `CVariableList` как `m_lVarNum: signed long` и
 //! `m_pVarList: stVariable*`, а 16-байтный `stVariable` содержит `Name` по
 //! `+0`, signed `Array` по `+4` и две union-пары `Value/strValue` и
-//! `SValue/strSValue` по `+8/+0xc`. Достигнутый `GetOneVar` `0x000A19C0`
+//! `SValue/strSValue` по `+8/+0xc`. Действующий `GetOneVar`
 //! отдаёт имя и два уже форматированных ANSI-значения: `%d` для scalar,
 //! `\"%s\"` для string и пустые значения для положительного `Array`.
-//! `VariableListSaveSource` сохраняет именно этот узкий byte-exact view; сам
+//! `VariableListSaveSource` сохраняет именно этот узкий byte- view; сам
 //! layout и остальные операции списка будут материализованы в их владельце.
 //!
 //! `LoadVarList` сначала очищает прежний список, затем читает непрерывные
@@ -27,9 +20,8 @@
 //! `name="value"`. Scalar/array получают одинаковые current/saved values.
 //! `LoadOneVar` ищет первое byte-sensitive имя из `CSL_GENVAR` и заменяет его
 //! current/saved scalar либо строкой; именно так DB-строка может заменить
-//! объявленный array. Rust не сохраняет исходные преждевременные return после
-//! `delete` в декомпиляции — это внутренний compiler/lifetime defect, не
-//! контракт списка.
+//! объявленный array. Преждевременные return после compiler-owned `delete` не
+//! являются контрактом списка и не переносятся.
 //!
 //! `SaveVarData` не имел собственной DB-семантики: копировал тот же ADO
 //! connection, получал `GetGame()->m_pRsGenVar`, вызывал
@@ -38,22 +30,22 @@
 //! ссылки, но не меняет порядок, соединение либо результат. Owned SQL buffer
 //! не переносит переполнение исходного scratch-буфера.
 //!
-//! Exact World serializer и Game decoder задают framing общего списка:
+//! World serializer и Game decoder задают framing общего списка:
 //! `signed variable count + signed payload length + payload`. Каждая запись
 //! содержит C-string name, signed tag и значение: tag `0` — один `i32`, tag
 //! `<0` — C-string, tag `>0` — ровно tag значений `i32`. Для строки исходный
 //! tag равен `-(bytes + NUL)`. Typed enum заменяет две C++ union-пары, `Vec`
-//! заменяет raw-массивы, сохраняя порядок и wire. Невозможные count/length,
+//! заменяет оригинал-массивы, сохраняя порядок и wire. Невозможные count/length,
 //! внутренний NUL и пустой массив блокируются до изменения destination.
 //!
-//! Достигнутый World call-site integer-overload всегда передаёт index `0`.
+//! Действующий World call-site integer-overload всегда передаёт index `0`.
 //! Владелец линейно ищет первое ASCII-only `_strcmpi`-совпадение, меняет
 //! scalar либо нулевой элемент непустого массива и продолжает поиск после
 //! совпавшей string-записи. String-overload меняет первую совпавшую string.
 //! EXE технически позволял переписать integer/array как string, но после этого
 //! сохранённый union интерпретировался как `char*` и дальнейшее чтение имело UB;
 //! Rust останавливает этот недопустимый owner-state typed-границей. `Vec` и
-//! enum заменяют только raw allocation/union, не меняя штатную мутацию.
+//! enum заменяют только оригинал allocation/union, не меняя штатную мутацию.
 
 use std::error::Error;
 use std::fmt;
@@ -76,7 +68,7 @@ pub(crate) struct VariableEntry {
     pub(crate) value: VariableValue,
 }
 
-/// Value-owner вместо `m_lVarNum + stVariable*` и двух raw union-ов.
+/// Value-owner вместо `m_lVarNum + stVariable*` и двух оригинал union-ов.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CVariableList {
     variables: Vec<VariableEntry>,
@@ -89,26 +81,26 @@ impl Default for CVariableList {
 }
 
 impl CVariableList {
-    /// Создаёт пустой список, как конструктор с `m_lVarNum = 0` и null-массивом.
+ /// Создаёт пустой список, как конструктор с `m_lVarNum = 0` и null-массивом.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             variables: Vec::new(),
         }
     }
 
-    /// Освобождает все записи переменных и публикует пустое состояние.
-    ///
-    /// Rust `Vec` и `VariableValue` освобождают имя и значения без ранних
-    /// возвратов и утечек старого owner-а.
+ /// Освобождает все записи переменных и публикует пустое состояние.
+ ///
+ /// Rust `Vec` и `VariableValue` освобождают имя и значения без ранних
+ /// возвратов и утечек старого owner-а.
     pub(crate) fn release(&mut self) {
         self.variables.clear();
     }
 
-    /// Возвращает имя C-строки без индексного суффикса от последней `[`.
-    ///
-    /// Оригинал сначала копировал вход в выходной буфер вызывающего, затем
-    /// ставил NUL на последней `[` независимо от наличия закрывающей `]`.
-    /// Rust возвращает владеющий массив байтов и не меняет входной срез.
+ /// Возвращает имя C-строки без индексного суффикса от последней `[`.
+ ///
+ /// Оригинал сначала копировал вход в выходной буфер вызывающего, затем
+ /// ставил NUL на последней `[` независимо от наличия закрывающей `]`.
+ /// Rust возвращает владеющий массив байтов и не меняет входной срез.
     pub(crate) fn get_array_name(name: &[u8]) -> Vec<u8> {
         let name = visible_c_string(name);
         let end = name
@@ -118,11 +110,11 @@ impl CVariableList {
         name[..end].to_vec()
     }
 
-    /// Материализует достигнутый `LoadVarList` без raw allocation и union.
-    ///
-    /// `CIni::GetContinueDataNum` брал только непрерывный блок строк после
-    /// index `GeneralVariableList`; пустая или отсутствующая resource поэтому
-    /// публикует пустой список, как и исходный void owner.
+ /// Материализует действующий `LoadVarList` без оригинал allocation и union.
+ ///
+ /// `CIni::GetContinueDataNum` брал только непрерывный блок строк после
+ /// index `GeneralVariableList`; пустая или отсутствующая resource поэтому
+ /// публикует пустой список, как и исходный void owner.
     pub(crate) fn load_var_list(&mut self, source: Option<&[u8]>) -> VariableListLoadReport {
         self.release();
         let Some(source) = source else {
@@ -148,8 +140,8 @@ impl CVariableList {
                     }
                 }
                 None if value.first() == Some(&b'\"') => {
-                    // EXE копировал всё между первым символом и последней
-                    // позицией строки, не требуя парной closing quote.
+ // EXE копировал всё между первым символом и последней
+ // позицией строки, не требуя парной closing quote.
                     let string = value
                         .get(1..value.len().saturating_sub(1))
                         .unwrap_or_default()
@@ -179,9 +171,9 @@ impl CVariableList {
         report
     }
 
-    /// Точный `CVariableList::LoadOneVar`: первая byte-sensitive запись с
-    /// совпавшим именем получает DB SValue/CValue; array-объявления становятся
-    /// scalar/string, как это делал исходный owner.
+ /// Точный `CVariableList::LoadOneVar`: первая byte-sensitive запись с
+ /// совпавшим именем получает DB SValue/CValue; array-объявления становятся
+ /// scalar/string, как это делал исходный owner.
     pub(crate) fn load_one_var(
         &mut self,
         name: &[u8],
@@ -214,7 +206,7 @@ impl CVariableList {
         &self.variables
     }
 
-    /// Точный достигнутый `SetVarValue(name, 0, value)` World call-site.
+ /// Точный действующий `SetVarValue(name, 0, value)` World call-site.
     pub(crate) fn set_zero_index_integer(
         &mut self,
         name: &[u8],
@@ -245,7 +237,7 @@ impl CVariableList {
         VariableSetOutcome::NotFound
     }
 
-    /// Штатная часть `SetVarValue(name, string)` без unsafe union-retyping.
+ /// Штатная часть `SetVarValue(name, string)` без unsafe union-retyping.
     pub(crate) fn set_string(&mut self, name: &[u8], value: &[u8]) -> VariableSetOutcome {
         let name = visible_c_string(name);
         let value = visible_c_string(value);
@@ -338,12 +330,12 @@ impl CVariableList {
         Ok(())
     }
 
-    /// Точный `LoadVarData`: передаёт уже загруженный конфигурационный список
-    /// DB-owner-у и не меняет его bool-результат.
-    ///
-    /// Старый код находил `CGame::m_pRsGenVar` через singleton и игнорировал
-    /// итог `CRsGenVar::Load`; Rust делает владельца явным, поэтому caller
-    /// может сохранить это игнорирование или наблюдать результат отдельно.
+ /// Точный `LoadVarData`: передаёт уже загруженный конфигурационный список
+ /// DB-owner-у и не меняет его bool-результат.
+ ///
+ /// Старый код находил `CGame::m_pRsGenVar` через singleton и игнорировал
+ /// итог `CRsGenVar::Load`; Rust делает владельца явным, поэтому caller
+ /// может сохранить это игнорирование или наблюдать результат отдельно.
     pub(crate) async fn load_var_data<O: RsGenVarOwner>(
         &mut self,
         database: &mut O,
@@ -535,19 +527,19 @@ fn visible_c_string(bytes: &[u8]) -> &[u8] {
         .map_or(bytes, |end| &bytes[..end])
 }
 
-/// Три byte-exact строки, которые исходный `GetOneVar` отдавал DB-owner-у.
+/// Три byte- строки, которые исходный `GetOneVar` отдавал DB-owner-у.
 pub(crate) struct VariableSaveRow {
     pub(crate) name: Vec<u8>,
     pub(crate) initial_value: Vec<u8>,
     pub(crate) current_value: Vec<u8>,
 }
 
-/// Узкий read-only view достигнутой части `CVariableList`.
+/// Узкий read-only view действующей части `CVariableList`.
 pub(crate) trait VariableListSaveSource {
-    /// Число выполняемых исходным signed-циклом итераций.
+ /// Число выполняемых исходным signed-циклом итераций.
     fn variable_count(&self) -> usize;
 
-    /// Возвращает результат `GetOneVar` для доказанно допустимого индекса.
+ /// Возвращает результат `GetOneVar` для доказанно допустимого индекса.
     fn save_row(&self, index: usize) -> VariableSaveRow;
 }
 

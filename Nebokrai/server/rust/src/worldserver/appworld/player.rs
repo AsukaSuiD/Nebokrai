@@ -1,351 +1,28 @@
-//! Владелец игрока исторического `WorldServer`.
+//! Игровой owner `CPlayer` WorldServer из `appworld/player.cpp/.h`.
 //!
-//! Rust-owner включает `CPlayer::GetAccount` RVA `0x00002F90`,
-//! `CPlayer::SaveData` RVA
-//! `0x0005B4E0`, `CPlayer::CheckGoodsInPacket` RVA `0x0005BA90`, inherited
-//! `GetName`, reached `ProcessPlayerDataQueue`, `CPlayer::ChangeCountry` RVA
-//! `0x0005EA30`, `CPlayer::ChangeName` RVA `0x0005D1C0`,
-//! DB mutation helpers `SetFairyContainerEnabled/SetFosterNum/SetHatcherNum`
-//! RVA `0x0005AEB0/0x0005AEC0/0x0005AEE0` и `AddQuestFromDB` RVA
-//! `0x0005EA00`,
-//! применение binary DB-полей из `CRsPlayer::Load*Field`,
-//! `CPlayer::UpdateFactionInfo` RVA `0x0005C1D0`,
-//! `CPlayer::LoadData` RVA `0x0005E390`,
-//! `CPlayer::LoadDefaultProperty` RVA `0x0005E560`,
-//! `CPlayer::ReSetHonorElimilateNum` RVA `0x0005B260`,
-//! container-граница `CDBGoods::LoadGoods`,
-//! `CPlayer::ClearOwnedRegion` RVA `0x00033B50` и
-//! `CPlayer::AddOwnedRegion` RVA `0x0005DD10`
-//! accessors для level/friends и inherited `CShape::SetState`,
-//! process-wide `CPlayer::GetNetExID` inline-path в `CUnion::ApplyForJoin`
-//! `0x004C2C51..0x004C2C5E`,
-//! достигнутого base-подобъекта `CMoveShape`, поля `m_bGetFactionData` в
-//! `CPlayer::CPlayer` RVA `0x0005EB10` и `CPlayer::~CPlayer` RVA
-//! `0x0005F020` представлены действующими Rust-owner-ами. Точная пара
-//! доказательных артефактов:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.h:236` и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\player.cpp`.
+//! Источник контракта — точная пара WorldServer EXE/PDB. Файл хранит identity,
+//! region/session state, inventory/container owners, country/faction/union/JJC
+//! проекции, DB load/save snapshots и используемые World wire-codecs. Rust
+//! composition сохраняет исходные base/member границы без копирования ABI или
+//! сырых self-referential pointers.
 //!
-//! Старый getter выбирал inline-буфер либо heap-pointer MSVC `std::string`
-//! `m_BaseProperty.strAccount` и возвращал `char const*`. Owned `Vec<u8>`
-//! заменяет только внутреннее хранение строки; Rust API возвращает заимствованный
-//! byte-slice и не публикует raw pointer. Завершающий ноль не является частью
-//! `std::string`: когда конкретный consumer использует значение как C-строку,
-//! его владелец отдельно сохраняет усечение по первому нулю и добавляет terminator.
+//! Load/clone/decode применяют поля и вложенные owners в исходном порядке;
+//! ошибка сохраняет уже выполненный prefix только там, где это наблюдалось.
+//! Save projection фиксируется до передачи DB worker и не заимствует живой
+//! player после barrier. Byte-exact строки, GUID, signedness, fixed capacities
+//! и порядок сериализации не меняются.
 //!
-//! Исходный `CPlayer::CPlayer` первым вызывает `CMoveShape::CMoveShape`, а
-//! затем создаёт множество inventory/wallet и других собственных владельцев.
-//! Rust хранит достигнутый `CMoveShape` отдельным base-полем и делегирует ему
-//! унаследованные ID/region API без вторых `id` или `region_id`. Точный PDB
-//! задаёт размер старого `CPlayer` `0x9B8`, а raw-конструктор подтверждает
-//! единственный base-вызов `CMoveShape` по offset `0`. `CPlayer` по-прежнему
-//! не объявлен полным: исходный порядок содержит недостигнутые поля. Для
-//! достигнутого `CloneMapPlayer` добавлен только
-//! `with_clone_decode_constructor_state`: он создаёт все уже материализованные
-//! base/container/string/collection owner-ы, ставит type `400`, два default
-//! `dwFosterNum/dwHatcherNum = 1` и точные container volume. PDB-поля
-//! `m_btCountry +0x844` и `m_lContribute +0x848` raw constructor не назначает;
-//! до обязательного полного decoder-а они представлены `None`, а encoder
-//! останавливает локальную safe-границу вместо выдуманного нуля. Rust layout
-//! не объявляется копией старого ABI. Полный raw-конструктор сохранён ради
-//! незаменённой семантики; остальные поля `CPlayer` не моделируются до
-//! достижения их владельцев.
+//! `UpdateFactionInfo` сохраняет исходный порядок: разрешает faction/union,
+//! обновляет локальные organizing properties, публикует необходимые player и
+//! faction side effects и только затем формирует последующие уведомления.
+//! Missing/null owner останавливает соответствующую ветвь без выдуманного
+//! membership, rollback или дополнительного wire-ответа. Локальные комментарии
+//! рядом с функцией фиксируют compatibility quirks и partial mutation.
 //!
-//! Полная PDB-запись `CPlayer` type `0xC8FE` задаёт размер `0x9B8`, а член
-//! `m_bGetFactionData` — как `T_BOOL08` (`0x30`) по offset `+0x868`; следующий
-//! signed `m_lFactionID` начинается по `+0x86C`. Конструктор присваивает флагу
-//! `false`. `UpdateFactionInfo` сбрасывает его при faction ID `0`, offline-load
-//! также сбрасывает, а organizing callbacks выставляют `true` только после
-//! отправки полного faction snapshot и снова снимают при выходе. Partial Rust
-//! owner хранит этот reached-state как `Cell<bool>`: это позволяет concrete
-//! faction snapshot owner-у выставить флаг через общий read-only `CGame`
-//! borrow ровно после отправки, не создавая raw alias. Методы чтения/записи
-//! заменяют прямой доступ к полю, не объявляя Rust layout старым ABI и не
-//! придумывая узкий constructor в обход остальных полей. Exact consumer
-//! `CFaction::UpdateMemberInfoToClient` проверяет `byte ptr [player+0x868]` в
-//! диапазоне `0x004BA82D..0x004BA834`, поэтому offset дополнительно имеет
-//! статус `VERIFIED_DISASSEMBLY`.
-//!
-//! `GetNetExID` не читает player: он pre-increment-ит process-static signed
-//! DWORD по VA `0x006BAD98` с x86 wrapping и возвращает новое значение. В
-//! `ApplyForJoin` этот эффект происходит после online lookup, но до проверки
-//! лимита union, поэтому даже отказ по лимиту расходует ID. `AtomicI32`
-//! устраняет исходную data race, сохраняя process lifetime и 32-битный шаблон.
-//!
-//! `LoadDefaultProperty` получает прежние process-global country/duplicate-
-//! region/player-list/globe/thing owners явно. Exact порядок `operator[]`,
-//! region lookup, random position, base/property записей, daily-list и time
-//! сохранён; `VecDeque` и typed arithmetic/region errors заменяют только STL,
-//! unchecked overflow и raw pointers. Временная запись default JJC level не
-//! материализована отдельно: тот же owner без промежуточного вызова всегда
-//! перезаписывает её нулём до единственного downstream чтения.
-//!
-//! `CFaction::Demise` дважды читает `m_bFactionWarOperator` по PDB-offset
-//! `CPlayer+0x8ED`; exact диапазон `0x004BFF25..0x004BFF39` подтверждает оба
-//! сравнения именно с `true`. Raw constructor назначает `false`, поэтому
-//! reached-state хранится отдельным Rust `bool`, не расширяя это до заявления
-//! о полном layout `CPlayer`.
-//!
-//! `UpdateFactionInfo` exact `0x0045C1D0..0x0045C345` сбрасывает достигнутые
-//! organizing-поля, вызывает `SetPlayerOrganizing`, при faction ID `0`
-//! снимает `m_bGetFactionData`, затем создаёт `0x7FE06` с player ID. Вызванный
-//! через virtual slot `AddOrgSysToByteArray` ещё раз выполняет
-//! `SetPlayerOrganizing`; этот наблюдаемый двойной вызов сохранён. Готовое
-//! сообщение уходит в `GetGameServerNumber_ByPlayerID(player ID)` без
-//! дополнительного online-gate. Rust context заменяет только process-global
-//! singleton и транспорт. Старый owner не очищал owned-region container при
-//! переходе во free player, однако serializer при faction ID `0` его не
-//! читал; Rust удаляет это ненаблюдаемое stale-состояние как внутренний
-//! lifecycle-дефект.
-//!
-//! `ChangeCountry` exact `0x0045EA30..0x0045EA81` сначала сравнивает unsigned
-//! byte `m_btCountry +0x844`, затем требует signed `m_lFactionID +0x86C == 0`,
-//! проверяет новый byte через `CCountryHandler::GetCountry`, пишет только
-//! `m_btCountry` и возвращает новый country как unsigned integer. Ошибки
-//! соответственно `-1`, `-3`, `-5`; дополнительных DB/faction side effects
-//! нет. Rust получает результат проверки country-owner явным аргументом,
-//! заменяя только process-singleton lookup. `Option<u8>` остаётся safe-
-//! проекцией ещё не декодированного partial player-state, а не частью старого
-//! ABI.
-//!
-//! Достигнутый через `CGame::ResetHonorElimilateInfo` reset напрямую меняет
-//! три DWORD `tagBaseProperty`: day обнуляется безусловно, week только при
-//! `mask & 2`, month только при `mask & 4`; накопительный total не меняется.
-//! Rust пишет уже подтверждённые wire-offsets вместо воспроизведения старого
-//! object-layout.
-//! `CHonorRanks::PushToRanks` читает из того же base-owner уровень,
-//! occupation и appellation ID; узкие getters публикуют значения без копии
-//! всего `tagBaseProperty` и без объявления Rust layout старым ABI.
-//!
-//! Деструктор сначала вызывает virtual slot `+0x24` у шестнадцати container-
-//! подобъектов. Точный PDB исправляет ошибочную первоначальную классификацию:
-//! у `CContainer` slot `+0x14` — `Clear(void *)`, а `+0x24` — `Release()`.
-//! Exact `0x0045F047..0x0045F133` подтверждает receiver offsets `+0x80`,
-//! `+0x154`, `+0xE0`, `+0x3A0`, `+0x414`, `+0x184`, `+0x488`, повторно
-//! `+0x184`, `+0x1AC`, `+0x1D4`, `+0x228`, `+0x1FC`, `+0x2A0`, `+0x328`,
-//! `+0x4B0` и `+0x524`. Они точно совпадают с PDB-полями `m_cHand`,
-//! `m_cEquipment`, `m_cPacket`, двумя auction-container, `m_cWallet`,
-//! `m_cAuctionWallet`, повторным `m_cWallet`, `m_cYuanBao`, `m_cJiFen`,
-//! `m_cDepot`, `m_cBank`, `m_cFairy`, `m_cBF`, `m_cCiQing` и
-//! `m_cComposeCiQing`.
-//!
-//! Связанные `Release` удаляют owned `CGoods`, очищают собственные map/vector
-//! storage, сбрасывают owner/lock state и список внешних listeners; callbacks
-//! `OnObjectRemoved` они не вызывают. Amount/equipment containers после reset
-//! регистрируют только собственный embedded listener, который затем исчезает
-//! вместе с container. Повторный `m_cWallet::Release` наблюдаемого эффекта не
-//! добавляет: первый `CGoodsFactory::GarbageCollect` virtual-удаляет gold-coins
-//! и зануляет pointer, второй видит `nullptr`. После container-ов старый owner
-//! освобождает byte-buffer и только STL-строки/коллекции; `CGoods::~CGoods`
-//! также очищает лишь собственные addon/string/base-shape данные. Поэтому
-//! структурное уничтожение Rust-полей является совместимой заменой: каждый
-//! достигнутый owner освобождается своим `Drop`, отдельный callback или ручной
-//! `Drop for CPlayer` не нужен. Все пятнадцать container-полей теперь являются
-//! отдельными Rust-owner-ами; повторный wallet-release не требует второго
-//! Rust-действия, поскольку первый уже оставляет null slot. Полный raw-
-//! деструктор и его STL/EH noise удалены.
-//!
-//! `CheckGoodsInPacket` создаёт точный `CSeekGoodsListener`, назначает target
-//! через original-name index, обходит `m_cPacket`, затем для каждого GUID снова
-//! вызывает у packet-а `Find(700, GUID)`. Эта вторая lookup-фаза существенна:
-//! traversal видит locked-товары, а `Find` их отбрасывает. Exact
-//! `0x0045BB40..0x0045BB47` складывает unsigned amount инструкцией `ADD EBP,EAX`;
-//! Rust сохраняет 32-битное переполнение через `i32::wrapping_add`. Type `700`
-//! не переносится, потому что safe packet API уже возвращает только `CGoods`.
-//! Null `char*` выражен `Option<&CStr>` и по-прежнему возвращает `0` до
-//! создания listener-а. MSVC vector/RTTI/SEH заменены `Vec`, enum и `Drop`.
-
-//! Frozen DB-проекция теперь также `IMPLEMENTED`. Она читает byte-exact
-//! `tagBaseProperty[0x194]`, shape, JJC, skills/friends/things/quests и все
-//! пятнадцать container-owner-ов, а затем строит полные
-//! `PlayerCreationSnapshot`/`PlayerSaveSnapshot` из одного `CPlayer`. Exact PDB
-//! подтвердил offsets scalar-полей, порядок equipment `0,1,3,4,2,9,10,12,13,14,15`
-//! и `GAP_WEAPON_LEVEL = 0x30`. Временные массивы принадлежат
-//! `PlayerDbProjection`, поэтому DB-await не заимствует stack-temporary.
-//! Неинициализированные country/contribute, отрицательная/короткая variable-
-//! data, embedded NUL friend-name и недоказанные goods-границы возвращают
-//! локальные типизированные ошибки, а не получают значения по умолчанию.
-//! Обратная reached-проекция binary DB-полей также материализована: hotkeys
-//! пишутся в их 24 DWORD-offset, skill/friend/tattoo сохраняют исходную
-//! append/insert-семантику, state делегируется `CMoveShape`, а script payload
-//! получает безопасный owned lifetime вместо старой ветви delete/early-return.
-//! Непустой `ListThing` очищает deque даже при одном неполном хвосте; пустой
-//! вызывает daily setup только при `dwfyEnergy == 0`, как точный DB-owner.
-//! Scalar load-проекция пишет тот же byte-exact base-owner, shape identity,
-//! owned строки и reached standalone поля. `SetFosterNum/SetHatcherNum`
-//! сохраняют исходный clamp до пяти; `BaseMaxRp` не материализуется из DB,
-//! потому что точный `LoadPlayer` его не читает.
-
-//! PDB задаёт `SaveData` как public `bool`-метод с единственным connection
-//! `cn`, RVA `0x0005B4E0`, длина `0xA0`; исходный владелец —
-//! `player.cpp:187`. Согласованный raw получает singleton `CGame`, читает его
-//! `m_pRsPlayer` и один раз вызывает `CRsPlayer::SavePlayer(this, cn)`, после
-//! чего возвращает вложенный bool без дополнительной ветви. PDB подтверждает
-//! `CGame::m_pRsPlayer: CRsPlayer*` по `+0x138`. Собственного null-connection
-//! check, catch, лога, begin, commit или rollback у `CPlayer::SaveData` нет.
-//! Неоднозначности для машинного кода не осталось, поэтому дополнительный
-//! reverse не выполнялся.
-//!
-//! Rust передаёт `RsPlayerOwner`, JJc/goods owners и уже собранный
-//! `PlayerSaveSnapshot` явно вместо process-global `GetGame` и чтения ещё не
-//! материализованного полного layout `CPlayer`. Живая `&self` исключает
-//! недоказанный вызов member-функции через null player, а caller обязан собрать
-//! snapshot именно из этой же player-сущности. Connection остаётся `Option`:
-//! `None` доходит до `CRsPlayer::SavePlayer` и даёт исходный `false`.
-//! `PlayerSaveOutcome` расширяет старый bool только локальной goods-
-//! неизвестностью, которую безопасный Rust не вправе назначить `true` или
-//! `false`. AddRef/Release COM-копии заменены обычным reborrow; raw wrapper и
-//! compiler cleanup удалены.
-//!
-//! Три собственных подслоя будущего clone-codec также имеют статус
-//! `IMPLEMENTED`: `AddByteCiQing/DeByteCiQing` RVA
-//! `0x0005BB80/0x0005D9E0`, `AddByteArrayLeiTing/DecodeByteArrayLeiTing` RVA
-//! `0x0005B690/0x0005DE40` и
-//! `UpdateLeiTing` RVA `0x0005DD80`,
-//! `AddQuestDataToByteArray/DecordQuestDataFromByteArray` RVA
-//! `0x0005BC10/0x0005E970`. `BTreeSet` сохраняет unsigned порядок tattoo ID,
-//! `VecDeque` — порядок восьмибайтовых `tagThing`, а `BTreeMap` — unsigned
-//! порядок quest-key при отдельном mapped `wQuestID/byComplete`.
-//!
-//! `UpdateLeiTing` exact `0x0045DD80..0x0045DE3D` сначала обнуляет energy и
-//! восстанавливает `wRemainJingLiDanCnt` из globe setup, затем через 32-bit
-//! CRT localtime сравнивает только year/yday прежнего stamp с переданным
-//! mutable `tm`. При отличии `_mktime` нормализует тот же `tm`, и его signed
-//! result сохраняется как DWORD bits. Kind `1` снимает четыре младших flag-
-//! бита, kind `2` обнуляет flags и `wLTUp60Cnt`; остальные kind не меняют их.
-//! В конце `GetDailyThingList` может заменить список только непустой выборкой.
-//! Rust сохраняет этот порядок и partial mutations; невозможный platform-time
-//! вместо исходного null-dereference становится typed safe-границей.
-//!
-//! Container-сегмент `CPlayer::AddToByteArray/DecordFromByteArray` RVA
-//! `0x0005BDA0/0x0005F520` также `IMPLEMENTED` между готовым LeiTing-prefix и
-//! следующим variable-data suffix. Exact PDB type `0xC8FE` задаёт все
-//! пятнадцать nominal полей и offsets: `m_cHand +0x80`, `m_cPacket +0xE0`,
-//! `m_cEquipment +0x154`, `m_cWallet +0x184`, `m_cYuanBao +0x1AC`,
-//! `m_cJiFen +0x1D4`, `m_cBank +0x1FC`, `m_cDepot +0x228`, `m_cFairy +0x2A0`,
-//! `m_cBF +0x328`, `m_cAuctionGoodsContainer +0x3A0`,
-//! `m_cAuctionContainer +0x414`, `m_cAuctionWallet +0x488`, `m_cCiQing +0x4B0`
-//! и `m_cComposeCiQing +0x524`; `m_strDepotPassword` — отдельный string-owner
-//! по `+0x800`.
-//!
-//! Encoder вызывает container-ы не в layout-order, а в точном wire-order:
-//! hand, equipment, packet, два auction volume, wallet, auction wallet,
-//! yuanbao, jifen, depot-password, bank, depot, fairy, battle-fairy, ciqing и
-//! compose-ciqing. Каждый получает literal `include_child=true`; bool-results
-//! игнорируются, а общий player-result остаётся будущей обязанностью полного
-//! метода. Fairy encoder сохраняет свой наблюдаемый reset пяти hatch-time.
-//!
-//! Decoder перед каждым owner-ом выполняет исходный virtual `Release`, затем
-//! назначает только доказанные limit/volume: hand `1`, packet `8*0x0C`, auction
-//! goods `0x12`, auction container `2`, depot `0xA1`, fairy `0x0E`, battle-
-//! fairy `0x11`, ciqing `8`, compose-ciqing `3`. Depot-password читается между
-//! jifen и bank через legacy buffer `0x6C`. Повторный release внутри setter-а
-//! или decoder-а не свёрнут: порядок и partial effects сохранены буквально.
-//! Safe ошибка останавливает только конкретный безразмерный overread после уже
-//! выполненных releases, volume/limit mutations и decoded records.
-//!
-//! Первые пять LeiTing scalar живут внутри byte-exact первых `0x194` байт
-//! PDB-структуры `tagBaseProperty`; account/title остаются следующими двумя
-//! `std::string` за этой wire-частью. Rust хранит их раздельно и не объявляет
-//! собственный layout копией `tagBaseProperty`. Exact
-//! `0x0045D9E0..0x0045DA5A` закрыл потерянный raw-факт decoder-а CiQing:
-//! после каждого cursor `+4` значение загружается из source как `u32` и
-//! вставляется в set; count также обрабатывается как unsigned. После ответа
-//! reverse прекращён.
-//!
-//! Safe slice/cursor сохраняет исходную раннюю очистку коллекций и уже
-//! выполненные scalar/entry-мутации. Короткий source останавливает только
-//! конкретную операцию типизированной ошибкой: старые helpers длину source
-//! не получали, а воспроизводить overread через `unsafe` запрещено. Количество
-//! Rust-элементов вне диапазона 32-битного `_Mysize` также возвращается как
-//! typed ошибка до записи соответствующего count и элементов.
-//!
-//! `AddOrgSysToByteArray` RVA `0x0005B870` также `IMPLEMENTED`. Exact PDB
-//! сообщает для него `VirtualBaseOffset 0xA4`, поэтому потерянный virtual-call
-//! в хвосте `AddToByteArray` точно является этим owner-ом. Перед первой записью
-//! он по-прежнему выполняет `COrganizingCtrl::SetPlayerOrganizing`; process-
-//! global singleton заменён явным `PlayerOrganizingUpdater`, а `CGame` создаёт
-//! его из concrete `COrganizingCtrl` и reached region-map projection. Typed
-//! ошибка сохраняет уже выполненные мутации до локальной неизвестности. При
-//! `faction_id <= 0` wire заканчивается единственным signed ID.
-//!
-//! Положительный faction ID открывает точный порядок logo, `u16` level,
-//! experience, signed force, расширенного до `u32` contribute-флага, двух
-//! ANSI C-строк, трёх signed ID, двух signed-order set и списка регионов.
-//! `tagOwnedReg` PDB задаёт поля `long +0` и `unsigned short +4`. Exact
-//! `AddOwnedRegion` `0x0045DD10..0x0045DD75` резервирует восемь stack-байт,
-//! пишет только первые шесть и копирует запись целиком: последние два байта
-//! были утечкой неинициализированного стека, а не gameplay-контрактом.
-//! GameServer `DecordOrgSysFromByteArray` всё равно поглощает восемь байт и
-//! использует только region ID/type. Rust сохраняет ширину wire, но
-//! детерминированно пишет padding нулями; это исправление внутреннего UB без
-//! изменения потребляемой семантики. STL-tree/list traversal заменены
-//! `BTreeSet<i32>` и `VecDeque` без изменения порядка.
-//!
-//! Suffix тех же `AddToByteArray/DecordFromByteArray` от variable-data до
-//! `m_strSessionID` теперь также `IMPLEMENTED`. PDB задаёт signed variable
-//! count/length по `+0x838/+0x840`, `m_lSilienceTime +0x858`, unsigned
-//! murderer-time `+0x860`, signed fight-state `+0x864`, pet-vector `+0x900`,
-//! carriage `+0x910`, fixed session buffer `[0x40] +0x950`, JJC bool `+0x990`
-//! и шестнадцатибайтовый `tagPlayerJJcData +0x992`. Variable pointer остаётся
-//! отдельным `Option<Vec<u8>>`, чтобы не смешивать исходные null/non-null
-//! состояния; declared length сохраняется отдельно и может оставить partial
-//! state после безопасной ошибки.
-//!
-//! Потерянный raw bool установлен точечно: exact инструкции encoder-а
-//! `0x0045BFEF` и decoder-а `0x0045FB3C` читают/пишут `CPlayer+0x7C`, а PDB
-//! называет это inherited `CMoveShape::m_bIsGod`. После ответа disassembly
-//! прекращён. Decoder буквально потребляет входной fight-state DWORD, но
-//! независимо от него назначает live `m_lFightStateCount = 2`. Отрицательный
-//! pet count возвращает локальную ошибку: старый цикл с условием
-//! `count != 0` уходил в signed overflow/overread, поэтому безопасный Rust не
-//! назначает ему придуманное завершение. Pet/carriage strings ограничены
-//! исходными scratch-буферами `0x94`, session ID — фиксированными `0x40`.
-//!
-//! Decoder по-прежнему очищает pet-vector, carriage original-name/hp и recreate
-//! flag до base decode, но не очищает carriage-script, что сохраняет исходный
-//! partial путь при `include_child=false`. Organization block присутствует
-//! только в WorldServer encoder-варианте. Обязательный завершающий
-//! `UpdateProperty` не входит в suffix и реализован отдельной следующей
-//! owner-границей.
-//! `LoadData` теперь также замкнут через явный `PlayerLoadDataOwner`: только
-//! после его `true` последовательно пересчитываются base RP, recovery из
-//! player map, level-upgrade, полный property, clamp текущего RP, graphics ID
-//! и player speed. DB transport остаётся ответственностью `CRsPlayer`, но
-//! process-global singleton больше не скрывает границу этого единственного
-//! вызова.
-//!
-//! `UpdateProperty` RVA `0x0005AFC0` теперь имеет статус
-//! `VERIFIED_DISASSEMBLY, IMPLEMENTED`, поэтому полные
-//! `AddToByteArray/DecordFromByteArray` также замкнуты. Exact PDB задаёт все
-//! читаемые offsets `tagBaseProperty`, записываемые offsets `tagProperty` и
-//! девять `float[3]` из `CGlobeSetup::tagSetup`. Explicit
-//! `PlayerPropertyCoefficients` заменяет только process-global static; порядок
-//! чтений, записей и вызов после codec-а, включая `include_child=false`, не
-//! меняются. Occupation вне `0..3` оставляет уже скопированные Str/Dex/Con/Int
-//! и останавливается локальной ошибкой, потому что оригинал
-//! индексировал соседнюю static memory за пределами PDB-массива.
-//!
-//! Exact `0x0045AFC0..0x0045B259` восстановил потерянный x87 stack: burden
-//! использует `Str*fStr2Burden`, defense — `Con*fCon2Def`, resistant/element —
-//! сохранённый в binary32 `Int`, а re-ank — сохранённый binary32
-//! `Dex*fDex2Stiff`. Все `fistp` временно ставят RC=truncate; `__ftol2` также
-//! усекает к нулю. Первые MaxHp/MaxMp/MinAtk/MaxAtk и Def используют точный
-//! `u32 × binary32` в 64-битной x87 significand; поздние Int/Dex выражения
-//! сначала сохраняют stat в binary32, как `fst dword` оригинала.
-//!
-//! Safe `softfloat-wrapper` не предоставляет `extFloat80`, а доступные raw
-//! extFloat80 bindings требуют широкого `unsafe` FFI. Узкий compatibility-
-//! helper не реализует общий soft-float runtime: он раскладывает только два
-//! достигнутых binary произведения на IEEE-754 significand/exponent. Их максимум
-//! 56 значащих бит, поэтому результат точно помещается в 64-битную x87
-//! significand; truncation, signed overflow и integer-indefinite сохраняются
-//! без `unsafe` и без недостаточного промежуточного `f64`. Остальные байты
-//! `tagProperty[0x9c]` не меняются.
+//! `Box`, `Arc`, standard collections и safe slices заменяют allocation,
+//! MSVC containers и fixed-buffer arithmetic. Неподтверждённое чтение за
+//! границей или неинициализированный layout возвращает typed block; штатный
+//! DB/wire/gameplay путь остаётся без изменений.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -675,7 +352,7 @@ impl From<PlayerOrganizingUpdateError> for PlayerCodecError {
     }
 }
 
-/// Первые byte-exact `0x194` байт `tagBaseProperty` и два следующих string-owner-а.
+/// Первые byte- `0x194` байт `tagBaseProperty` и два следующих string-owner-а.
 struct PlayerBaseProperty {
     wire: [u8; BASE_PROPERTY_WIRE_LEN],
     account: Vec<u8>,
@@ -740,7 +417,7 @@ impl PlayerBaseProperty {
     }
 }
 
-/// Byte-exact `tagProperty`; reached owner меняет только доказанные offsets.
+/// Byte- `tagProperty`; reached owner меняет только доказанные offsets.
 struct PlayerProperty {
     wire: [u8; 0x9C],
 }
@@ -789,7 +466,7 @@ pub(crate) enum PlayerDefaultPropertyBlock {
     Property(PlayerCodecError),
 }
 
-/// Результат одной записи exact `CGame::AddOrginGoodsToPlayer`.
+/// Результат одной записи `CGame::AddOrginGoodsToPlayer`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerOriginEquipmentOutcome {
     OccupationMismatch,
@@ -813,7 +490,7 @@ struct PlayerThing {
     point: u16,
 }
 
-/// Platform-time граница exact `CPlayer::UpdateLeiTing`.
+/// Platform-time граница `CPlayer::UpdateLeiTing`.
 pub(crate) trait PlayerLeiTingClock {
     type Block;
 
@@ -822,10 +499,10 @@ pub(crate) trait PlayerLeiTingClock {
         timestamp: u32,
     ) -> Result<LeiTingLocalTime, Self::Block>;
 
-    /// Повторяет mutable `_mktime`; signed `-1` сохраняется как timestamp bits.
+ /// Повторяет mutable `_mktime`; signed `-1` сохраняется как timestamp bits.
     fn mktime(&mut self, local_time: &mut LeiTingLocalTime) -> Result<i32, Self::Block>;
 
-    /// Повторяет отдельный `GetLocalTime().wDayOfWeek` внутри daily-list loop.
+ /// Повторяет отдельный `GetLocalTime().wDayOfWeek` внутри daily-list loop.
     fn current_week_day(&mut self) -> u16;
 }
 
@@ -913,14 +590,14 @@ struct PlayerPetInformation {
     experience: u32,
 }
 
-/// Собственные достигнутые поля `CPlayer::tagCarriageInfo`.
+/// Собственные действующие поля `CPlayer::tagCarriageInfo`.
 struct PlayerCarriageInformation {
     original_name: Vec<u8>,
     hp: u32,
     carriage_script: Vec<u8>,
 }
 
-/// Достигнутые массивы `CGlobeSetup::tagSetup`, каждый строго для трёх occupations.
+/// Действующие массивы `CGlobeSetup::tagSetup`, каждый строго для трёх occupations.
 #[derive(Clone, Copy)]
 pub(crate) struct PlayerPropertyCoefficients {
     pub(crate) str_to_max_attack: [f32; 3],
@@ -983,7 +660,7 @@ struct PlayerOwnedRegion {
 }
 
 impl PlayerOwnedRegion {
-    /// Сохраняет ABI-ширину `tagOwnedReg`, безопасно обнуляя старый stack leak.
+ /// Сохраняет ABI-ширину `tagOwnedReg`, безопасно обнуляя старый stack leak.
     fn wire_bytes(self) -> [u8; 8] {
         let mut wire = [0; 8];
         wire[..4].copy_from_slice(&self.region_id.to_le_bytes());
@@ -992,7 +669,7 @@ impl PlayerOwnedRegion {
     }
 }
 
-/// Достигнутые organization-поля `CPlayer`, обновляемые `SetPlayerOrganizing`.
+/// Действующие organization-поля `CPlayer`, обновляемые `SetPlayerOrganizing`.
 pub(crate) struct PlayerOrganizingState {
     pub(crate) faction_id: i32,
     pub(crate) faction_logo_id: i32,
@@ -1011,12 +688,12 @@ pub(crate) struct PlayerOrganizingState {
 }
 
 impl PlayerOrganizingState {
-    /// Exact `CPlayer::ClearOwnedRegion` над safe Rust-owner-ом списка.
+ /// `CPlayer::ClearOwnedRegion` над safe Rust-owner-ом списка.
     pub(crate) fn clear_owned_regions(&mut self) {
         self.owned_regions.clear();
     }
 
-    /// Exact unique-by-region-ID insertion `CPlayer::AddOwnedRegion`.
+ /// unique-by-region-ID insertion `CPlayer::AddOwnedRegion`.
     pub(crate) fn add_owned_region(&mut self, region_id: i32, region_type: u16) {
         if self
             .owned_regions
@@ -1088,7 +765,7 @@ impl Error for PlayerOrganizingUpdateError {}
 
 /// Явная замена process-global `COrganizingCtrl::getInstance()`.
 pub(crate) trait PlayerOrganizingUpdater {
-    /// Выполняет исходный `SetPlayerOrganizing` перед чтением organization-полей.
+ /// Выполняет исходный `SetPlayerOrganizing` перед чтением organization-полей.
     fn set_player_organizing(
         &mut self,
         player_id: i32,
@@ -1175,7 +852,7 @@ pub(crate) struct PlayerBaseWireSnapshot {
     pub(crate) region_id: i32,
 }
 
-/// Одиннадцать пар ID/уровень из exact `CGame::GetPlayerEquipID`.
+/// Одиннадцать пар ID/уровень из `CGame::GetPlayerEquipID`.
 ///
 /// Порядок является частью World wire/DB-контракта и намеренно не совпадает с
 /// числовым порядком equipment slots.
@@ -1221,7 +898,7 @@ pub(crate) struct PlayerCountryChangeReport {
 }
 
 impl PlayerGoodsDbProjection {
-    /// Заимствует все containers в exact `SaveGoodsFiled` place-порядке.
+ /// Заимствует все containers в `SaveGoodsFiled` place-порядке.
     pub(crate) fn snapshot(&self, player_id: i32) -> PlayerGoodsFiledSnapshot<'_> {
         let traversal = |objects| GoodsContainerTraversalSnapshot { objects };
         PlayerGoodsFiledSnapshot {
@@ -1245,7 +922,7 @@ impl PlayerGoodsDbProjection {
     }
 }
 
-/// Достигнутая часть `CPlayer` с base-owner-ом и clone-кодеком через containers.
+/// Действующая часть `CPlayer` с base-owner-ом и clone-кодеком через containers.
 pub(crate) struct CPlayer {
     move_shape_base: CMoveShape,
     hand: CAmountLimitGoodsContainer,
@@ -1440,7 +1117,7 @@ impl PlayerDbProjection<'_> {
         }
     }
 
-    /// Строит полные три стадии `CRsPlayer::CreatePlayer` из одного owner-а.
+ /// Строит полные три стадии `CRsPlayer::CreatePlayer` из одного owner-а.
     pub(crate) fn creation_snapshot(
         &self,
     ) -> Result<PlayerCreationSnapshot<'_, '_>, PlayerDbProjectionBlock> {
@@ -1465,7 +1142,7 @@ impl PlayerDbProjection<'_> {
         })
     }
 
-    /// Строит полные четыре стадии `CRsPlayer::SavePlayer` из одного owner-а.
+ /// Строит полные четыре стадии `CRsPlayer::SavePlayer` из одного owner-а.
     pub(crate) fn save_snapshot(
         &self,
     ) -> Result<PlayerSaveSnapshot<'_, '_, '_>, PlayerDbProjectionBlock> {
@@ -1504,7 +1181,7 @@ impl PlayerDbProjection<'_> {
 }
 
 impl CPlayer {
-    /// Повторяет начальный reset пятнадцати container-ов `CDBGoods::LoadGoods`.
+ /// Повторяет начальный reset пятнадцати container-ов `CDBGoods::LoadGoods`.
     pub(crate) fn reset_goods_for_db_load(&mut self) {
         self.packet.clear();
         self.packet.set_container_volume_2d(8, 0x0C);
@@ -1532,7 +1209,7 @@ impl CPlayer {
         self.compose_ci_qing.set_container_volume(3);
     }
 
-    /// Возвращает существующий товар joined-строки по exact place/position.
+ /// Возвращает существующий товар joined-строки по place/position.
     pub(crate) fn loaded_goods_mut(&mut self, place: i32, position: u32) -> Option<&mut CGoods> {
         match place {
             1 => self.packet.get_goods_mut(position),
@@ -1554,7 +1231,7 @@ impl CPlayer {
         }
     }
 
-    /// Передаёт новый DB-товар exact container-у; неизвестный place остаётся no-op.
+ /// Передаёт новый DB-товар container-у; неизвестный place остаётся no-op.
     pub(crate) fn insert_loaded_goods(
         &mut self,
         place: i32,
@@ -1591,7 +1268,7 @@ impl CPlayer {
     fn base_equipment_fields(
         &self,
     ) -> Result<([u32; 11], [i32; 11]), PlayerDbProjectionBlock> {
-        // Exact `CGame::GetPlayerEquipID`, RVA 0x00001B50.
+ // `CGame::GetPlayerEquipID`,.
         const SQL_EQUIPMENT_ORDER: [u32; 11] = [0, 1, 3, 4, 2, 9, 10, 12, 13, 14, 15];
         let mut ids = [0; 11];
         let mut levels = [0; 11];
@@ -1607,7 +1284,7 @@ impl CPlayer {
         Ok((ids, levels))
     }
 
-    /// Материализует точные output-поля `CGame::GetPlayerEquipID`.
+ /// Материализует точные output-поля `CGame::GetPlayerEquipID`.
     pub(crate) fn equipment_wire_snapshot(
         &self,
     ) -> Result<PlayerEquipmentWireSnapshot, PlayerDbProjectionBlock> {
@@ -1618,7 +1295,7 @@ impl CPlayer {
         })
     }
 
-    /// Материализует только exact-поля одного `OpenPlayerBaseInDB/InMem` row.
+ /// Материализует только -поля одного `OpenPlayerBaseInDB/InMem` row.
     pub(crate) fn player_base_wire_snapshot(
         &self,
     ) -> Result<PlayerBaseWireSnapshot, PlayerDbProjectionBlock> {
@@ -1644,12 +1321,12 @@ impl CPlayer {
         })
     }
 
-    /// Создаёт constructor-state, необходимый точному `CloneMapPlayer` decoder-у.
-    ///
-    /// Это не объявление полного старого constructor-а: ещё не достигнутые поля
-    /// остаются в raw-корпусе. `m_btCountry/m_lContribute` исходник не
-    /// инициализировал, поэтому до обязательного полного decode они равны
-    /// `None`, а не придуманному нулю.
+ /// Создаёт constructor-state, необходимый точному `CloneMapPlayer` decoder-у.
+ ///
+ /// Это не объявление полного старого constructor-а: ещё не действующие поля
+ /// остаются в оригинал-корпусе. `m_btCountry/m_lContribute` исходник не
+ /// инициализировал, поэтому до обязательного полного decode они равны
+ /// `None`, а не придуманному нулю.
     pub(crate) fn with_clone_decode_constructor_state() -> Self {
         let mut move_shape_base = CMoveShape::with_constructor_shape_base();
         move_shape_base.set_type(400);
@@ -1758,8 +1435,8 @@ impl CPlayer {
         }
     }
 
-    /// Выполняет exact create-role `CPlayer::LoadDefaultProperty` с явными
-    /// заменами process-global setup/game owners и platform callbacks.
+ /// Выполняет create-role `CPlayer::LoadDefaultProperty` с явными
+ /// заменами process-global setup/game owners и platform callbacks.
     #[allow(
         clippy::too_many_arguments,
         reason = "исходный owner достигает region, country, player-list, globe и thing setup"
@@ -1991,8 +1668,8 @@ impl CPlayer {
         })
     }
 
-    /// Применяет одну ordered запись начальной экипировки. Factory probability
-    /// и modifier roll-ы остаются на общем legacy `random(bound)` callback-е.
+ /// Применяет одну ordered запись начальной экипировки. Factory probability
+ /// и modifier roll-ы остаются на общем legacy `random(bound)` callback-е.
     pub(crate) fn add_origin_equipment<Random>(
         &mut self,
         origin: &PlayerOriginEquipment,
@@ -2038,7 +1715,7 @@ impl CPlayer {
         }
     }
 
-    /// Применяет прямые create-role записи после `LoadDefaultProperty`.
+ /// Применяет прямые create-role записи после `LoadDefaultProperty`.
     pub(crate) fn set_creation_identity(
         &mut self,
         name: &[u8],
@@ -2053,7 +1730,7 @@ impl CPlayer {
         self.base_property.account.extend_from_slice(account);
     }
 
-    /// Применяет две post-default константы exact create-role ветки.
+ /// Применяет две post-default константы create-role ветки.
     pub(crate) fn set_creation_service_defaults(&mut self) {
         self.base_property
             .write_u32(BASE_PROPERTY_AUCTION_SPACE_OFFSET, 5);
@@ -2061,14 +1738,14 @@ impl CPlayer {
             .write_u32(BASE_PROPERTY_JJC_LEVEL_OFFSET, 1000);
     }
 
-    /// Применяет две записи worker-а перед обязательным `LoadData`.
+ /// Применяет две записи worker-а перед обязательным `LoadData`.
     pub(crate) fn set_database_load_identity(&mut self, player_id: i32, account: &[u8]) {
         self.set_id(player_id);
         self.base_property.account.clear();
         self.base_property.account.extend_from_slice(account);
     }
 
-    /// Ставит reached `bIsCharged` перед первой largess-выдачей игроку.
+ /// Ставит reached `bIsCharged` перед первой largess-выдачей игроку.
     pub(crate) fn mark_largess_charged(&mut self) {
         if self.base_property.read_u8(BASE_PROPERTY_IS_CHARGED_OFFSET) == 0 {
             self.base_property
@@ -2076,7 +1753,7 @@ impl CPlayer {
         }
     }
 
-    /// Делегирует exact `CLargess::AddGoldCoin` bank-owner-у на позиции `0`.
+ /// Делегирует `CLargess::AddGoldCoin` bank-owner-у на позиции `0`.
     pub(crate) fn add_largess_gold_coin(
         &mut self,
         goods: Box<CGoods>,
@@ -2088,12 +1765,12 @@ impl CPlayer {
             .is_none())
     }
 
-    /// Возвращает inherited depot limit для exact позиционного обхода largess.
+ /// Возвращает inherited depot limit для позиционного обхода largess.
     pub(crate) const fn largess_depot_limit(&self) -> u32 {
         self.depot.get_goods_amount_limit()
     }
 
-    /// Передаёт один товар positional `CDepot::Add`, сохраняя rejected owner.
+ /// Передаёт один товар positional `CDepot::Add`, сохраняя rejected owner.
     pub(crate) fn add_largess_to_depot(
         &mut self,
         position: u32,
@@ -2103,12 +1780,12 @@ impl CPlayer {
         self.depot.add_at(position, goods, registry).map_err(Into::into)
     }
 
-    /// Повторяет `CPlayer::GetMoney` RVA `0x0005AEA0` через wallet-owner.
+ /// Повторяет `CPlayer::GetMoney` через wallet-owner.
     pub(crate) const fn money(&self) -> u32 {
         self.wallet.get_gold_coins_amount()
     }
 
-    /// Считает unlocked amount товаров packet-а с точным original-name.
+ /// Считает unlocked amount товаров packet-а с точным original-name.
     pub(crate) fn check_goods_in_packet(
         &self,
         original_name: Option<&CStr>,
@@ -2129,12 +1806,12 @@ impl CPlayer {
         })
     }
 
-    /// Возвращает сохранённые account-байты без придуманной перекодировки.
+ /// Возвращает сохранённые account-байты без придуманной перекодировки.
     pub(crate) fn get_account(&self) -> &[u8] {
         &self.base_property.account
     }
 
-    /// Повторяет две последовательные native-width мутации ветки `0x5FA06`.
+ /// Повторяет две последовательные native-width мутации ветки `0x5FA06`.
     pub(crate) fn increment_murder_counters(&mut self) -> PlayerMurderCounterUpdate {
         let previous_kill_count = self
             .base_property
@@ -2156,7 +1833,7 @@ impl CPlayer {
         }
     }
 
-    /// Обнуляет exact `wPkCount/dwKillCount` в порядке исходного `Absolve`.
+ /// Обнуляет `wPkCount/dwKillCount` в порядке исходного `Absolve`.
     pub(crate) fn reset_murder_counters(&mut self) -> PlayerMurderCounterReset {
         let previous_pk_count = self.base_property.read_u16(BASE_PROPERTY_PK_COUNT_OFFSET);
         self.base_property.write_u16(BASE_PROPERTY_PK_COUNT_OFFSET, 0);
@@ -2165,17 +1842,17 @@ impl CPlayer {
         PlayerMurderCounterReset { previous_kill_count, previous_pk_count }
     }
 
-    /// Возвращает exact unsigned `m_BaseProperty.wPkCount`.
+ /// Возвращает unsigned `m_BaseProperty.wPkCount`.
     pub(crate) fn pk_count(&self) -> u16 {
         self.base_property.read_u16(BASE_PROPERTY_PK_COUNT_OFFSET)
     }
 
-    /// Возвращает унаследованный exact `CMoveShape::m_bIsGod`.
+ /// Возвращает унаследованный `CMoveShape::m_bIsGod`.
     pub(crate) const fn is_god(&self) -> bool {
         self.move_shape_base.is_god()
     }
 
-    /// Повторяет unsigned 32-bit сложение исходного `dwExploit += long`.
+ /// Повторяет unsigned 32-bit сложение исходного `dwExploit += long`.
     pub(crate) fn add_exploit_wrapping(&mut self, increment: i32) -> PlayerExploitUpdate {
         let previous_exploit = self.base_property.read_u32(BASE_PROPERTY_EXPLOIT_OFFSET);
         let exploit = previous_exploit.wrapping_add(increment as u32);
@@ -2188,22 +1865,22 @@ impl CPlayer {
         }
     }
 
-    /// Сообщает, был ли игроку уже отправлен полный faction snapshot.
+ /// Сообщает, был ли игроку уже отправлен полный faction snapshot.
     pub(crate) fn faction_data_received(&self) -> bool {
         self.faction_data_received.get()
     }
 
-    /// Сохраняет доказанную прямую мутацию `m_bGetFactionData`.
+ /// Сохраняет доказанную прямую мутацию `m_bGetFactionData`.
     pub(crate) fn set_faction_data_received(&self, received: bool) {
         self.faction_data_received.set(received);
     }
 
-    /// Уничтожает transient pet-information после принятого World snapshot-а.
+ /// Уничтожает transient pet-information после принятого World snapshot-а.
     pub(crate) fn clear_uncreated_pets(&mut self) {
         self.uncreated_pets.clear();
     }
 
-    /// Возвращает exact transient-флаг, блокирующий смену главы faction.
+ /// Возвращает transient-флаг, блокирующий смену главы faction.
     pub(crate) fn faction_war_operator(&self) -> bool {
         self.faction_runtime.borrow().faction_war_operator
     }
@@ -2212,70 +1889,70 @@ impl CPlayer {
         self.faction_runtime.borrow_mut().faction_war_operator = enabled;
     }
 
-    /// Возвращает signed ID через унаследованный `CBaseObject` owner.
+ /// Возвращает signed ID через унаследованный `CBaseObject` owner.
     pub(crate) const fn get_id(&self) -> i32 {
         self.move_shape_base.get_id()
     }
 
-    /// Возвращает следующий process-wide ID старого inline `GetNetExID`.
+ /// Возвращает следующий process-wide ID старого inline `GetNetExID`.
     pub(crate) fn get_net_exchange_id(&self) -> i32 {
         NEXT_NET_EXCHANGE_ID
             .fetch_add(1, Ordering::Relaxed)
             .wrapping_add(1)
     }
 
-    /// Возвращает signed type через унаследованный `CBaseObject` owner.
+ /// Возвращает signed type через унаследованный `CBaseObject` owner.
     pub(crate) const fn get_type(&self) -> i32 {
         self.move_shape_base.get_type()
     }
 
-    /// Присваивает signed ID через унаследованный `CBaseObject` owner.
+ /// Присваивает signed ID через унаследованный `CBaseObject` owner.
     pub(crate) const fn set_id(&mut self, id: i32) {
         self.move_shape_base.set_id(id);
     }
 
-    /// Заимствует byte-exact имя через унаследованный `CBaseObject` owner.
+ /// Заимствует byte- имя через унаследованный `CBaseObject` owner.
     pub(crate) fn get_name(&self) -> &[u8] {
         self.move_shape_base.get_name()
     }
 
-    /// Присваивает унаследованное byte-exact имя без global/DB проверок.
-    ///
-    /// Это прямой `CBaseObject::SetName`, нужный factory lifecycle; публичная
-    /// игровая смена имени по-прежнему должна проходить `set_validated_name`.
+ /// Присваивает унаследованное byte- имя без global/DB проверок.
+ ///
+ /// Это прямой `CBaseObject::SetName`, нужный factory lifecycle; публичная
+ /// игровая смена имени по-прежнему должна проходить `set_validated_name`.
     pub(crate) fn set_name(&mut self, name: &[u8]) {
         self.move_shape_base.set_name(name);
     }
 
-    /// Присваивает унаследованный signed graphics ID без иных side effects.
+ /// Присваивает унаследованный signed graphics ID без иных side effects.
     pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
         self.move_shape_base.set_graphics_id(graphics_id);
     }
 
-    /// Финальная exact-мутация `ChangeName` после ordered global/DB checks.
+ /// Финальная -мутация `ChangeName` после ordered global/DB checks.
     pub(crate) fn set_validated_name(&mut self, name: &[u8]) {
         self.move_shape_base.set_name(name);
     }
 
-    /// Прямая DB-load запись exact `bFairyContainerEnabled` byte.
+ /// Прямая DB-load запись `bFairyContainerEnabled` byte.
     pub(crate) fn set_fairy_container_enabled(&mut self, enabled: bool) {
         self.base_property
             .write_u8(BASE_PROPERTY_FAIRY_ENABLED_OFFSET, u8::from(enabled));
     }
 
-    /// Сохраняет unsigned `min(value, 5)` как exact `SetFosterNum`.
+ /// Сохраняет unsigned `min(value, 5)` как `SetFosterNum`.
     pub(crate) fn set_foster_num(&mut self, value: u32) {
         self.base_property
             .write_u32(BASE_PROPERTY_FOSTER_NUM_OFFSET, value.min(5));
     }
 
-    /// Сохраняет unsigned `min(value, 5)` как exact `SetHatcherNum`.
+ /// Сохраняет unsigned `min(value, 5)` как `SetHatcherNum`.
     pub(crate) fn set_hatcher_num(&mut self, value: u32) {
         self.base_property
             .write_u32(BASE_PROPERTY_HATCHER_NUM_OFFSET, value.min(5));
     }
 
-    /// Публикует scalar-часть одной найденной строки `CSL_PLAYER_ABILITY`.
+ /// Публикует scalar-часть одной найденной строки `CSL_PLAYER_ABILITY`.
     pub(crate) fn apply_loaded_ability_scalars(
         &mut self,
         loaded: &PlayerAbilityLoadScalarSnapshot<'_>,
@@ -2317,7 +1994,7 @@ impl CPlayer {
         base.write_u32(BASE_PROPERTY_MAX_HP_OFFSET, scalar.base_max_hp);
         base.write_u32(BASE_PROPERTY_MAX_MP_OFFSET, scalar.base_max_mp);
         base.write_u16(BASE_PROPERTY_MAX_YP_OFFSET, scalar.base_max_yp);
-        // `LoadPlayer` не читает BaseMaxRp: его сразу вычисляет `LoadData`.
+ // `LoadPlayer` не читает BaseMaxRp: его сразу вычисляет `LoadData`.
         base.write_u32(BASE_PROPERTY_STR_OFFSET, scalar.base_str);
         base.write_u32(BASE_PROPERTY_DEX_OFFSET, scalar.base_dex);
         base.write_u32(BASE_PROPERTY_CON_OFFSET, scalar.base_con);
@@ -2428,7 +2105,7 @@ impl CPlayer {
         self.contribute = Some(scalar.contribute);
     }
 
-    /// Публикует все 24 DWORD `HotKey` после exact-size проверки DB-owner-а.
+ /// Публикует все 24 DWORD `HotKey` после -size проверки DB-owner-а.
     pub(crate) fn apply_loaded_hot_keys(&mut self, hot_keys: &[u32; 24]) {
         for (index, hot_key) in hot_keys.iter().copied().enumerate() {
             self.base_property
@@ -2436,7 +2113,7 @@ impl CPlayer {
         }
     }
 
-    /// Добавляет `ListSkill` в исходном list-order без несуществующей очистки.
+ /// Добавляет `ListSkill` в исходном list-order без несуществующей очистки.
     pub(crate) fn append_loaded_skills(&mut self, skills: &[PlayerAbilitySkill]) {
         self.new_skills
             .extend(skills.iter().map(|skill| PlayerSkill {
@@ -2445,7 +2122,7 @@ impl CPlayer {
             }));
     }
 
-    /// Заменяет достигнутые `m_lVariable*` безопасным owned payload-ом.
+ /// Заменяет действующие `m_lVariable*` безопасным owned payload-ом.
     pub(crate) fn apply_loaded_script_flag(&mut self, script: LoadedPlayerScriptFlag) {
         self.variable_num = script.variable_num;
         self.variable_data_length = i32::try_from(script.variable_data.len())
@@ -2453,13 +2130,13 @@ impl CPlayer {
         self.variable_data = Some(script.variable_data);
     }
 
-    /// Повторяет непустой вызов `CMoveShape::SetExStates`.
+ /// Повторяет непустой вызов `CMoveShape::SetExStates`.
     pub(crate) fn apply_loaded_ex_states(&mut self, ex_states: Vec<u8>) {
         debug_assert!(!ex_states.is_empty());
         self.move_shape_base.set_ex_states(&ex_states);
     }
 
-    /// Добавляет DB-friends и сбрасывает runtime-only online-флаг каждого.
+ /// Добавляет DB-friends и сбрасывает runtime-only online-флаг каждого.
     pub(crate) fn append_loaded_friends(&mut self, names: Vec<Vec<u8>>) {
         self.friends.extend(names.into_iter().map(|name| PlayerFriend {
             name,
@@ -2467,12 +2144,12 @@ impl CPlayer {
         }));
     }
 
-    /// Вставляет DB tattoo ID с unsigned set-семантикой исходного owner-а.
+ /// Вставляет DB tattoo ID с unsigned set-семантикой исходного owner-а.
     pub(crate) fn extend_loaded_ci_qing(&mut self, ids: BTreeSet<u32>) {
         self.ci_qing_ids.extend(ids);
     }
 
-    /// Публикует `ListThing` и сохраняет отдельную empty/fyEnergy daily-ветвь.
+ /// Публикует `ListThing` и сохраняет отдельную empty/fyEnergy daily-ветвь.
     pub(crate) fn apply_loaded_things(
         &mut self,
         field_was_empty: bool,
@@ -2519,8 +2196,8 @@ impl CPlayer {
             .collect();
     }
 
-    /// Вставляет/заменяет DB quest по unsigned key, как `map::operator[]`
-    /// с последующей полной записью трёх значимых байт `tagPlayerQuest`.
+ /// Вставляет/заменяет DB quest по unsigned key, как `map::operator[]`
+ /// с последующей полной записью трёх значимых байт `tagPlayerQuest`.
     pub(crate) fn add_quest_from_db(&mut self, quest_id: u16, complete: u8) {
         self.player_quests.insert(
             quest_id,
@@ -2531,57 +2208,57 @@ impl CPlayer {
         );
     }
 
-    /// Заменяет exact `m_lSilienceTime`, возвращая прежнее значение.
+ /// Заменяет `m_lSilienceTime`, возвращая прежнее значение.
     pub(crate) fn replace_silience_time(&mut self, silience_time: i32) -> i32 {
         std::mem::replace(&mut self.silience_time, silience_time)
     }
 
-    /// Возвращает region ID через унаследованный shape-owner.
+ /// Возвращает region ID через унаследованный shape-owner.
     pub(crate) const fn get_region_id(&self) -> i32 {
         self.move_shape_base.get_region_id()
     }
 
-    /// Возвращает X через унаследованный shape-owner.
+ /// Возвращает X через унаследованный shape-owner.
     pub(crate) const fn get_pos_x(&self) -> f32 {
         self.move_shape_base.get_pos_x()
     }
 
-    /// Присваивает X через унаследованный shape-owner.
+ /// Присваивает X через унаследованный shape-owner.
     pub(crate) const fn set_pos_x(&mut self, pos_x: f32) {
         self.move_shape_base.set_pos_x(pos_x);
     }
 
-    /// Возвращает Y через унаследованный shape-owner.
+ /// Возвращает Y через унаследованный shape-owner.
     pub(crate) const fn get_pos_y(&self) -> f32 {
         self.move_shape_base.get_pos_y()
     }
 
-    /// Присваивает Y через унаследованный shape-owner.
+ /// Присваивает Y через унаследованный shape-owner.
     pub(crate) const fn set_pos_y(&mut self, pos_y: f32) {
         self.move_shape_base.set_pos_y(pos_y);
     }
 
-    /// Возвращает X-клетку через унаследованный shape-owner.
+ /// Возвращает X-клетку через унаследованный shape-owner.
     pub(crate) fn get_tile_x(&self) -> Result<i32, ShapeTileCoordinateBlock> {
         self.move_shape_base.get_tile_x()
     }
 
-    /// Возвращает Y-клетку через унаследованный shape-owner.
+ /// Возвращает Y-клетку через унаследованный shape-owner.
     pub(crate) fn get_tile_y(&self) -> Result<i32, ShapeTileCoordinateBlock> {
         self.move_shape_base.get_tile_y()
     }
 
-    /// Присваивает обе координаты через унаследованный shape-owner.
+ /// Присваивает обе координаты через унаследованный shape-owner.
     pub(crate) const fn set_pos_xy(&mut self, pos_x: f32, pos_y: f32) {
         self.move_shape_base.set_pos_xy(pos_x, pos_y);
     }
 
-    /// Присваивает signed legacy position через shape-owner.
+ /// Присваивает signed legacy position через shape-owner.
     pub(crate) const fn set_position(&mut self, position: i32) {
         self.move_shape_base.set_position(position);
     }
 
-    /// Возвращает bit-exact скорость через shape-owner.
+ /// Возвращает bit- скорость через shape-owner.
     pub(crate) const fn get_speed(&self) -> f32 {
         self.move_shape_base.get_speed()
     }
@@ -2590,32 +2267,32 @@ impl CPlayer {
         self.move_shape_base.set_direction(direction)
     }
 
-    /// Возвращает state через shape-owner.
+ /// Возвращает state через shape-owner.
     pub(crate) const fn get_state(&self) -> u16 {
         self.move_shape_base.get_state()
     }
 
-    /// Возвращает action через shape-owner.
+ /// Возвращает action через shape-owner.
     pub(crate) const fn get_action(&self) -> u16 {
         self.move_shape_base.get_action()
     }
 
-    /// Присваивает action через shape-owner.
+ /// Присваивает action через shape-owner.
     pub(crate) const fn set_action(&mut self, action: u16) {
         self.move_shape_base.set_action(action);
     }
 
-    /// Ставит игрока в центр signed tile через унаследованный shape-owner.
+ /// Ставит игрока в центр signed tile через унаследованный shape-owner.
     pub(crate) fn set_tile_xy(&mut self, tile_x: i32, tile_y: i32) {
         self.move_shape_base.set_tile_xy(tile_x, tile_y);
     }
 
-    /// Возвращает country только после материализации player-state.
+ /// Возвращает country только после материализации player-state.
     pub(crate) const fn country(&self) -> Option<u8> {
         self.country
     }
 
-    /// Повторяет exact `CPlayer::ChangeCountry`, получая singleton lookup явно.
+ /// Повторяет `CPlayer::ChangeCountry`, получая singleton lookup явно.
     pub(crate) fn change_country(
         &mut self,
         requested_country: u8,
@@ -2647,17 +2324,17 @@ impl CPlayer {
         }
     }
 
-    /// Возвращает достигнутый signed faction ID без преобразования.
+ /// Возвращает действующий signed faction ID без преобразования.
     pub(crate) fn faction_id(&self) -> i32 {
         self.faction_runtime.borrow().organizing.faction_id
     }
 
-    /// Возвращает signed `m_lTeamID` без изменения его bit-pattern.
+ /// Возвращает signed `m_lTeamID` без изменения его bit-pattern.
     pub(crate) const fn get_team_id(&self) -> i32 {
         self.team_id
     }
 
-    /// Возвращает полный восьмибитный уровень игрока.
+ /// Возвращает полный восьмибитный уровень игрока.
     pub(crate) fn get_level(&self) -> u8 {
         self.base_property.read_u8(BASE_PROPERTY_LEVEL_OFFSET)
     }
@@ -2666,14 +2343,14 @@ impl CPlayer {
         self.base_property.read_u32(BASE_PROPERTY_JJC_LEVEL_OFFSET)
     }
 
-    /// Прямые записи apply-message в два поля `m_BaseProperty`.
+ /// Прямые записи apply-message в два поля `m_BaseProperty`.
     pub(crate) fn set_jjc_identity(&mut self, level: u8, jjc_level: u32) {
         self.base_property.write_u8(BASE_PROPERTY_LEVEL_OFFSET, level);
         self.base_property
             .write_u32(BASE_PROPERTY_JJC_LEVEL_OFFSET, jjc_level);
     }
 
-    /// Exact `0x60901`: три scalar-поля и все восемь adjacent u16 counters.
+ /// `0x60901`: три scalar-поля и все восемь adjacent u16 counters.
     pub(crate) fn set_jjc_snapshot(
         &mut self,
         level: u8,
@@ -2687,7 +2364,7 @@ impl CPlayer {
         self.jjc_data = counters;
     }
 
-    /// Публикует найденную DB-строку `csl_player_jjc`, не меняя player level.
+ /// Публикует найденную DB-строку `csl_player_jjc`, не меняя player level.
     pub(crate) fn apply_loaded_jjc_data(
         &mut self,
         jjc_level: u32,
@@ -2703,24 +2380,24 @@ impl CPlayer {
         }
     }
 
-    /// Возвращает exact unsigned `m_BaseProperty.dwCredit`.
+ /// Возвращает unsigned `m_BaseProperty.dwCredit`.
     pub(crate) fn credit(&self) -> u32 {
         self.base_property.read_u32(BASE_PROPERTY_CREDIT_OFFSET)
     }
 
-    /// Возвращает occupation из exact base-property offset `+0x0E`.
+ /// Возвращает occupation из base-property offset `+0x0E`.
     pub(crate) fn get_occupation(&self) -> u8 {
         self.base_property
             .read_u8(BASE_PROPERTY_OCCUPATION_OFFSET)
     }
 
-    /// Возвращает appellation ID из exact base-property offset `+0x154`.
+ /// Возвращает appellation ID из base-property offset `+0x154`.
     pub(crate) fn get_appellation_id(&self) -> u32 {
         self.base_property
             .read_u32(BASE_PROPERTY_APPELLATION_OFFSET)
     }
 
-    /// Повторяет post-`ListThing` reset первого числа месяца.
+ /// Повторяет post-`ListThing` reset первого числа месяца.
     pub(crate) fn reset_loaded_lei_ting_if_needed(
         &mut self,
         local_day: u16,
@@ -2753,7 +2430,7 @@ impl CPlayer {
         }
     }
 
-    /// Повторяет `ReSetHonorElimilateNum` для caller-снимка local time.
+ /// Повторяет `ReSetHonorElimilateNum` для caller-снимка local time.
     pub(crate) fn reset_honor_eliminate_num(
         &mut self,
         mut save_time: TagTime,
@@ -2805,7 +2482,7 @@ impl CPlayer {
         })
     }
 
-    /// Повторяет прямые honor-eliminate записи `CGame` в player base-owner.
+ /// Повторяет прямые honor-eliminate записи `CGame` в player base-owner.
     pub(crate) fn reset_honor_eliminate_info(&mut self, rank_mask: u32) {
         if rank_mask & 0x02 != 0 {
             self.base_property
@@ -2819,17 +2496,17 @@ impl CPlayer {
             .write_u32(BASE_PROPERTY_DAYS_HONOR_OFFSET, 0);
     }
 
-    /// Возвращает текущее число элементов `m_listFriend`.
+ /// Возвращает текущее число элементов `m_listFriend`.
     pub(crate) fn friend_count(&self) -> usize {
         self.friends.len()
     }
 
-    /// Заимствует имя friend-элемента в исходном list-order.
+ /// Заимствует имя friend-элемента в исходном list-order.
     pub(crate) fn friend_name(&self, index: usize) -> Option<&[u8]> {
         self.friends.get(index).map(|friend| friend.name.as_slice())
     }
 
-    /// Присваивает `bOnline` выбранного friend-элемента.
+ /// Присваивает `bOnline` выбранного friend-элемента.
     pub(crate) fn set_friend_online(&mut self, index: usize, online: bool) -> bool {
         let Some(friend) = self.friends.get_mut(index) else {
             return false;
@@ -2838,13 +2515,13 @@ impl CPlayer {
         true
     }
 
-    /// Завершает direct `CRsPlayer::GetPlayerData` после friend-loop.
+ /// Завершает direct `CRsPlayer::GetPlayerData` после friend-loop.
     pub(crate) fn reset_selected_login_flags(&mut self) {
         self.faction_data_received.set(false);
         self.login = false;
     }
 
-    /// Обновляет organizing-состояние игрока через переданного владельца.
+ /// Обновляет organizing-состояние игрока через переданного владельца.
     pub(crate) fn set_player_organizing<U: PlayerOrganizingUpdater>(
         &self,
         updater: &mut U,
@@ -2856,7 +2533,8 @@ impl CPlayer {
         )
     }
 
-    /// Выполняет exact `CPlayer::UpdateFactionInfo` и публикует `0x7FE06`.
+ /// Сбрасывает faction-состояние, перечитывает organizing data, сериализует
+ /// снимок и только затем публикует `0x7FE06`.
     pub(crate) fn update_faction_info<Context>(
         &self,
         context: &mut Context,
@@ -2882,9 +2560,8 @@ impl CPlayer {
             runtime.create_union_operator = false;
             runtime.faction_war_operator = false;
             runtime.organizing.force = 0;
-            // Исходник оставлял stale owned-region list при переходе во free
-            // player, но serializer при faction ID `0` её никогда не читал.
-            // Это внутренний lifecycle-дефект без внешнего контракта.
+ // При faction ID `0` serializer не читает stale owned-region list;
+ // очистка здесь не меняет наблюдаемый wire-контракт.
             runtime.organizing.clear_owned_regions();
         }
 
@@ -2915,12 +2592,12 @@ impl CPlayer {
         })
     }
 
-    /// Присваивает state унаследованного shape-owner-а.
+ /// Присваивает state унаследованного shape-owner-а.
     pub(crate) const fn set_state(&mut self, state: u16) {
         self.move_shape_base.set_state(state);
     }
 
-    /// Замораживает все пятнадцать goods-owner-ов для одного DB lifecycle.
+ /// Замораживает все пятнадцать goods-owner-ов для одного DB lifecycle.
     pub(crate) fn db_goods_projection(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -2944,7 +2621,7 @@ impl CPlayer {
         })
     }
 
-    /// Материализует все временные массивы, которые DB-owner читал синхронно.
+ /// Материализует все временные массивы, которые DB-owner читал синхронно.
     pub(crate) fn db_projection(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -3040,12 +2717,12 @@ impl CPlayer {
         })
     }
 
-    /// Присваивает region ID через унаследованный shape-owner.
+ /// Присваивает region ID через унаследованный shape-owner.
     pub(crate) const fn set_region_id(&mut self, region_id: i32) {
         self.move_shape_base.set_region_id(region_id);
     }
 
-    /// Кодирует полный достигнутый player-wire и затем пересчитывает property.
+ /// Кодирует полный действующий player-wire и затем пересчитывает property.
     pub(crate) fn add_to_byte_array<U: PlayerOrganizingUpdater>(
         &mut self,
         destination: &mut Vec<u8>,
@@ -3063,7 +2740,7 @@ impl CPlayer {
         Ok(true)
     }
 
-    /// Декодирует полный достигнутый player-wire и затем пересчитывает property.
+ /// Декодирует полный действующий player-wire и затем пересчитывает property.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],
@@ -3081,7 +2758,7 @@ impl CPlayer {
         Ok(true)
     }
 
-    /// Пересчитывает доказанный WorldServer `tagProperty` из base и setup.
+ /// Пересчитывает доказанный WorldServer `tagProperty` из base и setup.
     pub(crate) fn update_property(
         &mut self,
         coefficients: &PlayerPropertyCoefficients,
@@ -3101,8 +2778,8 @@ impl CPlayer {
         let occupation = self.base_property.read_u8(BASE_PROPERTY_OCCUPATION_OFFSET);
         let occupation = usize::from(occupation);
         if occupation >= 3 {
-            // Оригинал индексировал соседнюю static
-            // память за `float[3]`; safe Rust не назначает ей коэффициент.
+ // Оригинал индексировал соседнюю static
+ // память за `float[3]`; safe Rust не назначает ей коэффициент.
             return Err(
                 PlayerCodecError::OccupationOutsidePropertyCoefficientRange {
                     occupation: occupation as u8,
@@ -3217,7 +2894,7 @@ impl CPlayer {
         Ok(())
     }
 
-    /// Кодирует непрерывный доказанный префикс до первого container-owner-а.
+ /// Кодирует непрерывный доказанный префикс до первого container-owner-а.
     pub(crate) fn add_to_byte_array_before_containers(
         &self,
         destination: &mut Vec<u8>,
@@ -3259,7 +2936,7 @@ impl CPlayer {
         Ok(true)
     }
 
-    /// Декодирует достигнутый префикс и оставляет cursor перед `m_cHand`.
+ /// Декодирует действующий префикс и оставляет cursor перед `m_cHand`.
     pub(crate) fn decord_from_byte_array_before_containers(
         &mut self,
         source: &[u8],
@@ -3304,9 +2981,9 @@ impl CPlayer {
 
         let ex_state_length = read_player_i32(source, cursor, "m_vExStates length")?;
         if ex_state_length < 0 {
-            // Старый signed length уходил в pointer
-            // arithmetic и `_AddToByteArray`; результат для high-bit wire не
-            // определён согласованным псевдокодом.
+ // Старый signed length уходил в pointer
+ // arithmetic и `_AddToByteArray`; результат для high-bit wire не
+ // определён согласованным оригинал.
             return Err(PlayerCodecError::NegativeLength {
                 field: "m_vExStates length",
                 value: ex_state_length,
@@ -3330,7 +3007,7 @@ impl CPlayer {
         Ok(true)
     }
 
-    /// Кодирует пятнадцать container-owner-ов и depot-password в exact wire-order.
+ /// Кодирует пятнадцать container-owner-ов и depot-password в wire-order.
     pub(crate) fn add_containers_to_byte_array(
         &mut self,
         destination: &mut Vec<u8>,
@@ -3361,7 +3038,7 @@ impl CPlayer {
         Ok(true)
     }
 
-    /// Декодирует container-сегмент с точными `Release` и limit/volume setup.
+ /// Декодирует container-сегмент с точными `Release` и limit/volume setup.
     pub(crate) fn decord_containers_from_byte_array(
         &mut self,
         source: &[u8],
@@ -3434,7 +3111,7 @@ impl CPlayer {
         Ok(true)
     }
 
-    /// Кодирует достигнутый suffix после containers и оставляет owner готовым к `UpdateProperty`.
+ /// Кодирует действующий suffix после containers и оставляет owner готовым к `UpdateProperty`.
     pub(crate) fn add_to_byte_array_after_containers<U: PlayerOrganizingUpdater>(
         &mut self,
         destination: &mut Vec<u8>,
@@ -3505,7 +3182,7 @@ impl CPlayer {
         Ok(true)
     }
 
-    /// Декодирует WorldServer suffix после containers; `UpdateProperty` остаётся следующим owner-ом.
+ /// Декодирует WorldServer suffix после containers; `UpdateProperty` остаётся следующим owner-ом.
     pub(crate) fn decord_from_byte_array_after_containers(
         &mut self,
         source: &[u8],
@@ -3514,8 +3191,8 @@ impl CPlayer {
         self.variable_num = read_player_i32(source, cursor, "m_lVariableNum")?;
         self.variable_data_length = read_player_i32(source, cursor, "m_lVariableDataLength")?;
         if self.variable_data_length < 0 {
-            // Оригинал передавал high-bit length в
-            // `operator new` и безразмерный `_GetBufferFromByteArray`.
+ // Оригинал передавал high-bit length в
+ // `operator new` и безразмерный `_GetBufferFromByteArray`.
             return Err(PlayerCodecError::NegativeLength {
                 field: "m_lVariableDataLength",
                 value: self.variable_data_length,
@@ -3538,8 +3215,8 @@ impl CPlayer {
 
         let pet_count = read_player_i32(source, cursor, "m_vUncreatedPets count")?;
         if pet_count < 0 {
-            // Исходный `for (count; count != 0; --count)`
-            // для отрицательного значения уходит в signed overflow/overread.
+ // Исходный `for (count; count != 0; --count)`
+ // для отрицательного значения уходит в signed overflow/overread.
             return Err(PlayerCodecError::NegativeLength {
                 field: "m_vUncreatedPets count",
                 value: pet_count,
@@ -3577,7 +3254,7 @@ impl CPlayer {
         Ok(true)
     }
 
-    /// Обновляет и кодирует organization-блок в точном WorldServer wire-order.
+ /// Обновляет и кодирует organization-блок в точном WorldServer wire-order.
     pub(crate) fn add_org_sys_to_byte_array<U: PlayerOrganizingUpdater>(
         &self,
         destination: &mut Vec<u8>,
@@ -3632,7 +3309,7 @@ impl CPlayer {
         Ok(true)
     }
 
-    /// Дописывает tattoo ID в unsigned set-order исходного `AddByteCiQing`.
+ /// Дописывает tattoo ID в unsigned set-order исходного `AddByteCiQing`.
     pub(crate) fn add_byte_ci_qing(
         &self,
         destination: &mut Vec<u8>,
@@ -3644,7 +3321,7 @@ impl CPlayer {
         Ok(())
     }
 
-    /// Очищает и восстанавливает tattoo set, сохраняя частичные вставки.
+ /// Очищает и восстанавливает tattoo set, сохраняя частичные вставки.
     pub(crate) fn de_byte_ci_qing(
         &mut self,
         source: &[u8],
@@ -3659,7 +3336,7 @@ impl CPlayer {
         Ok(())
     }
 
-    /// Дописывает LeiTing scalar и `tagThing` в исходном deque-order.
+ /// Дописывает LeiTing scalar и `tagThing` в исходном deque-order.
     pub(crate) fn add_byte_array_lei_ting(
         &self,
         destination: &mut Vec<u8>,
@@ -3704,7 +3381,7 @@ impl CPlayer {
         Ok(())
     }
 
-    /// Выполняет exact daily/monthly `CPlayer::UpdateLeiTing`.
+ /// Выполняет daily/monthly `CPlayer::UpdateLeiTing`.
     pub(crate) fn update_lei_ting<Clock: PlayerLeiTingClock>(
         &mut self,
         update_kind: u32,
@@ -3786,7 +3463,7 @@ impl CPlayer {
         })
     }
 
-    /// Читает LeiTing scalar, затем очищает и наполняет deque по порядку.
+ /// Читает LeiTing scalar, затем очищает и наполняет deque по порядку.
     pub(crate) fn decode_byte_array_lei_ting(
         &mut self,
         source: &[u8],
@@ -3821,7 +3498,7 @@ impl CPlayer {
         Ok(())
     }
 
-    /// Дописывает mapped quest values в unsigned key-order исходной map.
+ /// Дописывает mapped quest values в unsigned key-order исходной map.
     pub(crate) fn add_quest_data_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -3834,7 +3511,7 @@ impl CPlayer {
         Ok(true)
     }
 
-    /// Очищает quest map и восстанавливает mapped value по его же quest ID.
+ /// Очищает quest map и восстанавливает mapped value по его же quest ID.
     pub(crate) fn decord_quest_data_from_byte_array(
         &mut self,
         source: &[u8],
@@ -3853,7 +3530,7 @@ impl CPlayer {
         Ok(true)
     }
 
-    /// Выполняет exact post-load часть `CPlayer::LoadData` после DB-owner-а.
+ /// Выполняет post-load часть `CPlayer::LoadData` после DB-owner-а.
     pub(crate) async fn load_data<L: PlayerLoadDataOwner>(
         &mut self,
         loader: &mut L,
@@ -3936,9 +3613,9 @@ impl CPlayer {
         })
     }
 
-    /// Передаёт полный снимок игрока DB-owner-у и возвращает его точный итог.
-    ///
-    /// `snapshot` должен быть материализован из этой же player-сущности.
+ /// Передаёт полный снимок игрока DB-owner-у и возвращает его точный итог.
+ ///
+ /// `snapshot` должен быть материализован из этой же player-сущности.
     pub(crate) async fn save_data<P, J, G>(
         &self,
         snapshot: &PlayerSaveSnapshot<'_, '_, '_>,
@@ -4005,7 +3682,7 @@ fn append_player_fixed_c_string(
 /// extFloat80 bindings требуют широкого `unsafe` FFI. Здесь общий soft-float
 /// runtime не нужен: произведение 32-битного integer и 24-битной significand
 /// содержит не более 56 значащих бит и потому точно помещается в 64-битную
-/// x87 significand. Разбор IEEE-754 bits сохраняет это единственное достигнутое
+/// x87 significand. Разбор IEEE-754 bits сохраняет это единственное действующее
 /// действие без округления через недостаточный `f64`.
 fn legacy_x87_truncated_magnitude(
     value: u32,
@@ -4219,8 +3896,8 @@ fn read_player_c_string(
         return Ok(bytes[..length].to_vec());
     }
 
-    // Старый вспомогательный код писал до NUL в фиксированный стековый буфер.
-    // Rust не воспроизводит ни переполнение, ни чтение за источником.
+ // Старый вспомогательный код писал до NUL в фиксированный стековый буфер.
+ // Rust не воспроизводит ни переполнение, ни чтение за источником.
     Err(PlayerCodecError::UnterminatedString {
         field,
         offset,
@@ -4273,8 +3950,8 @@ fn read_player_array<const N: usize>(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Старый вспомогательный код не получал длину источника и продолжал
-        // чтение. Rust останавливает только эту локальную операцию.
+ // Старый вспомогательный код не получал длину источника и продолжал
+ // чтение. Rust останавливает только эту локальную операцию.
         return Err(PlayerCodecError::UnexpectedEnd {
             field,
             offset,

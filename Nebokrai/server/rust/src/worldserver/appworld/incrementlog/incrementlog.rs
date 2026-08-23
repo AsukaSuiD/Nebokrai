@@ -1,23 +1,17 @@
-//! Increment-shop журнал исторического WorldServer.
-//!
-//! `CIncrementLog` RVA `0x00072010/0x00072890..0x00072C00` восстановлен по
-//! точной паре `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
-//! исходный owner:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\incrementlog\incrementlog.cpp:7,16,29,58,69,83,102`.
-//! DB-owner — `dbaccess/worlddb/dbincrementlog.cpp:13`.
+//! Increment-shop журнал WorldServer из точной пары EXE/PDB.
+//! DB-владелец находится в `dbaccess/worlddb/dbincrementlog.rs`.
 //!
 //! Registry остаётся player-keyed, записи внутри игрока сохраняют insertion/
 //! DB cursor order. Страница содержит максимум `17` записей, считается от
-//! newest к oldest и внутри страницы также идёт в обратном порядке. Exact EXE
-//! `0x00472AA5` сбрасывает страницу только при `begin > size`, поэтому
+//! newest к oldest и внутри страницы также идёт в обратном порядке.
+//! сбрасывает страницу только при `begin > size`, поэтому
 //! `begin == size` успешно кодирует нулевую страницу. Отрицательная страница
 //! становится нулевой; `page * 17` использует x86 wrapping arithmetic.
 //!
 //! `BTreeMap<i32, Vec<_>>`, owned byte-строки и обычный `Drop` заменяют только
 //! `std::map<long, vector<pointer>*>`, ручные allocation/delete и singleton.
 //! Отдельный mutex не нужен: owner передаётся как единственная mutable Rust-
-//! ссылка. Donor-added календарные/ID/retention/description limits не являются
-//! контрактом EXE и не перенесены. Если wrapping page даёт отрицательный
+//! ссылка. Если wrapping page даёт отрицательный
 //! индекс либо переполняет следующий page-end, оригинал уходил в vector
 //! range/UB; safe Rust возвращает локальный block и не выдаёт внутренний
 //! memory defect за protocol-семантику.

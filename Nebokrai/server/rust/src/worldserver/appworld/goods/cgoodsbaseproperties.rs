@@ -1,37 +1,32 @@
 //! Владелец базовых свойств товаров исторического `WorldServer`.
 //!
-//! Конструктор RVA `0x000D5010`, `Serialize` RVA `0x000D4BD0`,
-//! `tagAddonProperty::Serialize` RVA `0x000D4B20`,
-//! `GetPrice/GetWeight/GetName/GetDescribe/GetIconID` RVA
-//! `0x000D4930/0x000D4940/0x000D4960/0x000D4970/0x000D4980`,
-//! `GetGoodsType/GetEquipPlace` RVA `0x000DEA40/0x000DEA50`,
-//! `GetAddonPropertyValues/GetValidAddonProperties` RVA
-//! `0x000D4E50/0x000D4D90`, `GetOccurProbability/IsImplicit` RVA
-//! `0x000D49C0/0x000D4A10`, lifecycle addon-ов RVA
-//! `0x000D4D70/0x000D4EE0/0x000D4F00/0x000D4F90` и destructor RVA
-//! `0x000D5080` реализованы в Rust. Точная пара доказательных артефактов:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsbaseproperties.cpp:285`;
-//! inline getter скомпонован линкером по одному RVA с равными scalar-getter-ами.
+//! Конструктор, `Serialize`,
+//! `tagAddonProperty::Serialize`,
+//! `GetPrice/GetWeight/GetName/GetDescribe/GetIconID`
 //!
-//! Exact PDB задаёт `GOODS_TYPE` как signed `int`: `GT_USELESS = 0`,
+//! `GetGoodsType/GetEquipPlace`,
+//! `GetAddonPropertyValues/GetValidAddonProperties`
+//! `GetOccurProbability/IsImplicit`
+//! lifecycle addon-ов
+//! и destructor
+//! входят в контракт owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
+//! inline getter скомпонован линкером по одному с равными scalar-getter-ами.
+//!
+//! Layout сохраняет `GOODS_TYPE` как signed `int`: `GT_USELESS = 0`,
 //! `GT_CONSUMABLE = 1`, `GT_EQUIPMENT = 2`, а соседний signed
 //! `EQUIP_PLACE m_epEquipPlace` лежит по `+0x60`. Его значения `0..16`
 //! буквально соответствуют `EP_UNKNOWN..EP_LINGBAO`. Он же подтверждает
-//! unsigned `m_dwWeight` по `+0x3C`; exact getter состоит из одной загрузки.
-//! PDB также подтверждает
+//! unsigned `m_dwWeight` по `+0x3C`; getter состоит из одной загрузки.
+//! Контракт также сохраняет
 //! `GAP_PARTICULAR_ATTRIBUTE = 0x0D`, `GAP_GOODS_STACKING_LIMIT = 0x26`,
 //! `GAP_WEAPON_LEVEL = 0x30` и
 //! layout `tagAddonPropertyValue`: unsigned `dwId` по `+0`, signed
 //! `lBaseValue` по `+4`, modifier-флаг по `+8`, затем vector modifier-ов.
-//! Rust-owner хранит все поля записи, заполняемые exact
+//! Rust-owner хранит все поля записи, заполняемые
 //! `CGoodsFactory::Load`: original/localized name, описание, цену, вес, тип,
 //! equip-place, три icon-а и addon-ы с modifier-ами. Неиспользуемые поля
 //! входного формата фабрика только потребляет, как и оригинал.
-//! Serialize намеренно не включает description: exact wire-owner пишет два
+//! Serialize намеренно не включает description: wire-owner пишет два
 //! C-string имени, type/place/price/weight, icons и полное addon-дерево.
 //!
 //! `GetAddonPropertyValues` останавливается на первом property совпавшего типа
@@ -40,7 +35,7 @@
 //! порядок, первое совпадение и значения сохраняются, а STL allocation/copy/
 //! destruction не являются наблюдаемым контрактом.
 //!
-//! Exact ASM destructor-а опровергает ложные ранние `return` декомпилятора:
+//! destructor-а опровергает ложные ранние `return` оригинал:
 //! icons, addon-дерево и три строки освобождаются безусловно. В Rust тот же
 //! lifecycle обеспечивает владение `Vec`; порядок внутренних освобождений не
 //! наблюдаем, потому что у элементов нет внешних callback-ов.
@@ -89,7 +84,7 @@ pub(super) struct GoodsBaseAddonPropertyValueModifier {
     upper_limit: i32,
 }
 
-/// Достигнутые scalar-поля исходного `tagAddonPropertyValue`.
+/// Действующие scalar-поля исходного `tagAddonPropertyValue`.
 #[derive(Clone)]
 pub(crate) struct GoodsBaseAddonPropertyValue {
     id: u32,
@@ -107,7 +102,7 @@ struct GoodsBaseAddonProperty {
     values: Vec<GoodsBaseAddonPropertyValue>,
 }
 
-/// Достигнутая stacking-часть исходного `CGoodsBaseProperties`.
+/// Действующая stacking-часть исходного `CGoodsBaseProperties`.
 #[derive(Clone)]
 pub(crate) struct CGoodsBaseProperties {
     original_name: Vec<u8>,
@@ -122,7 +117,7 @@ pub(crate) struct CGoodsBaseProperties {
 }
 
 impl CGoodsBaseProperties {
-    /// Создаёт exact пустое состояние constructor-а `0x004D5010`.
+ /// Создаёт пустое состояние constructor-а.
     pub(super) const fn with_constructor_defaults() -> Self {
         Self {
             original_name: Vec::new(),
@@ -137,42 +132,42 @@ impl CGoodsBaseProperties {
         }
     }
 
-    /// Заимствует byte-exact исходное имя без завершающего NUL.
+ /// Заимствует byte- исходное имя без завершающего NUL.
     pub(crate) fn get_original_name(&self) -> &[u8] {
         &self.original_name
     }
 
-    /// Заимствует byte-exact имя без завершающего NUL.
+ /// Заимствует byte- имя без завершающего NUL.
     pub(crate) fn get_name(&self) -> &[u8] {
         &self.name
     }
 
-    /// Заимствует byte-exact описание без завершающего NUL.
+ /// Заимствует byte- описание без завершающего NUL.
     pub(crate) fn get_description(&self) -> &[u8] {
         &self.description
     }
 
-    /// Возвращает exact unsigned базовую цену.
+ /// Возвращает unsigned базовую цену.
     pub(crate) const fn get_price(&self) -> u32 {
         self.price
     }
 
-    /// Возвращает exact unsigned вес одной единицы товара.
+ /// Возвращает unsigned вес одной единицы товара.
     pub(crate) const fn get_weight(&self) -> u32 {
         self.weight
     }
 
-    /// Возвращает exact signed `GOODS_TYPE` без дополнительных эффектов.
+ /// Возвращает signed `GOODS_TYPE` без дополнительных эффектов.
     pub(crate) const fn get_goods_type(&self) -> i32 {
         self.goods_type
     }
 
-    /// Возвращает exact signed `EQUIP_PLACE` без дополнительных эффектов.
+ /// Возвращает signed `EQUIP_PLACE` без дополнительных эффектов.
     pub(crate) const fn get_equip_place(&self) -> i32 {
         self.equip_place
     }
 
-    /// Возвращает icon первого совпавшего numeric-типа либо исходный `0`.
+ /// Возвращает icon первого совпавшего numeric-типа либо исходный `0`.
     pub(crate) fn get_icon_id(&self, icon_type: i32) -> u32 {
         self.icons
             .iter()
@@ -180,7 +175,7 @@ impl CGoodsBaseProperties {
             .map_or(0, |icon| icon.icon_id)
     }
 
-    /// Обходит тип каждого enabled property в исходном vector-order.
+ /// Обходит тип каждого enabled property в исходном vector-order.
     pub(super) fn valid_addon_property_types(&self) -> impl Iterator<Item = i32> + '_ {
         self.addon_properties
             .iter()
@@ -188,7 +183,7 @@ impl CGoodsBaseProperties {
             .map(|property| property.property_type)
     }
 
-    /// Возвращает implicit-флаг первого property совпавшего типа.
+ /// Возвращает implicit-флаг первого property совпавшего типа.
     pub(crate) fn is_implicit(&self, property_type: i32) -> i32 {
         self.addon_properties
             .iter()
@@ -196,7 +191,7 @@ impl CGoodsBaseProperties {
             .map_or(0, |property| property.is_implicit_attribute)
     }
 
-    /// Возвращает values первого property совпавшего numeric-типа.
+ /// Возвращает values первого property совпавшего numeric-типа.
     pub(crate) fn get_addon_property_values(
         &self,
         property_type: i32,
@@ -207,7 +202,7 @@ impl CGoodsBaseProperties {
             .map_or(&[], |property| property.values.as_slice())
     }
 
-    /// Возвращает probability первого property совпавшего numeric-типа.
+ /// Возвращает probability первого property совпавшего numeric-типа.
     pub(crate) fn get_occur_probability(&self, property_type: i32) -> u32 {
         self.addon_properties
             .iter()
@@ -215,7 +210,7 @@ impl CGoodsBaseProperties {
             .map_or(0, |property| property.occur_probability)
     }
 
-    /// Кодирует exact client-facing base-properties wire без description.
+ /// Кодирует client-facing base-properties wire без description.
     pub(crate) fn serialize(
         &self,
         destination: &mut Vec<u8>,
@@ -296,7 +291,7 @@ impl CGoodsBaseProperties {
         self.addon_properties.push(property);
     }
 
-    /// Возвращает `false` только для неизвестного value-id, как original loop.
+ /// Возвращает `false` только для неизвестного value-id, как original loop.
     pub(super) fn push_loaded_modifier(
         &mut self,
         property_index: usize,
@@ -328,7 +323,7 @@ impl CGoodsBaseProperties {
 }
 
 impl GoodsBaseAddonPropertyValue {
-    /// Создаёт exact пустое scalar-состояние с пустым vector modifier-ов.
+ /// Создаёт пустое scalar-состояние с пустым vector modifier-ов.
     const fn with_constructor_defaults() -> Self {
         Self {
             id: 0,
@@ -338,7 +333,7 @@ impl GoodsBaseAddonPropertyValue {
         }
     }
 
-    /// Восстанавливает scalar-ы и vector в исходное пустое состояние.
+ /// Восстанавливает scalar-ы и vector в исходное пустое состояние.
     fn clear(&mut self) {
         self.id = 0;
         self.base_value = 0;
@@ -346,12 +341,12 @@ impl GoodsBaseAddonPropertyValue {
         self.modifiers.clear();
     }
 
-    /// Возвращает exact unsigned идентификатор значения.
+ /// Возвращает unsigned идентификатор значения.
     pub(crate) const fn id(&self) -> u32 {
         self.id
     }
 
-    /// Возвращает exact signed базовое значение.
+ /// Возвращает signed базовое значение.
     pub(crate) const fn base_value(&self) -> i32 {
         self.base_value
     }
@@ -401,7 +396,7 @@ impl GoodsBaseAddonPropertyValueModifier {
 }
 
 impl GoodsBaseAddonProperty {
-    /// Создаёт exact состояние constructor-а `0x004D4EE0`.
+ /// Создаёт состояние constructor-а.
     const fn with_constructor_defaults() -> Self {
         Self {
             property_type: 0,
@@ -412,7 +407,7 @@ impl GoodsBaseAddonProperty {
         }
     }
 
-    /// Повторяет `Clear`: сначала scalar-ы, затем values в исходном порядке.
+ /// Повторяет `Clear`: сначала scalar-ы, затем values в исходном порядке.
     fn clear(&mut self) {
         self.property_type = 0;
         self.is_enabled = 0;

@@ -1,497 +1,32 @@
-//! DB-save orchestration исторического WorldServer из `savedb.cpp`.
+//! DB-save orchestration WorldServer из `worldserver/savedb.cpp/.h`.
 //!
-//! Rust-owner охватывает setup-ID, VarData, New Character, Restore Character, Delete Character,
-//! Delete Union, Delete Faction, Save Faction, Save Union, Save Region, Save
-//! HonorRanks, двух GodsBattle, EnemyFactions, Update Country Data и Save
-//! Charactor LoadDetails Data, Save Charactor Data и финального отчёта
-//! transaction-участков `DoSaveData` RVA `0x0001C610`, а также folded
-//! copy/destructor `CPlayerRanks::tagRank` RVA `0x0001B920/0x0001B7F0`.
-//! Точная пара доказательных артефактов:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходный путь PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\worldserver\savedb.cpp`.
+//! Источник контракта — точная пара WorldServer EXE/PDB. Owner формирует
+//! снимки игроков, стран, регионов, goods, factions, unions, JJC, GodsBattle,
+//! variables и Largess, передаёт их соответствующим `dbaccess/worlddb` owners
+//! и координирует save worker с runtime `CGame`.
 //!
-//! После успешного `OpenCn` исходный участок по `0x0041C6DF..0x0041C9C0`
-//! вызывает `BeginTran`, затем `CRsSetup::SavePlayerID` и, только если тот
-//! вернул `true`, `CRsSetup::SaveLeaveWorldID` на одном connection. Два успеха
-//! ведут к `CommitTran` и безусловному `ShowSaveInfo("++Save PlayerID
-//! SUCCESS!")`; первый `false` ведёт к `RollbackTran` и безусловному
-//! `AddLogText("--Save PlayerID FAILED!")`. Поэтому `None` у результата второго
-//! UPDATE означает именно пропущенный вызов, а не DB-ошибку.
+//! Сохранён исходный порядок save-стадий, отдельные MSSQL/TDS connections,
+//! именованные procedures/SQL, отсутствие добавленной общей транзакции и
+//! различие initial/periodic/final cleanup. Успешный prefix не откатывается при
+//! поздней ошибке. Если исходник извлекал запись до DB-вызова, ошибка теряет её;
+//! если оставлял запись до commit-like результата, Rust сохраняет её в очереди.
 //!
-//! Exact wrapper-ы `BeginTran` `0x004EBFE0`, `CommitTran` `0x004EC090` и
-//! `RollbackTran` `0x004EC140` поглощают `_com_error`, печатают собственный
-//! `PrintErr` и возвращают `0/false`. `DoSaveData` не проверяет эти результаты:
-//! ошибка begin не запрещает последующие UPDATE, а ошибка commit не отменяет
-//! исходный success-log. Это наблюдаемая странность сохранена отчётом, а не
-//! исправлена fail-closed поведением. Вложенный catch по `0x0041C9C5` проверял
-//! ненулевой ADO transaction level только для неожиданного `_com_error`; все
-//! ожидаемые TDS-ошибки Rust проходят явными значениями и не требуют SEH.
+//! `SaveData` публикует единый lifecycle state и barrier: producer фиксирует
+//! snapshot, worker выполняет стадии в порядке owner-а, а `Release` ждёт
+//! завершения перед уничтожением используемых игровых объектов. Stop не
+//! превращает частично выполненный save в успех и не пропускает обязательный
+//! join. Повторный close/release соединения остаётся идемпотентной технической
+//! заменой ADO cleanup.
 //!
-//! Следующий участок `0x0041C7A5..0x0041C860` независимо вызывает новый
-//! `BeginTran`, затем `CVariableList::SaveVarData` на том же connection.
-//! `true` ведёт к `CommitTran` и безусловному
-//! `ShowSaveInfo("++Save VarDate SUCCESS!")`; `false` — к `RollbackTran` и
-//! `AddLogText("--Save VarDate FAILED!")`. Результаты begin/commit/rollback
-//! снова игнорируются. Catch `0x0041CA1F` откатывал только при ненулевом ADO
-//! transaction level и писал `**Save VarDate ABNORMAL!`; достигнутые DB-ошибки
-//! Rust уже выражены `GenVarSaveOutcome::Failed`, поэтому не требуют SEH.
+//! Typed snapshots заменяют сырые pointer lists и защищают время жизни данных;
+//! `Mutex`/`Condvar`/`JoinHandle` заменяют critical sections, events и Win32
+//! thread handles. Tiberius заменяет ADO/COM, но не меняет SQL, параметры,
+//! порядок side effects или error mapping.
 //!
-//! Единственный `BlockedMissingFact` принадлежит неизвестному переполнению
-//! исходного `char[1024]`. Для него EXE не задаёт commit, rollback или log;
-//! orchestration поэтому не придумывает ни одну ветку и возвращает блокировку
-//! отдельно. Connection после неё нельзя передавать следующим save-фазам до
-//! решения владельца: это локальная граница реконструкции, а не runtime
-//! fallback.
-//!
-//! Закреплённый `tiberius 0.12.3` выполняет транзакции поддерживаемым им
-//! `simple_query("BEGIN TRAN"/"COMMIT"/"ROLLBACK")`; `into_results` полностью
-//! потребляет ответ и сохраняет серверные TDS transaction descriptor/env-change
-//! перед следующей командой. Параметризованные UPDATE остаются у настоящего
-//! DB-owner `CRsSetup`. Mutable borrow одного `WorldTdsClient` сохраняет одно
-//! исходное соединение, а caller-owned snapshot заменяет защищённый
-//! `CGame::m_stDBData` без глобального scratch-state.
-//!
-//! Начальная граница `0x0041C63C..0x0041C6BB` также восстановлена отдельно.
-//! Один `timeGetTime` сначала попадает и в local `saved_start_tick`, и в
-//! `g_dwThisSaveStartTime`; четыре счётчика и ранний player-map count после
-//! этого инициализируются нулями. Затем исходник создаёт ADO connection и
-//! вызывает `OpenCn`. Rust использует закреплённый Tiberius/Tokio connector с
-//! теми же byte-exact World DB setup-полями и без Windows COM.
-//!
-//! Только успешный `OpenCn` ставит `g_bIsSavingData = true`, после чего пишет
-//! `Save Variables Start...` и переходит к setup-ID. Ошибка пишет
-//! `Connect To DB FAILED!`, не меняет прежний save-флаг и входит в уже
-//! восстановленный finalizer как `ConnectionOpenFailed`; его четыре счётчика
-//! остаются нулями. Typed `begin_do_save_data` возвращает открытую connection
-//! либо error вместе с точным final snapshot и не публикует credential values.
-//!
-//! Frozen handoff из `CGame::tagDBData` теперь реализован для setup ID, всех
-//! пяти player-фаз, Delete/Save Union/Faction, Region, EnemyFactions и Country,
-//! а из отдельного `CHonorRanks::m_stDBData` — для HonorRanks. Эксклюзивная
-//! save-сессия выражает внешний `g_CriticalSectionSaveThread`, не удерживая
-//! блокировку списка игроков во время DB I/O; успешная очистка каждой связанной
-//! фазы применяется в исходной точке. `WorldProcessSaveRuntime` передаёт
-//! неизменяемый снимок системному worker-у, который открывает отдельное World
-//! DB-соединение, выполняет эту последовательность и хранится до
-//! последовательного ожидания в `Release`.
-//! Все DB/container-фазы от setup-ID до конца Save Character теперь связаны
-//! одной последовательностью поверх двух локальных участков. Все phase logs до
-//! конца Save Character публикуются синхронно. `do_save_data_lifecycle` также
-//! связывает начало и закрытие соединения с общим завершающим участком;
-//! достигнутый процессный caller запускает его из восстановленного
-//! `SaveThreadFunc` и публикует состояние жизненного цикла обратно в MainLoop.
-//!
-//! New Character начинается с list-order обхода `liDBCreationPlayer`. Null
-//! `CPlayer*` только пишет `**Create New Charactor NULL Pointer!!!!!!!!!!!!!!!!`,
-//! остаётся в list и не вызывает begin. Для ненулевого элемента owner сохраняет
-//! результат `BeginTran`, вызывает готовый `CRsPlayer::CreatePlayer`, а его
-//! `false` превращает в `E_FAIL` и catch. Если begin вернул ненулевой
-//! transaction level, catch пытается rollback; при `0` rollback пропускается.
-//! В обоих случаях пишется `--Create New Charactor FAILED.`, node остаётся и
-//! обход продолжается.
-//!
-//! Exact `0x0041C860..0x0041CB3D` имеет статус `VERIFIED_DISASSEMBLY` для
-//! повреждённого EH-разбиением raw. `CreatePlayer == true` безусловно вызывает
-//! commit, не проверяет его результат, пишет
-//! `Create New Charactor SUCCESS : %s.%s.%d`, затем под
-//! `g_CriticalSectionSavePlayerList` deleting-destructor-ом освобождает player,
-//! обнуляет pointer, unlink/delete-ит только текущий list-node, уменьшает size,
-//! снимает lock и продолжает со следующим node. Begin-ошибка не запрещает ни
-//! `CreatePlayer`, ни последующий commit/success/remove путь.
-//!
-//! `save_new_characters_from_world_snapshot` теперь применяет эту судьбу к
-//! реальному `VecDeque<Box<CPlayer>>`: `Commit` немедленно уничтожает owner и
-//! удаляет текущий node, `Failure` сохраняет node и продвигает cursor.
-//! Безопасное состояние не содержит null-указателя. Если вложенный владелец
-//! останавливается на неизвестном исходе старого UB, оркестрация не придумывает
-//! commit/rollback/log и запрещает продолжать lifecycle на этом connection.
-//!
-//! Exact `0x0041C874..0x0041C890` отдельно подтверждает: итоговый `Charactor
-//! CREATED` получает ранний `_Mysize` creation-list до traversal, а не число
-//! successful commit/remove. На Rust-хосте непредставимый 32-битный count
-//! блокируется до первого entry-вызова.
-//!
-//! Restore Charactor обходит `lDBRestorePlayer` в list-order. Exact
-//! `0x0041CB3D..0x0041CCEA` имеет статус `VERIFIED_DISASSEMBLY`: каждый `u32`
-//! сначала получает отдельный begin, затем готовый `RestorePlayer`. Его `false`
-//! бросает `E_FAIL`; catch пытается rollback только при ненулевом сохранённом
-//! begin-level, безусловно пишет `--Restore Charactor FAILED!`, сохраняет
-//! текущий node и продолжает со следующим ID.
-//!
-//! Успешный restore безусловно вызывает commit, игнорирует его результат и
-//! пишет `++Restore Charactor SUCCESS : %d`. Только затем critical section
-//! охватывает чтение next, unlink/delete текущего list-node и уменьшение size;
-//! после unlock обход продолжается с сохранённого next. В отличие от New
-//! Character, node содержит только ID и owned player не уничтожается.
-//! Begin-ошибка опять не препятствует restore и последующему success/commit.
-//!
-//! `save_restore_characters_from_world_snapshot` применяет отчёт к реальному
-//! `VecDeque<u32>`: `Commit` удаляет только текущий ID-node, `Failure` сохраняет
-//! его и продвигает cursor. Одинаковая доказанная catch-механика использует
-//! общий `FailedTransactionFinish`, но create/restore outcomes и сообщения
-//! остаются раздельными.
-//! Ранний `_Mysize` по `0x0041CB4A..0x0041CB58` сохраняется для итогового
-//! `CANCEL DELETE`; это размер restore-list, а не success-счётчик.
-//!
-//! Delete Charactor обходит 8-байтные значения `liDBDeletionPlayer` в
-//! list-order. Exact `0x0041CCEA..0x0041CE9E` имеет статус
-//! `VERIFIED_DISASSEMBLY`: `nPlayerID: u32` лежит в node по `+8`, а
-//! `tDelDate: long` по `+0xC`. Каждый элемент получает отдельный begin и затем
-//! готовый `DeletePlayer` на том же connection. Его доказанный `false` бросает
-//! `E_FAIL`; catch делает rollback только при ненулевом begin-level, пишет
-//! `--Delete Charactor FAILED!`, сохраняет node и переходит к следующему.
-//!
-//! `ReturnedTrue` безусловно вызывает commit, игнорирует его результат и пишет
-//! `++Delete Charactor SUCCESS : %d` с тем же player ID. Затем critical section
-//! охватывает чтение next, unlink/delete текущего node и уменьшение size;
-//! обход продолжается после unlock. Begin-ошибка не препятствует delete и
-//! success/commit/remove. `save_delete_characters_from_world_snapshot`
-//! немедленно удаляет только successful record, сохраняет failure для retry и
-//! останавливает всю фазу на отрицательной time-границе.
-//! Ранний `_Mysize` deletion-list по `0x0041CCF7..0x0041CD05` становится
-//! итоговым `SIGN DELETE`. Таким образом, две итоговые delete-цифры принадлежат
-//! разным входным очередям и не выводятся из результата одного DB-owner-а.
-//!
-//! Вложенный `PlayerDeleteOutcome::BlockedMissingFact` означает отрицательный
-//! timestamp, где оригинал не возвращался из-за null-разыменования. Для него
-//! EXE не задаёт commit, rollback, log или судьбу node, поэтому orchestration
-//! сохраняет block и запрещает продолжать lifecycle на connection. Следующая
-//! raw-фаза начинается с Delete Union по `0x0041CE9E`.
-//!
-//! Delete Union сохраняет начальный `_Mysize`, затем обходит signed `long` ID
-//! из `listDeleteUnions` в list-order. Exact `0x0041CE9E..0x0041D01B` имеет
-//! статус `VERIFIED_DISASSEMBLY`: каждый ID получает отдельные begin,
-//! `DelConfederation` и commit, но bool DB-owner-а намеренно игнорируется.
-//! Ошибки begin/commit wrapper-ов также не меняют обход и финальный success-log.
-//!
-//! Отдельный catch `0x0041CF8A` относится только к неожиданному `_com_error`:
-//! он откатывает при ненулевом begin-level, пишет
-//! `**Delte Union ABNORMAL!` и всё равно продолжает со следующим node.
-//! Достигнутые Tiberius-ошибки уже выражены значениями begin/delete/commit и не
-//! являются Rust unwind, поэтому typed normal-path не выдаёт их за abnormal.
-//!
-//! После обхода исходник без critical section отделяет список, зануляет size и
-//! удаляет каждый текущий node, затем пишет `++Delte %d Unions SUCCESS!` с
-//! размером, захваченным до цикла. `DeleteUnionClear` передаёт будущему list-
-//! owner-у эту обязанность отдельно от entry-отчётов; сохранённый count не
-//! выводится из длины Rust-среза, потому что исходник читал live list без lock.
-//! Следующая восстановленная фаза начинается с Delete Faction по
-//! `0x0041D01B`.
-//!
-//! Delete Faction отдельно захватывает `_Mysize`, затем обходит signed `long`
-//! ID из `listDeleteFactions` в list-order. Потерянный raw-аргумент точечно
-//! подтверждён по `0x0041D01B..0x0041D105`: `0x0041D0C7` читает ID текущего
-//! node по `+8` и передаёт его в готовый `CRsFaction::DelFaction`. Его bool
-//! намеренно не проверяется; commit выполняется после каждого вызова даже при
-//! `false`, а ошибки begin/commit wrapper-ов не меняют обход.
-//!
-//! Отдельный catch `0x0041D10A` относится только к неожиданному `_com_error`:
-//! он откатывает при ненулевом begin-level, пишет
-//! `**Delete Faction ABNORMAL!` и возвращается в продолжение traversal.
-//! Достигнутые Tiberius-ошибки являются явными значениями entry-отчёта, а не
-//! Rust unwind, поэтому normal-path не выдаёт их за abnormal.
-//!
-//! После traversal исходник без critical section отделяет список, зануляет
-//! size, удаляет все текущие nodes и пишет `++ Delte %d Factions SUCCESS!` с
-//! исходным count. `DeleteFactionClear` отдельно передаёт эту обязанность
-//! будущему list-owner-у; элементы с false/error не сохраняются для retry.
-//! Save Faction сохраняет начальный `_Mysize`, затем обходит
-//! `list<CFaction*> listSaveFactions` в live list-order. Каждый node независимо
-//! получает begin, готовый `CRsFaction::SaveFaction` и commit. Bool dispatcher-а
-//! намеренно игнорируется; null snapshot и leaf DB-failure поэтому не отменяют
-//! commit и cleanup текущего node.
-//!
-//! Exact `0x0041D1A8..0x0041D356` имеет статус `VERIFIED_DISASSEMBLY` для
-//! искажённой EH-разбиением судьбы элемента. Normal path и catch
-//! `0x0041D284` сходятся к `0x0041D2C9`: сначала unlink/delete текущего list-
-//! node, затем при non-null virtual deleting destructor `CFaction*`, затем
-//! переход к уже сохранённому next. Catch перед этим откатывает только при
-//! ненулевом begin-level и пишет `**Save Faction Data ABNORMAL!`.
-//!
-//! Достигнутые Tiberius-ошибки уже являются явными begin/save/commit
-//! результатами, а не Rust unwind, поэтому не выдаются за abnormal catch. После
-//! traversal исходник пишет `++Save %d Faction Data SUCCESS!` с начальным
-//! count и отдельно очищает все оставшиеся list-nodes без вызова destructor для
-//! их pointer-values. `SaveFactionFinalClear` передаёт эту точную обязанность
-//! будущему concurrent list-owner-у.
-//!
-//! Уже локализованный member/leave-word overread остаётся
-//! `BlockedMissingFact`: оригинал не возвращался из неизвестного UB, поэтому для
-//! текущего node не назначены commit, unlink, destructor либо продолжение на
-//! том же connection.
-//!
-//! `save_factions_from_world_snapshot` материализует property-группу только
-//! для dirty-bit `1`, а canonical Goods War count получает через точный
-//! `COrganizingCtrl::GetpFactionById`-эквивалент. После любого обычного bool
-//! текущий `VecDeque<Box<CFaction>>` node сразу удаляется вместе с owner-ом;
-//! projection/owner block сохраняет текущий и все последующие nodes.
-//!
-//! Save Union отдельно сохраняет начальный `_Mysize`, затем обходит
-//! `list<CUnion*> listSaveUnions` в live list-order. Exact
-//! `0x0041D356..0x0041D516` имеет статус `VERIFIED_DISASSEMBLY`: текущая
-//! save-копия берётся из list-node по `+8`, получает отдельный begin и
-//! передаётся готовому `CRsUnion::SaveConfederation`; его bool не проверяется,
-//! после обоих обычных значений безусловно вызывается commit.
-//!
-//! Catch `0x0041D444` откатывает только при ненулевом begin-level, пишет
-//! `**Save Union Data ABNORMAL!` и по `0x0041D47D` входит в тот же cleanup, что
-//! normal path. Cleanup по `0x0041D489..0x0041D4D2` сохраняет next, удаляет
-//! текущий list-node, уменьшает size, затем virtual-уничтожает non-null
-//! `CUnion*` и продолжает обход. После traversal исходник пишет
-//! `++Save %d Union Data SUCCESS!` с начальным count и отдельно очищает только
-//! оставшиеся list-nodes без destructor pointer-values.
-//!
-//! Достигнутые Tiberius-ошибки представлены begin/save/commit полями normal-
-//! отчёта и не выдаются за `_com_error` catch. Известные overflow/overread/null
-//! границы `SaveConfederation` остаются `BlockedMissingFact`: оригинал не
-//! возвращался из такого UB, поэтому текущему union-node не назначаются commit,
-//! cleanup или продолжение на том же connection.
-//!
-//! `save_unions_from_world_snapshot` заимствует поля прямо из frozen
-//! `Box<CUnion>`, выполняет тот же begin/save/commit и после обычного bool
-//! немедленно удаляет node вместе с save-копией. Block оставляет текущий front
-//! и хвост очереди без придуманного cleanup.
-//!
-//! `do_save_data_through_unions` теперь вызывает эти владельцы строго в
-//! подтверждённом порядке: setup-ID, VarData, New, Restore, Delete Character,
-//! Delete Union, Delete Faction, Save Faction и Save Union. Неизвестный исход
-//! старого UB останавливает передачу connection следующей фазе;
-//! отчёты и уже применённые container cleanup остаются доступны caller-у.
-//!
-//! Save Region отдельно сохраняет начальный `_Mysize`, затем без lock обходит
-//! `list<CWorldRegion*> listRegionParam` в live list-order. Exact
-//! `0x0041D516..0x0041D6A3` имеет статус `VERIFIED_DISASSEMBLY`: pointer текущей
-//! save-копии читается из node по `+8`, получает отдельный begin и передаётся
-//! готовому `CRsRegion::Save`. Его bool не проверяется, поэтому commit следует
-//! после обоих обычных значений и после явных Tiberius-ошибок.
-//!
-//! В отличие от faction/union, cleanup по `0x0041D64A` не unlink-ит текущий
-//! node: он только вызывает virtual deleting destructor с флагом `1` для
-//! non-null `CWorldRegion*`, затем берёт next из всё ещё живого node. Catch
-//! `0x0041D5FF` перед тем же cleanup откатывает лишь при ненулевом begin-level
-//! и пишет `**Save Region Data ABNORMAL.`. После traversal исходник пишет
-//! `++Save %ld Region Data SUCCESS.` с начальным count, отделяет весь список,
-//! зануляет size и удаляет nodes без повторного уничтожения pointer-values.
-//!
-//! `SaveRegionEntryCleanup` и `SaveRegionFinalClear` раздельно передают эти
-//! обязанности будущему list-owner-у. Достигнутые Rust-ошибки остаются явными
-//! полями normal-path и не выдаются за старый `_com_error` catch. Следующая
-//! Save HonorRanks по `0x0041D6A3` отдельно начинает транзакцию, затем на
-//! одном connection вызывает `CRsPlayer::InsertHonorRanks` и только после его
-//! `true` — `CRsPlayer::SaveHonorRanks`. Два успеха ведут к commit и точной
-//! строке `+Success to save HonorRanks!!!l`; первый `false` превращался в
-//! `_com_error`, catch откатывал только при ненулевом сохранённом begin-level и
-//! писал `Save HonorRanks start ABNORMAL`, после чего переходил к Save
-//! GodsBattle. Ошибка begin не запрещает оба owner-вызова, а ошибка commit не
-//! отменяет success-log.
-//!
-//! Согласованные raw owner-а и catch вместе с уже доказанными ADO-wrapper-ами
-//! полностью задают это ветвление, поэтому повторный reverse не выполнялся.
-//! `HonorRanksSaveDisposition::BlockedMissingFact` принадлежит неизвестному
-//! переполнению старого blob-size: для него оригинал не возвращался из owner-а,
-//! следовательно orchestration не назначает commit, rollback, log либо переход
-//! к первой GodsBattle-фазе. Обычные исходы продолжаются с неё по
-//! `0x0041D856`.
-//!
-//! Две GodsBattle-фазы используют один уже открытый World DB connection, но
-//! каждая начинает и завершает собственную транзакцию. Первая по
-//! `0x0041D856..0x0041D943` вызывает caller-connection
-//! `CRSGodsBattle::SaveFacitonXYD`; вторая по
-//! `0x0041D943..0x0041DA23` независимо вызывает caller-connection
-//! `CRSGodsBattle::SaveNpcFaction`. No-argument overload второго owner-а и
-//! следующая Save EnemyFactions phase сюда не входят.
-//!
-//! Оба `false` превращались в `_com_error`. Catch-и `0x0041DC69` и
-//! `0x0041DC97` откатывали только при ненулевом сохранённом begin-level, писали
-//! разные GodsBattle abnormal-сообщения и продолжали соответственно со второй
-//! фазой либо с EnemyFactions. `true` безусловно вызывал commit и success-log;
-//! ошибка begin не запрещала owner-вызов, а ошибка commit не отменяла success.
-//! Tiberius возвращает begin/commit/rollback ошибки отдельными полями, тогда
-//! как bool owner-а буквально выбирает исходную success/failure ветку.
-//!
-//! Caller-owned `GodsBattleFactionXydSnapshot` и ordered NPC slice заменяют
-//! только чтение уже созданных `CShape/CGodsBattleConf` из process singleton.
-//! Оба owner-а получают последовательные mutable reborrow одного connection;
-//! никаких дополнительных DB-соединений, общей транзакции либо cleanup между
-//! двумя фазами Rust не вводит. Raw обеих фаз, их catch-и и дублированные
-//! compiler-continuation удалены; следующая восстановленная EnemyFactions
-//! фаза начинается по `0x0041DA23`.
-//!
-//! EnemyFactions отдельно пытается begin, копирует pointer-list
-//! `CGame::m_stDBData.listEnemyFactions` по значению и вызывает готовый
-//! `CRsEnemyFactions::SaveAllEnemyFactions` на том же connection. Его bool
-//! исходно не проверяется: и `true`, и обычный `false` безусловно ведут к
-//! commit, после чего одинаково уничтожаются исходные значения и nodes.
-//! Ошибка begin не пропускает owner, а ошибка commit не отменяет cleanup и
-//! точную строку `++Save EnemyFactions SUCCESS.`.
-//!
-//! Raw ошибочно показывал ранний return после первого `operator_delete`.
-//! Exact cleanup `0x0041DAE2..0x0041DB48` имеет статус
-//! `VERIFIED_DISASSEMBLY`: первый полный проход удаляет каждый non-null
-//! `tagEnemyFaction*` в list-order и зануляет `_Myval`; второй отделяет список,
-//! зануляет size и удаляет все прежние list-node-ы. Только после этого по
-//! `0x0041DB48` пишется success-log и выполняется переход к Update Country Data
-//! по `0x0041DB5C`. После ответа reverse прекращён.
-//!
-//! Catch `0x0041DCC5` относился только к неожиданному `_com_error`: он
-//! безусловно пытался rollback, писал `**Save EnemyFactions ABNORMAL.` и
-//! переходил к Country-фазе без normal cleanup. Достигнутые Tiberius-ошибки
-//! уже являются явными begin/save/commit результатами и не выдаются за Rust
-//! unwind. Локальный null-entry `BlockedMissingFact` владельца означает
-//! неизвестное разыменование после DELETE/предыдущих INSERT: ему не назначены
-//! commit, cleanup, log либо продолжение на connection.
-//!
-//! `EnemyFactionsFinalCleanup` возвращает будущему list-owner-у точную normal-
-//! обязанность destroy-values-then-clear-nodes. Raw фазы удалён из трёх
-//! continuation-копий вместе с её catch; следующий доказанный участок
-//! начинается с Update Country Data по `0x0041DB5C`.
-//!
-//! Update Country Data сохраняет начальный `_Mysize`, затем обходит
-//! `list<CCountry*> ltDBCountrys` в live list-order. Каждый nullable snapshot
-//! получает отдельные begin, готовый `CDBCountry::Save` и безусловный commit;
-//! возвращённый bool и ошибки wrapper-ов не меняют normal cleanup.
-//!
-//! `VERIFIED_DISASSEMBLY`: normal-путь по `0x0041DC36` и catch
-//! `0x0041DCF2..0x0041DD2A` сходятся к cleanup `0x0041DD2B..0x0041DD80`.
-//! Сначала сохраняется next, unlink/delete-ится текущий list-node и уменьшается
-//! size, затем virtual deleting destructor уничтожает non-null `CCountry*`,
-//! после чего traversal продолжается. Catch перед этим откатывает только при
-//! ненулевом begin-level и пишет `UpDate Country ABNORMAL....!`.
-//!
-//! После полного traversal исходник пишет `++Update %ld Country Data
-//! SUCCESS.` с начальным count, отделяет список, зануляет size и удаляет только
-//! оставшиеся nodes без повторного destructor pointer-values по
-//! `0x0041DD85..0x0041DDC2`. Переход к следующей Save Charactor LoadDetails
-//! Data phase начинается по `0x0041DDC4`. Typed normal-path не выдаёт явные
-//! Tiberius-ошибки за старый `_com_error` unwind. Три дублирующие compiler-
-//! continuation и заменённый country-префикс `FUN_0041dd37` удалены; его
-//! незаменённый Character-хвост сохранён ниже.
-
-//! Save Charactor LoadDetails Data по `0x0041DDC4..0x0041DFB7` берёт исходный
-//! `CGame::tagDBData::mDBPlayer` типа
-//! `map<unsigned int, CPlayer*>` и обходит его в порядке unsigned keys. Null
-//! player пишет `** Save LoadDetails NULL Pointer!!!!!!`, не открывает
-//! транзакцию и не меняет node. Ни normal path, ни catch не стирают и не
-//! удаляют entries: та же map затем повторно обходится Save Charactor Data
-//! phase.
-//!
-//! PDB задаёт `bUseOldSaveLargessWay` как `bool` по `tagSetup+0x2C8`,
-//! `CBaseObject::m_lID` как signed `long` по `CPlayer+8`, а обе перегрузки
-//! `CLargess::SaveLoadDetails` принимают `std::string&` CD-key и `long`
-//! player ID. Exact calls `0x0041DE39..0x0041DE4B` и
-//! `0x0041DEB8..0x0041DEF9` подтверждают `CPlayer+0x72C`, ID по `+8` и
-//! игнорирование обоих bool-результатов.
-//!
-//! При `bUseOldSaveLargessWay == true` вызывается старая self-opening
-//! перегрузка без transaction wrapper. Новая ветка для каждого non-null player
-//! вызывает begin, caller-connection перегрузку и commit; ошибки wrapper-ов и
-//! bool owner-а не меняют порядок. Catch `0x0041DF05` откатывал только при
-//! ненулевом begin-level, писал `-- Save LoadDetails FAILED!` и продолжал map
-//! traversal. Достигнутые Tiberius-ошибки уже выражены значениями
-//! wrapper/owner и не выдаются за `_com_error`. Catch `0x0041E0CE` относится
-//! уже к следующей Save Charactor Data phase.
-//!
-//! Единственный `BlockedMissingFact` по-прежнему принадлежит `_sprintf`
-//! overflow внутри готового `CLargess`: для новой ветки begin уже мог
-//! выполниться, но EXE не задаёт commit, rollback, log, переход к next либо
-//! судьбу map. Typed phase поэтому останавливает lifecycle точно на этой
-//! границе.
-
-//! Save Charactor Data по `0x0041DFB7..0x0041E1CF` повторно обходит тот же
-//! `CGame::tagDBData::mDBPlayer` в unsigned key-order. PDB подтверждает
-//! `map<unsigned int, CPlayer*>` по `tagDBData+0x30`; его `_Mysize` снимается
-//! один раз по `0x0041DDD6` ещё перед LoadDetails и позже выводится как число
-//! `Charactor SAVED`, даже если часть values null либо завершилась отказом.
-//! `BTreeMap<u32, _>` сохраняет порядок, а отдельный `logged_count` — именно
-//! этот ранний 32-битный snapshot.
-//!
-//! Каждый non-null player получает `BeginTran`, `CPlayer::SaveData` и только
-//! при `true` — `CommitTran`; `false` искусственно входит в catch. Catch
-//! `0x0041E0CE..0x0041E107` откатывает только при ненулевом begin-level, пишет
-//! `-- Save Charactor FAILED!` и возвращается к общему continuation. Null value
-//! не открывает транзакцию, пишет `** Save Charactor NULL Pointer!!!!!!` и
-//! остаётся в map. Ошибки самих transaction-wrapper-ов поглощались внутри
-//! `CMyAdoBase` и не меняли дальнейшее ветвление.
-//!
-//! Exact `0x0041E048..0x0041E15D` имеет статус `VERIFIED_DISASSEMBLY`:
-//! результат `SaveData` сохраняется до commit/catch, success-log получает
-//! account по `CPlayer+0x72C`, inherited name и signed ID, затем под
-//! `g_CriticalSectionSavePlayerList` выполняются virtual delete player,
-//! зануление pointer-value и `map::erase(current)`, возвращающий next. Поэтому
-//! cleanup выполняется при сохранённом `true` даже после ошибки commit;
-//! сохранённый `false` и null оставляют node/value и переходят к обычному next.
-//! Конец map достигает следующего close/report tail по `0x0041E1CF`.
-//!
-//! Rust-фаза вызывает готовый `CPlayer::save_data`, сохраняет begin/commit/
-//! rollback ошибки typed-значениями и применяет cleanup к реальному map-owner-
-//! у: после `Saved` уничтожает player и стирает entry, failure сохраняет его.
-//! Предшествующий LoadDetails wrapper обходит тот же map без мутации и передаёт
-//! ранний `logged_count` в Save Character. Projection либо `PlayerSaveBlock`
-//! останавливают lifecycle без придуманного rollback, cleanup или next.
-//! Заменённые Character-хвост `FUN_0041DD37`, catch `0x0041E0CE` и continuation
-//! `FUN_0041E113` удалены.
-//!
-//! Все достигнутые фазовые `AddLogText`/`ShowSaveInfo` теперь материализуются
-//! как ordered `SaveDataLogEvent` в соответствующем phase-report. Статические
-//! start/final/failure payload-ы сохраняют исходные опечатки, пробелы и
-//! punctuation; подробные player success payload-ы строятся до уничтожения
-//! owner-а. Exact call-sites `0x0041C96E..0x0041CA78` и
-//! `0x0041E08C..0x0041E0C4` имеют статус `VERIFIED_DISASSEMBLY`: оба передают
-//! `account`, затем унаследованное `name`, затем signed player ID.
-//!
-//! Четыре нераскрытые raw-символом GodsBattle строки точечно прочитаны из exact
-//! EXE по `0x0053F8BC/0x0053F88C/0x0053F7F8/0x0053F7D8` и хранятся byte-exact,
-//! включая CP936 bytes `A1 F0/A1 A3/A1 F9`. Найденный runtime-журнал того же
-//! WorldServer независимо подтверждает полный normal-порядок статических строк
-//! от `Save Variables Start...` до `Save Data end ...`; персональные runtime-
-//! значения из него не перенесены. После ответов reverse прекращён.
-//!
-//! `Debug` фазовых отчётов показывает только target и длину event payload,
-//! поэтому account/name не размножаются диагностикой. Полная phase-цепь от
-//! общего `Save Variables Start...` до последнего Save Character entry передаёт
-//! один mutable publisher синхронно по точным позициям. Logger block
-//! возвращается до следующего DB/container cleanup, а batch replay отсутствует.
-//! Владеющий состоянием `SaveDataLogPublisher` уже связывает один event с точным target:
-//! он хранит общий `WorldLogTextOwner`, gate, timeout и три callback-а, полностью
-//! завершает вызов до возврата и сводит оба logger-result к редактированному
-//! typed outcome без строки с account/name. Batch-публикации у него нет.
-//!
-//! `do_save_data_after_unions` связывает Region, HonorRanks, обе GodsBattle,
-//! EnemyFactions, Country, LoadDetails и Save Character в этом точном порядке.
-//! Обычный `false` продолжает цепь ровно у тех owner-ов, чьи catch/normal paths
-//! это доказывают; typed block сохраняет текущий report и не достигает next.
-//! `do_save_data_phases` последовательно соединяет этот suffix с уже готовым
-//! префиксом и только после полного normal traversal возвращает четыре ранних
-//! counters. `do_save_data_lifecycle` поверх него выполняет begin, точный
-//! connection-log порядок, обе ступени finalizer-а и monitoring send.
-//!
-//! Финальный хвост `0x0041E1CF..0x0041E324` теперь также восстановлен. После
-//! успешного traversal исходник выполняет `CloseCn`, пишет `Save Data end ...`
-//! и вызывает `ReleaseCn`, который внутри повторно вызывает `CloseCn`, а затем
-//! освобождает COM pointer. Ветка неуспешного `OpenCn` пишет
-//! `Connect To DB FAILED!` и сразу вызывает `ReleaseCn`; обе ветви сходятся на
-//! общем `timeGetTime`. Tiberius `Client::close`/`Drop` заменяет только
-//! ADO/COM lifetime, а `SaveDataConnectionFinish` сохраняет различимый порядок
-//! connection/log-эффектов внутри единого typed orchestration.
-//!
-//! Итоговый summary получает четыре исходных счётчика и ранний `_Mysize`; на
-//! open-failure все пять значений равны нулю. Время вычисляется как wrapping
-//! разность двух `DWORD`, затем один `GetLocalTime` обновляет
-//! `g_stLastSaveTime`, `g_dwThisSaveStartTime` обнуляется и
-//! `g_dwLastSaveTick` получает конечный tick. `rustix::CLOCK_BOOTTIME` и
-//! `chrono::Local` заменяют только Windows clock API; caller снимает tick после
-//! connection cleanup, а local time — после итогового summary-log, как в
-//! исходнике.
-//!
-//! Мониторинговая C-string строится byte-exact с Windows-1251 server name,
-//! шестью полями `SYSTEMTIME`, signed `%d`-проекциями elapsed/log count и
-//! отправляется как `0x1FE08` с типом `-2`, server ID и битами `dwNumber`.
-//! Rust строит monitoring C-string в owned buffer и не переносит переполнение
-//! старого `_sprintf(char[128])`. Send-result исходно игнорируется, после чего
-//! флаг обязательно сбрасывается.
+//! Известные malformed/null границы останавливаются до UB и возвращаются как
+//! отдельные dispositions. Рядом с конкретными стадиями сохранены только те
+//! комментарии, где важны pop-before-call, partial success, странный bool
+//! mapping либо судьба элемента после ошибки.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -566,7 +101,7 @@ pub(crate) enum SaveDataLogTarget {
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) struct SaveDataLogEvent {
     pub(crate) target: SaveDataLogTarget,
-    /// Результат первого call-site форматирования без конечного C NUL.
+ /// Результат первого call-site форматирования без конечного C NUL.
     pub(crate) payload: Vec<u8>,
 }
 
@@ -580,10 +115,10 @@ impl fmt::Debug for SaveDataLogEvent {
     }
 }
 
-/// Локальная неизвестность конкретного достигнутого logger-owner-а.
+/// Локальная неизвестность конкретного действующего logger-owner-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SaveDataLogPublishBlock {
-    /// `AddLogText` уже выполнил rotation-check и снял собственное local time.
+ /// `AddLogText` уже выполнил rotation-check и снял собственное local time.
     AddLogText {
         target: SaveDataLogTarget,
         rotation: SaveLogTextDisposition,
@@ -595,14 +130,14 @@ pub(crate) enum SaveDataLogPublishBlock {
 /// Наблюдаемый итог немедленной публикации одного фазового события.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SaveDataLogPublishDisposition {
-    /// `ShowSaveInfo` остановился на выключенном process-global gate.
+ /// `ShowSaveInfo` остановился на выключенном process-global gate.
     Suppressed,
-    /// Строка синхронно передана file sink и добавлена в operator log.
+ /// Строка синхронно передана file sink и добавлена в operator log.
     Written {
         target: SaveDataLogTarget,
         rotation: SaveLogTextDisposition,
     },
-    /// Следующий DB/cleanup-эффект нельзя выполнять до разрешения границы.
+ /// Следующий DB/cleanup-эффект нельзя выполнять до разрешения границы.
     BlockedMissingFact(SaveDataLogPublishBlock),
 }
 
@@ -655,7 +190,7 @@ where
         }
     }
 
-    /// Публикует ровно один event и полностью завершает его до возврата.
+ /// Публикует ровно один event и полностью завершает его до возврата.
     pub(crate) fn publish(&mut self, event: &SaveDataLogEvent) -> SaveDataLogPublishDisposition {
         match event.target {
             SaveDataLogTarget::AddLogText => {
@@ -773,20 +308,20 @@ pub(crate) struct SetupIdSnapshot {
 /// Локальная граница передачи frozen owner-данных в `DoSaveData`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldSnapshotSaveBlock {
-    /// `CHonorRanks::GenerateSaveData` ещё не создал отдельную DB-копию.
+ /// `CHonorRanks::GenerateSaveData` ещё не создал отдельную DB-копию.
     MissingHonorRanks,
-    /// На 64-битном Rust-хосте создан контейнер, невозможный в 32-битном EXE.
+ /// На 64-битном Rust-хосте создан контейнер, невозможный в 32-битном EXE.
     ContainerCountOverflow { phase: &'static str, count: usize },
 }
 
 /// Последняя транзакционная команда и её поглощённая исходником ошибка.
 #[derive(Debug)]
 pub(crate) enum SetupIdSaveFinish {
-    /// Оба UPDATE вернули `true`; исходник сообщал успех даже при ошибке commit.
+ /// Оба UPDATE вернули `true`; исходник сообщал успех даже при ошибке commit.
     Commit {
         error: Option<tiberius::error::Error>,
     },
-    /// Первый либо второй UPDATE вернул `false`; rollback тоже мог отказать.
+ /// Первый либо второй UPDATE вернул `false`; rollback тоже мог отказать.
     Rollback {
         error: Option<tiberius::error::Error>,
     },
@@ -795,12 +330,12 @@ pub(crate) enum SetupIdSaveFinish {
 /// Полный доказанный результат setup-ID участка `DoSaveData`.
 #[derive(Debug)]
 pub(crate) struct SetupIdSaveReport {
-    /// Ошибка begin не останавливала исходные UPDATE.
+ /// Ошибка begin не останавливала исходные UPDATE.
     pub(crate) begin_error: Option<tiberius::error::Error>,
     pub(crate) player_saved: bool,
-    /// `None`, когда `SavePlayerID == false` и второй вызов исходно пропущен.
+ /// `None`, когда `SavePlayerID == false` и второй вызов исходно пропущен.
     pub(crate) leave_world_saved: Option<bool>,
-    /// Commit соответствует исходному success-log, rollback — failure-log.
+ /// Commit соответствует исходному success-log, rollback — failure-log.
     pub(crate) finish: SetupIdSaveFinish,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
 }
@@ -808,11 +343,11 @@ pub(crate) struct SetupIdSaveReport {
 /// Финальная ветка второй транзакционной фазы `DoSaveData`.
 #[derive(Debug)]
 pub(crate) enum GeneralVariableSaveDisposition {
-    /// `SaveVarData == true`; success-log исходно не зависел от ошибки commit.
+ /// `SaveVarData == true`; success-log исходно не зависел от ошибки commit.
     Commit {
         error: Option<tiberius::error::Error>,
     },
-    /// `SaveVarData == false`; failure-log исходно не зависел от rollback.
+ /// `SaveVarData == false`; failure-log исходно не зависел от rollback.
     Rollback {
         error: Option<tiberius::error::Error>,
     },
@@ -821,9 +356,9 @@ pub(crate) enum GeneralVariableSaveDisposition {
 /// Полный доказанный результат VarData-участка `DoSaveData`.
 #[derive(Debug)]
 pub(crate) struct GeneralVariableSaveReport {
-    /// Ошибка begin не останавливала исходный `SaveVarData`.
+ /// Ошибка begin не останавливала исходный `SaveVarData`.
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// Commit/rollback задают исходный final log; blocked останавливает lifecycle.
+ /// Commit/rollback задают исходный final log; blocked останавливает lifecycle.
     pub(crate) disposition: GeneralVariableSaveDisposition,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
 }
@@ -831,35 +366,35 @@ pub(crate) struct GeneralVariableSaveReport {
 /// Завершение failure-ветки одной транзакционной записи игрока.
 #[derive(Debug)]
 pub(crate) enum FailedTransactionFinish {
-    /// Begin создал транзакцию; rollback вызван, но его ошибка поглощена.
+ /// Begin создал транзакцию; rollback вызван, но его ошибка поглощена.
     Rollback {
         error: Option<tiberius::error::Error>,
     },
-    /// `BeginTran` вернул `0`, поэтому catch не вызывал rollback.
+ /// `BeginTran` вернул `0`, поэтому catch не вызывал rollback.
     NoTransaction,
 }
 
 /// Финальная ветка одного элемента `liDBCreationPlayer`.
 #[derive(Debug)]
 pub(crate) enum NewCharacterSaveDisposition {
-    /// Commit соответствует success-log и последующему удалению list-node.
+ /// Commit соответствует success-log и последующему удалению list-node.
     Commit {
         error: Option<tiberius::error::Error>,
     },
-    /// Исходный catch писал failure-log, сохранял node и переходил к следующему.
+ /// Исходный catch писал failure-log, сохранял node и переходил к следующему.
     Failure(FailedTransactionFinish),
-    /// Null `CPlayer*` сохранялся в очереди и не открывал транзакцию.
+ /// Null `CPlayer*` сохранялся в очереди и не открывал транзакцию.
     NullPlayer,
-    /// Не назначает неизвестной вложенной границе commit, rollback или log.
+ /// Не назначает неизвестной вложенной границе commit, rollback или log.
     BlockedMissingFact(PlayerCreateBlock),
 }
 
 /// Полный доказанный результат одного New Character элемента `DoSaveData`.
 #[derive(Debug)]
 pub(crate) struct NewCharacterSaveReport {
-    /// Для `NullPlayer` begin не вызывался и это поле равно `None`.
+ /// Для `NullPlayer` begin не вызывался и это поле равно `None`.
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// Задаёт исходный log, судьбу list-node и возможность продолжить обход.
+ /// Задаёт исходный log, судьбу list-node и возможность продолжить обход.
     pub(crate) disposition: NewCharacterSaveDisposition,
 }
 
@@ -867,7 +402,7 @@ pub(crate) struct NewCharacterSaveReport {
 #[derive(Debug)]
 pub(crate) enum NewCharactersSaveDisposition {
     Complete,
-    /// DB-ветка текущего entry завершена, но его log и следующий cleanup — нет.
+ /// DB-ветка текущего entry завершена, но его log и следующий cleanup — нет.
     BlockedLog {
         entry_index: usize,
         entry: NewCharacterSaveReport,
@@ -887,7 +422,7 @@ pub(crate) enum NewCharactersSaveDisposition {
 /// Результат New Character phase с уже применённым success-cleanup.
 #[derive(Debug)]
 pub(crate) struct NewCharactersSaveReport {
-    /// `_Mysize`, снятый до traversal для итогового `Charactor CREATED`.
+ /// `_Mysize`, снятый до traversal для итогового `Charactor CREATED`.
     pub(crate) logged_count: u32,
     pub(crate) entries: Vec<NewCharacterSaveReport>,
     pub(crate) disposition: NewCharactersSaveDisposition,
@@ -897,27 +432,27 @@ pub(crate) struct NewCharactersSaveReport {
 /// Финальная ветка одного ID из `lDBRestorePlayer`.
 #[derive(Debug)]
 pub(crate) enum RestoreCharacterSaveDisposition {
-    /// Commit соответствует success-log и удалению текущего ID-node под lock.
+ /// Commit соответствует success-log и удалению текущего ID-node под lock.
     Commit {
         error: Option<tiberius::error::Error>,
     },
-    /// Failure-log сохраняет текущий ID-node и продолжает обход.
+ /// Failure-log сохраняет текущий ID-node и продолжает обход.
     Failure(FailedTransactionFinish),
 }
 
 /// Полный доказанный результат одного Restore Charactor элемента.
 #[derive(Debug)]
 pub(crate) struct RestoreCharacterSaveReport {
-    /// Ошибка begin не останавливала вызов `RestorePlayer`.
+ /// Ошибка begin не останавливала вызов `RestorePlayer`.
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// Задаёт исходный log и судьбу текущего ID-node.
+ /// Задаёт исходный log и судьбу текущего ID-node.
     pub(crate) disposition: RestoreCharacterSaveDisposition,
 }
 
 /// Полный Restore Character traversal с уже удалёнными success-node-ами.
 #[derive(Debug)]
 pub(crate) struct RestoreCharactersSaveReport {
-    /// `_Mysize`, снятый до traversal для итогового `CANCEL DELETE`.
+ /// `_Mysize`, снятый до traversal для итогового `CANCEL DELETE`.
     pub(crate) logged_count: u32,
     pub(crate) entries: Vec<RestoreCharacterSaveReport>,
     pub(crate) disposition: RestoreCharactersSaveDisposition,
@@ -938,22 +473,22 @@ pub(crate) enum RestoreCharactersSaveDisposition {
 /// Финальная ветка одного элемента `liDBDeletionPlayer`.
 #[derive(Debug)]
 pub(crate) enum DeleteCharacterSaveDisposition {
-    /// Success-log требует удалить текущий node под исходным lock.
+ /// Success-log требует удалить текущий node под исходным lock.
     Commit {
         error: Option<tiberius::error::Error>,
     },
-    /// Failure-log сохраняет текущий node и продолжает обход.
+ /// Failure-log сохраняет текущий node и продолжает обход.
     Failure(FailedTransactionFinish),
-    /// Не назначает исходному access violation DB-команду, log или remove.
+ /// Не назначает исходному access violation DB-команду, log или remove.
     BlockedMissingFact(PlayerDeleteTimeBlock),
 }
 
 /// Полный доказанный результат одного Delete Charactor элемента.
 #[derive(Debug)]
 pub(crate) struct DeleteCharacterSaveReport {
-    /// Ошибка begin не останавливала вызов `DeletePlayer`.
+ /// Ошибка begin не останавливала вызов `DeletePlayer`.
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// Задаёт log, судьбу node либо обязательную остановку lifecycle.
+ /// Задаёт log, судьбу node либо обязательную остановку lifecycle.
     pub(crate) disposition: DeleteCharacterSaveDisposition,
 }
 
@@ -961,7 +496,7 @@ pub(crate) struct DeleteCharacterSaveReport {
 #[derive(Debug)]
 pub(crate) enum DeleteCharactersSaveDisposition {
     Complete,
-    /// DB-ветка завершена; event не опубликован и node/cursor ещё не изменены.
+ /// DB-ветка завершена; event не опубликован и node/cursor ещё не изменены.
     BlockedLog {
         entry_index: usize,
         entry: DeleteCharacterSaveReport,
@@ -977,7 +512,7 @@ pub(crate) enum DeleteCharactersSaveDisposition {
 /// Результат Delete Character phase с уже применённым success-cleanup.
 #[derive(Debug)]
 pub(crate) struct DeleteCharactersSaveReport {
-    /// `_Mysize`, снятый до traversal для итогового `SIGN DELETE`.
+ /// `_Mysize`, снятый до traversal для итогового `SIGN DELETE`.
     pub(crate) logged_count: u32,
     pub(crate) entries: Vec<DeleteCharacterSaveReport>,
     pub(crate) disposition: DeleteCharactersSaveDisposition,
@@ -986,9 +521,9 @@ pub(crate) struct DeleteCharactersSaveReport {
 
 /// Caller-owned view исходного `listDeleteUnions` перед началом фазы.
 pub(crate) struct DeleteUnionListSnapshot<'entries> {
-    /// ID в доказанном list-order.
+ /// ID в доказанном list-order.
     pub(crate) union_ids: &'entries [i32],
-    /// `_Mysize`, захваченный отдельно до traversal и используемый `%d`-логом.
+ /// `_Mysize`, захваченный отдельно до traversal и используемый `%d`-логом.
     pub(crate) logged_count: u32,
 }
 
@@ -996,7 +531,7 @@ pub(crate) struct DeleteUnionListSnapshot<'entries> {
 #[derive(Debug)]
 pub(crate) struct DeleteUnionEntrySaveReport {
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// `false` уже имеет собственный `Delete Union ERROR`, но не отменяет commit.
+ /// `false` уже имеет собственный `Delete Union ERROR`, но не отменяет commit.
     pub(crate) delete_succeeded: bool,
     pub(crate) commit_error: Option<tiberius::error::Error>,
 }
@@ -1004,7 +539,7 @@ pub(crate) struct DeleteUnionEntrySaveReport {
 /// Обязанность list-owner-а после завершения всех entry-вызовов.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DeleteUnionClear {
-    /// После clear выводится как исходный signed `%d`-шаблон.
+ /// После clear выводится как исходный signed `%d`-шаблон.
     pub(crate) logged_count: u32,
 }
 
@@ -1012,16 +547,16 @@ pub(crate) struct DeleteUnionClear {
 #[derive(Debug)]
 pub(crate) struct DeleteUnionSaveReport {
     pub(crate) entries: Vec<DeleteUnionEntrySaveReport>,
-    /// Требует без исходного player-list lock удалить все текущие list-nodes.
+ /// Требует без исходного player-list lock удалить все текущие list-nodes.
     pub(crate) clear: DeleteUnionClear,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
 }
 
 /// Caller-owned view исходного `listDeleteFactions` перед началом фазы.
 pub(crate) struct DeleteFactionListSnapshot<'entries> {
-    /// ID в доказанном list-order.
+ /// ID в доказанном list-order.
     pub(crate) faction_ids: &'entries [i32],
-    /// `_Mysize`, захваченный до traversal для финального `%d`-лога.
+ /// `_Mysize`, захваченный до traversal для финального `%d`-лога.
     pub(crate) logged_count: u32,
 }
 
@@ -1029,7 +564,7 @@ pub(crate) struct DeleteFactionListSnapshot<'entries> {
 #[derive(Debug)]
 pub(crate) struct DeleteFactionEntrySaveReport {
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// `false` уже создал `delete faction ERROR`, но не отменял commit.
+ /// `false` уже создал `delete faction ERROR`, но не отменял commit.
     pub(crate) delete_succeeded: bool,
     pub(crate) commit_error: Option<tiberius::error::Error>,
 }
@@ -1037,7 +572,7 @@ pub(crate) struct DeleteFactionEntrySaveReport {
 /// Обязанность list-owner-а после завершения всех entry-вызовов.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DeleteFactionClear {
-    /// После clear выводится как исходный signed `%d`-шаблон.
+ /// После clear выводится как исходный signed `%d`-шаблон.
     pub(crate) logged_count: u32,
 }
 
@@ -1045,25 +580,25 @@ pub(crate) struct DeleteFactionClear {
 #[derive(Debug)]
 pub(crate) struct DeleteFactionSaveReport {
     pub(crate) entries: Vec<DeleteFactionEntrySaveReport>,
-    /// Требует без исходного player-list lock удалить все текущие list-nodes.
+ /// Требует без исходного player-list lock удалить все текущие list-nodes.
     pub(crate) clear: DeleteFactionClear,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
 }
 
 /// Caller-owned view исходного `listSaveFactions` перед началом фазы.
 pub(crate) struct SaveFactionListSnapshot<'entries, 'faction> {
-    /// Nullable save-копии в доказанном live list-order.
+ /// Nullable save-копии в доказанном live list-order.
     pub(crate) factions: &'entries mut [Option<FactionSaveSnapshot<'faction>>],
-    /// `_Mysize`, захваченный до traversal для финального `%d`-лога.
+ /// `_Mysize`, захваченный до traversal для финального `%d`-лога.
     pub(crate) logged_count: u32,
 }
 
 /// Доказанный cleanup одного нормально завершённого entry.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SaveFactionEntryCleanup {
-    /// Null `CFaction*`: удалить только текущий list-node.
+ /// Null `CFaction*`: удалить только текущий list-node.
     RemoveNode,
-    /// Сначала удалить node, затем virtual-уничтожить non-null save-копию.
+ /// Сначала удалить node, затем virtual-уничтожить non-null save-копию.
     RemoveNodeThenDestroySnapshot,
 }
 
@@ -1071,7 +606,7 @@ pub(crate) enum SaveFactionEntryCleanup {
 #[derive(Debug)]
 pub(crate) struct SaveFactionEntrySaveReport {
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// Bool dispatcher-а исходно игнорировался и не менял commit/cleanup.
+ /// Bool dispatcher-а исходно игнорировался и не менял commit/cleanup.
     pub(crate) save_returned: bool,
     pub(crate) commit_error: Option<tiberius::error::Error>,
     pub(crate) cleanup: SaveFactionEntryCleanup,
@@ -1080,21 +615,21 @@ pub(crate) struct SaveFactionEntrySaveReport {
 /// Финальная очистка pointer-list после завершения traversal.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SaveFactionFinalClear {
-    /// Сначала выводится как исходный signed `%d`-шаблон.
+ /// Сначала выводится как исходный signed `%d`-шаблон.
     pub(crate) logged_count: u32,
 }
 
 /// Завершение Save Faction Data phase либо неизвестная overread-граница.
 #[derive(Debug)]
 pub(crate) enum SaveFactionSaveDisposition {
-    /// После entry-cleanup-ов очистить все оставшиеся list-nodes и перейти дальше.
+ /// После entry-cleanup-ов очистить все оставшиеся list-nodes и перейти дальше.
     Complete(SaveFactionFinalClear),
-    /// Все entry уже очищены, но final log остановился перед остаточным clear.
+ /// Все entry уже очищены, но final log остановился перед остаточным clear.
     BlockedLog {
         logged_count: u32,
         block: SaveDataLogPublishBlock,
     },
-    /// Не назначает текущему node commit, cleanup или продолжение lifecycle.
+ /// Не назначает текущему node commit, cleanup или продолжение lifecycle.
     BlockedMissingFact {
         entry_index: usize,
         begin_error: Option<tiberius::error::Error>,
@@ -1112,7 +647,7 @@ pub(crate) enum SaveFactionPhaseBlock {
 /// Полный доказанный результат Save Faction Data phase.
 #[derive(Debug)]
 pub(crate) struct SaveFactionSaveReport {
-    /// Только полностью завершённые entry; каждый требует указанного cleanup.
+ /// Только полностью завершённые entry; каждый требует указанного cleanup.
     pub(crate) entries: Vec<SaveFactionEntrySaveReport>,
     pub(crate) disposition: SaveFactionSaveDisposition,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
@@ -1120,18 +655,18 @@ pub(crate) struct SaveFactionSaveReport {
 
 /// Caller-owned view исходного `listSaveUnions` перед началом фазы.
 pub(crate) struct SaveUnionListSnapshot<'entries, 'union> {
-    /// Nullable save-копии в доказанном live list-order.
+ /// Nullable save-копии в доказанном live list-order.
     pub(crate) unions: &'entries mut [Option<UnionSaveSnapshot<'union>>],
-    /// `_Mysize`, захваченный до traversal для финального `%d`-лога.
+ /// `_Mysize`, захваченный до traversal для финального `%d`-лога.
     pub(crate) logged_count: u32,
 }
 
 /// Доказанный cleanup одного нормально завершённого union-entry.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SaveUnionEntryCleanup {
-    /// Null `CUnion*`: удалить только текущий list-node.
+ /// Null `CUnion*`: удалить только текущий list-node.
     RemoveNode,
-    /// Сначала удалить node, затем virtual-уничтожить non-null save-копию.
+ /// Сначала удалить node, затем virtual-уничтожить non-null save-копию.
     RemoveNodeThenDestroySnapshot,
 }
 
@@ -1139,7 +674,7 @@ pub(crate) enum SaveUnionEntryCleanup {
 #[derive(Debug)]
 pub(crate) struct SaveUnionEntrySaveReport {
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// Bool `SaveConfederation` исходно игнорировался и не менял commit/cleanup.
+ /// Bool `SaveConfederation` исходно игнорировался и не менял commit/cleanup.
     pub(crate) save_returned: bool,
     pub(crate) commit_error: Option<tiberius::error::Error>,
     pub(crate) cleanup: SaveUnionEntryCleanup,
@@ -1148,21 +683,21 @@ pub(crate) struct SaveUnionEntrySaveReport {
 /// Финальная очистка pointer-list после завершения union traversal.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SaveUnionFinalClear {
-    /// Сначала выводится как исходный signed `%d`-шаблон.
+ /// Сначала выводится как исходный signed `%d`-шаблон.
     pub(crate) logged_count: u32,
 }
 
 /// Завершение Save Union Data phase либо неизвестная owner-граница.
 #[derive(Debug)]
 pub(crate) enum SaveUnionSaveDisposition {
-    /// После entry-cleanup-ов очистить оставшиеся list-nodes и перейти к region.
+ /// После entry-cleanup-ов очистить оставшиеся list-nodes и перейти к region.
     Complete(SaveUnionFinalClear),
-    /// Все entry уже очищены, но final log остановился перед остаточным clear.
+ /// Все entry уже очищены, но final log остановился перед остаточным clear.
     BlockedLog {
         logged_count: u32,
         block: SaveDataLogPublishBlock,
     },
-    /// Не назначает текущему node commit, cleanup или продолжение lifecycle.
+ /// Не назначает текущему node commit, cleanup или продолжение lifecycle.
     BlockedMissingFact {
         entry_index: usize,
         begin_error: Option<tiberius::error::Error>,
@@ -1173,7 +708,7 @@ pub(crate) enum SaveUnionSaveDisposition {
 /// Полный доказанный результат Save Union Data phase.
 #[derive(Debug)]
 pub(crate) struct SaveUnionSaveReport {
-    /// Только полностью завершённые entry; каждый требует указанного cleanup.
+ /// Только полностью завершённые entry; каждый требует указанного cleanup.
     pub(crate) entries: Vec<SaveUnionEntrySaveReport>,
     pub(crate) disposition: SaveUnionSaveDisposition,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
@@ -1181,18 +716,18 @@ pub(crate) struct SaveUnionSaveReport {
 
 /// Caller-owned view исходного `listRegionParam` перед началом фазы.
 pub(crate) struct SaveRegionListSnapshot<'entries> {
-    /// Nullable save-копии в доказанном live list-order.
+ /// Nullable save-копии в доказанном live list-order.
     pub(crate) regions: &'entries [Option<RegionSaveSnapshot>],
-    /// `_Mysize`, захваченный до traversal для финального `%ld`-лога.
+ /// `_Mysize`, захваченный до traversal для финального `%ld`-лога.
     pub(crate) logged_count: u32,
 }
 
 /// Доказанный cleanup одного завершённого region-entry до чтения next.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SaveRegionEntryCleanup {
-    /// Null `CWorldRegion*`: сохранить текущий node и только перейти к next.
+ /// Null `CWorldRegion*`: сохранить текущий node и только перейти к next.
     RetainNode,
-    /// Virtual-уничтожить save-копию, сохранив node для финальной очистки.
+ /// Virtual-уничтожить save-копию, сохранив node для финальной очистки.
     DestroySnapshotAndRetainNode,
 }
 
@@ -1200,7 +735,7 @@ pub(crate) enum SaveRegionEntryCleanup {
 #[derive(Debug)]
 pub(crate) struct SaveRegionEntrySaveReport {
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// Bool `CRsRegion::Save` исходно игнорировался и не менял commit/cleanup.
+ /// Bool `CRsRegion::Save` исходно игнорировался и не менял commit/cleanup.
     pub(crate) save_returned: bool,
     pub(crate) commit_error: Option<tiberius::error::Error>,
     pub(crate) cleanup: SaveRegionEntryCleanup,
@@ -1209,16 +744,16 @@ pub(crate) struct SaveRegionEntrySaveReport {
 /// Финальная очистка list-nodes после уничтожения region save-копий.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SaveRegionFinalClear {
-    /// Сначала выводится как исходный signed `%ld`-шаблон.
+ /// Сначала выводится как исходный signed `%ld`-шаблон.
     pub(crate) logged_count: u32,
 }
 
 /// Полный доказанный результат Save Region Data phase.
 #[derive(Debug)]
 pub(crate) struct SaveRegionSaveReport {
-    /// Каждый entry сохраняет node до общей финальной очистки.
+ /// Каждый entry сохраняет node до общей финальной очистки.
     pub(crate) entries: Vec<SaveRegionEntrySaveReport>,
-    /// Требует отделить список, занулить size и удалить все его nodes.
+ /// Требует отделить список, занулить size и удалить все его nodes.
     pub(crate) clear: SaveRegionFinalClear,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
 }
@@ -1226,25 +761,25 @@ pub(crate) struct SaveRegionSaveReport {
 /// Финальная ветка Save HonorRanks transaction phase.
 #[derive(Debug)]
 pub(crate) enum HonorRanksSaveDisposition {
-    /// Оба owner-а вернули `true`; исходный success-log не зависел от commit.
+ /// Оба owner-а вернули `true`; исходный success-log не зависел от commit.
     Commit {
         error: Option<tiberius::error::Error>,
     },
-    /// Первый `false` приводил в общий catch и его conditional rollback.
+ /// Первый `false` приводил в общий catch и его conditional rollback.
     Failure(FailedTransactionFinish),
-    /// Не назначает старому size-overflow завершение транзакции либо log.
+ /// Не назначает старому size-overflow завершение транзакции либо log.
     BlockedMissingFact(HonorRanksSaveBlock),
 }
 
 /// Полный доказанный результат Save HonorRanks участка `DoSaveData`.
 #[derive(Debug)]
 pub(crate) struct HonorRanksTransactionSaveReport {
-    /// Ошибка begin не останавливала исходный `InsertHonorRanks`.
+ /// Ошибка begin не останавливала исходный `InsertHonorRanks`.
     pub(crate) begin_error: Option<tiberius::error::Error>,
     pub(crate) insert_succeeded: bool,
-    /// `None`, если insert вернул `false` либо save достиг size-overflow.
+ /// `None`, если insert вернул `false` либо save достиг size-overflow.
     pub(crate) save_returned: Option<bool>,
-    /// Commit соответствует success-log, Failure — abnormal catch/log.
+ /// Commit соответствует success-log, Failure — abnormal catch/log.
     pub(crate) disposition: HonorRanksSaveDisposition,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
 }
@@ -1252,22 +787,22 @@ pub(crate) struct HonorRanksTransactionSaveReport {
 /// Финальная ветка одной из двух независимых GodsBattle transaction phases.
 #[derive(Debug)]
 pub(crate) enum GodsBattleSaveDisposition {
-    /// Owner вернул `true`; исходный success-log не зависел от ошибки commit.
+ /// Owner вернул `true`; исходный success-log не зависел от ошибки commit.
     Commit {
         error: Option<tiberius::error::Error>,
     },
-    /// Owner вернул `false`; abnormal-log следовал после conditional rollback.
+ /// Owner вернул `false`; abnormal-log следовал после conditional rollback.
     Failure(FailedTransactionFinish),
 }
 
 /// Полный доказанный результат одной GodsBattle transaction phase.
 #[derive(Debug)]
 pub(crate) struct GodsBattleTransactionSaveReport {
-    /// Отличает Belief/XYD и NPC ветви без объединения их owner-вызовов.
+ /// Отличает Belief/XYD и NPC ветви без объединения их owner-вызовов.
     pub(crate) operation: GodsBattleSaveOperation,
-    /// Ошибка begin не останавливала соответствующий owner.
+ /// Ошибка begin не останавливала соответствующий owner.
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// Этот bool буквально выбирал commit/success либо catch/failure.
+ /// Этот bool буквально выбирал commit/success либо catch/failure.
     pub(crate) save_returned: bool,
     pub(crate) disposition: GodsBattleSaveDisposition,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
@@ -1276,28 +811,28 @@ pub(crate) struct GodsBattleTransactionSaveReport {
 /// Точная normal-path очистка исходного `listEnemyFactions` после commit.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum EnemyFactionsFinalCleanup {
-    /// Уничтожить все non-null values в list-order, затем удалить все nodes.
+ /// Уничтожить все non-null values в list-order, затем удалить все nodes.
     DestroyValuesThenClearNodes,
 }
 
 /// Завершение EnemyFactions transaction phase.
 #[derive(Debug)]
 pub(crate) enum EnemyFactionsTransactionSaveDisposition {
-    /// Bool owner-а проигнорирован; commit-error не отменяет cleanup/success-log.
+ /// Bool owner-а проигнорирован; commit-error не отменяет cleanup/success-log.
     Complete {
         commit_error: Option<tiberius::error::Error>,
         cleanup: EnemyFactionsFinalCleanup,
     },
-    /// Не назначает неизвестному null-разыменованию commit, cleanup либо log.
+ /// Не назначает неизвестному null-разыменованию commit, cleanup либо log.
     BlockedMissingFact(EnemyFactionNullEntryBlock),
 }
 
 /// Полный доказанный результат EnemyFactions участка `DoSaveData`.
 #[derive(Debug)]
 pub(crate) struct EnemyFactionsTransactionSaveReport {
-    /// Ошибка begin не останавливала копирование списка и вызов DB-owner-а.
+ /// Ошибка begin не останавливала копирование списка и вызов DB-owner-а.
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// `None` означает, что owner достиг null-entry и не вернул исходный bool.
+ /// `None` означает, что owner достиг null-entry и не вернул исходный bool.
     pub(crate) save_returned: Option<bool>,
     pub(crate) disposition: EnemyFactionsTransactionSaveDisposition,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
@@ -1305,18 +840,18 @@ pub(crate) struct EnemyFactionsTransactionSaveReport {
 
 /// Caller-owned view исходного `ltDBCountrys` перед началом фазы.
 pub(crate) struct SaveCountryListSnapshot<'entries> {
-    /// Nullable save-копии в доказанном live list-order.
+ /// Nullable save-копии в доказанном live list-order.
     pub(crate) countries: &'entries [Option<CountrySaveSnapshot>],
-    /// `_Mysize`, захваченный до traversal для финального `%ld`-лога.
+ /// `_Mysize`, захваченный до traversal для финального `%ld`-лога.
     pub(crate) logged_count: u32,
 }
 
 /// Доказанный cleanup одного завершённого country-entry.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SaveCountryEntryCleanup {
-    /// Null `CCountry*`: удалить только текущий list-node.
+ /// Null `CCountry*`: удалить только текущий list-node.
     RemoveNode,
-    /// Сначала удалить node, затем virtual-уничтожить non-null save-копию.
+ /// Сначала удалить node, затем virtual-уничтожить non-null save-копию.
     RemoveNodeThenDestroySnapshot,
 }
 
@@ -1324,7 +859,7 @@ pub(crate) enum SaveCountryEntryCleanup {
 #[derive(Debug)]
 pub(crate) struct SaveCountryEntrySaveReport {
     pub(crate) begin_error: Option<tiberius::error::Error>,
-    /// Bool `CDBCountry::Save` исходно игнорировался и не менял commit/cleanup.
+ /// Bool `CDBCountry::Save` исходно игнорировался и не менял commit/cleanup.
     pub(crate) save_returned: bool,
     pub(crate) commit_error: Option<tiberius::error::Error>,
     pub(crate) cleanup: SaveCountryEntryCleanup,
@@ -1333,56 +868,56 @@ pub(crate) struct SaveCountryEntrySaveReport {
 /// Финальная очистка pointer-list после завершения country traversal.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SaveCountryFinalClear {
-    /// Сначала выводится как исходный signed `%ld`-шаблон.
+ /// Сначала выводится как исходный signed `%ld`-шаблон.
     pub(crate) logged_count: u32,
 }
 
 /// Полный доказанный normal-path Update Country Data phase.
 #[derive(Debug)]
 pub(crate) struct SaveCountrySaveReport {
-    /// Каждый завершённый entry требует указанного cleanup до следующего node.
+ /// Каждый завершённый entry требует указанного cleanup до следующего node.
     pub(crate) entries: Vec<SaveCountryEntrySaveReport>,
-    /// Требует удалить оставшиеся list-nodes и перейти к LoadDetails phase.
+ /// Требует удалить оставшиеся list-nodes и перейти к LoadDetails phase.
     pub(crate) clear: SaveCountryFinalClear,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
 }
 
-/// Неизменяемые поля non-null `CPlayer*`, достигнутые LoadDetails-фазой.
+/// Неизменяемые поля non-null `CPlayer*`, действующие LoadDetails-фазой.
 ///
-/// `Debug` сознательно не реализован, чтобы CD-key не попадал в обычный log.
+/// `Debug` сознательно не действует, чтобы CD-key не попадал в обычный log.
 #[derive(Clone, Copy)]
 pub(crate) struct LoadDetailsPlayerSnapshot<'player> {
-    /// Signed `CBaseObject::m_lID` по `CPlayer+8`.
+ /// Signed `CBaseObject::m_lID` по `CPlayer+8`.
     pub(crate) player_id: i32,
-    /// Byte-exact C-string view исходного `std::string` по `CPlayer+0x72C`.
+ /// Byte- C-string view исходного `std::string` по `CPlayer+0x72C`.
     pub(crate) cd_key: &'player [u8],
 }
 
 /// Caller-owned view исходного `map<unsigned int, CPlayer*>`.
 pub(crate) struct LoadDetailsPlayerMapSnapshot<'entries, 'player> {
-    /// `BTreeMap` сохраняет exact unsigned-key order и nullable pointer-values.
+ /// `BTreeMap` сохраняет unsigned-key order и nullable pointer-values.
     pub(crate) players: &'entries BTreeMap<u32, Option<LoadDetailsPlayerSnapshot<'player>>>,
-    /// Буквальный snapshot `CGame::tagSetup::bUseOldSaveLargessWay`.
+ /// Буквальный snapshot `CGame::tagSetup::bUseOldSaveLargessWay`.
     pub(crate) use_old_save_largess_way: bool,
 }
 
 /// Выбранная один раз до traversal ветка и её обязательный mode-log.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LoadDetailsSaveWay {
-    /// `** use old save way` и self-opening перегрузка.
+ /// `** use old save way` и self-opening перегрузка.
     Old,
-    /// `** use new save way` и caller-connection transaction.
+ /// `** use new save way` и caller-connection transaction.
     New,
 }
 
 /// Один полностью завершённый map-entry до перехода к next.
 #[derive(Debug)]
 pub(crate) enum LoadDetailsEntrySaveReport {
-    /// Null pointer не вызывал DB-owner и требует null-pointer log.
+ /// Null pointer не вызывал DB-owner и требует null-pointer log.
     NullPlayer { map_key: u32 },
-    /// Старая перегрузка открывала своё Cost DB connection без transaction.
+ /// Старая перегрузка открывала своё Cost DB connection без transaction.
     OldWay { map_key: u32, save_returned: bool },
-    /// Новая перегрузка безусловно получала begin и commit.
+ /// Новая перегрузка безусловно получала begin и commit.
     NewWay {
         map_key: u32,
         begin_error: Option<tiberius::error::Error>,
@@ -1394,16 +929,16 @@ pub(crate) enum LoadDetailsEntrySaveReport {
 /// Финальная судьба LoadDetails phase.
 #[derive(Debug)]
 pub(crate) enum LoadDetailsSaveDisposition {
-    /// Все entries завершены; `mDBPlayer` остаётся byte-for-byte неизменной.
+ /// Все entries завершены; `mDBPlayer` остаётся byte-for-byte неизменной.
     CompleteRetainPlayerMap,
 }
 
 /// Полный доказанный LoadDetails normal-path либо локальная UB-граница.
 #[derive(Debug)]
 pub(crate) struct LoadDetailsSaveReport {
-    /// Сохраняется даже для пустой map и задаёт исходный mode-log.
+ /// Сохраняется даже для пустой map и задаёт исходный mode-log.
     pub(crate) way: LoadDetailsSaveWay,
-    /// Только entries, для которых исходно задан переход к next.
+ /// Только entries, для которых исходно задан переход к next.
     pub(crate) entries: Vec<LoadDetailsEntrySaveReport>,
     pub(crate) disposition: LoadDetailsSaveDisposition,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
@@ -1418,41 +953,41 @@ pub(crate) struct LoadDetailsWorldSaveReport {
 
 /// Non-null value одного элемента `mDBPlayer` для Save Charactor Data.
 pub(crate) struct SaveCharacterPlayerSnapshot<'player, 'snapshot> {
-    /// Тот же живой owner, который исходный map хранил как `CPlayer*`.
+ /// Тот же живой owner, который исходный map хранил как `CPlayer*`.
     pub(crate) player: &'player CPlayer,
-    /// Полная проекция этого же owner-а для достигнутого DB-save.
+ /// Полная проекция этого же owner-а для действующего DB-save.
     pub(crate) save: PlayerSaveSnapshot<'snapshot, 'snapshot, 'snapshot>,
 }
 
 /// Caller-owned view повторного обхода `map<unsigned int, CPlayer*>`.
 pub(crate) struct SaveCharacterPlayerMapSnapshot<'entries, 'player, 'snapshot> {
-    /// `BTreeMap` сохраняет unsigned key-order и nullable pointer-values.
+ /// `BTreeMap` сохраняет unsigned key-order и nullable pointer-values.
     pub(crate) players:
         &'entries BTreeMap<u32, Option<SaveCharacterPlayerSnapshot<'player, 'snapshot>>>,
-    /// `_Mysize`, захваченный до предшествующей LoadDetails phase.
+ /// `_Mysize`, захваченный до предшествующей LoadDetails phase.
     pub(crate) logged_count: u32,
 }
 
 /// Точная success-очистка после `ShowSaveInfo` и до перехода к next.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SaveCharacterSuccessCleanup {
-    /// Под player-list lock уничтожить player, занулить value и стереть entry.
+ /// Под player-list lock уничтожить player, занулить value и стереть entry.
     DestroyPlayerThenEraseEntryUnderLock,
 }
 
 /// Один полностью завершённый map-entry Save Charactor Data.
 #[derive(Debug)]
 pub(crate) enum SaveCharacterEntrySaveReport {
-    /// Null value не открывает транзакцию, пишет null-log и сохраняет entry.
+ /// Null value не открывает транзакцию, пишет null-log и сохраняет entry.
     NullPlayer { map_key: u32 },
-    /// `SaveData == true`: commit вызывается, затем entry обязательно удаляется.
+ /// `SaveData == true`: commit вызывается, затем entry обязательно удаляется.
     Saved {
         map_key: u32,
         begin_error: Option<tiberius::error::Error>,
         commit_error: Option<tiberius::error::Error>,
         cleanup: SaveCharacterSuccessCleanup,
     },
-    /// `SaveData == false`: conditional rollback, failure-log и сохранение entry.
+ /// `SaveData == false`: conditional rollback, failure-log и сохранение entry.
     Failed {
         map_key: u32,
         begin_error: Option<tiberius::error::Error>,
@@ -1463,15 +998,15 @@ pub(crate) enum SaveCharacterEntrySaveReport {
 /// Финальная судьба Save Charactor Data traversal.
 #[derive(Debug)]
 pub(crate) enum SaveCharacterSaveDisposition {
-    /// Все entries завершены; следующий owner закрывает connection и пишет итог.
+ /// Все entries завершены; следующий owner закрывает connection и пишет итог.
     Complete { logged_count: u32 },
-    /// DB-ветка завершена, но её log и следующий map-эффект ещё не завершены.
+ /// DB-ветка завершена, но её log и следующий map-эффект ещё не завершены.
     BlockedLog {
         map_key: u32,
         entry: Box<SaveCharacterEntrySaveReport>,
         block: SaveDataLogPublishBlock,
     },
-    /// Не назначает локальной goods-неизвестности transaction finish и cleanup.
+ /// Не назначает локальной goods-неизвестности transaction finish и cleanup.
     BlockedMissingFact {
         map_key: u32,
         begin_error: Option<tiberius::error::Error>,
@@ -1489,7 +1024,7 @@ pub(crate) enum SaveCharacterPhaseBlock {
 /// Полный доказанный результат Save Charactor Data phase.
 #[derive(Debug)]
 pub(crate) struct SaveCharacterSaveReport {
-    /// Только entries, для которых исходно доказан переход к next.
+ /// Только entries, для которых исходно доказан переход к next.
     pub(crate) entries: Vec<SaveCharacterEntrySaveReport>,
     pub(crate) disposition: SaveCharacterSaveDisposition,
     pub(crate) log_events: Vec<SaveDataLogEvent>,
@@ -1517,7 +1052,7 @@ pub(crate) enum DoSaveDataPhase {
     SaveCharacters,
 }
 
-/// Все отчёты уже достигнутых фаз; `None` означает, что фаза ещё не начиналась.
+/// Все отчёты уже действующих фаз; `None` означает, что фаза ещё не начиналась.
 #[derive(Debug, Default)]
 pub(crate) struct DoSaveDataThroughUnionsPhases {
     pub(crate) setup_ids: Option<SetupIdSaveReport>,
@@ -1539,34 +1074,34 @@ pub(crate) struct SaveDataEarlyCounters {
     pub(crate) sign_deleted: u32,
 }
 
-/// Точная достигнутая позиция event-а внутри последовательности фазы.
+/// Точная действующая позиция event-а внутри последовательности фазы.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SaveDataLogCheckpoint {
-    /// Первый общий event сразу после успешного открытия connection.
+ /// Первый общий event сразу после успешного открытия connection.
     SaveVariablesStart,
-    /// Фазовый start-event до первого DB-вызова.
+ /// Фазовый start-event до первого DB-вызова.
     PhaseStart,
-    /// Индекс уже материализованного event-а в phase-report.
+ /// Индекс уже материализованного event-а в phase-report.
     PhaseEvent(usize),
 }
 
 /// Точка остановки последовательности либо переход к Save Region Data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DoSaveDataThroughUnionsDisposition {
-    /// Safe snapshot-граница возникла до первого DB-вызова названной фазы.
+ /// Safe snapshot-граница возникла до первого DB-вызова названной фазы.
     BlockedSnapshot {
         phase: DoSaveDataPhase,
         block: WorldSnapshotSaveBlock,
     },
-    /// Отчёт текущей фазы содержит конкретную нерешённую границу вложенного владельца.
+ /// Отчёт текущей фазы содержит конкретную нерешённую границу вложенного владельца.
     BlockedPhase(DoSaveDataPhase),
-    /// Logger остановил lifecycle до следующего DB/container эффекта.
+ /// Logger остановил lifecycle до следующего DB/container эффекта.
     BlockedLog {
         phase: DoSaveDataPhase,
         checkpoint: SaveDataLogCheckpoint,
         block: SaveDataLogPublishBlock,
     },
-    /// Все фазы закончены; следующий observable owner — Save Region Data.
+ /// Все фазы закончены; следующий observable owner — Save Region Data.
     ContinueWithRegion(SaveDataEarlyCounters),
 }
 
@@ -1597,15 +1132,15 @@ pub(crate) enum DoSaveDataAfterUnionsDisposition {
         phase: DoSaveDataPhase,
         block: WorldSnapshotSaveBlock,
     },
-    /// Вложенный phase-report содержит конкретную неизвестную границу.
+ /// Вложенный phase-report содержит конкретную неизвестную границу.
     BlockedPhase(DoSaveDataPhase),
-    /// Logger остановил suffix до следующего DB/container эффекта.
+ /// Logger остановил suffix до следующего DB/container эффекта.
     BlockedLog {
         phase: DoSaveDataPhase,
         checkpoint: SaveDataLogCheckpoint,
         block: SaveDataLogPublishBlock,
     },
-    /// Все DB/container фазы закончены; следующий owner закрывает connection.
+ /// Все DB/container фазы закончены; следующий owner закрывает connection.
     Complete(SaveDataCounters),
 }
 
@@ -1621,7 +1156,7 @@ pub(crate) struct DoSaveDataAfterUnionsReport {
 pub(crate) enum DoSaveDataPhasesDisposition {
     BlockedThroughUnions,
     BlockedAfterUnions,
-    /// Следующий owner выполняет connection cleanup и общий final report.
+ /// Следующий owner выполняет connection cleanup и общий final report.
     Complete(SaveDataCounters),
 }
 
@@ -1639,25 +1174,25 @@ pub(crate) struct SaveDataCounters {
     pub(crate) created: u32,
     pub(crate) cancel_deleted: u32,
     pub(crate) sign_deleted: u32,
-    /// Ранний `_Mysize`, а не число фактически удалённых success-entry.
+ /// Ранний `_Mysize`, а не число фактически удалённых success-entry.
     pub(crate) saved: u32,
 }
 
 /// Ветка, по которой `DoSaveData` достиг общего финального отчёта.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SaveDataFinalPath {
-    /// Полный traversal: счётчики берутся из четырёх сохранённых locals.
+ /// Полный traversal: счётчики берутся из четырёх сохранённых locals.
     Completed(SaveDataCounters),
-    /// `OpenCn == false`: все четыре locals остались исходными нулями.
+ /// `OpenCn == false`: все четыре locals остались исходными нулями.
     ConnectionOpenFailed,
 }
 
-/// Exact connection/log-порядок перед единичным замером конечного tick.
+/// connection/log-порядок перед единичным замером конечного tick.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SaveDataConnectionFinish {
-    /// `CloseCn -> "Save Data end ..." -> ReleaseCn` (ещё один `CloseCn`).
+ /// `CloseCn -> "Save Data end..." -> ReleaseCn` (ещё один `CloseCn`).
     CloseLogEndThenRelease,
-    /// `"Connect To DB FAILED!" -> ReleaseCn` без success-end log.
+ /// `"Connect To DB FAILED!" -> ReleaseCn` без success-end log.
     LogConnectFailureThenRelease,
 }
 
@@ -1711,16 +1246,16 @@ pub(crate) struct SaveDataLifecycleState {
 pub(crate) struct SaveDataMonitoringReport {
     pub(crate) message_type: i8,
     pub(crate) server_id: i32,
-    /// `SendErrLog` принимал `long`; это те же четыре бита setup `DWORD`.
+ /// `SendErrLog` принимал `long`; это те же четыре бита setup `DWORD`.
     pub(crate) world_number_bits: u32,
-    /// C-string без конечного NUL; component message-owner обязан добавить его.
+ /// C-string без конечного NUL; component message-owner обязан добавить его.
     pub(crate) text: Vec<u8>,
 }
 
 /// Последняя наблюдаемая ветка после обновления трёх time-global значений.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum SaveDataFinalDisposition {
-    /// `SendErrLog` вызван, его send-result проигнорирован и save-флаг сброшен.
+ /// `SendErrLog` вызван, его send-result проигнорирован и save-флаг сброшен.
     Complete(SaveDataMonitoringReport),
 }
 
@@ -1728,7 +1263,7 @@ pub(crate) enum SaveDataFinalDisposition {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct SaveDataFinalReport {
     pub(crate) connection_finish: SaveDataConnectionFinish,
-    /// Уже отформатированный observable payload итогового `AddLogText`.
+ /// Уже отформатированный observable payload итогового `AddLogText`.
     pub(crate) summary_log: Vec<u8>,
     pub(crate) elapsed_ms: u32,
     pub(crate) disposition: SaveDataFinalDisposition,
@@ -1737,7 +1272,7 @@ pub(crate) struct SaveDataFinalReport {
 /// Первая половина хвоста после connection cleanup и конечного `timeGetTime`.
 pub(crate) struct SaveDataFinalStart {
     pub(crate) connection_finish: SaveDataConnectionFinish,
-    /// Caller обязан опубликовать этот log до следующего `GetLocalTime`.
+ /// Caller обязан опубликовать этот log до следующего `GetLocalTime`.
     pub(crate) summary_log: Vec<u8>,
     pub(crate) elapsed_ms: u32,
     end_tick_ms: u32,
@@ -1746,12 +1281,12 @@ pub(crate) struct SaveDataFinalStart {
 /// Неизменяемые входы до connection cleanup и конечного `timeGetTime`.
 pub(crate) struct SaveDataFinalSnapshot {
     pub(crate) path: SaveDataFinalPath,
-    /// Local `saved_start_tick`, снятый одновременно с global start tick.
+ /// Local `saved_start_tick`, снятый одновременно с global start tick.
     pub(crate) started_at_tick_ms: u32,
 }
 
 impl SaveDataFinalSnapshot {
-    /// Даёт caller-у connection/log-обязанность до конечного `timeGetTime`.
+ /// Даёт caller-у connection/log-обязанность до конечного `timeGetTime`.
     pub(crate) const fn connection_finish(&self) -> SaveDataConnectionFinish {
         match self.path {
             SaveDataFinalPath::Completed(_) => SaveDataConnectionFinish::CloseLogEndThenRelease,
@@ -1762,18 +1297,18 @@ impl SaveDataFinalSnapshot {
     }
 }
 
-/// Значения, которые exact tail читает после обновления time-global полей.
+/// Значения, которые tail читает после обновления time-global полей.
 ///
-/// `Debug` не реализован, чтобы byte-string имени сервера не размножался в log.
+/// `Debug` не действует, чтобы byte-string имени сервера не размножался в log.
 pub(crate) struct SaveDataMonitoringSnapshot {
-    /// Byte-exact `std::string`; старый `%s` читает только prefix до NUL.
+ /// Byte- `std::string`; старый `%s` читает только prefix до NUL.
     pub(crate) server_name: Vec<u8>,
     pub(crate) write_log_count: u32,
     pub(crate) server_id: i32,
     pub(crate) world_number_bits: u32,
 }
 
-/// Ошибка достигнутой `CreateCn/OpenCn`-границы без connection string.
+/// Ошибка действующей `CreateCn/OpenCn`-границы без connection string.
 #[derive(Debug)]
 pub(crate) enum SaveDataConnectionError {
     Connect(io::Error),
@@ -1808,12 +1343,12 @@ impl From<tiberius::error::Error> for SaveDataConnectionError {
 
 /// Результат начальной `DoSaveData`-границы перед первой save-фазой.
 pub(crate) enum DoSaveDataStart {
-    /// Флаг уже поставлен; caller следующим пишет `Save Variables Start...`.
+ /// Флаг уже поставлен; caller следующим пишет `Save Variables Start...`.
     Opened {
         connection: WorldTdsClient,
         started_at_tick_ms: u32,
     },
-    /// Флаг не менялся; caller выполняет failure connection-finish и finalizer.
+ /// Флаг не менялся; caller выполняет failure connection-finish и finalizer.
     ConnectionOpenFailed {
         error: SaveDataConnectionError,
         final_snapshot: SaveDataFinalSnapshot,
@@ -1830,35 +1365,35 @@ pub(crate) enum SaveDataConnectionLogCheckpoint {
 /// Доказательства уже завершённого пути после выхода из connection-владельца.
 #[derive(Debug)]
 pub(crate) struct SaveDataLifecycleEvidence {
-    /// `None` только у ветки, где World connection не был открыт.
+ /// `None` только у ветки, где World connection не был открыт.
     pub(crate) phases: Option<DoSaveDataPhasesReport>,
     pub(crate) open_error: Option<SaveDataConnectionError>,
-    /// Ошибка Tiberius close наблюдаема в Rust, но не меняет исходный порядок.
+ /// Ошибка Tiberius close наблюдаема в Rust, но не меняет исходный порядок.
     pub(crate) close_error: Option<tiberius::error::Error>,
 }
 
 /// Результат единого owner-а `DoSaveData` без создания runtime entry/thread.
 pub(crate) enum DoSaveDataLifecycleReport {
-    /// Phase block не разрешает выбирать transaction/connection cleanup.
+ /// Phase block не разрешает выбирать transaction/connection cleanup.
     BlockedPhases {
         phases: DoSaveDataPhasesReport,
         connection: WorldTdsClient,
         started_at_tick_ms: u32,
     },
-    /// Первый close либо failed-open уже достигнут, следующий эффект запрещён.
+ /// Первый close либо failed-open уже действует, следующий эффект запрещён.
     BlockedConnectionLog {
         evidence: SaveDataLifecycleEvidence,
         final_snapshot: SaveDataFinalSnapshot,
         checkpoint: SaveDataConnectionLogCheckpoint,
         block: SaveDataLogPublishBlock,
     },
-    /// Connection cleanup и конечный tick завершены, но summary-log — нет.
+ /// Connection cleanup и конечный tick завершены, но summary-log — нет.
     BlockedSummaryLog {
         evidence: SaveDataLifecycleEvidence,
         final_start: SaveDataFinalStart,
         block: SaveDataLogPublishBlock,
     },
-    /// `SaveDataFinalDisposition` отдельно различает monitoring success/block.
+ /// `SaveDataFinalDisposition` отдельно различает monitoring success/block.
     Final {
         evidence: SaveDataLifecycleEvidence,
         report: SaveDataFinalReport,
@@ -2035,7 +1570,7 @@ where
 
 /// Выполняет транзакционную часть одного элемента `liDBCreationPlayer`.
 ///
-/// `Commit` требует от будущего list-owner-а удалить player и текущий node под
+/// `Commit` требует от связанный list-owner-а удалить player и текущий node под
 /// `g_CriticalSectionSavePlayerList`. `Failure` и `NullPlayer` сохраняют node и
 /// разрешают перейти к следующему. После `BlockedMissingFact` connection и
 /// очередь нельзя использовать дальше до решения локальной границы.
@@ -2100,7 +1635,7 @@ where
 
 /// Выполняет транзакционную часть одного ID из `lDBRestorePlayer`.
 ///
-/// `Commit` требует от будущего list-owner-а удалить текущий node под
+/// `Commit` требует от связанный list-owner-а удалить текущий node под
 /// `g_CriticalSectionSavePlayerList`; `Failure` сохраняет его. Обе доказанные
 /// ветви продолжают обход со следующим ID.
 pub(crate) async fn save_restore_character_entry<P: RsPlayerOwner>(
@@ -4648,7 +4183,7 @@ where
 /// Выполняет все доказанные DB/container фазы на уже открытом World connection.
 ///
 /// Функция не создаёт и не закрывает connection и не запускает save-thread.
-/// Вся phase-цепь публикует logs через переданный owner в exact порядке. Первый
+/// Вся phase-цепь публикует logs через переданный owner в порядке. Первый
 /// block либо четыре counters передаются существующему finalizer-у.
 #[allow(
     clippy::too_many_arguments,
@@ -4824,8 +4359,8 @@ where
         world_number_bits: monitoring_snapshot.world_number_bits,
         text,
     };
-    // Исходный SendErrLog возвращал void: попытка send всегда ведёт к
-    // сбросу флага, независимо от результата внутреннего CMessage::Send.
+ // Исходный SendErrLog возвращал void: попытка send всегда ведёт к
+ // сбросу флага, независимо от результата внутреннего CMessage::Send.
     send_monitoring(&monitoring);
     state.is_saving_data = false;
     let disposition = SaveDataFinalDisposition::Complete(monitoring);
@@ -4957,9 +4492,9 @@ where
                 started_at_tick_ms,
             };
 
-            // `Client::close(self)` одновременно завершает TDS transport и
-            // потребляет Rust-owner. Это совместимая замена первого CloseCn;
-            // исходный повторный CloseCn внутри ReleaseCn был idempotent.
+ // `Client::close(self)` одновременно завершает TDS transport и
+ // потребляет Rust-owner. Это совместимая замена первого CloseCn;
+ // исходный повторный CloseCn внутри ReleaseCn был idempotent.
             let close_error = connection.close().await.err();
             let evidence = SaveDataLifecycleEvidence {
                 phases: Some(phases),
@@ -4976,8 +4511,8 @@ where
                     block,
                 };
             }
-            // Здесь находится исходная ReleaseCn-граница; Tiberius owner уже
-            // потреблён первым close, поэтому второго observable вызова нет.
+ // Здесь находится исходная ReleaseCn-граница; Tiberius owner уже
+ // потреблён первым close, поэтому второго observable вызова нет.
             (evidence, final_snapshot)
         }
         DoSaveDataStart::ConnectionOpenFailed {
@@ -4999,8 +4534,8 @@ where
                     block,
                 };
             }
-            // Неуспешный Tiberius connect уже освободил transport-owner; эта
-            // точка сохраняет исходную логическую ReleaseCn-границу после log.
+ // Неуспешный Tiberius connect уже освободил transport-owner; эта
+ // точка сохраняет исходную логическую ReleaseCn-границу после log.
             (evidence, final_snapshot)
         }
     };

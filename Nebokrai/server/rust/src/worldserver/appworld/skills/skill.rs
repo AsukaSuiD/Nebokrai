@@ -1,13 +1,5 @@
 //! Описание одного навыка, передаваемое из WorldServer в GameServer.
 //!
-//! Статус World `CSkill` и `Serialize` RVA `0x000DCE50`: `IMPLEMENTED`.
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
-//! SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skill.cpp`.
 //!
 //! EXE разрешает противоречие с очищенным C++ reference: wire начинается с
 //! `type, id, level, target`, имя передаётся как `length + bytes` без NUL,
@@ -73,7 +65,7 @@ impl CSkill {
         self.level
     }
 
-    /// Точный composite key World cache: `id << 16 | level & 0xffff`.
+ /// Точный composite key World cache: `id << 16 | level & 0xffff`.
     pub(crate) fn cache_key(&self) -> u32 {
         self.skill_id.wrapping_shl(16) | (self.level & 0xffff)
     }
@@ -90,7 +82,7 @@ impl CSkill {
         set_bounded_c_string(&mut self.name, name, SkillTextField::Name)
     }
 
-    /// Описание сохраняется для owner-а, но намеренно отсутствует в wire.
+ /// Описание сохраняется для owner-а, но намеренно отсутствует в wire.
     pub(crate) fn set_description(&mut self, description: &[u8]) -> Result<(), SkillTextError> {
         set_bounded_c_string(
             &mut self.description,
@@ -107,7 +99,7 @@ impl CSkill {
         self.usages.push(usage);
     }
 
-    /// Возвращает `None` для exact invalid-state: unknown type либо нулевой ID.
+ /// Возвращает `None` для invalid-state: unknown type либо нулевой ID.
     pub(crate) fn serialize(&self) -> Result<Option<Vec<u8>>, SkillSerializeError> {
         if self.skill_type == UNKNOWN_SKILL_TYPE || self.skill_id == 0 {
             return Ok(None);
@@ -241,5 +233,4 @@ fn set_bounded_c_string(
     Ok(())
 }
 
-// Сырой C++ ниже сохранён как локальная доказательная документация
 // материализованного owner-а, а не как Rust-реализация.

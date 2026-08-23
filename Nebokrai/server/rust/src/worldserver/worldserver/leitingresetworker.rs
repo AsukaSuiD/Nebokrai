@@ -1,10 +1,8 @@
 //! Безопасный fire-and-forget owner `CRsPlayer::ResetAllLeitingInDB`.
 //!
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
-//! исходный owner `e:\svn\fengyun_russia_dev\dbaccess\worlddb\rsplayer.cpp`,
-//! RVA `0x00110F70`, worker `DbLetTingUpdate` RVA `0x00110520`.
+//! worker `DbLetTingUpdate`.
 //!
-//! Exact EXE выделяет payload из двух DWORD, передаёт его в один
+//! выделяет payload из двух DWORD, передаёт его в один
 //! `_beginthreadex` и сразу возвращает success/failure создания. Ни retry, ни
 //! queue, ни merge двух daily reset-ов не происходят. Каждый удачный dispatch
 //! ниже так же запускает отдельный поток с собственным TDS-соединением.
@@ -64,8 +62,8 @@ impl WorldLeiTingResetWorker {
         }
     }
 
-    /// Повторяет один `ResetAllLeitingInDB` call: ошибка создания остаётся
-    /// синхронным false-эквивалентом, DB итог приходит независимо позднее.
+ /// Повторяет один `ResetAllLeitingInDB` call: ошибка создания остаётся
+ /// синхронным false-эквивалентом, DB итог приходит независимо позднее.
     pub(crate) fn dispatch(
         &self,
         request: LeiTingDatabaseResetRequest,

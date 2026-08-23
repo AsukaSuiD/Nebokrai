@@ -1,24 +1,19 @@
 //! Владелец equipment-container и соседнего exported volume decoder-а.
 //!
-//! Конструктор и деструктор `CEquipmentContainer` RVA
-//! `0x000D9F70/0x000D9E70`, auto/positional `Add` RVA
-//! `0x000D8B30/0x000DA020`, `Remove/AddFromDB` RVA
-//! `0x000D9B30/0x000DA280`,
-//! `Clear/Release` RVA `0x000D8E40/0x000D8F30`, `GetGoods/GetGoodsAmount`
-//! RVA `0x000D9470/0x000D94B0`, `GetContentsWeight` RVA `0x000D9080`,
-//! `Serialize` RVA `0x000D9530` и разделяемого
-//! с `CVolumeLimitGoodsContainer` `Unserialize` RVA `0x000D8DA0`, а также
-//! read-side family RVA `0x000D9000/0x000D90F0/0x000D9180/0x000D9280/`
-//! `0x000D92F0/0x000D9350/0x000D93E0/0x000DA530` и `AI` RVA `0x000D9210`
-//! реализованы в Rust.
-//! Функции остаются именно в этом `.rs`, потому что их точный PDB source-owner —
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cequipmentcontainer.cpp:22,36,43,135,158,173,210,237,257,291,470,648,670,694,713,731,745,773,813,834`.
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
+//! Конструктор и деструктор `CEquipmentContainer`
+//! auto/positional `Add`
+//! `Remove/AddFromDB`
 //!
-//! Exact PDB задаёт `CGoodsContainer` prefix, secondary `CContainerListener`
+//! `Clear/Release`, `GetGoods/GetGoodsAmount`
+//! `GetContentsWeight`,
+//! `Serialize` и разделяемого
+//! с `CVolumeLimitGoodsContainer` `Unserialize`, а также
+//! read-side family /`
+//! и `AI`
+//! входят в контракт owner-а.
+//! Функции остаются именно в этом `.rs`, потому что их PDB source-owner —
+//!
+//! Layout сохраняет `CGoodsContainer` prefix, secondary `CContainerListener`
 //! по `+0x20` и `std::map<EQUIPMENT_COLUMN, CGoods*> m_mEquipment` по `+0x24`.
 //! Колонки имеют значения `0..16`: head, body, hand, glove, boot, jewelry,
 //! два ornaments-slot-а, medal, posterior, headgear, talisman, frock, wing,
@@ -26,13 +21,13 @@
 //! допустимую колонку; ornaments — единственный тип, принимающий две колонки.
 //! Positional `Add` сначала отвергает занятую колонку, неизвестные properties,
 //! не-equipment и несовпадающий slot, затем кладёт pointer и вызывает
-//! listeners. Псевдокод потерял return из-за security-cookie; точный диапазон
-//! World EXE `0x004DA020..0x004DA239` подтвердил `eax=0` на отказе и `ebx=1`
-//! после вставки. После ответа reverse прекращён. Оба встроенных callback-а
-//! уже доказанно сведены к no-op RVA `0x000DBD10`.
+//! listeners. оригинал потерял return из-за security-cookie; точный диапазон
+//! World EXE подтвердил `eax=0` на отказе и `ebx=1`
+//! после вставки.. Оба встроенных callback-а
+//! уже доказанно сведены к no-op.
 //!
 //! Rust `BTreeMap<EquipmentColumn, Box<CGoods>>` заменяет только MSVC tree и
-//! raw ownership, сохраняя numeric key-order wire-а. Старый `Clear` уведомлял
+//! оригинал ownership, сохраняя numeric key-order wire-а. Старый `Clear` уведомлял
 //! listeners и удалял лишь map nodes без `GarbageCollect`; rejected factory-
 //! result decoder-а тоже терялся. Это внутренние leaks без внешних callback-
 //! эффектов, поэтому Rust исправляет их обычным `Drop`, а не сохраняет
@@ -47,24 +42,23 @@
 //! virtual `Clear` и positional `Add` остаются вариантными.
 //! Короткий source сохраняет раннюю очистку, cursor и уже добавленные товары.
 //!
-//! Exact global `s_dwEquipmentLimit` по `0x0056BE18` имеет значение `9`.
+//! global `s_dwEquipmentLimit` по имеет значение `9`.
 //! `IsFull` считает non-null map values и проверяет строгое равенство, поэтому
-//! десять предметов снова дают false. Старый Linux-донор подменил limit числом
 //! всех колонок `17`; Rust сохраняет подтверждённый результат EXE. Object-
 //! overload position-query сравнивает pointer identity, GUID-overload и `Find`
 //! — все 16 байт GUID, обход идёт в numeric map-order. Legacy
 //! `GetGoods(index, vector-by-value)` не возвращал наполненную копию; этот
 //! внутренний дефект исправлен Rust iterator-ом с тем же base-index фильтром.
-//! Auto-`Add` выбирает exact колонку по equip-place; ornaments сначала пробует
-//! `6`, затем `7`. Exact ASM исправляет ошибку raw и передаёт исходный context
+//! Auto-`Add` выбирает колонку по equip-place; ornaments сначала пробует
+//! `6`, затем `7`. исправляет ошибку оригинал и передаёт исходный context
 //! в обе ветви, но встроенные callbacks всё равно no-op. `AddFromDB` выполняет
 //! те же type/place/column проверки и прямую вставку без callback. `Remove`
 //! передаёт ownership первого GUID-совпадения вызывающему.
 //! Weight-family обходит все equipment values без фильтра и сохраняет unsigned
 //! wrapping-сумму; numeric tree-order на коммутативный результат не влияет.
 //! `AI` в том же numeric tree-order вызывает virtual `CGoods::AI` для каждого
-//! non-null товара. Его Rust owner ещё не достигнут, поэтому typed callback
-//! передаётся явно, сохраняя dispatch и порядок без raw vtable.
+//! non-null товара. Его Rust owner ещё не действует, поэтому typed callback
+//! передаётся явно, сохраняя dispatch и порядок без оригинал vtable.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -207,7 +201,7 @@ impl From<GoodsCodecError> for EquipmentContainerCodecError {
     }
 }
 
-/// Достигнутая owning-часть исходного `CEquipmentContainer`.
+/// Действующая owning-часть исходного `CEquipmentContainer`.
 pub(crate) struct CEquipmentContainer {
     container_base: CGoodsContainerState,
     equipment: BTreeMap<EquipmentColumn, Box<CGoods>>,
@@ -237,7 +231,7 @@ impl ContainerGuidStorage for CEquipmentContainer {
 }
 
 impl CEquipmentContainer {
-    /// Создаёт exact пустое состояние constructor-а с base-owner `0/0`.
+ /// Создаёт пустое состояние constructor-а с base-owner `0/0`.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             container_base: CGoodsContainerState::with_constructor_defaults(),
@@ -245,7 +239,7 @@ impl CEquipmentContainer {
         }
     }
 
-    /// Добавляет товар только в колонку, разрешённую его base-properties.
+ /// Добавляет товар только в колонку, разрешённую его base-properties.
     pub(crate) fn add_at(
         &mut self,
         position: u32,
@@ -275,7 +269,7 @@ impl CEquipmentContainer {
         Ok(None)
     }
 
-    /// Выбирает exact equipment-column и делегирует positional `Add`.
+ /// Выбирает equipment-column и делегирует positional `Add`.
     pub(crate) fn add(
         &mut self,
         goods: Box<CGoods>,
@@ -322,7 +316,7 @@ impl CEquipmentContainer {
         self.add_at(column as u32, goods, registry)
     }
 
-    /// Вставляет DB-товар с exact slot/type/place validation без callback.
+ /// Вставляет DB-товар с slot/type/place validation без callback.
     pub(crate) fn add_from_db(
         &mut self,
         position: u32,
@@ -332,47 +326,47 @@ impl CEquipmentContainer {
         self.add_at(position, goods, registry)
     }
 
-    /// Вынимает первое GUID-совпадение и передаёт ownership вызывающему.
+ /// Вынимает первое GUID-совпадение и передаёт ownership вызывающему.
     pub(crate) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
         <Self as ContainerGuidStorage>::remove_by_guid(self, ex_id)
     }
 
-    /// Очищает map после no-op removed callbacks, исправляя внутреннюю leak.
+ /// Очищает map после no-op removed callbacks, исправляя внутреннюю leak.
     pub(crate) fn clear(&mut self) {
         self.equipment.clear();
     }
 
-    /// Уничтожает текущие map-товары и сбрасывает inherited owner `0/0`.
+ /// Уничтожает текущие map-товары и сбрасывает inherited owner `0/0`.
     pub(crate) fn release(&mut self) {
         self.equipment.clear();
         self.container_base.release();
     }
 
-    /// Обходит товары в exact numeric map-order для virtual `CGoods::AI`.
-    ///
-    /// Товарный AI остаётся owner-ом `CGoods`, поэтому callback передаётся
-    /// явно вместо прежнего virtual dispatch через raw pointer.
+ /// Обходит товары в numeric map-order для virtual `CGoods::AI`.
+ ///
+ /// Товарный AI остаётся owner-ом `CGoods`, поэтому callback передаётся
+ /// явно вместо прежнего virtual dispatch через оригинал pointer.
     pub(crate) fn ai(&mut self, mut on_goods_ai: impl FnMut(&mut CGoods)) {
         for goods in self.equipment.values_mut() {
             on_goods_ai(goods);
         }
     }
 
-    /// Возвращает товар exact numeric equipment-column либо `None`.
+ /// Возвращает товар numeric equipment-column либо `None`.
     pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
         EquipmentColumn::from_wire(position)
             .and_then(|column| self.equipment.get(&column))
             .map(Box::as_ref)
     }
 
-    /// Возвращает mutable DB-view exact numeric equipment-column.
+ /// Возвращает mutable DB-view numeric equipment-column.
     pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         EquipmentColumn::from_wire(position)
             .and_then(|column| self.equipment.get_mut(&column))
             .map(Box::as_mut)
     }
 
-    /// Передаёт все товары listener-у в exact numeric map-order.
+ /// Передаёт все товары listener-у в numeric map-order.
     pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
         let Some(listener) = listener else {
             return;
@@ -382,7 +376,7 @@ impl CEquipmentContainer {
         }
     }
 
-    /// Складывает exact unsigned вес всех equipment-товаров.
+ /// Складывает unsigned вес всех equipment-товаров.
     pub(crate) fn get_contents_weight(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -392,12 +386,12 @@ impl CEquipmentContainer {
         })
     }
 
-    /// Ищет первый товар с полным 16-байтовым GUID в numeric map-order.
+ /// Ищет первый товар с полным 16-байтовым GUID в numeric map-order.
     pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         <Self as ContainerGuidStorage>::find_by_guid(self, ex_id)
     }
 
-    /// Возвращает numeric column по exact object identity.
+ /// Возвращает numeric column по object identity.
     pub(crate) fn query_goods_position_by_object(&self, goods: Option<&CGoods>) -> Option<u32> {
         let goods = goods?;
         self.equipment
@@ -406,7 +400,7 @@ impl CEquipmentContainer {
             .map(|(column, _)| *column as u32)
     }
 
-    /// Возвращает numeric column первого полного GUID-совпадения.
+ /// Возвращает numeric column первого полного GUID-совпадения.
     pub(crate) fn query_goods_position(&self, ex_id: &CGuid) -> Option<u32> {
         self.equipment
             .iter()
@@ -414,12 +408,12 @@ impl CEquipmentContainer {
             .map(|(column, _)| *column as u32)
     }
 
-    /// Сохраняет exact equality с global equipment limit `9`.
+ /// Сохраняет equality с global equipment limit `9`.
     pub(crate) fn is_full(&self) -> bool {
         self.equipment.len() == EQUIPMENT_FULL_LIMIT
     }
 
-    /// Возвращает первый товар с exact base-properties index в map-order.
+ /// Возвращает первый товар с base-properties index в map-order.
     pub(crate) fn get_the_first_goods(&self, base_properties_index: u32) -> Option<&CGoods> {
         self.equipment
             .values()
@@ -427,12 +421,12 @@ impl CEquipmentContainer {
             .find(|goods| goods.get_base_properties_index() == Some(base_properties_index))
     }
 
-    /// Проверяет наличие base-properties index через тот же map traversal.
+ /// Проверяет наличие base-properties index через тот же map traversal.
     pub(crate) fn is_goods_existed(&self, base_properties_index: u32) -> bool {
         self.get_the_first_goods(base_properties_index).is_some()
     }
 
-    /// Возвращает usable iterator вместо legacy vector-by-value копии.
+ /// Возвращает usable iterator вместо legacy vector-by-value копии.
     pub(crate) fn get_goods_by_base_index(
         &self,
         base_properties_index: u32,
@@ -443,7 +437,7 @@ impl CEquipmentContainer {
             .filter(move |goods| goods.get_base_properties_index() == Some(base_properties_index))
     }
 
-    /// Замораживает map traversal с exact numeric equipment-position.
+ /// Замораживает map traversal с numeric equipment-position.
     pub(crate) fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -459,7 +453,7 @@ impl CEquipmentContainer {
             .collect()
     }
 
-    /// Считает только товары с non-null base-properties lookup.
+ /// Считает только товары с non-null base-properties lookup.
     pub(crate) fn get_goods_amount(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -479,7 +473,7 @@ impl CEquipmentContainer {
             .map_err(|_| EquipmentContainerCodecError::ValidGoodsCountOutsideLegacyRange { count })
     }
 
-    /// Кодирует valid-count, numeric column и полный goods-wire в map-order.
+ /// Кодирует valid-count, numeric column и полный goods-wire в map-order.
     pub(crate) fn serialize(
         &self,
         destination: &mut Vec<u8>,
@@ -502,7 +496,7 @@ impl CEquipmentContainer {
         Ok(true)
     }
 
-    /// Декодирует equipment records после обязательного раннего `Clear`.
+ /// Декодирует equipment records после обязательного раннего `Clear`.
     pub(crate) fn unserialize(
         &mut self,
         source: &[u8],
@@ -523,7 +517,7 @@ impl CEquipmentContainer {
 }
 
 impl CVolumeLimitGoodsContainer {
-    /// Декодирует exported volume-owner после точного раннего `Clear`.
+ /// Декодирует exported volume-owner после точного раннего `Clear`.
     pub(crate) fn unserialize(
         &mut self,
         source: &[u8],
@@ -534,7 +528,7 @@ impl CVolumeLimitGoodsContainer {
         self.unserialize_records_after_clear(source, cursor, registry)
     }
 
-    /// Декодирует records после уже выполненного derived `Clear`.
+ /// Декодирует records после уже выполненного derived `Clear`.
     pub(super) fn unserialize_records_after_clear(
         &mut self,
         source: &[u8],
@@ -569,8 +563,8 @@ fn read_volume_u32(
         .into());
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Старый вспомогательный код не получал длину источника. При коротком
-        // буфере он выходил за его границы; Rust не воспроизводит это UB.
+ // Старый вспомогательный код не получал длину источника. При коротком
+ // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(AmountContainerCodecError::UnexpectedEnd {
             field,
             offset,
@@ -603,8 +597,8 @@ fn read_equipment_u32(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Старый вспомогательный код не получал длину источника. При коротком
-        // буфере он выходил за его границы; Rust не воспроизводит это UB.
+ // Старый вспомогательный код не получал длину источника. При коротком
+ // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(EquipmentContainerCodecError::UnexpectedEnd {
             field,
             offset,

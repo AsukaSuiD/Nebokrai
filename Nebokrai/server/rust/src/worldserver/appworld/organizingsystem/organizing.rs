@@ -2,14 +2,7 @@
 //!
 //! PDB-layout `COrganizing::tagMemInfo`, его вложенные
 //! `ePurview/ePurviewOwnState`, `COrganizing` и billboard-типы представлены
-//! действующими Rust-owner-ами. Точная пара доказательных артефактов:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.h`
-//! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizing.cpp`.
+//! действующими Rust-owner-ами. Источник контракта — точная пара WorldServer EXE/PDB.
 //!
 //! Полная PDB-запись type index `0x5AE8` задаёт размер `tagMemInfo` `0xF0` и
 //! одиннадцать членов: signed `long lID` `+0x00`, `char strName[32]` `+0x04`,
@@ -26,25 +19,25 @@
 //! потому что faction/union публикуют `listPV` сырым блоком `0x2C`, а
 //! `LastOnlineTime` — блоком `0x10`. Сами блоки строятся явно в little-endian:
 //! ни padding всего объекта, ни native Rust memory не отправляются в wire.
-//! Plain `char` хранится как byte-exact `u8`; фиксированные массивы не
+//! Plain `char` хранится как byte- `u8`; фиксированные массивы не
 //! заменяются `String`/`Vec`, а C-string view заканчивается на первом NUL и
 //! включает его. Отсутствующий NUL привёл бы к чтению за границей массива;
 //! безопасный Rust возвращает локальную типизированную ошибку, не
 //! придумывая наблюдаемую реакцию.
 //!
-//! `CFaction::Initial` RVA `0x000BD950` полностью заполняет локальный
+//! `CFaction::Initial` полностью заполняет локальный
 //! `tagMemInfo` мастера и копирует ровно `0xF0` bytes в `m_Members`.
-//! Контейнерный `_Buynode` RVA `0x000B52C0` копирует key вместе со всеми
+//! Контейнерный `_Buynode` копирует key вместе со всеми
 //! `0xF0` bytes значения; `Copy` заменяет этот trivially-copyable механизм без
 //! отдельной STL-семантики. В отличие от полного значения, COMDAT
-//! `map::operator[]` RVA `0x000BA580` вызывает только нулевой constructor
+//! `map::operator[]` вызывает только нулевой constructor
 //! `LastOnlineTime` и оставляет остальные primitive/array bytes
 //! неопределёнными. Поэтому Rust намеренно не реализует `Default`: безопасное
-//! создание требует все поля сразу, а будущий `m_Members` не сможет незаметно
+//! создание требует все поля сразу, а связанный `m_Members` не сможет незаметно
 //! выбрать нули вместо старой странности.
 //!
-//! Полные порядки `CFaction::AddMembersToByteArray` RVA `0x000B53D0` и
-//! `UpdateMemberInfoToClient` RVA `0x000BA7C0` принадлежат `faction.rs`. Этот
+//! Полные порядки `CFaction::AddMembersToByteArray` и
+//! `UpdateMemberInfoToClient` принадлежат `faction.rs`. Этот
 //! owner предоставляет доказанные общие `eOperator`, layout и wire-проекции
 //! фиксированных C-буферов, `listPV` и `LastOnlineTime`; он не вводит
 //! универсальный serializer и не смешивает faction/union форматы. PDB type
@@ -98,7 +91,7 @@ pub(crate) enum EPurview {
 }
 
 impl EPurview {
-    /// Отделяет допустимый enum-контракт от произвольного входного `long`.
+ /// Отделяет допустимый enum-контракт от произвольного входного `long`.
     pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
         match value {
             0 => Some(Self::Disband),
@@ -122,7 +115,7 @@ impl EPurview {
 }
 
 impl ECityState {
-    /// Принимает только четыре значения точного signed `eCityState`.
+ /// Принимает только четыре значения точного signed `eCityState`.
     pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
         match value {
             0 => Some(Self::No),
@@ -133,14 +126,14 @@ impl ECityState {
         }
     }
 
-    /// Возвращает исходное signed значение enum для wire и message boundaries.
+ /// Возвращает исходное signed значение enum для wire и message boundaries.
     pub(crate) const fn wire_value(self) -> i32 {
         self as i32
     }
 }
 
 impl EOperator {
-    /// Принимает только три значения точного signed `eOperator`.
+ /// Принимает только три значения точного signed `eOperator`.
     pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
         match value {
             0 => Some(Self::Delete),
@@ -150,7 +143,7 @@ impl EOperator {
         }
     }
 
-    /// Возвращает значение исходного `eOperator` для `CBaseMessage::Add(long)`.
+ /// Возвращает значение исходного `eOperator` для `CBaseMessage::Add(long)`.
     pub(crate) const fn wire_value(self) -> i32 {
         self as i32
     }
@@ -166,7 +159,7 @@ pub(crate) enum EPurviewOwnState {
 }
 
 impl EPurviewOwnState {
-    /// Принимает только три значения точного signed `ePurviewOwnState`.
+ /// Принимает только три значения точного signed `ePurviewOwnState`.
     pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
         match value {
             0 => Some(Self::No),
@@ -176,7 +169,7 @@ impl EPurviewOwnState {
         }
     }
 
-    /// Возвращает доказанное 32-битное значение элемента `listPV`.
+ /// Возвращает доказанное 32-битное значение элемента `listPV`.
     pub(crate) const fn wire_value(self) -> i32 {
         self as i32
     }
@@ -206,7 +199,7 @@ pub(crate) struct TagTimeValue {
 }
 
 impl TagTimeValue {
-    /// Строит ровно тот 16-байтовый little-endian блок, который отправлял owner.
+ /// Строит ровно тот 16-байтовый little-endian блок, который отправлял owner.
     pub(crate) fn wire_bytes(self) -> [u8; 16] {
         let mut bytes = [0; 16];
         for (chunk, value) in bytes.chunks_exact_mut(2).zip([
@@ -260,8 +253,8 @@ pub(crate) struct TagMemInfo {
 }
 
 impl TagMemInfo {
-    /// Создаёт только полностью определённое member-значение; старого частично
-    /// неинициализированного `map::operator[]` аналога намеренно нет.
+ /// Создаёт только полностью определённое member-значение; старого частично
+ /// неинициализированного `map::operator[]` аналога намеренно нет.
     #[allow(
         clippy::too_many_arguments,
         reason = "параметры один к одному сохраняют десять доказанных data-полей tagMemInfo"
@@ -292,22 +285,22 @@ impl TagMemInfo {
         }
     }
 
-    /// Возвращает `strName` до первого NUL включительно.
+ /// Возвращает `strName` до первого NUL включительно.
     pub(crate) fn name_wire_bytes(&self) -> Result<&[u8], UnterminatedMemberField> {
         terminated_field(&self.name, "strName")
     }
 
-    /// Возвращает `strTitle` до первого NUL включительно.
+ /// Возвращает `strTitle` до первого NUL включительно.
     pub(crate) fn title_wire_bytes(&self) -> Result<&[u8], UnterminatedMemberField> {
         terminated_field(&self.title, "strTitle")
     }
 
-    /// Возвращает `strRegion` до первого NUL включительно.
+ /// Возвращает `strRegion` до первого NUL включительно.
     pub(crate) fn region_wire_bytes(&self) -> Result<&[u8], UnterminatedMemberField> {
         terminated_field(&self.region, "strRegion")
     }
 
-    /// Строит точный `0x2C` little-endian блок `listPV`.
+ /// Строит точный `0x2C` little-endian блок `listPV`.
     pub(crate) fn purview_wire_bytes(&self) -> [u8; 44] {
         let mut bytes = [0; 44];
         for (chunk, state) in bytes.chunks_exact_mut(4).zip(self.purview) {
@@ -316,7 +309,7 @@ impl TagMemInfo {
         bytes
     }
 
-    /// Строит точный `0x10` блок `LastOnlineTime`.
+ /// Строит точный `0x10` блок `LastOnlineTime`.
     pub(crate) fn last_online_wire_bytes(&self) -> [u8; 16] {
         self.last_online_time.wire_bytes()
     }
@@ -327,9 +320,9 @@ fn terminated_field<'a>(
     name: &'static str,
 ) -> Result<&'a [u8], UnterminatedMemberField> {
     let Some(terminator) = field.iter().position(|byte| *byte == 0) else {
-        // Исходные перегрузки с `char*` продолжали бы чтение за фиксированным
-        // массивом. Достижимость и наблюдаемая реакция такого
-        // состояния не доказаны и не заменяются добавленным NUL или unsafe.
+ // Исходные перегрузки с `char*` продолжали бы чтение за фиксированным
+ // массивом. Достижимость и наблюдаемая реакция такого
+ // состояния не доказаны и не заменяются добавленным NUL или unsafe.
         return Err(UnterminatedMemberField { field: name });
     };
     Ok(&field[..=terminator])

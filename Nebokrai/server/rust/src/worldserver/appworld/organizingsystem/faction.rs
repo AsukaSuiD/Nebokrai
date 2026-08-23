@@ -1,600 +1,25 @@
-//! Владелец faction-состояния исторического `WorldServer`.
+//! Owner `CFaction` WorldServer из `appworld/organizingsystem/faction.cpp/.h`.
 //!
-//! `CFaction::SetChangeData` RVA `0x000B4C60`, `CloneSaveData` RVA
-//! `0x000C1210`, достигнутое чтение
-//! `m_ChangeDataType` из `CRsFaction::SaveFaction` RVA `0x000FF070`,
-//! `GetPronounceData` RVA
-//! `0x000B4CA0`, `SetGoodsWarCount` RVA `0x000B4D70`,
-//! `UpdatePronounceToClient` RVA `0x000B56C0`,
-//! `UpdateLeaveWordToClient/EditLeaveWord` RVA `0x000B6240/0x000B6790`,
-//! `LeaveWord/LoadLeavewords` RVA `0x000BCA40/0x000BD3F0`,
-//! `UpdateAllApplyMemberToClient/UpdateApplyMemberToClient/RemoveApplyMember`
-//! RVA `0x000B60D0/0x000BEC80/0x000B9F50`,
-//! `ApplyForJoin/DoJoin/Exit/FireOut/DubAndSetJobLvl/EndueRightToMember/
-//! AbolishRightToMember` RVA
-//! `0x000BE520/0x000BEE40/0x000BAAB0/0x000BB140/0x000BB8A0/
-//! 0x000BBFB0/0x000BC500`,
-//! `SendInfoToAllMember/UpdateOtherFacInfoToClient` RVA
-//! `0x000B5890/0x000B58F0`,
-//! `Talk` RVA `0x000B5A50`,
-//! `DeleteOrgaToClient` RVA `0x000B8A20`,
-//! `Pronounce` RVA `0x000B8DC0`,
-//! feature-setter-ы `SetLWFunction/SetPronounceFun/SetEndueRightFun/
-//! SetJoinVillageWarFun/SetJoinCityWarFun/SetCreateUnionFun` RVA
-//! `0x000B7030/0x000B7400/0x000B77D0/0x000B7BA0/0x000B7F70/0x000B8340`,
-//! полный `AddToByteArray` RVA `0x000C10B0`,
-//! `AddMembersToByteArray` RVA `0x000B53D0`, PDB-inline
-//! `AddApplyPersonsToByteArray/AddLeaveWordsToByteArray` RVA
-//! `0x000B5D30/0x000B5DD0`,
-//! `GetMembers/GetMemberNum` RVA `0x000BD7C0/0x000BD830` и
-//! `CFaction::IsMember` RVA `0x000BD840` и
-//! `UpdateMemberInfoToClient` RVA `0x000BA7C0`, а также
-//! оба `CheckOperValidate` RVA `0x000B4CE0/0x000C17F0`,
-//! `OnMemberExitGame` RVA `0x000B64D0`,
-//! `ClearApplyList/IsInApplyMembers` RVA `0x000B6450/0x000B6760`,
-//! free owner `GoodsWarCheckforFaction` RVA `0x000B5070`,
-//! `Initial/InitialPropertyByLvl` RVA `0x000BD950/0x000B4BA0`,
-//! `AddEnemyFactionsToByteArray/AddCityWarEnemyFactionsToByteArray` RVA
-//! `0x000B5E40/0x000B5ED0`,
-//! `ClearEnemyFation/ClearCityWarEnemyFation` RVA `0x000B6030/0x000B6080`,
-//! `IsHaveEnymyFaction/IsHaveCityEnemyFaction` RVA `0x000B50F0/0x000B5100`,
-//! `ClearOwnedCity/DelOwnedCity` RVA `0x000B54C0/0x000B5F60`,
-//! `RefreshOwnCityInfo` RVA `0x000B5570`,
-//! обе перегрузки `GetMemberList` RVA `0x000B5530/0x000B9E60`,
-//! оба `AddOwnedCity` RVA `0x000B9DE0/0x000BA650` и `SetOwnedCity` RVA
-//! `0x000C16A0`,
-//! `SetSuperiorOrganizing` RVA `0x000B5110`,
-//! `IsOwnedCity` RVA `0x000B5490`, `GetOwnedCities` RVA `0x000BD7D0`,
-//! `AddOwnedCitiesToByteArray` RVA `0x000BDD70`,
-//! `UpdateExpToClient/SetExp` RVA `0x000B55B0/0x000B61F0`,
-//! `OnMemberLvlChange` RVA `0x000B6590`,
-//! базовые query-owner-ы `GetID/GetName/GetMasterID/GetLvl/GetExp/GetCountry`
-//! RVA `0x000BD700..0x000BD760`, `GetEstablishedTime`/`IsLWFunction`/
-//! `IsCreateUnionFun` RVA `0x000BD790..0x000BD7B0`, victor/delete getter-ы
-//! RVA `0x000BD800..0x000BD820` и member query-owner-ы
-//! `GetTitleByID/GetJobLvlByID` RVA `0x000BD870/0x000BD910`,
-//! прямые mutator-owner-ы `SetPermitDemise/SetCountry` RVA
-//! `0x000BD750/0x000BD770`, enemy-changed setter-ы RVA
-//! `0x000BD7E0/0x000BD7F0` и `SetName` RVA `0x000C1B90`,
-//! `DelMember` RVA `0x000B9EF0`,
-//! `UpdatePropertyToClient` RVA `0x000B9FB0`,
-//! `UpdateEnemyFactionToClient/UpdateCityWarEnemyFactionToClient` RVA
-//! `0x000BA0F0/0x000BA210`,
-//! `UpdateEnemyFaction/UpdateCityWarEnemyFaction` RVA `0x000B4E30/0x000B4E60`,
-//! `Add/DelEnemyOrganizing` RVA `0x000BDE80/0x000BE030` и
-//! `Add/DelCityWarEnemyOrganizing` RVA `0x000BE1E0/0x000BE390`,
-//! `UpdateOwnedCityToClient` RVA `0x000C0BF0`,
-//! `UpdatePlayerFactionInfo` RVA `0x000B5820`,
-//! `IncMaxNumber` RVA `0x000B4E90`, by-value no-op `GetEnemyList` RVA
-//! `0x000B5FF0`, `SetParam` RVA `0x000BA310`, `GetPlayerHeader` RVA
-//! `0x000C0D10` и compiler-owned destructor RVA `0x000BD590`,
-//! `AddDefence/Offense/VillageWarVictorCounts` RVA
-//! `0x000BA3B0/0x000BA3D0/0x000BA3F0`,
-//! `ReInitialPropertyByLvl` RVA `0x000BA630`,
-//! `IsUsingPV/SetMemPV/AbolishMemPV` RVA
-//! `0x000BA700/0x000BA760/0x000C1DD0`,
-//! set-copy getter-ы `GetEnemyList/GetCityWarEnemyList` RVA
-//! `0x000BA6A0/0x000BA6D0` и legacy `IsEnemyFaction` RVA `0x000C1830`,
-//! inert `GetEnemyLeaderOrgnizingID` RVA `0x000B4CD0`,
-//! `IsSuperiorOrganizing` RVA `0x000BD780`, `IsMaster` RVA `0x000C1EE0` и
-//! `SetIsPermit/OnMemberEnterGame` RVA `0x000C09A0/0x000C0A10` —
-//! `IMPLEMENTED`; спорные ключи и порядок side effect имеют статус
-//! `VERIFIED_DISASSEMBLY`.
-//! `OnMemberPosChange` RVA `0x000C0B40` — `IMPLEMENTED` и
-//! `VERIFIED_DISASSEMBLY`.
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.h:185,242,243`
-//! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\faction.cpp:265,344,1388,2519,2561`.
+//! Источник контракта — точная пара WorldServer EXE/PDB. Owner хранит ordered
+//! members/applications/leave words, faction properties, enemy/Goods-War state,
+//! owned regions, logs, DB snapshots и wire publications. Signed map order,
+//! list order, fixed C-string capacities и dirty-bit semantics сохраняются.
 //!
-//! PDB задаёт `m_lID` как signed `long` по offset `+0x4`, а ordered
-//! `std::map<long, COrganizing::tagMemInfo> m_Members` — по `+0x28` старого
-//! `CFaction`. Оба конструктора создают пустой map; public constructor RVA
-//! `0x000C0EE0` до этого принимает и сохраняет faction ID. Rust partial-owner
-//! хранит только эти достигнутые поля: `BTreeMap<i32, TagMemInfo>` заменяет
-//! MSVC tree-node, sentinel, allocator и ручной cleanup, сохраняя signed
-//! numeric порядок. `with_reached_member_state` materialизует private
-//! constructor для всех уже представленных полей, а `for_creation` — public
-//! constructor и его точный последующий `Initial`. Не назначенные старым
-//! private constructor-ом scalar-ы остаются `Option`, а Rust-layout не
-//! объявляется копией старого ABI.
-//! Public constructor копирует весь входной `std::string`, включая внутренние
-//! NUL: Rust хранит те же bytes, а C-string prefix применяется только в
-//! доказанных wire/lookup границах.
-//! `InitialPropertyByLvl` принимает восстановленный `COrganizingParam` явно,
-//! меняет шесть permission-флагов и maximum до проверки level-record, а
-//! upgrade experience — только после неё. Поэтому отсутствующий уровень
-//! сохраняет уже выполненный prefix и возвращает старый `false`; отсутствующий
-//! live property остаётся отдельной safe-границей узкого Rust-owner-а.
-//! `Initial` для нового owner-а материализован в `CFaction::for_creation`:
-//! master берётся из online player либо получает literal level/occupation
-//! `1/1`, job-level `1`, title `WS0157`, established time и все права `Permit`,
-//! кроме `PV_DubJobLvl = No`. Property начинает с level/member-count `1/1`,
-//! permit `true`, countdown — с `m_lDisbandFactionTime`, после чего вызывается
-//! тот же `InitialPropertyByLvl`. Exact ASM `0x004BD950..0x004BDD69`
-//! подтверждает порядок и значения. Небезопасные `strcpy` имени, title и
-//! region заменены typed overflow-границей, не меняющей допустимые строки.
-//! `SetSuperiorOrganizing` так же принимает параметры явно. Машинный проход
-//! `0x004B5110..0x004B5167` подтверждает, что union ID меняется первым, positive
-//! ID только отменяет положительный countdown, а negative/zero ID сравнивает
-//! member-count с порогом через unsigned `JNC`. При неполном live-state уже
-//! выполненная смена union ID не откатывается.
-//! `DelMember` отклоняет master до erase, после erase использует новый unsigned
-//! member-count и запускает countdown только для faction без union. Exact
-//! `0x004B9EF0..0x004B9F46` подтверждает порядок и unsigned `JNC`.
-//! `UpdatePropertyToClient` публикует message `0x7FE0B`: recipient ID, затем
-//! все `0x38` байт property вместе с padding. Получатели обходятся по signed
-//! member key и допускаются только при online-owner, ненулевом GameServer ID и
-//! уже выставленном `m_bGetFactionData`; результат каждого send игнорировался.
-//! Три victor-counter owner-а машинно подтверждают единый порядок: wrapping
-//! 32-битный `ADD`, property-send, затем dirty-bit `1`.
-//! Vtable slot `+0xC4` exact concrete `CFaction` указывает на RVA
-//! `0x000B4CD0`, состоящий только из `xor eax,eax; ret`; enemy-leader query
-//! поэтому остаётся отдельным literal `0`, а не выводится из enemy-set.
-//! Permission owner-ы используют player ID как map key и PDB enum `0..10` как
-//! индекс. `SetMemPV` в EXE единственный не проверял индекс и мог писать за
-//! `listPV`; safe Rust явно отклоняет недопустимое значение. Это исправление
-//! внутреннего memory bug, а не новая Miracle-семантика допустимых прав.
-//! `SetParam` сравнивает полные legacy C-string ключи `Level`/`Experience`.
-//! Level выше `12` выходит без эффектов; после `SetLvl` отсутствующая level-
-//! запись сохраняет уже выполненный prefix и также выходит. Любой иной
-//! нормальный путь, включая неизвестный ключ, публикует property, обновляет
-//! online member-ов и запрашивает dirty-bit `1` именно в таком порядке.
-//! `GetPlayerHeader` при положительном union ID использует nullable lookup и
-//! только найденному `CUnion` делегирует header; miss возвращает собственного
-//! master-а. Найденный, но внутренне разорванный союз может вернуть `0` и не
-//! запускает faction fallback.
-//! `IncMaxNumber` машинно состоит из `true; ret 4`. By-value `GetEnemyList` не
-//! читает receiver или элементы и только уничтожает временный `std::list`;
-//! отдельной игровой операции в Rust нет, а владение временным значением и
-//! cleanup обеспечивает обычный `Drop`. По той же причине destructor не
-//! получает ручной `Drop`: он выполнял только compiler/STL cleanup уже
-//! представленных `Vec`/`String`/`BTree*`/`VecDeque` полей.
-//! Apply-list clear проверяет право `ConMem = 3`, при отказе не меняет set и
-//! возвращает `false`. Membership exact ASM ищет входной player ID, а не
-//! ошибочную подстановку this в декомпиляте, и при hit возвращает faction ID.
-//! Трёхаргументный `CheckOperValidate` проверяет право requester и запрещает
-//! ему управлять target с тем же правом, кроме случая requester-master; exact
-//! ASM подтверждает, что финальный `IsMaster` получает requester.
-//! Enemy-update сообщения передают полный set, а не delta: `0x7FE11/0x7FE12`,
-//! recipient ID, 32-битный count и signed IDs в tree-order. Объявленные
-//! `enemy_id/operator` исходные функции не читали и в Rust-интерфейс не входят.
-//! Standard refresh сначала безусловно ставит enemy-changed byte в `1`, затем
-//! публикует `0x7FE11` и обновляет online player state. City-war refresh делает
-//! `0x7FE12` и player update только при changed byte ровно `1`, не очищая его.
-//! Exact ASM подтверждает порядок; неизвестный partial byte не превращается в
-//! выдуманный `false`, а возвращается отдельным typed outcome.
-//! Standard enemy add/del меняют set только при фактической вставке/наличии и
-//! вообще не трогают changed byte. City-war add при новой записи ставит changed
-//! byte перед вставкой; city-war del безусловно вызывает erase и не ставит
-//! changed byte. Последний также пытается написать `WS0161` даже при miss,
-//! тогда как остальные три логируют только фактическую мутацию. War-логи идут
-//! после мутации, разрешают только положительный organizing ID и живой pointer,
-//! используют `WS0158/WS0159/WS0160/WS0161`; delete-формы получают оставшийся
-//! 32-битный count третьим аргументом. Exact ASM `0x004BDE80..0x004BE511`
-//! подтверждает эти асимметрии и порядок. Локализация и запись в `war` оставлены
-//! тонкому контексту, а небезопасный `_sprintf(char[256])` заменён typed
-//! границей без воспроизведения переполнения.
-//! Value-getter-ы обоих enemy-set создают независимые копии. Clear всегда
-//! очищает set, но выставляет соответствующий changed-флаг только если до
-//! очистки он был непустым. Отдельный virtual `IsEnemyFaction` в этой версии
-//! является подтверждённым stub и всегда возвращает `0`; membership дают
-//! другие owner-ы, поэтому эти контракты намеренно не объединены.
-//! Owned-city wire сохраняет list-order: 32-битный count, затем для каждого
-//! узла signed city ID и NUL-terminated region name. Missing key и null
-//! `pRegion` дают пустую строку. Exact ASM подтверждает lookup по текущему city
-//! ID и локальный `char[256]`; owned wire-buffer не переносит переполнение
-//! временного stack-buffer-а.
-//! Owned-city update `0x7FE13` повторяет тот же full snapshot для каждого
-//! готового member recipient после исходного предварительного, но не
-//! использованного построения. Оба объявленных delta-аргумента не читаются.
-//! Recipient filter и игнорирование send-result совпадают с property/enemy
-//! update; Rust возвращает результаты и уже выполненный prefix явно.
-//! `UpdatePlayerFactionInfo(0)` обходит member keys в signed порядке и вызывает
-//! player-owner только для online entries; ненулевой ID проверяется один раз.
-//! Exact ASM подтверждает обе ветви. Rust принимает update callback явно,
-//! отделяя faction dispatch от ещё самостоятельного `CPlayer` owner-а.
-//! Owned-city mutator-ы сохраняют list, а не set: одиночный add подавляет любой
-//! существующий duplicate, range-add дописывает значения и выполняет только
-//! adjacent `list::unique`, delete снимает первое совпадение. Clear/range-add/
-//! delete всегда делают `0x7FE13`, затем player refresh; single-add — только
-//! после фактической вставки, set — только `0x7FE13`. Exact ASM подтверждает,
-//! что delete при miss всё равно публикует и возвращает `true`.
-//! `RefreshOwnCityInfo` проходит тот же list-order и вызывает внешний
-//! `RefreshOwnedCityOrg(region, faction, union)` для каждого элемента. Пустой
-//! список не читает property; при непустом точный union ID берётся из
-//! `tagFacBaseProperty +0x18`. ASM `0x004B5570..0x004B55AB` подтверждает порядок
-//! чтений и трёх аргументов; singleton/game plumbing заменён узким callback-ом.
-//! Experience-update `0x7FE14` получает только contributor либо master и несёт
-//! recipient/current/upgrade exp. `SetExp` ставит dirty-bit до этой рассылки.
-//! Простые query-owner-ы возвращают достигнутые scalar/property/member поля
-//! без side effect. Для ещё не назначенного partial state Rust возвращает
-//! `Option`, а bounded C-строка title не воспроизводит старое чтение за массивом.
-//! Прямые setter-ы сохраняют отсутствие side effect: country меняет ровно один
-//! property-byte, name копируется byte-exact и по старому контракту всегда
-//! сообщает успех. Три transient bool до первого достигнутого присваивания
-//! остаются `Option`, потому что один constructor сам их не инициализировал.
-//! `SetIsPermit` получает union lookup явно, но вызывает его только после
-//! master-player gate и только с текущим `lConfederationID`; найденный
-//! master-faction ID союза сравнивается с собственным faction ID. Exact ASM
-//! `0x004C09A0..0x004C0A02` подтверждает последующий порядок: запись
-//! permit-byte, полная property-рассылка, dirty `1`.
-//! Достигнутый `SetPlayerOrganizing` дополнительно читает `m_strName`,
-//! `m_lMastterID`, `m_Property.lLvl/lExp`, `m_OwnedCities` и два enemy-set.
-//! Коллекции, которые constructor действительно создавал пустыми, хранятся
-//! пустыми; ещё не назначенные narrow state scalar представлены `Option`, а не
-//! выдуманным нулём. Member title/contribute берутся из того же `tagMemInfo`.
+//! Membership и governance операции выполняют lookup, permission gates,
+//! mutations, callbacks, logs и broadcasts в исходном порядке. Ранний отказ не
+//! отменяет уже опубликованный prefix. Удаление, demise, job/title/property
+//! изменения и faction/union связи не получают дополнительных validation gates
+//! из альтернативных реализаций.
 //!
-//! Достигнутые save-поля расширяют partial-owner без притворного старого
-//! layout: полный byte-exact `tagFacBaseProperty[0x38]`, established/delete
-//! scalars, `m_ChangeDataType`, `m_lFactionWarWinCount` и
-//! `m_szFactionWarLastWinTime`, а также ability-state `m_ApplyPersons`,
-//! `m_Pronounce`, `m_LastUploadIconTime` и `m_IconData`. `SetChangeData(0)`
-//! очищает всю mask, ненулевое значение добавляет отсутствующие bits через OR.
-//! `SetGoodsWarCount` сначала
-//! снимает один Windows-local wall-clock, пишет строку без leading zeroes,
-//! ставит bit `1`, затем сохраняет `0` для входа `<= 0` либо сам положительный
-//! signed `long`. Последняя нормализация подтверждена exact диапазоном
-//! `0x004B4DC5..0x004B4DDF`; после ответа reverse прекращён.
-//! `GoodsWarCheckforFaction` снимает один local-time snapshot только для
-//! ненулевой faction и допускает ровно субботнее окно 19:30–21:10 включительно.
-//! Лишь затем он передаёт faction ID в GoodsWar membership lookup. Exact ASM
-//! `0x004B5074..0x004B50DA` подтверждает short-circuit и обе границы; `chrono`
-//! заменяет только Win32 `GetLocalTime`, а сам lookup остаётся явным контекстом.
+//! Load/clone/save разделяют живое состояние и DB projection. Container nodes,
+//! RTTI/vtable dispatch и ручное владение заменены enum/traits, `BTreeMap`,
+//! `VecDeque` и owned values; игровые формулы, wire payload и DB поля остаются
+//! явными. Safe string/length границы блокируют только старое UB и возвращают
+//! typed disposition без придуманного rollback.
 //!
-//! Для достигнутого `SaveAbility` наблюдаемы только signed keys ordered map
-//! `m_ApplyPersons`, а `AddApplyPersonsToByteArray` дополнительно подтверждает
-//! полный PDB-value: `lID, strName[20], lOccu, lLvl`. Поэтому owner хранит
-//! `BTreeMap<i32, TagApplyPerson>`, не перенося MSVC tree-layout.
-//! PDB и `UpdatePronounceToClient` подтверждают полный `tagPronounceWord`:
-//! `lPlayerID +0x00`, `strName[20] +0x04`, `tagTime +0x18` и
-//! `strContent[2048] +0x28`, общий размер `0x828`. `GetPronounceData` буквально
-//! дописывает эти bytes. `Vec<u8>` и
-//! `TagTimeValue` заменяют только STL-vector и Windows `SYSTEMTIME`-совместимое
-//! значение значка. Оба конструктора создавали пустые map/vector, а достигнутый
-//! `Initial` обнулял весь pronounce-блок; тот же достигнутый baseline задаёт
-//! `with_reached_member_state`.
-//! `CloneSaveData` возвращает null при нулевой mask; иначе всегда переносит ID
-//! и mask, а группы `property/members/leave-word/ability` копирует только для
-//! bits `1/2/4/8`. Property переносится четырнадцатью DWORD вместе с тремя
-//! padding-байтами после `btCountry`. Enemy-set и Goods War поля функция не
-//! копирует. Ещё не материализованные числовые поля узкого состояния возвращают
-//! явную типизированную ошибку, а не выдуманное значение по умолчанию.
-//!
-//! Достигнутый leave-word save-state хранит исходный list-order через
-//! `VecDeque<TagLeaveWord>`. Три блока той же точной пары согласуются по полному
-//! layout: list-copy в `CFaction` переносит `0x40` DWORD, `LoadLeaveWords`
-//! заполняет `lID/lPlayerID`, `tagTime`, `strContent` и `strName`, а exact
-//! `SaveLeaveWords` читает time по `+0x1C` и content по `+0x2C`. Поэтому
-//! `tagLeaveWord` имеет размер `0x100`: signed ID по `+0x00/+0x04`,
-//! `strName[20]` по `+0x08`, 16-байтовый `tagTime` по `+0x1C` и
-//! `strContent[212]` по `+0x2C`. `repr(C)` и compile-time assertions фиксируют
-//! этот value-layout; partial `CFaction` по-прежнему не выдаётся за полный x86
-//! object-layout. Отсутствующий NUL content локализован до старого `CheckPoint`
-//! и не воспроизводится чтением за массивом.
-//!
-//! `GetMembers` возвращает неизменяемое заимствование map, `GetMemberNum`
-//! сохраняет младший 32-битный шаблон старого `_Mysize`, а `IsMember` ищет
-//! только map-key и при наличии возвращает faction ID, иначе `0`. Exact EXE
-//! `0x004BD840..0x004BD865` подтверждает, что ключом служит входной signed
-//! player ID; подстановка this в декомпиляте является ошибкой восстановления stack-slot.
-//!
-//! Полный `AddToByteArray` публикует ID/name/master ID/master title,
-//! established-time, все `0x38` property bytes, pronounce в порядке
-//! `player/time/content/name`, затем leave-word/member/apply/owned-city и оба
-//! enemy snapshot-а. Exact ASM `0x004C10B0..0x004C1206` подтверждает порядок
-//! и literal `true`. Exact machine перед tree lookup использует
-//! неинициализированный stack-key; ближайший `GetMasterID` и практический C++
-//! donor подтверждают предназначенный master key. Rust исправляет этот
-//! внутренний UB и детерминированно ищет master ID. Его title копируется только
-//! при visible длине `<=20`; более длинный или отсутствующий title остаётся
-//! пустой C-строкой. Остальные serializers переиспользуются напрямую, а
-//! отсутствующий reached scalar либо невалидная fixed C-строка дают локальную
-//! typed-границу после записанного prefix вместо чтения за памятью.
-//!
-//! `AddMembersToByteArray` первым дописывает 32-битный count и затем проходит
-//! map в signed-key порядке. Каждое полное `tagMemInfo` публикуется как
-//! `lID, lJobLvl, strTitle\0, listPV[0x2C], lLvl, lOccu, strName\0,
-//! uint(bControbute), strRegion\0, LastOnlineTime[0x10]`. Отдельная non-delete
-//! проекция `UpdateMemberInfoToClient` имеет порядок
-//! `strName\0, lLvl, lOccu, lJobLvl, strTitle\0, listPV[0x2C], strRegion\0,
-//! uint(bControbute), LastOnlineTime[0x10]`. Полный update в non-delete ветви
-//! сначала ищет target и при наличии одним снимком локального времени заменяет
-//! его `LastOnlineTime`; delete не ищет target и не снимает время. Затем обе
-//! ветви проходят recipients в signed map-порядке, до фильтра выполняют lookup
-//! online-player и GameServer ID и требуют ненулевого player, ненулевой
-//! GameServer и его `m_bGetFactionData`. Сообщение `0x7FE0D` всегда начинается
-//! `recipient ID, operator, target ID`, после чего non-delete добавляет эту
-//! per-member проекцию. Исходно игнорировавшиеся результаты `SendToMapID`
-//! сохраняются в typed-отчёте и не останавливают следующий send. При
-//! отсутствующем NUL уже выполненные предыдущие отправки возвращаются вместе с
-//! локальной типизированной ошибкой; текущее неполное сообщение не отправляется,
-//! а чтение за массивом не воспроизводится.
-//! `chrono::Local::now` заменяет Windows `GetLocalTime`: один полученный local
-//! wall-clock раскладывается в те же восемь `u16`, включая Sunday-based
-//! `wDayOfWeek` и миллисекунды, до первой recipient-операции.
-//! Exact EXE `0x004BA8B1..0x004BA8CB` подтверждает испорченный raw stack-slot:
-//! в `find` передаётся адрес входного target `param_1` по `[esp+0x98]`, а не
-//! iterator-local. Проверка recipient-флага по `CPlayer+0x868` видна напрямую
-//! в `0x004BA82D..0x004BA834`; после этих двух ответов reverse прекращён.
-//!
-//! `OnMemberExitGame` ищет signed player ID и только при найденном member
-//! снимает первый local-time snapshot. Пустой регион определяется сравнением
-//! единственного первого байта с `""`; он оставляет member без изменений и не
-//! публикует update. Для непустого региона owner записывает NUL только в
-//! `strRegion[0]`, сохраняя остальные 63 bytes, копирует первый snapshot и
-//! вызывает virtual `UpdateMemberInfoToClient(player, OP_Update)`. Последний
-//! по исходному контракту снимает второй local-time snapshot и сразу заменяет
-//! первый до recipient-прохода; обе позиции сохранены буквально. Exact EXE
-//! `0x004B64D7..0x004B64E9` подтверждает ключ `param_1` по `[esp+0x30]`,
-//! `0x004B6501..0x004B6544` — порядок time-before-region-check, а
-//! `0x004B6546..0x004B6575` — очистку одного byte, копирование времени и
-//! virtual slot `+0x1B8` с оператором `2`. После этих ответов reverse
-//! прекращён.
-//!
-//! `OnMemberEnterGame` сохраняет исходный порядок: online-player lookup,
-//! member lookup, virtual `CShape::GetRegionID`, numeric `CGame::GetRegion`,
-//! копирование имени найденного `CWorldRegion` во временный `char[256]`,
-//! `strcmp` с member `strRegion[64]`, условный `strcpy` и virtual update с
-//! `OP_Update`. Exact EXE `0x004C0A4B..0x004C0A57` подтверждает, что потерянный
-//! raw key — адрес входного `player_id` по `[ebp+8]`. Диапазон
-//! `0x004C0A69..0x004C0A7D` обнуляет ровно 256 bytes, а
-//! `0x004C0A92..0x004C0AA9` оставляет их пустой C-строкой при отсутствующем
-//! region key либо через найденный `pRegion` читает унаследованный
-//! `CBaseObject::m_strName` по `+0x20`. Отсутствующий region поэтому означает
-//! пустое имя, а не ранний выход. После этих конкретных ответов reverse
-//! прекращён.
-//!
-//! При равенстве C-string member не мутируется и update не вызывается. При
-//! различии копируются байты имени и один NUL; оставшийся хвост fixed field не
-//! очищается. Затем существующий `UpdateMemberInfoToClient` снимает local-time
-//! и выполняет ordered recipient-рассылку. Rust использует slice equality и
-//! bounded copy только там, где меняется fixed member data. Nullable `pRegion`,
-//! отсутствующий NUL в поле участника и имя длиннее 63 байт остаются локальными
-//! типизированными ошибками: первый путь разыменовывал null, а два последних
-//! затрагивают fixed layout. Временный `char[256]` заменён owned slice.
-//!
-//! PDB связывает slots organizing-base `+0x13C/+0x140` с enter/exit-функциями
-//! этого owner-а; оба slot-а теперь замкнуты. Заменённые project-блоки удалены;
-//! tree traversal, allocator, local scratch и cleanup остаются ненаблюдаемой
-//! STL/compiler/CRT-семантикой, выраженной `BTreeMap`, slices и `Drop`.
-//!
-//! `OnMemberPosChange` не ищет online-player и не сравнивает старый регион:
-//! member lookup идёт по первому аргументу, region lookup — по второму, затем
-//! `CWorldRegion::m_strName` копируется прямо в `strRegion[64]` и безусловно
-//! публикуется `OP_Update`. Exact ASM `0x004C0B45..0x004C0BDA` подтверждает оба
-//! потерянных raw stack-key, destination `tagMemInfo + 0xAC` и порядок вызова.
-//! Missing/null region остаётся исходным no-op; переполнение старого `strcpy`
-//! заменено typed safe-границей без частичной записи.
-//!
-//! Обе перегрузки `GetMemberList` сначала очищают переданный list. Перегрузка
-//! `list<COrganizing*>` оставляет его пустым, а `list<long>` затем добавляет
-//! signed member keys в tree-order. Exact ASM `0x004B5530..0x004B5564` и
-//! `0x004B9E60..0x004B9EDE` подтверждает, что raw early-return после удаления
-//! старых nodes был ошибкой декомпиляции, а не условием пропуска заполнения.
-//! Apply snapshot имеет wire-порядок
-//! `count, record.id, name\0, occupation, level` в signed key-order.
-//! Leave-word snapshot сохраняет list-order и поля
-//! `count, id, player_id, time[0x10], content\0, name\0`. Exact ASM
-//! `0x004B5D30..0x004B5E3B` подтверждает offsets и порядок. Нетерминированные
-//! fixed C-строки локализованы typed-ошибками после уже записанного prefix,
-//! вместо исходного чтения за массивом.
-//! `UpdatePronounceToClient` не читает объявленный target ID: всем online
-//! member-ам с ненулевым GameServer ID и `m_bGetFactionData` отправляется
-//! `0x7FE10` с `recipient, operator, pronounce.player_id, name\0, content\0,
-//! time[0x10]`. Exact ASM `0x004B56C0..0x004B57DB` подтверждает framing,
-//! фильтр и неиспользованный первый аргумент. Нетерминированная C-строка
-//! останавливает текущий message typed-ошибкой вместо чтения за `0x828`.
-//! `SendInfoToAllMember` передаёт каждому signed member key обе исходные
-//! `std::string`, signed kind, жёсткие `0xFFDAEDFE/0`; объявленный unsigned
-//! четвёртый аргумент не читается. `UpdateOtherFacInfoToClient` сначала копирует
-//! visible C-string имени в `char[20]`, затем готовым member-ам отправляет
-//! `0x7FE15`: `recipient, operator, other_faction_id, name\0`. Exact ASM
-//! `0x004B5890..0x004B5A44` подтверждает оба порядка и фильтр второй функции.
-//! Переполнение старого `strcpy` заменено typed-границей до recipient-прохода.
-//! `Talk` проверяет только ненулевой GameServer ID — без online lookup и
-//! faction-data gate — и отправляет `0x7FA02` как
-//! `recipient, 400, speaker_id, first_text\0, second_text\0`. Встроенный NUL в
-//! исходной `std::string` обрезает visible C-string. Exact ASM
-//! `0x004B5A50..0x004B5B63` подтверждает фильтр и порядок аргументов.
-//! `DeleteOrgaToClient(target)` для положительного target требует online,
-//! ненулевой GameServer и faction-data flag, затем отправляет только `0x7FE03`
-//! (`target, faction_id`). Для `target <= 0` сначала один раз разрешается
-//! `WS0191`, затем каждый online member с ненулевым GameServer — уже без
-//! faction-data gate — получает тот же delete message, после чего отдельно
-//! `SendOrgaInfoToClient(WS0191, WS0119, game_server_id, 0xFFDAEDFE, 0)`.
-//! `WS0119` разрешается заново после каждой отправки. Exact ASM
-//! `0x004B8A20..0x004B8DB2` подтверждает ветвление и порядок side effects;
-//! owned notice не переносит старое переполнение `char[100]` строкой `WS0191`.
-//! `Pronounce` сначала проверяет property-флаг и право `PV_Pronounce`, затем
-//! обрезает переданную `std::string&` до глобального `0x800`, присваивает ID и
-//! время, копирует только C-string prefix текста, а имя заменяет лишь для
-//! online-автора. Весь `tagPronounceWord` не очищается: хвосты fixed-массивов и
-//! прежнее имя offline-автора сохраняются. После `UpdatePronounceToClient(0,
-//! OP_Update)` всегда ставится dirty-бит `8`. Exact ASM
-//! `0x004B8DC0..0x004B8F1E` подтверждает порядок, размер глобала и обе ветки;
-//! две старые `strcpy`-границы заменены typed-блокировкой до изменения state.
-//! Шесть feature-setter-ов при неизменном флаге являются no-op. Иначе флаг
-//! меняется до локализации, затем `WS0119` и feature-specific `WS0172..WS0185`
-//! разрешаются с fallback `""`, после чего всем member key без online-фильтра
-//! передаётся `SendInfoToAllMember(feature, WS0119, -1, 0x87A238)`. Последний
-//! аргумент тот owner не использует: фактический цвет остаётся `0xFFDAEDFE`.
-//! Exact ASM `0x004B7030..0x004B86C8` подтверждает offsets, пары ID и порядок;
-//! общая Rust-реализация заменяет шесть копий одной технической процедуры.
-//! `UpdateLeaveWordToClient` для `OP_Delete` шлёт переданный ID, но жёсткий
-//! operator `0`; для любого другого operator игнорирует переданный ID и шлёт
-//! последний leave-word как `operator, id, player, name\0, content\0, time`.
-//! Обе ветки используют `0x7FE0F` и общий online/GameServer/faction-data фильтр.
-//! `EditLeaveWord` проверяет feature и `PV_EditLeaveWord`, ищет ID в list-order,
-//! удаляет его, публикует delete и ставит dirty-бит `4`; объявленный operator
-//! не читается. Exact ASM `0x004B6240..0x004B644C` и
-//! `0x004B6790..0x004B6823` подтверждает порядок и донорские расхождения.
-//! Чтение sentinel-а при пустом non-delete list и выход за fixed C-строки
-//! заменены typed-границами.
-//! `LeaveWord` проверяет feature и `PV_LeaveWord`, обрезает входную
-//! `std::string&` до global `MAX_PerWordCharNum=210`, затем wrapping-увеличивает
-//! общий `CGame::m_nLeaveWordID`, копирует time/player/content и только online-
-//! имя. После добавления в хвост публикуется `OP_Add`, затем dirty-бит `4`.
-//! `MAX_LeaveWordNum=60`; `LoadLeavewords` делает только bounded append без
-//! публикации/dirty. Exact ASM `0x004BCA40..0x004BCC58` и
-//! `0x004BD3F0..0x004BD470` подтверждает порядок и глобалы. В EXE unlink старых
-//! nodes не уменьшает `_Mysize`, из-за чего full-list loop повреждён; стандартный
-//! `VecDeque::pop_front` сохраняет intended FIFO-limit. Неинициализированное имя
-//! offline-автора и переполнение `char[20]` заменены typed-блокировкой после уже
-//! выделенного ID; незначимые хвосты нового fixed-record безопасно обнуляются.
-//! `UpdateAllApplyMemberToClient(target)` требует только target online,
-//! ненулевой GameServer и faction-data flag, затем шлёт каждый apply-person в
-//! signed key-order. Точечный `UpdateApplyMemberToClient(id, operator)` создаёт
-//! нулевой local-record с заданным ID, заменяет его map-value при hit и шлёт
-//! только готовым member-ам с `PV_ConMem`. Оба используют `0x7FE0A` и wire
-//! `recipient, operator, record.id, name\0, occupation, level`; это совпадает
-//! с PDB-layout `tagApplyPerson[0x20]` и Linux-донором. `RemoveApplyMember`
-//! сначала стирает map-entry, затем публикует `OP_Delete` уже как ID + пустые
-//! поля, ставит
-//! dirty-бит `8` и возвращает faction ID; miss возвращает `0`. Exact ASM
-//! `0x004B60D0..0x004B61E2`, `0x004BEC80..0x004BEE2E` и
-//! `0x004B9F50..0x004B9FA7` подтверждает framing, фильтры и side effects.
-//! `ApplyForJoin` последовательно запрещает заявку при standard/village-war,
-//! city-war, полном member-limit и полном apply-limit `40`. Уже состоящий во
-//! faction player получает тихий `false`; затем старые заявки удаляются из
-//! всех faction и только после этого требуется online-player. Новый record
-//! копирует C-string имя через старый bounded `strncpy[20]`, occupation и level,
-//! отправляет заявителю `WS0166/WS0119`, публикует `OP_Add`, ставит dirty `8` и
-//! опционально пишет faction-log type `2`. Exact ASM
-//! `0x004BE520..0x004BEC6E` подтверждает short-circuit, signed member-limit,
-//! unsigned apply-limit, порядок мутаций и неиспользованные аргументы 2/3.
-//! War/controller/localization/log plumbing остаётся тонким контекстом; формат
-//! DB-записи может быть параметризован библиотекой без переноса старого SQL-
-//! буфера. Нетерминированное `char[20]` и переполнение 256-байтового `_sprintf`
-//! заменены typed-границами в точках прежнего UB с сохранением уже выполненных
-//! эффектов.
-//! `DoJoin` повторяет те же war-gates, но Goods War проверяет после city-war и
-//! только затем право `PV_ConMem`. Найденная заявка копируется и удаляется до
-//! чтения approve-флага. Нулевой флаг означает отказ заявителю и старый `true`;
-//! ненулевой продолжает через повторный member-limit, глобальное снятие заявок
-//! и membership-gate. Новый `tagMemInfo` получает job-level `99`, права Exit и
-//! LeaveWord, title `WS0169`, входной join-time и online либо сохранённые данные
-//! кандидата. До вставки идут `WS0170` всем старым членам и `WS0171` заявителю;
-//! после неё — player refresh, два controller snapshot callback-а, member
-//! `OP_Add`, dirty `2`, отмена disband countdown и опциональный join-log.
-//! Exact ASM `0x004BEE40..0x004BF9F5` подтверждает этот порядок, два отдельных
-//! controller callback-а `0x00437380/0x00434D00`, unsigned countdown threshold
-//! и игнорирование их bool-return. Fixed C-буферы и старые `_sprintf/strcpy`
-//! заменены bounded массивами и typed-границами; controller/war/log plumbing
-//! остаётся явным тонким контекстом.
-//! `Exit` использует те же standard/village и city-war gates. В отличие от
-//! Linux-донора, Goods War после `WS0162/WS0121` не завершает функцию: exact
-//! ASM продолжает к `PV_Exit`. После уведомления `WS0187(name)/WS0188` старым
-//! членам идут `DelMember`, player refresh, delete faction-state вышедшему,
-//! member `OP_Delete`, dirty `2`, опциональный quit-log type `3` и безусловное
-//! удаление из Goods War. Диапазон `0x004BAAB0..0x004BB131` подтверждает этот
-//! порядок и старый `true` только после полного success-prefix. Linux-донор
-//! переставлял player/member update и ошибочно возвращал `false` после Goods
-//! War. Форматирование, лог и Goods War plumbing выражены bounded данными и
-//! узким контекстом; старые `_sprintf/strcpy` не переносятся.
-//! `FireOut` в отличие от `Exit` действительно завершает Goods War gate после
-//! `WS0363 ` (ID содержит trailing space). Затем он делает трёхаргументный
-//! `CheckOperValidate(manager, target, PV_FireOut)`, `WS0192(name)/WS0119`
-//! старым членам и эффекты в машинном порядке: `DelMember`, delete
-//! faction-state, member `OP_Delete`, player refresh, dirty `2`, fire-log type `1`,
-//! Goods War delete и локальное fixed-frame сообщение `0x60508` как
-//! `target_id + faction_name[32]`. Exact ASM `0x004BB140..0x004BB897`
-//! подтверждает порядок, framing и игнорирование send/queue результатов;
-//! Linux-донор переставлял три callback-а после удаления.
-//! `DubAndSetJobLvl` сначала передаёт изменяемый title в общий invalid-string
-//! owner, затем проверяет `PV_DubJobLevel` и диапазон job-level `1..=99`, после
-//! чего обрезает сам входной `std::string&` до 20 bytes. Title и job-level
-//! меняются независимыми ветками с `WS0195/WS0196`; только title-ветка делает
-//! player refresh. Даже при отсутствии обеих изменений owner всегда публикует
-//! member `OP_Update`, ставит dirty `2` и при включённом логе пишет title-log;
-//! old-title там остаётся пустым, если title не менялся. Exact ASM
-//! `0x004BB8A0..0x004BBFA5` подтверждает этот порядок, 100-байтовые notice-
-//! буферы и старый 32-байтовый old-title scratch. Rust сохраняет C-string
-//! prefix/tail семантику fixed title, но UB обеих `_sprintf/strcpy` границ
-//! заменяет typed progress-блокировкой; фильтр и лог остаются контекстом.
-//! Выдача и отзыв прав имеют общий gate: feature `EndueRight`, управляющее
-//! право `PV_EndueRor` и целевой диапазон `2..=9`. Оба owner-а вызывают
-//! permission-mutator, затем безусловно member `OP_Update` и dirty `2`, после
-//! чего выбирают точный notice ID (`WS0197..WS0204` либо `WS0205..WS0212`) и
-//! пишут purview-log type `0/1`. Только grant `PV_ConMem=3` дополнительно
-//! отправляет полный apply snapshot, причём exact ASM ставит его после member-
-//! update и dirty, а не до них, как Linux-донор. Диапазоны
-//! `0x004BBFB0..0x004BC4CF` и `0x004BC500..0x004BCA13` подтверждают эту
-//! асимметрию, 100-байтовые notice-буферы и string-ID mapping.
-//! `SetLvl` принимает только `1..=12`, первым пишет level, затем в строгом
-//! порядке применяет Pronounce, LeaveWord, EndueRight, CreateUnion,
-//! JoinVillageWar, JoinCityWar и наконец maximum member count. Каждый реально
-//! изменившийся feature setter публикует собственный notice. `SetMaxMememberNums`
-//! сначала пишет `lMaxMemberNums`, затем форматирует `WS0186(max)` в старый
-//! 256-байтовый buffer и рассылает его всем member key. Exact ASM
-//! `0x004B8710..0x004B893C` и `0x004B8940..0x004B8A18` подтверждает порядок;
-//! typed block сохраняет уже изменённое поле вместо воспроизведения overflow.
-//! `Upgrade` проверяет master-owner (`vtable +0xD8`), level `<12`, current level-record, faction
-//! experience, online-player, unsigned money, master-level и optional goods
-//! именно в этом порядке; отказы `WS0220..WS0223` адресуются инициатору.
-//! Success сначала вызывает полный `SetLvl`, затем `SetExp`, отправляет charge
-//! `0x7FE1E` (`player, signed money, goods\0`) и лишь после этого ищет record
-//! нового level. Поэтому late miss возвращает старый `false`, сохраняя level,
-//! experience side effects и charge. При hit пишется next upgrade-exp, идёт
-//! `WS0224(level)`, property update, dirty `1`, refresh всех online members и
-//! optional level-log. Exact ASM `0x004BCC60..0x004BD3EB` подтверждает порядок,
-//! unsigned money compare и quirk перехода на level 12: уже изменённый level
-//! заставляет `SetExp` вернуть MaximumLevel без списания faction experience.
-//! Goods catalog, inventory/money и DB-log остаются узким контекстом; charge и
-//! wire framing строятся существующим `CMessage`.
-//! `SetControbuter` допускает только текущего master-а как requester-а, при
-//! включении проверяет signed maximum contributor-ов, затем меняет target flag.
-//! После мутации exact order: member `Update`, player refresh, форматированный
-//! `WS0227/WS0228(target name)`, broadcast с `WS0119`, типом `-1` и цветом
-//! `0x87A238`, затем dirty `2`. ASM `0x004B92F0..0x004B9509` подтверждает два
-//! разных requester/target ID, 256-байтовый `_sprintf` buffer и отсутствие
-//! отдельной purview-проверки. Vtable подтверждает `+0xD8 = IsMaster`, а не
-//! донорский `IsMember`. Локализация и player-owner остаются контекстом;
-//! нетерминированное имя остаётся typed-границей после уже совершённых
-//! эффектов; форматированный notice хранится без старого buffer-limit.
-//! `UploadIcon`, вопреки имени, не принимает icon bytes и не выполняет file I/O:
-//! аргумент `tagTime` не читается. Master-gate (`vtable +0xD8`) и property flag дают silent miss
-//! либо `WS0225/WS0119`; разрешённый interval `<1` лишь ставит dirty `8` и
-//! возвращает `true`, положительный interval отправляет `WS0226(minutes)` и
-//! возвращает `false`. Exact ASM `0x004B8F30..0x004B92ED` подтверждает
-//! 256-байтовый `_sprintf` buffer и отсутствие иных эффектов. Локализация
-//! остаётся тонким контекстом, а owned notice не переносит overflow.
-//! `Disband` проверяет `CheckOperValidate(player, PV_Disband)`, отсутствие
-//! superior organizing, standard/village, city/attack и Goods War именно в
-//! этом порядке. War-отказы отправляют `WS0189/WS0190/ws0362` с `WS0121`, а
-//! country king получает silent false. Success последовательно удаляет Goods
-//! War members/count, очищает apply-persons и leave-words, затем вызывает
-//! `DeleteOrgaToClient(0)`; dirty-state функция не меняет. Exact ASM
-//! `0x004BFA00..0x004BFDE0` подтверждает vtable slots и порядок. Старый null
-//! country dereference заменён typed-границей, STL/allocator cleanup —
-//! безопасными Rust containers и `Drop`.
-//! `Demise` начинает с `IsMaster(old)` и `IsMember(new)`, затем дважды вызывает
-//! один и тот же `CAttackCitySys::IsAlreadyDeclarForWar`: после обычного и
-//! city enemy-set. Этот наблюдаемый quirk сохранён, как и literal `"???"` для
-//! Goods War. Оба игрока обязаны быть online и не иметь
-//! `m_bFactionWarOperator`; новый master проходит level, transient permit и
-//! country-king gates. Success меняет master ID, title/job/purview обоих
-//! member-ов, публикует `Update(old)`, `Update(new)`, dirty `1`, dirty `2`,
-//! refresh `0`, затем `WS0219(old,new)` с цветом `0x87A238` и optional log.
-//! Exact ASM `0x004BFDE0..0x004C0874` подтверждает этот порядок, true/false и
-//! размеры buffers: 256 для block notice, 100 для success. Старый
-//! `map::operator[]` при отсутствующем old-master создавал запись из частично
-//! неинициализированного stack-value; corrupted invariant теперь даёт typed
-//! block без UB. Fixed title/name/format overflows также остаются локальными
-//! typed-границами, country/war/log plumbing — узким контекстом.
-//! `OperatorTax` и `OperatorCityGate` одинаково требуют owned region и
-//! `CheckOperValidate(player, PV_ObtainTax/PV_OperCityGate)`, но намеренно
-//! получают union authority разными путями: tax через controller-wide
-//! `IsFreeFaction(GetID())`, gate через собственный
-//! `m_Property.lConfederationID`. Для найденного non-null union только master
-//! faction проходит дальше; отсутствующий/null union не блокирует. Exact ASM
-//! `0x004C0880..0x004C0925/0x004C0930..0x004C0991` подтверждает аргументы
-//! `playerID, regionID`, порядок и отсутствие side effects. Null pointer в
-//! `IsFreeFaction` scan и partial property остаются typed-границами.
+//! Неочевидные cases — duplicate publication, off-by-one limits, callback до
+//! удаления, partial success и unusual bool mapping — документированы возле
+//! соответствующих методов.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -651,7 +76,7 @@ const ZERO_TIME: TagTimeValue = TagTimeValue {
     milliseconds: 0,
 };
 
-/// Полный byte-exact блок исходного `CFaction::tagFacBaseProperty`.
+/// Полный byte- блок исходного `CFaction::tagFacBaseProperty`.
 ///
 /// Три байта выравнивания после `btCountry` сохраняются вместе с полями:
 /// `CloneSaveData` копировал структуру четырнадцатью 32-битными словами.
@@ -662,7 +87,7 @@ pub(crate) struct FactionBaseProperty {
 }
 
 impl FactionBaseProperty {
-    /// Принимает уже полностью восстановленные `0x38` байт без нормализации.
+ /// Принимает уже полностью действующие `0x38` байт без нормализации.
     pub(crate) const fn from_complete_bytes(bytes: [u8; FACTION_BASE_PROPERTY_SIZE]) -> Self {
         Self { bytes }
     }
@@ -1788,10 +1213,10 @@ pub(crate) struct FactionTalkDelivery {
 
 /// Узкая граница исходных StringTable и organizing-info controller-а.
 pub(crate) trait FactionOrganizingInfoContext {
-    /// Возвращает независимую копию результата `StringTable::getStringByID`.
+ /// Возвращает независимую копию результата `StringTable::getStringByID`.
     fn world_string(&mut self, string_id: &'static [u8]) -> Option<Vec<u8>>;
 
-    /// Повторяет `COrganizingCtrl::SendOrgaInfoToClient`.
+ /// Повторяет `COrganizingCtrl::SendOrgaInfoToClient`.
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
 }
 
@@ -2108,10 +1533,10 @@ pub(crate) trait FactionDemiseContext: FactionOrganizingInfoContext {
 pub(crate) trait FactionOperationAuthorityContext {
     type Block;
 
-    /// Повторяет controller-wide `IsFreeFaction` и возвращает signed union ID.
+ /// Повторяет controller-wide `IsFreeFaction` и возвращает signed union ID.
     fn union_id_for_faction(&self, faction_id: i32) -> Result<i32, Self::Block>;
 
-    /// Повторяет nullable `GetConfederationOrganizing(...)->GetMasterID()`.
+ /// Повторяет nullable `GetConfederationOrganizing(...)->GetMasterID()`.
     fn union_master_faction_id(&self, union_id: i32) -> Option<i32>;
 }
 
@@ -2119,8 +1544,8 @@ pub(crate) trait FactionOperationAuthorityContext {
 pub(crate) trait FactionPlayerHeaderContext {
     type Block;
 
-    /// `None` означает miss/null самого union; `Some(0)` — найденный союз,
-    /// который штатно не смог разрешить свою master-faction.
+ /// `None` означает miss/null самого union; `Some(0)` — найденный союз,
+ /// который штатно не смог разрешить свою master-faction.
     fn union_player_header(&self, union_id: i32) -> Result<Option<i32>, Self::Block>;
 }
 
@@ -2162,17 +1587,17 @@ pub(crate) enum FactionEnemyWarLogArgument<'a> {
 
 /// Узкая граница organizing lookup, локализации и исходного `war`-лога.
 pub(crate) trait FactionEnemyMutationContext {
-    /// Возвращает независимую byte-exact копию имени живого organizing.
+ /// Возвращает независимую byte- копию имени живого organizing.
     fn organizing_name(&self, organizing_id: i32) -> Option<Vec<u8>>;
 
-    /// Повторяет `StringTable::getStringByID` с fallback `""` и `_sprintf`.
+ /// Повторяет `StringTable::getStringByID` с fallback `""` и `_sprintf`.
     fn format_world_string(
         &mut self,
         string_id: &'static [u8],
         arguments: &[FactionEnemyWarLogArgument<'_>],
     ) -> Vec<u8>;
 
-    /// Повторяет `PutStringToFile("war", text)`.
+ /// Повторяет `PutStringToFile("war", text)`.
     fn put_war_log(&mut self, text: &[u8]);
 }
 
@@ -2306,7 +1731,7 @@ pub(crate) struct MemberUpdateDelivery {
 /// Отчёт полного ordered recipient-прохода.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct MemberUpdateReport {
-    /// `None` означает delete-ветвь без target lookup.
+ /// `None` означает delete-ветвь без target lookup.
     pub(crate) target_found: Option<bool>,
     pub(crate) deliveries: Vec<MemberUpdateDelivery>,
 }
@@ -2317,7 +1742,7 @@ pub(crate) struct MemberUpdateBuildError {
     pub(crate) field: UnterminatedMemberField,
     pub(crate) recipient_player_id: i32,
     pub(crate) game_server_id: i32,
-    /// Уже выполненные send-ы не откатываются, как и в исходном ordered цикле.
+ /// Уже выполненные send-ы не откатываются, как и в исходном ordered цикле.
     pub(crate) completed_deliveries: Vec<MemberUpdateDelivery>,
 }
 
@@ -2546,8 +1971,8 @@ impl TagPronounceWord {
         }
     }
 
-    /// Копирует fixed `tagPronounceWord` из binary DB chunk безопасным
-    /// field-wise разбором вместо старого `SafeArrayAccessData` + `memcpy`.
+ /// Копирует fixed `tagPronounceWord` из binary DB chunk безопасным
+ /// field-wise разбором вместо старого `SafeArrayAccessData` + `memcpy`.
     pub(crate) fn from_database_blob(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < PRONOUNCE_DATA_SIZE {
             return None;
@@ -2637,7 +2062,7 @@ pub(crate) struct TagLeaveWord {
 }
 
 impl TagLeaveWord {
-    /// Создаёт полный 0x100-байтовый leave-word snapshot.
+ /// Создаёт полный 0x100-байтовый leave-word snapshot.
     pub(crate) const fn from_complete_fields(
         id: i32,
         player_id: i32,
@@ -2654,12 +2079,12 @@ impl TagLeaveWord {
         }
     }
 
-    /// Возвращает `strContent` до первого NUL включительно.
+ /// Возвращает `strContent` до первого NUL включительно.
     pub(crate) fn content_wire_bytes(&self) -> Result<&[u8], UnterminatedLeaveWordField> {
         let Some(terminator) = self.content.iter().position(|byte| *byte == 0) else {
-            // WorldServer `SaveLeaveWords` RVA `0x000FACA0` передавал
-            // `node + 0x34` в `CheckPoint` без размера; тот читал бы за
-            // `char[212]`, а достижимость и результат этого пути не доказаны.
+ // WorldServer `SaveLeaveWords` передавал
+ // `node + 0x34` в `CheckPoint` без размера; тот читал бы за
+ // `char[212]`, а достижимость и результат этого пути не доказаны.
             return Err(UnterminatedLeaveWordField {
                 field: "tagLeaveWord::strContent",
             });
@@ -2667,7 +2092,7 @@ impl TagLeaveWord {
         Ok(&self.content[..=terminator])
     }
 
-    /// Возвращает `strName` до первого NUL включительно.
+ /// Возвращает `strName` до первого NUL включительно.
     pub(crate) fn name_wire_bytes(&self) -> Result<&[u8], UnterminatedLeaveWordField> {
         let Some(terminator) = self.name.iter().position(|byte| *byte == 0) else {
             return Err(UnterminatedLeaveWordField {
@@ -2698,7 +2123,7 @@ const _: () = {
     assert!(offset_of!(TagLeaveWord, content) == 0x2C);
 };
 
-/// Поля одной строки `CSL_FACTION_BaseProperty`, которые exact
+/// Поля одной строки `CSL_FACTION_BaseProperty`, которые
 /// `CRsFaction::LoadFactionProperty` присваивает после public-конструктора
 /// `CFaction`.
 pub(crate) struct FactionDatabaseBaseState {
@@ -2722,7 +2147,7 @@ pub(crate) struct FactionDatabaseBaseState {
     pub(crate) goods_war_last_win_time: String,
 }
 
-/// Достигнутая member-state часть исходного `CFaction`.
+/// Действующая member-state часть исходного `CFaction`.
 pub(crate) struct CFaction {
     faction_id: i32,
     name: Vec<u8>,
@@ -2745,13 +2170,13 @@ pub(crate) struct CFaction {
     change_data_type: i32,
     goods_war_count: i32,
     goods_war_last_win_time: String,
-    /// Rust-проекция master faction текущего union для синхронного
-    /// `CPlayer::UpdateFactionInfo` без повторного заимствования controller-а.
+ /// Rust-проекция master faction текущего union для синхронного
+ /// `CPlayer::UpdateFactionInfo` без повторного заимствования controller-а.
     union_master_id: i32,
 }
 
 impl CFaction {
-    /// Создаёт доказанный пустой `m_Members` с уже назначенным faction ID.
+ /// Создаёт доказанный пустой `m_Members` с уже назначенным faction ID.
     pub(crate) const fn with_reached_member_state(faction_id: i32) -> Self {
         Self {
             faction_id,
@@ -2779,10 +2204,10 @@ impl CFaction {
         }
     }
 
-    /// Строит exact live-state нового `CFaction` из constructor + `Initial`.
-    ///
-    /// MSVC `strcpy` для трёх fixed-полей заменён явной границей: допустимые
-    /// C-string дают те же байты, а переполнение не превращается в memory UB.
+ /// Строит live-state нового `CFaction` из constructor + `Initial`.
+ ///
+ /// MSVC `strcpy` для трёх fixed-полей заменён явной границей: допустимые
+ /// C-string дают те же байты, а переполнение не превращается в memory UB.
     pub(crate) fn for_creation(
         faction_id: i32,
         master_id: i32,
@@ -2876,12 +2301,12 @@ impl CFaction {
         Ok(faction)
     }
 
-    /// Материализует base-row в точном порядке `LoadFactionProperty`.
-    ///
-    /// Public constructor уже выполняет `Initial` до DB assignments. Поэтому
-    /// этот owner начинает с `for_creation`, сохраняя fallback master-member и
-    /// constructor-derived property bytes, и заменяет только поля row. Полные
-    /// member/leave/ability/apply данные принадлежат следующим DB owner-ам.
+ /// Материализует base-row в точном порядке `LoadFactionProperty`.
+ ///
+ /// Public constructor уже выполняет `Initial` до DB assignments. Поэтому
+ /// этот owner начинает с `for_creation`, сохраняя fallback master-member и
+ /// constructor-derived property bytes, и заменяет только поля row. Полные
+ /// member/leave/ability/apply данные принадлежат следующим DB owner-ам.
     pub(crate) fn from_database_base_state(
         state: FactionDatabaseBaseState,
         master_title: &[u8],
@@ -2918,39 +2343,39 @@ impl CFaction {
         Ok(faction)
     }
 
-    /// Вставляет одну строку private DB owner-а `LoadFactionMembers`.
-    ///
-    /// `std::map::operator[]` заменял duplicate player ID последней строкой;
-    /// Rust сохраняет именно опубликованное значение, но освобождает прежнее
-    /// value обычным ownership вместо старой внутренней lifetime-механики.
-    /// Загрузка не ставит dirty-bit и не публикует сетевых сообщений.
+ /// Вставляет одну строку private DB owner-а `LoadFactionMembers`.
+ ///
+ /// `std::map::operator[]` заменял duplicate player ID последней строкой;
+ /// Rust сохраняет именно опубликованное значение, но освобождает прежнее
+ /// value обычным ownership вместо старой внутренней lifetime-механики.
+ /// Загрузка не ставит dirty-bit и не публикует сетевых сообщений.
     pub(crate) fn load_database_member(&mut self, member: TagMemInfo) {
         self.members.insert(member.id, member);
     }
 
-    /// Вставляет одну DB-строку `CSL_Faction_Apply` после join с player base.
-    /// Duplicate key сохраняет последнее значение старого `map::operator[]`.
+ /// Вставляет одну DB-строку `CSL_Faction_Apply` после join с player base.
+ /// Duplicate key сохраняет последнее значение старого `map::operator[]`.
     pub(crate) fn load_database_apply_person(&mut self, person: TagApplyPerson) {
         self.apply_persons.insert(person.id, person);
     }
 
-    /// Применяет ровно `0x828` байт поля `Pronounce` из `LoadFactionPronounce`.
-    /// Загрузка не меняет dirty-bit и не рассылает обновление клиентам.
+ /// Применяет ровно `0x828` байт поля `Pronounce` из `LoadFactionPronounce`.
+ /// Загрузка не меняет dirty-bit и не рассылает обновление клиентам.
     pub(crate) fn load_database_pronounce(&mut self, pronounce: TagPronounceWord) {
         self.pronounce = pronounce;
     }
 
-    /// `LoadIconData` в exact EXE читал blob, но не копировал его в `m_IconData`;
-    /// наблюдаемое присваивание относится только к этому времени.
+ /// `LoadIconData` в читал blob, но не копировал его в `m_IconData`;
+ /// наблюдаемое присваивание относится только к этому времени.
     pub(crate) fn load_database_icon_upload_time(&mut self, time: TagTimeValue) {
         self.last_upload_icon_time = time;
     }
 
-    /// Завершает DB-prefix `LoadAllFaction` перед публикацией в controller map.
-    ///
-    /// Старый owner перезаписывает MemberNums фактическим размером map, затем
-    /// вызывает `InitialPropertyByLvl`, игнорируя его bool, и очищает dirty
-    /// mask. Никаких client/event side effect этот этап не имеет.
+ /// Завершает DB-prefix `LoadAllFaction` перед публикацией в controller map.
+ ///
+ /// Старый owner перезаписывает MemberNums фактическим размером map, затем
+ /// вызывает `InitialPropertyByLvl`, игнорируя его bool, и очищает dirty
+ /// mask. Никаких client/event side effect этот этап не имеет.
     pub(crate) fn complete_database_load(
         &mut self,
         parameters: &COrganizingParam,
@@ -2965,29 +2390,29 @@ impl CFaction {
         Ok(())
     }
 
-    /// Возвращает исходный signed `m_lID`.
+ /// Возвращает исходный signed `m_lID`.
     pub(crate) const fn faction_id(&self) -> i32 {
         self.faction_id
     }
 
-    /// Возвращает byte-exact содержимое исходного `m_strName`.
+ /// Возвращает byte- содержимое исходного `m_strName`.
     pub(crate) fn name(&self) -> &[u8] {
         &self.name
     }
 
-    /// Копирует `std::string` byte-exact; исходный virtual всегда возвращал `true`.
+ /// Копирует `std::string` byte-; исходный virtual всегда возвращал `true`.
     pub(crate) fn set_name(&mut self, name: &[u8]) -> bool {
         self.name.clear();
         self.name.extend_from_slice(name);
         true
     }
 
-    /// Возвращает достигнутый `m_lMastterID`; narrow state его не назначает.
+ /// Возвращает действующий `m_lMastterID`; narrow state его не назначает.
     pub(crate) const fn master_id(&self) -> Option<i32> {
         self.master_id
     }
 
-    /// Возвращает reached `m_Property.lLvl` без выдуманного default.
+ /// Возвращает reached `m_Property.lLvl` без выдуманного default.
     pub(crate) const fn level(&self) -> Option<i32> {
         match self.base_property {
             Some(property) => Some(property.level()),
@@ -2995,7 +2420,7 @@ impl CFaction {
         }
     }
 
-    /// Возвращает reached `m_Property.lExp` без выдуманного default.
+ /// Возвращает reached `m_Property.lExp` без выдуманного default.
     pub(crate) const fn experience(&self) -> Option<i32> {
         match self.base_property {
             Some(property) => Some(property.experience()),
@@ -3003,7 +2428,7 @@ impl CFaction {
         }
     }
 
-    /// Возвращает полный reached `m_Property` вместе с исходным padding.
+ /// Возвращает полный reached `m_Property` вместе с исходным padding.
     pub(crate) const fn base_property(&self) -> Option<FactionBaseProperty> {
         self.base_property
     }
@@ -3015,7 +2440,7 @@ impl CFaction {
         }
     }
 
-    /// Меняет только `m_Property.btCountry`; partial property остаётся safe-границей.
+ /// Меняет только `m_Property.btCountry`; partial property остаётся safe-границей.
     pub(crate) fn set_country(
         &mut self,
         country: u8,
@@ -3059,11 +2484,11 @@ impl CFaction {
         }
     }
 
-    /// Меняет faction-permit в точном порядке `SetIsPermit`.
-    ///
-    /// Lookup заменяет исходный singleton и получает ровно текущий union ID;
-    /// его результат — master-faction ID, а не master-player ID. `None`
-    /// сохраняет общий null/missing результат старого controller-а.
+ /// Меняет faction-permit в точном порядке `SetIsPermit`.
+ ///
+ /// Lookup заменяет исходный singleton и получает ровно текущий union ID;
+ /// его результат — master-faction ID, а не master-player ID. `None`
+ /// сохраняет общий null/missing результат старого controller-а.
     pub(crate) fn set_is_permitted<F>(
         &mut self,
         game: &CGame,
@@ -3133,7 +2558,7 @@ impl CFaction {
         }
     }
 
-    /// Пересчитывает level-зависимый property prefix без клиентской публикации.
+ /// Пересчитывает level-зависимый property prefix без клиентской публикации.
     pub(crate) fn initial_property_by_level(
         &mut self,
         parameters: &COrganizingParam,
@@ -3157,7 +2582,7 @@ impl CFaction {
         Ok(true)
     }
 
-    /// Публикует полный `tagFacBaseProperty` всем готовым faction-members.
+ /// Публикует полный `tagFacBaseProperty` всем готовым faction-members.
     pub(crate) fn update_property_to_client(
         &self,
         game: &CGame,
@@ -3183,7 +2608,7 @@ impl CFaction {
         Ok(deliveries)
     }
 
-    /// Пересчитывает property и безусловно публикует его, как старый wrapper.
+ /// Пересчитывает property и безусловно публикует его, как старый wrapper.
     pub(crate) fn reinitialize_property_by_level(
         &mut self,
         game: &CGame,
@@ -3234,29 +2659,29 @@ impl CFaction {
         self.add_victor_count(game, 0x10)
     }
 
-    /// Возвращает reached `m_EstablishedTime` без выдуманного default.
+ /// Возвращает reached `m_EstablishedTime` без выдуманного default.
     pub(crate) const fn established_time(&self) -> Option<TagTimeValue> {
         self.established_time
     }
 
-    /// Возвращает reached `m_lDelRemainTime` без выдуманного default.
+ /// Возвращает reached `m_lDelRemainTime` без выдуманного default.
     pub(crate) const fn delete_remain_time(&self) -> Option<i32> {
         self.delete_remain_time
     }
 
-    /// Заменяет reached signed `m_lDelRemainTime`, если значение изменилось.
+ /// Заменяет reached signed `m_lDelRemainTime`, если значение изменилось.
     pub(crate) fn set_delete_remain_time(&mut self, value: i32) {
         if self.delete_remain_time != Some(value) {
             self.delete_remain_time = Some(value);
         }
     }
 
-    /// Возвращает исходный list-order `m_OwnedCities`.
+ /// Возвращает исходный list-order `m_OwnedCities`.
     pub(crate) const fn owned_cities(&self) -> &VecDeque<i32> {
         &self.owned_cities
     }
 
-    /// Синхронизирует каждый owned region с текущими faction/union ID.
+ /// Синхронизирует каждый owned region с текущими faction/union ID.
     pub(crate) fn refresh_owned_city_info<F>(
         &self,
         mut refresh_owned_city: F,
@@ -3289,7 +2714,7 @@ impl CFaction {
         })
     }
 
-    /// Дописывает owned-city list вместе с исходными region C-строками.
+ /// Дописывает owned-city list вместе с исходными region C-строками.
     pub(crate) fn add_owned_cities_to_byte_array(
         &self,
         game: &CGame,
@@ -3309,7 +2734,7 @@ impl CFaction {
         Ok(true)
     }
 
-    /// Публикует полный owned-city snapshot каждому готовому member recipient.
+ /// Публикует полный owned-city snapshot каждому готовому member recipient.
     pub(crate) fn update_owned_cities_to_client(
         &self,
         game: &CGame,
@@ -3349,7 +2774,7 @@ impl CFaction {
         Ok(deliveries)
     }
 
-    /// Материализует `SetPlayerOrganizing` из уже заимствованного faction-owner-а.
+ /// Материализует `SetPlayerOrganizing` из уже заимствованного faction-owner-а.
     pub(crate) fn set_player_organizing_projection(
         &self,
         player_id: i32,
@@ -3409,7 +2834,7 @@ impl CFaction {
         Ok(())
     }
 
-    /// Диспетчеризует `CPlayer::UpdateFactionInfo` только online-игрокам.
+ /// Диспетчеризует `CPlayer::UpdateFactionInfo` только online-игрокам.
     pub(crate) fn update_player_faction_info<F>(
         &self,
         game: &CGame,
@@ -3458,7 +2883,7 @@ impl CFaction {
         })
     }
 
-    /// Очищает список, публикует snapshot и обновляет online member-ов.
+ /// Очищает список, публикует snapshot и обновляет online member-ов.
     pub(crate) fn clear_owned_cities<F>(
         &mut self,
         game: &CGame,
@@ -3476,7 +2901,7 @@ impl CFaction {
         })
     }
 
-    /// Добавляет один город только при полном отсутствии такого ID.
+ /// Добавляет один город только при полном отсутствии такого ID.
     pub(crate) fn add_owned_city<F>(
         &mut self,
         game: &CGame,
@@ -3494,7 +2919,7 @@ impl CFaction {
         Ok(OwnedCityAddOutcome::Added(report))
     }
 
-    /// Дописывает range и повторяет только adjacent `std::list::unique`.
+ /// Дописывает range и повторяет только adjacent `std::list::unique`.
     pub(crate) fn add_owned_city_list<F>(
         &mut self,
         game: &CGame,
@@ -3516,7 +2941,7 @@ impl CFaction {
         self.finish_owned_city_mutation(game, state_changed, update_player)
     }
 
-    /// Удаляет первое совпадение и публикует snapshot даже при miss.
+ /// Удаляет первое совпадение и публикует snapshot даже при miss.
     pub(crate) fn delete_owned_city<F>(
         &mut self,
         game: &CGame,
@@ -3541,7 +2966,7 @@ impl CFaction {
         })
     }
 
-    /// Заменяет список и публикует snapshot без player refresh.
+ /// Заменяет список и публикует snapshot без player refresh.
     pub(crate) fn set_owned_cities(
         &mut self,
         game: &CGame,
@@ -3562,7 +2987,7 @@ impl CFaction {
         })
     }
 
-    /// Возвращает faction ID, только если город есть в исходном list-order.
+ /// Возвращает faction ID, только если город есть в исходном list-order.
     pub(crate) fn is_owned_city(&self, region_id: i32) -> i32 {
         if self.owned_cities.contains(&region_id) {
             self.faction_id
@@ -3571,7 +2996,7 @@ impl CFaction {
         }
     }
 
-    /// Возвращает faction ID только для текущего `m_lMastterID`.
+ /// Возвращает faction ID только для текущего `m_lMastterID`.
     pub(crate) const fn is_master(&self, player_id: i32) -> i32 {
         match self.master_id {
             Some(master_id) if master_id == player_id => self.faction_id,
@@ -3579,17 +3004,17 @@ impl CFaction {
         }
     }
 
-    /// Возвращает копируемый `m_EnemyFactions` в signed key-order.
+ /// Возвращает копируемый `m_EnemyFactions` в signed key-order.
     pub(crate) const fn enemy_factions(&self) -> &BTreeSet<i32> {
         &self.enemy_factions
     }
 
-    /// Возвращает независимую value-копию исходного `std::set<long>`.
+ /// Возвращает независимую value-копию исходного `std::set<long>`.
     pub(crate) fn enemy_factions_snapshot(&self) -> BTreeSet<i32> {
         self.enemy_factions.clone()
     }
 
-    /// Очищает standard enemy-set и отмечает только фактическое изменение.
+ /// Очищает standard enemy-set и отмечает только фактическое изменение.
     pub(crate) fn clear_enemy_factions(&mut self) {
         if !self.enemy_factions.is_empty() {
             self.enemy_factions_changed = Some(true);
@@ -3597,22 +3022,22 @@ impl CFaction {
         self.enemy_factions.clear();
     }
 
-    /// Сохраняет exact `set::_Mysize != 0` без зависимости от MSVC layout.
+ /// Сохраняет `set::_Mysize != 0` без зависимости от MSVC layout.
     pub(crate) fn has_enemy_faction(&self) -> bool {
         !self.enemy_factions.is_empty()
     }
 
-    /// Возвращает копируемый `m_CityWarEnemyFactions` в signed key-order.
+ /// Возвращает копируемый `m_CityWarEnemyFactions` в signed key-order.
     pub(crate) const fn city_war_enemy_factions(&self) -> &BTreeSet<i32> {
         &self.city_war_enemy_factions
     }
 
-    /// Возвращает независимую value-копию city-war `std::set<long>`.
+ /// Возвращает независимую value-копию city-war `std::set<long>`.
     pub(crate) fn city_war_enemy_factions_snapshot(&self) -> BTreeSet<i32> {
         self.city_war_enemy_factions.clone()
     }
 
-    /// Очищает city-war enemy-set и отмечает только фактическое изменение.
+ /// Очищает city-war enemy-set и отмечает только фактическое изменение.
     pub(crate) fn clear_city_war_enemy_factions(&mut self) {
         if !self.city_war_enemy_factions.is_empty() {
             self.city_war_enemy_factions_changed = Some(true);
@@ -3620,17 +3045,17 @@ impl CFaction {
         self.city_war_enemy_factions.clear();
     }
 
-    /// Сохраняет exact `set::_Mysize != 0` для city-war enemy-set.
+ /// Сохраняет `set::_Mysize != 0` для city-war enemy-set.
     pub(crate) fn has_city_war_enemy_faction(&self) -> bool {
         !self.city_war_enemy_factions.is_empty()
     }
 
-    /// Сохраняет отдельный исторический stub, не подменяя его membership-check.
+ /// Сохраняет отдельный исторический stub, не подменяя его membership-check.
     pub(crate) const fn is_enemy_faction(&self, _faction_id: i32) -> i32 {
         0
     }
 
-    /// Исторический concrete virtual не читал state и всегда возвращал `0`.
+ /// Исторический concrete virtual не читал state и всегда возвращал `0`.
     pub(crate) const fn enemy_leader_organizing_id(&self) -> i32 {
         0
     }
@@ -3668,7 +3093,7 @@ impl CFaction {
         Ok(true)
     }
 
-    /// Добавляет standard enemy и только при новой записи пишет `WS0158`.
+ /// Добавляет standard enemy и только при новой записи пишет `WS0158`.
     pub(crate) fn add_enemy_organizing<Context>(
         &mut self,
         enemy_id: i32,
@@ -3694,7 +3119,7 @@ impl CFaction {
         })
     }
 
-    /// Удаляет существующего standard enemy и после erase пишет `WS0159`.
+ /// Удаляет существующего standard enemy и после erase пишет `WS0159`.
     pub(crate) fn del_enemy_organizing<Context>(
         &mut self,
         enemy_id: i32,
@@ -3727,7 +3152,7 @@ impl CFaction {
         })
     }
 
-    /// Добавляет city-war enemy, выставляя changed byte перед вставкой.
+ /// Добавляет city-war enemy, выставляя changed byte перед вставкой.
     pub(crate) fn add_city_war_enemy_organizing<Context>(
         &mut self,
         enemy_id: i32,
@@ -3754,7 +3179,7 @@ impl CFaction {
         })
     }
 
-    /// Безусловно стирает city-war enemy и независимо от miss пытается писать `WS0161`.
+ /// Безусловно стирает city-war enemy и независимо от miss пытается писать `WS0161`.
     pub(crate) fn del_city_war_enemy_organizing<Context>(
         &mut self,
         enemy_id: i32,
@@ -3780,13 +3205,13 @@ impl CFaction {
         })
     }
 
-    /// Дописывает полный standard enemy-set в исходном wire-формате.
+ /// Дописывает полный standard enemy-set в исходном wire-формате.
     pub(crate) fn add_enemy_factions_to_byte_array(&self, output: &mut Vec<u8>) -> bool {
         append_signed_set(output, &self.enemy_factions);
         true
     }
 
-    /// Дописывает полный city-war enemy-set в исходном wire-формате.
+ /// Дописывает полный city-war enemy-set в исходном wire-формате.
     pub(crate) fn add_city_war_enemy_factions_to_byte_array(
         &self,
         output: &mut Vec<u8>,
@@ -3840,7 +3265,7 @@ impl CFaction {
         self.update_enemy_set_to_client(game, EnemyFactionSetKind::CityWar)
     }
 
-    /// Ставит standard changed-флаг, публикует set и обновляет online players.
+ /// Ставит standard changed-флаг, публикует set и обновляет online players.
     pub(crate) fn update_enemy_faction<F>(
         &mut self,
         game: &CGame,
@@ -3858,7 +3283,7 @@ impl CFaction {
         }
     }
 
-    /// Выполняет city-war refresh только при changed-флаге ровно `true`.
+ /// Выполняет city-war refresh только при changed-флаге ровно `true`.
     pub(crate) fn update_city_war_enemy_faction<F>(
         &self,
         game: &CGame,
@@ -3882,7 +3307,7 @@ impl CFaction {
         }
     }
 
-    /// Рассылает current/upgrade exp только contributor-ам и master-у.
+ /// Рассылает current/upgrade exp только contributor-ам и master-у.
     pub(crate) fn update_experience_to_client(
         &self,
         game: &CGame,
@@ -3917,7 +3342,7 @@ impl CFaction {
         Ok(deliveries)
     }
 
-    /// Рассылает полный pronounce-state всем готовым member recipient-ам.
+ /// Рассылает полный pronounce-state всем готовым member recipient-ам.
     pub(crate) fn update_pronounce_to_client(
         &self,
         game: &CGame,
@@ -3969,7 +3394,7 @@ impl CFaction {
         Ok(deliveries)
     }
 
-    /// Публикует полный apply-list одному готовому клиенту без проверки права.
+ /// Публикует полный apply-list одному готовому клиенту без проверки права.
     pub(crate) fn update_all_apply_members_to_client(
         &self,
         game: &CGame,
@@ -4008,7 +3433,7 @@ impl CFaction {
         Ok(deliveries)
     }
 
-    /// Публикует один apply-record только членам с правом `PV_ConMem`.
+ /// Публикует один apply-record только членам с правом `PV_ConMem`.
     pub(crate) fn update_apply_member_to_client(
         &self,
         game: &CGame,
@@ -4055,7 +3480,7 @@ impl CFaction {
         Ok(deliveries)
     }
 
-    /// Удаляет кандидата до публикации пустого `OP_Delete`-record-а.
+ /// Удаляет кандидата до публикации пустого `OP_Delete`-record-а.
     pub(crate) fn remove_apply_member(
         &mut self,
         game: &CGame,
@@ -4074,7 +3499,7 @@ impl CFaction {
         }
     }
 
-    /// Создаёт заявку после полной исходной цепочки war/limit/member gates.
+ /// Создаёт заявку после полной исходной цепочки war/limit/member gates.
     pub(crate) fn apply_for_join<Context>(
         &mut self,
         game: &CGame,
@@ -4190,7 +3615,7 @@ impl CFaction {
         })
     }
 
-    /// Выпускает участника из faction с исходным порядком внешних эффектов.
+ /// Выпускает участника из faction с исходным порядком внешних эффектов.
     pub(crate) fn exit<Context>(
         &mut self,
         game: &CGame,
@@ -4304,7 +3729,7 @@ impl CFaction {
         })
     }
 
-    /// Исключает участника с точным FireOut-порядком уведомлений и callback-ов.
+ /// Исключает участника с точным FireOut-порядком уведомлений и callback-ов.
     pub(crate) fn fire_out<Context>(
         &mut self,
         game: &CGame,
@@ -4441,7 +3866,7 @@ impl CFaction {
         })
     }
 
-    /// Изменяет title и job-level двумя независимыми исходными ветками.
+ /// Изменяет title и job-level двумя независимыми исходными ветками.
     pub(crate) fn dub_and_set_job_level<Context>(
         &mut self,
         game: &CGame,
@@ -4700,7 +4125,7 @@ impl CFaction {
         )
     }
 
-    /// Меняет maximum member count и публикует `WS0186` только при отличии.
+ /// Меняет maximum member count и публикует `WS0186` только при отличии.
     pub(crate) fn set_maximum_members<Context>(
         &mut self,
         maximum_members: i32,
@@ -4733,12 +4158,12 @@ impl CFaction {
         ))
     }
 
-    /// Старый virtual принимал amount, не читал его и всегда возвращал `true`.
+ /// Старый virtual принимал amount, не читал его и всегда возвращал `true`.
     pub(crate) const fn inc_maximum_number(&self, _amount: i32) -> bool {
         true
     }
 
-    /// Меняет level и последовательно применяет шесть feature-флагов и maximum.
+ /// Меняет level и последовательно применяет шесть feature-флагов и maximum.
     pub(crate) fn set_level<Context>(
         &mut self,
         level: i32,
@@ -4826,7 +4251,7 @@ impl CFaction {
         })
     }
 
-    /// Диспетчеризует legacy `Level`/`Experience` и сохраняет общий postfix.
+ /// Диспетчеризует legacy `Level`/`Experience` и сохраняет общий postfix.
     pub(crate) fn set_parameter<Context>(
         &mut self,
         game: &CGame,
@@ -4919,7 +4344,7 @@ impl CFaction {
         Ok(FactionSetParameterOutcome::Applied(progress))
     }
 
-    /// Повышает faction-level с исходными проверками и частичными эффектами.
+ /// Повышает faction-level с исходными проверками и частичными эффектами.
     pub(crate) fn upgrade<Context>(
         &mut self,
         game: &CGame,
@@ -5340,7 +4765,7 @@ impl CFaction {
         })
     }
 
-    /// Отклоняет либо принимает уже существующую faction-заявку.
+ /// Отклоняет либо принимает уже существующую faction-заявку.
     pub(crate) fn do_join<Context>(
         &mut self,
         game: &CGame,
@@ -5618,7 +5043,7 @@ impl CFaction {
         })
     }
 
-    /// Публикует удаление по переданному ID либо последний leave-word целиком.
+ /// Публикует удаление по переданному ID либо последний leave-word целиком.
     pub(crate) fn update_leave_word_to_client(
         &self,
         game: &CGame,
@@ -5686,7 +5111,7 @@ impl CFaction {
         Ok(deliveries)
     }
 
-    /// Удаляет leave-word; объявленный operator исходная функция не читала.
+ /// Удаляет leave-word; объявленный operator исходная функция не читала.
     pub(crate) fn edit_leave_word(
         &mut self,
         game: &CGame,
@@ -5716,7 +5141,7 @@ impl CFaction {
         Ok(FactionEditLeaveWordOutcome::Deleted { deliveries })
     }
 
-    /// Создаёт новый leave-word, вытесняет старейшие и публикует последний.
+ /// Создаёт новый leave-word, вытесняет старейшие и публикует последний.
     pub(crate) fn leave_word(
         &mut self,
         game: &mut CGame,
@@ -5785,7 +5210,7 @@ impl CFaction {
         })
     }
 
-    /// Загружает один DB leave-word с восстановленным FIFO-limit.
+ /// Загружает один DB leave-word с исходным FIFO-limit.
     pub(crate) fn load_leave_word(
         &mut self,
         leave_word: TagLeaveWord,
@@ -5799,7 +5224,7 @@ impl CFaction {
         FactionLoadLeaveWordReport { evicted_count }
     }
 
-    /// Заменяет текущее объявление с исходными проверками и порядком эффектов.
+ /// Заменяет текущее объявление с исходными проверками и порядком эффектов.
     pub(crate) fn pronounce(
         &mut self,
         game: &CGame,
@@ -5857,7 +5282,7 @@ impl CFaction {
         })
     }
 
-    /// Повторяет permission/interval gate старого `UploadIcon` без выдуманного I/O.
+ /// Повторяет permission/interval gate старого `UploadIcon` без выдуманного I/O.
     pub(crate) fn upload_icon<Context>(
         &mut self,
         parameters: &COrganizingParam,
@@ -5908,7 +5333,7 @@ impl CFaction {
         })
     }
 
-    /// Проверяет disband-контракт и очищает reached transient faction-state.
+ /// Проверяет disband-контракт и очищает reached transient faction-state.
     pub(crate) fn disband<Context>(
         &mut self,
         game: &CGame,
@@ -5994,7 +5419,7 @@ impl CFaction {
         Ok(FactionDisbandOutcome::Disbanded(progress))
     }
 
-    /// Передаёт leadership с точными gates, member-state и порядком публикации.
+ /// Передаёт leadership с точными gates, member-state и порядком публикации.
     pub(crate) fn demise<Context>(
         &mut self,
         game: &CGame,
@@ -6322,7 +5747,7 @@ impl CFaction {
         Ok(FactionDemiseOutcome::Transferred(progress))
     }
 
-    /// Проверяет authority на сбор налога в принадлежащем faction городе.
+ /// Проверяет authority на сбор налога в принадлежащем faction городе.
     pub(crate) fn operator_tax<Context>(
         &self,
         player_id: i32,
@@ -6349,7 +5774,7 @@ impl CFaction {
         self.authorize_owned_city_operation(player_id, region_id, EPurview::ObtainTax)
     }
 
-    /// Проверяет authority на управление воротами принадлежащего faction города.
+ /// Проверяет authority на управление воротами принадлежащего faction города.
     pub(crate) fn operator_city_gate<Context>(
         &self,
         player_id: i32,
@@ -6395,7 +5820,7 @@ impl CFaction {
         Ok(FactionOperationOutcome::Authorized)
     }
 
-    /// Передаёт organizing-info каждому member без online-фильтра этого owner-а.
+ /// Передаёт organizing-info каждому member без online-фильтра этого owner-а.
     pub(crate) fn send_info_to_all_members<'a, F>(
         &self,
         first_text: &'a [u8],
@@ -6540,7 +5965,7 @@ impl CFaction {
         Ok(FactionFeatureFunctionUpdate::Updated(report))
     }
 
-    /// Публикует имя другой фракции всем готовым member recipient-ам.
+ /// Публикует имя другой фракции всем готовым member recipient-ам.
     pub(crate) fn update_other_faction_info_to_client(
         &self,
         game: &CGame,
@@ -6571,7 +5996,7 @@ impl CFaction {
         Ok(deliveries)
     }
 
-    /// Рассылает faction-talk всем member-ам с известным GameServer ID.
+ /// Рассылает faction-talk всем member-ам с известным GameServer ID.
     pub(crate) fn talk(
         &self,
         game: &CGame,
@@ -6603,7 +6028,7 @@ impl CFaction {
         deliveries
     }
 
-    /// Удаляет faction-state у одного готового клиента либо у всех online member-ов.
+ /// Удаляет faction-state у одного готового клиента либо у всех online member-ов.
     pub(crate) fn delete_organizing_to_client<Context>(
         &self,
         game: &CGame,
@@ -6672,7 +6097,7 @@ impl CFaction {
         })
     }
 
-    /// Clamp-ит и публикует faction experience с исходным порядком эффектов.
+ /// Clamp-ит и публикует faction experience с исходным порядком эффектов.
     pub(crate) fn set_experience(
         &mut self,
         game: &CGame,
@@ -6698,7 +6123,7 @@ impl CFaction {
         })
     }
 
-    /// Возвращает достигнутый `m_Property.lConfederationID`.
+ /// Возвращает действующий `m_Property.lConfederationID`.
     pub(crate) const fn superior_organizing(&self) -> Option<i32> {
         match self.base_property {
             Some(property) => Some(property.union_id()),
@@ -6710,7 +6135,7 @@ impl CFaction {
         self.union_master_id = union_master_id;
     }
 
-    /// Возвращает player-header с исходным union lookup и faction fallback.
+ /// Возвращает player-header с исходным union lookup и faction fallback.
     pub(crate) fn player_header<Context>(
         &self,
         context: &Context,
@@ -6733,7 +6158,7 @@ impl CFaction {
             .ok_or(FactionPlayerHeaderBlock::MissingMasterId)
     }
 
-    /// Назначает union ID и поддерживает исходный countdown роспуска.
+ /// Назначает union ID и поддерживает исходный countdown роспуска.
     pub(crate) fn set_superior_organizing(
         &mut self,
         organizing_id: i32,
@@ -6775,7 +6200,7 @@ impl CFaction {
         Ok(())
     }
 
-    /// Удаляет не-master участника и при необходимости запускает роспуск.
+ /// Удаляет не-master участника и при необходимости запускает роспуск.
     pub(crate) fn del_member(
         &mut self,
         player_id: i32,
@@ -6812,7 +6237,7 @@ impl CFaction {
         }))
     }
 
-    /// Возвращает member-title без завершающего NUL либо старую overread-границу.
+ /// Возвращает member-title без завершающего NUL либо старую overread-границу.
     pub(crate) fn member_title(&self, player_id: i32) -> Result<Vec<u8>, UnterminatedMemberField> {
         let Some(member) = self.members.get(&player_id) else {
             return Ok(Vec::new());
@@ -6821,14 +6246,14 @@ impl CFaction {
         Ok(wire[..wire.len() - 1].to_vec())
     }
 
-    /// Сохраняет точный missing-member результат `CFaction::IsControbute`.
+ /// Сохраняет точный missing-member результат `CFaction::IsControbute`.
     pub(crate) fn is_contribute(&self, player_id: i32) -> bool {
         self.members
             .get(&player_id)
             .is_some_and(|member| member.contribute)
     }
 
-    /// Считает contributor-флаги с исходным 32-битным переполнением.
+ /// Считает contributor-флаги с исходным 32-битным переполнением.
     pub(crate) fn contributor_count(&self) -> i32 {
         self.members.values().fold(0i32, |count, member| {
             if member.contribute {
@@ -6839,7 +6264,7 @@ impl CFaction {
         })
     }
 
-    /// Меняет contributor-флаг с исходным порядком публикации и dirty-state.
+ /// Меняет contributor-флаг с исходным порядком публикации и dirty-state.
     pub(crate) fn set_contributor<Context>(
         &mut self,
         game: &CGame,
@@ -6929,14 +6354,14 @@ impl CFaction {
         Ok(FactionContributorOutcome::Updated(progress))
     }
 
-    /// Возвращает младшие 16 бит `lJobLvl` либо исходный `0` при miss.
+ /// Возвращает младшие 16 бит `lJobLvl` либо исходный `0` при miss.
     pub(crate) fn member_job_level(&self, player_id: i32) -> u16 {
         self.members
             .get(&player_id)
             .map_or(0, |member| member.job_level as u16)
     }
 
-    /// Проверяет точное состояние `PST_Permit` одного member-права.
+ /// Проверяет точное состояние `PST_Permit` одного member-права.
     pub(crate) fn is_using_purview(&self, player_id: i32, purview: i32) -> bool {
         let Some(purview) = EPurview::from_wire_value(purview) else {
             return false;
@@ -6946,7 +6371,7 @@ impl CFaction {
             .is_some_and(|member| member.purview[purview.index()] == EPurviewOwnState::Permit)
     }
 
-    /// Переводит только `PST_No` в `PST_Permit`.
+ /// Переводит только `PST_No` в `PST_Permit`.
     pub(crate) fn set_member_purview(
         &mut self,
         player_id: i32,
@@ -6966,7 +6391,7 @@ impl CFaction {
         MemberPurviewMutation::Changed
     }
 
-    /// Переводит любое не-`PST_No` состояние в `PST_No`.
+ /// Переводит любое не-`PST_No` состояние в `PST_No`.
     pub(crate) fn abolish_member_purview(
         &mut self,
         player_id: i32,
@@ -6986,12 +6411,12 @@ impl CFaction {
         MemberPurviewMutation::Changed
     }
 
-    /// Проверяет членство и одно право requester-а.
+ /// Проверяет членство и одно право requester-а.
     pub(crate) fn check_operator_validate(&self, requester_id: i32, purview: i32) -> bool {
         self.is_member(requester_id) != 0 && self.is_using_purview(requester_id, purview)
     }
 
-    /// Проверяет операцию requester над другим faction-member.
+ /// Проверяет операцию requester над другим faction-member.
     pub(crate) fn check_operator_validate_target(
         &self,
         requester_id: i32,
@@ -7013,12 +6438,12 @@ impl CFaction {
         Ok(true)
     }
 
-    /// Возвращает один снимок исходной signed dirty-bit mask.
+ /// Возвращает один снимок исходной signed dirty-bit mask.
     pub(crate) const fn change_data_type(&self) -> i32 {
         self.change_data_type
     }
 
-    /// Применяет точную bit-mask семантику virtual `SetChangeData`.
+ /// Применяет точную bit-mask семантику virtual `SetChangeData`.
     pub(crate) fn set_change_data(&mut self, change_data_type: i32) {
         if change_data_type == 0 {
             self.change_data_type = 0;
@@ -7027,7 +6452,7 @@ impl CFaction {
         }
     }
 
-    /// Создаёт отдельную save-копию ровно по dirty-битам `1/2/4/8`.
+ /// Создаёт отдельную save-копию ровно по dirty-битам `1/2/4/8`.
     pub(crate) fn clone_save_data(&self) -> Result<Option<Self>, FactionCloneSaveBlock> {
         let change_data_type = self.change_data_type;
         if change_data_type == 0 {
@@ -7089,15 +6514,15 @@ impl CFaction {
             } else {
                 VecDeque::new()
             },
-            // CloneSaveData не копирует оба runtime enemy-set.
+ // CloneSaveData не копирует оба runtime enemy-set.
             enemy_factions: BTreeSet::new(),
             city_war_enemy_factions: BTreeSet::new(),
-            // Private clone-constructor не назначает transient bool.
+ // Private clone-constructor не назначает transient bool.
             permit_demise: None,
             enemy_factions_changed: None,
             city_war_enemy_factions_changed: None,
-            // DB ability-owner читает ordered keys; wire-owner подтверждает
-            // и сохраняемый вместе с ними полный tagApplyPerson value.
+ // DB ability-owner читает ordered keys; wire-owner подтверждает
+ // и сохраняемый вместе с ними полный tagApplyPerson value.
             apply_persons: if change_data_type & 8 != 0 {
                 self.apply_persons.clone()
             } else {
@@ -7124,9 +6549,9 @@ impl CFaction {
                 Vec::new()
             },
             change_data_type,
-            // Private clone-constructor не назначает эти поля; текущие
-            // безопасные значения остаются только до будущей canonical
-            // нормализации SaveFactionProperty.
+ // Private clone-constructor не назначает эти поля; текущие
+ // безопасные значения остаются только до связанный canonical
+ // нормализации SaveFactionProperty.
             goods_war_count: 0,
             goods_war_last_win_time: String::new(),
             union_master_id: if copy_property {
@@ -7137,7 +6562,7 @@ impl CFaction {
         }))
     }
 
-    /// Обновляет Goods War count/time и возвращает сохранённый signed count.
+ /// Обновляет Goods War count/time и возвращает сохранённый signed count.
     pub(crate) fn set_goods_war_count(&mut self, goods_war_count: i32) -> i32 {
         let now = Local::now();
         self.goods_war_last_win_time = format!(
@@ -7158,48 +6583,48 @@ impl CFaction {
         self.goods_war_count
     }
 
-    /// Возвращает текущий signed Goods War count save-копии.
+ /// Возвращает текущий signed Goods War count save-копии.
     pub(crate) const fn goods_war_count(&self) -> i32 {
         self.goods_war_count
     }
 
-    /// Возвращает текущую ASCII time-строку save-копии.
+ /// Возвращает текущую ASCII time-строку save-копии.
     pub(crate) fn goods_war_last_win_time(&self) -> &str {
         &self.goods_war_last_win_time
     }
 
-    /// Заменяет только time-строку save-копии до ADO/TDS update.
+ /// Заменяет только time-строку save-копии до ADO/TDS update.
     pub(crate) fn set_goods_war_last_win_time(&mut self, value: String) {
         self.goods_war_last_win_time = value;
     }
 
-    /// Возвращает исходный const-view ordered `m_Members`.
+ /// Возвращает исходный const-view ordered `m_Members`.
     pub(crate) const fn get_members(&self) -> &BTreeMap<i32, TagMemInfo> {
         &self.members
     }
 
-    /// Перегрузка `list<COrganizing*>`: faction не возвращает вложенные owners.
+ /// Перегрузка `list<COrganizing*>`: faction не возвращает вложенные owners.
     pub(crate) fn get_organizing_member_list<T>(&self, output: &mut VecDeque<T>) {
         output.clear();
     }
 
-    /// Перегрузка `list<long>`: заменяет output полным ordered списком ID.
+ /// Перегрузка `list<long>`: заменяет output полным ordered списком ID.
     pub(crate) fn get_member_id_list(&self, output: &mut VecDeque<i32>) {
         output.clear();
         output.extend(self.members.keys().copied());
     }
 
-    /// Возвращает полный ordered map исходного `m_ApplyPersons`.
+ /// Возвращает полный ordered map исходного `m_ApplyPersons`.
     pub(crate) const fn get_apply_persons(&self) -> &BTreeMap<i32, TagApplyPerson> {
         &self.apply_persons
     }
 
-    /// Даёт DB owner-у прежний zero-copy ordered view только ключей.
+ /// Даёт DB owner-у прежний zero-copy ordered view только ключей.
     pub(crate) fn get_apply_person_ids(&self) -> impl Iterator<Item = &i32> {
         self.apply_persons.keys()
     }
 
-    /// Возвращает faction ID при наличии player-key в `m_ApplyPersons`.
+ /// Возвращает faction ID при наличии player-key в `m_ApplyPersons`.
     pub(crate) fn is_in_apply_members(&self, player_id: i32) -> i32 {
         if self.apply_persons.contains_key(&player_id) {
             self.faction_id
@@ -7208,7 +6633,7 @@ impl CFaction {
         }
     }
 
-    /// Очищает apply-list только при точном состоянии права `ConMem`.
+ /// Очищает apply-list только при точном состоянии права `ConMem`.
     pub(crate) fn clear_apply_list(&mut self, operator_id: i32) -> bool {
         if !self.is_using_purview(operator_id, EPurview::ConMem as i32) {
             return false;
@@ -7217,33 +6642,33 @@ impl CFaction {
         true
     }
 
-    /// Дописывает byte-exact `m_Pronounce` в исходный output-vector.
+ /// Дописывает byte- `m_Pronounce` в исходный output-vector.
     pub(crate) fn get_pronounce_data(&self, output: &mut Vec<u8>) -> bool {
         self.pronounce.append_wire_bytes(output);
         true
     }
 
-    /// Возвращает исходный const-view ordered `m_LeaveWords`.
+ /// Возвращает исходный const-view ordered `m_LeaveWords`.
     pub(crate) const fn get_leave_words(&self) -> &VecDeque<TagLeaveWord> {
         &self.leave_words
     }
 
-    /// Возвращает дату последней загрузки faction-icon.
+ /// Возвращает дату последней загрузки faction-icon.
     pub(crate) const fn last_upload_icon_time(&self) -> TagTimeValue {
         self.last_upload_icon_time
     }
 
-    /// Возвращает byte-exact исходный `m_IconData`.
+ /// Возвращает byte- исходный `m_IconData`.
     pub(crate) fn icon_data(&self) -> &[u8] {
         &self.icon_data
     }
 
-    /// Возвращает младший 32-битный шаблон старого `map::_Mysize`.
+ /// Возвращает младший 32-битный шаблон старого `map::_Mysize`.
     pub(crate) fn get_member_num(&self) -> i32 {
         self.members.len() as u32 as i32
     }
 
-    /// Возвращает faction ID только для существующего member key.
+ /// Возвращает faction ID только для существующего member key.
     pub(crate) fn is_member(&self, player_id: i32) -> i32 {
         if self.members.contains_key(&player_id) {
             self.faction_id
@@ -7252,10 +6677,10 @@ impl CFaction {
         }
     }
 
-    /// Дописывает точный полный faction snapshot virtual slot `+0x0C`.
-    ///
-    /// Title master-а исходник копировал только при visible длине не более
-    /// двадцати байт; более длинный title оставлял уже обнулённый `char[256]`.
+ /// Дописывает точный полный faction snapshot virtual slot `+0x0C`.
+ ///
+ /// Title master-а исходник копировал только при visible длине не более
+ /// двадцати байт; более длинный title оставлял уже обнулённый `char[256]`.
     pub(crate) fn add_full_snapshot_to_byte_array(
         &self,
         game: &CGame,
@@ -7313,7 +6738,7 @@ impl CFaction {
         Ok(true)
     }
 
-    /// Дописывает полный ordered member snapshot в исходном byte-array формате.
+ /// Дописывает полный ordered member snapshot в исходном byte-array формате.
     pub(crate) fn add_members_to_byte_array(
         &self,
         output: &mut Vec<u8>,
@@ -7334,7 +6759,7 @@ impl CFaction {
         Ok(true)
     }
 
-    /// Дописывает полный ordered snapshot кандидатов на вступление.
+ /// Дописывает полный ordered snapshot кандидатов на вступление.
     pub(crate) fn add_apply_persons_to_byte_array(
         &self,
         output: &mut Vec<u8>,
@@ -7355,7 +6780,7 @@ impl CFaction {
         Ok(true)
     }
 
-    /// Дописывает полный leave-word snapshot в исходном list-order.
+ /// Дописывает полный leave-word snapshot в исходном list-order.
     pub(crate) fn add_leave_words_to_byte_array(
         &self,
         output: &mut Vec<u8>,
@@ -7371,8 +6796,8 @@ impl CFaction {
         Ok(true)
     }
 
-    /// Публикует delete либо полный non-delete member-update всем готовым
-    /// получателям.
+ /// Публикует delete либо полный non-delete member-update всем готовым
+ /// получателям.
     pub(crate) fn update_member_info_to_client(
         &mut self,
         game: &CGame,
@@ -7435,7 +6860,7 @@ impl CFaction {
         })
     }
 
-    /// Обновляет `tagMemInfo::lLvl` и публикует operator `Update`.
+ /// Обновляет `tagMemInfo::lLvl` и публикует operator `Update`.
     pub(crate) fn on_member_level_change(
         &mut self,
         game: &CGame,
@@ -7456,7 +6881,7 @@ impl CFaction {
         ))
     }
 
-    /// Копирует имя заданного региона в member-state и публикует `Update`.
+ /// Копирует имя заданного региона в member-state и публикует `Update`.
     pub(crate) fn on_member_position_change(
         &mut self,
         game: &CGame,
@@ -7496,7 +6921,7 @@ impl CFaction {
         ))
     }
 
-    /// Обновляет byte-exact online-регион участника и публикует изменение.
+ /// Обновляет byte- online-регион участника и публикует изменение.
     pub(crate) fn on_member_enter_game(
         &mut self,
         game: &CGame,
@@ -7513,9 +6938,9 @@ impl CFaction {
         let region_name = match game.region_name(region_id) {
             WorldRegionNameLookup::RegionNotFound => &[][..],
             WorldRegionNameLookup::NullRegionPointer => {
-                // Exact EXE `0x004C0A96..0x004C0A98` разыменовывает найденный
-                // `tagRegion::pRegion` без проверки на null.
-                // Достижимость и наблюдаемая реакция null не доказаны.
+ // разыменовывает найденный
+ // `tagRegion::pRegion` без проверки на null.
+ // Достижимость и наблюдаемая реакция null не доказаны.
                 return MemberEnterOutcome::Blocked(MemberEnterBlockedReason::NullRegionPointer {
                     region_id,
                 });
@@ -7531,7 +6956,7 @@ impl CFaction {
             let member_region = match member.region_wire_bytes() {
                 Ok(bytes) => &bytes[..bytes.len() - 1],
                 Err(field) => {
-                    // strcmp читал бы за strRegion[64].
+ // strcmp читал бы за strRegion[64].
                     return MemberEnterOutcome::Blocked(
                         MemberEnterBlockedReason::UnterminatedMemberRegion(field),
                     );
@@ -7550,8 +6975,8 @@ impl CFaction {
             .region
             .len();
         if region_name.len() >= member_region_capacity {
-            // Второй `strcpy` по `0x004C0B07..0x004C0B11` переполнял бы
-            // `strRegion[64]` уже после доказанного неравенства.
+ // Второй `strcpy` по переполнял бы
+ // `strRegion[64]` уже после доказанного неравенства.
             return MemberEnterOutcome::Blocked(
                 MemberEnterBlockedReason::RegionNameExceedsMemberField {
                     region_id,
@@ -7574,7 +6999,7 @@ impl CFaction {
         ))
     }
 
-    /// Очищает online-регион участника и публикует исходный update при изменении.
+ /// Очищает online-регион участника и публикует исходный update при изменении.
     pub(crate) fn on_member_exit_game(
         &mut self,
         game: &CGame,

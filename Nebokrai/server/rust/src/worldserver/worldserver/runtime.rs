@@ -283,7 +283,7 @@ pub(crate) struct WorldProcessDomainOwners {
     pub(crate) honor_ranks: CHonorRanks,
     pub(crate) increment_log: CIncrementLog,
     pub(crate) auction_log: CAuctionLog,
-    /// Единственные входная/выходная FIFO аукционного DB-конвейера.
+ /// Единственные входная/выходная FIFO аукционного DB-конвейера.
     pub(crate) db_misc: CDbMisc,
     pub(crate) session_factory: CSessionFactory,
     pub(crate) net_sessions: CNetSessionManager,
@@ -844,9 +844,9 @@ impl WorldGameReleaseContext for WorldProcessReleaseContext<'_> {
 
 /// Результат одного завершившегося системного save-worker-а.
 pub(crate) struct WorldSaveWorkerCompletion {
-    /// Незавершённый batch остаётся owned до Release вместо тихой потери.
+ /// Незавершённый batch остаётся owned до Release вместо тихой потери.
     pub(crate) retained_job: Option<WorldSaveThreadJob>,
-    /// Blocked-путь не изображает достигнутый `LeaveCriticalSection`.
+ /// Blocked-путь не изображает действующий `LeaveCriticalSection`.
     retained_serialization: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
@@ -888,11 +888,11 @@ impl WorldSaveWorker {
         Arc::clone(&self.serialization)
     }
 
-    /// Запускает очередной exact background role, не ожидая предыдущий поток.
-    ///
-    /// Исходный caller закрывал только kernel handle: уже запущенный save-thread
-    /// продолжал работу и сериализовался внутри `SaveThreadFunc`. Rust хранит
-    /// join-handle-ы до release, но собирает здесь лишь уже завершившиеся.
+ /// Запускает очередной background role, не ожидая предыдущий поток.
+ ///
+ /// Исходный caller закрывал только kernel handle: уже запущенный save-thread
+ /// продолжал работу и сериализовался внутри `SaveThreadFunc`. Rust хранит
+ /// join-handle-ы до release, но собирает здесь лишь уже завершившиеся.
     pub(crate) fn launch(&mut self, job: WorldSaveThreadJob) -> WorldSaveThreadHandleState {
         self.collect_finished();
 
@@ -1160,9 +1160,9 @@ impl WorldProcessPlayerLoadDatabase {
             jjc: TiberiusRsJjcSys::new(settings),
             goods: TiberiusDbGoods::new(settings),
             snapshot,
-            // Exact World binary только конструирует/читает static map; кроме
-            // CRT teardown записей в неё нет, поэтому shipped process начинает
-            // и остаётся с пустой таблицей замен индексов.
+ // World binary только конструирует/читает static map; кроме
+ // CRT teardown записей в неё нет, поэтому shipped process начинает
+ // и остаётся с пустой таблицей замен индексов.
             changed_goods_indices: BTreeMap::new(),
             dakong_addon_types,
         }
@@ -1494,15 +1494,15 @@ impl Error for WorldPlatformTimeError {}
 fn local_tm(timestamp: i64) -> Result<libc::tm, WorldPlatformTimeError> {
     let timestamp = timestamp as libc::time_t;
     let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
-    // `localtime_r` — потокобезопасная системная замена MSVC `_localtime`;
-    // указатели живут только внутри этого вызова и результат сразу копируется.
+ // `localtime_r` — потокобезопасная системная замена MSVC `_localtime`;
+ // указатели живут только внутри этого вызова и результат сразу копируется.
     let result = unsafe { libc::localtime_r(&timestamp, local.as_mut_ptr()) };
     if result.is_null() {
         return Err(WorldPlatformTimeError::LocalTimeUnavailable {
             timestamp: timestamp as i64,
         });
     }
-    // `localtime_r` при non-null результате полностью инициализировал `tm`.
+ // `localtime_r` при non-null результате полностью инициализировал `tm`.
     Ok(unsafe { local.assume_init() })
 }
 
@@ -1558,7 +1558,7 @@ fn normalize_lei_ting_time(
         tm_isdst: local.daylight_saving,
         ..unsafe { std::mem::zeroed() }
     };
-    // `_mktime` в EXE одновременно нормализовал все девять полей `tm`.
+ // `_mktime` в EXE одновременно нормализовал все девять полей `tm`.
     let timestamp = unsafe { libc::mktime(&mut native) };
     *local = lei_ting_time_from_tm(&native);
     i32::try_from(timestamp).map_err(|_| {
@@ -2108,9 +2108,9 @@ impl WorldGameInitContext for WorldProcessInitContext {
             WorldGameDatabaseOwner::DbMisc => {
                 let mut database = TiberiusDbMiscDatabase::new(&settings);
                 if let Err(error) = database.initialize_normal_connection().await {
-                    // Конструктор старого CDbMisc также сохранял owner после
-                    // неуспешного CreateNormalCn: следующий MainLoop batch
-                    // повторял reconnect через тот же контекст.
+ // Конструктор старого CDbMisc также сохранял owner после
+ // неуспешного CreateNormalCn: следующий MainLoop batch
+ // повторял reconnect через тот же контекст.
                     eprintln!(
                         "WorldServer: начальное соединение аукционного DB-owner-а не открыто: {error:?}"
                     );
@@ -2603,9 +2603,9 @@ pub(crate) struct WorldProcessRuntime {
     exit_requested: Arc<AtomicBool>,
     game_thread_exited: bool,
     window_close_requested: bool,
-    /// Статический `ReMsg` исходно заполнен нулями; в точном EXE найден только reader,
-    /// поэтому owner сохраняется отдельно и остаётся нулём до появления
-    /// доказанного producer-а.
+ /// Статический `ReMsg` исходно заполнен нулями; в точном EXE найден только reader,
+ /// поэтому owner сохраняется отдельно и остаётся нулём до появления
+ /// доказанного producer-а.
     reback_messages: i32,
 }
 

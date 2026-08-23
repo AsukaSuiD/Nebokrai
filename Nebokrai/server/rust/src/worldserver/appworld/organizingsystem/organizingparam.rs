@@ -1,17 +1,8 @@
-//! Параметры организаций исторического WorldServer.
+//! Параметры организаций WorldServer из точной пары EXE/PDB.
 //!
-//! Статус `GetMaxNumberByLvl` RVA `0x00040B70`, `GetLvlParamByLvl` RVA
-//! `0x00040BA0`, constructor/destructor/singleton RVA `0x00041340..0x000413E0`,
-//! `OnGetTodayTax` RVA `0x00041510`, `Load` RVA `0x000416D0` и thunk
-//! `Initialize` RVA `0x00041C80`: `IMPLEMENTED`, кроме прямого shutdown-вызова
-//! `Release`. Точная пара: `WorldServer/Nworldserver.exe +
-//! WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный owner PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingparam.cpp`.
+//! Owner охватывает загрузку, `Initialize`, `OnGetTodayTax` и `Release`.
 //!
-//! PDB задаёт размер owner-а `0x88`, `tagLvlParam` `0x2C` и точный порядок
+//! Layout сохраняет размер owner-а `0x88`, `tagLvlParam` `0x2C` и точный порядок
 //! полей. Rust не имитирует MSVC layout: `Vec`, `Vec<u8>`, `Option<TimerId>` и
 //! явная передача owner-а заменяют `std::vector`, `std::string`,
 //! неинициализированный event ID и nullable singleton. Числовые поля исходный
@@ -26,9 +17,8 @@
 //! сохраняет специфический `ReadTo("*")` контракт; обычная INI-библиотека для
 //! этого формата непригодна.
 //!
-//! Exact disassembly `0x00441B1F..0x00441B61` и
-//! `0x00441590..0x004415D1` исправляет ошибку decompiler-а: перед сравнением
-//! либо `AddDay(1)` в налоговую копию подставляются текущие year/month/day,
+//! Перед сравнением либо `AddDay(1)` в налоговую копию подставляются текущие
+//! year/month/day,
 //! но не weekday. Первое событие переносится только при strict `< now`, callback
 //! всегда ставит следующий день. Broadcast `0x7FE26`, регистрация следующего
 //! события, lookup `WS0263` и append в `war` сохраняют исходный порядок.
@@ -126,13 +116,13 @@ pub(crate) struct OrganizingTodayTaxRefreshReport {
 /// Наблюдаемый до `Drop` итог освобождения параметров организаций.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OrganizingParamReleaseReport {
-    /// Последнее назначенное tax-событие до consuming release.
+ /// Последнее назначенное tax-событие до consuming release.
     pub(crate) latest_tax_event_id: Option<TimerId>,
-    /// Число calendar registrations, сохранённых данным owner-ом.
+ /// Число calendar registrations, сохранённых данным owner-ом.
     pub(crate) registered_tax_events: usize,
-    /// Число реально снятых записей в общем `CTimer`.
+ /// Число реально снятых записей в общем `CTimer`.
     pub(crate) cancelled_tax_events: usize,
-    /// Число level-записей, переданных стандартному Rust Drop.
+ /// Число level-записей, переданных стандартному Rust Drop.
     pub(crate) released_level_records: usize,
 }
 
@@ -159,11 +149,11 @@ struct ParsedOrganizingParam {
 }
 
 impl COrganizingParam {
-    /// Завершает owner и снимает его calendar callbacks до обычного `Drop`.
-    ///
-    /// Exact `Release` удалял только singleton: в исходном shutdown timer
-    /// освобождался отдельно. Явные Rust owners могут жить раздельно, поэтому
-    /// registrations отменяются здесь, чтобы callback не пережил параметры.
+ /// Завершает owner и снимает его calendar callbacks до обычного `Drop`.
+ ///
+ /// `Release` удалял только singleton: в исходном shutdown timer
+ /// освобождался отдельно. Явные Rust owners могут жить раздельно, поэтому
+ /// registrations отменяются здесь, чтобы callback не пережил параметры.
     pub(crate) fn release<Callback>(
         self,
         timer: &mut CTimer<Callback>,
@@ -183,7 +173,7 @@ impl COrganizingParam {
         }
     }
 
-    /// Открывает точный runtime-path, разбирает owner и ставит первое tax-событие.
+ /// Открывает точный runtime-path, разбирает owner и ставит первое tax-событие.
     pub(crate) fn initialize<Callback: Copy>(
         &mut self,
         runtime_directory: &Path,
@@ -194,7 +184,7 @@ impl COrganizingParam {
         self.load(runtime_directory, current_time, timer, callback)
     }
 
-    /// `Load` очищает level-vector ещё до попытки открыть файл, как exact owner.
+ /// `Load` очищает level-vector ещё до попытки открыть файл, как owner.
     pub(crate) fn load<Callback: Copy>(
         &mut self,
         runtime_directory: &Path,
@@ -314,7 +304,7 @@ impl COrganizingParam {
         self.tax_event_ids.contains(&event_id)
     }
 
-    /// Выполняет broadcast и вычисление следующего дня до timer-регистрации.
+ /// Выполняет broadcast и вычисление следующего дня до timer-регистрации.
     pub(crate) fn prepare_today_tax_refresh(
         &self,
         current_event_id: TimerId,
@@ -333,7 +323,7 @@ impl COrganizingParam {
         })
     }
 
-    /// Фиксирует `SetTimeEvent`, затем выполняет поздний `WS0263` war-log.
+ /// Фиксирует `SetTimeEvent`, затем выполняет поздний `WS0263` war-log.
     pub(crate) fn finish_today_tax_refresh(
         &mut self,
         prepared: PreparedTodayTaxRefresh,

@@ -1,22 +1,19 @@
 //! WorldServer dispatcher-owner `OnOtherMessage`.
 //!
-//! Статус dispatcher-а RVA `0x000AC680`: `IMPLEMENTED`. Материализованы
 //! transport leaves `0x5FD02`, `0x5FD06..0x5FD09`, goods-link publish/lookup
 //! `0x5FD03/0x5FD04`, increment-log page `0x5FD0A`, copy-number `0x5FD0B`,
 //! cursor-only `0x5FD0E`, chat relay `0x5FD01`, player rename `0x5FD05`,
 //! LeiTing update `0x5FD10`,
 //! honor-reset `0x5FD0C` и eliminate update `0x5FD0D` со статусом
-//! `IMPLEMENTED`. Reset читает один Windows `long`, получает текущий `CGame`
+//! действует. Reset читает один Windows `long`, получает текущий `CGame`
 //! и вызывает `ResetHonorElimilateInfo`.
 //! Недостаточный payload сохраняет старое поведение numeric getter-а: значение
 //! становится нулём без сдвига cursor; отчёт отдельно фиксирует неполноту.
 //!
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
 //! исходный owner
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\othermessage.cpp:43`.
 //! Linux C++ подтверждает практическую границу dispatcher-а, но добавленную там
-//! проверку synthetic owner-а и route-validation Rust не переносит: exact EXE
-//! их не выполняет. Для `0x5FD0D` exact owner сначала читает player/eliminator,
+//! проверку synthetic owner-а и route-validation Rust не переносит:
+//! их не выполняет. Для `0x5FD0D` owner сначала читает player/eliminator,
 //! проверяет online player и duplicate ledger, и только для новой пары читает
 //! четыре прежних счётчика, прибавляет к каждому единицу, обновляет ranks и
 //! отвечает `0x7FA16 + player + char(1)` в исходный socket. Дубликат прекращает
@@ -25,23 +22,23 @@
 //! маршрутизует то же сообщение; `0x5FD06..09` только переписывают type и
 //! делают `SendAll`. `0x5FD0E` ровно один раз читает и отбрасывает signed long.
 //! Donor-added ownership/tail validation отсутствует в EXE и не перенесена.
-//! Полный exact `switch` завершается общим epilogue после `0x5FD10`: любой
+//! Полный `switch` завершается общим epilogue после `0x5FD10`: любой
 //! иной opcode не читает payload, не отправляет ответ и не передаётся
 //! следующему owner-у. Rust materialизует это `NoOp`.
 //! `0x5FD0B` отражает первые два signed long, добавляет прежнее значение
 //! `s_nCopyNum` и только при ненулевом третьем поле увеличивает global до
 //! `SendToSocket`; это сохраняет peek/reserve и side-effect-before-send.
 //! `0x5FD10` читает player ID и только для online owner-а делегирует оставшийся
-//! buffer/cursor уже достигнутому `CPlayer::DecodeByteArrayLeiTing`; malformed
+//! buffer/cursor уже действующему `CPlayer::DecodeByteArrayLeiTing`; malformed
 //! хвост возвращается typed-ошибкой с сохранением доказанных prefix-мутаций.
 //! `0x5FD05` читает signed player ID и `GetStr(..., 0x20)`, оставляет result
-//! `1` при отсутствующем map-owner-е, иначе выполняет exact восемь проверок
+//! `1` при отсутствующем map-owner-е, иначе выполняет восемь проверок
 //! `CPlayer::ChangeName`. Ответ всегда `0x7FA0E + ID + char(result) + name\0`;
 //! parameterized Tiberius query заменяет только старый ADO owner. Только
 //! локальная safe-граница недопустимо длинного уже сохранённого имени не
 //! получает выдуманного response после исходного stack-overread.
 //! `0x5FD0A` читает player/page, требует online owner-а и отвечает
-//! `0x7FA12 + player + page` только когда `CIncrementLog` добавил exact page.
+//! `0x7FA12 + player + page` только когда `CIncrementLog` добавил page.
 //! Empty/missing player history сохраняет исходную ветку без отправки; page
 //! wire и newest-first порядок принадлежат concrete increment-log owner-у.
 //!
@@ -51,8 +48,7 @@
 //! добавляется до изменения текста. Rewrite удаляет девять байт от `change=`,
 //! заменяет участок с offset `+3` до `>` signed-десятичным индексом и продолжает
 //! после `</goodslink>`. Lookup возвращает `long(found)` и либо прежний goods,
-//! либо новый factory-roll с сохранённым amount. Добавленные Linux-донором
-//! owner/tail/type/count проверки в exact EXE отсутствуют и не перенесены.
+//! owner/tail/type/count проверки в отсутствуют и не перенесены.
 //! Malformed goods и невозможные позиции `std::string` остаются typed safe-
 //! границами; уже добавленные prefix-ссылки при rewrite-ошибке не откатываются.
 //! Chat-ветка сохраняет условное чтение строк: faction name/content читаются
@@ -62,7 +58,6 @@
 //! faction delivery делегирован точному `CFaction::talk`. Typed write-log FIFO
 //! и Tiberius заменяют только SQL-строку/ADO, не меняя `bUseLogSys`,
 //! `bFactionChat`/`bPrivateChat`, sender lookup и координатную семантику.
-//! Сырой C++ ниже сохранён как локальная документация, а не как реализация.
 
 use crate::dbaccess::worlddb::rsplayer::TiberiusRsPlayer;
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
@@ -177,7 +172,7 @@ pub(crate) enum WorldOtherChatOutcome {
     },
 }
 
-/// Наблюдаемый итог одной уже восстановленной ветки `OnOtherMessage`.
+/// Наблюдаемый итог одной уже действующей ветки `OnOtherMessage`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldHonorEliminateReset {
     pub(crate) rank_mask: u32,
@@ -207,7 +202,7 @@ pub(crate) enum WorldGoodsLinkPublishBlock {
     },
 }
 
-/// Успешно сформированный exact response одной goods-link ветки.
+/// Успешно сформированный response одной goods-link ветки.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGoodsLinkResponse {
     pub(crate) response_type: i32,
@@ -238,7 +233,7 @@ pub(crate) struct WorldGoodsLinkLookupOutcome {
     pub(crate) result: Result<WorldGoodsLinkResponse, GoodsCodecError>,
 }
 
-/// Наблюдаемый исход exact duplicate-ledger и rank-update ветки `0x5FD0D`.
+/// Наблюдаемый исход duplicate-ledger и rank-update ветки `0x5FD0D`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldHonorEliminateUpdate {
     MissingOnlinePlayer {
@@ -286,7 +281,7 @@ pub(crate) struct WorldIncrementLogPageOutcome {
 /// Один обработанный результат полного other-owner-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldOtherMessageOutcome {
-    /// Default полного exact `switch`: message остаётся без side effects.
+ /// Default полного `switch`: message остаётся без side effects.
     NoOp {
         request_type: i32,
     },
@@ -905,8 +900,8 @@ fn finish_chat_log(
         return WorldOtherChatLogOutcome::Disabled;
     }
 
-    // Exact `_sprintf` вычислял Y до X; первая невозможная x87-конверсия
-    // остаётся наблюдаемой typed safe-границей в том же порядке.
+ // `_sprintf` вычислял Y до X; первая невозможная x87-конверсия
+ // остаётся наблюдаемой typed safe-границей в том же порядке.
     let position_y = match sender.get_tile_y() {
         Ok(value) => value,
         Err(source) => {

@@ -1,12 +1,10 @@
 //! Жизненный цикл пула `LoadPlayerDataFromDB` исторического WorldServer.
 //!
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
 //! исходный owner
-//! `e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5119`,
-//! RVA `0x000092C0`. Exact EXE `0x004092F9..0x0040931F` проверяет сначала
+//! проверяет сначала
 //! game-exit, затем player-load-exit и только после этого делает `Sleep(1)`.
-//! `0x0040952F..0x00409544` продолжает текущий FIFO-list, а
-//! `0x0040958E..0x00409599` возвращается к началу polling-loop.
+//! продолжает текущий FIFO-list, а
+//! возвращается к началу polling-loop.
 //!
 //! `WorldPlayerLoadWorkerSpec` хранит cloneable пары load/data FIFO, поэтому
 //! системным потокам не передаётся mutable `CGame` и не нужен process-global
@@ -68,8 +66,8 @@ impl WorldPlayerLoadWorkerPool {
         Self::default()
     }
 
-    /// Создаёт один exact worker-slot. Ошибка spawn сохраняет пустой slot,
-    /// чтобы Release видел тот же ordered vector, что и исходный owner.
+ /// Создаёт один worker-slot. Ошибка spawn сохраняет пустой slot,
+ /// чтобы Release видел тот же ordered vector, что и исходный owner.
     pub(crate) fn start<Loader, LoadLargess, GetTick>(
         &mut self,
         spec: WorldPlayerLoadWorkerSpec,
@@ -130,7 +128,7 @@ impl WorldPlayerLoadWorkerPool {
         self.workers.len()
     }
 
-    /// Выставляет общий load-exit и ждёт все handles в insertion-order.
+ /// Выставляет общий load-exit и ждёт все handles в insertion-order.
     pub(crate) fn stop(&mut self) -> Vec<(u32, WorldPlayerLoadWorkerCompletion)> {
         self.request_player_load_threads_exit();
         self.workers

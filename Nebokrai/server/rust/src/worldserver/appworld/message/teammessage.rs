@@ -1,17 +1,15 @@
 //! Входящий Team-owner исторического WorldServer.
 //!
-//! `OnTeamMessage` RVA `0x000AAD40` — `IMPLEMENTED / VERIFIED_DISASSEMBLY`
+//! `OnTeamMessage` — часть контракта owner-а
 //! по точной паре `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`.
 //! Исходный owner:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\teammessage.cpp:22`.
 //!
 //! Реализация сохраняет opcodes `0x60001..0x6000C`, условный порядок чтения
-//! payload и все достигнутые virtual side effects. После отсутствующего
+//! payload и все действующие virtual side effects. После отсутствующего
 //! `CTeam` остаётся прочитан только team ID; `0x60009` игнорирует два средних
 //! `long`; allocation scheme принимает любое signed значение `< 2`, включая
 //! отрицательное. Ответ `0x7FD08` буквально содержит virtual `Serialize`.
 //!
-//! Старый Linux-донор использован для имён и формы. Его peer-проверки, eager-
 //! разбор payload, duplicate-team gate и cleanup при ошибке `InsertPlug`
 //! отсутствуют в EXE и не перенесены. Единственные registry остаются внутри
 //! `CSessionFactory`; конкретные `CTeam`/`CTeamate` и узкие trait-проекции
@@ -89,7 +87,7 @@ pub(crate) enum WorldTeamMessageOutcome {
     Malformed { message_type: i32, cursor: usize },
 }
 
-/// Исполняет весь exact `OnTeamMessage` поверх единого session factory.
+/// Исполняет весь `OnTeamMessage` поверх единого session factory.
 pub(crate) fn on_team_message(
     game: &mut CGame,
     factory: &mut CSessionFactory,

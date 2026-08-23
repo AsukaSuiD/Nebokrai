@@ -1,28 +1,22 @@
 //! Фабрика товаров исторического `WorldServer`.
 //!
-//! `GarbageCollect` RVA `0x00055C20`,
-//! `QueryGoodsBaseProperties/QueryGoodsName` RVA
-//! `0x00055DB0/0x00055DE0`,
-//! `UnserializeGoods` RVA `0x00055E20` и `QueryGoodsIDByOriginalName` RVA
-//! `0x000566F0`, `QueryGoodsBasePropertiesByOriginalName` RVA `0x00057390`,
-//! `GetGoldCoinIndex/GetYuanBaoIndex/GetJiFenIndex` RVA
-//! `0x00056810/0x000568B0/0x00056950`,
-//! private `Upgrade` и сломанный `UpgradeEquipment` RVA
-//! `0x00055F20/0x000561C0`,
-//! `CreateGoods/CreateGoodsNoProbability` RVA
-//! `0x00059460/0x000597C0`, `Release/Load` RVA
-//! `0x00058380/0x00059EE0`, `Serialize` RVA `0x00056130` реализованы в Rust.
-//! Точная пара доказательных артефактов:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoodsfactory.cpp:38,88,696`.
+//! `GarbageCollect`,
+//! `QueryGoodsBaseProperties/QueryGoodsName`
+//!
+//! `UnserializeGoods` и `QueryGoodsIDByOriginalName`
+//! `QueryGoodsBasePropertiesByOriginalName`,
+//! `GetGoldCoinIndex/GetYuanBaoIndex/GetJiFenIndex`
+//!
+//! private `Upgrade` и сломанный `UpgradeEquipment`
+//!
+//! `CreateGoods/CreateGoodsNoProbability`
+//! `Release/Load`
+//! `Serialize` входят в контракт owner-а.
 //!
 //! Старые static `std::map<unsigned long, CGoodsBaseProperties*>` и
 //! `std::map<std::string, unsigned long>` заменены caller-owned `BTreeMap`:
 //! unsigned key-order и возможность null mapped-value первой карты сохранены,
-//! а глобальный mutable pointer-lifetime не вводится до восстановления
+//! а глобальный mutable pointer-lifetime не вводится до присоединения
 //! `Load/Release` фабрики. Original-name остаётся последовательностью legacy-
 //! байтов, а не обязанной быть UTF-8 строкой; `CStr` сохраняет доказанную
 //! границу нуль-терминированного `char const*`. `nullptr` результата base-
@@ -31,15 +25,15 @@
 //!
 //! `UnserializeGoods` создаёт default `CGoods`, вызывает его decoder, затем
 //! оставляет объект только при non-null lookup его base-properties index.
-//! Exact инструкции `0x00455E9A..0x00455EA6` подтверждают третий аргумент
+//! инструкции подтверждают третий аргумент
 //! virtual slot `+0xAC`: `push 1`, cursor, source, то есть `include_child=true`.
-//! После ответа reverse прекращён. Вызванный затем `CShape::GetDir` не меняет
+//! Вызванный затем `CShape::GetDir` не меняет
 //! состояние и не влияет на решение; Rust не сохраняет этот пустой getter-call.
 //! Нулевой source pointer исходно давал `nullptr`, а Rust API принимает
 //! только non-null slice. Ошибки безопасного `CGoods` decoder-а остаются
 //! typed-ошибками вместо старого безразмерного чтения.
 //!
-//! Для original-name lookup exact `0x004566F0..0x00456803` подтверждает:
+//! Для original-name lookup подтверждает:
 //! null-вход возвращает `0`, отсутствующий key возвращает `0`, найденный узел
 //! возвращает mapped `u32` по `+0x28`. Два временных `std::string`, tree node
 //! и security-cookie являются библиотечной/компиляторной формой; Rust
@@ -49,17 +43,17 @@
 //! `random(10000)` на каждый enabled addon-type, затем ещё один на modifier и
 //! `random(upper-lower)` только для выбранного probability-interval. Сам
 //! process-global PRNG не подменяется другим алгоритмом: caller передаёт узкий
-//! callback с exact legacy `random(bound)` семантикой. Rust `Box/Vec` заменяют
+//! callback с legacy `random(bound)` семантикой. Rust `Box/Vec` заменяют
 //! только allocation/STL plumbing и автоматически освобождают частичный result.
 //!
 //! `Load` открывает файл через `std::fs`, а parser принимает byte-slice и
-//! сохраняет exact `GOODS`-формат, порядок
+//! сохраняет `GOODS`-формат, порядок
 //! двух StringTable lookup-ов и построения трёх map-ов. Старые unchecked
 //! `CRFile::ReadData`, ручные `new[]` и утечки при duplicate-id заменены
 //! проверяемым reader-ом и Rust ownership. Для повреждённого/обрезанного файла
 //! возвращается typed-ошибка, а registry остаётся очищенным, как в безопасном
 //! donor-пути; валидный вход и его observable state не меняются.
-//! `UpgradeEquipment` в matching EXE заблокирован exact всегда-нулевым
+//! `UpgradeEquipment` в matching EXE заблокирован всегда-нулевым
 //! `CGoods::CanUpgraded`; поэтому исправленное mutation-тело Linux-donor-а не
 //! является поведением этой версии. Private `Upgrade` материализован отдельным
 //! callback-adapter-ом, но публичный контур по-прежнему не достигает его.
@@ -76,13 +70,13 @@ use super::cgoodsbaseproperties::{
     ICON_TYPE_GROUND,
 };
 
-/// Достигнутая lookup-форма static base-properties map.
+/// Действующая lookup-форма static base-properties map.
 pub(crate) type GoodsBasePropertiesRegistry = BTreeMap<u32, Option<CGoodsBaseProperties>>;
 
-/// Достигнутый индекс exact legacy original-name в unsigned goods id.
+/// Действующий индекс legacy original-name в unsigned goods id.
 pub(crate) type GoodsOriginalNameIndex = BTreeMap<Vec<u8>, u32>;
 
-/// Достигнутый индекс exact legacy localized-name в unsigned goods id.
+/// Действующий индекс legacy localized-name в unsigned goods id.
 pub(crate) type GoodsNameIndex = BTreeMap<Vec<u8>, u32>;
 
 /// Safe-граница private `CGoodsFactory::Upgrade` для malformed destination.
@@ -141,7 +135,7 @@ impl Error for GoodsRegistrySerializeError {
     }
 }
 
-/// Очищает три owner-map в exact исходном порядке.
+/// Очищает три owner-map в исходном порядке.
 pub(crate) fn release_goods_registry(
     registry: &mut GoodsBasePropertiesRegistry,
     original_name_index: &mut GoodsOriginalNameIndex,
@@ -152,7 +146,7 @@ pub(crate) fn release_goods_registry(
     name_index.clear();
 }
 
-/// Открывает config стандартной библиотекой и передаёт exact format parser-у.
+/// Открывает config стандартной библиотекой и передаёт format parser-у.
 pub(crate) fn load_goods_registry_from_file<ResolveString>(
     path: impl AsRef<Path>,
     registry: &mut GoodsBasePropertiesRegistry,
@@ -175,7 +169,7 @@ where
     .map_err(GoodsRegistryFileLoadError::Format)
 }
 
-/// Загружает exact `GOODS`-поток и разрешает два legacy StringTable id записи.
+/// Загружает `GOODS`-поток и разрешает два legacy StringTable id записи.
 pub(crate) fn load_goods_registry<ResolveString>(
     source: &[u8],
     registry: &mut GoodsBasePropertiesRegistry,
@@ -215,7 +209,7 @@ where
     Ok(())
 }
 
-/// Кодирует registry в exact ascending-id wire фабрики.
+/// Кодирует registry в ascending-id wire фабрики.
 pub(crate) fn serialize_goods_registry(
     registry: &GoodsBasePropertiesRegistry,
     destination: &mut Vec<u8>,
@@ -241,9 +235,9 @@ pub(crate) fn serialize_goods_registry(
 /// Материализует private `CGoodsFactory::Upgrade`.
 ///
 /// `random` вызывается ровно тогда, когда source upper-value положительно,
-/// с exact signed wrapping `upper - lower`; callback несёт уже достигнутую
+/// с signed wrapping `upper - lower`; callback несёт уже действующую
 /// legacy-семантику `random(bound)`. Non-zero `increase` исходника выражен
-/// bool-границей. Пустой destination value-vector был raw dereference и
+/// bool-границей. Пустой destination value-vector был оригинал dereference и
 /// становится typed block без mutation.
 pub(crate) fn upgrade_goods_addon<Random>(
     goods: &mut CGoods,
@@ -424,7 +418,7 @@ pub(crate) fn query_goods_base_properties(
     registry.get(&index).and_then(Option::as_ref)
 }
 
-/// Возвращает byte-exact localized-name известного non-null товара.
+/// Возвращает byte- localized-name известного non-null товара.
 pub(crate) fn query_goods_name(
     registry: &GoodsBasePropertiesRegistry,
     index: u32,
@@ -459,7 +453,7 @@ pub(crate) fn garbage_collect(goods: Option<&mut Option<Box<CGoods>>>) -> bool {
     true
 }
 
-/// Сохраняет exact ранний отказ matching EXE без мутаций и RNG-вызовов.
+/// Сохраняет ранний отказ matching EXE без мутаций и RNG-вызовов.
 pub(crate) fn upgrade_equipment(goods: Option<&mut CGoods>, target_level: i32) -> bool {
     let Some(goods) = goods else {
         return false;
@@ -543,7 +537,7 @@ pub(crate) fn unserialize_goods(
     Ok(Some(goods))
 }
 
-/// Создаёт товар и выполняет exact addon probability/modifier roll-order.
+/// Создаёт товар и выполняет addon probability/modifier roll-order.
 pub(crate) fn create_goods<Random>(
     registry: &GoodsBasePropertiesRegistry,
     index: u32,

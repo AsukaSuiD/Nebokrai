@@ -1,27 +1,20 @@
-//! Владелец `WorldCountryWarRegion` исторического WorldServer — `IMPLEMENTED`.
-//!
-//! Constructor RVA `0x00078790`, virtual `Load` RVA `0x00078920` и serializer
-//! RVA `0x00077F30` восстановлены для точной пары
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! source `worldcountrywarregion.cpp:5,13,197`.
+//! Владелец `WorldCountryWarRegion` WorldServer из точной пары EXE/PDB и
+//! исходного owner-а `worldcountrywarregion.cpp`.
 //!
 //! Owner содержит один прямой `CWorldRegion` и шесть ordered list-ов. `Load`
 //! сначала полностью выполняет base Load, затем читает `regions/{id}.country`.
 //! Успешный open очищает и заполняет секции в порядке defend/attack gates,
 //! defend/attack flags, defend/attack areas; missing resource сохраняет прежние
-//! списки и возвращает `0`. Exact disassembly подтверждает `eax=0` на ветке
-//! `00478986 -> 0047950A` и `eax=1` после разбора по `00479503`.
+//! списки и возвращает `0`; успешный разбор возвращает `1`.
 //!
 //! Gate wire состоит из `0x2C` scalar bytes и двух C-строк, flag — из `0x28`
 //! bytes и двух C-строк, area — из `0x14` bytes. Serializer сначала вызывает
 //! base с тем же `include_child`, затем пишет шесть signed count-ов и записи в
 //! том же порядке. Независимый GameServer decoder
-//! `ServerCountryRegion::DecordFromByteArray` RVA `0x001CD3F0` подтверждает
-//! размеры и порядок. Имена и scripts сохраняются byte-exact: COUNTRY loader,
+//! `ServerCountryRegion::DecordFromByteArray` подтверждает
+//! размеры и порядок. Имена и scripts сохраняются byte-: COUNTRY loader,
 //! в отличие от CITY, не обращается к StringTable.
-//! Exact PDB дополнительно задаёт имена всех scalar-полей: gate содержит
+//! PDB дополнительно задаёт имена всех scalar-полей: gate содержит
 //! `lID/lPicID/lDir/lAction/lMaxHP/lDef/lER/lTitleX/lTitleY/lWidthInc/`
 //! `lHeightInc`, flag — ту же последовательность без `lAction`, area — `lID`
 //! и четыре координаты `tagRECT`. Rust хранит их именованно; `[i32; N]` в
@@ -30,7 +23,7 @@
 //!
 //! `std::list`, stream, allocation, destructors и compiler cleanup заменены
 //! `Vec`, заимствованными resource bytes и обычным `Drop`; Rust layout не
-//! объявляется старым ABI. Полный сырой декомпилят удалён после переноса.
+//! объявляется старым ABI.
 
 use super::worldregion::{
     CWorldRegion, WorldRegionLoadError, WorldRegionLoadedCounts, WorldRegionResourceContext,
@@ -199,7 +192,7 @@ impl WorldCountryWarRegion {
         Ok(WorldCountryWarRegionLoadOutcome { counts, loaded })
     }
 
-    /// Missing `.country` возвращает legacy `0` и не очищает прежние списки.
+ /// Missing `.country` возвращает legacy `0` и не очищает прежние списки.
     pub(crate) fn load_country_bytes(
         &mut self,
         bytes: Option<&[u8]>,

@@ -1,19 +1,7 @@
-//! Владелец региона исторического `WorldServer`.
+//! Владелец региона WorldServer из точной пары EXE/PDB.
 //!
-//! Owner `CRegion`; constructor/destructor, `New`, resource `Load`, region-wire
-//! `AddToByteArray` и `DecordFromByteArray` имеют статус `IMPLEMENTED`, а
-//! существенные offsets и возвраты сверены как `VERIFIED_DISASSEMBLY`. Точная
-//! пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\region.h` и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\region.cpp:11`.
-//!
-//! Существенные RVA: constructor `0x000D7460`, `New` `0x000D7000`, `Load`
-//! `0x000D7570`, `GetRandomPosInRange` `0x000D6AA0`, serializer
-//! `0x000D6CB0`. Exact EXE подтверждает старые поля:
+//! Owner охватывает lifecycle, resource load/save, wire codec и
+//! `GetRandomPosInRange`. Состояние включает поля:
 //! `m_lRegionType +0x6C`, `m_lResourceID +0x70`, `m_fExpScale +0x74`,
 //! `m_lWidth/+0x78`, `m_lHeight/+0x7C`, `m_btCountry +0x80`, `m_lNotify +0x84`,
 //! cell-owner `+0x88` и `tagSwitch` vector `+0x8C`; Rust layout старый ABI не
@@ -24,18 +12,15 @@
 //! `Load` читает `regions/{ID}.rgn`: `CLS-RGN`, signed version `1`, region type,
 //! width/height, ровно `width*height*4` cell-байтов, signed switch-count и по
 //! `0x14` байт на switch. Все 872 loose fixtures имеют эту форму, version `1`,
-//! type `0`, положительные размеры и точный хвост; SHA-256 `10000.rgn` —
-//! `17861A76421D89925BF7D9EFA8257AD6C013EDE525A9487276DF3D84B6B21837`.
 //! `New` заменён владеющими `Vec`: он удалял прежние cells/switches, создавал
 //! zero-filled cell block и возвращал `1`. Serializer сохраняет literal order и
-//! четыре IEEE-754 байта scale; независимый GameServer decoder RVA `0x000F1070`
-//! читает их именно как `float`, исправляя ошибочный cast в raw-псевдокоде.
+//! четыре IEEE-754 байта scale; независимый GameServer decoder
+//! читает их именно как `float`.
 //! World `DecordFromByteArray` намеренно не является обратным к этому полному
-//! serializer: exact EXE `0x004D773C..0x004D7782` после base-wire читает только
+//! serializer: после base-wire читает только
 //! region type, width, height, country и notify, затем вызывает `New`; поля
 //! resource ID и exp scale не потребляются и сохраняют прежнее состояние.
-//! Очищенный C++ reference делает decoder симметричным, но это противоречит
-//! World EXE и не переносится. Rust сохраняет exact порядок уже применённых
+//! Rust сохраняет асимметрию decoder-а и порядок уже применённых
 //! base/scalar-изменений и cursor; чтение за концом input либо небезопасная
 //! размерная арифметика остаётся typed safe-границей.
 //! `Save` строит relative path `regions/{signed ID}.rgn`, открывает его в
@@ -46,15 +31,15 @@
 //! current directory, не меняя самого relative path и file-layout.
 //! Число switches, невозможное для 32-bit `int`, останавливается typed
 //! границей до открытия файла; legacy не мог материализовать такой vector.
-//! Destructor exact `0x004D6DAF..0x004D6E57` последовательно освобождает
+//! Destructor последовательно освобождает
 //! cell-array, switch-vector, filename и base. Их Rust-owned `Vec` и base
-//! выполняют тот же lifecycle без ручного `Drop`; ранние decompiler-return-ы
-//! и MSVC SSO/free plumbing не являются контрактом Miracle.
+//! выполняют тот же lifecycle без ручного `Drop`; MSVC SSO/free plumbing не
+//! является контрактом Miracle.
 //! `GetRandomPosInRange` сохраняет сначала 1000 случайных попыток, затем scan
 //! X-снаружи/Y-внутри и расширение прямоугольника на 10 клеток с каждой
-//! стороны. `VERIFIED_DISASSEMBLY` по `0x004D6BA3/0x004D6C14` подтверждает, что
+//! стороны. по / подтверждает, что
 //! клетка закрыта по маске `(byte0 & 7) != 0`, а не по всему первому байту;
-//! `0x004D6BA8/0x004D6C19` отдельно проверяет нулевой `u16` по offset `+2`.
+//! / отдельно проверяет нулевой `u16` по offset `+2`.
 //! Process-global `random(long)` передаётся узкой `FnMut(i32) -> i32` границей,
 //! поэтому owner сохраняет число, порядок и bounds вызовов без собственной RNG.
 //! Неинициализированные country/notify и небезопасные отрицательные/overflow
@@ -119,7 +104,7 @@ pub(crate) enum RegionRandomPositionBlock {
     MissingCell { x: i32, y: i32, index: usize },
 }
 
-/// Достигнутая base-часть исходного `CRegion`.
+/// Действующая base-часть исходного `CRegion`.
 pub(crate) struct CRegion {
     base_object: CBaseObject,
     file_name: Vec<u8>,
@@ -135,7 +120,7 @@ pub(crate) struct CRegion {
 }
 
 impl CRegion {
-    /// Создаёт полный доказанный constructor-state `CRegion`.
+ /// Создаёт полный доказанный constructor-state `CRegion`.
     pub(crate) const fn with_constructor_base_and_type() -> Self {
         let mut base_object = CBaseObject::with_reached_constructor_defaults();
         base_object.set_type(200);
@@ -154,47 +139,47 @@ impl CRegion {
         }
     }
 
-    /// Возвращает унаследованный object type без дополнительных эффектов.
+ /// Возвращает унаследованный object type без дополнительных эффектов.
     pub(crate) const fn get_type(&self) -> i32 {
         self.base_object.get_type()
     }
 
-    /// Возвращает унаследованный signed object ID.
+ /// Возвращает унаследованный signed object ID.
     pub(crate) const fn get_id(&self) -> i32 {
         self.base_object.get_id()
     }
 
-    /// Присваивает унаследованный signed object ID.
+ /// Присваивает унаследованный signed object ID.
     pub(crate) const fn set_id(&mut self, id: i32) {
         self.base_object.set_id(id);
     }
 
-    /// Заимствует byte-exact имя из единственного base-подобъекта.
+ /// Заимствует byte- имя из единственного base-подобъекта.
     pub(crate) fn get_name(&self) -> &[u8] {
         self.base_object.get_name()
     }
 
-    /// Присваивает унаследованное byte-exact имя до первого NUL.
+ /// Присваивает унаследованное byte- имя до первого NUL.
     pub(crate) fn set_name(&mut self, name: &[u8]) {
         self.base_object.set_name(name);
     }
 
-    /// Присваивает унаследованный signed graphics ID без иных side effects.
+ /// Присваивает унаследованный signed graphics ID без иных side effects.
     pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
         self.base_object.set_graphics_id(graphics_id);
     }
 
-    /// Возвращает reached country byte без подстановки constructor-неизвестного значения.
+ /// Возвращает reached country byte без подстановки constructor-неизвестного значения.
     pub(crate) fn country(&self) -> Option<u8> {
         self.country.get()
     }
 
-    /// Присваивает достигнутый country byte унаследованного `CRegion`.
+ /// Присваивает действующий country byte унаследованного `CRegion`.
     pub(crate) fn set_country(&self, country: u8) {
         self.country.set(Some(country));
     }
 
-    /// Дописывает только унаследованный `CBaseObject` для отдельного proxy-wire.
+ /// Дописывает только унаследованный `CBaseObject` для отдельного proxy-wire.
     pub(crate) fn add_base_object_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -204,13 +189,13 @@ impl CRegion {
             .add_to_byte_array(destination, include_child)
     }
 
-    /// Выполняет исходный virtual `New`: пересоздаёт cells и очищает switches.
+ /// Выполняет исходный virtual `New`: пересоздаёт cells и очищает switches.
     pub(crate) fn new_region(&mut self) -> Result<i32, RegionLoadError> {
         self.recreate_cells()?;
         Ok(1)
     }
 
-    /// Применяет четыре поля, которые `LoadRegionList` назначает перед virtual `Load`.
+ /// Применяет четыре поля, которые `LoadRegionList` назначает перед virtual `Load`.
     pub(crate) fn set_region_list_fields(
         &mut self,
         resource_id: u32,
@@ -224,7 +209,7 @@ impl CRegion {
         self.notify = Some(notify);
     }
 
-    /// Загружает точное содержимое уже открытого `regions/{ID}.rgn`.
+ /// Загружает точное содержимое уже открытого `regions/{ID}.rgn`.
     pub(crate) fn load_from_resource(
         &mut self,
         path: &[u8],
@@ -272,10 +257,10 @@ impl CRegion {
         Ok(true)
     }
 
-    /// Сохраняет exact resource-layout в `regions/{signed ID}.rgn`.
-    ///
-    /// Возвращает legacy `0` только если файл не удалось открыть; ошибки
-    /// отдельных записей намеренно не меняют result после успешного открытия.
+ /// Сохраняет resource-layout в `regions/{signed ID}.rgn`.
+ ///
+ /// Возвращает legacy `0` только если файл не удалось открыть; ошибки
+ /// отдельных записей намеренно не меняют result после успешного открытия.
     pub(crate) fn save_to_resource_directory(
         &mut self,
         runtime_directory: &Path,
@@ -308,7 +293,7 @@ impl CRegion {
         Ok(1)
     }
 
-    /// Дописывает полный region-base wire после унаследованного `CBaseObject`.
+ /// Дописывает полный region-base wire после унаследованного `CBaseObject`.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -349,10 +334,10 @@ impl CRegion {
         Ok(true)
     }
 
-    /// Декодирует отдельный короткий World region-wire.
-    ///
-    /// Он не читает `m_lResourceID/m_fExpScale`: это подтверждённая
-    /// асимметрия World `DecordFromByteArray`, а не пропуск Rust decoder-а.
+ /// Декодирует отдельный короткий World region-wire.
+ ///
+ /// Он не читает `m_lResourceID/m_fExpScale`: это подтверждённая
+ /// асимметрия World `DecordFromByteArray`, а не пропуск Rust decoder-а.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],
@@ -397,11 +382,11 @@ impl CRegion {
         Ok(true)
     }
 
-    /// Ищет проходимую клетку в точном порядке исходного owner-а.
-    ///
-    /// `random` обязан иметь контракт legacy `random(long)`: для
-    /// неотрицательного bound возвращать значение, которое можно безопасно
-    /// прибавить к началу диапазона. Bound `0` допустим и даёт `0`.
+ /// Ищет проходимую клетку в точном порядке исходного owner-а.
+ ///
+ /// `random` обязан иметь контракт legacy `random(long)`: для
+ /// неотрицательного bound возвращать значение, которое можно безопасно
+ /// прибавить к началу диапазона. Bound `0` допустим и даёт `0`.
     pub(crate) fn get_random_pos_in_range<R>(
         &self,
         mut left: i32,
@@ -414,9 +399,9 @@ impl CRegion {
         R: FnMut(i32) -> i32,
     {
         if self.width < 0 || self.height < 0 {
-            // Исходный владелец RVA `0x000D6AA0` передавал отрицательный размер в
-            // `random(long)` и знаковую арифметику. Достижимость и
-            // реакция старого helper-а для такого region-state не доказаны.
+ // Исходный владелец передавал отрицательный размер в
+ // `random(long)` и знаковую арифметику. Достижимость и
+ // реакция старого helper-а для такого region-state не доказаны.
             return Err(RegionRandomPositionBlock::InvalidRegionDimensions {
                 width: self.width,
                 height: self.height,
@@ -500,9 +485,9 @@ impl CRegion {
                 });
             }
 
-            // Исходные signed операции при overflow дают
-            // неопределённое C++-поведение; безопасный owner не назначает ему
-            // wrap либо fail-closed результат без доказательства достижимости.
+ // Исходные signed операции при overflow дают
+ // неопределённое C++-поведение; безопасный owner не назначает ему
+ // wrap либо fail-closed результат без доказательства достижимости.
             left = checked_region_sub(left, 10, "left - 10")?;
             top = checked_region_sub(top, 10, "top - 10")?;
             span_x = checked_region_add(span_x, 20, "span_x + 20")?;
@@ -538,9 +523,9 @@ impl CRegion {
         self.switches.clear();
         let (Ok(width), Ok(height)) = (usize::try_from(self.width), usize::try_from(self.height))
         else {
-            // Исходный владелец RVA `0x000D7000` перемножал знаковые размеры с
-            // переполнением и передавал результат allocator-у. Реакция CRT на
-            // такой размер не задаёт безопасное серверное поведение.
+ // Исходный владелец перемножал знаковые размеры с
+ // переполнением и передавал результат allocator-у. Реакция CRT на
+ // такой размер не задаёт безопасное серверное поведение.
             return Err(RegionLoadError::InvalidDimensions {
                 width: self.width,
                 height: self.height,
@@ -610,8 +595,8 @@ fn read_region_bytes<'a>(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Результат `CRFile::ReadData` игнорировался. Safe Rust не может
-        // воспроизвести содержимое старого буфера после короткого чтения.
+ // Результат `CRFile::ReadData` игнорировался. Safe Rust не может
+ // воспроизвести содержимое старого буфера после короткого чтения.
         return Err(RegionLoadError::UnexpectedEnd {
             field,
             offset,

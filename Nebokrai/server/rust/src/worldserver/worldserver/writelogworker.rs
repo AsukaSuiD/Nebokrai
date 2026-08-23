@@ -1,45 +1,17 @@
-//! DB-граница `DoSaveLog` / `ProcessWriteLogDataFunc` исторического WorldServer.
+//! Owned write-log worker WorldServer.
 //!
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`;
-//! исходный owner
-//! `e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:5088,5230`,
-//! RVA `0x0000D770` и `0x000095E0`.
+//! Контракт очереди и reconnect-loop подтверждён точной парой WorldServer
+//! EXE/PDB. Worker извлекает SQL-команду до выполнения; при DB-ошибке уже
+//! извлечённая команда теряется, соединение пересоздаётся, а очередь продолжает
+//! работу с последующего элемента. Ошибка initial/reconnect connect повторяется
+//! через исходный десятисекундный интервал; успешный idle loop сохраняет
+//! миллисекундную cadence.
 //!
-//! `VERIFIED_DISASSEMBLY`: exact `0x004097C0..0x00409A2F` сначала делает
-//! `Sleep(1)`, проверяет exit/use-log/queue, один раз снимает `GetSize`, затем
-//! для каждого slot вызывает `PopWriteLogData` до `ExecuteCn`. При SQL failure
-//! команда уже потеряна: `0x00409953` печатает её, `0x00409961..0x00409A1A`
-//! восстанавливает connection, `0x00409A1E` освобождает старый SQL и цикл идёт
-//! к следующему slot без повторного Execute. Ошибка reconnect по
-//! `0x00409A34..0x00409A7C` ждёт 10 секунд и повторяет только подключение.
-//! Новые producer-записи сверх исходного снимка остаются следующему batch.
-//!
-//! Rust сохраняет этот наблюдаемый FIFO/data-loss контракт typed batch-ом:
-//! failure-команда возвращается как `discarded`, но в очередь не ставится;
-//! после reconnect caller продолжает оставшиеся slot-ы того же снимка. Старый
-//! Linux-донор с peek-until-commit, повтором SQL и классификацией transient
-//! ошибок менял этот контракт и здесь не используется как истина.
-//!
-//! ADO connection заменён отдельным `tiberius` connection, а строковый INSERT
-//! — параметризованным запросом. Windows-1251 payload декодируется перед bind;
-//! это сохраняет штатные значения и не воспроизводит `_sprintf`, ручное SQL
-//! quoting, stack overflow и injection через неэкранированный `context_id`.
-//! Provider из setup является ADO plumbing и Tiberius-у не передаётся.
-//! Producer `OnLogMessage::0x4FB02` дополнительно ставит exact
-//! `player_delete_log(player_id,player_name,ip_addr)` после login-response;
-//! typed variant сохраняет общий FIFO, а parameter binding заменяет только
-//! исходный `_sprintf` INSERT.
-//! Те же правила применены к faction-, member-, title-, purview-, level-,
-//! experience- и master-log: доменные owner-ы передают уже подтверждённые
-//! positional поля, worker владеет их копией до pop и выполняет один INSERT.
-//!
-//! `WorldWriteLogWorker` завершает внешний thread/exit owner: отдельный
-//! `JoinHandle` выполняет 1-ms polling, exit сначала дренирует FIFO, а typed
-//! events заменяют operator-log вызовы. Reconnect сохраняет 10-sec cadence и
-//! продолжает тот же batch без повтора потерянной команды. В отличие от
-//! исходного бесконечного reconnect, shutdown будит ожидание через `Condvar`
-//! и возвращает явный `ReconnectCancelled`: зависание Release было внутренним
-//! дефектом lifetime, а не контрактом данных Miracle.
+//! `WorldWriteLogQueue` владеет командами, Tiberius заменяет ADO/COM, а
+//! `JoinHandle`, atomics и `Condvar` заменяют Win32 thread/stop primitives.
+//! Shutdown может прервать reconnect-ожидание и всегда присоединяет worker;
+//! это безопасная техническая граница вместо зависания `Release`, не rollback
+//! потерянной команды и не изменение SQL.
 
 use std::error::Error;
 use std::fmt;
@@ -500,7 +472,7 @@ impl WorldWriteLogBatch {
 
 /// Один SQL failure после уже выполненного `PopWriteLogData`.
 ///
-/// Команда намеренно остаётся в отчёте, а не возвращается в очередь: exact
+/// Команда намеренно остаётся в отчёте, а не возвращается в очередь:
 /// worker переподключался, но потерянный SQL повторно не исполнял.
 pub(crate) struct WorldWriteLogDiscardedCommand {
     pub(crate) command: WorldWriteLogCommand,
@@ -780,9 +752,9 @@ pub(crate) async fn execute_world_write_log_command(
             Ok(())
         }
         WorldWriteLogCommand::AuctionNoticeSql(sql) => {
-            // `CollectNoNotice` кладёт в общий FIFO уже собранный точный
-            // UPDATE. Строка создаётся только owner-ом из CGuid/opttype, а
-            // worker сохраняет его отдельный порядок и failure contract.
+ // `CollectNoNotice` кладёт в общий FIFO уже собранный точный
+ // UPDATE. Строка создаётся только owner-ом из CGuid/opttype, а
+ // worker сохраняет его отдельный порядок и failure contract.
             Query::new(sql.as_str()).execute(connection).await?;
             Ok(())
         }
@@ -854,7 +826,7 @@ pub(crate) async fn execute_world_write_log_command(
                     query.bind(write.second_player_id);
                     query.bind(decode_legacy_text(&write.second_player_name));
                     query.bind(*map_id);
-                    // Exact `_sprintf` передавал последний long для обеих координат.
+ // `_sprintf` передавал последний long для обеих координат.
                     query.bind(*position_y);
                     query.bind(*position_y);
                     query.bind(i32::from(*log_type));
@@ -1017,9 +989,9 @@ pub(crate) async fn execute_world_write_log_command(
             Ok(())
         }
         WorldWriteLogCommand::LegacyEmptyChatSql { log_type: _ } => {
-            // Exact jump-table ставил очищенный `_Dest` в FIFO; ExecuteCn затем
-            // исполнял именно пустую строку. Query сохраняет тот же DB-запрос,
-            // оставляя transport-specific success/failure самому SQL Server.
+ // jump-table ставил очищенный `_Dest` в FIFO; ExecuteCn затем
+ // исполнял именно пустую строку. Query сохраняет тот же DB-запрос,
+ // оставляя transport-specific success/failure самому SQL Server.
             Query::new("").execute(connection).await?;
             Ok(())
         }

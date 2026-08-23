@@ -1,17 +1,11 @@
 //! Владелец конфигурации объединения боевых фей исторического `WorldServer`.
 //!
-//! Статус `GetInstance`, `tagCompose`/owner constructor,
-//! `bLoadCombineConfig` и `AddToByteArray_Combine` RVA
-//! `0x00001410/0x00040090/0x00040860/0x00040980/0x0003FF50` —
-//! `IMPLEMENTED`; оставшиеся блоки ниже являются compiler/STL cleanup. Точная
-//! пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
-//! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cbattlefairyproperty.cpp:53,64,365`.
+//! `bLoadCombineConfig` и `AddToByteArray_Combine`
+//! —
+//! действует; оставшиеся блоки ниже являются compiler/STL cleanup. Точная
 //!
 //! Singleton с process-lifetime leak заменён caller-owned registry, как и в
-//! очищенном C++ reference. Exact loader возвращает false только при ошибке
+//! очищенном C++ reference. loader возвращает false только при ошибке
 //! открытия; после успешного чтения он очищает compose-vector и возвращает
 //! true даже для пустого или повреждённого потока. Один временный `tagCompose`
 //! переиспользуется между `#`-записями: при частичном последнем record уже
@@ -22,7 +16,7 @@
 //! `BattleFairyCompose: Clone`. Деструктор очищает только четыре строки и
 //! заменён структурным Drop.
 //!
-//! Wire `0x2D` подтверждён exact ASM: signed 32-bit count и по `0x7C` сырых
+//! Wire `0x2D` подтверждён signed 32-bit count и по `0x7C` сырых
 //! bytes каждого MSVC `tagCompose`. GameServer decoder зануляет 124 bytes,
 //! копирует record и вызывает string copy constructor; поэтому корректно
 //! декодируются только SSO-строки длиной до 15 bytes. Для них Rust формирует
@@ -94,15 +88,15 @@ impl fmt::Display for BattleFairyComposeWireError {
 
 impl Error for BattleFairyComposeWireError {}
 
-/// Достигнутое owning-состояние `CBattleFairyProperty`, не копия его ABI.
+/// Действующее owning-состояние `CBattleFairyProperty`, не копия его ABI.
 pub(crate) struct CBattleFairyProperty {
     compose: Vec<BattleFairyCompose>,
     levels: Vec<BattleFairyLevel>,
 }
 
 impl CBattleFairyProperty {
-    /// Создаёт два пустых vector-а; остальные exact scalar defaults равны нулю
-    /// и не имеют consumer-а в matching World PDB.
+ /// Создаёт два пустых vector-а; остальные scalar defaults равны нулю
+ /// и не имеют consumer-а в matching World PDB.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             compose: Vec::new(),
@@ -118,7 +112,7 @@ impl CBattleFairyProperty {
         &self.levels
     }
 
-    /// При open-error сохраняет старое состояние, как исходный early return.
+ /// При open-error сохраняет старое состояние, как исходный early return.
     pub(crate) fn load_combine_config_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -128,7 +122,7 @@ impl CBattleFairyProperty {
         Ok(())
     }
 
-    /// Загружает marker/token формат с exact reuse частичного record-а.
+ /// Загружает marker/token формат с reuse частичного record-а.
     pub(crate) fn load_combine_config(&mut self, source: &[u8]) {
         self.compose.clear();
         let mut cursor = 0usize;
@@ -150,7 +144,7 @@ impl CBattleFairyProperty {
         }
     }
 
-    /// Кодирует client-facing `0x2D` payload в доказанном MSVC SSO-domain.
+ /// Кодирует client-facing `0x2D` payload в доказанном MSVC SSO-domain.
     pub(crate) fn serialize_combine(
         &self,
         destination: &mut Vec<u8>,

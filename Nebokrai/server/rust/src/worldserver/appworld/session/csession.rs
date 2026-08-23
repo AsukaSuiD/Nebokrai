@@ -1,20 +1,12 @@
-//! Базовый session-owner WorldServer.
-//!
-//! Восстановлены исходные функции `CSession` RVA `0x000DD5A0..0x000DDBA0`
-//! из `e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\csession.cpp`
-//! по точной паре `Nworldserver.exe + WorldServer.pdb`. Два catch-helper-а
-//! `0x0007BD79/0x0007BF56` являются STL/unwind noise и заменены владением
-//! `Vec`/`Drop`.
+//! Базовый session-owner WorldServer из точной пары EXE/PDB.
 //!
 //! Сохраняются full signed lifecycle-флаги, unsigned wrapping tick/lifetime,
 //! list-order plug-ов, wire header `[type,min,max,remaining_lifetime]` и
 //! безусловные повторные `End/Abort` callbacks. `Vec<WorldSessionPlug>`
 //! заменяет `std::list<long>` и дополнительно к ID кэширует неизменяемую owner
 //! identity: это позволяет Rust-owner-у выполнять virtual owner lookup без
-//! обратного raw pointer-а в factory и не меняет порядок или wire.
-//! Переход `0x004DDAE7 -> 0x004DDA55` в exact EXE подтверждает продолжение
-//! обхода после удаления plug-а; показанный RAW ранний `return` был ошибкой
-//! структурирования декомпилятора.
+//! обратного указателя в factory и не меняет порядок или wire. После удаления
+//! plug-а обход продолжается со следующей записью.
 //!
 //! Обращения к plug registry и `CGame`, которые C++ выполнял через globals,
 //! представлены ordered `WorldSessionEffect`. `CSessionFactory` забирает их
@@ -141,7 +133,7 @@ impl CSession {
         1
     }
 
-    /// Выполняет только local prefix `AI`; plug traversal принадлежит factory.
+ /// Выполняет только local prefix `AI`; plug traversal принадлежит factory.
     pub(crate) fn ai(&mut self) -> bool {
         if self.started != 1 || self.ended != 0 || self.aborted != 0 {
             return false;

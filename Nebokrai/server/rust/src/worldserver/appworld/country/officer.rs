@@ -1,14 +1,8 @@
 //! Четыре officer-поля country owner-а исторического `WorldServer`.
 //!
-//! Статус reached constructor-state и destructor `COfficer` RVA `0x000E0EF0`:
-//! `IMPLEMENTED`. `CKing::CKing` и `CMinister::CMinister` оба сначала
+//! действует. `CKing::CKing` и `CMinister::CMinister` оба сначала
 //! создают `CCountryIdentity`, затем обнуляют ровно четыре bytes по `+0x20`;
-//! это `id_type`, `quest_switch`, `appointed` и `salary_received`. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный owner PDB:
-//! `e:\\svn\\fengyun_russia_dev\\server\\worldserver\\appworld\\country\\officer.cpp:5`.
+//! это `id_type`, `quest_switch`, `appointed` и `salary_received`. Источник контракта — точная пара WorldServer EXE/PDB.
 //!
 //! `CCountry` использует эти значения через отдельный snapshot owner; данный
 //! тип сохраняет только подтверждённый lifecycle identity/officer и не вводит
@@ -16,7 +10,7 @@
 
 use super::countryidentity::CCountryIdentity;
 
-/// Безопасная композиция identity и четырёх exact byte-полей officer-а.
+/// Безопасная композиция identity и четырёх byte-полей officer-а.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct COfficer {
     identity: CCountryIdentity,
@@ -33,7 +27,7 @@ impl Default for COfficer {
 }
 
 impl COfficer {
-    /// Повторяет reached prefix `CCountryIdentity` и четыре нулевых bytes.
+ /// Повторяет reached prefix `CCountryIdentity` и четыре нулевых bytes.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             identity: CCountryIdentity::with_constructor_defaults(),

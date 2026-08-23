@@ -1,10 +1,7 @@
 //! WorldServer dispatcher-owner `OnGMAMessage`.
 //!
-//! Статус `IMPLEMENTED`: exact `0x004A5DB0..0x004A609F` материализован для
 //! kick-player `0x4FD01` и transport branches `0x4FD04`, `0x60401`, `0x60402`.
-//! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, исходный owner
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\gmamessage.cpp`.
 //! Kick-player сохраняет `_strcmpi` lookup аккаунта, online-list gate, точные
 //! payload-ы ошибок LoginServer, отсутствие Login-ответа на успешном пути и
 //! два `AddLogText` в исходном порядке. Небезопасные `char[256]`, `strcpy` и
@@ -15,10 +12,9 @@
 //! `Send(false)`. Payload не читается, `Update` и ownership/tail gates
 //! отсутствуют. До setup `dwNumber` в оригинале был неинициализирован; Rust не
 //! выбирает произвольные биты и возвращает typed safe-block без внешнего send.
-//! Любой opcode вне четырёх exact case завершает dispatcher без чтения,
+//! Любой opcode вне четырёх case завершает dispatcher без чтения,
 //! отправки и fallback-маршрута; Rust представляет это `NoOp`.
 //!
-//! Декомпилятор: Ghidra 12.1.2. Сырой C++ ниже сохранён как локальная
 //! документация, а не как Rust-реализация.
 
 use std::ffi::CString;
@@ -63,7 +59,7 @@ pub(crate) enum WorldGmaKickPlayerDisposition {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGmaMessageOutcome {
-    /// Default полного exact `OnGMAMessage` без side effects.
+ /// Default полного `OnGMAMessage` без side effects.
     NoOp {
         request_type: i32,
     },
@@ -106,7 +102,7 @@ pub(crate) enum WorldGmaMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет полный exact `OnGMAMessage` и достигнутый kick-player helper.
+/// Исполняет полный `OnGMAMessage` и действующий kick-player helper.
 pub(crate) fn on_gma_message(
     game: &CGame,
     mut message: CMessage,

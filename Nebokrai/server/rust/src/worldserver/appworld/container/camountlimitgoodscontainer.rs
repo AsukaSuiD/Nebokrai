@@ -1,39 +1,32 @@
 //! Владелец amount-limited goods-container исторического `WorldServer`.
 //!
-//! Конструктор RVA `0x000DC700`, `Find(long, GUID)` RVA `0x000D5F50`,
-//! `Find(GUID/object)/IsLocked/TraversingContainer` RVA
-//! `0x000DC180/0x000DBD40/0x000DBDC0/0x000DBE10`, query-family RVA
-//! `0x000DBE70/0x000DBEC0/0x000DBF20/0x000DBF60/0x000DBFE0/0x000DC5B0`,
-//! `GetContentsWeight` RVA `0x000DBE40`,
-//! `Lock/Unlock` RVA `0x000DC640/0x000DC260`, `IsFull/Set/GetLimit` RVA
-//! `0x000DBCC0/0x000DBCE0/0x000DBCF0`, `SetOwner` RVA `0x000DBD00`,
-//! positional `Remove` RVA `0x000D5E20`, `Remove` wrapper-ы и GUID-owner RVA
-//! `0x000DBD20/0x000DBD30/0x000DC1C0`,
-//! `Unserialize/Serialize` RVA `0x000DBD50/0x000DC070`, `GetGoodsAmount` RVA
-//! `0x000DC030`, основного `Add/AddFromDB` RVA `0x000DC790/0x000DC820`,
-//! `Clear/Release` RVA
-//! `0x000DC9A0/0x000DCAB0`, `Clone` RVA `0x000DCBA0` и destructor RVA
-//! `0x000DCC10` реализованы в Rust. Точная пара доказательных артефактов:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.h`
-//! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\camountlimitgoodscontainer.cpp:19,42,114,139,176,218,247,267,289,316,336,355,415,464,526,563,602,608,629`.
+//! Конструктор, `Find(long, GUID)`,
+//! `Find(GUID/object)/IsLocked/TraversingContainer`
+//! query-family
 //!
-//! Exact PDB задаёт старый размер `0x60`: `CGoodsContainer`/secondary
+//! `GetContentsWeight`,
+//! `Lock/Unlock`, `IsFull/Set/GetLimit`
+//! `SetOwner`,
+//! positional `Remove`, `Remove` wrapper-ы и GUID-owner
+//!
+//! `Unserialize/Serialize`, `GetGoodsAmount`
+//! основного `Add/AddFromDB`,
+//! `Clear/Release`
+//! `Clone` и destructor
+//! входят в контракт owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
+//!
+//! Layout сохраняет старый размер `0x60`: `CGoodsContainer`/secondary
 //! `CContainerListener` prefix, `stdext::hash_map<CGUID, CGoods*>` по `+0x24`,
 //! unsigned limit по `+0x4C` и vector locked GUID по `+0x50`. Constructor
 //! создаёт пустые map/vector, limit `1`, owner type/ID `0` и регистрирует
-//! embedded listener. Exact constructor `0x004DC721..0x004DC76F` подтвердил
-//! secondary subobject `+0x20` и vtable `0x00549410`; оба added/removed slots
-//! ведут в `0x004DBD10`, чьё полное тело — `mov eax,1; ret 0xC`. Поэтому этот
-//! listener не имеет побочных эффектов. Во всём World PDB/raw-корпусе других
-//! `OnObjectAdded/OnObjectRemoved` override-ов нет; после ответа reverse
+//! embedded listener. constructor подтвердил
+//! secondary subobject `+0x20` и vtable; оба added/removed slots
+//! ведут в, чьё полное тело — `mov eax,1; ret 0xC`. Поэтому этот
+//! listener не имеет побочных эффектов. Во всём World PDB/оригинал-корпусе других
+//! `OnObjectAdded/OnObjectRemoved` override-ов нет; после ответа проверка
 //! прекращён.
 //!
-//! Rust `BTreeMap<CGuid, Box<CGoods>>` заменяет только STL hash storage и raw
+//! Rust `BTreeMap<CGuid, Box<CGoods>>` заменяет только STL hash storage и оригинал
 //! ownership. GUID остаётся ключом. Старый duplicate overwrite, `Clear` и
 //! проигнорированный false `Add` теряли прежний `CGoods*` без
 //! `GarbageCollect`. Это внутренний lifetime-дефект без наблюдаемого контракта:
@@ -42,7 +35,7 @@
 //!
 //! Старый hash-list traversal не является игровым порядком: каждая wire-запись
 //! содержит свой GUID внутри `CGoods`, decoder вставляет её обратно по GUID, а
-//! оба достигнутых callbacks no-op. `BTreeMap` даёт воспроизводимый raw-GUID
+//! оба действующих callbacks no-op. `BTreeMap` даёт воспроизводимый оригинал-GUID
 //! order без ручного восстановления внутренностей MSVC `stdext::hash_map`.
 //!
 //! `Serialize` пишет unsigned число только тех товаров, чей base-properties
@@ -61,20 +54,20 @@
 //! получал длину и мог читать за buffer; короткий источник возвращает
 //! типизированную ошибку после уже выполненных изменений.
 //!
-//! Exact `Find(GUID)` сначала ищет hash-node, затем вызывает virtual
+//! `Find(GUID)` сначала ищет hash-node, затем вызывает virtual
 //! `IsLocked`; совпадение любого из четырёх DWORD GUID в locked-vector
-//! недостаточно — `0x004DBDE0..0x004DBDED` сравнивает все 16 байт. Typed
-//! `Find(long, GUID)` через thunks `0x004D5F50/0x004E0660` приходит в
-//! `0x004E0A00`, читает только GUID из второго аргумента и делегирует этому
+//! недостаточно — сравнивает все 16 байт. Typed
+//! `Find(long, GUID)` через thunks / приходит в
+//! читает только GUID из второго аргумента и делегирует этому
 //! методу, поэтому safe Rust не носит лишний type `700` рядом с уже typed
-//! `CGoods`. Object-overload через `0x004E0A40` проверяет null, берёт тот же
+//! `CGoods`. Object-overload через проверяет null, берёт тот же
 //! embedded GUID по `+0x0C` и делегирует GUID-slot. Traversal при
 //! null listener ничего не делает, иначе посещает все map-values и игнорирует
 //! callback-result. `BTreeMap` сохраняет уже принятую storage-замену; для
-//! достигнутого `CheckGoodsInPacket` порядок ненаблюдаем, поскольку итоговая
+//! действующего `CheckGoodsInPacket` порядок ненаблюдаем, поскольку итоговая
 //! 32-битная wrapping-сумма коммутативна.
 //! `GetContentsWeight` также обходит все map-values без lock-фильтра и складывает
-//! exact wrapping-вес товаров; storage-order на коммутативный результат не
+//! wrapping-вес товаров; storage-order на коммутативный результат не
 //! влияет.
 //!
 //! Query-family намеренно различает locked-состояние. `GetGoods(position)`,
@@ -86,26 +79,26 @@
 //! параметра как `None` и использует `std::ptr::eq` без `unsafe`.
 //!
 //! PDB/mangled symbol для `GetGoods(base index, vector)` подтверждает передачу
-//! vector по значению, а exact `RET 0x14` и destructor временной копии — что
+//! vector по значению, а `RET 0x14` и destructor временной копии — что
 //! собранный список не возвращается вызывающему. Rust сохраняет этот странный
 //! контракт принимаемым по значению `Vec<&CGoods>` и unit-result, не исправляя
 //! историческую сигнатуру в reference-output API.
 //!
-//! Exact `Lock` не проверяет принадлежность переданного товара контейнеру: он
+//! `Lock` не проверяет принадлежность переданного товара контейнеру: он
 //! отвергает только null и уже locked GUID, затем копирует GUID. `Unlock`
 //! находит и удаляет первое совпадение, сдвигая хвост на один элемент. Новый
 //! C++ reference принимает GUID, требует `Find` и использует удаление всех
 //! совпадений; Rust сохраняет EXE-контракт через `Option<&CGoods>` и `Vec::remove`.
 //!
-//! Exact GUID-`Remove` ищет map-node, отклоняет locked товар, вызывает только
+//! GUID-`Remove` ищет map-node, отклоняет locked товар, вызывает только
 //! доказанные no-op listeners и лишь затем вынимает pointer из map; locked-
 //! vector при успехе не чистится. `BTreeMap::remove` заменяет legacy hash erase,
 //! а `Box<CGoods>` явно переносит возвращаемое ownership вызывающему.
 //! Positional `Remove(position, amount)` сначала использует locked-aware
 //! `GetGoods`. При частичном stack-remove он требует max-stack больше `1`,
-//! создаёт новый товар через exact factory, назначает requested amount и только
+//! создаёт новый товар через factory, назначает requested amount и только
 //! затем вычитает его из исходного stack; равный amount делегирует GUID-remove.
-//! Точный ASM исправляет перепутанные raw-аргументы и сохраняет unsigned SUB.
+//! исправляет перепутанные оригинал-аргументы и сохраняет unsigned SUB.
 //!
 //! `AddFromDB` отдельно от обычного Add сначала проверяет full, затем ordinal
 //! `GetGoods(position)`: unlocked существующий товар даёт false и debug-log,
@@ -115,13 +108,13 @@
 //! rejection и state-переходы сохранены, вытесненный pointer безопасно
 //! уничтожается как внутренний lifetime-дефект.
 //!
-//! Exact `Clone` присваивает target только limit и map сырых `CGoods*`; owner и
+//! `Clone` присваивает target только limit и map сырых `CGoods*`; owner и
 //! locked-vector target сохраняются. World-корпус не содержит caller-а этого
 //! virtual slot-а, а shallow alias создаёт только double-free/use-after-free
 //! lifetime-дефект. Rust исправляет внутреннее владение deep clone-ом каждого
 //! товара через его подтверждённый wire-roundtrip, сохраняя набор полей и
 //! порядок target-эффектов. `AI` всё ещё требует child-graph `CBaseObject` и
-//! остаётся RAW.
+//! остаётся оригинал.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -193,7 +186,7 @@ impl From<GoodsCodecError> for AmountContainerCodecError {
     }
 }
 
-/// Достигнутая owning-часть `CAmountLimitGoodsContainer`.
+/// Действующая owning-часть `CAmountLimitGoodsContainer`.
 pub(crate) struct CAmountLimitGoodsContainer {
     container_base: CGoodsContainerState,
     goods: BTreeMap<CGuid, Box<CGoods>>,
@@ -225,7 +218,7 @@ impl GoodsContainerPositionStorage for CAmountLimitGoodsContainer {
 }
 
 impl CAmountLimitGoodsContainer {
-    /// Создаёт точные defaults constructor-а.
+ /// Создаёт точные defaults constructor-а.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             container_base: CGoodsContainerState::with_constructor_defaults(),
@@ -235,22 +228,22 @@ impl CAmountLimitGoodsContainer {
         }
     }
 
-    /// Присваивает unsigned предел количества валидных товаров.
+ /// Присваивает unsigned предел количества валидных товаров.
     pub(crate) const fn set_goods_amount_limit(&mut self, limit: u32) {
         self.goods_amount_limit = limit;
     }
 
-    /// Возвращает unsigned предел количества валидных товаров.
+ /// Возвращает unsigned предел количества валидных товаров.
     pub(crate) const fn get_goods_amount_limit(&self) -> u32 {
         self.goods_amount_limit
     }
 
-    /// Сохраняет два signed owner scalar без дополнительных эффектов.
+ /// Сохраняет два signed owner scalar без дополнительных эффектов.
     pub(crate) const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
         self.container_base.set_owner(owner_type, owner_id);
     }
 
-    /// Считает только товары с non-null base-properties lookup.
+ /// Считает только товары с non-null base-properties lookup.
     pub(crate) fn get_goods_amount(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -268,7 +261,7 @@ impl CAmountLimitGoodsContainer {
             .map_err(|_| AmountContainerCodecError::ValidGoodsCountOutsideLegacyRange { count })
     }
 
-    /// Сравнивает текущий valid-count с unsigned limit как исходный `IsFull`.
+ /// Сравнивает текущий valid-count с unsigned limit как исходный `IsFull`.
     pub(crate) fn is_full(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -276,7 +269,7 @@ impl CAmountLimitGoodsContainer {
         Ok(self.goods_amount_limit <= self.get_goods_amount(registry)?)
     }
 
-    /// Добавляет typed товар по exact GUID; `Some` сохраняет ownership при false.
+ /// Добавляет typed товар по GUID; `Some` сохраняет ownership при false.
     pub(crate) fn add(
         &mut self,
         goods: Box<CGoods>,
@@ -289,7 +282,7 @@ impl CAmountLimitGoodsContainer {
         Ok(None)
     }
 
-    /// Воспроизводит DB-вставку: full и unlocked ordinal collision до insert.
+ /// Воспроизводит DB-вставку: full и unlocked ordinal collision до insert.
     pub(crate) fn add_from_db(
         &mut self,
         position: u32,
@@ -303,13 +296,13 @@ impl CAmountLimitGoodsContainer {
         Ok(None)
     }
 
-    /// Вставляет raw DB/legacy pointer по GUID и безопасно уничтожает вытесненный.
+ /// Вставляет оригинал DB/legacy pointer по GUID и безопасно уничтожает вытесненный.
     pub(super) fn insert_unchecked(&mut self, goods: Box<CGoods>) {
         let ex_id = *goods.get_ex_id();
         let _ = self.goods.insert(ex_id, goods);
     }
 
-    /// Вынимает unlocked товар по GUID и переносит ownership вызывающему.
+ /// Вынимает unlocked товар по GUID и переносит ownership вызывающему.
     pub(super) fn remove(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>> {
         let goods = self.goods.get(ex_id)?;
         if self.is_locked(goods) {
@@ -318,7 +311,7 @@ impl CAmountLimitGoodsContainer {
         self.goods.remove(ex_id)
     }
 
-    /// Вынимает exact amount из ordinal position, включая split-stack ветку.
+ /// Вынимает amount из ordinal position, включая split-stack ветку.
     pub(crate) fn remove_at<Random>(
         &mut self,
         position: u32,
@@ -342,13 +335,13 @@ impl CAmountLimitGoodsContainer {
         .map_err(Into::into)
     }
 
-    /// Очищает goods/locked storage, сохраняя owner и limit.
+ /// Очищает goods/locked storage, сохраняя owner и limit.
     pub(crate) fn clear(&mut self) {
         self.goods.clear();
         self.locked_goods.clear();
     }
 
-    /// Выполняет точный достигнутый reset `Release`.
+ /// Выполняет точный действующий reset `Release`.
     pub(crate) fn release(&mut self) {
         self.goods_amount_limit = 1;
         self.goods.clear();
@@ -356,16 +349,16 @@ impl CAmountLimitGoodsContainer {
         self.container_base.release();
     }
 
-    /// Обходит все goods в storage-order ровно один раз для virtual `CGoods::AI`.
-    /// Сам товарный AI остаётся owner-ом `CGoods`, поэтому callback внедряется
-    /// явно вместо прежнего virtual dispatch через raw pointer.
+ /// Обходит все goods в storage-order ровно один раз для virtual `CGoods::AI`.
+ /// Сам товарный AI остаётся owner-ом `CGoods`, поэтому callback внедряется
+ /// явно вместо прежнего virtual dispatch через оригинал pointer.
     pub(crate) fn ai(&mut self, mut on_goods_ai: impl FnMut(&mut CGoods)) {
         for goods in self.goods.values_mut() {
             on_goods_ai(goods);
         }
     }
 
-    /// Копирует World-набор `limit + goods`, сохраняя owner/locked target-а.
+ /// Копирует World-набор `limit + goods`, сохраняя owner/locked target-а.
     pub(crate) fn clone_into(
         &self,
         target: &mut CAmountLimitGoodsContainer,
@@ -382,18 +375,18 @@ impl CAmountLimitGoodsContainer {
         Ok(true)
     }
 
-    /// Ищет exact GUID и скрывает товар, если тот присутствует в locked-vector.
+ /// Ищет GUID и скрывает товар, если тот присутствует в locked-vector.
     pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         let goods = self.goods.get(ex_id).map(Box::as_ref)?;
         (!self.is_locked(goods)).then_some(goods)
     }
 
-    /// Делегирует object-overload точному GUID-поиску после null-check.
+ /// Делегирует object-overload точному GUID-поиску после null-check.
     pub(crate) fn find_object(&self, goods: Option<&CGoods>) -> Option<&CGoods> {
         find_by_object_guid(self, goods.map(CGoods::get_ex_id))
     }
 
-    /// Возвращает ordinal map-элемент, если position ниже limit и он не locked.
+ /// Возвращает ordinal map-элемент, если position ниже limit и он не locked.
     pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
         if position >= self.goods_amount_limit {
             return None;
@@ -407,13 +400,13 @@ impl CAmountLimitGoodsContainer {
         (!self.is_locked(goods)).then_some(goods)
     }
 
-    /// Возвращает mutable DB-view того же unlocked ordinal-элемента.
+ /// Возвращает mutable DB-view того же unlocked ordinal-элемента.
     pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         let ex_id = *self.get_goods(position)?.get_ex_id();
         self.goods_mut(&ex_id)
     }
 
-    /// Возвращает первый unlocked товар с exact base-properties index.
+ /// Возвращает первый unlocked товар с base-properties index.
     pub(crate) fn get_the_first_goods(&self, base_properties_index: u32) -> Option<&CGoods> {
         self.goods.values().map(Box::as_ref).find(|goods| {
             goods.get_base_properties_index() == Some(base_properties_index)
@@ -421,14 +414,14 @@ impl CAmountLimitGoodsContainer {
         })
     }
 
-    /// Проверяет наличие base-properties index, намеренно не учитывая lock.
+ /// Проверяет наличие base-properties index, намеренно не учитывая lock.
     pub(crate) fn is_goods_existed(&self, base_properties_index: u32) -> bool {
         self.goods
             .values()
             .any(|goods| goods.get_base_properties_index() == Some(base_properties_index))
     }
 
-    /// Возвращает ordinal по exact object identity без lock-фильтра.
+ /// Возвращает ordinal по object identity без lock-фильтра.
     pub(crate) fn query_goods_position(&self, goods: Option<&CGoods>) -> Option<u32> {
         let goods = goods?;
         self.goods
@@ -437,7 +430,7 @@ impl CAmountLimitGoodsContainer {
             .and_then(|position| u32::try_from(position).ok())
     }
 
-    /// Возвращает ordinal по полному GUID без lock-фильтра.
+ /// Возвращает ordinal по полному GUID без lock-фильтра.
     pub(crate) fn query_goods_position_by_guid(&self, ex_id: &CGuid) -> Option<u32> {
         self.goods
             .values()
@@ -445,7 +438,7 @@ impl CAmountLimitGoodsContainer {
             .and_then(|position| u32::try_from(position).ok())
     }
 
-    /// Сохраняет исходную by-value vector-сигнатуру: результат будет отброшен.
+ /// Сохраняет исходную by-value vector-сигнатуру: результат будет отброшен.
     pub(crate) fn get_goods_by_base_index<'container>(
         &'container self,
         base_properties_index: u32,
@@ -457,7 +450,7 @@ impl CAmountLimitGoodsContainer {
         }));
     }
 
-    /// Копирует GUID любого non-null товара, если такой GUID ещё не locked.
+ /// Копирует GUID любого non-null товара, если такой GUID ещё не locked.
     pub(crate) fn lock(&mut self, goods: Option<&CGoods>) -> i32 {
         let Some(goods) = goods else {
             return 0;
@@ -470,7 +463,7 @@ impl CAmountLimitGoodsContainer {
         1
     }
 
-    /// Удаляет первое exact GUID-совпадение либо возвращает исходный `0`.
+ /// Удаляет первое GUID-совпадение либо возвращает исходный `0`.
     pub(crate) fn unlock(&mut self, goods: Option<&CGoods>) -> i32 {
         let Some(goods) = goods else {
             return 0;
@@ -487,14 +480,14 @@ impl CAmountLimitGoodsContainer {
         1
     }
 
-    /// Проверяет полное 16-байтовое совпадение GUID в linear locked-vector.
+ /// Проверяет полное 16-байтовое совпадение GUID в linear locked-vector.
     fn is_locked(&self, goods: &CGoods) -> bool {
         self.locked_goods
             .iter()
             .any(|locked| locked == goods.get_ex_id())
     }
 
-    /// Передаёт listener-у все map-values и игнорирует его `int` результат.
+ /// Передаёт listener-у все map-values и игнорирует его `int` результат.
     pub(crate) fn traversing_container<L: CContainerListener>(&self, listener: Option<&mut L>) {
         let Some(listener) = listener else {
             return;
@@ -505,7 +498,7 @@ impl CAmountLimitGoodsContainer {
         }
     }
 
-    /// Складывает exact unsigned вес всех товаров без lock-фильтра.
+ /// Складывает unsigned вес всех товаров без lock-фильтра.
     pub(crate) fn get_contents_weight(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -515,12 +508,12 @@ impl CAmountLimitGoodsContainer {
         })
     }
 
-    /// Даёт derived-container-у read-only обход единственного goods-owner-а.
+ /// Даёт derived-container-у read-only обход единственного goods-owner-а.
     pub(super) fn goods(&self) -> impl Iterator<Item = &CGoods> {
         self.goods.values().map(Box::as_ref)
     }
 
-    /// Замораживает concrete traversal с ordinal `QueryGoodsPosition`.
+ /// Замораживает concrete traversal с ordinal `QueryGoodsPosition`.
     pub(crate) fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -535,12 +528,12 @@ impl CAmountLimitGoodsContainer {
             .collect()
     }
 
-    /// Заимствует товар по exact GUID для derived positional операции.
+ /// Заимствует товар по GUID для derived positional операции.
     pub(super) fn goods_mut(&mut self, ex_id: &CGuid) -> Option<&mut CGoods> {
         self.goods.get_mut(ex_id).map(Box::as_mut)
     }
 
-    /// Кодирует valid-count и полные товары в container wire.
+ /// Кодирует valid-count и полные товары в container wire.
     pub(crate) fn serialize(
         &self,
         destination: &mut Vec<u8>,
@@ -560,7 +553,7 @@ impl CAmountLimitGoodsContainer {
         Ok(true)
     }
 
-    /// Декодирует container после точного раннего `Clear`.
+ /// Декодирует container после точного раннего `Clear`.
     pub(crate) fn unserialize(
         &mut self,
         source: &[u8],
@@ -594,8 +587,8 @@ fn read_amount_u32(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Старый вспомогательный код не получал длину источника. При коротком
-        // буфере он выходил за его границы; Rust не воспроизводит это UB.
+ // Старый вспомогательный код не получал длину источника. При коротком
+ // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(AmountContainerCodecError::UnexpectedEnd {
             field,
             offset,

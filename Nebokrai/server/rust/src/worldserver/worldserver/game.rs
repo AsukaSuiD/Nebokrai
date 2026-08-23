@@ -1,1195 +1,44 @@
-//! Главный владелец исторического `WorldServer`.
-//!
-//! Rust-owner включает `CGame::tagSetup::tagSetup` RVA `0x00004C30`,
-//! позиционную часть
-//! `CGame::LoadSetup` RVA `0x0000F890`, `CGame::InitNetServer` RVA
-//! `0x00001860`, `CGame::InitNetClient` RVA `0x000030F0` и
-//! `CGame::ReConnectLoginServer` RVA `0x00003280` и
-//! `CGame::SendCdkeyToLoginServer` RVA `0x000083D0`,
-//! `CGame::SendMsg2GameServer` RVA `0x00001B10`,
-//! `CGame::SendGlobeVariableToGS` RVA `0x000017E0`,
-//! `CGame::LoadServerSetup` RVA `0x00013850`, полный `CGame::Init` RVA
-//! `0x00018EE0`, `CGame::SaveCityRegion` RVA `0x00008750`,
-//! `CGame::ClearMapPlayer` RVA `0x0000D450`, полный `CGame::Release` RVA
-//! `0x0000E7F0`, `CreateGame/DeleteGame/GetGame` RVA
-//! `0x00015660/0x00001780/0x000017A0`, destructor `CGame` RVA
-//! `0x00014EF0` и внешний `GameThreadFunc` RVA `0x0001A310`,
-//! `CGame::GetConnectedGameServerCount` RVA `0x000084C0`,
-//! `CGame::GetConnectedGameServerCountEx` RVA `0x00008520`,
-//! обе перегрузки `CGame::GetGameServer` RVA `0x00008590/0x000132A0`,
-//! constructor `CGame::CGame` RVA `0x00015210`,
-//! `CGame::IsConnect` RVA `0x000A5600`,
-//! `CGame::ClearOfflinePlayer` RVA `0x00004BF0`,
-//! `CGame::ClearMapPlayerForOffline` RVA `0x0000D3A0`,
-//! `CGame::GetMapPlayer` RVA `0x00007100`,
-//! `CGame::RemoveOnlinePlayer` RVA `0x00007190`,
-//! `CGame::GetOnlinePlayerByID` RVA `0x00007210`,
-//! `CGame::GetOnlinePlayerIDByName` RVA `0x00005590`,
-//! `CGame::GetLoginPlayerIDByName` RVA `0x00007270`,
-//! `CGame::GetFactionById` RVA `0x00001FD0`,
-//! `CGame::ToStrlwr` RVA `0x00002000`,
-//! `CGame::IsNameExistInMapPlayer` RVA `0x00005190`,
-//! `CGame::ClearCreationPlayer` RVA `0x00004B30`,
-//! `CGame::GetCreationPlayerCountInCdkey` RVA `0x000052D0`,
-//! `CGame::GetCreationPlayerByName` RVA `0x00005390`,
-//! `CGame::RemoveOfflinePlayer` RVA `0x00007330`,
-//! `CGame::RemoveLoginPlayer` RVA `0x00007340`,
-//! `CGame::GetLoginPlayerByID` RVA `0x00007390`,
-//! `CGame::ValidateDBPlayerIDinCdkey` RVA `0x000073F0`,
-//! `CGame::ValidatePlayerIDinCdkey` RVA `0x00007490`,
-//! `CGame::GetTeamSessionID` RVA `0x000070C0`,
-//! `CGame::AppendOnlinePlayer` RVA `0x00010D50`,
-//! `CGame::AppendOfflinePlayer` RVA `0x00010DF0`,
-//! `CGame::AppendLoginPlayer` RVA `0x00010E50`,
-//! numeric `CGame::GetRegion(long)` RVA `0x00011F20`,
-//! name-overload `CGame::GetRegion(char const*)` RVA `0x00008680`,
-//! достигнутой связи `CGame::tagRegion::pRegion` с `CWorldRegion` и его
-//! унаследованным именем,
-//! `CGame::GetRegionGameServer` RVA `0x00013AC0`,
-//! `CGame::GetPlayerGameServer` RVA `0x00013B40`,
-//! `CGame::GetGameServerNumber_ByRegionID` RVA `0x00013B70`,
-//! `CGame::GetGameServerNumber_ByPlayerID` RVA `0x00013B90`, а также
-//! `ShowSaveInfo` RVA `0x00001720`,
-//! `CGame::CheckPoint` RVA `0x00009A90` и
-//! `CGame::ProcessMessage` RVA `0x00001A30`, player-часть
-//! `CGame::tagDBData::tagDBData` RVA `0x00011F60`,
-//! `CGame::AppendDBPlayer` RVA `0x0000ED90` и
-//! `CGame::AppendDBCreationPlayer` RVA `0x00010FB0`,
-//! `CGame::AppendSaveFaction/AppendSaveUnion` RVA `0x000110D0/0x00011130`,
-//! `CGame::AppendDelFaction/AppendDelUnion` RVA `0x00011190/0x000111F0`,
-//! `CGame::AppendRegionParam` RVA `0x00011250`,
-//! `CGame::AddGoodsLink/FindGoodsLink` RVA `0x000112B0/0x00005A10`,
-//! `CGame::AddOrginGoodsToPlayer` RVA `0x00005A40`,
-//! `CGame::AppendDBCountry` RVA `0x00011070`,
-//! `CGame::SetEnemyFactions` RVA `0x00014D90` и
-//! `CGame::ClearDBData` RVA `0x0000D490`, live restore/deletion list-owner-ы
-//! `0x00004B70/0x00004BB0/0x000054E0/0x00005530/0x00005560/0x00007140/
-//! 0x00010CA0/0x00010CF0`, `CGame::AppendMapPlayer` RVA `0x00010A40`,
-//! `CGame::CloneMapPlayer` RVA `0x00010AB0`, `CGame::CloneSavingPlayer` RVA
-//! `0x00010EB0`, `CGame::GetCreationPlayerVectorByCdkey` RVA `0x00012760` и
-//! полный `CGame::GenerateDBData` RVA `0x00012E50`,
-//! `CGame::GeterateRegionDBData` RVA `0x00012860`,
-//! `CGame::RefreshOwnedCityOrg` RVA `0x000128E0`,
-//! `CGame::CheckInvalidString` RVA `0x00001B30`,
-//! `SaveThreadFunc` RVA `0x00001E30`, полный `CGame::AI` RVA `0x000148A0`,
-//! полный `CGame::ProcessPlayerDataQueue` RVA `0x00013BD0`,
-//! worker `LoadPlayerDataFromDB` RVA `0x000092C0`,
-//! `CGame::ProcessTimeOutLoginPlayer` RVA `0x00014A60` и весь достигнутый
-//! `CGame::MainLoop` RVA `0x00019A00`. Точная пара доказательных артефактов:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.h:116,174,377,401,423,609,655`
-//! и `e:\svn\fengyun_russia_dev\server\worldserver\worldserver\game.cpp:141,495,502,513,520,563,587,786,2072,2215,2284,2302,2346,2446,2790,2976,3011,3021,3045,3083,3105,3161,3299,3322,3357,3372,3393,3498,3514,3577,3590,3620,3678,3786,4194,4208,4285,4410,4464,4555,4565,4574,4583,4789,4822,5532,5967`.
-//!
-//! Конструктор `tagSetup` создаёт 23 пустые `std::string` и задаёт только
-//! `dwRefeashInfoTime = 1000`, `dwSaveInfoTime = 60000`, `bUseLogSys = false`
-//! и `bUseOldSaveLargessWay = true`. Затем `CGame::CGame` RVA `0x00015210`
-//! меняет имя на `WorldServer`, Login IP на `127.0.0.1`, порты на `2345/8100`
-//! и позднее создаёт пустой `m_vectorPingGameServerInfo`, ставит
-//! `_login_server_id = 0`, `m_bInPing = false` и снимает отдельный начальный
-//! ping-tick. Остальные достигнутые
-//! numeric/bool члены исходно не инициализированы; `Option` сохраняет эту
-//! границу и не назначает ей выдуманный ноль.
-//!
-//! `AddOrginGoodsToPlayer` сохраняет list-order, occupation filter, original-
-//! name lookup, factory roll-order, GUID-before-positional-add и продолжение
-//! после rejected equipment. `uuid`/`getrandom` заменяют только `CoCreateGuid`,
-//! а системный отказ остаётся typed block вместо скрытого нулевого GUID.
-//!
-//! Исключение сделано только для `m_GlobeVariable` по итогам точной проверки
-//! всего EXE. PDB задаёт четыре signed `long` по `CGame+0x04..+0x13`, точный
-//! конструктор `0x00415210` после vtable сразу начинает `m_mPlayer` с `+0x14`,
-//! а полный проход декомпиляции и ссылок не нашёл записей в эти 16 байт.
-//! Единственный настоящий потребитель, `SendGlobeVariableToGS` `0x004017E0`,
-//! копирует их как сырой payload `0x7F80D`. Старый сервер тем самым выдавал
-//! наружу недетерминированную память, а не устойчивую Miracle-семантику. Rust
-//! исправляет эту ошибку работы с памятью четырьмя нулями; явное little-endian кодирование
-//! сохраняет доказанные размер, порядок полей и wire framing без `unsafe`.
-//!
-//! `GetFactionById` не использует `this`: он возвращает null при ID `0` либо
-//! отсутствующем singleton-е, иначе делегирует signed ID точному
-//! `COrganizingCtrl::GetpFactionById`. Rust передаёт controller явно вместо
-//! global singleton и возвращает `Option<&CFaction>` вместо nullable pointer;
-//! нулевой ID по-прежнему отсекается до map lookup. Raw owner после реализации
-//! удалён.
-//!
-//! `RefreshOwnedCityOrg` сначала проверяет обе ступени `GetRegion` и только для
-//! живого owner-а получает country через exact `GetCountryByFaction`. Затем он
-//! вызывает virtual `SetOwnedCityOrg`, присваивает унаследованный country byte и
-//! уже после обеих мутаций рассылает `0x7FE27 + region/faction/union/country`.
-//! Точная дизассемблировка `0x004128E0..0x004129E8` подтверждает, что Windows
-//! owner не сохраняет регион и не использует отдельный governance wire-кодек:
-//! эти добавления старого Linux-донора не перенесены. `BTreeMap`, typed region
-//! owner и готовый `CMessage::send_all` заменяют только STL, virtual ABI и
-//! сетевую инфраструктуру; ignored send-result остаётся наблюдаемым отчётом.
-//!
-//! Name-overload `GetRegion` обходит `s_mapRegionList` в signed key-order и
-//! возвращает первый `tagRegion`, чей `pRegion->m_strName` равен входной
-//! C-строке через case-sensitive `strcmp`. Точная дизассемблировка
-//! `0x00408680..0x00408741` не содержит map lookup по имени или fallback-а.
-//! `named_region_lookup` сохраняет порядок и first-match, а также возвращает
-//! достигнутый route snapshot вместо сырого указателя. Null `pRegion` в EXE
-//! разыменовывался; Rust считает его повреждённым внутренним состоянием,
-//! пропускает и явно считает, не приписывая падению игровую семантику.
-//!
-//! `CheckInvalidString` остаётся точным однострочным делегатом, но process-global
-//! `CWordsFilter` теперь является owned полем единственного `CGame`. `Init`
-//! читает оба ресурса на прежней позиции и игнорирует bool `Initial`, а Release
-//! очищает owner на позиции исходного singleton delete. Это устраняет global
-//! lifetime, не меняя порядок загрузки, фильтрации или teardown. Смена имени
-//! вызывает двухаргументный overload, создание роли — трёхаргументный с exact
-//! all-numbers gate; initial-config проверяет `IsValid` и кодирует subtype
-//! `0x31` из того же owner-а. Прежние внешние callback/snapshot-ы этих путей
-//! удалены.
-//! Reload-профиль `InvalidStr` по exact
-//! `0x00416C75..0x00416CA8` вызывает тот же owned `ReloadFilter`: failure
-//! молча идёт в общий epilogue, success пишет только `Load InvalidStr...OK!`,
-//! а общий legacy return-slot остаётся нулевым. Resource-context заменяет
-//! `fopen`, но чтение charcode начинается только после доступного word-list.
-//!
-//! `CQuestSystem` является owned setup-частью `CGame`: после
-//! `InitializeFactionWar` exact `CGame::Init` вызывает его void `Initialize`,
-//! который очищает map, читает пакетный `Data/Quest.ini` и затем накладывает
-//! loose `Data/QuestEx.ini`. Три setup-script и уже загруженная StringTable
-//! остаются теми же owner-ами, которые затем обслуживают subtype `0x16`.
-//! Отсутствующий `QuestEx.ini` раньше приводил к внутреннему null dereference;
-//! Rust не вводит несуществующий log или init-failure, но сохраняет primary map
-//! и отдаёт typed report. Release сбрасывает тот же owned value на месте
-//! исторического singleton release.
-//!
-//! `EquipmentComposeList` также принадлежит единственному `CGame`: reload и
-//! initial-config serializer читают одну пару ordered map. Exact caller
-//! `0x00417AF6..0x00417B7F` передаёт `data/EquipmentCompose.ini`, сохраняет
-//! return `LoadList`, пишет прежний log и только при success + send-флаге
-//! публикует `0x7F801/0x30`. Прежние boolean/serialization callback-owner-ы
-//! для этой ветви удалены; resource backend и `CMessage` остаются общими
-//! техническими границами.
-//!
-//! `CCiQingSetup` теперь также принадлежит `CGame`. Reload `ciqing` по exact
-//! `0x00417D96..0x00417E63` читает `/data/ciqing.ini`, пишет прежний success/
-//! failure log, сохраняет bool в общий legacy return-slot и затем безусловно
-//! перезагружает `CLingBaoSetup` из `/data/lingbao.ini`; только успешный CiQing
-//! при включённой рассылке кодирует owned CiQing перед его wire в subtype `0x35`.
-//! Initial-config читает те же owned экземпляры, поэтому внешние CiQing/LingBao
-//! snapshot и reload callback-ы удалены.
-//! `Vec` и resource-context заменяют только STL/file backend; original-name
-//! lookup остаётся явной границей уже загруженного World `CGoodsFactory`.
-//!
-//! `CTaoZhuangSetup` следует той же owned-модели: exact dispatcher
-//! `0x00417CE6..0x00417D91` загружает `data/taozhuang.ini`, сохраняет bool в
-//! legacy return-slot, пишет прежний log и публикует subtype `0x34` только при
-//! success + send-флаге. Loader сохраняет first-wins `std::map`/`std::set`
-//! порядок и exact duplicate-failure logs; дубли ID самих комплектов не
-//! блокируют reload и оставляют первый item, как World EXE. Initial-config
-//! кодирует этот же owned owner, без внешнего TaoZhuang snapshot/callback.
-//!
-//! `CHitLevelSetup` теперь тоже принадлежит `CGame`: exact dispatcher
-//! `0x00416768..0x00416850` очищает/читает `data/hitlevel.ini`, сохраняет
-//! именно bool load-result до и после optional subtype `0x14`, а не размер
-//! payload. Missing file сохраняет исходный operator notice `ERROR`; initial-
-//! config использует этот же owner. Прежние HitLevel boolean/serialization
-//! callbacks и внешний snapshot удалены.
-//!
-//! `CIncrementShopList` также принадлежит `CGame`: dispatcher читает
-//! `setup/incrementshoplist.ini`, сохраняет bool load-result в legacy
-//! return-slot и при success + send-флаге публикует subtype `4`. Loader
-//! последовательно резолвит original/display names через тот же `CGoodsFactory`,
-//! сохраняет частичное state при ошибке разбора и отдельно загружает affiche.
-//! Initial-config и Release используют тот же owner; прежние IncrementShop
-//! boolean/serialization/release callbacks и внешний snapshot удалены.
-//!
-//! `PrisonConf` owned `CGame`: exact loader `data/PrisonConf.ini` очищает map
-//! до открытия, но сохраняет PK scalar при missing resource; dispatcher
-//! сохраняет bool load-result до optional subtype `0x1D`. Initial-config
-//! читает этот же owner, без внешних Prison callbacks/snapshot.
-//!
-//! `CTradeList` owned `CGame`: `data/tradelist.ini` сначала очищает map, затем
-//! в exact порядке получает NPC text из owned StringTable и goods ID из
-//! `CGoodsFactory`. Reload сохраняет прежний return mapping: только успешная
-//! рассылка subtype `3` заменяет legacy return размером payload; initial-config
-//! читает тот же owner без внешнего TradeList snapshot/callback.
-//!
-//! `CEmotion` owned `CGame`: `data/Emotions.ini` не очищает static map и
-//! возвращает false только при missing resource. Reload сохраняет исходный
-//! порядок после PlayerList и legacy return length от optional subtype `0x15`;
-//! initial-config читает тот же owner без внешнего snapshot/callback.
-//!
-//! `CBattleFairyExpConfig` остаётся отдельным World owner: reload читает
-//! `BattleFairyReleate/BattleFairyExp.xml`, очищает map до открытия, при
-//! ошибке берёт exact `ZHGS0029..0036` из owned StringTable и лишь после
-//! успешного XML loader-а публикует subtype `0x2C`. Legacy return получает
-//! длину wire только при отправке. `quick-xml` заменяет TinyXML внутри owner-а,
-//! а CGame сохраняет наблюдаемые путь, диагностики, log-order и wire boundary.
-//!
-//! `CFairyExpConf` — производный, но самостоятельный owner обычных духов:
-//! reload читает `data/fairyexp.xml`, очищает базовую map до открытия, отдаёт
-//! собственные exact diagnostics в log (включая missing-file, без operator
-//! notice) и после успеха публикует тот же base wire subtype `0x20`.
-//!
-//! `CDaKongXiangQian` — внешний owner `data/dakongxiangqian.ini`: три map и
-//! основной vector очищаются до открытия, parser сохраняет permissive marked
-//! stream исходника, а `data/DaKongDeluxModify.ini` остаётся optional и
-//! накапливается между reload. Успех публикует exact subtype `0x2B`; generic
-//! callback не может скрыть эти два разных lifecycle.
-//!
-//! `CChangeBodyConf` читает `data/CHBYRestrictionsGoods.xml`: vector чистится
-//! до открытия, StringTable diagnostics `GS1148..1151` остаются owner-контрактом,
-//! и только missing `index` повторно очищает partial result. После успеха
-//! CGame публикует его exact `0x24` wire.
-//!
-//! `PreciousBoxConf` читает `data/preciousboxconf.xml` в `_box_conf` и очищает
-//! также serializer map `_box`, как World EXE. В этом варианте не найдено
-//! XML→range materializer-а: reload подтверждённо посылает пустой `0x1E` wire,
-//! сохраняя подробные XML diagnostics и lookup исходных goods через owner context.
-//!
-//! `CBattleFairyProperty` аналогично остаётся внешним runtime owner-ом:
-//! `BattleFairyCombineConfig` читает `BattleFairyReleate/CombineConfig.ini`,
-//! не меняет старый compose-vector при missing resource и после успешного
-//! чтения публикует его exact `0x2D` payload. Legacy return — размер payload
-//! только при send. Так CGame устраняет generic callback, но не копирует
-//! owner-state и сохраняет observed resource/lifecycle контракт.
-//!
-//! `CSynthesis` — внешний static owner двух разных контейнеров: reload
-//! `data/synthesis.xml` очищает лишь recipes до resource-open, выполняет
-//! original-name/display-name lookup через тот же `CGoodsFactory`, а broadcast
-//! map сохраняет даже при последующем XML failure. После успеха тот же owner
-//! кодирует subtype `0x21`; generic callback и отдельная serialization-копия
-//! удалены. `quick-xml` и safe temporary extraction owner-а заменяют только
-//! TinyXML и aliasing, не меняя порядок state transitions или lookup-ов.
-//!
-//! `HonorElimilateConfig` также освобождён от generic callback: reload читает
-//! `data/honorelimilate.ini` в единственные два runtime scalar-а, при missing
-//! resource сохраняет старые значения и выдаёт exact operator notice, а при
-//! доступном, но повреждённом тексте сохраняет legacy success/partial-write.
-//! Dispatcher не отправляет его eight-byte wire и не меняет legacy return.
-//!
-//! `CContributeSetup` теперь owned `CGame`: dispatcher
-//! `0x004171CA..0x004172B1` читает `data/ContributeSetup.ini`, сохраняет bool
-//! load-result в legacy return-slot и при success + send-флаге публикует
-//! subtype `5`. Missing resource показывает `ERROR`, очищает только item-
-//! vector, но оставляет 11 scalar-параметров прежними, как exact loader.
-//! Initial-config читает тот же owner; внешние Contribute callbacks/snapshot
-//! удалены.
-//!
-//! `CDupliRegionSetup` создаётся и публикуется в `CGame` перед своим `Load`,
-//! как exact Init `0x0041901B..0x00419053`, и остаётся owned даже при
-//! load-failure до общего Release. Init читает точный
-//! `setup/DupliRegionsSetup.ini`; reconnect и create-role используют тот же
-//! owner без внешней параллельной копии. `Option` сохраняет исходный nullable
-//! lifecycle до позиции создания и после позиции удаления.
-//!
-//! `LoadSetup` сначала пробует обычный `setup.ini`, а только при ошибке
-//! открытия — декодированный `setup.dat`. Поток читает пары `label + value`,
-//! label не проверяет, строки хранит byte-exact и при EOF/fail-state оставляет
-//! уже выполненные мутации и прежние значения хвоста. DAT — отдельный старый
-//! формат: после `bUseLogSys` он не назначает `strLogSysProvider`, читает четыре
-//! оставшихся LogSys-строки, пять CostDB-строк и затем повторно назначает
-//! `strName` перед `dwLoadLargessTime`; этот порядок не выравнивается с INI.
-//! После чтения plain-ветвь закрепляет single-instance title
-//! `WorldServer[<name>]-Saga3D2`, encoded-ветвь — `WorldServer[<name>]`.
-//! Linux owner передаётся callback-ом вместо `FindWindowA/SetWindowTextA`;
-//! занятый title сохраняет исходный операторский `ERROR` и false-ветвь.
-//! `IniDecoder` заменён уже доказанным `public::tools::ini_decode`, а owned
-//! `Vec<u8>` и `fs::read` заменяют `new[]/fread/stringstream` без Windows ABI.
-//!
-//! Полный `Init` сохраняет исходный порядок crash/random/setup/language/DB,
-//! reload и subsystem owners, region relation, log/network/queue и worker-start
-//! эффектов. Готовые `LoadSetup`, `LoadServerSetup`, `InitNetClient`,
-//! `InitNetServer`, `CRsSetup` ID-публикация и `CPlayerDataQueue::Clear`
-//! исполняются непосредственно. `COrganizingParam::Initialize` напрямую читает
-//! позиционный `data/FactionParam.ini` и ставит tax event; затем
-//! `CPlayerRanks::Initialize` получает его загруженные rank-поля, ставит своё
-//! calendar event, после чего начальный
-//! `StatPlayerRanks` напрямую читает DB без публикации — точный caller на
-//! `0x004197C1/0x004197CD` не проверяет bool первого вызова, а второй является
-//! void. Ещё сырые соседние owners переданы одним
-//! ordered context-контрактом и не объявлены реализованными. Первый доказанный
-//! false-result прекращает дальнейшие эффекты, а старые `MessageBoxA` и
-//! `__beginthreadex` представлены operator/worker boundaries. Async-форма DB и
-//! connect-owner-ов сохраняет их старые синхронные caller-позиции. Повторная
-//! запись control-send после `InitNetClient` схлопнута с уже выполненной
-//! идемпотентной публикацией того же значения.
-//!
-//! `Release` сохраняет полный порядок: queue/city-save, остановка network
-//! workers, шесть live lists, player/DB data, save-worker join, goods/region/
-//! script/team-session owners, subsystem/network/DB teardown, cache и runtime cleanup,
-//! write/player-load workers, Largess/ADO и последние resource owners. Exact
-//! EXE содержит единственный `ret` в `0x0040ED87`; псевдокодовые ранние выходы
-//! после STL `operator_delete` являются ошибкой декомпилятора и не перенесены.
-//! `CDbMisc` в Release доказанно не удалялся и отмечен retained, а не потерян
-//! внутри общего DB списка. `VecDeque/BTreeMap/Box/Drop` заменяют только
-//! container nodes, deleting destructors и allocator cleanup. Для
-//! уже удалённых region owner-ов Rust очищает и пустые map-узлы, а scalar
-//! `m_mTeamSessionID` освобождается после последнего lookup перед `DeleteGame`:
-//! это внутренние очистки без wire, callback или изменения порядка owner-ов.
-//! Для
-//! `SaveCityRegion(0)` остаются две локальные safe-границы: неназначенный
-//! `REGION_TYPE` и исходное разыменование null city-region pointer.
-//!
-//! Внешний `GameThreadFunc` теперь владеет nullable game-slot: создаёт `CGame`,
-//! вызывает готовые Init/MainLoop через typed runtime adapter, ждёт save barrier
-//! только после successful Init, всегда выполняет Release перед DeleteGame на
-//! штатной ветви и публикует exit-event до window-close request. Linux future,
-//! cooperative worker adapters и Rust Drop заменяют Win32 thread/event/window
-//! mechanics без Windows FFI. Fatal `_exit(1)` из Init и typed safe-block-и
-//! возвращают live `Box<CGame>` и потому не получают выдуманный cleanup.
-//!
-//! `InitNetServer` создаёт точный World `CMyNetServer`, публикует owner до
-//! результата `Host`, а при ошибке сохраняет его у `CGame`. После успешного
-//! listen первый IPv4 локального hostname заменяет унаследованные адресные
-//! поля, затем восемь setup-полей записываются в исходном порядке offset-ов.
-//! `rustix::system::uname` и стандартный `ToSocketAddrs` заменяют
-//! `gethostname/gethostbyname`, `clock_gettime(CLOCK_BOOTTIME)` — wrapping
-//! `timeGetTime` конструктора общего сетевого owner-а.
-//!
-//! `dwMaxMsgLen` подтверждён как `CServer+0x118`, а `bCheckMsgCon` — как
-//! `+0x10D` по соседнему consumer `nets/netserver/CMyServerClient::OnReceive`.
-//! Точный World `networld` parser эти поля не читает, поэтому Rust сохраняет
-//! позднее состояние, но не переносит из другого компонента его ban/QUIT и
-//! условные CRC-ветви. Успех метода соответствует старому ненулевому результату,
-//! а `Host`-ошибка — нулю; это подтверждает непосредственный вызов из `Init`.
-//!
-//! `InitNetClient` сначала уничтожает прежний World-to-Login owner, публикует
-//! новый до создания socket и bind-ит `0.0.0.0:0`. `CreateSocketThread` заменён
-//! awaitable readiness самого `CMyNetClient`. Общий десятисекундный connect
-//! получает первый IPv4 из исходной C-строки `strLoginIP`; после успеха
-//! включается control-send и ставится `0x1FE01 + dwNumber + strName\0` без
-//! приоритета. Результат старого `Send` игнорировался и поэтому сохраняется в
-//! typed-отчёте, не меняя legacy success `1`. Ошибка bind/resolution/connect
-//! выполняет исходный close/delete и снова оставляет nullable owner.
-//!
-//! World-вариант общего `CClient::Connect` RVA `0x000293E0` копировал вход в
-//! `char[64]`, предварительно разрешал non-digit имя через `gethostbyname`, а
-//! `ConnectServer` RVA `0x00028E20` применял `inet_addr` с тем же DNS fallback.
-//! `ToSocketAddrs` заменяет эти системные вызовы и выбирает первый IPv4.
-//! Найденный baseline Login IP — короткий ASCII strict dotted IPv4; его значение
-//! не публикуется. Длина свыше 63 bytes и non-UTF8 hostname остаются локальными
-//! safe-границами старого переполнения/ANSI resolver, а не получают `unsafe`.
-//!
-//! `ReConnectLoginServer` создаёт такой же новый client локально и не меняет
-//! текущий `s_pNetClient`. Точный PDB задаёт virtual slot как
-//! `CClient::Create(unsigned int, char const*, int, long, bool)`, а World-тело
-//! RVA `0x00029210` подтверждает `(0, nullptr, 1, 0x33, true)`: TCP socket,
-//! bind `0.0.0.0:0` и WinSock event mask. Tokio readiness и тот же
-//! `bind_tcp_ipv4` сохраняют технический эффект без Windows runtime.
-//!
-//! После connect старый код публиковал `0x3FC03 + CMyNetClient*` прямо в FIFO
-//! World `CMyNetServer`. Rust передаёт той же FIFO владение typed event без
-//! pointer-to-integer. `ProcessMessage` фиксирует один размер server FIFO,
-//! исполняет handoff на его позиции, затем заново фиксирует FIFO уже текущего
-//! Login client. `OnServerMessage` RVA `0x000ADCF0` сначала закрывает прежний
-//! owner, ставит CD-key snapshot и приоритетный `0x1FE01`, а control-send
-//! включает только после попытки отправки. Поэтому reconnect не включает его
-//! заранее.
-//!
-//! Оба цикла `ProcessMessage` уменьшают только исходный signed snapshot даже
-//! при пустом `PopMessage`; новые элементы остаются следующему проходу. Вторая
-//! очередь читается через текущий client на каждой итерации. `Drop` заменяет
-//! virtual deleting destructor, а два wrapping millisecond аккумулятора
-//! сохраняют `g_lGSMessageTime/g_lLSMessageTime`. Обычный `CMessage::Run`
-//! выполняет точный numeric selector; готовые ветви server-owner
-//! `0x4FC01..=0x4FC03`, other honor, достигнутые organizing owner-ы вплоть до
-//! billboard `0x60125`, faction upgrade `0x60126`, upload-icon gate `0x60127`
-//! и contributor gate `0x60128`, faction-experience `0x60129`, а также
-//! member level/position callback `0x6012A`, city-tax gates `0x6012B/0x6012C`
-//! и region-param broadcast/route `0x6012D/0x6012E`, city-gate `0x6012F`
-//! исполняются сразу. Остальные сообщения возвращаются owned вместе с
-//! выбранным сырым owner-ом и не выдаются за no-op исполнение. Session manager
-//! передаётся тому же
-//! `ProcessMessage` явно вместо
-//! process-global singleton-а; cookie/result и terminal removal остаются у
-//! уже восстановленного manager-owner-а.
-//! Внешний MainLoop call-site теперь также готов: отдельный tick снимается до
-//! `ProcessMessage`, следующий после успешного возврата даёт wrapping elapsed
-//! для `DAT_0056e514`, а третий становится start tick следующей SessionFactory-
-//! стадии и назначается общему clock-state. Safe block сохраняет только уже
-//! снятый первый tick и не назначает исходно недостигнутые
-//! accumulator/end/next-stage эффекты.
-//! Самостоятельный 600-секундный profiling gate также материализован без
-//! вызова сырых producers. Он использует wrapping `now - last` и строгое
-//! `> 600000`, снимает двенадцать 32-битных bit-pattern-ов, интерпретирует их
-//! как signed `%d` в точной многострочной строке и вызывает один `AddLogText`.
-//! Только после него счётчики обнуляются в исходном порядке, а last tick
-//! получает текущий MainLoop tick. Prerequisite initial tick теперь также
-//! готов: отдельный `WorldMainLoopInitializationState` хранит точный общий
-//! `DAT_0056e550`. Bit `1` и следующий bit `2` устанавливаются отдельными
-//! owner-ами с сохранением всех остальных bits до своих clock-call; результаты
-//! назначаются соответственно last-report и last-save state. Bit `4` clock не
-//! вызывает: он копирует прежний общий current tick в initial refresh tick.
-//! Следующий MainLoop `timeGetTime` теперь также материализован: ровно один
-//! clock-call заменяет общий current tick и возвращает то же значение caller-у.
-//! Следующий Largess gate читает setup до остальных эффектов, wrapping
-//! увеличивает общий pass-counter и использует short-circuit
-//! `interval != 0 && interval < current - last`. Достигнутый gate сначала
-//! обновляет last tick и возвращает typed `StartWorkerRequested`. Полный
-//! MainLoop на этой позиции вызывает конкретный `TiberiusLargess::start_worker`,
-//! который владеет системным worker-ом и его DB-результатом. Более
-//! поздний profiling-start также снимает ровно один tick в общий scratch,
-//! который следующие стадии исходно переиспользуют. Цельный следующий участок
-//! теперь также готов: strict refresh gate сначала назначает last-refresh tick,
-//! вызывает фактический `RefeashInfoText`, снимает end tick, wrapping добавляет
-//! `DAT_0056e530` и сразу выполняет готовый 600-секундный profiling gate.
-//! Отсутствующий network owner сохраняет исходный no-op только внутри refresh,
-//! после чего profiling-порядок продолжается. Write-log count теперь читается
-//! из concrete `CGame` FIFO; Team/Largess/load/reback counts принадлежат
-//! соседним owners и передаются явно. Непредставимый старым `uint` размер
-//! блокирует только refresh после
-//! уже выполненного last-tick присваивания.
-//!
-//! `CGame::ReLoad` RVA `0x00015740`, `reload_conf_log` RVA `0x00002FD0` и
-//! `reload_profiles` RVA `0x00018110` имеют статус `IMPLEMENTED`. Внутренний
-//! dispatcher сохраняет 47 case-insensitive сравнений, точные load/log/
-//! serialize/send ветви, включая безусловные AttackCity/VillageWar/CityWar/
-//! Quest send, no-op `GeneralVariableList` и исходный length-accumulator.
-//! Exact EXE подтверждает единственный epilogue `ReLoad`; startup call-sites
-//! `0x004193D8..0x00419694` передают оба boolean как `false`. Соседние ещё
-//! сырые configuration owners представлены раздельными typed вызовами, а не
-//! одним непрозрачным reload callback.
-//! `Allthing` больше не является таким callback-ом: exact caller
-//! `0x00417F12..0x00417F45` передаёт byte-path `/data/LeitingAction.ini`,
-//! проверяет явный `0/1` loader-а и только после успеха допускает subtype
-//! `0x36`. Конкретный `CThingSetup` живёт у единственного `CGame`, поэтому
-//! startup/reload, initial-config serializer и daily LeiTing читают один
-//! owner; `VecDeque`, resource-context и safe codec заменяют лишь static STL,
-//! `CRFile` и безразмерный byte buffer.
-//! CountryWar-ветвь внешнего main-loop dispatcher-а передаёт прямо живые
-//! `CountryWarSys`, `CTimer`, девять callback-ключей, local time,
-//! resource-context и текущий GameServer sender. Единственный достигнутый
-//! flag-dispatcher направляет профиль concrete owner-у в той же позиции;
-//! reload-server-resources, внутренние логи, `end_war`, повторная загрузка и
-//! итоговый `0/1` сохраняют исходный порядок. Exact
-//! `0x004176D5..0x0041771D` кладёт zero-extended bool reload-owner-а в общий
-//! return slot `CGame::ReLoad`, что исправляет прежний потерянный Rust-result.
-//! FourNationWar следует той же concrete main-loop границе: она передаёт
-//! живые `CFourNationWarSys`, `CTimer`, девять callback-ключей, country-name
-//! snapshot и resource-context. При success payload `0x25` строится из того
-//! же live owner-а, а legacy failure-log остаётся после active-war gate либо
-//! запрета отправки.
-//! `TimeToReturn` также получает concrete main-loop границу: тот же live
-//! owner отменяет map-ordered event IDs и загружает `setup/TimeToReturn.ini`.
-//! Как в EXE, его bool влияет только на success/failure log, а общий legacy
-//! return-slot `CGame::ReLoad` остаётся нулём.
-//! `VillageWar` аналогично выполняется через owned map и timer: шесть event-ID
-//! снимаются в доказанном порядке, активные войны завершаются до `Initialize`,
-//! а затем тот же owner формирует subtype `0x1C`. Неизвестный event-ID остаётся
-//! typed границей уже восстановленного safe owner-а вместо старого UB.
-//! Результат `SendAll(0x7FF1D)`
-//! старый код игнорировал; Rust хранит его как `Result` только в typed report,
-//! не назначая искусственный legacy error code.
-//!
-//! Внешний flag-dispatcher сохраняет все 42 проверки в
-//! исходном порядке, отдельные 32-битные low/high чтения и записи, снятие флага
-//! до вызова reload-owner-а и странные поздние повторные/перекрывающиеся маски.
-//! В частности, большинство low-веток после своей low-записи отдельно обнуляют
-//! всю high-половину, а `ChangeBodyConf`, `SynthesisList` и поздний `Allthing`
-//! этого не делают. Две `AtomicU32` с relaxed load/store заменяют исходные
-//! несинхронизированные x86 word-accesses без `unsafe`: это намеренно
-//! не atomic read-modify-write, поэтому совместный producer всё ещё может
-//! потерять конкурентную запись между load и store. Готовые `Init/MainLoop`
-//! теперь вызывают этот же `CGame` owner напрямую.
-//!
-//! Script-цепочка `GetScriptFileData/LoadOneScript/ReLoadOneScript/
-//! LoadScriptFileData` RVA `0x000132E0/0x00013440/0x00013760/0x00014450`
-//! хранит byte-exact buffers в `BTreeMap`, нормализует только доказанный
-//! ведущий `\\` и `\\ -> /`, очищает три owner-а до reload и публикует
-//! `0x7F801` subcodes `0x0A/0x0B/0x0D` в string-key order. Доступ к overlay и
-//! порядок перечисления `.script` остаются у resource-context: plain fs не
-//! назначен каноническим поверх loose/data/patch01.
-//!
-//! `reload_conf_log` игнорирует переданный reload-result, дважды снимает local
-//! time для последовательных `_strdate`/`_strtime`, строит byte-exact
-//! `0x1FE06 + local IPv4 word + world number + C-string` и посылает его
-//! LoginServer с `prioritized=false`. Nullable/empty profile остаётся no-op;
-//! отсутствующие обязательные server/setup owners остаются явными границами.
-//! Owned `Vec` устраняет переполнение старого `char[128]`; MSVC SEH/security-
-//! cookie bookkeeping удалён как compiler noise без Linux-наблюдаемости.
-//!
-//! Следующий MainLoop maintenance-сегмент от `g_bStatPlayerRanks` до
-//! collect-player-data также `IMPLEMENTED`. Он снимает rank-request до двух
-//! отдельных singleton-вызовов, сохраняет Appellation guard, nullable
-//! HonorRanks instance, strict day mismatch, точный tick/log/OnNewDay/log
-//! порядок и затем безусловно достигает AuctionBang daily gate. Сырые
-//! PlayerRanks DB-чтение, `CHonorRanks` и `CAuctionLog` исполняются напрямую.
-//! PlayerRanks сохраняет clear/log/tick/stream-prefix/log/send порядок и
-//! продолжает публикацию даже после DB `false`, как исходный void-wrapper.
-//! Тот же stat/send helper используется calendar `OnStatRanks`, но именно
-//! timer-owner после него снимает отдельное local time и ставит следующий день.
-//! Суточная
-//! AuctionBang-ветвь передаёт реальный Log DB connection, присваивает день до
-//! update и сохраняет его неатомарный outcome. Нулевой sentinel в Rust-owner-е
-//! заменяет неинициализированное слово исходного constructor-а и детерминированно
-//! запускает первое суточное обновление. Отдельный init-проход напрямую
-//! вызывает потоковый `CAuctionLog::LoadItem`, сохраняет partial publication и
-//! исходно продолжает инициализацию после `false`, меняя только текст лога.
-//! `AtomicBool` использует отдельные relaxed load/store, а не `swap`, сохраняя
-//! исходную границу между проверкой producer-флага и его очисткой.
-//!
-//! `CGame::AI` сначала обходит `s_mapRegionList` в signed-key порядке и зовёт
-//! virtual region `AI` только у ненулевого `tagRegion::pRegion`. Exact vtable
-//! slot всех поставочных subtype-ов ведёт в общий `0x00401000: ret`, поэтому
-//! `WorldRegionOwner::ai` сохраняет concrete dispatch как доказанный no-op без
-//! внешнего callback-а и object slicing. Затем ровно один
-//! `timeGetTime` задаёт секунды для всего ordered `m_listBroadcast`. Cadence
-//! использует wrapping `now - last` и строгое `interval < elapsed`;
-//! `random(100)` вызывается только после gate, а interval-random — только после
-//! выбранной рассылки и попытки send. Сообщение `0x7FA03` содержит signed
-//! region/import, два color DWORD и byte-exact C-строку именно в этом порядке.
-//! Нулевой region идёт в `SendAll`, ненулевой — в
-//! `GetRegionGameServer -> SendToMapID`; при отсутствующей записи send
-//! пропускается, но last/interval всё равно меняются. `BTreeMap`, `VecDeque`,
-//! owned `Vec<u8>` и готовый `CMessage` заменяют только MSVC tree/list/string,
-//! allocation и SEH. Достигнутая AI-проекция `tagSysBroadcast` сохраняет поля
-//! struct offsets `+0x04..+0x40`; нечитавшийся `_login_type +0x00` не получает
-//! выдуманного значения, и Rust ABI не объявлен копией старых 68 bytes.
-//!
-//! Окружающий MainLoop call-site сначала отдельным tick закрывает время
-//! SavePoint в `DAT_0056e52c`, wrapping увеличивает `s_lAITick`, затем новым
-//! tick назначает `_DAT_0056e534`, вызывает полный AI и последним tick добавляет
-//! `DAT_0056e510`. Эти bit-pattern-ы хранятся соответственно в уже существующих
-//! `save_point_time_ms`, `ai_calls` и `ai_time_ms`; следующим остаётся готовый
-//! `process_message_main_loop_stage`. Последующие готовые stage-owner-ы
-//! сохраняют все accumulator/tick позиции вплоть до финального pacing-хвоста.
-//!
-//! Следующий `CSessionFactory::AI` теперь также связан с profiling-порядком:
-//! он использует start tick, назначенный успешным `ProcessMessage`, после
-//! полного factory traversal одним tick wrapping добавляет `DAT_0056e528`, а
-//! следующим назначает общий start для готового `ProcessPlayerDataQueue`.
-//! Factory передаётся явно вместо process-global static registry; это меняет
-//! форму API, но не порядок вызова, clock-read либо accumulator side effects.
-//!
-//! Неуверенный AuctionBang calendar field точечно проверен в exact EXE
-//! (`VERIFIED_DISASSEMBLY`): `0x00419C3A..0x00419C46` копирует девять DWORD
-//! CRT `tm`, после восстановления ESP `0x00419C4D` читает destination `+0x0C`,
-//! то есть `tm_mday`; сравнение с `m_lAucOldDay` выполняется at `0x00419C51`,
-//! запись — at `0x00419C68`. Rust callback возвращает только наблюдаемый
-//! `tm_mday`; остальные восемь stack-copy полей и `rep movsd` являются
-//! ненаблюдаемым CRT/compiler mechanism. После ответа reverse прекращён.
-//!
-//! `SendCdkeyToLoginServer` при nullable client остаётся no-op, иначе ставит
-//! приоритетный `0x1FE02 + dwNumber + m_lOnlinePlayer.size() + account...`.
-//! `m_lOnlinePlayer` — `std::list<unsigned int>` с `CBaseObject::m_lID`, а
-//! `m_mPlayer` — владеющий `std::map<unsigned int, CPlayer*>`; `VecDeque<u32>`,
-//! `BTreeMap<u32, Box<CPlayer>>` и обычное Rust-владение заменяют только
-//! STL/allocation. Порядок списка и byte-exact account C-строки сохраняются.
-//! Потерянное экспортом присваивание ключа имеет статус `VERIFIED_DISASSEMBLY`:
-//! exact EXE `0x00408440..0x00408453` читает `_Myval` текущего list-node,
-//! сохраняет его в локальный key и передаёт адрес в `m_mPlayer.find`.
-//! Отсутствующий map-owner в старом коде приводил к null-dereference на
-//! `CPlayer+0x744`; safe Rust не назначает ему новое поведение и останавливает
-//! только эту границу до send с локальной типизированной ошибкой.
-//!
-//! `GetOnlinePlayerByID` сначала линейно проходит `m_lOnlinePlayer` в его
-//! list-порядке и только после первого совпадения ищет тот же unsigned ID во
-//! владеющем `m_mPlayer`. Поэтому запись только в map не считается online, а
-//! отсутствие на любой ступени возвращает `Option::None`. `VecDeque::iter` и
-//! `BTreeMap::get` заменяют только STL traversal; запрос не мутирует владельцев.
-//! Прямой `GetMapPlayer` выполняет только вторую ступень. Login-вариант сначала
-//! так же линейно проверяет `m_lLoginPlayer`, чей точный PDB-элемент размером
-//! `0x8` содержит `unsigned long dwPlayerID` по `+0x0` и `dwLoginTime` по
-//! `+0x4`, а затем вызывает тот же map lookup. Потерянные экспортом ключи имеют
-//! статус `VERIFIED_DISASSEMBLY`: `0x00407105` берёт адрес входного аргумента
-//! `GetMapPlayer`, а `0x004073A0/0x004073BF` загружает и передаёт тот же
-//! аргумент после сравнения с login-record. Rust хранит полный достигнутый
-//! record, хотя эти два lookup-а читают только ID.
-//! `AppendLoginPlayer` оставляет первый существующий ID и его прежнее время
-//! полностью неизменными, иначе дописывает новую пару в хвост списка.
-//! `RemoveLoginPlayer` удаляет только первый совпавший ID и ничего не делает
-//! при отсутствии. `VecDeque::push_back/remove` заменяют allocation и link-
-//! мутации STL-list, сохраняя порядок и наблюдаемое содержимое записей.
-//!
-//! `ProcessTimeOutLoginPlayer` снимает один `timeGetTime` на весь login-list и
-//! использует strict unsigned `release < now - login_time`. Неистёкший узел
-//! сохраняется; истёкший узел без `m_mPlayer` owner-а тоже сохраняется. Для
-//! найденного игрока сначала без приоритета отправляется
-//! `0x1FF06 + account\0 + name\0 + level`, затем signed `m_lTeamID` ищется в
-//! PDB-map `std::map<unsigned long,long>` и даже нулевой session ID проходит
-//! явную границу `QuerySession -> CTeam -> QueryPlugByOwner(type,id) -> Exit`.
-//! Эта цепочка session/team/plug выполняется конкретными `CSessionFactory`,
-//! `CTeam` и `CTeamate` owner-ами. После неё удаляется текущий login-node, затем в
-//! точном порядке выполняются `RemoveOnlinePlayer`, уникальная offline-вставка
-//! и friend-list рассылки `0x7F905 + friendID + expiredName\0`. Friend lookup
-//! использует только online owner; route берётся через online player/region/
-//! GameServer и при любом miss остаётся исходным нулём, но send всё равно
-//! выполняется. Результаты send-ов не меняют дальнейшие эффекты.
-//!
-//! Ошибочный raw decompile показывал `return` сразу после удаления login-node.
-//! `VERIFIED_DISASSEMBLY` exact EXE `0x00414BE4..0x00414C05` подтверждает
-//! unlink/free, а `0x00414C09..0x00414D37` — последующие offline и friend
-//! эффекты без возврата. Поэтому Rust продолжает с сохранённым следующим
-//! узлом. Полный псевдокод заменён этой локальной спецификацией; STL/RTTI/SEH
-//! mechanics удалены, `VecDeque/BTreeMap/Box` и готовый message-owner заменяют
-//! только технический механизм.
-//!
-//! Финальный MainLoop хвост сначала снимает pacing tick, при unsigned delta
-//! меньше `40` вызывает внешний Linux wait-adapter на точный остаток, затем
-//! wrapping увеличивает deadline на `40`. Warning использует signed cast
-//! `sample - deadline` и строгое `1000 < lag`; после точной строки он отдельным
-//! tick пересинхронизирует deadline. Следующий tick проверяет strict unsigned
-//! release gate против отдельного BSS-state, назначает last tick до owner-а и
-//! только затем вызывает `ProcessTimeOutLoginPlayer`, который снимает свой
-//! собственный snapshot tick. Неназначенный setup interval блокирует только
-//! уже достигнутую границу после pacing; Windows process handle/FFI не вводятся.
-//!
-//! Полный `CGame::MainLoop` теперь связывает все эти стадии одним owner-ом:
-//! три lazy initializer-а, current/Largess/refresh/reload/maintenance/collect,
-//! save pre-gate, AI и весь последующий хвост выполняются строго в исходном
-//! порядке. `CLargess::StartWorkerThread` остаётся сырым доменным owner-ом, но
-//! его callback вызывается синхронно ровно на доказанном gate. Аналогично
-//! внешний save-thread launcher вызывается непосредственно после snapshot и
-//! cleanup, до повторного connected-count и `SaveNotify`; callback возвращает
-//! только наблюдаемое `Open/Empty` состояние opaque handle-а. State/domain/
-//! platform зависимости сгруппированы в borrowing-структуры, но не объединены
-//! в новый singleton и не меняют владельцев поведения. Normal path возвращает
-//! исходный `1`; первый typed block прекращает оставшиеся стадии без rollback.
-//! Большой block boxed только на ошибочной границе, поэтому обычный turn не
-//! получает дополнительной heap allocation. Полный заменённый псевдокод и
-//! SEH/STL/Windows wait mechanics удалены.
-//! Отдельный `m_lOfflinePlayer` содержит только unsigned ID. Его `Clear`
-//! удаляет весь список, а `RemoveOfflinePlayer` сохраняет семантику
-//! `std::list::remove` и удаляет все равные ID. `VecDeque::clear/retain`
-//! заменяют только STL node traversal и освобождение, не смешивая offline-
-//! состояние с online/login списками.
-//! `AppendOfflinePlayer` читает signed `CBaseObject::m_lID` через точную
-//! base-цепочку игрока, сохраняет его 32-битный шаблон как list `unsigned int`,
-//! оставляет первый duplicate без изменений и иначе добавляет ID в хвост.
-//! Живая `&CPlayer` заменяет исходный сразу разыменовываемый pointer; nullable
-//! API не вводится, поскольку null-поведение оригинала не было контрактом.
-//! `ClearMapPlayerForOffline` проходит player-map в unsigned key-order. Для
-//! каждого ID он сначала линейно ищет online-list и только при miss — login-
-//! list; первое совпадение сохраняет owner. ID, отсутствующий в обоих списках,
-//! virtual-уничтожается и стирается, после чего обход продолжается с iterator,
-//! возвращённого `erase`. `BTreeMap::retain` сохраняет этот key-order и
-//! short-circuit lookup, а `Box`/`Drop` заменяют deleting destructor. Offline-
-//! list функция не читает, критическую секцию не берёт и другие списки не
-//! меняет.
-//!
-//! `AppendOnlinePlayer` читает тот же унаследованный ID, линейно ищет его в
-//! `m_lOnlinePlayer` и добавляет в хвост только при отсутствии. Organizing
-//! enter callback вызывается всегда: и для первого добавления после list-
-//! мутации, и для уже существующего duplicate без мутации. `RemoveOnlinePlayer`
-//! сначала выполняет исходный `std::list::remove`, то есть удаляет все
-//! совпадения, а затем всегда вызывает organizing exit независимо от их числа.
-//! `VecDeque::contains/push_back/retain` сохраняют linear traversal, порядок и
-//! освобождение list-node через `Drop`.
-//!
-//! Точный PDB задаёт `CGame::tagDBData` размером `0xA8`: два scalar ID по
-//! `+0x0/+0x8`, `liDBCreationPlayer` по `+0xC`, `lDBRestorePlayer` по `+0x18`,
-//! `liDBDeletionPlayer` по `+0x24`, `mDBPlayer` по `+0x30`, faction/union
-//! save-списки по `+0x3C/+0x48`, delete-ID списки по `+0x54/+0x60`, enemy-
-//! список по `+0x6C`, region-список по `+0x90` и country-список по `+0x9C`.
-//! Pointer `pVariableList` по `+0x4`, village/city-war списки `+0x78/+0x84`
-//! пока остаются у своих RAW-владельцев.
-//! Конструктор создавал пустыми только списки/отображения и не назначал
-//! скалярные поля. До обязательного `GenerateDBData` эти остаточные байты не
-//! имеют потребителя; Rust
-//! нормализует их к нулю в `WorldDbData::new`, не создавая псевдослучайное
-//! внутреннее состояние и не меняя сформированный save snapshot.
-//!
-//! `VecDeque<Box<CPlayer>>` и `BTreeMap<u32, Box<CPlayer>>` заменяют только
-//! list/map nodes и virtual deleting destructor. Один `parking_lot::Mutex`
-//! сохраняет границу `g_CriticalSectionSavePlayerList`: поиск duplicate,
-//! уничтожение прежней копии, удаление записи и вставка новой остаются под
-//! одним lock. Он не удаляется вслед за общим scratch-буфером и пока не
-//! выдаётся за отдельную сериализацию внешнего `SaveThreadFunc`.
-//! `AppendDBCreationPlayer` при совпадении ID именно заменяет первую старую
-//! копию новой: переходы exact EXE `0x00410FF0..0x00411024` после destructor и
-//! unlink продолжают к tail-insert; это `VERIFIED_DISASSEMBLY`, после ответа
-//! reverse прекращён. `AppendDBPlayer` уничтожает прежнее map-value до вставки
-//! новой пары с unsigned bit-pattern inherited signed ID. Остальные шесть
-//! append-owner-ов только отклоняют null через входной Rust-тип и дописывают
-//! значение в хвост соответствующей очереди под тем же lock.
-//!
-//! `ClearDBData` строго очищает creation, restore, deletion, player-map,
-//! save-factions, save-unions, delete-factions, delete-unions и region nodes
-//! под одним lock; scalar ID не сбрасываются. Non-null player/faction/union
-//! копии уничтожаются в list/key order. Region values представлены
-//! `Option<RegionSaveSnapshot>`: предшествующая save-фаза ставит `None`, а
-//! `ClearDBData`, как exact EXE, удаляет только nodes. Диапазон
-//! `0x0040D490..0x0040D76B` подтвердил непрерывный проход без ложных raw-return
-//! и единственный unlock; это `VERIFIED_DISASSEMBLY`, после ответа reverse
-//! прекращён. Enemy/war/country поля функция исходно не трогала.
-//!
-//! Исходный singleton заменён явно переданным единственным mutable
-//! `COrganizingCtrl`; это меняет форму API, но не порядок либо владельца
-//! callback-эффектов. Typed отчёты сохраняют факт вставки/число удалений и
-//! полный organizing outcome. Если callback достигает старого локализованного
-//! UB, уже выполненная list-мутация не откатывается, а вызывающий owner получает
-//! blocked-результат и не обязан придумывать продолжение. Новая append-ветвь и
-//! remove-хвост после callback-а вызывали `AddPlayerList`; duplicate append
-//! возвращался раньше. Exact адрес `0x00401000` содержит единственный `ret`,
-//! поэтому map/name lookup remove-ветви и строковый выбор новой append-ветви не
-//! имеют наблюдаемого эффекта и Linux-аналога не получают.
-//!
-//! `GetOnlinePlayerIDByName` проходит владеющий player-map в unsigned numeric
-//! порядке. Для каждого `CPlayer` он сравнивает унаследованное имя с входной
-//! C-строкой через `_strcmpi`, а при равенстве линейно проверяет тот же map-key
-//! в online-list и возвращает list ID. Не-online совпадение не завершает map-
-//! обход. Exact linked CRT `0x0052A629..0x0052A691` при неизменённой C-locale
-//! использует ASCII-only folding по `0x00525D70..0x00525DBD`; в executable-
-//! секциях нет project-call к `_setlocale` `0x00520AA9`. Поэтому
-//! `eq_ignore_ascii_case` над C-string prefix сохраняет ASCII-регистр и
-//! byte-exact high bytes без Windows CRT в Linux runtime.
-//! `GetMapPlayerIDByName` использует тот же map-order и `_strcmpi`, но не
-//! проверяет online-list: первое совпавшее имя сразу возвращает map-key, иначе
-//! результат равен нулю. Общий Rust helper C-string prefix сохраняет остановку
-//! на NUL, а `BTreeMap` — исходный unsigned порядок MSVC map.
-//!
-//! `GetLoginPlayerIDByName`, напротив, проходит login-list по порядку, ищет
-//! player-map owner по `tagLoginPlayer::dwPlayerID`, пропускает отсутствующий
-//! owner и сравнивает имя с учётом регистра обычным C-string `strcmp`-
-//! эквивалентом. При совпадении возвращается унаследованный ID найденного
-//! `CPlayer`, а не безусловно list-key. Потерянный raw key имеет статус
-//! `VERIFIED_DISASSEMBLY`: exact EXE `0x00407292..0x004072A5` копирует
-//! `[login_node+0x8]` в локальный ключ и передаёт его в `m_mPlayer.find`.
-//! `BTreeMap`, `VecDeque`, `Box` и slice-заимствование заменяют только
-//! STL/pointer/string storage; `&[u8]` исключает исходный null-аргумент, который
-//! обе функции немедленно разыменовывали.
-//!
-//! `ToStrlwr` не был CRT lowercase: он проходил C-строку до NUL и применял
-//! project switch только к 33 входным байтам. Exact диапазон
-//! `0x00402000..0x00402139` и его jump tables подтверждают отображения
-//! `0xC0..=0xD7 -> +0x20`, `0xDA..=0xDF -> +0x20` и две наблюдаемые странности:
-//! ASCII `0x54 ('T') -> 0xAC`, а оба `0xD8/0xD9 -> 0xF9`. Эти значения
-//! сохраняются буквально; остальные байты не меняются. Mutable Rust-slice
-//! заменяет возвращаемый тот же `char*`; caller задаёт живые байты C-строки
-//! без обязательного хранения служебного NUL, поэтому null/overread не
-//! переносятся в Linux runtime.
-//!
-//! `IsNameExistInMapPlayer` и `GetCreationPlayerByName` на каждой map-записи
-//! независимо копируют input и inherited player name в два `char[260]`, затем
-//! применяют этот custom lowercase и сравнивают C-строки byte-exact. Максимум
-//! Rust-owned копия сохраняет сравнение для любой представимой длины и не
-//! переносит дефект `_snprintf(char[260])`, при котором отсутствующий NUL
-//! заставлял следующий `ToStrlwr` читать за stack-buffer.
-//!
-//! Первый lookup возвращает `true` при первом lower-case совпадении независимо
-//! от operational list-ов. Второй после совпадения имени линейно требует тот же
-//! unsigned map-key как тот же 32-битный шаблон в signed
-//! `m_lCreationPlayer` и только тогда возвращает map-value; иначе map-обход
-//! продолжается. Точный PDB задаёт этот список как `std::list<long>` по
-//! `CGame+0x20`; `VecDeque<i32>` сохраняет list-порядок, signed storage и
-//! duplicate-наблюдаемость, а `BTreeMap` — unsigned map-порядок. Испорченные
-//! raw return-ы имеют статус `VERIFIED_DISASSEMBLY`: exact
-//! `0x004052AF..0x004052CC` возвращает `false/true`, а
-//! `0x004054BF..0x004054DD` — `nullptr/[map_node+0x10]`.
-//!
-//! `CPlayer::ChangeName` exact `0x0045D1C0..0x0045D39A` использует эти
-//! lookup-и в порядке map -> frozen DB data -> frozen DB creation -> ADO.
-//! До них он ограничивает новое C-string имя 16 байтами, требует
-//! case-sensitive вхождения `strSpeStr` именно в текущем имени и передаёт
-//! отдельную `std::string`-копию в `CheckInvalidString(false)`, но после
-//! проверки продолжает работать с исходным input. Rust сохраняет этот порядок,
-//! byte-exact input и коды `1/8/2/3/4/5/6/7/0`; Tiberius parameter binding,
-//! `Vec` и explicit borrows заменяют только ADO/STL/global plumbing.
-//!
-//! `ClearCreationPlayer` удаляет все list-node без player-map мутаций и без
-//! уничтожения самих `CPlayer`; `VecDeque::clear` заменяет только link traversal
-//! и освобождение узлов. `GetCreationPlayerCountInCdkey` проходит player-map в
-//! unsigned порядке, сравнивает byte-exact account C-строки через тот же
-//! доказанный ASCII-only CRT `_strcmpi` и для каждого совпавшего map-key
-//! полностью проходит creation-list. Каждый равный list-node увеличивает
-//! `unsigned char`, поэтому duplicate-ы считаются отдельно, а результат
-//! сохраняет 8-битное wrapping. Rust-срез исключает немедленно разыменовываемый
-//! null account-аргумент; player-map по достигнутому ownership хранит живой
-//! `Box<CPlayer>` вместо исходного raw pointer.
-//!
-//! `AppendCreationPlayer` материализован полностью, включая обе ненормальные
-//! ветви.
-//! После проверки duplicate ID она сначала добавляет новый ID в хвост
-//! creation-list, затем ищет map-key. Exact
-//! `0x00410C12..0x00410C5D` подтверждает: существующий ненулевой map-value
-//! вызывает лог и ранний return уже после list-мутации; отсутствующий key либо
-//! существующий null переходит в `operator[] = incoming player`. Duplicate ID
-//! по `0x00410C36..0x00410C4A` virtual-удаляет incoming player до возврата.
-//! Текст лога `MapPlayer Not Found or NULL.` противоречит условию, но условие
-//! сохраняется по машинному коду.
-//!
-//! Executable-wide direct-xref нашёл единственный caller `0x004B1AE0` в
-//! create-role ветви `OnLogMessage`: он передаёт freshly allocated player с
-//! только что увеличенным `m_nPlayerID`, не проверяет void-результат и сразу
-//! продолжает читать тот же pointer для equipment/response. После normal insert
-//! map владеет объектом, а caller использует non-owning alias. Duplicate-ветвь
-//! поэтому была бы use-after-free, existing-non-null ветвь — дальнейшим
-//! использованием и затем утечкой incoming pointer; отдельного delete до выхода
-//! нет. Rust normal path принимает `Box`, вставляет list ID и передаёт Box map-у.
-//! Duplicate-ветвь завершает safe Rust-caller typed результатом после
-//! доказанного `Drop`. Existing-owner ветвь возвращает incoming `Box` caller-у,
-//! потому что сама исходная функция его не потребляла; collision сохраняет уже
-//! выполненный list `push_back`. Судьба этого pointer после возврата относится
-//! к единственному caller-у `OnLogMessage`, а не к append-owner-у. Текущий
-//! `BTreeMap<u32, Box<CPlayer>>` также сознательно не получает nullable value по
-//! одному защитному условию оригинала. Typed log-callback вызывается в точных
-//! местах обоих `AddLogText`: до уничтожения duplicate и после list-мутации у
-//! existing owner; `Display` сохраняет исходные строки.
-//!
-//! Точный PDB задаёт `CGame::m_nPlayerID` как `unsigned long` по `+0x68`.
-//! `CGame::CGame` RVA `0x00015210` это поле не пишет. `CRsSetup::LoadPlayerID`
-//! загружает его из `csl_setup.playerID`, а при пустой выборке или exception
-//! пишет `0`; create-role по `0x004B1AC1` выполняет обычный x86 `add 1` с
-//! 32-битным wrapping. Исполняемый файл содержит только эти четыре записи через
-//! `GetGame()` и ни одной записи через 98 прямых загрузок `g_pGame`. Проверки
-//! счётчика против player-table/map нет, поэтому collision не объявляется
-//! недостижимым: fallback в ноль, отставшее сохранение либо wrapping допускают
-//! повторный ID.
-//!
-//! Live restore/deletion owner-ы сохраняют точные PDB-типы
-//! `list<unsigned int>` по `+0x2C` и `list<tagDeletionPlayer>` по `+0x38`.
-//! Clear очищает весь список, Delete удаляет первое совпадение, оба Append
-//! оставляют первый duplicate без изменения, а deletion-time lookup возвращает
-//! время первого совпадения либо `0`. `LoadedSetupIds` записывает результаты
-//! constructor-load в `m_nPlayerID/m_nLeaveWordID`. Хотя exact constructor
-//! оставлял оба scalar неинициализированными, `CGame::Init` обязательно
-//! получает их из `CRsSetup` до main loop, а пустой recordset и catch каждого
-//! load-а дают `0`. Поэтому Rust начинает с тех же нулей: это устраняет
-//! внутреннее UB без нового внешнего отказа до обязательной init-фазы.
-//! `CFaction::LeaveWord` RVA `0x000BCA40` увеличивает `m_nLeaveWordID` обычным
-//! signed x86 `add 1`; `allocate_leave_word_id` сохраняет wrapping.
-//!
-//! Player-prefix `GenerateDBData` сначала копирует оба scalar ID, затем обходит
-//! signed creation-list, unsigned restore-list, deletion-list и unsigned
-//! player-map. `CloneMapPlayer` теперь буквально находит unsigned key, создаёт
-//! новый player constructor-state, сериализует живой owner с
-//! `include_child=true`, декодирует из `vector.data()` с нулевым cursor и тем
-//! же флагом, а decoder-`false` уничтожает копию и возвращает `None`.
-//! Encoder сохраняет наблюдаемые мутации `SetPlayerOrganizing` и
-//! `UpdateProperty`; registry, concrete organizing-owner и property
-//! coefficients передаются явно вместо process-static singleton-ов. Перед
-//! mutable player-borrow снимается reached проекция `tagRegion::REGION_TYPE`.
-//! Exact диапазон
-//! `0x00410AB0..0x00410B98` подтвердил исправленный key/dataflow и обе virtual
-//! позиции. Restore-копии добавляются без save-lock, как exact тело; каждый
-//! deletion-record и каждая player-копия отдельно проходят тот же
-//! `g_CriticalSectionSavePlayerList`, выраженный `parking_lot::Mutex`.
-//! Последующие generators `COrganizingCtrl::GenerateSaveData`,
-//! `CFactionWarSys::GenerateSaveData`, а также собственный
-//! `GeterateRegionDBData` и `CCountryHandler::GenerateSaveData` восстановлены
-//! у своих owner-ов; `CHonorRanks::GenerateSaveData` также восстановлен в
-//! отдельном static-state owner-е. Полный метод вызывает их после player-
-//! prefix строго в порядке organizing с literal `force_all=false`, faction-
-//! war, region, country и honor-ranks. Прежние singleton/static зависимости
-//! передаются явными ссылками; это изменение формы API, а не новая
-//! оркестрация. Локальная player/organizing safe-граница прекращает дальнейшие
-//! стадии: продолжение после исходного UB не назначается. Сам метод не очищает
-//! live player/restore/creation/deletion/offline списки — эти операции
-//! принадлежат следующему caller-участку после возврата.
-//! Отдельная `g_bSaveAllOrg` ветвь не вызывает player-prefix и Country:
-//! `materialize_save_all_organizations_snapshot` сохраняет только organizing,
-//! faction-war, region и HonorRanks, затем достигает того же launch call-site.
-//!
-//! `ShowSaveInfo` сначала проверяет process-global `g_bShowSaveInfo`. При
-//! `false` он не форматирует аргументы и не касается log-owner-а. При `true`
-//! первый `_vsprintf` материализует ANSI C-string в `char[256]`, после чего
-//! передаёт её как format без varargs в `AddLogText`. Rust принимает уже
-//! отформатированный call-site payload в owned slice и делегирует второе
-//! форматирование готовому `WorldLogTextOwner`, не перенося переполнение
-//! первого stack-buffer. Неизвестный `%` второго форматирования блокируется
-//! уже у `AddLogText` после его доказанных rotation/time эффектов.
-//! Предшествующая ручная collect-player-data ветвь теперь отдельно очищает
-//! `g_bSendCollectPlayerDataMsgNow`, строит пустой `0x7F808` и ровно один раз
-//! вызывает готовый `CMessage::SendAll`. Nullable server-owner сохраняет
-//! старый нулевой результат, а ошибка envelope остаётся в отчёте и не меняет
-//! уже очищенный флаг.
-//! Reached save-trigger участок `CGame::Run` после успешного
-//! `TryEnterCriticalSection` теперь исполняет обе доказанные формы решения.
-//! `g_bSaveAllOrg` очищается до четырёх организационных generators. Иначе
-//! manual/no-GameServer путь пишет точный log, обновляет save tick, очищает
-//! `g_bSaveNowData` и связывает успешный полный snapshot с последовательностью
-//! `ClearMapPlayerForOffline`, `ClearRestorePlayer`, `ClearCreationPlayer`,
-//! `ClearDeletionPlayer`, `ClearOfflinePlayer` и launch request. Затем
-//! подключения считаются повторно: при их наличии tick и `m_nDBResponsed`
-//! сбрасываются, а пустой `0x7F803` идёт каждой connected записи в unsigned
-//! map-order. Поэтому manual-save при живых GameServer выполняет и snapshot,
-//! и последующую notify-рассылку, а не выбирает одно из них.
-//! При локальном blocked-результате generator-а cleanup/notify не продолжаются
-//! и typed guard не выдаётся за снятый. Предшествующий pre-gate также готов:
-//! `g_bSendSaveMsgNow` сначала пишет точный log, назначает `last = now -
-//! first_interval` и очищается. Отдельный profiling tick снимается до wrapping
-//! elapsed-проверки, а `dwSavePointTime` читается повторно: при неизменном
-//! setup текущая итерация видит равенство и попадает в исходное `<=`, не пробуя
-//! lock. Try-lock callback вызывается только при строгом `elapsed >
-//! second_interval`; его `false` делает wrapping `last += 1000` и не создаёт
-//! guard, а `true` входит в готовое save-решение. Exact EXE `0x00419D2C`
-//! подтверждает try-enter, а `0x00419ECD` — обязательный leave уже после
-//! `__beginthreadex`; normal Run-путь поэтому принимает отдельный парный
-//! callback, blocked generator до leave не доходит. `SaveThreadFunc` удерживает
-//! typed guard той же внешней сериализации, пишет точные start/end events
-//! вокруг готового `DoSaveData`
-//! lifecycle и возвращает guard при границе, где исходник не дошёл до unlock.
-//! COM apartment удалён как заменённый Windows DB-механизм. Оба достигнутых
-//! `CloseHandle/__beginthreadex` caller-а передают одному process-worker-у
-//! одноразовые launch request и полный frozen job; system thread создаётся в
-//! `worldserver::runtime`, а прежний завершившийся handle закрывается перед
-//! его заменой.
-//! `WorldDbDataSaveSession` теперь предоставляет узкие owner-операции для всех
-//! четырёх player-коллекций frozen snapshot-а. Creation/restore/deletion
-//! удаляют текущий `VecDeque` node только после доказанного успеха; player-map
-//! уничтожает `Box<CPlayer>` и стирает key только после successful Save
-//! Character. Failure сохраняет frozen job у process-worker-а. Отдельная
-//! async-сериализация сохраняет общий барьер trigger/save-thread, не удерживая
-//! mutable `CGame` через DB-await; MainLoop сразу пишет в новый accumulator.
-//!
-//! `SetEnemyFactions` полностью заменяет pointer-list по `tagDBData+0x6C` под
-//! той же save-блокировкой. Старые non-null значения уничтожаются до очистки
-//! nodes, затем входной pointer-list копируется в исходном порядке; временные
-//! list-копии освобождают только nodes. Owned `VecDeque<Option<_>>` и `Drop`
-//! выражают этот контракт без raw pointers. `ClearDBData` этот список не
-//! трогал, поэтому отдельная EnemyFactions save-phase по-прежнему отвечает за
-//! уничтожение значений и очистку nodes.
-//!
-//! `GeterateRegionDBData` сохраняет исходную опечатку имени, проходит
-//! `s_mapRegionList` в signed key-order и пропускает отсутствующий
-//! `tagRegion::pRegion`. Каждый живой `CWorldRegion` создаёт отдельную полную
-//! девятиполевую копию `tagRegionParam`, после чего `AppendRegionParam`
-//! добавляет её в хвост DB-очереди под save-lock. Другие поля живого региона
-//! не копируются. Owned snapshot заменяет выделенный базовый `CWorldRegion`,
-//! поскольку следующий `CRsRegion::Save` наблюдает только `m_Param`, а
-//! save-phase затем уничтожает копию.
-//!
-//! `AppendDBCountry` добавляет отдельный non-null country snapshot в хвост
-//! `ltDBCountrys` под тем же save-lock. Nullable list-форма сохраняется для
-//! уже готовой Country save-фазы, хотя достигнутый generator создаёт только
-//! `Some`. `ClearDBData` country-list не трогал, поэтому его очистка не
-//! присваивается этому owner-у. После точного `join_save_worker` успешного
-//! `Release` Rust отдельно уничтожает оставшиеся country/enemy snapshot-ы:
-//! штатный `GameThreadFunc` немедленно делает `DeleteGame`, а у plain
-//! snapshot-ов нет destructor side effects. Так исправляется только
-//! внутреннее удержание памяти после последнего DB-потребителя, не меняя
-//! `ClearDBData`, DB-порядок или observable release-последовательность.
-//!
-//! Numeric `GetRegion(long)` выполняет nullable lookup signed ключа в исходном
-//! `std::map<long, tagRegion>` без `operator[]`-вставки. Прямой
-//! `GetRegionGameServer` затем читает `dwGameServerIndex` найденного региона,
-//! ищет его в `std::map<unsigned long, tagGameServer>` и возвращает nullable
-//! указатель.
-//! Два `BTreeMap` сохраняют ordered lookup, `Option` — отсутствие любой
-//! ступени, а короткий numeric getter возвращает исходный `0`. Пересылка
-//! принимает гарантированно живую `&CMessage`, поэтому старый nullable check
-//! становится типовой границей; `u32 -> i32` сохраняет тот же 32-битный
-//! map identity готового Linux/Rust `SendToMapID`.
-//! Player-варианты сначала проходят тот же online-list/map lookup, затем читают
-//! унаследованный `CShape::GetRegionID` и только после этого ищут назначенный
-//! региону GameServer. Слот `CPlayer` vtable `+0x50` имеет статус
-//! `VERIFIED_DISASSEMBLY`: exact EXE хранит vftable по `0x00543DE4`, ячейку
-//! слота по `0x00543E34` и адрес `CShape::GetRegionID` `0x004530F0`.
-//! `Option` сохраняет nullable результат первого варианта, второй возвращает
-//! исходный ноль либо signed представление `dwIndex`; signed player ID
-//! переводится в unsigned map-key с сохранением 32-битного шаблона.
-//!
-//! `ProcessPlayerDataQueue` снимает размер под отдельной queue-блокировкой и
-//! повторяет null-pop только в пределах этого snapshot. Первый фактически
-//! извлечённый record всегда завершает вызов. Null player, отсутствующий регион
-//! и отсутствующий либо disconnected GameServer отправляют `0x1FF01` со
-//! статусом `0x1C`; две последние ветви уничтожают player-owner. Success после
-//! `SetPlayerOrganizing` и exact virtual `CShape::SetState(0)` отправляет
-//! `0x1FF01` со статусом `0x1D`, account, GameServer IP/port, именем и level.
-//! Затем friends обходятся строго в list-order: online lookup предшествует
-//! login lookup, `bOnline` меняется до optional `0x7F904`, а найденный только в
-//! login-list адресуется map ID `0`, как и отсутствующий online owner/region.
-//! После обхода безусловный `RemoveOnlinePlayer` выполняет organizing-exit,
-//! offline-list удаляет все совпадения, login-list получает текущий tick,
-//! прежний map-owner уничтожается и incoming `Box<CPlayer>` передаётся map.
-//! `VecDeque/BTreeMap/Box` заменяют только STL nodes и deleting destructor.
-//!
-//! Lost stack keys region/GameServer/player-map восстановлены из прямого
-//! dataflow согласованного тела: соответственно `GetRegionID`,
-//! `tagRegion::dwGameServerIndex` и inherited player ID. Единственная virtual
-//! неоднозначность имеет статус `VERIFIED_DISASSEMBLY`: CPlayer vtable ячейка
-//! `0x00543E68` содержит `0x004531D0`, точный `CShape::SetState(unsigned short)`.
-//! `tagGameServer::dwPort`, оставшийся `None` после доказанного malformed
-//! loader-а, останавливает только эту safe-границу после уже выполненного
-//! organizing/state, не отправляя придуманный port. Ошибки send по-прежнему не
-//! меняют последующие мутации и лишь возвращаются в наблюдаемом отчёте.
-//! Record с `szCdkey[20]` без NUL блокируется сразу после pop: исходные
-//! `CBaseMessage::Add(char*)` читали бы за fixed buffer, а наблюдаемая реакция
-//! такого повреждённого producer-state не доказана.
-//! `LoadPlayerDataFromDB` проверяет game-exit перед player-load-exit, делает
-//! `Sleep(1)`, атомарно дренирует всю load FIFO и последовательно обрабатывает
-//! каждый non-null record с ненулевым ID. Успех и DB-failure одинаково создают
-//! data-record; failure несёт nullable player и поэтому позднее даёт `0x1C`.
-//! Largess вызывается после DB-load и до публикации в data FIFO, start/end logs
-//! используют два отдельных `timeGetTime` с wrapping elapsed. Exact
-//! disassembly `0x0040952F..0x00409544` восстановил скрытый переход к следующей
-//! list-записи, а `0x0040958B..0x00409599` — внешний polling-loop; Ghidra
-//! ошибочно считала оба `operator delete` call-site терминаторами. Rust Drop
-//! исправляет только утечки invalid/raw-pointer records, Tokio timer заменяет
-//! `Sleep`, а async DB-load остаётся явным соседним owner-контрактом. Concrete
-//! `WorldPlayerLoadWorkerPool` завершает system-thread/exit/join lifecycle;
-//! cloneable queue-spec заменяет только исходный global `g_pGame` lookup.
-//! MainLoop использует назначенный предыдущей стадией shared tick, добавляет
-//! wrapping elapsed в `DAT_0056e524` и отдельным tick начинает готовый
-//! `CTimer::Run`; при safe block эти недостигнутые clock-эффекты не создаются.
-//! Timer-dispatch теперь сам выполняет exact `CPlayerRanks::OnStatRanks`:
-//! stat, публикация, отдельный local-time, событие следующего дня и только
-//! затем удаление текущей calendar-записи. Тот же adapter выполняет tax-
-//! callback `COrganizingParam`: broadcast `0x7FE26`, следующий день, регистрация
-//! и лишь затем lookup/log `WS0263`. Async TDS await остаётся внутри исходной
-//! позиции PlayerRanks; остальные callbacks проходят прежний sync dispatcher.
-//! После полного timer-call wrapping закрывает `DAT_0056e520`, а отдельный tick
-//! начинает `CFactionWarSys::Run`. Faction-war call после полного expiry-пути
-//! единственным end tick увеличивает
-//! `DAT_0056e51c`. Перед следующим `CLeiTing::Run` новый shared tick в exact
-//! MainLoop отсутствует, поэтому Rust его не добавляет. Сам следующий
-//! непрофилированный `CLeiTing::Run` также связан: caller снимает ровно один
-//! local `tm`, а после полного daily owner-а переходит к готовому
-//! `CDbMisc::DoneOutList`. Соседний DB batch также связан
-//! целиком: output limit `8`, полное снятие input queue, ordered DB-dispatch и
-//! один `LoadAuction`. Только после них единственный tick назначает start
-//! следующей профилированной границы `CNetSessionManager::Run`. Полный
-//! ordered timeout pass теперь закрывает `DAT_0056e518` одним end tick; нового
-//! shared start перед следующей ping-границей исходник не назначает. Ping-
-//! граница MainLoop RVA `0x00019A00` также закрыта целиком: при active flag
-//! она сравнивает unsigned число подключённых GameServer с числом ответов либо
-//! ждёт строгий wrapping timeout `5000 < elapsed`; завершение сначала очищает
-//! flag, затем отправляет LoginServer `0x1FE04` с online count и ordered
-//! `(IP C-string, map ID, player count)` snapshot. LoginServer decoder того же
-//! wire независимо подтверждает порядок полей.
-//!
-//! BaiTan registry-cluster также восстановлен: `DelItemToIpList` RVA
-//! `0x0000D830`, `AddItemToBaiTanRequestList` RVA `0x0000EE30`,
-//! `DelItemFromBaiTanList` RVA `0x000129F0`, `AddItemToBaiTanList` RVA
-//! `0x00014140` и `DoneBaiTanList` RVA `0x000141F0`. Потерянные raw-
-//! присваивания `std::pair` имеют статус `VERIFIED_DISASSEMBLY`: exact EXE
-//! `0x0040EE33..0x0040EE51` подтверждает request `(IP, player_id)`, а
-//! `0x00414150..0x004141D9` — `(player_id, IP)`, `(IP, 1)` с wrapping
-//! increment и `(player_id, GameServer index либо 0)`. Независимые
-//! `std::map::insert` игнорируют duplicate каждый сам по себе; Rust сохраняет
-//! это, включая возможный отставший refcount. Batch идёт по unsigned IP-order,
-//! для каждого сначала мутирует registries, затем отправляет `0x8040D +
-//! player_id + 1` даже на route `0`, и только после всего обхода очищает
-//! request map.
-//!
-//! Следующая MainLoop minute-chain теперь объединяет lazy bits `0x10`, `0x20`
-//! и `0x40`, их точные два initial clock-call, новый current tick, wrapping
-//! `(current - minute_start) / 60000`, полный `COrganizingCtrl::Run`, полный
-//! `CCountryHandler::Run` и только после обоих обновляет minute start.
-//! `DisbandFaction` вызывается concrete organizing owner-ом через живые
-//! Village/City/Goods War/country owners; player flag и optional log завершают
-//! его exact success-порядок сразу после удаления faction;
-//! та же finalization-последовательность обслуживает прямой message-ingress
-//! `0x60111`,
-//! поэтому retired owner не задерживается внутри event-report, а DB-log и
-//! player flag сохраняют общий машинный порядок;
-//! `CCountry::AI` выполняется concrete country owner-ом через governance context;
-//! при локальном blocked-path последующие эффекты не выдумываются.
-//! Сразу после этого `run_main_loop_bai_tan_jjc_stage` без нового clock-call
-//! завершает весь BaiTan batch и запускает полный `CJJcSystem::Run`. JJC сам
-//! сохраняет rank gate, weekly/season reset, fight timeout, message и recycle;
-//! процессный контекст связывает его с `TiberiusRsJjcSys`, INI, часами, логом и
-//! отдельным weekly-reset worker-ом.
-//!
-//! Точный PDB задаёт старому `CGame::tagRegion` размер `0xC`: nullable
-//! `CWorldRegion* pRegion` по `+0x0`, `unsigned long dwGameServerIndex` по
-//! `+0x4` и `REGION_TYPE RegionType` по `+0x8`. `LoadRegionList` RVA
-//! `0x00012220` теперь materializes все десять positional полей и сохраняет
-//! полный numeric selector. `WorldRegionOwner` сохраняет исходный virtual
-//! выбор `0/4/5 -> CWorldRegion`, `1 -> CWorldVillageRegion`,
-//! `2 -> CWorldCityRegion`; COUNTRY `3`, которого нет в поставочном list,
-//! остаётся единственной узкой raw-границей. `Option<enum>` заменяет nullable
-//! владеющий pointer и allocation, но не выдаётся за x86 layout.
-//! Владение подтверждено парой lifecycle-границ: `LoadRegionList` RVA
-//! `0x00012220` выделяет конкретный virtual region и записывает pointer в map,
-//! а `CGame::Release` RVA `0x0000E7F0` обходит map, вызывает virtual deleting
-//! destructor каждого ненулевого pointer и обнуляет его. Resource reads теперь
-//! происходят у concrete owner-а в исходном порядке, а два global object-count
-//! остаются явной process-state границей. Region snapshot также вызывается
-//! прямо; точечный exact disassembly `0x004165C1..0x004165D2` подтверждает
-//! `include_child=true` перед virtual slot `+0x10`. Безопасные parser/wire
-//! неизвестности возвращаются через reload/init/MainLoop как локальный block,
-//! а не получают придуманный legacy result.
-//! `ReLoadOneRegionSetup/ReLoadAllRegionSetup` RVA
-//! `0x000120F0/0x000108F0` уже сохраняют signed map-order, null-skip и точный
-//! `0x7F801/0x10` send соответствующему GameServer.
-//! Init-pass после organizing load больше не делегирует целый
-//! `InitOwnerRelation` внешнему контексту: каждый concrete region owner прямо
-//! проверяет faction/union, восстанавливает faction city-list и country byte.
-//! Внешней остаётся только узкая player-refresh граница уже готового
-//! `CFaction::AddOwnedCity`.
-//!
-//! `region_name` выполняет ровно цепочку numeric `GetRegion -> pRegion ->
-//! CWorldRegion -> CRegion -> CBaseObject::m_strName`. Typed lookup сохраняет
-//! разницу между отсутствующим map-key и существующим `tagRegion` с null
-//! pointer: первый в enter-ветви означает пустую C-строку, второй исходно
-//! разыменовывался и остаётся локальной типизированной ошибкой. Живое имя
-//! заимствуется byte-exact без UTF-8 и без копирования MSVC `std::string` SSO.
-//!
-//! `LoadServerSetup` читает byte-exact whitespace-токены: произвольный header,
-//! signed число записей, затем после каждого точного `#` — unsigned ID,
-//! IP-строку и unsigned port. Map заранее не очищается, повторный ID полностью
-//! заменяет пять полей существующей записи, а отсутствующий файл возвращает
-//! старый `false`. ASCII-insensitive поиск имени сохраняет Windows-доступ к
-//! найденному lowercase `serversetup.ini`; `fs::read`, `Vec` и `BTreeMap`
-//! заменяют `CRFile`, stringstream, `std::string` и `std::map`.
-//!
-//! Единственный неуверенный stack-факт имеет статус `VERIFIED_DISASSEMBLY`:
-//! exact EXE `0x004139FE` читает неинициализированный `[esp+0xC8]`, а
-//! `0x00413A08` пишет его в `tagGameServer::lReceivedPlayerData`; до чтения
-//! слот не получает записи и не передаётся extraction-вызовам. `Option<i32>`
-//! сохраняет эту неизвестность без выдуманного нуля. Missing-file ветвь
-//! `0x004138C8` возвращает `0`, успешный хвост `0x00413A95` — `1`.
-//!
-//! Пять прямых запросов registry используют тот же ordered
-//! `std::map<unsigned long, tagGameServer>`. `BTreeMap` сохраняет числовой
-//! порядок обхода: обычный count считает все подключённые записи, вариант Ex
-//! исключает `dwIndex == 5`, а 32-битный `wrapping_add` воспроизводит машинный
-//! `add` старого x86. Адресный lookup возвращает первую запись с byte-exact,
-//! case-sensitive полным равенством IP и тем же unsigned port; numeric lookup
-//! и отсутствие записи представлены `Option`. Если malformed loader оставил
-//! port неизвестным именно у совпавшего IP, typed-ошибка локализует сравнение
-//! старого неинициализированного DWORD вместо притворного miss. Signed аргумент
-//! `IsConnect(long)` переводится в unsigned map-key с сохранением 32-битного
-//! шаблона. STL tree traversal и `operator[]` удалены как библиотечный механизм;
-//! запросы не мутируют registry и не требуют повторного reverse.
-//!
-//! Найденный локальный `WorldServer/setup.ini` с SHA-256
-//! `F2E3AB113D98554787CE0A76C1524564D5CC8F62E19B5BDF6B6119299814434A`
-//! содержит 40 полных пар. Оригинал пытается прочитать 41-ю пару в
-//! `bUseOldSaveLargessWay`, поэтому на этом файле поле сохраняет constructor-
-//! default `true`. Значения, включая credentials, в код, отчёты и ошибки не
-//! переносятся.
-//!
-//! После positional-чтения оригинал строил GUI single-instance заголовок:
-//! `WorldServer[name]-Saga3D2` для INI и `WorldServer[name]` для DAT. Готовая
-//! Linux callback-граница закрепляет тот же title либо возвращает занятую
-//! instance-ветвь в полный `Init`, не вводя `FindWindowA`/MFC runtime.
-//!
-//! `CheckPoint(char*)` удваивает каждый байт одинарной кавычки для старого SQL-
-//! literal. Exact `0x00409B17..0x00409B49` обнуляет локальный `char[256]`,
-//! `0x00409C55..0x00409C68` вызывает `_snprintf(..., 0x100, "%s", ...)`, а
-//! `0x00409CBB` возвращает адрес этого уже заканчивающего lifetime stack-
-//! буфера; `this` функция не читает. Достигнутый caller
-//! `0x004FADCB..0x004FADEB` копировал байты в свой SQL-buffer без промежуточного
-//! вызова. Rust меняет только форму API и возвращает owned `Vec<u8>`, сохраняя
-//! точные escaped bytes без старого dangling stack-pointer и 256-байтового
-//! лимита.
-//!
-//! Write-log producer `0x6020D` хранит в `CGame` FIFO структурированных
-//! `IncrementLog` DB-команд вместо готовых SQL literals. Это техническая
-//! замена для параметризованного Tiberius worker-а: packet-поля, enqueue
-//! position и исходный enqueue-before-live-Add сохраняются, а временные
-//! `_sprintf/CheckPoint` buffers и SQL injection не воспроизводятся.
-//! Consumer batch также достигнут: exact `DoSaveLog` сначала снимал размер,
-//! затем удалял каждый SQL до Execute и после failure восстанавливал connection,
-//! не повторяя потерянную запись. `WorldWriteLogWorkerSpec::process_batch`
-//! сохраняет этот observable data-loss/FIFO контракт и продолжимый snapshot-
-//! checkpoint; typed Execute и connection open находятся в соседнем
-//! `writelogworker`.
-//! `WorldLoginReconnectWorker` завершает внешний owner
-//! `CreateConnectLoginThread`: он хранит только snapshot setup и отправитель
-//! общей World FIFO, поэтому не передаёт `&mut CGame` системному потоку.
-//! Exact stop/join/start порядок и 8-sec cadence сохранены; Win32 handle,
-//! CRT thread и process-global pointer заменены `JoinHandle`, `AtomicBool` и
-//! безопасным ownership.
-//!
-//! `ResetHonorElimilateInfo` RVA `0x00014390` проходит `m_mPlayer` в map-order,
-//! сбрасывает достигнутые day/week/month counters по исходной mask-семантике,
-//! затем полностью очищает `m_HonorElimilateList` и повторяет reset под lock
-//! `CPlayerDataQueue`. `BTreeMap`, `VecDeque` и `parking_lot::Mutex` заменяют
-//! только STL/critical-section plumbing; накопительный total не меняется.
-//! Ветка `OnOtherMessage(0x5FD0D)` использует тот же map как per-player список
-//! уже учтённых eliminator ID: отсутствие online player и дубликат завершают
-//! обработку, новая пара добавляется в хвост до чтения четырёх счётчиков.
+//! Главный runtime-owner `CGame` WorldServer из `worldserver/game.cpp/.h`.
+//!
+//! Поведение владельца подтверждено точной парой WorldServer EXE/PDB. Файл
+//! соединяет глобальное игровое состояние, setup/resources, World DB owners,
+//! межсерверную сеть, очереди сообщений и полный процессный порядок
+//! `CreateGame -> Init -> MainLoop -> Release`; тонкая Linux process-оболочка
+//! находится в `process/worldserver.rs`.
+//!
+//! `Init` сохраняет исходную последовательность: constructor defaults,
+//! resource/setup загрузка, DB connections и initial loads, игровые registry,
+//! network owners, фоновые workers и финальная публикация готовности. Ошибка не
+//! переставляет уже выполненные side effects; caller всегда проводит `Release`
+//! над частично созданным состоянием. `Release` останавливает producers,
+//! закрывает network, проводит save barrier, дожидается DB/workers и освобождает
+//! owners в исходном порядке. Rust ownership заменяет только `new/delete`, STL,
+//! Win32 handles и compiler cleanup.
+//!
+//! `MainLoop` использует 32-битные wrapping boot ticks и строгие интервальные
+//! сравнения. Каждый сетевой и message turn обрабатывает зафиксированный FIFO
+//! snapshot; добавленное во время handler-а остаётся следующему turn. Порядок
+//! AI, сообщений, reconnect, maintenance, save cadence и рассылок не
+//! параллелизуется поверх исходных observable side effects.
+//!
+//! Wire-контракты сохраняют полные opcode, signedness, byte-exact C-строки,
+//! framing и порядок полей. DB-контракты сохраняют MSSQL procedure/SQL,
+//! отдельные соединения, отсутствие добавленных транзакций, partial success и
+//! исходные error mappings. Tiberius, Tokio, `parking_lot`, стандартные
+//! коллекции, `uuid` и системные Linux API заменяют только универсальную
+//! инфраструктуру.
+//!
+//! Save worker, player-load/write-log workers, reconnect и shutdown являются
+//! owned задачами с явным stop/join. Save barrier не разрешает уничтожить
+//! player/region/faction owners до завершения соответствующих DB snapshots.
+//! Неудачи после необратимого pop/mutation не получают rollback, если его не
+//! было в оригинале.
+//!
+//! Старые UB-границы — null owner, короткий payload, неинициализированное поле,
+//! переполнение фиксированного буфера — остановлены типизированным результатом
+//! ровно в точке, где подтверждённый контракт заканчивается. Такие границы и
+//! их практический эффект документируются возле соответствующего кода; они не
+//! объявляются поведением оригинала и не меняют штатный путь.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
@@ -1680,24 +529,24 @@ pub(crate) struct WorldSetupLoadReport {
 /// Нечувствительный итог чтения `serverSetup.ini` без публикации адресов.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldServerSetupLoadReport {
-    /// Signed число записей после header либо исходный инициализированный ноль.
+ /// Signed число записей после header либо исходный инициализированный ноль.
     pub(crate) declared_records: i32,
-    /// Число записей, для которых старый `map::operator[]` был воспроизведён.
+ /// Число записей, для которых старый `map::operator[]` был воспроизведён.
     pub(crate) applied_records: usize,
-    /// Итоговое число уникальных ключей с учётом прежних записей и замен.
+ /// Итоговое число уникальных ключей с учётом прежних записей и замен.
     pub(crate) unique_game_servers: usize,
-    /// Не перешёл ли formatted stream в fail/EOF-state.
+ /// Не перешёл ли formatted stream в fail/EOF-state.
     pub(crate) stream_complete: bool,
-    /// Первая запись, map-key которой зависел бы от неизвестного stack-значения.
+ /// Первая запись, map-key которой зависел бы от неизвестного stack-значения.
     pub(crate) blocked_at_record: Option<usize>,
-    /// Достигнута ли исходная позиция `AddLogText("GS Setup Read END.")`.
+ /// Действуета ли исходная позиция `AddLogText("GS Setup Read END.")`.
     pub(crate) read_end_notice: bool,
 }
 
 /// Локальная safe-граница адресного поиска в GameServer registry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldGameServerLookupError {
-    /// Совпавший IP достиг поля port, которое старый loader не назначил.
+ /// Совпавший IP достиг поля port, которое старый loader не назначил.
     PortUnavailable { index: u32 },
 }
 
@@ -1726,12 +575,12 @@ struct WorldNetworkConfig {
     check_net: bool,
 }
 
-/// Ошибка достигнутой сетевой границы World `CGame::InitNetServer`.
+/// Ошибка действующей сетевой границы World `CGame::InitNetServer`.
 #[derive(Debug)]
 pub(crate) enum WorldNetworkInitializationError {
-    /// Setup-чтение не назначило поле, которое исходник затем читал.
+ /// Setup-чтение не назначило поле, которое исходник затем читал.
     MissingSetupField(&'static str),
-    /// Общий listener не смог выполнить доказанный bind/listen.
+ /// Общий listener не смог выполнить доказанный bind/listen.
     Host(ServerHostError),
 }
 
@@ -1758,24 +607,24 @@ impl Error for WorldNetworkInitializationError {
 /// Успешный итог World `InitNetClient`; старый return при этом равен `1`.
 #[derive(Debug)]
 pub(crate) struct WorldClientInitialization {
-    /// Первый IPv4 endpoint, переданный общему десятисекундному connect.
+ /// Первый IPv4 endpoint, переданный общему десятисекундному connect.
     pub(crate) endpoint: SocketAddrV4,
-    /// Исходно игнорировавшийся результат постановки `0x1FE01`.
+ /// Исходно игнорировавшийся результат постановки `0x1FE01`.
     pub(crate) registration: Result<i32, SendMessageError>,
 }
 
-/// Ошибка достигнутой initial World-to-Login границы.
+/// Ошибка действующей initial World-to-Login границы.
 #[derive(Debug)]
 pub(crate) enum WorldClientInitializationError {
-    /// Setup-чтение не назначило поле, которое исходник затем читал.
+ /// Setup-чтение не назначило поле, которое исходник затем читал.
     MissingSetupField(&'static str),
-    /// ANSI hostname нельзя без доказательства преобразовать в Linux resolver.
+ /// ANSI hostname нельзя без доказательства преобразовать в Linux resolver.
     LoginAddressEncodingUnsupported,
-    /// `inet_addr/gethostbyname` не дали пригодный IPv4 endpoint.
+ /// `inet_addr/gethostbyname` не дали пригодный IPv4 endpoint.
     LoginAddressResolution,
-    /// Не создан и не bind-нут исходящий IPv4 socket.
+ /// Не создан и не bind-нут исходящий IPv4 socket.
     Bind(io::Error),
-    /// Общий десятисекундный connect завершился неуспешно.
+ /// Общий десятисекундный connect завершился неуспешно.
     Connect(ClientConnectError),
 }
 
@@ -1979,7 +828,7 @@ pub(crate) struct WorldStringTableEncodingBlock {
     pub(crate) entry_count: usize,
 }
 
-/// Наблюдаемый результат exact `CGame::LoadStringTable`.
+/// Наблюдаемый результат `CGame::LoadStringTable`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldStringTableLoadReport {
     pub(crate) package: Vec<u8>,
@@ -1987,7 +836,7 @@ pub(crate) struct WorldStringTableLoadReport {
     pub(crate) log_payload: Vec<u8>,
 }
 
-/// Последняя достигнутая ветвь `CGame::UpdateStringTable`.
+/// Последняя действующая ветвь `CGame::UpdateStringTable`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldStringTableUpdateCompletion {
     DefaultLanguageFailed,
@@ -2065,7 +914,7 @@ pub(crate) struct WorldGameInitReport {
 pub(crate) type WorldGameInitResult<ContextBlock> =
     Result<WorldGameInitReport, Box<WorldGameInitBlock<ContextBlock>>>;
 
-/// Прямые процессные владельцы, достигнутые полным `CGame::Init`.
+/// Прямые процессные владельцы, действующие полным `CGame::Init`.
 pub(crate) trait WorldGameInitContext {
     type Block;
     type PlayerDatabase: RsPlayerOwner;
@@ -2083,7 +932,7 @@ pub(crate) trait WorldGameInitContext {
     fn seed_random(&mut self, seed: u32);
     fn random(&mut self, upper_bound: i32) -> i32;
     fn put_debug_string(&mut self, payload: &[u8]);
-    /// Возвращает `true`, если Linux single-instance owner закрепил title.
+ /// Возвращает `true`, если Linux single-instance owner закрепил title.
     fn claim_single_instance(&mut self, title: &[u8]) -> bool;
     fn notify_operator(&mut self, notice: &WorldGameInitOperatorNotice);
 
@@ -2098,31 +947,31 @@ pub(crate) trait WorldGameInitContext {
     async fn create_rs_setup_owner(&mut self) -> Result<LoadedSetupIds, Self::Block>;
 
     async fn load_region_parameters(&mut self, game: &mut CGame) -> bool;
-    /// Возвращает достигнутый player DB-owner и его текущий caller-connection.
+ /// Возвращает действующий player DB-owner и его текущий caller-connection.
     fn player_database(
         &mut self,
     ) -> (&mut Self::PlayerDatabase, Option<&mut WorldTdsClient>);
-    /// Отдельный DB-owner `CRsEnemyFactions` с самостоятельным connection.
+ /// Отдельный DB-owner `CRsEnemyFactions` с самостоятельным connection.
     fn enemy_factions_database(&mut self) -> &mut Self::EnemyFactionsDatabase;
-    /// Отдельный DB-owner `CRsGenVar`, который сам открывает World connection.
+ /// Отдельный DB-owner `CRsGenVar`, который сам открывает World connection.
     fn general_variable_database(&mut self) -> &mut Self::GeneralVariableDatabase;
-    /// Возвращает два самостоятельных DB-owner-а exact organizing Initialize.
+ /// Возвращает два самостоятельных DB-owner-а organizing Initialize.
     fn organizing_databases(&mut self) -> (&mut Self::UnionDatabase, &mut Self::FactionDatabase);
-    /// Возвращает country DB-owner и его отдельное World connection.
+ /// Возвращает country DB-owner и его отдельное World connection.
     fn country_database(
         &mut self,
     ) -> (&mut Self::CountryDatabase, Option<&mut WorldTdsClient>);
-    /// Возвращает отдельное соединение constructor-а `CGoodsWarMember`.
+ /// Возвращает отдельное соединение constructor-а `CGoodsWarMember`.
     fn goods_war_database_connection(&mut self) -> Option<&mut WorldTdsClient>;
-    /// Возвращает созданный `CRSGodsBattle`; до соответствующего create-event
-    /// owner закономерно отсутствует.
+ /// Возвращает созданный `CRSGodsBattle`; до соответствующего create-event
+ /// owner закономерно отсутствует.
     fn gods_battle_database(&mut self) -> Option<&mut TiberiusRsGodsBattle>;
-    /// Возвращает уже открытый Log DB connection техническому increment-owner-у.
+ /// Возвращает уже открытый Log DB connection техническому increment-owner-у.
     fn increment_log_database(&mut self) -> Option<&mut WorldTdsClient>;
-    /// Возвращает уже открытый Log DB connection техническому auction-owner-у.
+ /// Возвращает уже открытый Log DB connection техническому auction-owner-у.
     fn auction_log_database(&mut self) -> Option<&mut WorldTdsClient>;
-    /// Даёт каждому concrete worker-у собственные Send-owner-ы; handle остаётся
-    /// внутри единственного `CGame` и освобождается его Release.
+ /// Даёт каждому concrete worker-у собственные Send-owner-ы; handle остаётся
+ /// внутри единственного `CGame` и освобождается его Release.
     fn player_load_worker_runtime(
         &mut self,
         worker_index: u32,
@@ -2512,7 +1361,7 @@ pub(crate) struct WorldGameReleaseBlock {
 
 pub(crate) type WorldGameReleaseResult = Result<WorldGameReleaseReport, Box<WorldGameReleaseBlock>>;
 
-/// Ещё сырые domain/platform owners, непосредственно достигнутые Release.
+/// Ещё сырые domain/platform owners, непосредственно действующие Release.
 pub(crate) trait WorldGameReleaseContext {
     fn put_debug_string(&mut self, payload: &'static [u8]);
     fn save_city_region(&mut self, region_id: i32, region: &mut WorldRegionOwner);
@@ -2521,13 +1370,13 @@ pub(crate) trait WorldGameReleaseContext {
     fn release_void_owner(&mut self, owner: WorldGameReleaseVoidOwner);
     fn release_optional_owner(&mut self, owner: WorldGameReleaseOptionalOwner) -> bool;
     fn release_database_owner(&mut self, owner: WorldGameReleaseDatabaseOwner) -> bool;
-    /// Снимает rank-event с ещё живого timer-а, затем уничтожает rank-owner.
+ /// Снимает rank-event с ещё живого timer-а, затем уничтожает rank-owner.
     fn release_player_ranks(&mut self) -> PlayerRanksReleaseReport;
-    /// Снимает events, которые поставил `COrganizingParam`, затем уничтожает
-    /// его раньше общего timer-owner-а.
+ /// Снимает events, которые поставил `COrganizingParam`, затем уничтожает
+ /// его раньше общего timer-owner-а.
     fn release_organizing_parameters(&mut self) -> OrganizingParamReleaseReport;
 
-    /// Ждёт и закрывает даже исходный пустой `g_hSavingThread`, затем обнуляет owner.
+ /// Ждёт и закрывает даже исходный пустой `g_hSavingThread`, затем обнуляет owner.
     fn join_save_worker(&mut self) -> WorldSaveThreadHandleState;
 }
 
@@ -2612,13 +1461,13 @@ pub(crate) trait WorldGameThreadRuntime: WorldGameReleaseContext {
         game: &'game mut CGame,
     ) -> Pin<Box<dyn Future<Output = Result<i32, Self::MainLoopBlock>> + 'game>>;
     fn wait_for_save_barrier(&mut self);
-    /// Временно передаёт concrete Goods War owner полному Release.
+ /// Временно передаёт concrete Goods War owner полному Release.
     fn take_goods_war_member(&mut self) -> CGoodsWarMember;
     fn restore_goods_war_member(&mut self, owner: CGoodsWarMember);
-    /// Временно передаёт process-global increment-log owner полному Release.
+ /// Временно передаёт process-global increment-log owner полному Release.
     fn take_increment_log(&mut self) -> CIncrementLog;
     fn restore_increment_log(&mut self, owner: CIncrementLog);
-    /// Передаёт тот же SkillFactory owner, который обслуживал Init/reload/wire.
+ /// Передаёт тот же SkillFactory owner, который обслуживал Init/reload/wire.
     fn take_skill_factory(&mut self) -> CSkillFactory;
     fn restore_skill_factory(&mut self, owner: CSkillFactory);
     fn signal_game_thread_exit(&mut self);
@@ -2628,7 +1477,7 @@ pub(crate) trait WorldGameThreadRuntime: WorldGameReleaseContext {
 /// Успешный итог отдельной попытки World `ReConnectLoginServer`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldLoginReconnect {
-    /// Первый IPv4 endpoint, к которому подключён переданный FIFO client.
+ /// Первый IPv4 endpoint, к которому подключён переданный FIFO client.
     pub(crate) endpoint: SocketAddrV4,
 }
 
@@ -2639,11 +1488,11 @@ pub(crate) struct WorldLoginReconnect {
 /// попыток и terminal state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldLoginReconnectWorkerOutcome {
-    /// Stop-флаг уже был установлен до первой паузы.
+ /// Stop-флаг уже был установлен до первой паузы.
     StoppedBeforeRetry,
-    /// Stop замечен после неуспешной попытки, как в условии старого цикла.
+ /// Stop замечен после неуспешной попытки, как в условии старого цикла.
     StoppedAfterFailedRetry { attempts: u32 },
-    /// Новое Login-соединение передано в World FIFO.
+ /// Новое Login-соединение передано в World FIFO.
     Reconnected {
         attempts: u32,
         reconnect: WorldLoginReconnect,
@@ -2663,7 +1512,7 @@ pub(crate) struct WorldLoginReconnectSpec {
 }
 
 impl WorldLoginReconnectSpec {
-    /// Выполняет одну попытку в прежнем bind/resolve/connect/publish порядке.
+ /// Выполняет одну попытку в прежнем bind/resolve/connect/publish порядке.
     pub(crate) async fn reconnect_once(
         &self,
     ) -> Result<WorldLoginReconnect, WorldLoginReconnectError> {
@@ -2681,18 +1530,18 @@ pub(crate) enum WorldLoginReconnectThreadStart {
 /// Наблюдаемая внутренняя последовательность `CreateConnectLoginThread`.
 #[derive(Debug)]
 pub(crate) struct WorldLoginReconnectThreadRestart {
-    /// Предыдущий handle всегда полностью joined до старта следующего.
+ /// Предыдущий handle всегда полностью joined до старта следующего.
     pub(crate) previous_completion: Option<WorldLoginReconnectWorkerCompletion>,
-    /// Новый worker либо точная ошибка создания Linux system thread.
+ /// Новый worker либо точная ошибка создания Linux system thread.
     pub(crate) started: WorldLoginReconnectThreadStart,
 }
 
 /// Успешно построенный и поставленный World CD-key snapshot.
 #[derive(Debug)]
 pub(crate) struct WorldCdkeySnapshot {
-    /// Точное 32-битное значение исходного `m_lOnlinePlayer.size()`.
+ /// Точное 32-битное значение исходного `m_lOnlinePlayer.size()`.
     pub(crate) declared_online_players: u32,
-    /// Исходно игнорировавшийся результат приоритетного `CMessage::Send`.
+ /// Исходно игнорировавшийся результат приоритетного `CMessage::Send`.
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
@@ -2784,7 +1633,7 @@ pub(crate) struct WorldOnlinePlayerRemoveOutcome {
     pub(crate) organizing: PlayerExitGameOutcome,
 }
 
-/// Один player state-transition из exact `CGame::OnGameServerLost`.
+/// Один player state-transition из `CGame::OnGameServerLost`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldLostGameServerPlayer {
     pub(crate) player_id: u32,
@@ -2794,7 +1643,7 @@ pub(crate) struct WorldLostGameServerPlayer {
     pub(crate) offline_inserted: bool,
 }
 
-/// Полный достигнутый результат отключения одного GameServer.
+/// Полный действующий результат отключения одного GameServer.
 #[derive(Debug)]
 pub(crate) struct WorldGameServerLostReport {
     pub(crate) game_server_index: u32,
@@ -2823,14 +1672,14 @@ pub(crate) struct WorldRegionChangePlayerTransition {
     pub(crate) login_time_ms: u32,
 }
 
-/// Безопасная граница достигнутого `CGame::SendCdkeyToLoginServer`.
+/// Безопасная граница действующего `CGame::SendCdkeyToLoginServer`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldCdkeySnapshotError {
-    /// Setup-чтение не назначило исходно неинициализированный `dwNumber`.
+ /// Setup-чтение не назначило исходно неинициализированный `dwNumber`.
     MissingWorldNumber,
-    /// Rust-коллекция вышла за 32-битный размер старого MSVC списка.
+ /// Rust-коллекция вышла за 32-битный размер старого MSVC списка.
     OnlinePlayerCountOutsideLegacyRange { count: usize },
-    /// Online-list нарушил исходный инвариант наличия owning map-entry.
+ /// Online-list нарушил исходный инвариант наличия owning map-entry.
     MissingPlayerOwner { player_id: u32 },
 }
 
@@ -2879,7 +1728,7 @@ pub(crate) enum WorldMessageOwner {
     MiscAuction,
 }
 
-/// Результат exact duplicate-ledger gate ветки `0x5FD0D`.
+/// Результат duplicate-ledger gate ветки `0x5FD0D`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldHonorEliminatorRegistration {
     MissingOnlinePlayer,
@@ -2905,13 +1754,13 @@ impl fmt::Display for WorldLocalMessageQueueBlock {
 
 impl Error for WorldLocalMessageQueueBlock {}
 
-/// Сообщение, для которого `Run` не выбрал восстановленный owner.
+/// Сообщение, для которого `Run` не выбрал действующий owner.
 pub(crate) struct RoutedWorldMessage {
     pub(crate) source: WorldMessageSource,
     pub(crate) message_type: i32,
     pub(crate) owner: Option<WorldMessageOwner>,
     pub(crate) legacy_run_result: i32,
-    /// Полное сообщение сохраняется для диагностики неизвестного selector-а.
+ /// Полное сообщение сохраняется для диагностики неизвестного selector-а.
     pub(crate) message: CMessage,
 }
 
@@ -3388,8 +2237,8 @@ pub(crate) enum ProcessedWorldEvent {
         outcome: Result<OrganizingPronounceDispatch, OrganizingPronounceBlock>,
         runtime: WorldUnionApplicationRuntimeReport,
     },
-    /// Exact default `OnOrgasysMessage`: неизвестный organizing opcode не имеет
-    /// side effects, но уже накопленные terminal callbacks всё равно исполняются.
+ /// default `OnOrgasysMessage`: неизвестный organizing opcode не имеет
+ /// side effects, но уже накопленные terminal callbacks всё равно исполняются.
     OrganizingNoOp {
         source: WorldMessageSource,
         legacy_run_result: i32,
@@ -3585,7 +2434,7 @@ pub(crate) struct WorldPlayerLoadRequestBlock {
     pub(crate) account_length: usize,
 }
 
-/// Exact bool-смысл `CPlayerLoadQueue::PushPlayerLoadData`.
+/// bool-смысл `CPlayerLoadQueue::PushPlayerLoadData`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WorldPlayerLoadRequestOutcome {
     Queued,
@@ -3724,7 +2573,7 @@ impl WorldPlayerLoadWorkerSpec {
         }
     }
 
-    /// Выполняет один exact drain/process batch фонового DB-load worker-а.
+ /// Выполняет один drain/process batch фонового DB-load worker-а.
     pub(crate) async fn process_batch<Loader, LoadLargess, GetTick>(
         &self,
         worker_index: u32,
@@ -3840,7 +2689,7 @@ impl WorldPlayerLoadWorkerSpec {
         })
     }
 
-    /// Повторяет polling-loop до exact приоритетного game/load exit-флага.
+ /// Повторяет polling-loop до приоритетного game/load exit-флага.
     pub(crate) async fn run<Loader, LoadLargess, GetTick>(
         &self,
         worker_index: u32,
@@ -3911,7 +2760,7 @@ pub(crate) enum WorldMainLoopPlayerDataQueueStageReport {
     },
 }
 
-/// Один exact `CPlayerRanks::OnStatRanks`, выполненный внутри calendar callback.
+/// Один `CPlayerRanks::OnStatRanks`, выполненный внутри calendar callback.
 #[derive(Debug)]
 pub(crate) struct PlayerRanksTimerRefreshReport {
     pub(crate) stat: PlayerRanksStatRunReport,
@@ -5131,14 +3980,14 @@ impl<Context: WorldJjcRuntimeContext> JjcRunContext for WorldJjcWorkerContext<'_
 /// Platform/log дополнение к `LeiTingContext`, необходимое concrete DB-worker-у.
 /// Сам доменный `CLeiTing` по-прежнему не знает о Tokio либо system threads.
 pub(crate) trait WorldLeiTingRuntimeContext: LeiTingContext {
-    /// Точный synchronous false-путь `_beginthreadex` остаётся operator-visible.
+ /// Точный synchronous false-путь `_beginthreadex` остаётся operator-visible.
     fn on_database_reset_spawn_failed(
         &mut self,
         request: LeiTingDatabaseResetRequest,
         error: io::Error,
     );
 
-    /// Доставляет begin/end и DB-итог уже запущенного detached worker-а.
+ /// Доставляет begin/end и DB-итог уже запущенного detached worker-а.
     fn on_database_reset_worker_event(&mut self, event: WorldLeiTingResetWorkerEvent);
 }
 
@@ -5276,10 +4125,10 @@ pub(crate) struct WorldMainLoopCallbacks<'a> {
     pub(crate) get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
     pub(crate) put_log_info: &'a mut dyn FnMut(&[u8]),
     pub(crate) get_auction_month_day: &'a mut dyn FnMut() -> i32,
-    /// Конкретный `CLargess` owner для исходного `StartWorkerThread` вызова.
+ /// Конкретный `CLargess` owner для исходного `StartWorkerThread` вызова.
     pub(crate) largess: &'a TiberiusLargess,
-    /// Общий producer исходного `CWriteLogQueue`; faction-owner-ы ставят
-    /// typed записи в тот же FIFO непосредственно в своих точках вызова.
+ /// Общий producer исходного `CWriteLogQueue`; faction-owner-ы ставят
+ /// typed записи в тот же FIFO непосредственно в своих точках вызова.
     pub(crate) write_log_queue: WorldWriteLogQueue,
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
     pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
@@ -5487,10 +4336,10 @@ pub(crate) type WorldReloadOneScriptResult = Result<bool, WorldReloadOneScriptBl
 
 /// Resource/domain границы, непосредственно вызываемые готовым `CGame::ReLoad`.
 pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
-    /// Каталог исходных loose setup-файлов процесса.
+ /// Каталог исходных loose setup-файлов процесса.
     fn runtime_directory(&self) -> &Path;
-    /// Три карты единственного World `CGoodsFactory`; loader, lookup и wire
-    /// работают с одним опубликованным состоянием.
+ /// Три карты единственного World `CGoodsFactory`; loader, lookup и wire
+ /// работают с одним опубликованным состоянием.
     fn goods_registries(
         &mut self,
     ) -> (
@@ -5498,46 +4347,46 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
         &mut GoodsOriginalNameIndex,
         &mut GoodsNameIndex,
     );
-    /// Общие setup owners, читаемые и reload-ом, и initial-config `0x5FA01`.
+ /// Общие setup owners, читаемые и reload-ом, и initial-config `0x5FA01`.
     fn monster_registries(&mut self) -> (&mut MonsterRegistry, &mut MonsterDropRegistry);
     fn log_system(&mut self) -> &mut CLogSystem;
     fn region_setup(&mut self) -> &mut CRegionSetup;
     fn gm_list(&mut self) -> &mut CGMList;
-    /// Единый World snapshot, который reload затем сериализует GameServer-ам.
+ /// Единый World snapshot, который reload затем сериализует GameServer-ам.
     fn globe_setup(&mut self) -> &mut GlobeSetupSnapshot;
-    /// Тот же router-owner, который следует за blob в общем wire.
+ /// Тот же router-owner, который следует за blob в общем wire.
     fn region_router(&mut self) -> &mut RegionRouter;
-    /// Совместное заимствование той же пары для единого Globe wire.
+ /// Совместное заимствование той же пары для единого Globe wire.
     fn globe_setup_and_router(&mut self) -> (&GlobeSetupSnapshot, &RegionRouter);
-    /// Отдельный mutable owner исторических static `CPlayerList` data.
-    ///
-    /// Он остаётся вне `CGame`, поскольку тот же экземпляр участвует в
-    /// create-role и DB-load runtime; это исключает расходящиеся config копии.
+ /// Отдельный mutable owner исторических static `CPlayerList` data.
+ ///
+ /// Он остаётся вне `CGame`, поскольку тот же экземпляр участвует в
+ /// create-role и DB-load runtime; это исключает расходящиеся config копии.
     fn player_list(&mut self) -> &mut CPlayerList;
-    /// Отдельный owner правил уничтожения предметов, разделяемый с initial-config.
+ /// Отдельный owner правил уничтожения предметов, разделяемый с initial-config.
     fn goods_destroy_setup(&mut self) -> &mut GoodsDestroySetup;
-    /// Отдельный owner списков монстров новых навыков для reload и initial-config.
+ /// Отдельный owner списков монстров новых навыков для reload и initial-config.
     fn new_skill_monster_conf(&mut self) -> &mut NewSkillMonsterConf;
-    /// Таблица опыта боевых духов, общая для reload и initial-config wire.
+ /// Таблица опыта боевых духов, общая для reload и initial-config wire.
     fn battle_fairy_exp_config(&mut self) -> &mut CBattleFairyExpConfig;
-    /// Конфигурация объединения боевых духов, общая для reload и `0x2D` wire.
+ /// Конфигурация объединения боевых духов, общая для reload и `0x2D` wire.
     fn battle_fairy_property(&mut self) -> &mut CBattleFairyProperty;
-    /// Статические map/vector синтеза, shared с игровыми запросами и reload wire.
+ /// Статические map/vector синтеза, shared с игровыми запросами и reload wire.
     fn synthesis(&mut self) -> &mut CSynthesis;
-    /// Два scalar-а honor-eliminate, общие для runtime и initial-config wire.
+ /// Два scalar-а honor-eliminate, общие для runtime и initial-config wire.
     fn honor_eliminate_config(&mut self) -> &mut HonorElimilateConfig;
-    /// Derived owner обычных духов с отдельным XML источником и base wire.
+ /// Derived owner обычных духов с отдельным XML источником и base wire.
     fn fairy_exp_conf(&mut self) -> &mut CFairyExpConf;
-    /// Конфигурация большого отверстия, общая для initial-config и reload wire.
+ /// Конфигурация большого отверстия, общая для initial-config и reload wire.
     fn da_kong_xiang_qian(&mut self) -> &mut CDaKongXiangQian;
-    /// Ограничения товаров смены тела, общие для initial-config и reload wire.
+ /// Ограничения товаров смены тела, общие для initial-config и reload wire.
     fn change_body_conf(&mut self) -> &mut CChangeBodyConf;
-    /// Raw XML state и отдельный serializer state PreciousBox.
+ /// оригинал XML state и отдельный serializer state PreciousBox.
     fn precious_box_conf(&mut self) -> &mut PreciousBoxConf;
-    /// Token-stream LingBao, идущий следом за CiQing в combined payload `0x35`.
+ /// Token-stream LingBao, идущий следом за CiQing в combined payload `0x35`.
     fn ling_bao_setup(&mut self) -> &mut CLingBaoSetup;
-    /// Публикует immutable snapshot фоновой DB-load очереди после изменения
-    /// любого входящего setup-owner-а.
+ /// Публикует immutable snapshot фоновой DB-load очереди после изменения
+ /// любого входящего setup-owner-а.
     fn publish_player_load_snapshot(
         &mut self,
         thing_setup: &CThingSetup,
@@ -5546,24 +4395,24 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
         use_log_system: bool,
         write_log_queue: WorldWriteLogQueue,
     );
-    /// Concrete lookup уже загруженного World `CGoodsFactory`.
+ /// Concrete lookup уже загруженного World `CGoodsFactory`.
     fn query_goods_id_by_original_name(&mut self, original_name: &[u8]) -> u32;
-    /// Concrete display-name lookup того же `CGoodsFactory`.
+ /// Concrete display-name lookup того же `CGoodsFactory`.
     fn query_goods_name(&mut self, goods_id: u32) -> Option<Vec<u8>>;
-    /// Пять source-слотов `CGlobeSetup::szCountryName` для snapshot FourNation.
+ /// Пять source-слотов `CGlobeSetup::szCountryName` для snapshot FourNation.
     fn four_nation_country_names(&mut self) -> [Vec<u8>; 5];
     fn add_log_text(&mut self, payload: &[u8]);
     fn notify_reload_operator(&mut self, title: &[u8], message: &[u8]);
 
-    /// Возвращает script paths в порядке конкретного resource-owner-а.
-    ///
-    /// Пока package-resource ещё не материализован, default является безопасной
-    /// host-filesystem заменой Win32 `FindScriptFile`. Будущий resource owner
-    /// может переопределить метод, не меняя script-loading контракт `CGame`.
+ /// Возвращает script paths в порядке конкретного resource-owner-а.
+ ///
+ /// Пока package-resource ещё не материализован, default является безопасной
+ /// host-filesystem заменой Win32 `FindScriptFile`. связанный resource owner
+ /// может переопределить метод, не меняя script-loading контракт `CGame`.
     fn script_files(&mut self, pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>> {
         find_script_files(pattern, extension)
     }
-    /// Сохраняет два process-global счётчика после прямого region-owner load.
+ /// Сохраняет два process-global счётчика после прямого region-owner load.
     fn add_region_object_counts(&mut self, monsters: i32, npcs: i32) -> (i32, i32);
     fn region_object_counts(&mut self) -> (i32, i32);
 }
@@ -5631,8 +4480,8 @@ pub(crate) fn find_script_files(pattern: &[u8], extension: &[u8]) -> Vec<Vec<u8>
             Some(path)
         })
         .collect::<Vec<_>>();
-    // Win32 не обещал directory order. Стабильная сортировка устраняет только
-    // внутреннюю зависимость от host FS; wire всё равно публикуется из BTreeMap.
+ // Win32 не обещал directory order. Стабильная сортировка устраняет только
+ // внутреннюю зависимость от host FS; wire всё равно публикуется из BTreeMap.
     files.sort_unstable();
     files
 }
@@ -5805,7 +4654,7 @@ impl WorldReloadProfile {
 }
 
 impl WorldReloadProfileFlags {
-    /// Создаёт точное начальное low/high состояние без объединения в один RMW.
+ /// Создаёт точное начальное low/high состояние без объединения в один RMW.
     pub(crate) const fn new(low: u32, high: u32) -> Self {
         Self {
             low: AtomicU32::new(low),
@@ -5813,7 +4662,7 @@ impl WorldReloadProfileFlags {
         }
     }
 
-    /// Снимает диагностический low/high snapshot двумя отдельными чтениями.
+ /// Снимает диагностический low/high snapshot двумя отдельными чтениями.
     pub(crate) fn snapshot(&self) -> WorldReloadProfileFlagsSnapshot {
         WorldReloadProfileFlagsSnapshot {
             low: self.low.load(Ordering::Relaxed),
@@ -5821,14 +4670,14 @@ impl WorldReloadProfileFlags {
         }
     }
 
-    /// Повторяет producer-последовательность `load low -> OR -> store low`.
+ /// Повторяет producer-последовательность `load low -> OR -> store low`.
     pub(crate) fn set_low_bits(&self, mask: u32) -> u32 {
         let updated = self.low.load(Ordering::Relaxed) | mask;
         self.low.store(updated, Ordering::Relaxed);
         updated
     }
 
-    /// Повторяет producer-последовательность `load high -> OR -> store high`.
+ /// Повторяет producer-последовательность `load high -> OR -> store high`.
     pub(crate) fn set_high_bits(&self, mask: u32) -> u32 {
         let updated = self.high.load(Ordering::Relaxed) | mask;
         self.high.store(updated, Ordering::Relaxed);
@@ -6073,12 +4922,12 @@ pub(crate) struct WorldPlayerRanksRequestState {
 }
 
 impl WorldPlayerRanksRequestState {
-    /// Устанавливает запрос, не меняя уже установленное состояние.
+ /// Устанавливает запрос, не меняя уже установленное состояние.
     pub(crate) fn request(&self) {
         self.requested.store(true, Ordering::Relaxed);
     }
 
-    /// Возвращает текущее значение request-флага.
+ /// Возвращает текущее значение request-флага.
     pub(crate) fn is_requested(&self) -> bool {
         self.requested.load(Ordering::Relaxed)
     }
@@ -6102,7 +4951,7 @@ pub(crate) enum WorldPlayerRanksMaintenanceDisposition {
     },
 }
 
-/// Полный exact `CPlayerRanks::StatPlayerRanks` без последующей публикации.
+/// Полный `CPlayerRanks::StatPlayerRanks` без последующей публикации.
 #[derive(Debug)]
 pub(crate) struct PlayerRanksStatRunReport {
     pub(crate) started_at_ms: u32,
@@ -6151,7 +5000,7 @@ pub(crate) struct WorldHonorRanksMaintenanceBlock {
     pub(crate) source: HonorRanksNewDayBlock,
 }
 
-/// Итог безусловно достигнутого AuctionBang day gate.
+/// Итог безусловно действующего AuctionBang day gate.
 #[derive(Debug)]
 pub(crate) enum WorldAuctionBangMaintenanceDisposition {
     AlreadyCurrent {
@@ -6438,20 +5287,20 @@ fn current_country_save_limits(
     })
 }
 
-/// Ошибка одной достигнутой попытки World-to-Login reconnect.
+/// Ошибка одной действующей попытки World-to-Login reconnect.
 #[derive(Debug)]
 pub(crate) enum WorldLoginReconnectError {
-    /// Setup-чтение не назначило поле, которое исходник затем читал.
+ /// Setup-чтение не назначило поле, которое исходник затем читал.
     MissingSetupField(&'static str),
-    /// ANSI hostname нельзя без доказательства преобразовать в Linux resolver.
+ /// ANSI hostname нельзя без доказательства преобразовать в Linux resolver.
     LoginAddressEncodingUnsupported,
-    /// `inet_addr/gethostbyname` не дали пригодный IPv4 endpoint.
+ /// `inet_addr/gethostbyname` не дали пригодный IPv4 endpoint.
     LoginAddressResolution,
-    /// Не создан и не bind-нут новый IPv4 socket.
+ /// Не создан и не bind-нут новый IPv4 socket.
     Bind(io::Error),
-    /// Общий десятисекундный connect завершился неуспешно.
+ /// Общий десятисекундный connect завершился неуспешно.
     Connect(ClientConnectError),
-    /// Успешный client невозможно передать через отсутствующий server-owner.
+ /// Успешный client невозможно передать через отсутствующий server-owner.
     MissingNetworkServerOwner,
 }
 
@@ -6568,7 +5417,7 @@ pub(crate) struct WorldSetup {
 }
 
 impl Default for WorldSetup {
-    /// Воспроизводит только точный `tagSetup::tagSetup`, до записей `CGame`.
+ /// Воспроизводит только точный `tagSetup::tagSetup`, до записей `CGame`.
     fn default() -> Self {
         Self {
             world_number: None,
@@ -6634,7 +5483,7 @@ impl WorldSetup {
         &self,
     ) -> Result<WorldNetworkConfig, WorldNetworkInitializationError> {
         Ok(WorldNetworkConfig {
-            // Порядок чтения повторяет локальные значения RVA 0x00001860.
+ // Порядок чтения повторяет локальные значения.
             ban_ip_time_ms: self.ban_ip_time_ms.ok_or(
                 WorldNetworkInitializationError::MissingSetupField("dwBanIPTime"),
             )?,
@@ -6673,9 +5522,9 @@ impl WorldSetup {
                     return tokens.outcome();
                 };
                 let Some(value) = $parser(raw) else {
-                    // Для лексически неверного числового или логического token
-                    // не доказана мутация destination старым MSVC iostream.
-                    // Найденный setup содержит только корректные такие значения.
+ // Для лексически неверного числового или логического token
+ // не доказана мутация destination старым MSVC iostream.
+ // Найденный setup содержит только корректные такие значения.
                     return tokens.outcome();
                 };
                 self.$field = value;
@@ -6762,8 +5611,8 @@ impl WorldSetup {
                     return tokens.outcome();
                 };
                 let Some(value) = $parser(raw) else {
-                    // Некорректный числовой или логический token не встречается
-                    // в найденном oracle; MSVC destination не угадываем.
+ // Некорректный числовой или логический token не встречается
+ // в найденном oracle; MSVC destination не угадываем.
                     return tokens.outcome();
                 };
                 self.$field = value;
@@ -6819,7 +5668,7 @@ impl WorldSetup {
         read_number!(release_login_player_time_ms, u32);
         read_bool!(use_log_system);
 
-        // Точный старый DAT-порядок RVA 0x0000F890: provider не назначается.
+ // Точный старый DAT-порядок: provider не назначается.
         read_bytes!(log_system_server);
         read_bytes!(log_system_database);
         read_bytes!(log_system_user);
@@ -6924,8 +5773,8 @@ impl<'a> WorldServerSetupTokens<'a> {
         let mut iterator = remaining.iter().copied();
         let found = read_to(&mut iterator, expected);
         let consumed = remaining.len() - iterator.len();
-        // Общий ReadTo возвращал false на успешно прочитанном `<end>`, не
-        // переводя сам formatted stream в fail-state.
+ // Общий ReadTo возвращал false на успешно прочитанном `<end>`, не
+ // переводя сам formatted stream в fail-state.
         let stopped_at_end =
             !found && consumed != 0 && self.tokens[self.next + consumed - 1] == b"<end>";
         self.next += consumed;
@@ -7062,7 +5911,7 @@ impl WorldRegionOwner {
         }
     }
 
-    /// Выполняет virtual `CRegion::Save` для любого производного World owner-а.
+ /// Выполняет virtual `CRegion::Save` для любого производного World owner-а.
     pub(crate) fn save_to_resource_directory(
         &mut self,
         runtime_directory: &Path,
@@ -7072,8 +5921,8 @@ impl WorldRegionOwner {
             .save_to_resource_directory(runtime_directory)
     }
 
-    /// Выполняет exact virtual AI всех поставочных World region owner-ов.
-    /// Их slot `+0x40` указывает на общий однокомандный `ret` `0x00401000`.
+ /// Выполняет virtual AI всех поставочных World region owner-ов.
+ /// Их slot `+0x40` указывает на общий однокомандный `ret`.
     pub(crate) const fn ai(&mut self) {}
 
     fn add_full_initial_snapshot(
@@ -7233,15 +6082,15 @@ enum WorldRegionMaterialization {
     MissingSubtype,
 }
 
-/// Достигнутая часть исходного 12-байтового `CGame::tagRegion`.
+/// Действующая часть исходного 12-байтового `CGame::tagRegion`.
 pub(crate) struct WorldRegionAssignment {
     region: Option<WorldRegionOwner>,
     game_server_index: u32,
-    /// PDB `REGION_TYPE +0x8`; до reached loader-а значение неизвестно.
+ /// PDB `REGION_TYPE +0x8`; до reached loader-а значение неизвестно.
     region_type: Option<i32>,
 }
 
-/// Достигнутая AI-проекция исходного `CGame::tagSysBroadcast`.
+/// Действующая AI-проекция исходного `CGame::tagSysBroadcast`.
 ///
 /// Поля идут по смыслу struct-layout `+0x04..+0x40`; `_login_type` AI не читает,
 /// а Rust-layout не выдаётся за старый 68-байтовый Windows ABI.
@@ -7278,7 +6127,7 @@ pub(crate) struct WorldGoodsLink {
     payload: WorldGoodsLinkPayload,
 }
 
-/// Результат exact `CGame::GetOptMoneyJin` для одной аукционной цены.
+/// Результат `CGame::GetOptMoneyJin` для одной аукционной цены.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldAuctionSellerMoney {
     pub(crate) fee: i32,
@@ -7413,7 +6262,7 @@ pub(crate) enum WorldSystemBroadcastDisposition {
     },
 }
 
-/// Наблюдаемый результат полного `CGame::AI` RVA `0x000148A0`.
+/// Наблюдаемый результат полного `CGame::AI`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGameAiReport {
     pub(crate) region_ids_run: Vec<i32>,
@@ -7492,9 +6341,9 @@ pub(crate) enum WorldRegionParamDecodeOutcome {
     Decoded(Result<bool, WorldRegionParamDecodeError>),
 }
 
-/// Минимальная достигнутая часть исходного `CGame::tagGameServer`.
+/// Минимальная действующая часть исходного `CGame::tagGameServer`.
 ///
-/// Его raw-деструктор освобождал только `strIP`; `ip: Vec<u8>` освобождается
+/// Его оригинал-деструктор освобождал только `strIP`; `ip: Vec<u8>` освобождается
 /// структурным Drop без отдельной инфраструктуры строки MSVC.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldGameServerEntry {
@@ -7566,21 +6415,21 @@ pub(crate) struct WorldGlobeVariablesDelivery {
 /// или внешний wire-контракт.
 #[derive(Debug)]
 pub(crate) enum WorldErrorLogDelivery {
-    /// Nullable `char*` был нулевым: сообщение даже не создаётся.
+ /// Nullable `char*` был нулевым: сообщение даже не создаётся.
     SkippedNullText,
-    /// Пакет `0x1FE08` целиком поставлен текущему LoginServer без priority.
+ /// Пакет `0x1FE08` целиком поставлен текущему LoginServer без priority.
     Sent {
         message_type: i8,
         server_ip: i32,
         world_id: i32,
-        /// Видимая до первого NUL часть исходной C-строки.
+ /// Видимая до первого NUL часть исходной C-строки.
         text: Vec<u8>,
         wire: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
     },
 }
 
-/// Строит и ставит exact `SendErrLog` packet указанному Login transport.
+/// Строит и ставит `SendErrLog` packet указанному Login transport.
 ///
 /// Выделен из `CGame` только для save-owner-а, который эксклюзивно держит
 /// `m_DBData`, но заимствует независимый Login FIFO до async DB traversal.
@@ -7615,7 +6464,7 @@ fn send_err_log_to_login(
     }
 }
 
-/// Точная достигнутая семантика полей исходного `CGame::tagLoginPlayer`.
+/// Точная действующая семантика полей исходного `CGame::tagLoginPlayer`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WorldLoginPlayerEntry {
     player_id: u32,
@@ -7638,7 +6487,7 @@ pub(crate) struct WorldLoginPlayerRouteSnapshot {
     pub(crate) region_id: i32,
 }
 
-/// Первый online-list account, для которого достигнут назначенный GameServer.
+/// Первый online-list account, для которого действует назначенный GameServer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldOnlineAccountPlayerRoute {
     pub(crate) team_id: i32,
@@ -7679,14 +6528,14 @@ pub(crate) struct WorldGenerateDbDataReport {
     pub(crate) organizing: OrganizingSaveDataReport,
 }
 
-/// Материализованная достигнутая часть исходного `CGame::tagDBData`.
+/// Материализованная действующая часть исходного `CGame::tagDBData`.
 ///
 /// Scalar ID получают safe нулевой baseline до обязательного constructor-load
-/// `CRsSetup`; Rust-layout не является копией 32-битного MSVC ABI. Exact
+/// `CRsSetup`; Rust-layout не является копией 32-битного MSVC ABI.
 /// `DoSaveData` не имеет
 /// Village/City War snapshot-полей или save-фаз, поэтому они здесь не
 /// резервируются по одному лишь имени пустых DB-адаптеров. Constructor
-/// `tagDBData` создавал пустыми все достигнутые владельцы списков и
+/// `tagDBData` создавал пустыми все действующие владельцы списков и
 /// отображений; `VecDeque` и `BTreeMap` сохраняют их порядок без служебного
 /// sentinel/allocator хранилища MSVC.
 struct WorldDbData {
@@ -7766,7 +6615,7 @@ pub(crate) struct WorldSaveThreadJob {
 }
 
 impl WorldDbDataSaveSession<'_> {
-    /// Возвращает два scalar ID одного frozen snapshot.
+ /// Возвращает два scalar ID одного frozen snapshot.
     pub(crate) const fn setup_ids(&self) -> (u32, i32) {
         (self.data.player_id, self.data.leave_word_id)
     }
@@ -7779,7 +6628,7 @@ impl WorldDbDataSaveSession<'_> {
         self.data.creation_players.get(index).map(Box::as_ref)
     }
 
-    /// Уничтожает successful creation-owner и удаляет только его list-node.
+ /// Уничтожает successful creation-owner и удаляет только его list-node.
     pub(crate) fn remove_creation_player(&mut self, index: usize) {
         drop(self.data.creation_players.remove(index));
     }
@@ -7792,7 +6641,7 @@ impl WorldDbDataSaveSession<'_> {
         self.data.restore_players.get(index).copied()
     }
 
-    /// Удаляет только successful restore ID-node.
+ /// Удаляет только successful restore ID-node.
     pub(crate) fn remove_restore_player(&mut self, index: usize) {
         let _ = self.data.restore_players.remove(index);
     }
@@ -7805,7 +6654,7 @@ impl WorldDbDataSaveSession<'_> {
         self.data.deletion_players.get(index).copied()
     }
 
-    /// Удаляет только successful deletion-record node.
+ /// Удаляет только successful deletion-record node.
     pub(crate) fn remove_deletion_player(&mut self, index: usize) {
         let _ = self.data.deletion_players.remove(index);
     }
@@ -7814,7 +6663,7 @@ impl WorldDbDataSaveSession<'_> {
         &self.data.players
     }
 
-    /// Уничтожает successful player-owner и стирает его единственный map-entry.
+ /// Уничтожает successful player-owner и стирает его единственный map-entry.
     pub(crate) fn remove_player(&mut self, player_id: u32) {
         drop(self.data.players.remove(&player_id));
     }
@@ -7843,7 +6692,7 @@ impl WorldDbDataSaveSession<'_> {
         self.data.save_factions.front_mut().map(Box::as_mut)
     }
 
-    /// Удаляет текущий faction node и уничтожает его non-null save-копию.
+ /// Удаляет текущий faction node и уничтожает его non-null save-копию.
     pub(crate) fn remove_first_saved_faction(&mut self) {
         if let Some(faction) = self.data.save_factions.pop_front() {
             self.data
@@ -7870,7 +6719,7 @@ impl WorldDbDataSaveSession<'_> {
         self.data.save_unions.front().map(Box::as_ref)
     }
 
-    /// Удаляет текущий union node и уничтожает его non-null save-копию.
+ /// Удаляет текущий union node и уничтожает его non-null save-копию.
     pub(crate) fn remove_first_saved_union(&mut self) {
         drop(self.data.save_unions.pop_front());
     }
@@ -7887,7 +6736,7 @@ impl WorldDbDataSaveSession<'_> {
         self.data.regions.get(index).copied()
     }
 
-    /// Уничтожает non-null region value, сохраняя его list-node до общего clear.
+ /// Уничтожает non-null region value, сохраняя его list-node до общего clear.
     pub(crate) fn destroy_saved_region(&mut self, index: usize) {
         if let Some(region) = self.data.regions.get_mut(index) {
             *region = None;
@@ -7902,7 +6751,7 @@ impl WorldDbDataSaveSession<'_> {
         self.data.enemy_factions.make_contiguous()
     }
 
-    /// Уничтожает enemy values в list-order и очищает pointer-list.
+ /// Уничтожает enemy values в list-order и очищает pointer-list.
     pub(crate) fn clear_saved_enemy_factions(&mut self) {
         for enemy_faction in &mut self.data.enemy_factions {
             *enemy_faction = None;
@@ -7918,7 +6767,7 @@ impl WorldDbDataSaveSession<'_> {
         self.data.countries.front().map(Option::as_ref)
     }
 
-    /// Удаляет текущий country node и его non-null save-копию перед next.
+ /// Удаляет текущий country node и его non-null save-копию перед next.
     pub(crate) fn remove_first_saved_country(&mut self) {
         drop(self.data.countries.pop_front());
     }
@@ -7931,7 +6780,7 @@ impl WorldDbDataSaveSession<'_> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WorldPlayerNameLookupError {}
 
-/// Exact terminal CPlayer::ChangeName branch до однобайтового ответа GS.
+/// terminal CPlayer::ChangeName branch до однобайтового ответа GS.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WorldPlayerNameChangeDisposition {
     PlayerMissing,
@@ -8107,10 +6956,10 @@ impl PlayerFactionInfoContext for WorldPlayerFactionInfoContext<'_> {
     }
 }
 
-/// Достигнутая setup-часть исходного `CGame`; другие поля добавляются owners.
+/// Действующая setup-часть исходного `CGame`; другие поля добавляются owners.
 pub(crate) struct CGame {
     setup: WorldSetup,
-    /// Process-global `CThingSetup` привязан к единственному World `CGame`.
+ /// Process-global `CThingSetup` привязан к единственному World `CGame`.
     thing_setup: CThingSetup,
     emotion: CEmotion,
     globe_variables: WorldGlobeVariables,
@@ -8168,7 +7017,7 @@ pub(crate) struct CGame {
 }
 
 impl CGame {
-    /// Возвращает exact faction-owner через явную замену organizing singleton-а.
+ /// Возвращает faction-owner через явную замену organizing singleton-а.
     pub(crate) fn get_faction_by_id(
         organizing: &COrganizingCtrl,
         faction_id: i32,
@@ -8180,12 +7029,12 @@ impl CGame {
         }
     }
 
-    /// Делегирует exact World overload достигнутому owned `CWordsFilter`.
+ /// Делегирует World overload действующему owned `CWordsFilter`.
     pub(crate) fn check_invalid_string(&self, value: &mut Vec<u8>, replace: bool) -> bool {
         self.words_filter.check(value, replace)
     }
 
-    /// Делегирует create-role overload с отдельным all-numbers gate.
+ /// Делегирует create-role overload с отдельным all-numbers gate.
     pub(crate) fn check_create_role_name(
         &self,
         value: &mut Vec<u8>,
@@ -8236,7 +7085,7 @@ impl CGame {
         &self.contribute_setup
     }
 
-    /// Владелец QuestSystem WorldServer-а после фазы инициализации.
+ /// Владелец QuestSystem WorldServer-а после фазы инициализации.
     pub(crate) fn quest_system(&self) -> &CQuestSystem {
         &self.quest_system
     }
@@ -8247,7 +7096,7 @@ impl CGame {
             .expect("CDupliRegionSetup доступен только после успешного CGame::Init")
     }
 
-    /// Создаёт `tagSetup`, затем применяет четыре точные записи `CGame::CGame`.
+ /// Создаёт `tagSetup`, затем применяет четыре точные записи `CGame::CGame`.
     pub(crate) fn new() -> Self {
         Self {
             setup: WorldSetup::for_game(),
@@ -8310,12 +7159,12 @@ impl CGame {
         }
     }
 
-    /// Выполняет полный observable путь `CGame::LoadServerResource`.
-    ///
-    /// Стандартный `current_dir` заменяет `GetCurrentDirectoryA` без его
-    /// внутреннего 260-byte лимита. Если ОС не даёт cwd, пустой `PathBuf`
-    /// сохраняет безопасную попытку relative resource owner-а. Независимо от
-    /// результата `LoadEx` exact код пишет success-log и возвращает `true`.
+ /// Выполняет полный observable путь `CGame::LoadServerResource`.
+ ///
+ /// Стандартный `current_dir` заменяет `GetCurrentDirectoryA` без его
+ /// внутреннего 260-byte лимита. Если ОС не даёт cwd, пустой `PathBuf`
+ /// сохраняет безопасную попытку relative resource owner-а. Независимо от
+ /// результата `LoadEx` код пишет success-log и возвращает `true`.
     pub(crate) fn load_server_resource<Log>(
         &mut self,
         default_resource: &mut DefaultClientResourceOwner,
@@ -8330,10 +7179,10 @@ impl CGame {
         report
     }
 
-    /// Связывает resource replacement с тем же owner-ом, из которого
-    /// `WorldRegionResourceContext::read_resource` обслуживает дальнейшие
-    /// загрузки. Отдельная публикация log после освобождения mutable borrow
-    /// меняет только Rust-заимствование, но не исходный порядок side effects.
+ /// Связывает resource replacement с тем же owner-ом, из которого
+ /// `WorldRegionResourceContext::read_resource` обслуживает дальнейшие
+ /// загрузки. Отдельная публикация log после освобождения mutable borrow
+ /// меняет только Rust-заимствование, но не исходный порядок side effects.
     fn load_server_resource_from_context<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -8346,13 +7195,13 @@ impl CGame {
         report
     }
 
-    /// Exact `ClearStringTable`: очищает map и прежний coded buffer.
+ /// `ClearStringTable`: очищает map и прежний coded buffer.
     pub(crate) fn clear_string_table(&mut self) {
         self.string_table.table_mut().free();
         self.string_table_array.clear();
     }
 
-    /// Выполняет file-overload через уже выбранный caller-ом resource backend.
+ /// Выполняет file-overload через уже выбранный caller-ом resource backend.
     pub(crate) fn load_string_table_resource(
         &mut self,
         package: &[u8],
@@ -8389,7 +7238,7 @@ impl CGame {
         }
     }
 
-    /// Дописывает current ordered table в coded buffer, как исходный owner.
+ /// Дописывает current ordered table в coded buffer, как исходный owner.
     pub(crate) fn code_string_table(
         &mut self,
     ) -> Result<(), WorldStringTableEncodingBlock> {
@@ -8402,7 +7251,7 @@ impl CGame {
         &self.string_table_array
     }
 
-    /// CGame-обёртка превращает nullable miss базового owner-а в пустую строку.
+ /// CGame-обёртка превращает nullable miss базового owner-а в пустую строку.
     pub(crate) fn get_string_by_id(&self, string_id: &[u8]) -> &[u8] {
         self.string_table
             .table()
@@ -8410,8 +7259,8 @@ impl CGame {
             .unwrap_or_default()
     }
 
-    /// Форматирует строку того же live `StringTable`, не создавая внешний
-    /// callback, способный разойтись с reload-состоянием `CGame`.
+ /// Форматирует строку того же live `StringTable`, не создавая внешний
+ /// callback, способный разойтись с reload-состоянием `CGame`.
     pub(crate) fn format_world_string(
         &self,
         string_id: &[u8],
@@ -8420,9 +7269,9 @@ impl CGame {
         format_union_world_string(self.get_string_by_id(string_id), arguments)
     }
 
-    /// Выполняет `CQuestSystem::Initialize` в его точной позиции World init.
-    /// `Initialize` всегда возвращал true после void `Load`, поэтому report не
-    /// превращается в init-block и сохраняет уже сделанные in-place изменения.
+ /// Выполняет `CQuestSystem::Initialize` в его точной позиции World init.
+ /// `Initialize` всегда возвращал true после void `Load`, поэтому report не
+ /// превращается в init-block и сохраняет уже сделанные in-place изменения.
     fn initialize_quest_system<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -8445,7 +7294,7 @@ impl CGame {
                 context.add_log_text(b"Data/Quest.ini can't found!");
             }
             crate::setup::questsystem::QuestSystemLoadCompletion::QuestExFileMissing => {
-                // EXE разыменовывал null CRFile; не добавляем новый внешний log.
+ // EXE разыменовывал null CRFile; не добавляем новый внешний log.
             }
             crate::setup::questsystem::QuestSystemLoadCompletion::PrimaryFormatStopped => {}
             crate::setup::questsystem::QuestSystemLoadCompletion::Loaded => {
@@ -8456,8 +7305,8 @@ impl CGame {
         report
     }
 
-    /// Exact reload всегда игнорирует переданное имя и перечитывает default и
-    /// настроенный packages. Resource I/O остаётся инфраструктурным callback-ом.
+ /// reload всегда игнорирует переданное имя и перечитывает default и
+ /// настроенный packages. Resource I/O остаётся инфраструктурным callback-ом.
     pub(crate) fn update_string_table<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -8518,12 +7367,12 @@ impl CGame {
         }
     }
 
-    /// Добавляет точную POD-запись в хвост `m_listGoodsLink`.
-    ///
-    /// Constructor уже создал 500 нулевых placeholder-ов, а process-global
-    /// индекс начинается с `1`. Changed-запись сохраняет ID декодированного
-    /// товара и global не двигает. Редкая `list::max_size` ветвь удаляет голову;
-    /// Rust одновременно освобождает её owned товар, исправляя только утечку.
+ /// Добавляет точную POD-запись в хвост `m_listGoodsLink`.
+ ///
+ /// Constructor уже создал 500 нулевых placeholder-ов, а process-global
+ /// индекс начинается с `1`. Changed-запись сохраняет ID декодированного
+ /// товара и global не двигает. Редкая `list::max_size` ветвь удаляет голову;
+ /// Rust одновременно освобождает её owned товар, исправляя только утечку.
     pub(crate) fn add_goods_link(&mut self, mut link: WorldGoodsLink) -> u32 {
         if self.goods_links.len() == LEGACY_GOODS_LINK_MAX_SIZE {
             let _ = self.goods_links.pop_front();
@@ -8536,18 +7385,18 @@ impl CGame {
         index
     }
 
-    /// Ставит структурированную DB-команду в хвост исходного write-log FIFO.
+ /// Ставит структурированную DB-команду в хвост исходного write-log FIFO.
     pub(crate) fn push_write_log_command(&self, command: WorldWriteLogCommand) -> usize {
         self.write_log_queue.push(command)
     }
 
-    /// Передаёт process-callback-ам producer того же FIFO, не открывая им
-    /// mutable доступ к `CGame` во время одного MainLoop-прохода.
+ /// Передаёт process-callback-ам producer того же FIFO, не открывая им
+ /// mutable доступ к `CGame` во время одного MainLoop-прохода.
     pub(crate) fn write_log_queue(&self) -> WorldWriteLogQueue {
         self.write_log_queue.clone()
     }
 
-    /// Ставит единственную созданную `CLargess::LoadLargess` запись в общий FIFO.
+ /// Ставит единственную созданную `CLargess::LoadLargess` запись в общий FIFO.
     pub(crate) fn publish_largess_load_log(
         &self,
         report: &mut LoadLargessReport,
@@ -8573,7 +7422,7 @@ impl CGame {
         );
     }
 
-    /// Выполняет доменную выдачу и сразу публикует её optional log в общий FIFO.
+ /// Выполняет доменную выдачу и сразу публикует её optional log в общий FIFO.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn load_player_largess<Random, Upgrade>(
         &self,
@@ -8606,7 +7455,7 @@ impl CGame {
         })
     }
 
-    /// Копирует четыре credential-поля отдельного Log DB connection-owner-а.
+ /// Копирует четыре credential-поля отдельного Log DB connection-owner-а.
     fn write_log_worker_spec(&self) -> WorldWriteLogWorkerSpec {
         let settings = WorldDatabaseSettings::from_parts(WorldDatabaseSettingsParts {
             host: self.setup.log_system_server.clone(),
@@ -8621,7 +7470,7 @@ impl CGame {
         )
     }
 
-    /// Отделяет две shared FIFO от остального mutable `CGame` для DB worker-а.
+ /// Отделяет две shared FIFO от остального mutable `CGame` для DB worker-а.
     fn player_load_worker_spec(&self) -> WorldPlayerLoadWorkerSpec {
         WorldPlayerLoadWorkerSpec::new(
             self.player_load_queue.clone(),
@@ -8629,17 +7478,17 @@ impl CGame {
         )
     }
 
-    /// Возвращает первое совпадение в list-order, включая constructor-ный
-    /// placeholder для индекса `0`.
+ /// Возвращает первое совпадение в list-order, включая constructor-ный
+ /// placeholder для индекса `0`.
     pub(crate) fn find_goods_link(&self, index: u32) -> Option<&WorldGoodsLink> {
         self.goods_links.iter().find(|link| link.index == index)
     }
 
-    /// Возвращает exact appearance snapshot экипировки игрока.
-    ///
-    /// Rust-ссылка исключает недоказанный null-вызов; EXE без проверок проходит
-    /// slots `0,1,3,4,2,9,10,12,13,14,15`, оставляет нули для пустых slots и
-    /// сужает signed `GAP_WEAPON_LEVEL` до младшего байта.
+ /// Возвращает appearance snapshot экипировки игрока.
+ ///
+ /// Rust-ссылка исключает недоказанный null-вызов; EXE без проверок проходит
+ /// slots `0,1,3,4,2,9,10,12,13,14,15`, оставляет нули для пустых slots и
+ /// сужает signed `GAP_WEAPON_LEVEL` до младшего байта.
     pub(crate) fn get_player_equip_id(
         &self,
         player: &CPlayer,
@@ -8647,14 +7496,14 @@ impl CGame {
         player.equipment_wire_snapshot()
     }
 
-    /// Вычисляет комиссию и остаток продавца по exact World auction-контракту.
-    ///
-    /// `None` заменяет единственную исходную проверку nullable `CGoodsNode*`.
-    /// `dwMoneySeller` сначала читается как signed Windows `long`; затем EXE
-    /// умножает его на `fAuctionFactorC`, отбрасывает дробную часть и поочерёдно
-    /// ограничивает `fSxfJinMin/fSxfJinMax`. Целочисленное разложение factor-а
-    /// сохраняет x87-произведение без лишнего `f32`-округления. Невалидные и
-    /// out-of-range setup-значения определённо насыщаются вместо UB старого cast.
+ /// Вычисляет комиссию и остаток продавца по World auction-контракту.
+ ///
+ /// `None` заменяет единственную исходную проверку nullable `CGoodsNode*`.
+ /// `dwMoneySeller` сначала читается как signed Windows `long`; затем EXE
+ /// умножает его на `fAuctionFactorC`, отбрасывает дробную часть и поочерёдно
+ /// ограничивает `fSxfJinMin/fSxfJinMax`. Целочисленное разложение factor-а
+ /// сохраняет x87-произведение без лишнего `f32`-округления. Невалидные и
+ /// out-of-range setup-значения определённо насыщаются вместо UB старого cast.
     pub(crate) fn get_opt_money_jin(
         globe_setup: &GlobeSetupSnapshot,
         seller_money: Option<u32>,
@@ -8681,34 +7530,34 @@ impl CGame {
         })
     }
 
-    /// Возвращает byte-exact script buffer по case-sensitive normalized key.
+ /// Возвращает byte- script buffer по case-sensitive normalized key.
     pub(crate) fn get_script_file_data(&self, path: &[u8]) -> Option<&[u8]> {
         self.script_file_data
             .get(legacy_c_string_prefix(path))
             .map(Vec::as_slice)
     }
 
-    /// Возвращает загруженный LeiTing setup для initial-config serializer-а.
+ /// Возвращает загруженный LeiTing setup для initial-config serializer-а.
     pub(crate) const fn thing_setup(&self) -> &CThingSetup {
         &self.thing_setup
     }
 
-    /// Интервал общего log-owner-а, уже прочитанный обязательным World setup.
+ /// Интервал общего log-owner-а, уже прочитанный обязательным World setup.
     pub(crate) const fn save_info_time_ms(&self) -> u32 {
         self.setup.save_info_time_ms
     }
 
-    /// Nullable raw owner начального пакета function-list subtype `0x0A`.
+ /// Nullable оригинал owner начального пакета function-list subtype `0x0A`.
     pub(crate) fn function_list_file_data(&self) -> Option<&[u8]> {
         self.function_list_file_data.as_deref()
     }
 
-    /// Nullable raw owner начального пакета variable-list subtype `0x0B`.
+ /// Nullable оригинал owner начального пакета variable-list subtype `0x0B`.
     pub(crate) fn variable_list_file_data(&self) -> Option<&[u8]> {
         self.variable_list_file_data.as_deref()
     }
 
-    /// Ordered C-string view initial-config `m_mapScript_FileData`.
+ /// Ordered C-string view initial-config `m_mapScript_FileData`.
     pub(crate) fn initial_script_files(&self) -> impl Iterator<Item = (&[u8], &[u8])> + '_ {
         self.script_file_data.iter().map(|(path, data)| {
             (
@@ -8718,7 +7567,7 @@ impl CGame {
         })
     }
 
-    /// Загружает один script и заменяет прежний owner с тем же normalized key.
+ /// Загружает один script и заменяет прежний owner с тем же normalized key.
     pub(crate) fn load_one_script<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -8745,7 +7594,7 @@ impl CGame {
         true
     }
 
-    /// Очищает три прежних script-owner-а и повторяет exact load order.
+ /// Очищает три прежних script-owner-а и повторяет load order.
     pub(crate) fn load_script_file_data<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -8770,7 +7619,7 @@ impl CGame {
         };
         self.variable_list_file_data = Some(variable_data);
 
-        // Исходный RVA 0x00014450 использует literal, а не `script_directory`.
+ // Исходный использует literal, а не `script_directory`.
         for path in context.script_files(b"scripts/*.*", b".script") {
             let _ = self.load_one_script(context, &path);
         }
@@ -8787,7 +7636,7 @@ impl CGame {
         context.notify_reload_operator(b"Message", &message);
     }
 
-    /// Перезагружает один script, затем публикует exact `0x7F801/0x0D` wire.
+ /// Перезагружает один script, затем публикует `0x7F801/0x0D` wire.
     pub(crate) fn reload_one_script<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -8808,9 +7657,9 @@ impl CGame {
         context.add_log_text(&log);
 
         let Some(data) = self.get_script_file_data(path).map(legacy_c_string_prefix) else {
-            // Исходный владелец RVA `0x00013760` передаёт исходный path в
-            // `GetScriptFileData` после того, как `LoadOneScript` нормализовал
-            // только map-key. При несовпадении оригинал вызывает lstrlen(NULL).
+ // Исходный владелец передаёт исходный path в
+ // `GetScriptFileData` после того, как `LoadOneScript` нормализовал
+ // только map-key. При несовпадении оригинал вызывает lstrlen(NULL).
             return Err(WorldReloadOneScriptBlock {
                 requested_path: path.to_vec(),
                 normalized_map_key: normalize_script_path(path),
@@ -8881,7 +7730,7 @@ impl CGame {
                 Ok(WorldRegionMaterialization::Direct {
                     owner: WorldRegionOwner::Village(region),
                     counts,
-                    // RVA 0x00079F90 игнорирует base-result и возвращает `1`.
+ // игнорирует base-result и возвращает `1`.
                     loaded: true,
                 })
             }
@@ -8921,7 +7770,7 @@ impl CGame {
         }
     }
 
-    /// Загружает positional region-list и публикует только успешно loaded owners.
+ /// Загружает positional region-list и публикует только успешно loaded owners.
     pub(crate) fn load_region_list<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -9011,10 +7860,8 @@ impl CGame {
             context.add_log_text(&log);
             previous_monsters = total_monster_count;
             previous_npcs = total_npc_count;
-            // Доказанный loose fixture SHA-256
-            // A479A3104813832A2C65A0983C55C00537F6942248EA3BEE9FEBE4B69C8B9406
-            // содержит 549 записей и 549 уникальных ID; поэтому Rust Drop
-            // заменённого Box не достигается в baseline и не подменяет утечку.
+ // содержит 549 записей и 549 уникальных ID; поэтому Rust Drop
+ // заменённого Box не достигается в baseline и не подменяет утечку.
             self.regions.insert(
                 region_id,
                 WorldRegionAssignment {
@@ -9029,7 +7876,7 @@ impl CGame {
         Ok(true)
     }
 
-    /// Перечитывает setup одного региона и отправляет его owning GameServer.
+ /// Перечитывает setup одного региона и отправляет его owning GameServer.
     pub(crate) fn reload_one_region_setup<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -9056,7 +7903,7 @@ impl CGame {
         Ok(true)
     }
 
-    /// Перечитывает setup всех живых регионов в signed map-key order.
+ /// Перечитывает setup всех живых регионов в signed map-key order.
     pub(crate) fn reload_all_region_setup<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -9104,7 +7951,7 @@ impl CGame {
         let _ = message.send_all(sender.as_ref());
     }
 
-    /// Выполняет concrete `CountryWarSys::reload` для main-loop профиля.
+ /// Выполняет concrete `CountryWarSys::reload` для main-loop профиля.
     fn reload_country_war<Context, TimerCallback>(
         &mut self,
         context: &mut Context,
@@ -9142,7 +7989,7 @@ impl CGame {
         Ok(i32::from(succeeded))
     }
 
-    /// Выполняет concrete `CFourNationWarSys::ReLoad` для main-loop профиля.
+ /// Выполняет concrete `CFourNationWarSys::ReLoad` для main-loop профиля.
     fn reload_four_nation_war<Context, TimerCallback>(
         &mut self,
         context: &mut Context,
@@ -9192,10 +8039,10 @@ impl CGame {
         Ok(legacy_result)
     }
 
-    /// Выполняет concrete `TimeToReturn::reload` для main-loop профиля.
-    ///
-    /// Его bool в старом dispatcher-е не записывался в общий return-slot:
-    /// результат определяет только exact success/failure log.
+ /// Выполняет concrete `TimeToReturn::reload` для main-loop профиля.
+ ///
+ /// Его bool в старом dispatcher-е не записывался в общий return-slot:
+ /// результат определяет только success/failure log.
     fn reload_time_to_return<Context, TimerCallback>(
         &mut self,
         context: &mut Context,
@@ -9220,13 +8067,13 @@ impl CGame {
             }
             Err(source) => return Err(WorldReloadBlock::TimeToReturnLoad(source)),
         }
-        // VERIFIED_DISASSEMBLY 0x00473CC1 и caller 0x004173C7..0x004173D0:
-        // missing-файл тоже даёт bool `1`, который становится ReLoad result.
+ // и caller:
+ // missing-файл тоже даёт bool `1`, который становится ReLoad result.
         context.add_log_text(b"Load TimeToReturn...OK!");
         Ok(1)
     }
 
-    /// Выполняет concrete `CVillageWarSys::ReLoad` для main-loop профиля.
+ /// Выполняет concrete `CVillageWarSys::ReLoad` для main-loop профиля.
     fn reload_village_war<Context, TimerCallback>(
         &mut self,
         context: &mut Context,
@@ -9258,10 +8105,10 @@ impl CGame {
         Ok(legacy_result)
     }
 
-    /// Выполняет concrete `CAttackCitySys::Reload` для main-loop профиля.
-    ///
-    /// Ложный результат `Initialize` остаётся обычным legacy `0`: прежние
-    /// таймеры и активные войны уже обработаны Reload и не откатываются.
+ /// Выполняет concrete `CAttackCitySys::Reload` для main-loop профиля.
+ ///
+ /// Ложный результат `Initialize` остаётся обычным legacy `0`: прежние
+ /// таймеры и активные войны уже обработаны Reload и не откатываются.
     #[allow(
         clippy::too_many_arguments,
         reason = "Reload объединяет доказанные singleton-owner-ы city-war lifecycle"
@@ -9306,8 +8153,8 @@ impl CGame {
             update_player,
         ) {
             Ok(_) => {}
-            // `CAttackCitySys::Reload` буквально возвращает Initialize bool.
-            // Ошибка parse/open представляет его ложный результат, не block.
+ // `CAttackCitySys::Reload` буквально возвращает Initialize bool.
+ // Ошибка parse/open представляет его ложный результат, не block.
             Err(AttackCityReloadBlock::Load(_)) => return Ok(0),
             Err(block) => return Err(WorldReloadBlock::AttackCity(block)),
         };
@@ -9319,13 +8166,13 @@ impl CGame {
         Ok(legacy_result)
     }
 
-    /// Выполняет отдельный профиль `CityWarPara` из `CGame::ReLoad`.
-    ///
-    /// Exact EXE `0x00416ECC..0x00416F5D` вызывает тот же статический
-    /// `CAttackCitySys::Reload`, но намеренно не проверяет его bool: сразу
-    /// после вызова сериализует live owner в subcode `0x1B`, рассылает
-    /// `0x7F801` и пишет success-log. Это не тот же контракт, что
-    /// `AttackCitySys`, где ложный `Reload` прекращает публикацию.
+ /// Выполняет отдельный профиль `CityWarPara` из `CGame::ReLoad`.
+ ///
+ /// вызывает тот же статический
+ /// `CAttackCitySys::Reload`, но намеренно не проверяет его bool: сразу
+ /// после вызова сериализует live owner в subcode `0x1B`, рассылает
+ /// `0x7F801` и пишет success-log. Это не тот же контракт, что
+ /// `AttackCitySys`, где ложный `Reload` прекращает публикацию.
     #[allow(
         clippy::too_many_arguments,
         reason = "CityWarPara сохраняет тот же concrete lifecycle, но отдельный return/log contract"
@@ -9578,7 +8425,7 @@ impl CGame {
         }
     }
 
-    /// Выполняет полный case-insensitive dispatcher `CGame::ReLoad`.
+ /// Выполняет полный case-insensitive dispatcher `CGame::ReLoad`.
     pub(crate) async fn reload<Context: WorldReloadContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -9606,8 +8453,8 @@ impl CGame {
                 const EXPERIENCE_PATH: &[u8] = b"data/playerExp.ini";
                 const UPGRADES_PATH: &[u8] = b"data/playerPropertiesUpgrade.ini";
 
-                // `LoadPlayerList` открывает второй файл только после успешного
-                // первого. Каждая missing-file ветвь сохраняет exact clear scope.
+ // `LoadPlayerList` открывает второй файл только после успешного
+ // первого. Каждая missing-file ветвь сохраняет clear scope.
                 let player = match context.read_resource(PLAYER_LIST_PATH) {
                     Some(source) => {
                         context
@@ -10377,7 +9224,7 @@ impl CGame {
             WorldReloadProfile::PreciousBox => {
                 const PATH: &[u8] = b"data/preciousboxconf.xml";
                 let source = context.read_resource(PATH);
-                // Убираем Rust-only mutable aliasing, не создавая копию owner state.
+ // Убираем Rust-only mutable aliasing, не создавая копию owner state.
                 let mut owner = std::mem::take(context.precious_box_conf());
                 let load_result = owner.load_from_bytes(source.as_deref(), |original_name| {
                     context.query_goods_id_by_original_name(original_name)
@@ -10548,13 +9395,13 @@ impl CGame {
             }
             WorldReloadProfile::Synthesis => {
                 const PATH: &[u8] = b"data/synthesis.xml";
-                // EXE очищает recipe-vector до rfOpen, но broadcast-map остаётся static.
+ // EXE очищает recipe-vector до rfOpen, но broadcast-map остаётся static.
                 context.synthesis().clear_recipes();
                 let loaded = match context.read_resource(PATH) {
                     Some(source) => {
-                        // На время goods lookup owner извлечён безопасно: lookup идёт в
-                        // тот же `WorldReloadContext`, а после точного loader-а state
-                        // возвращается в его единственный runtime slot.
+ // На время goods lookup owner извлечён безопасно: lookup идёт в
+ // тот же `WorldReloadContext`, а после точного loader-а state
+ // возвращается в его единственный runtime slot.
                         let mut synthesis = std::mem::take(context.synthesis());
                         let result = synthesis.load_from_bytes(
                             &source,
@@ -10679,7 +9526,7 @@ impl CGame {
                         .goods_destroy_setup()
                         .add_to_byte_array(&mut payload)
                         .map_err(WorldReloadBlock::GoodsDestroySerialization)?;
-                    // Dispatcher не переписывал legacy result для GoodsDestroy.
+ // Dispatcher не переписывал legacy result для GoodsDestroy.
                     self.send_reload_payload(0x23, &payload);
                 }
             }
@@ -10815,8 +9662,8 @@ impl CGame {
                     let (title, message) = section.missing_notice();
                     context.notify_reload_operator(title, message);
                 }
-                // VERIFIED_DISASSEMBLY 0x004819EF: LoadFile устанавливает EAX=1
-                // и после missing-file notice тоже приходит в этот epilogue.
+ //: LoadFile устанавливает EAX=1
+ // и после missing-file notice тоже приходит в этот epilogue.
                 legacy_result = 1;
                 context.add_log_text(b"Load Gods-Battle...ok!");
 
@@ -10918,15 +9765,15 @@ impl CGame {
         Ok(())
     }
 
-    /// Открывает frozen DB snapshot только внутри внешне сериализованного save.
+ /// Открывает frozen DB snapshot только внутри внешне сериализованного save.
     pub(crate) fn db_data_save_session(&mut self) -> WorldDbDataSaveSession<'_> {
         WorldDbDataSaveSession {
             data: self.db_data.get_mut(),
         }
     }
 
-    /// Передаёт сформированный DB batch фоновому worker-у и публикует пустой
-    /// accumulator для событий, пришедших уже после save-trigger-а.
+ /// Передаёт сформированный DB batch фоновому worker-у и публикует пустой
+ /// accumulator для событий, пришедших уже после save-trigger-а.
     pub(crate) fn take_save_data_owner(&mut self) -> WorldSaveDataOwner {
         WorldSaveDataOwner {
             data: std::mem::replace(self.db_data.get_mut(), WorldDbData::new()),
@@ -10936,7 +9783,7 @@ impl CGame {
         }
     }
 
-    /// Снимает все process-global входы save-thread в достигнутой launch-точке.
+ /// Снимает все process-global входы save-thread в действующей launch-точке.
     pub(crate) fn take_save_thread_job(
         &mut self,
         variables: &CVariableList,
@@ -10984,35 +9831,35 @@ impl CGame {
         }
     }
 
-    /// Применяет два constructor-load результата `CRsSetup` к live `CGame`.
+ /// Применяет два constructor-load результата `CRsSetup` к live `CGame`.
     pub(crate) const fn apply_loaded_setup_ids(&mut self, loaded: LoadedSetupIds) {
         self.player_id = loaded.player_id;
         self.leave_word_id = loaded.leave_world_id;
     }
 
-    /// Выделяет следующий signed leave-word ID с точным x86 wrapping.
+ /// Выделяет следующий signed leave-word ID с точным x86 wrapping.
     pub(crate) fn allocate_leave_word_id(&mut self) -> i32 {
         self.leave_word_id = self.leave_word_id.wrapping_add(1);
         self.leave_word_id
     }
 
-    /// Выполняет точный `++m_nPlayerID` create-role ветки с x86 wrapping.
+ /// Выполняет точный `++m_nPlayerID` create-role ветки с x86 wrapping.
     pub(crate) fn allocate_player_id(&mut self) -> i32 {
         self.player_id = self.player_id.wrapping_add(1);
         self.player_id as i32
     }
 
-    /// Полностью очищает live restore-list.
+ /// Полностью очищает live restore-list.
     pub(crate) fn clear_restore_player(&mut self) {
         self.restore_players.clear();
     }
 
-    /// Полностью очищает live deletion-list.
+ /// Полностью очищает live deletion-list.
     pub(crate) fn clear_deletion_player(&mut self) {
         self.deletion_players.clear();
     }
 
-    /// Удаляет player-map owners, отсутствующие и в online-, и в login-list.
+ /// Удаляет player-map owners, отсутствующие и в online-, и в login-list.
     pub(crate) fn clear_map_player_for_offline(&mut self) {
         let online_players = &self.online_players;
         let login_players = &self.login_players;
@@ -11024,7 +9871,7 @@ impl CGame {
         });
     }
 
-    /// Удаляет только первое совпадение из live restore-list.
+ /// Удаляет только первое совпадение из live restore-list.
     pub(crate) fn delete_restore_player(&mut self, player_id: u32) {
         if let Some(index) = self
             .restore_players
@@ -11035,12 +9882,12 @@ impl CGame {
         }
     }
 
-    /// Проверяет наличие ID в live restore-list.
+ /// Проверяет наличие ID в live restore-list.
     pub(crate) fn is_restore_player_exist(&self, player_id: u32) -> bool {
         self.restore_players.contains(&player_id)
     }
 
-    /// Возвращает время первого совпавшего deletion-record либо исходный ноль.
+ /// Возвращает время первого совпавшего deletion-record либо исходный ноль.
     pub(crate) fn deletion_player_time(&self, player_id: u32) -> i32 {
         self.deletion_players
             .iter()
@@ -11048,7 +9895,7 @@ impl CGame {
             .map_or(0, |entry| entry.deletion_time)
     }
 
-    /// Удаляет только первое совпадение из live deletion-list.
+ /// Удаляет только первое совпадение из live deletion-list.
     pub(crate) fn delete_deletion_player(&mut self, player_id: u32) {
         if let Some(index) = self
             .deletion_players
@@ -11059,14 +9906,14 @@ impl CGame {
         }
     }
 
-    /// Добавляет уникальный ID в хвост live restore-list.
+ /// Добавляет уникальный ID в хвост live restore-list.
     pub(crate) fn append_restore_player(&mut self, player_id: u32) {
         if !self.restore_players.contains(&player_id) {
             self.restore_players.push_back(player_id);
         }
     }
 
-    /// Добавляет первый deletion-record ID и не меняет его при duplicate.
+ /// Добавляет первый deletion-record ID и не меняет его при duplicate.
     pub(crate) fn append_deletion_player(&mut self, player_id: u32, deletion_time: i32) {
         if self
             .deletion_players
@@ -11081,12 +9928,12 @@ impl CGame {
         });
     }
 
-    /// Создаёт byte-array копию player-map owner-а либо возвращает `None` при miss.
-    ///
-    /// Encoder mutates исходный player в доказанных `SetPlayerOrganizing` и
-    /// `UpdateProperty`; decoder начинает с нулевого cursor и `include_child=true`.
-    /// Его `false` уничтожает новую копию, как virtual deleting destructor старого
-    /// owner-а. Typed codec-error останавливает только недоказанную safe-границу.
+ /// Создаёт byte-array копию player-map owner-а либо возвращает `None` при miss.
+ ///
+ /// Encoder mutates исходный player в доказанных `SetPlayerOrganizing` и
+ /// `UpdateProperty`; decoder начинает с нулевого cursor и `include_child=true`.
+ /// Его `false` уничтожает новую копию, как virtual deleting destructor старого
+ /// owner-а. Typed codec-error останавливает только недоказанную safe-границу.
     pub(crate) fn clone_map_player(
         &mut self,
         player_id: u32,
@@ -11110,10 +9957,10 @@ impl CGame {
         Ok(Some(Box::new(cloned)))
     }
 
-    /// Клонирует map-owner только если ID ещё состоит в creation-list.
-    ///
-    /// Exact caller сначала линейно проходил весь `m_lCreationPlayer`, а при
-    /// первом совпадении без дополнительной мутации вызывал `CloneMapPlayer`.
+ /// Клонирует map-owner только если ID ещё состоит в creation-list.
+ ///
+ /// caller сначала линейно проходил весь `m_lCreationPlayer`, а при
+ /// первом совпадении без дополнительной мутации вызывал `CloneMapPlayer`.
     pub(crate) fn clone_creation_player(
         &mut self,
         player_id: u32,
@@ -11131,16 +9978,16 @@ impl CGame {
         self.clone_map_player(player_id, registry, organizing_ctrl, coefficients)
     }
 
-    /// Уничтожает единственного player-owner-а по exact unsigned map-key.
-    ///
-    /// `Box`/`BTreeMap::remove` заменяют virtual deleting destructor и erase;
-    /// bool сообщает caller-у только наблюдаемый факт наличия, которого старый
-    /// void API наружу не выдавал.
+ /// Уничтожает единственного player-owner-а по unsigned map-key.
+ ///
+ /// `Box`/`BTreeMap::remove` заменяют virtual deleting destructor и erase;
+ /// bool сообщает caller-у только наблюдаемый факт наличия, которого старый
+ /// void API наружу не выдавал.
     pub(crate) fn delete_map_player(&mut self, player_id: u32) -> bool {
         self.players.remove(&player_id).is_some()
     }
 
-    /// Повторяет `CloneSavingPlayer` под save-list lock через тот же clone-codec.
+ /// Повторяет `CloneSavingPlayer` под save-list lock через тот же clone-codec.
     pub(crate) fn clone_saving_player(
         &self,
         player_id: u32,
@@ -11165,10 +10012,10 @@ impl CGame {
         Ok(Some(Box::new(cloned)))
     }
 
-    /// Материализует player-prefix `GenerateDBData` до доменных generators.
-    ///
-    /// Restore-копирование выполняется через эксклюзивный `&mut self` без lock;
-    /// deletion и обе player-очереди используют исходную save-блокировку.
+ /// Материализует player-prefix `GenerateDBData` до доменных generators.
+ ///
+ /// Restore-копирование выполняется через эксклюзивный `&mut self` без lock;
+ /// deletion и обе player-очереди используют исходную save-блокировку.
     pub(crate) fn generate_db_data_player_prefix(
         &mut self,
         registry: &GoodsBasePropertiesRegistry,
@@ -11216,10 +10063,10 @@ impl CGame {
         Ok(())
     }
 
-    /// Материализует полный DB snapshot в исходном порядке владельцев.
-    ///
-    /// Функция ничего не очищает в live player-list после snapshot: это
-    /// отдельные операции caller-а, следующие за `GenerateDBData`.
+ /// Материализует полный DB snapshot в исходном порядке владельцев.
+ ///
+ /// Функция ничего не очищает в live player-list после snapshot: это
+ /// отдельные операции caller-а, следующие за `GenerateDBData`.
     #[allow(
         clippy::too_many_arguments,
         reason = "семь прежних singleton/static зависимостей передаются явно без нового общего owner-а"
@@ -11244,10 +10091,10 @@ impl CGame {
         Ok(WorldGenerateDbDataReport { organizing })
     }
 
-    /// Материализует отдельную `g_bSaveAllOrg` ветвь `CGame::Run`.
-    ///
-    /// Она не вызывает player-prefix и Country generator: исходник выполнял
-    /// только organizing, faction-war, region и HonorRanks перед тем же launch.
+ /// Материализует отдельную `g_bSaveAllOrg` ветвь `CGame::Run`.
+ ///
+ /// Она не вызывает player-prefix и Country generator: исходник выполнял
+ /// только organizing, faction-war, region и HonorRanks перед тем же launch.
     pub(crate) fn materialize_save_all_organizations_snapshot(
         &mut self,
         organizing_ctrl: &mut COrganizingCtrl,
@@ -11281,10 +10128,10 @@ impl CGame {
         })
     }
 
-    /// Выполняет snapshot и live-cleanup save-trigger ветви `CGame::Run`.
-    ///
-    /// Только после snapshot/cleanup закрывает прежний handle-state, передаёт
-    /// job process save-owner-у и сохраняет возвращённое `Open/Empty` состояние.
+ /// Выполняет snapshot и live-cleanup save-trigger ветви `CGame::Run`.
+ ///
+ /// Только после snapshot/cleanup закрывает прежний handle-state, передаёт
+ /// job process save-owner-у и сохраняет возвращённое `Open/Empty` состояние.
     #[allow(
         clippy::too_many_arguments,
         reason = "исходный Run обращался к тем же семи singleton/static зависимостям"
@@ -11335,10 +10182,10 @@ impl CGame {
         })
     }
 
-    /// Исполняет ручную collect-player-data ветвь `CGame::Run`.
-    ///
-    /// Флаг очищается до создания пустого broadcast; исходно игнорировавшийся
-    /// результат `SendAll` сохраняется только как наблюдаемый отчёт.
+ /// Исполняет ручную collect-player-data ветвь `CGame::Run`.
+ ///
+ /// Флаг очищается до создания пустого broadcast; исходно игнорировавшийся
+ /// результат `SendAll` сохраняется только как наблюдаемый отчёт.
     pub(crate) fn materialize_collect_player_data_request(
         &self,
         state: &mut WorldCollectPlayerDataRequestState,
@@ -11358,11 +10205,11 @@ impl CGame {
         })
     }
 
-    /// Выполняет точный pre-gate save-участка `CGame::Run`.
-    ///
-    /// `try_enter` вызывается только после строгого прохождения wrapping-
-    /// интервала. Его `false` соответствует занятому critical section и
-    /// сдвигает прежний save tick на исходные `1000` миллисекунд.
+ /// Выполняет точный pre-gate save-участка `CGame::Run`.
+ ///
+ /// `try_enter` вызывается только после строгого прохождения wrapping-
+ /// интервала. Его `false` соответствует занятому critical section и
+ /// сдвигает прежний save tick на исходные `1000` миллисекунд.
     #[allow(
         clippy::too_many_arguments,
         reason = "Run обращался к тем же process-global и singleton владельцам"
@@ -11472,12 +10319,12 @@ impl CGame {
         }
     }
 
-    /// Выполняет достигнутое save-решение `CGame::Run` после успешного try-lock.
-    ///
-    /// При manual-save и живых GameServer исходник сначала строит локальный
-    /// snapshot/launch, затем повторно считает подключения и рассылает notify.
-    /// Blocked generator сохраняет guard: исходный невозвратившийся путь не
-    /// достигает ни второй проверки, ни `LeaveCriticalSection`.
+ /// Выполняет действующее save-решение `CGame::Run` после успешного try-lock.
+ ///
+ /// При manual-save и живых GameServer исходник сначала строит локальный
+ /// snapshot/launch, затем повторно считает подключения и рассылает notify.
+ /// Blocked generator сохраняет guard: исходный невозвратившийся путь не
+ /// достигает ни второй проверки, ни `LeaveCriticalSection`.
     #[allow(
         clippy::too_many_arguments,
         reason = "Run обращался к тем же process-global и singleton владельцам"
@@ -11616,7 +10463,7 @@ impl CGame {
         })
     }
 
-    /// Материализует region-очередь `CGame::tagDBData` в signed map-order.
+ /// Материализует region-очередь `CGame::tagDBData` в signed map-order.
     pub(crate) fn geterate_region_db_data(&self) {
         for assignment in self.regions.values() {
             let Some(region) = assignment.region.as_ref().map(WorldRegionOwner::base) else {
@@ -11626,7 +10473,7 @@ impl CGame {
         }
     }
 
-    /// Снимает только наблюдаемую SetPlayerOrganizing-проекцию region-map.
+ /// Снимает только наблюдаемую SetPlayerOrganizing-проекцию region-map.
     fn player_organizing_region_types(&self) -> BTreeMap<i32, Option<u16>> {
         self.regions
             .iter()
@@ -11640,10 +10487,10 @@ impl CGame {
             .collect()
     }
 
-    /// Добавляет save-копию в `m_stDBData.liDBCreationPlayer`.
-    ///
-    /// При первом совпадении inherited ID старая копия уничтожается и
-    /// удаляется, после чего новая всегда дописывается в хвост под тем же lock.
+ /// Добавляет save-копию в `m_stDBData.liDBCreationPlayer`.
+ ///
+ /// При первом совпадении inherited ID старая копия уничтожается и
+ /// удаляется, после чего новая всегда дописывается в хвост под тем же lock.
     pub(crate) fn append_db_creation_player(&self, player: Box<CPlayer>) {
         let player_id = player.get_id();
         let mut db_data = self.db_data.lock();
@@ -11658,10 +10505,10 @@ impl CGame {
         db_data.creation_players.push_back(player);
     }
 
-    /// Вставляет save-копию в `m_stDBData.mDBPlayer` по unsigned ID.
-    ///
-    /// Существующая копия уничтожается до вставки новой и всё изменение
-    /// остаётся внутри исходной critical-section границы.
+ /// Вставляет save-копию в `m_stDBData.mDBPlayer` по unsigned ID.
+ ///
+ /// Существующая копия уничтожается до вставки новой и всё изменение
+ /// остаётся внутри исходной critical-section границы.
     pub(crate) fn append_db_player(&self, player: Box<CPlayer>) {
         let player_id = player.get_id() as u32;
         let mut db_data = self.db_data.lock();
@@ -11672,7 +10519,7 @@ impl CGame {
         db_data.players.insert(player_id, player);
     }
 
-    /// Дописывает non-null save-копию в `m_stDBData.listSaveFactions`.
+ /// Дописывает non-null save-копию в `m_stDBData.listSaveFactions`.
     pub(crate) fn append_save_faction(&self, faction: Box<CFaction>, goods_war_count: i32) {
         let faction_id = faction.faction_id();
         let mut db_data = self.db_data.lock();
@@ -11682,36 +10529,36 @@ impl CGame {
             .insert(faction_id, goods_war_count);
     }
 
-    /// Дописывает non-null save-копию в `m_stDBData.listSaveUnions`.
+ /// Дописывает non-null save-копию в `m_stDBData.listSaveUnions`.
     pub(crate) fn append_save_union(&self, union: Box<CUnion>) {
         self.db_data.lock().save_unions.push_back(union);
     }
 
-    /// Дописывает signed ID в `m_stDBData.listDeleteFactions`.
+ /// Дописывает signed ID в `m_stDBData.listDeleteFactions`.
     pub(crate) fn append_delete_faction(&self, faction_id: i32) {
         self.db_data.lock().delete_factions.push_back(faction_id);
     }
 
-    /// Дописывает signed ID в `m_stDBData.listDeleteUnions`.
+ /// Дописывает signed ID в `m_stDBData.listDeleteUnions`.
     pub(crate) fn append_delete_union(&self, union_id: i32) {
         self.db_data.lock().delete_unions.push_back(union_id);
     }
 
-    /// Дописывает материализованную non-null region save-копию.
+ /// Дописывает материализованную non-null region save-копию.
     pub(crate) fn append_region_param(&self, region: RegionSaveSnapshot) {
         self.db_data.lock().regions.push_back(Some(region));
     }
 
-    /// Дописывает non-null country save-копию в `m_stDBData.ltDBCountrys`.
+ /// Дописывает non-null country save-копию в `m_stDBData.ltDBCountrys`.
     pub(crate) fn append_db_country(&self, country: CountrySaveSnapshot) {
         self.db_data.lock().countries.push_back(Some(country));
     }
 
-    /// Заменяет весь `m_stDBData.listEnemyFactions` под save-lock.
-    ///
-    /// Вход уже владеет отдельными копиями. `Option` сохраняет допустимый
-    /// null pointer-list элемент, хотя готовый generator создаёт только
-    /// non-null записи.
+ /// Заменяет весь `m_stDBData.listEnemyFactions` под save-lock.
+ ///
+ /// Вход уже владеет отдельными копиями. `Option` сохраняет допустимый
+ /// null pointer-list элемент, хотя готовый generator создаёт только
+ /// non-null записи.
     pub(crate) fn set_enemy_factions(
         &self,
         enemy_factions: VecDeque<Option<EnemyFactionSaveSnapshot>>,
@@ -11720,10 +10567,10 @@ impl CGame {
         db_data.enemy_factions = enemy_factions;
     }
 
-    /// Выполняет полный достигнутый `CGame::ClearDBData` под одним lock.
-    ///
-    /// Scalar ID исходная функция не сбрасывала. Region-часть удаляет только
-    /// nodes: их non-null save-копии обязан уничтожить предшествующий save.
+ /// Выполняет полный действующий `CGame::ClearDBData` под одним lock.
+ ///
+ /// Scalar ID исходная функция не сбрасывала. Region-часть удаляет только
+ /// nodes: их non-null save-копии обязан уничтожить предшествующий save.
     pub(crate) fn clear_db_data(&self) {
         let mut db_data = self.db_data.lock();
 
@@ -11743,27 +10590,27 @@ impl CGame {
         }
         db_data.delete_factions.clear();
         db_data.delete_unions.clear();
-        // WorldServer RVA 0x0000D490 не вызывает virtual destructor здесь:
-        // save-фаза уничтожает value, сохраняя node до этой общей очистки.
+ // WorldServer не вызывает virtual destructor здесь:
+ // save-фаза уничтожает value, сохраняя node до этой общей очистки.
         db_data.regions.clear();
     }
 
-    /// Освобождает snapshot-очереди, которые точный `ClearDBData` не трогал.
-    ///
-    /// Вызывается только после `join_save_worker` в normal `Release`: к этой
-    /// точке штатный `GameThreadFunc` уже не оставляет DB-потребителя и сразу
-    /// уничтожает `CGame`. У самих snapshot-значений нет callback/DB side
-    /// effects, поэтому это исправляет лишь внутреннее удержание owner-ов.
+ /// Освобождает snapshot-очереди, которые точный `ClearDBData` не трогал.
+ ///
+ /// Вызывается только после `join_save_worker` в normal `Release`: к этой
+ /// точке штатный `GameThreadFunc` уже не оставляет DB-потребителя и сразу
+ /// уничтожает `CGame`. У самих snapshot-значений нет callback/DB side
+ /// effects, поэтому это исправляет лишь внутреннее удержание owner-ов.
     fn clear_release_only_db_snapshots(&self) {
         let mut db_data = self.db_data.lock();
         db_data.enemy_factions.clear();
         db_data.countries.clear();
     }
 
-    /// Удваивает одинарные кавычки как исходный `CheckPoint`.
-    ///
-    /// Вход уже является доказанным видимым C-string prefix; отсутствие NUL в
-    /// конкретном fixed field проверяет его владелец до этого вызова.
+ /// Удваивает одинарные кавычки как исходный `CheckPoint`.
+ ///
+ /// Вход уже является доказанным видимым C-string prefix; отсутствие NUL в
+ /// конкретном fixed field проверяет его владелец до этого вызова.
     pub(crate) fn check_point(input: &[u8]) -> Vec<u8> {
         let escaped_length = input
             .len()
@@ -11778,10 +10625,10 @@ impl CGame {
         escaped
     }
 
-    /// Позиционно читает `setup.ini`, а при ошибке открытия — `setup.dat`.
-    ///
-    /// Успешное открытие остаётся успешной загрузкой даже после stream
-    /// fail-state. Метод не запускает сервисы и не публикует значения файла.
+ /// Позиционно читает `setup.ini`, а при ошибке открытия — `setup.dat`.
+ ///
+ /// Успешное открытие остаётся успешной загрузкой даже после stream
+ /// fail-state. Метод не запускает сервисы и не публикует значения файла.
     pub(crate) fn load_setup<ClaimSingleInstance>(
         &mut self,
         runtime_directory: &Path,
@@ -11836,11 +10683,11 @@ impl CGame {
         })
     }
 
-    /// Читает `serverSetup.ini`, не очищая прежний GameServer registry.
-    ///
-    /// Ошибка открытия не меняет map и соответствует старому `false`.
-    /// Успешное открытие сохраняет legacy-успех даже после stream fail-state;
-    /// безопасная граница останавливает только запись с неизвестным первым ID.
+ /// Читает `serverSetup.ini`, не очищая прежний GameServer registry.
+ ///
+ /// Ошибка открытия не меняет map и соответствует старому `false`.
+ /// Успешное открытие сохраняет legacy-успех даже после stream fail-state;
+ /// безопасная граница останавливает только запись с неизвестным первым ID.
     pub(crate) fn load_server_setup(
         &mut self,
         runtime_directory: &Path,
@@ -11870,9 +10717,9 @@ impl CGame {
             }
 
             let Some(index) = current_index else {
-                // При неуспехе первого числового чтения exact EXE всё равно
-                // использовал неизвестный
-                // stack-key в map::operator[]. Safe Rust не выбирает ключ.
+ // При неуспехе первого числового чтения всё равно
+ // использовал неизвестный
+ // stack-key в map::operator[]. Safe Rust не выбирает ключ.
                 blocked_at_record = Some(record_index as usize + 1);
                 break;
             };
@@ -11883,8 +10730,8 @@ impl CGame {
                     index,
                     ip: current_ip.clone(),
                     port: current_port,
-                    // VERIFIED_DISASSEMBLY: 0x004139FE -> 0x00413A08
-                    // переносит неинициализированный stack DWORD.
+ // ->
+ // переносит неинициализированный stack DWORD.
                     received_player_data: None,
                 },
             );
@@ -11991,11 +10838,11 @@ impl CGame {
         }
     }
 
-    /// Применяет одну DB-пару enemy factions через живые organizing owners.
-    ///
-    /// Контекст форматирования принадлежит текущему `CGame`: process-оболочка
-    /// не может корректно держать вторую копию StringTable или захватывать
-    /// `CGame` внешней closure на время его же `Init`.
+ /// Применяет одну DB-пару enemy factions через живые organizing owners.
+ ///
+ /// Контекст форматирования принадлежит текущему `CGame`: process-оболочка
+ /// не может корректно держать вторую копию StringTable или захватывать
+ /// `CGame` внешней closure на время его же `Init`.
     fn apply_loaded_enemy_faction_relation(
         &self,
         organizing: &mut COrganizingCtrl,
@@ -12042,33 +10889,33 @@ impl CGame {
         Ok(())
     }
 
-    /// Выполняет полный `CGame::Init` до запуска write/player-load workers.
-    ///
-    /// Windows crash reporter, GUI notice и thread creation передаются точным
-    /// внешним границам; file/network owners и live `CGame` мутации исполняются
-    /// непосредственно здесь. Первый false/block прекращает оставшийся порядок.
-    ///
-    /// Для country-участка EXE/PDB подтверждают порядок: загрузить параметры,
-    /// при включённой appellation-функции загрузить honor ranks, передать
-    /// текущий локальный день в `CCountryHandler::Initialize`, проверить его
-    /// результат, записать `Load Country SUCCESS...` и лишь затем запускать
-    /// country war. Rust использует те же живые `CCountryParam`,
-    /// `CCountryHandler` и `CountryWarSys`; resource bytes,
-    /// Tiberius-соединение, `CTimer` и календарный контекст передаются явно
-    /// вместо resource manager, глобальных singleton-ов и process-global
-    /// времени оригинала. Эти технические замены не меняют доказанный
-    /// fail-fast порядок и вызов `SetNewDay` после успешной DB-load.
-    /// Goods War сохраняет отдельный соседний контракт constructor-а: exact
-    /// `reInitDB` выполняется между `DbCountry` и `DbMisc`, но собственный
-    /// DB-error поглощается после сохранения прочитанного prefix-а. Поэтому
-    /// typed load-report входит в event stream и не становится init block-ом.
-    /// Increment log также является concrete owner-ом этого порядка: после
-    /// general variables он потоково читает Log DB, пишет исходный
-    /// success/failure log и не превращает старый непроверяемый результат в
-    /// новый init-block. `Release` очищает тот же owner ровно между
-    /// `TimeToReturn::uninitialize` и `CCountryHandler::Release`. Открытое
-    /// Tiberius-соединение и явная Rust-ссылка заменяют только внутренние
-    /// ADO/singleton mechanics.
+ /// Выполняет полный `CGame::Init` до запуска write/player-load workers.
+ ///
+ /// Windows crash reporter, GUI notice и thread creation передаются точным
+ /// внешним границам; file/network owners и live `CGame` мутации исполняются
+ /// непосредственно здесь. Первый false/block прекращает оставшийся порядок.
+ ///
+ /// Для country-участка EXE/PDB подтверждают порядок: загрузить параметры,
+ /// при включённой appellation-функции загрузить honor ranks, передать
+ /// текущий локальный день в `CCountryHandler::Initialize`, проверить его
+ /// результат, записать `Load Country SUCCESS...` и лишь затем запускать
+ /// country war. Rust использует те же живые `CCountryParam`,
+ /// `CCountryHandler` и `CountryWarSys`; resource bytes,
+ /// Tiberius-соединение, `CTimer` и календарный контекст передаются явно
+ /// вместо resource manager, глобальных singleton-ов и process-global
+ /// времени оригинала. Эти технические замены не меняют доказанный
+ /// fail-fast порядок и вызов `SetNewDay` после успешной DB-load.
+ /// Goods War сохраняет отдельный соседний контракт constructor-а:
+ /// `reInitDB` выполняется между `DbCountry` и `DbMisc`, но собственный
+ /// DB-error поглощается после сохранения прочитанного prefix-а. Поэтому
+ /// typed load-report входит в event stream и не становится init block-ом.
+ /// Increment log также является concrete owner-ом этого порядка: после
+ /// general variables он потоково читает Log DB, пишет исходный
+ /// success/failure log и не превращает старый непроверяемый результат в
+ /// новый init-block. `Release` очищает тот же owner ровно между
+ /// `TimeToReturn::uninitialize` и `CCountryHandler::Release`. Открытое
+ /// Tiberius-соединение и явная Rust-ссылка заменяют только внутренние
+ /// ADO/singleton mechanics.
     #[allow(
         clippy::too_many_arguments,
         reason = "прямые PlayerRanks/country/timer/increment owners заменяют прежние opaque callbacks"
@@ -12140,8 +10987,8 @@ impl CGame {
             discarded_roll,
         });
 
-        // Оба critical section уже являются Rust owners: `db_data` Mutex и
-        // эксклюзивная save-thread guard-граница. До worker-start их не видно.
+ // Оба critical section уже являются Rust owners: `db_data` Mutex и
+ // эксклюзивная save-thread guard-граница. До worker-start их не видно.
         events.push(WorldGameInitEvent::RustLocksReady);
         context.put_debug_string(b"WorldServer start!");
         events.push(WorldGameInitEvent::DebugStartPublished);
@@ -12319,10 +11166,10 @@ impl CGame {
             events.push(WorldGameInitEvent::DatabaseOwnerCreated(owner));
         }
 
-        // Exact constructor ловил DB/COM error внутри `reInitDB`: owner
-        // оставался опубликованным, а CGame::Init продолжал следующий шаг.
-        // Замена прежнего Rust owner-а повторяет `new`; старый owner штатно
-        // освобождается Drop вместо исходной утечки при повторном Init.
+ // constructor ловил DB/COM error внутри `reInitDB`: owner
+ // оставался опубликованным, а CGame::Init продолжал следующий шаг.
+ // Замена прежнего Rust owner-а повторяет `new`; старый owner штатно
+ // освобождается Drop вместо исходной утечки при повторном Init.
         if let Err(block) = context
             .create_database_owner(WorldGameDatabaseOwner::GoodsWarMember)
             .await
@@ -12931,8 +11778,8 @@ impl CGame {
             stop!(WorldGameInitBlockReason::CountryWar);
         }
 
-        // Exact Init публикует новый owner до config/DB loading. Drop заменяет
-        // предварительный delete и не сохраняет его dangling-lifetime риск.
+ // Init публикует новый owner до config/DB loading. Drop заменяет
+ // предварительный delete и не сохраняет его dangling-lifetime риск.
         *general_variables = Some(CVariableList::default());
         events.push(WorldGameInitEvent::VoidOwner(
             WorldGameInitVoidOwner::CreateGeneralVariableList,
@@ -12950,7 +11797,7 @@ impl CGame {
             .expect("owner опубликован перед LoadVarData")
             .load_var_data(context.general_variable_database())
             .await;
-        // `LoadVarData` был void: исходный Init не ветвился по bool Load.
+ // `LoadVarData` был void: исходный Init не ветвился по bool Load.
         events.push(WorldGameInitEvent::GeneralVariableDataLoaded(
             general_variable_data_load,
         ));
@@ -12992,8 +11839,8 @@ impl CGame {
             WorldGameInitVoidOwner::InitializeBaseMessage,
             WorldGameInitVoidOwner::InitializeSocket,
         ] {
-            // Rust message/socket owners не требуют отдельного глобального
-            // initialize-вызова; их живые transport-owner-ы создаются ниже.
+ // Rust message/socket owners не требуют отдельного глобального
+ // initialize-вызова; их живые transport-owner-ы создаются ниже.
             events.push(WorldGameInitEvent::VoidOwner(owner));
         }
 
@@ -13079,7 +11926,7 @@ impl CGame {
         })
     }
 
-    /// Вызывает city-region save только при selector `0` и `REGION_TYPE == 2`.
+ /// Вызывает city-region save только при selector `0` и `REGION_TYPE == 2`.
     fn save_city_region<SaveRegion>(
         &mut self,
         selector: i32,
@@ -13109,7 +11956,7 @@ impl CGame {
                 continue;
             }
             let Some(region) = assignment.region.as_mut() else {
-                // WorldServer RVA 0x00008750 разыменовывал `pRegion` без null-check.
+ // WorldServer разыменовывал `pRegion` без null-check.
                 return Err((
                     saved,
                     WorldSaveCityRegionBlock::NullCityRegion { region_id },
@@ -13121,7 +11968,7 @@ impl CGame {
         Ok(saved)
     }
 
-    /// Уничтожает все live player-owner-ы в unsigned key-order.
+ /// Уничтожает все live player-owner-ы в unsigned key-order.
     fn clear_map_player(&mut self) -> usize {
         let entries = self.players.len();
         while let Some((_player_id, player)) = self.players.pop_first() {
@@ -13130,9 +11977,9 @@ impl CGame {
         entries
     }
 
-    /// Выполняет полный `CGame::Release` до legacy result `1`.
-    /// Concrete Goods War owner освобождается между CityWar и RsRegion, как
-    /// exact pointer-owner, но его Rust collections использует обычный Drop.
+ /// Выполняет полный `CGame::Release` до legacy result `1`.
+ /// Concrete Goods War owner освобождается между CityWar и RsRegion, как
+ /// pointer-owner, но его Rust collections использует обычный Drop.
     pub(crate) fn release<Context: WorldGameReleaseContext>(
         &mut self,
         context: &mut Context,
@@ -13217,10 +12064,10 @@ impl CGame {
             drop(region);
             events.push(WorldGameReleaseEvent::RegionOwnerReleased { region_id });
         }
-        // `ClearRegionList` удаляет сначала каждый `pRegion`, затем освобождает
-        // узлы самой map. После этого места normal Release больше не читает
-        // region registry, поэтому clear устраняет только внутреннее удержание
-        // пустых Rust map-node до немедленного `DeleteGame`.
+ // `ClearRegionList` удаляет сначала каждый `pRegion`, затем освобождает
+ // узлы самой map. После этого места normal Release больше не читает
+ // region registry, поэтому clear устраняет только внутреннее удержание
+ // пустых Rust map-node до немедленного `DeleteGame`.
         self.regions.clear();
 
         for (owner, released) in [
@@ -13240,10 +12087,9 @@ impl CGame {
             events.push(WorldGameReleaseEvent::OptionalOwner { owner, released });
         }
         self.script_file_data.clear();
-        // C++-донор очищает `m_mTeamSessionID` вместе с file-data map-ами.
-        // После этого места нет ни одного team lookup до немедленного
-        // `DeleteGame`, поэтому Rust освобождает только пустые map-node, не
-        // меняя session ID, routing либо внешний порядок.
+ // После этого места нет ни одного team lookup до немедленного
+ // `DeleteGame`, поэтому Rust освобождает только пустые map-node, не
+ // меняя session ID, routing либо внешний порядок.
         self.team_session_ids.clear();
         let owner = WorldGameReleaseOptionalOwner::GeneralVariableList;
         let released = context.release_optional_owner(owner);
@@ -13292,10 +12138,10 @@ impl CGame {
         context.release_void_owner(owner);
         events.push(WorldGameReleaseEvent::VoidOwner(owner));
 
-        // Background reconnect может владеть только producer FIFO, но перед
-        // разрушением transport-owner-а он обязан завершиться. Это устраняет
-        // внутренний dangling-lifetime старого process-global worker-а; sleep
-        // не прерывается, как у его обычного stop/join owner-а.
+ // Background reconnect может владеть только producer FIFO, но перед
+ // разрушением transport-owner-а он обязан завершиться. Это устраняет
+ // внутренний dangling-lifetime старого process-global worker-а; sleep
+ // не прерывается, как у его обычного stop/join owner-а.
         let _connect_login_completion = self.stop_connect_login_thread();
 
         if let Some(client) = self.net_client.take() {
@@ -13331,8 +12177,8 @@ impl CGame {
             let released = context.release_database_owner(owner);
             events.push(WorldGameReleaseEvent::DatabaseOwner { owner, released });
         }
-        // WorldServer RVA 0x0000E7F0 создаёт `m_pRsMisc` в Init, но не удаляет
-        // и не обнуляет его ни в одном Release call-site до skill-cache cleanup.
+ // WorldServer создаёт `m_pRsMisc` в Init, но не удаляет
+ // и не обнуляет его ни в одном Release call-site до skill-cache cleanup.
         events.push(WorldGameReleaseEvent::DatabaseMiscRetained);
 
         skills.clear_skill_cache();
@@ -13347,8 +12193,8 @@ impl CGame {
         context.release_void_owner(owner);
         events.push(WorldGameReleaseEvent::VoidOwner(owner));
 
-        // `db_data` и save serialization являются Rust owners; после этой
-        // позиции Release к ним больше не обращается, фактический Drop — DeleteGame.
+ // `db_data` и save serialization являются Rust owners; после этой
+ // позиции Release к ним больше не обращается, фактический Drop — DeleteGame.
         events.push(WorldGameReleaseEvent::RustLocksRetired);
         for owner in [
             WorldGameReleaseVoidOwner::CleanupSocket,
@@ -13400,11 +12246,11 @@ impl CGame {
         })
     }
 
-    /// Создаёт и публикует World listener-owner, затем применяет setup.
-    ///
-    /// Ошибка `Host` оставляет новый owner опубликованным. Отсутствующее позднее
-    /// поле возвращается только после успешного listen и hostname-resolution,
-    /// то есть уже выполненные исходные побочные эффекты не откатываются.
+ /// Создаёт и публикует World listener-owner, затем применяет setup.
+ ///
+ /// Ошибка `Host` оставляет новый owner опубликованным. Отсутствующее позднее
+ /// поле возвращается только после успешного listen и hostname-resolution,
+ /// то есть уже выполненные исходные побочные эффекты не откатываются.
     pub(crate) fn init_net_server(&mut self) -> Result<(), WorldNetworkInitializationError> {
         let server = CMyNetServer::new(legacy_tick_ms());
         let listen_port =
@@ -13414,7 +12260,7 @@ impl CGame {
                     "dwListenPort",
                 ))?;
 
-        // RVA 0x00001860 публиковал s_pNetServer до проверки результата Host.
+ // публиковал s_pNetServer до проверки результата Host.
         self.net_server = Some(server);
         let server = self
             .net_server
@@ -13443,18 +12289,18 @@ impl CGame {
         Ok(())
     }
 
-    /// Пересоздаёт initial World-to-Login client и ставит регистрацию мира.
-    ///
-    /// Bind, resolution либо connect error выполняют исходный close/delete и
-    /// оставляют `net_client = None`. Если безопасная граница `dwNumber`
-    /// достигается уже после connect, опубликованный подключённый owner и
-    /// включённый control-send не откатываются.
+ /// Пересоздаёт initial World-to-Login client и ставит регистрацию мира.
+ ///
+ /// Bind, resolution либо connect error выполняют исходный close/delete и
+ /// оставляют `net_client = None`. Если безопасная граница `dwNumber`
+ /// достигается уже после connect, опубликованный подключённый owner и
+ /// включённый control-send не откатываются.
     pub(crate) async fn init_net_client(
         &mut self,
     ) -> Result<WorldClientInitialization, WorldClientInitializationError> {
         self.net_client.take();
 
-        // RVA 0x000030F0 записывал s_pNetClient до Create(0, 0) и Connect.
+ // записывал s_pNetClient до Create(0, 0) и Connect.
         self.net_client = Some(CMyNetClient::new());
         let socket = bind_tcp_ipv4(None, 0);
         let login_port =
@@ -13497,9 +12343,9 @@ impl CGame {
             .expect("успешно подключённый World client остаётся опубликованным")
             .enable_control_send();
 
-        // При успешно открытом, но оборванном до первой
-        // пары setup исходный `dwNumber` не инициализирован. Уже выполненные
-        // connect/control-send не откатываем и неизвестный DWORD не выбираем.
+ // При успешно открытом, но оборванном до первой
+ // пары setup исходный `dwNumber` не инициализирован. Уже выполненные
+ // connect/control-send не откатываем и неизвестный DWORD не выбираем.
         let world_number =
             self.setup
                 .world_number
@@ -13520,19 +12366,19 @@ impl CGame {
         })
     }
 
-    /// Подключает новый LoginServer client и передаёт его World FIFO.
-    ///
-    /// Текущий `net_client` остаётся неизменным. Новый owner не получает
-    /// control-send: его включит только будущая обработка typed handoff в
-    /// исходной позиции `0x3FC03` после замены и постановки регистрации.
+ /// Подключает новый LoginServer client и передаёт его World FIFO.
+ ///
+ /// Текущий `net_client` остаётся неизменным. Новый owner не получает
+ /// control-send: его включит только связанный обработка typed handoff в
+ /// исходной позиции `0x3FC03` после замены и постановки регистрации.
     pub(crate) async fn reconnect_login_server(
         &self,
     ) -> Result<WorldLoginReconnect, WorldLoginReconnectError> {
         self.login_reconnect_spec().reconnect_once().await
     }
 
-    /// Отделяет ровно те данные, которые свободный reconnect-worker читал из
-    /// process-global `g_pGame`: login endpoint и producer World FIFO.
+ /// Отделяет ровно те данные, которые свободный reconnect-worker читал из
+ /// process-global `g_pGame`: login endpoint и producer World FIFO.
     fn login_reconnect_spec(&self) -> WorldLoginReconnectSpec {
         WorldLoginReconnectSpec {
             login_ip: self.setup.login_ip.clone(),
@@ -13541,11 +12387,11 @@ impl CGame {
         }
     }
 
-    /// Выполняет exact stop/wait/start owner вместо Win32 thread handle.
-    ///
-    /// Если старый worker спит, stop не будит его: `WaitForSingleObject` также
-    /// ждал завершения полного `Sleep(8000)`. Ошибка создания не оставляет
-    /// выдуманный handle и сообщается caller-у отдельным typed итогом.
+ /// Выполняет stop/wait/start owner вместо Win32 thread handle.
+ ///
+ /// Если старый worker спит, stop не будит его: `WaitForSingleObject` также
+ /// ждал завершения полного `Sleep(8000)`. Ошибка создания не оставляет
+ /// выдуманный handle и сообщается caller-у отдельным typed итогом.
     pub(crate) fn create_connect_login_thread(
         &mut self,
         runtime: tokio::runtime::Handle,
@@ -13573,7 +12419,7 @@ impl CGame {
         }
     }
 
-    /// Останавливает активный reconnect-owner в точной stop/join-последовательности.
+ /// Останавливает активный reconnect-owner в точной stop/join-последовательности.
     pub(crate) fn stop_connect_login_thread(
         &mut self,
     ) -> Option<WorldLoginReconnectWorkerCompletion> {
@@ -13585,15 +12431,15 @@ impl CGame {
         completion
     }
 
-    /// Подключает один новый LoginServer client и передаёт его World FIFO.
-    ///
-    /// Здесь сохраняется публичный owner-метод для caller-ов `CGame`; его
-    /// фактическая попытка живёт в cloneable spec и потому может выполняться
-    /// без передачи mutable `CGame` системному worker-у.
+ /// Подключает один новый LoginServer client и передаёт его World FIFO.
+ ///
+ /// Здесь сохраняется публичный owner-метод для caller-ов `CGame`; его
+ /// фактическая попытка живёт в cloneable spec и потому может выполняться
+ /// без передачи mutable `CGame` системному worker-у.
     async fn reconnect_login_server_from_spec(
         spec: &WorldLoginReconnectSpec,
     ) -> Result<WorldLoginReconnect, WorldLoginReconnectError> {
-        // RVA 0x00003280 держал новый CMyNetClient только в локальном pointer.
+ // держал новый CMyNetClient только в локальном pointer.
         let mut client = CMyNetClient::new();
         let socket = match bind_tcp_ipv4(None, 0) {
             Ok(socket) => socket,
@@ -13605,8 +12451,8 @@ impl CGame {
         let login_port = match spec.login_port {
             Some(port) => port,
             None => {
-                // Старый dwLoginPort здесь был
-                // неинициализирован; неизвестное значение не выбираем.
+ // Старый dwLoginPort здесь был
+ // неинициализирован; неизвестное значение не выбираем.
                 let _legacy_result = client.close();
                 return Err(WorldLoginReconnectError::MissingSetupField("dwLoginPort"));
             }
@@ -13627,9 +12473,9 @@ impl CGame {
         let event_sender = match spec.event_sender.as_ref() {
             Some(server) => server,
             None => {
-                // Исходник после успешного connect
-                // разыменовывал обязательный g_pGame->s_pNetServer. Safe Rust
-                // закрывает ещё не опубликованный owner и не имитирует UB.
+ // Исходник после успешного connect
+ // разыменовывал обязательный g_pGame->s_pNetServer. Safe Rust
+ // закрывает ещё не опубликованный owner и не имитирует UB.
                 let _legacy_result = client.close();
                 return Err(WorldLoginReconnectError::MissingNetworkServerOwner);
             }
@@ -13639,13 +12485,13 @@ impl CGame {
         Ok(WorldLoginReconnect { endpoint })
     }
 
-    /// Выполняет точный retry-loop свободного `ConnectLoginServerFunc`.
-    ///
-    /// После начального stop-check каждая попытка всегда следует за полной
-    /// восьмисекундной паузой. Stop, пришедший во время паузы, намеренно не
-    /// отменяет следующую попытку: EXE проверял флаг только после её failure.
-    /// `ReConnectLoginServer`-ошибки остаются внутренней причиной следующего
-    /// retry и не получают нового observable error mapping.
+ /// Выполняет точный retry-loop свободного `ConnectLoginServerFunc`.
+ ///
+ /// После начального stop-check каждая попытка всегда следует за полной
+ /// восьмисекундной паузой. Stop, пришедший во время паузы, намеренно не
+ /// отменяет следующую попытку: EXE проверял флаг только после её failure.
+ /// `ReConnectLoginServer`-ошибки остаются внутренней причиной следующего
+ /// retry и не получают нового observable error mapping.
     pub(crate) async fn connect_login_server_func(
         &mut self,
         connect_thread_exit: &AtomicBool,
@@ -13670,12 +12516,12 @@ impl CGame {
         }
     }
 
-    /// Ставит LoginServer полный snapshot аккаунтов в порядке online-list.
-    ///
-    /// `Ok(None)` буквально соответствует nullable `s_pNetClient` и не создаёт
-    /// сообщения. Ошибки безопасной границы возникают до единственного send;
-    /// уже собранный локальный payload при этом, как и старый stack-owner, не
-    /// становится наблюдаемым соседним процессом.
+ /// Ставит LoginServer полный snapshot аккаунтов в порядке online-list.
+ ///
+ /// `Ok(None)` буквально соответствует nullable `s_pNetClient` и не создаёт
+ /// сообщения. Ошибки безопасной границы возникают до единственного send;
+ /// уже собранный локальный payload при этом, как и старый stack-owner, не
+ /// становится наблюдаемым соседним процессом.
     pub(crate) fn send_cdkey_to_login_server(
         &self,
     ) -> Result<Option<WorldCdkeySnapshot>, WorldCdkeySnapshotError> {
@@ -13696,10 +12542,10 @@ impl CGame {
         snapshot.base_mut().add_ulong(world_number);
         snapshot.base_mut().add_ulong(declared_online_players);
         for &player_id in &self.online_players {
-            // World owner RVA `0x000083D0` выполнял
-            // При отсутствии узла используется ноль; иначе node->second, затем чтение со смещением 0x744.
-            // Достижимость/реакция null-dereference не доказана; safe Rust не
-            // отправляет частичный snapshot и не выдаёт эту ошибку за legacy.
+ // World owner выполнял
+ // При отсутствии узла используется ноль; иначе node->second, затем чтение со смещением 0x744.
+ // Достижимость/реакция null-dereference не доказана; safe Rust не
+ // отправляет частичный snapshot и не выдаёт эту ошибку за legacy.
             let player = self
                 .players
                 .get(&player_id)
@@ -13714,10 +12560,10 @@ impl CGame {
         }))
     }
 
-    /// Перечитывает `setup/sysboardcast.ini` в тот же live список, который
-    /// обслуживает AI. Отсутствующий resource сохраняет прежний список;
-    /// открытый источник очищает его до разбора и оставляет подтверждённый
-    /// prefix при повреждённой записи.
+ /// Перечитывает `setup/sysboardcast.ini` в тот же live список, который
+ /// обслуживает AI. Отсутствующий resource сохраняет прежний список;
+ /// открытый источник очищает его до разбора и оставляет подтверждённый
+ /// prefix при повреждённой записи.
     pub(crate) fn reload_system_broadcasts<Random, GetTick>(
         &mut self,
         source: Option<&[u8]>,
@@ -13791,12 +12637,12 @@ impl CGame {
         true
     }
 
-    /// Выполняет полный `CGame::AI` в исходном порядке RVA `0x000148A0`.
-    ///
-    /// Ordered region map вызывает отдельного virtual owner-а только для
-    /// ненулевого `pRegion`. После всего обхода снимается один общий broadcast
-    /// tick; list cadence, оба random-вызова, wire-поля, send и последующие
-    /// мутации сохраняют исходный порядок и wrapping 32-битную арифметику.
+ /// Выполняет полный `CGame::AI` в исходном порядке.
+ ///
+ /// Ordered region map вызывает отдельного virtual owner-а только для
+ /// ненулевого `pRegion`. После всего обхода снимается один общий broadcast
+ /// tick; list cadence, оба random-вызова, wire-поля, send и последующие
+ /// мутации сохраняют исходный порядок и wrapping 32-битную арифметику.
     pub(crate) fn ai<GetTick, Random>(
         &mut self,
         get_tick: &mut GetTick,
@@ -13895,12 +12741,12 @@ impl CGame {
         }
     }
 
-    /// Выполняет непосредственно окружающий `CGame::AI` profiling-порядок.
-    ///
-    /// Первый tick закрывает SavePoint-стадию, второй становится общим началом
-    /// AI, внутренний tick принадлежит самому `CGame::AI`, четвёртый закрывает
-    /// AI. Следующим исходным owner-ом остаётся готовый
-    /// `process_message_main_loop_stage`.
+ /// Выполняет непосредственно окружающий `CGame::AI` profiling-порядок.
+ ///
+ /// Первый tick закрывает SavePoint-стадию, второй становится общим началом
+ /// AI, внутренний tick принадлежит самому `CGame::AI`, четвёртый закрывает
+ /// AI. Следующим исходным owner-ом остаётся готовый
+ /// `process_message_main_loop_stage`.
     pub(crate) fn run_main_loop_ai_stage<GetTick, Random>(
         &mut self,
         clocks: &mut WorldMainLoopClockState,
@@ -13940,41 +12786,41 @@ impl CGame {
         }
     }
 
-    /// Обрабатывает два FIFO в точных snapshot-границах RVA `0x00001A30`.
-    ///
-    /// Сначала фиксируется число server-событий. Только после их исчерпания
-    /// заново читается текущий Login client и фиксируется его число сообщений.
-    /// Поэтому typed reconnect из первой очереди заменяет owner до второго
-    /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
-    /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, полный GM
-    /// owner `0x5FF01..0x5FF16`,
-    /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
-    /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, goods-link
-    /// `0x5FD03/0x5FD04`, copy-number
-    /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
-    /// `0x5FD0C/0x5FD0D`, server `0x5FA01..=0x5FA07/0x5FA09/0x5FA0F/0x5FA10`,
-    /// organizing session
-    /// result, смерть faction-master-а `0x60101`, создание faction `0x60103`,
-    /// initial organizing data `0x60104`, список faction страны `0x60107`,
-    /// подача заявки `0x60108`,
-    /// отмена заявки `0x60109`, решение по ней `0x6010A`, member/faction/union
-    /// mutations `0x6010B..0x60113`, union application
-    /// `0x60118`, leave-word enable `0x6011A`, запись
-    /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
-    /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
-    /// `0x60121/0x60123`, передача города `0x60130`, admission permit
-    /// `0x60132`, terminal войны за город `0x60133`, заявка village-war
-    /// `0x60135`, её result `0x60136`, city-war заявка `0x60137` и её result
-    /// `0x60138`, Goods War command `0x60139`, faction-win `0x6013A` и player
-    /// quest routes `0x6013B/0x6013C`, run-script `0x6013D` и faction parameter
-    /// `0x6013E` и region-router request `0x60144` исполняются; неизвестные
-    /// organizing opcode завершаются exact default без side effects. Terminal
-    /// actions применяются FIFO до следующего сообщения. Async TDS lookup
-    /// `0x5FF12` завершается до следующего slot-а, как синхронный ADO EXE;
-    /// JJC owner `0x60901..0x60907` и Team owner `0x60001..0x6000C`
-    /// исполняются полностью. Write-log owners `0x6020D/0x60214` ставят typed
-    /// DB-command в FIFO и сразу публикуют запись в concrete increment/auction
-    /// live-owner.
+ /// Обрабатывает два FIFO в точных snapshot-границах.
+ ///
+ /// Сначала фиксируется число server-событий. Только после их исчерпания
+ /// заново читается текущий Login client и фиксируется его число сообщений.
+ /// Поэтому typed reconnect из первой очереди заменяет owner до второго
+ /// snapshot. Обычные сообщения проходят точный `Run` selector: готовые
+ /// ветви server-owner-а, GMA `0x4FD01/0x4FD04/0x60401/0x60402`, полный GM
+ /// owner `0x5FF01..0x5FF16`,
+ /// player relay `0x5FC01..0x5FC04`, country relay `0x60310/0x60311`, other
+ /// transport/cursor `0x5FD02/0x5FD06..0x5FD09/0x5FD0E`, goods-link
+ /// `0x5FD03/0x5FD04`, copy-number
+ /// `0x5FD0B`, LeiTing update `0x5FD10`, honor
+ /// `0x5FD0C/0x5FD0D`, server `0x5FA01..=0x5FA07/0x5FA09/0x5FA0F/0x5FA10`,
+ /// organizing session
+ /// result, смерть faction-master-а `0x60101`, создание faction `0x60103`,
+ /// initial organizing data `0x60104`, список faction страны `0x60107`,
+ /// подача заявки `0x60108`,
+ /// отмена заявки `0x60109`, решение по ней `0x6010A`, member/faction/union
+ /// mutations `0x6010B..0x60113`, union application
+ /// `0x60118`, leave-word enable `0x6011A`, запись
+ /// `0x6011B`, её удаление `0x6011C`, объявление `0x6011D`, список целей
+ /// войны `0x6011E`, само объявление `0x6011F`, общий leaf
+ /// `0x60121/0x60123`, передача города `0x60130`, admission permit
+ /// `0x60132`, terminal войны за город `0x60133`, заявка village-war
+ /// `0x60135`, её result `0x60136`, city-war заявка `0x60137` и её result
+ /// `0x60138`, Goods War command `0x60139`, faction-win `0x6013A` и player
+ /// quest routes `0x6013B/0x6013C`, run-script `0x6013D` и faction parameter
+ /// `0x6013E` и region-router request `0x60144` исполняются; неизвестные
+ /// organizing opcode завершаются default без side effects. Terminal
+ /// actions применяются FIFO до следующего сообщения. Async TDS lookup
+ /// `0x5FF12` завершается до следующего slot-а, как синхронный ADO EXE;
+ /// JJC owner `0x60901..0x60907` и Team owner `0x60001..0x6000C`
+ /// исполняются полностью. Write-log owners `0x6020D/0x60214` ставят typed
+ /// DB-command в FIFO и сразу публикуют запись в concrete increment/auction
+ /// live-owner.
     pub(crate) async fn process_message<TimerCallback, DbMiscContextOwner, JjcContext>(
         &mut self,
         honor_ranks: &mut CHonorRanks,
@@ -14212,10 +13058,10 @@ impl CGame {
         })
     }
 
-    /// Выполняет внешний MainLoop profiling call-site `ProcessMessage`.
-    ///
-    /// Safe block не получает придуманных end/next-stage ticks и не меняет
-    /// накопитель: исходный невозвратившийся путь их не достигал.
+ /// Выполняет внешний MainLoop profiling call-site `ProcessMessage`.
+ ///
+ /// Safe block не получает придуманных end/next-stage ticks и не меняет
+ /// накопитель: исходный невозвратившийся путь их не достигал.
     pub(crate) async fn process_message_main_loop_stage<
         TimerCallback,
         DbMiscContextOwner,
@@ -14377,12 +13223,12 @@ impl CGame {
         }
     }
 
-    /// Выполняет следующий MainLoop owner после `ProcessMessage`.
-    ///
-    /// Входной shared tick уже назначен успешным
-    /// `process_message_main_loop_stage`; первый новый tick закрывает
-    /// `CSessionFactory::AI` в `DAT_0056e528`, второй начинает соседний
-    /// готовый `ProcessPlayerDataQueue`.
+ /// Выполняет следующий MainLoop owner после `ProcessMessage`.
+ ///
+ /// Входной shared tick уже назначен успешным
+ /// `process_message_main_loop_stage`; первый новый tick закрывает
+ /// `CSessionFactory::AI` в `DAT_0056e528`, второй начинает соседний
+ /// готовый `ProcessPlayerDataQueue`.
     pub(crate) fn run_main_loop_session_factory_stage<GetTick>(
         &mut self,
         factory: &mut CSessionFactory,
@@ -14546,7 +13392,7 @@ impl CGame {
         )
     }
 
-    /// Проводит уже полученного player-owner-а по общей direct/DB-load цепочке.
+ /// Проводит уже полученного player-owner-а по общей direct/DB-load цепочке.
     #[allow(
         clippy::too_many_arguments,
         reason = "queue metadata сохраняет exact diagnostic outcome producer-а"
@@ -14611,7 +13457,7 @@ impl CGame {
             });
         };
 
-        // CPlayer vtable +0x84 = exact `CShape::SetState(0)`.
+ // CPlayer vtable +0x84 = `CShape::SetState(0)`.
         player.set_state(0);
         let Some(game_server) = self
             .game_server(game_server_index)
@@ -14709,11 +13555,11 @@ impl CGame {
         })
     }
 
-    /// Обрабатывает не более одного non-null record-а из начального snapshot.
-    ///
-    /// Null-pop не завершает метод: он уменьшает только сохранённый snapshot и
-    /// повторяет pop. Любая фактически извлечённая запись проходит ровно одну
-    /// reject либо success цепочку и затем безусловно завершает вызов.
+ /// Обрабатывает не более одного non-null record-а из начального snapshot.
+ ///
+ /// Null-pop не завершает метод: он уменьшает только сохранённый snapshot и
+ /// повторяет pop. Любая фактически извлечённая запись проходит ровно одну
+ /// reject либо success цепочку и затем безусловно завершает вызов.
     pub(crate) fn process_player_data_queue<GetTick>(
         &mut self,
         organizing_ctrl: &mut COrganizingCtrl,
@@ -14764,7 +13610,7 @@ impl CGame {
         })
     }
 
-    /// Закрывает `DAT_0056e524` и назначает shared start следующего `CTimer::Run`.
+ /// Закрывает `DAT_0056e524` и назначает shared start следующего `CTimer::Run`.
     pub(crate) fn run_main_loop_player_data_queue_stage<GetTick>(
         &mut self,
         organizing_ctrl: &mut COrganizingCtrl,
@@ -14797,11 +13643,11 @@ impl CGame {
         }
     }
 
-    /// Выполняет `CTimer::Run`, закрывает `DAT_0056e520` и начинает faction-war стадию.
-    ///
-    /// `profile_state.ai_calls` является текущим `CGame::s_lAITick`. Timer
-    /// получает тот же tick-provider, которым затем MainLoop закрывает стадию
-    /// и отдельно назначает shared start для готового `CFactionWarSys::Run`.
+ /// Выполняет `CTimer::Run`, закрывает `DAT_0056e520` и начинает faction-war стадию.
+ ///
+ /// `profile_state.ai_calls` является текущим `CGame::s_lAITick`. Timer
+ /// получает тот же tick-provider, которым затем MainLoop закрывает стадию
+ /// и отдельно назначает shared start для готового `CFactionWarSys::Run`.
     #[allow(
         clippy::too_many_arguments,
         reason = "timer callback сохраняет явные DB, ranking, clock и log owners"
@@ -14920,11 +13766,11 @@ impl CGame {
         })
     }
 
-    /// Выполняет `CFactionWarSys::Run` и закрывает `DAT_0056e51c`.
-    ///
-    /// Raw MainLoop не назначает новый shared start перед следующим
-    /// `CLeiTing::Run`, поэтому этот call-site делает только один end tick и
-    /// оставляет `clocks.stage_started_at_ms` без изменения.
+ /// Выполняет `CFactionWarSys::Run` и закрывает `DAT_0056e51c`.
+ ///
+ /// оригинал MainLoop не назначает новый shared start перед следующим
+ /// `CLeiTing::Run`, поэтому этот call-site делает только один end tick и
+ /// оставляет `clocks.stage_started_at_ms` без изменения.
     pub(crate) fn run_main_loop_faction_war_stage<GetTick>(
         &mut self,
         faction_war_sys: &mut CFactionWarSys,
@@ -14963,7 +13809,7 @@ impl CGame {
         })
     }
 
-    /// Выполняет следующий непрофилированный MainLoop owner `CLeiTing::Run`.
+ /// Выполняет следующий непрофилированный MainLoop owner `CLeiTing::Run`.
     pub(crate) fn run_main_loop_lei_ting_stage<Context, GetLocalTime>(
         &mut self,
         lei_ting: &mut CLeiTing,
@@ -14995,11 +13841,11 @@ impl CGame {
         result
     }
 
-    /// Выполняет соседний `DoneOutList -> Pop/DoneListIn -> LoadAuction` batch.
-    ///
-    /// Между `CLeiTing::Run` и этими тремя owners исходный MainLoop не снимал
-    /// tick. Единственный clock-call после `LoadAuction` назначает shared start
-    /// следующей готовой стадии `CNetSessionManager::Run`.
+ /// Выполняет соседний `DoneOutList -> Pop/DoneListIn -> LoadAuction` batch.
+ ///
+ /// Между `CLeiTing::Run` и этими тремя owners исходный MainLoop не снимал
+ /// tick. Единственный clock-call после `LoadAuction` назначает shared start
+ /// следующей готовой стадии `CNetSessionManager::Run`.
     pub(crate) fn run_main_loop_db_misc_stage<Context, Delivery, GetTick>(
         db_misc: &mut CDbMisc,
         context: &mut Context,
@@ -15026,11 +13872,11 @@ impl CGame {
         })
     }
 
-    /// Выполняет полный session timeout pass, применяет его terminal actions и
-    /// закрывает `DAT_0056e518`.
-    ///
-    /// Следующий участок MainLoop начинает проверку ping без нового shared
-    /// start tick, поэтому `clocks.stage_started_at_ms` здесь не меняется.
+ /// Выполняет полный session timeout pass, применяет его terminal actions и
+ /// закрывает `DAT_0056e518`.
+ ///
+ /// Следующий участок MainLoop начинает проверку ping без нового shared
+ /// start tick, поэтому `clocks.stage_started_at_ms` здесь не меняется.
     pub(crate) fn run_main_loop_net_session_stage<GetTick>(
         &self,
         manager: &CNetSessionManager,
@@ -15080,10 +13926,10 @@ impl CGame {
         }
     }
 
-    /// Завершает либо продолжает один GameServer ping без нового clock-call.
-    ///
-    /// При публикации `m_bInPing` очищается до сборки и неприоритетной отправки
-    /// `0x1FE04`; порядок ответов совпадает с порядком исходного vector.
+ /// Завершает либо продолжает один GameServer ping без нового clock-call.
+ ///
+ /// При публикации `m_bInPing` очищается до сборки и неприоритетной отправки
+ /// `0x1FE04`; порядок ответов совпадает с порядком исходного vector.
     pub(crate) fn run_main_loop_ping_stage(
         &mut self,
         clocks: &WorldMainLoopClockState,
@@ -15145,7 +13991,7 @@ impl CGame {
         })
     }
 
-    /// Выполняет общий minute delta, `COrganizingCtrl::Run` и country `Run`.
+ /// Выполняет общий minute delta, `COrganizingCtrl::Run` и country `Run`.
     #[allow(
         clippy::too_many_arguments,
         reason = "два ещё отдельных downstream owner-а и clock передаются явно"
@@ -15258,7 +14104,7 @@ impl CGame {
         })
     }
 
-    /// Завершает BaiTan batch и без промежуточного clock-call запускает JJC.
+ /// Завершает BaiTan batch и без промежуточного clock-call запускает JJC.
     pub(crate) fn run_main_loop_bai_tan_jjc_stage<Context: WorldJjcRuntimeContext>(
         &mut self,
         jjc_system: &mut CJJcSystem,
@@ -15285,27 +14131,27 @@ impl CGame {
         Ok(WorldMainLoopBaiTanJjcStageReport { bai_tan, jjc })
     }
 
-    /// Возвращает mapped team-session либо исходный ноль при отсутствии key.
+ /// Возвращает mapped team-session либо исходный ноль при отсутствии key.
     pub(crate) fn get_team_session_id(&self, team_id: u32) -> i32 {
         self.team_session_ids.get(&team_id).copied().unwrap_or(0)
     }
 
-    /// Текущий размер точного контейнера `m_mTeamSessionID`, читаемый refresh-владельцем.
+ /// Текущий размер точного контейнера `m_mTeamSessionID`, читаемый refresh-владельцем.
     pub(crate) fn team_session_count(&self) -> usize {
         self.team_session_ids.len()
     }
 
-    /// Воспроизводит `m_mTeamSessionID[teamID] = sessionID` из `CTeam::Start`.
+ /// Воспроизводит `m_mTeamSessionID[teamID] = sessionID` из `CTeam::Start`.
     pub(crate) fn publish_team_session(&mut self, team_id: u32, session_id: i32) {
         self.team_session_ids.insert(team_id, session_id);
     }
 
-    /// Удаляет найденный team key без проверки прежнего session pointer-а.
+ /// Удаляет найденный team key без проверки прежнего session pointer-а.
     pub(crate) fn remove_team_session(&mut self, team_id: u32) {
         self.team_session_ids.remove(&team_id);
     }
 
-    /// Выполняет точную `CTeam -> CTeamate::Exit` цепочку timeout-login.
+ /// Выполняет точную `CTeam -> CTeamate::Exit` цепочку timeout-login.
     pub(crate) fn exit_team_player(
         &mut self,
         factory: &mut CSessionFactory,
@@ -15335,7 +14181,7 @@ impl CGame {
         }
     }
 
-    /// Выполняет точную RTTI-цепочку смены региона участника команды.
+ /// Выполняет точную RTTI-цепочку смены региона участника команды.
     pub(crate) fn set_team_player_owner_region(
         &mut self,
         factory: &mut CSessionFactory,
@@ -15368,8 +14214,8 @@ impl CGame {
         }
     }
 
-    /// Обходит весь login-list по одному общему tick snapshot и освобождает
-    /// только просроченные записи, у которых ещё существует player-owner.
+ /// Обходит весь login-list по одному общему tick snapshot и освобождает
+ /// только просроченные записи, у которых ещё существует player-owner.
     pub(crate) fn process_time_out_login_player<GetTick>(
         &mut self,
         release_interval_ms: u32,
@@ -15397,7 +14243,7 @@ impl CGame {
             }
 
             let Some(player) = self.map_player(login.player_id) else {
-                // Exact EXE оставляет такой просроченный list-node на месте.
+ // оставляет такой просроченный list-node на месте.
                 entries.push(WorldLoginTimeoutEntryOutcome::ExpiredMissingPlayer {
                     player_id: login.player_id,
                     elapsed_ms,
@@ -15483,7 +14329,7 @@ impl CGame {
                 offline_inserted,
                 friend_outcomes,
             });
-            // После erase сохранённый next node занимает тот же VecDeque index.
+ // После erase сохранённый next node занимает тот же VecDeque index.
         }
 
         WorldLoginTimeoutReport {
@@ -15492,7 +14338,7 @@ impl CGame {
         }
     }
 
-    /// Выполняет точный 40-ms pacing, warning-resync и strict login-release gate.
+ /// Выполняет точный 40-ms pacing, warning-resync и strict login-release gate.
     #[allow(
         clippy::too_many_arguments,
         reason = "clock, wait/debug adapters и session factory являются разными границами"
@@ -15551,8 +14397,8 @@ impl CGame {
         };
 
         let Some(release_interval_ms) = self.setup.release_login_player_time_ms else {
-            // Конструктор не задавал это поле, а safe Rust
-            // не выбирает значение для исходного чтения неинициализированного DWORD.
+ // Конструктор не задавал это поле, а safe Rust
+ // не выбирает значение для исходного чтения неинициализированного DWORD.
             return WorldMainLoopTailStageReport::BlockedMissingReleaseInterval { pacing };
         };
 
@@ -15575,11 +14421,11 @@ impl CGame {
         }
     }
 
-    /// Выполняет весь `CGame::MainLoop` в исходном порядке прямых owner-вызовов.
-    ///
-    /// Возвращаемый block означает только недоказанную safe-границу, на которой
-    /// старый путь не имел подтверждённого штатного продолжения. Уже выполненные
-    /// мутации, sends, clock reads и callback-и не откатываются.
+ /// Выполняет весь `CGame::MainLoop` в исходном порядке прямых owner-вызовов.
+ ///
+ /// Возвращаемый block означает только недоказанную safe-границу, на которой
+ /// старый путь не имел подтверждённого штатного продолжения. Уже выполненные
+ /// мутации, sends, clock reads и callback-и не откатываются.
     #[allow(
         clippy::too_many_arguments,
         reason = "явные state/domain/platform owners сохраняют исходные границы процесса"
@@ -16338,15 +15184,15 @@ impl CGame {
         )
     }
 
-    /// Выполняет один strict Largess gate и не запускает отдельный worker.
+ /// Выполняет один strict Largess gate и не запускает отдельный worker.
     pub(crate) fn evaluate_main_loop_largess_gate(
         &self,
         clocks: &WorldMainLoopClockState,
         state: &mut WorldMainLoopLargessState,
     ) -> WorldMainLoopLargessGateReport {
         let Some(load_interval_ms) = self.setup.load_largess_time_ms else {
-            // Конструктор не задавал `dwLoadLargessTime`;
-            // неизвестное C++-чтение не позволяет назначить последующий counter.
+ // Конструктор не задавал `dwLoadLargessTime`;
+ // неизвестное C++-чтение не позволяет назначить последующий counter.
             return WorldMainLoopLargessGateReport::BlockedMissingFact {
                 field: "dwLoadLargessTime",
             };
@@ -16360,8 +15206,8 @@ impl CGame {
             };
         }
         if self.setup.world_number.is_none() {
-            // TransferLargessThread форматировал `%d`
-            // непосредственно из исходно неинициализированного dwNumber.
+ // TransferLargessThread форматировал `%d`
+ // непосредственно из исходно неинициализированного dwNumber.
             return WorldMainLoopLargessGateReport::BlockedMissingFact {
                 field: "dwNumber",
             };
@@ -16387,7 +15233,7 @@ impl CGame {
         }
     }
 
-    /// Выполняет цельный MainLoop refresh/profile участок до `reload_profiles`.
+ /// Выполняет цельный MainLoop refresh/profile участок до `reload_profiles`.
     #[allow(
         clippy::too_many_arguments,
         reason = "caller связывает CGame, пять process-global state owners и три точных callbacks"
@@ -16482,7 +15328,7 @@ impl CGame {
         }
     }
 
-    /// Выполняет exact clear/log/tick/DB/tick/log owner `StatPlayerRanks`.
+ /// Выполняет clear/log/tick/DB/tick/log owner `StatPlayerRanks`.
     #[allow(
         clippy::too_many_arguments,
         reason = "явные DB, organizing, clock и log owners сохраняют исходный порядок"
@@ -16547,7 +15393,7 @@ impl CGame {
         })
     }
 
-    /// Выполняет цельный PlayerRanks/HonorRanks/AuctionBang maintenance-блок.
+ /// Выполняет цельный PlayerRanks/HonorRanks/AuctionBang maintenance-блок.
     #[allow(
         clippy::too_many_arguments,
         reason = "caller сохраняет clock/log callbacks и явные границы доменных owners"
@@ -16755,7 +15601,7 @@ impl CGame {
         }))
     }
 
-    /// Публикует и сбрасывает строго просроченное 600-секундное profiling-окно.
+ /// Публикует и сбрасывает строго просроченное 600-секундное profiling-окно.
     #[allow(
         clippy::too_many_arguments,
         reason = "gate связывает два точных accumulator-owner-а и готовый logger"
@@ -16838,7 +15684,7 @@ impl CGame {
         })
     }
 
-    /// Закрывает прежний Login owner до присваивания нового, как `0x3FC03`.
+ /// Закрывает прежний Login owner до присваивания нового, как `0x3FC03`.
     pub(crate) fn replace_login_client(&mut self, client: CMyNetClient) -> bool {
         let mut previous = self.net_client.take();
         if let Some(previous) = previous.as_mut() {
@@ -16850,48 +15696,48 @@ impl CGame {
         previous_client_closed
     }
 
-    /// Возвращает world number после успешного snapshot, который уже его прочёл.
+ /// Возвращает world number после успешного snapshot, который уже его прочёл.
     pub(crate) fn world_number_after_cdkey_snapshot(&self) -> u32 {
         self.setup
             .world_number
             .expect("успешный CD-key snapshot проверил dwNumber")
     }
 
-    /// Возвращает назначенный setup world number без выбора старого UB.
+ /// Возвращает назначенный setup world number без выбора старого UB.
     pub(crate) const fn configured_world_number(&self) -> Option<u32> {
         self.setup.world_number
     }
 
-    /// Возвращает byte-exact setup-имя для старой C-строки регистрации.
+ /// Возвращает byte- setup-имя для старой C-строки регистрации.
     pub(crate) fn world_name(&self) -> &[u8] {
         &self.setup.name
     }
 
-    /// Возвращает текущий Login owner после typed replacement.
+ /// Возвращает текущий Login owner после typed replacement.
     pub(crate) fn current_login_client(&self) -> Option<&CMyNetClient> {
         self.net_client.as_ref()
     }
 
-    /// Возвращает текущий Login owner для позднего включения control-send.
+ /// Возвращает текущий Login owner для позднего включения control-send.
     pub(crate) fn current_login_client_mut(&mut self) -> Option<&mut CMyNetClient> {
         self.net_client.as_mut()
     }
 
-    /// Передаёт process network-owner-у единственный mutable Login transport.
+ /// Передаёт process network-owner-у единственный mutable Login transport.
     pub(crate) fn process_login_client_mut(&mut self) -> Option<&mut CMyNetClient> {
         self.net_client.as_mut()
     }
 
-    /// Передаёт process network-owner-у единственный mutable GameServer listener.
+ /// Передаёт process network-owner-у единственный mutable GameServer listener.
     pub(crate) fn process_game_server_mut(&mut self) -> Option<&mut CMyNetServer> {
         self.net_server.as_mut()
     }
 
-    /// Воспроизводит свободный `SendErrLog`: `0x1FE08 + char + long + long + C-string`.
-    ///
-    /// Nullable text сохраняет исходный ранний return. Внутренние bytes после
-    /// первого NUL не принадлежат старой C-строке и не входят в wire; отсутствие
-    /// Login owner сохраняет обычный результат `CMessage::Send == 0`.
+ /// Воспроизводит свободный `SendErrLog`: `0x1FE08 + char + long + long + C-string`.
+ ///
+ /// Nullable text сохраняет исходный ранний return. Внутренние bytes после
+ /// первого NUL не принадлежат старой C-строке и не входят в wire; отсутствие
+ /// Login owner сохраняет обычный результат `CMessage::Send == 0`.
     pub(crate) fn send_err_log(
         &self,
         message_type: i8,
@@ -16908,12 +15754,12 @@ impl CGame {
         )
     }
 
-    /// Возвращает producer handle текущего nullable GameServer owner-а.
+ /// Возвращает producer handle текущего nullable GameServer owner-а.
     pub(crate) fn current_game_server_sender(&self) -> Option<ServerCommandHandle> {
         self.net_server.as_ref().map(CMyNetServer::command_handle)
     }
 
-    /// Публикует `0x7F80D` с четырьмя последовательными signed Windows `long`.
+ /// Публикует `0x7F80D` с четырьмя последовательными signed Windows `long`.
     pub(crate) fn send_globe_variables_to_game_server(
         &self,
         socket_id: i32,
@@ -16931,7 +15777,7 @@ impl CGame {
         }
     }
 
-    /// Считает все подключённые GameServer в исходном ordered registry.
+ /// Считает все подключённые GameServer в исходном ordered registry.
     pub(crate) fn connected_game_server_count(&self) -> i32 {
         self.game_servers
             .values()
@@ -16939,7 +15785,7 @@ impl CGame {
             .fold(0_i32, |count, _| count.wrapping_add(1))
     }
 
-    /// Возвращает `dwIndex` подключённых GameServer в исходном map-order.
+ /// Возвращает `dwIndex` подключённых GameServer в исходном map-order.
     pub(crate) fn connected_game_server_indices(&self) -> impl Iterator<Item = i32> + '_ {
         self.game_servers
             .values()
@@ -16947,7 +15793,7 @@ impl CGame {
             .map(|game_server| game_server.index as i32)
     }
 
-    /// Считает подключённые GameServer, кроме записи с `dwIndex == 5`.
+ /// Считает подключённые GameServer, кроме записи с `dwIndex == 5`.
     pub(crate) fn connected_game_server_count_ex(&self) -> i32 {
         self.game_servers
             .values()
@@ -16955,10 +15801,10 @@ impl CGame {
             .fold(0_i32, |count, _| count.wrapping_add(1))
     }
 
-    /// Возвращает первую запись с полным byte-exact IP и тем же port.
-    ///
-    /// Входной slice соответствует байтам старой C-строки до первого NUL.
-    /// Неизвестный port блокирует только сравнение уже совпавшего IP.
+ /// Возвращает первую запись с полным byte- IP и тем же port.
+ ///
+ /// Входной slice соответствует байтам старой C-строки до первого NUL.
+ /// Неизвестный port блокирует только сравнение уже совпавшего IP.
     pub(crate) fn game_server_by_address(
         &self,
         ip: &[u8],
@@ -16981,7 +15827,7 @@ impl CGame {
         Ok(None)
     }
 
-    /// Находит настроенный адрес и безусловно ставит его `bConnected`.
+ /// Находит настроенный адрес и безусловно ставит его `bConnected`.
     pub(crate) fn connect_game_server_by_address(
         &mut self,
         ip: &[u8],
@@ -17005,12 +15851,12 @@ impl CGame {
         }))
     }
 
-    /// Возвращает запись по unsigned numeric ID либо старый `nullptr` как `None`.
+ /// Возвращает запись по unsigned numeric ID либо старый `nullptr` как `None`.
     pub(crate) fn game_server(&self, index: u32) -> Option<&WorldGameServerEntry> {
         self.game_servers.get(&index)
     }
 
-    /// Сбрасывает received-player counter найденного GameServer в ноль.
+ /// Сбрасывает received-player counter найденного GameServer в ноль.
     pub(crate) fn reset_received_player_data(
         &mut self,
         game_server_index: i32,
@@ -17025,7 +15871,7 @@ impl CGame {
         }
     }
 
-    /// Выполняет native signed increment только после доказанной инициализации.
+ /// Выполняет native signed increment только после доказанной инициализации.
     pub(crate) fn increment_received_player_data(
         &mut self,
         game_server_index: i32,
@@ -17044,7 +15890,7 @@ impl CGame {
         }
     }
 
-    /// Возвращает exact counter; отсутствие map-entry сохраняет local-ноль EXE.
+ /// Возвращает counter; отсутствие map-entry сохраняет local-ноль EXE.
     pub(crate) fn received_player_data(
         &self,
         game_server_index: i32,
@@ -17058,13 +15904,13 @@ impl CGame {
         )
     }
 
-    /// Читает `bConnected`, сохраняя bit-pattern signed Windows `long` ключа.
+ /// Читает `bConnected`, сохраняя bit-pattern signed Windows `long` ключа.
     pub(crate) fn is_game_server_connected(&self, server_number: i32) -> bool {
         self.game_server(server_number as u32)
             .is_some_and(|game_server| game_server.connected)
     }
 
-    /// Применяет точную project byte-table `ToStrlwr` к живой C-строке.
+ /// Применяет точную project byte-table `ToStrlwr` к живой C-строке.
     pub(crate) fn to_strlwr(value: &mut [u8]) -> &mut [u8] {
         let end = value
             .iter()
@@ -17081,13 +15927,13 @@ impl CGame {
         value
     }
 
-    /// Возвращает игрока непосредственно из владеющего map либо `None`.
+ /// Возвращает игрока непосредственно из владеющего map либо `None`.
     pub(crate) fn map_player(&self, player_id: u32) -> Option<&CPlayer> {
         self.players.get(&player_id).map(Box::as_ref)
     }
 
-    /// Повторяет `ValidatePlayerIDinCdkey`: lookup идёт только по live map,
-    /// а account сравнивается старым `_strcmpi` до первого NUL.
+ /// Повторяет `ValidatePlayerIDinCdkey`: lookup идёт только по live map,
+ /// а account сравнивается старым `_strcmpi` до первого NUL.
     pub(crate) fn validate_player_id_in_cdkey(
         &self,
         account: &[u8],
@@ -17100,7 +15946,7 @@ impl CGame {
             .eq_ignore_ascii_case(legacy_c_string_prefix(account))
     }
 
-    /// Повторяет locked `ValidateDBPlayerIDinCdkey` над frozen save-map.
+ /// Повторяет locked `ValidateDBPlayerIDinCdkey` над frozen save-map.
     pub(crate) fn validate_db_player_id_in_cdkey(
         &self,
         account: &[u8],
@@ -17142,12 +15988,12 @@ impl CGame {
         true
     }
 
-    /// Снимает unsigned map-order ключей для exact `CLeiTing` прохода.
+ /// Снимает unsigned map-order ключей для `CLeiTing` прохода.
     pub(crate) fn player_map_keys(&self) -> Vec<u32> {
         self.players.keys().copied().collect()
     }
 
-    /// Выполняет concrete `CPlayer::UpdateLeiTing` без online-gate.
+ /// Выполняет concrete `CPlayer::UpdateLeiTing` без online-gate.
     pub(crate) fn update_map_player_lei_ting<Clock: PlayerLeiTingClock>(
         &mut self,
         map_key: u32,
@@ -17173,8 +16019,8 @@ impl CGame {
             .map(Some)
     }
 
-    /// Повторяет reached continuation `DisbandFaction`: snapshot имени берётся
-    /// до прямой записи `m_bGetFactionData=false` тому же online map-owner-у.
+ /// Повторяет reached continuation `DisbandFaction`: snapshot имени берётся
+ /// до прямой записи `m_bGetFactionData=false` тому же online map-owner-у.
     fn clear_disbanded_player_faction_data(
         &mut self,
         player_id: i32,
@@ -17198,7 +16044,7 @@ impl CGame {
         })
     }
 
-    /// Выполняет прямую wrapping-мутацию `dwExploit` только map-owner-а.
+ /// Выполняет прямую wrapping-мутацию `dwExploit` только map-owner-а.
     pub(crate) fn add_map_player_exploit_wrapping(
         &mut self,
         player_id: u32,
@@ -17209,7 +16055,7 @@ impl CGame {
             .map(|player| player.add_exploit_wrapping(increment))
     }
 
-    /// Возвращает первый map-key с `_strcmpi`-равным именем, без online-gate.
+ /// Возвращает первый map-key с `_strcmpi`-равным именем, без online-gate.
     pub(crate) fn map_player_id_by_name(&self, name: &[u8]) -> u32 {
         let name = legacy_c_string_prefix(name);
         self.players
@@ -17222,7 +16068,7 @@ impl CGame {
             .unwrap_or(0)
     }
 
-    /// Передаёт non-null player-owner map либо сохраняет его у caller-а.
+ /// Передаёт non-null player-owner map либо сохраняет его у caller-а.
     pub(crate) fn append_map_player(
         &mut self,
         incoming: Box<CPlayer>,
@@ -17240,7 +16086,7 @@ impl CGame {
         WorldMapPlayerAppendOutcome::Inserted { player_id }
     }
 
-    /// Возвращает игрока только после подтверждения ID в online-list.
+ /// Возвращает игрока только после подтверждения ID в online-list.
     pub(crate) fn online_player_by_id(&self, player_id: u32) -> Option<&CPlayer> {
         let is_online = self
             .online_players
@@ -17252,8 +16098,8 @@ impl CGame {
         self.map_player(player_id)
     }
 
-    /// Повторяет online-list scan `0x4FB07`: account-match без назначенного
-    /// GameServer не завершает поиск, а переходит к следующему list-node.
+ /// Повторяет online-list scan `0x4FB07`: account-match без назначенного
+ /// GameServer не завершает поиск, а переходит к следующему list-node.
     pub(crate) fn online_player_route_by_account(
         &self,
         account: &[u8],
@@ -17279,11 +16125,11 @@ impl CGame {
         None
     }
 
-    /// Выполняет concrete `CPlayer::UpdateFactionInfo` для map-owner-а.
-    ///
-    /// Изменяемая organizing-проекция находится внутри player-owner-а: это
-    /// позволяет синхронному доменному callback-у обновить игрока через shared
-    /// game-view без второго mutable alias всего `CGame`.
+ /// Выполняет concrete `CPlayer::UpdateFactionInfo` для map-owner-а.
+ ///
+ /// Изменяемая organizing-проекция находится внутри player-owner-а: это
+ /// позволяет синхронному доменному callback-у обновить игрока через shared
+ /// game-view без второго mutable alias всего `CGame`.
     pub(crate) fn update_player_faction_info(
         &self,
         organizing: &COrganizingCtrl,
@@ -17309,8 +16155,8 @@ impl CGame {
         outcome.map(Some)
     }
 
-    /// Выполняет тот же owner по faction-проекции, переданной непосредственно
-    /// из точки доменной мутации.
+ /// Выполняет тот же owner по faction-проекции, переданной непосредственно
+ /// из точки доменной мутации.
     pub(crate) fn update_player_faction_info_from_faction(
         &self,
         faction: &CFaction,
@@ -17333,7 +16179,7 @@ impl CGame {
         player.update_faction_info(&mut context).map(Some)
     }
 
-    /// Меняет country только у owner-а, подтверждённого exact online-list.
+ /// Меняет country только у owner-а, подтверждённого online-list.
     pub(crate) fn change_online_player_country(
         &mut self,
         player_id: u32,
@@ -17352,7 +16198,7 @@ impl CGame {
             .map(|player| player.change_country(requested_country, country_exists))
     }
 
-    /// Мутирует silence-поле только игрока, подтверждённого online-list.
+ /// Мутирует silence-поле только игрока, подтверждённого online-list.
     pub(crate) fn replace_online_player_silience_time(
         &mut self,
         player_id: u32,
@@ -17370,7 +16216,7 @@ impl CGame {
             .map(|player| player.replace_silience_time(silience_time))
     }
 
-    /// Увеличивает kill/PK только у owner-а, подтверждённого online-list.
+ /// Увеличивает kill/PK только у owner-а, подтверждённого online-list.
     pub(crate) fn increment_online_player_murder_counters(
         &mut self,
         player_id: u32,
@@ -17399,7 +16245,7 @@ impl CGame {
             .map(|player| player.reset_murder_counters())
     }
 
-    /// Декодирует player snapshot только после exact online-list lookup.
+ /// Декодирует player snapshot только после online-list lookup.
     pub(crate) fn decord_online_player_by_id(
         &mut self,
         player_id: u32,
@@ -17422,7 +16268,7 @@ impl CGame {
         Ok(true)
     }
 
-    /// Выполняет state-часть `0x5FA02` после доказанных route/online gates.
+ /// Выполняет state-часть `0x5FA02` после доказанных route/online gates.
     #[allow(
         clippy::too_many_arguments,
         reason = "positional поля wire остаются видимыми у точного call-site"
@@ -17478,7 +16324,7 @@ impl CGame {
         }))
     }
 
-    /// Декодирует LeiTing-хвост только у игрока из exact online-list.
+ /// Декодирует LeiTing-хвост только у игрока из online-list.
     pub(crate) fn decode_online_player_lei_ting(
         &mut self,
         player_id: u32,
@@ -17499,7 +16345,7 @@ impl CGame {
         Ok(true)
     }
 
-    /// Возвращает первый по map-порядку online-ID с ASCII-case-insensitive именем.
+ /// Возвращает первый по map-порядку online-ID с ASCII-case-insensitive именем.
     pub(crate) fn online_player_id_by_name(&self, name: &[u8]) -> u32 {
         let name = legacy_c_string_prefix(name);
         for (&player_id, player) in &self.players {
@@ -17517,7 +16363,7 @@ impl CGame {
         0
     }
 
-    /// Возвращает первого по map-порядку online-player с `_strcmpi`-равным account.
+ /// Возвращает первого по map-порядку online-player с `_strcmpi`-равным account.
     pub(crate) fn online_player_by_cdkey(&self, cdkey: &[u8]) -> Option<&CPlayer> {
         let cdkey = legacy_c_string_prefix(cdkey);
         for (&player_id, player) in &self.players {
@@ -17535,12 +16381,12 @@ impl CGame {
         None
     }
 
-    /// Возвращает `_Mysize` exact online-list для wire/count owners.
+ /// Возвращает `_Mysize` online-list для wire/count owners.
     pub(crate) fn online_player_count(&self) -> usize {
         self.online_players.len()
     }
 
-    /// Добавляет ID в хвост только при отсутствии и всегда вызывает enter.
+ /// Добавляет ID в хвост только при отсутствии и всегда вызывает enter.
     pub(crate) fn append_online_player(
         &mut self,
         organizing: &mut COrganizingCtrl,
@@ -17549,7 +16395,7 @@ impl CGame {
         self.append_online_player_id(organizing, player.get_id())
     }
 
-    /// Добавляет уже декодированный ID, сохраняя map до organizing callback-а.
+ /// Добавляет уже декодированный ID, сохраняя map до organizing callback-а.
     pub(crate) fn append_online_player_id(
         &mut self,
         organizing: &mut COrganizingCtrl,
@@ -17569,7 +16415,7 @@ impl CGame {
         }
     }
 
-    /// Декодирует существующий либо новый player reconnect-записи.
+ /// Декодирует существующий либо новый player reconnect-записи.
     pub(crate) fn decord_reconnected_player(
         &mut self,
         requested_player_id: u32,
@@ -17603,7 +16449,7 @@ impl CGame {
         })
     }
 
-    /// Декодирует обычный `0x5FA03/0x5FA09` snapshot без reconnect offline-эффекта.
+ /// Декодирует обычный `0x5FA03/0x5FA09` snapshot без reconnect offline-эффекта.
     pub(crate) fn decord_server_snapshot_player(
         &mut self,
         requested_player_id: u32,
@@ -17636,8 +16482,8 @@ impl CGame {
         })
     }
 
-    /// Принимает subtype `1` из `0x5FB02`, очищает transient pet vector и
-    /// выполняет ранний offline-переход только для вновь созданного owner-а.
+ /// Принимает subtype `1` из `0x5FB02`, очищает transient pet vector и
+ /// выполняет ранний offline-переход только для вновь созданного owner-а.
     pub(crate) fn decord_returned_player(
         &mut self,
         organizing: &mut COrganizingCtrl,
@@ -17701,10 +16547,10 @@ impl CGame {
         })
     }
 
-    /// Повторяет wrapping increment и точное equality-решение `0x5FA03`.
-    ///
-    /// Проверка выполняется после каждого batch, даже не terminal. При равенстве
-    /// счётчик сбрасывается до `GenerateDBData`, как в EXE.
+ /// Повторяет wrapping increment и точное equality-решение `0x5FA03`.
+ ///
+ /// Проверка выполняется после каждого batch, даже не terminal. При равенстве
+ /// счётчик сбрасывается до `GenerateDBData`, как в EXE.
     pub(crate) fn record_player_save_response(
         &mut self,
         completion_counted: bool,
@@ -17728,7 +16574,7 @@ impl CGame {
         }
     }
 
-    /// Удаляет все совпадения online-ID и затем всегда вызывает exit.
+ /// Удаляет все совпадения online-ID и затем всегда вызывает exit.
     pub(crate) fn remove_online_player(
         &mut self,
         organizing: &mut COrganizingCtrl,
@@ -17745,14 +16591,14 @@ impl CGame {
         }
     }
 
-    /// Переводит игроков потерянного GameServer в offline и уведомляет Login.
-    ///
-    /// Сначала собираются фактические `pRegion->ID` всех assignments указанного
-    /// GS в signed map-order. Затем online-list и login-list в таком порядке
-    /// дают уникальные player ID. Для каждого выполняются exact side effects:
-    /// удаление всех online-дубликатов, organizing exit, `AddPlayerList`, удаление
-    /// первой login-записи и unique offline append. В конце Login получает
-    /// `0x1FE03`, signed count и C-string имена в том же player-list order.
+ /// Переводит игроков потерянного GameServer в offline и уведомляет Login.
+ ///
+ /// Сначала собираются фактические `pRegion->ID` всех assignments указанного
+ /// GS в signed map-order. Затем online-list и login-list в таком порядке
+ /// дают уникальные player ID. Для каждого выполняются side effects:
+ /// удаление всех online-дубликатов, organizing exit, `AddPlayerList`, удаление
+ /// первой login-записи и unique offline append. В конце Login получает
+ /// `0x1FE03`, signed count и C-string имена в том же player-list order.
     pub(crate) fn on_game_server_lost<AddPlayerList>(
         &mut self,
         organizing: &mut COrganizingCtrl,
@@ -17770,8 +16616,8 @@ impl CGame {
             .filter_map(|assignment| match assignment.region.as_ref() {
                 Some(region) => Some(region.base().get_id()),
                 None => {
-                    // Старый код разыменовывал повреждённый null pRegion. Такой
-                    // внутренний UB не является compatibility-поведением.
+ // Старый код разыменовывал повреждённый null pRegion. Такой
+ // внутренний UB не является compatibility-поведением.
                     skipped_null_region_owners += 1;
                     None
                 }
@@ -17839,7 +16685,7 @@ impl CGame {
         }
     }
 
-    /// Возвращает игрока только после подтверждения ID в login-list.
+ /// Возвращает игрока только после подтверждения ID в login-list.
     pub(crate) fn login_player_by_id(&self, player_id: u32) -> Option<&CPlayer> {
         let is_login = self
             .login_players
@@ -17851,7 +16697,7 @@ impl CGame {
         self.map_player(player_id)
     }
 
-    /// Фиксирует route-поля до сериализации и последующих list-переходов.
+ /// Фиксирует route-поля до сериализации и последующих list-переходов.
     pub(crate) fn login_player_route_snapshot(
         &self,
         player_id: u32,
@@ -17864,8 +16710,8 @@ impl CGame {
         })
     }
 
-    /// Сериализует полный mapped `CPlayer` с тем же concrete organizing
-    /// adapter-ом, не меняя login/online/offline списки при safe-block-е.
+ /// Сериализует полный mapped `CPlayer` с тем же concrete organizing
+ /// adapter-ом, не меняя login/online/offline списки при safe-block-е.
     pub(crate) fn encode_map_player_full_snapshot(
         &mut self,
         organizing: &COrganizingCtrl,
@@ -17895,7 +16741,7 @@ impl CGame {
         encoded.map(|_| Some(payload))
     }
 
-    /// Сбрасывает `m_bGetFactionData` только у достигнутого map-owner-а.
+ /// Сбрасывает `m_bGetFactionData` только у действующего map-owner-а.
     pub(crate) fn reset_map_player_faction_data(&self, map_key: u32) -> bool {
         let Some(player) = self.map_player(map_key) else {
             return false;
@@ -17904,7 +16750,7 @@ impl CGame {
         true
     }
 
-    /// Возвращает inherited ID первого login-игрока с byte-exact именем.
+ /// Возвращает inherited ID первого login-игрока с byte- именем.
     pub(crate) fn login_player_id_by_name(&self, name: &[u8]) -> u32 {
         let name = legacy_c_string_prefix(name);
         for login_player in &self.login_players {
@@ -17918,13 +16764,13 @@ impl CGame {
         0
     }
 
-    /// Проверяет custom-lowercase имя во всём player-map.
+ /// Проверяет custom-lowercase имя во всём player-map.
     pub(crate) fn is_name_exist_in_map_player(
         &self,
         name: &[u8],
     ) -> Result<bool, WorldPlayerNameLookupError> {
         for player in self.players.values() {
-            // 0x0040520D lower-case-ит player-buffer раньше requested-buffer.
+ // lower-case-ит player-buffer раньше requested-buffer.
             let player_name = copy_name_for_legacy_lowercase(player.get_name());
             let requested_name = copy_name_for_legacy_lowercase(name);
             if player_name == requested_name {
@@ -17934,13 +16780,13 @@ impl CGame {
         Ok(false)
     }
 
-    /// Возвращает первый map-owner с custom-lowercase именем и creation-ID.
+ /// Возвращает первый map-owner с custom-lowercase именем и creation-ID.
     pub(crate) fn creation_player_by_name(
         &self,
         name: &[u8],
     ) -> Result<Option<&CPlayer>, WorldPlayerNameLookupError> {
         for (&player_id, player) in &self.players {
-            // 0x0040540A сохраняет обратный порядок двух ToStrlwr-вызовов.
+ // сохраняет обратный порядок двух ToStrlwr-вызовов.
             let requested_name = copy_name_for_legacy_lowercase(name);
             let player_name = copy_name_for_legacy_lowercase(player.get_name());
             if player_name == requested_name && self.creation_players.contains(&(player_id as i32))
@@ -17951,7 +16797,7 @@ impl CGame {
         Ok(None)
     }
 
-    /// Ищет имя в frozen DB-creation list под Rust mutex вместо Win32 CS.
+ /// Ищет имя в frozen DB-creation list под Rust mutex вместо Win32 CS.
     pub(crate) fn is_name_exist_in_db_creation(
         &self,
         name: &[u8],
@@ -17967,7 +16813,7 @@ impl CGame {
         Ok(false)
     }
 
-    /// Ищет имя в frozen DB-player map в исходном unsigned key-order.
+ /// Ищет имя в frozen DB-player map в исходном unsigned key-order.
     pub(crate) fn is_name_exist_in_db_data(
         &self,
         name: &[u8],
@@ -17983,8 +16829,8 @@ impl CGame {
         Ok(false)
     }
 
-    /// Повторяет exact `IsNameExitInFaction`: общий organizing lookup ищет
-    /// сначала faction, затем union и сворачивает любой match в `true`.
+ /// Повторяет `IsNameExitInFaction`: общий organizing lookup ищет
+ /// сначала faction, затем union и сворачивает любой match в `true`.
     pub(crate) fn is_name_exit_in_faction(
         &self,
         organizing: &COrganizingCtrl,
@@ -17995,9 +16841,9 @@ impl CGame {
             .map(|matched| matched.is_some())
     }
 
-    /// Выполняет полный reached `CPlayer::ChangeName` без global singleton-ов.
-    /// Filter получает отдельную mutable копию, а последующие проверки и
-    /// финальное присваивание используют исходные bytes, как exact owner.
+ /// Выполняет полный reached `CPlayer::ChangeName` без global singleton-ов.
+ /// Filter получает отдельную mutable копию, а последующие проверки и
+ /// финальное присваивание используют исходные bytes, как owner.
     pub(crate) async fn change_map_player_name<Database>(
         &mut self,
         player_id: u32,
@@ -18110,12 +16956,12 @@ impl CGame {
         ))
     }
 
-    /// Полностью очищает creation-list, не меняя владеющий player-map.
+ /// Полностью очищает creation-list, не меняя владеющий player-map.
     pub(crate) fn clear_creation_player(&mut self) {
         self.creation_players.clear();
     }
 
-    /// Считает все creation-list вхождения игроков с совпавшим account.
+ /// Считает все creation-list вхождения игроков с совпавшим account.
     pub(crate) fn creation_player_count_in_cdkey(&self, cdkey: &[u8]) -> u8 {
         let cdkey = legacy_c_string_prefix(cdkey);
         let mut count = 0_u8;
@@ -18132,7 +16978,7 @@ impl CGame {
         count
     }
 
-    /// Материализует exact `GetCreationPlayerVectorByCdkey` ID-vector.
+ /// Материализует `GetCreationPlayerVectorByCdkey` ID-vector.
     pub(crate) fn creation_player_ids_by_cdkey(&self, cdkey: &[u8]) -> Vec<u32> {
         let cdkey = legacy_c_string_prefix(cdkey);
         let mut player_ids = Vec::new();
@@ -18149,10 +16995,10 @@ impl CGame {
         player_ids
     }
 
-    /// Передаёт уникального creation-игрока владеющему map после list-вставки.
-    ///
-    /// На обеих collision-ветвях синхронно передаёт точный payload исходного
-    /// `AddLogText`; duplicate уничтожается только после возврата callback-а.
+ /// Передаёт уникального creation-игрока владеющему map после list-вставки.
+ ///
+ /// На обеих collision-ветвях синхронно передаёт точный payload исходного
+ /// `AddLogText`; duplicate уничтожается только после возврата callback-а.
     pub(crate) fn append_creation_player(
         &mut self,
         incoming: Box<CPlayer>,
@@ -18162,9 +17008,9 @@ impl CGame {
         let player_id = signed_player_id as u32;
         if self.creation_players.contains(&signed_player_id) {
             add_log_text(WorldCreationPlayerAppendLog::Duplicate { player_id });
-            // `0x00410C36..0x00410C4A` удаляет incoming до исходного UAF.
-            // Box::drop сохраняет destruction; typed outcome запрещает caller-у
-            // продолжить с уже уничтоженным non-owning alias.
+ // удаляет incoming до исходного UAF.
+ // Box::drop сохраняет destruction; typed outcome запрещает caller-у
+ // продолжить с уже уничтоженным non-owning alias.
             drop(incoming);
             return WorldCreationPlayerAppendOutcome::DuplicateReleased { player_id };
         }
@@ -18172,9 +17018,9 @@ impl CGame {
         self.creation_players.push_back(signed_player_id);
         if self.players.contains_key(&player_id) {
             add_log_text(WorldCreationPlayerAppendLog::ExistingMapOwner);
-            // Original уже добавил list-ID, оставил старый map-owner и вернул
-            // incoming pointer caller-у. Box выражает именно это непринятое
-            // владение; дальнейшая судьба объекта принадлежит OnLogMessage.
+ // Original уже добавил list-ID, оставил старый map-owner и вернул
+ // incoming pointer caller-у. Box выражает именно это непринятое
+ // владение; дальнейшая судьба объекта принадлежит OnLogMessage.
             return WorldCreationPlayerAppendOutcome::ExistingMapOwnerKept {
                 player_id,
                 incoming,
@@ -18185,8 +17031,8 @@ impl CGame {
         WorldCreationPlayerAppendOutcome::Inserted { player_id }
     }
 
-    /// Выполняет exact list-order `AddOrginGoodsToPlayer`; reject одного slot-а
-    /// не останавливает дальнейший обход, как исходный debug-only failure.
+ /// Выполняет list-order `AddOrginGoodsToPlayer`; reject одного slot-а
+ /// не останавливает дальнейший обход, как исходный debug-only failure.
     pub(crate) fn add_origin_goods_to_player<Random>(
         &self,
         player: &mut CPlayer,
@@ -18211,7 +17057,7 @@ impl CGame {
         Ok(WorldOriginGoodsReport { entries })
     }
 
-    /// Добавляет унаследованный ID игрока в хвост, если его ещё нет в списке.
+ /// Добавляет унаследованный ID игрока в хвост, если его ещё нет в списке.
     pub(crate) fn append_offline_player(&mut self, player: &CPlayer) {
         let _ = self.append_offline_player_id(player.get_id() as u32);
     }
@@ -18224,18 +17070,18 @@ impl CGame {
         true
     }
 
-    /// Полностью очищает список offline-ID.
+ /// Полностью очищает список offline-ID.
     pub(crate) fn clear_offline_player(&mut self) {
         self.offline_players.clear();
     }
 
-    /// Удаляет все совпадения ID, как исходный `std::list::remove`.
+ /// Удаляет все совпадения ID, как исходный `std::list::remove`.
     pub(crate) fn remove_offline_player(&mut self, player_id: u32) {
         self.offline_players
             .retain(|offline_id| *offline_id != player_id);
     }
 
-    /// Добавляет login-запись в хвост, не меняя существующий duplicate ID.
+ /// Добавляет login-запись в хвост, не меняя существующий duplicate ID.
     pub(crate) fn append_login_player(&mut self, player_id: u32, login_time_ms: u32) {
         if self
             .login_players
@@ -18250,8 +17096,8 @@ impl CGame {
         });
     }
 
-    /// Возвращает первый mapped player в порядке login-list с `_strcmpi`
-    /// совпавшим account, не переставляя и не очищая отсутствующие map-owner-ы.
+ /// Возвращает первый mapped player в порядке login-list с `_strcmpi`
+ /// совпавшим account, не переставляя и не очищая отсутствующие map-owner-ы.
     pub(crate) fn login_player_by_account(
         &self,
         account: &[u8],
@@ -18273,14 +17119,14 @@ impl CGame {
         None
     }
 
-    /// Удаляет первый ожидающий DB-load record и синхронно пишет exact log.
+ /// Удаляет первый ожидающий DB-load record и синхронно пишет log.
     pub(crate) fn remove_player_load_data(&self, player_id: i32) -> bool {
         self.player_load_queue
             .remove_player_load_data(player_id)
             .is_some()
     }
 
-    /// Копирует request в exact fixed record и передаёт его DB-load FIFO.
+ /// Копирует request в fixed record и передаёт его DB-load FIFO.
     pub(crate) fn push_player_load_request(
         &self,
         account: &[u8],
@@ -18307,10 +17153,10 @@ impl CGame {
         })
     }
 
-    /// Выполняет один точный drain/process batch фонового DB-load worker-а.
-    ///
-    /// Несколько worker-ов конкурируют только за атомарный drain очереди; один
-    /// победитель последовательно обрабатывает весь полученный FIFO-list.
+ /// Выполняет один точный drain/process batch фонового DB-load worker-а.
+ ///
+ /// Несколько worker-ов конкурируют только за атомарный drain очереди; один
+ /// победитель последовательно обрабатывает весь полученный FIFO-list.
     pub(crate) async fn process_player_load_batch<Loader, LoadLargess, GetTick>(
         &self,
         worker_index: u32,
@@ -18328,7 +17174,7 @@ impl CGame {
             .await
     }
 
-    /// Повторяет polling-loop `LoadPlayerDataFromDB` до одного из двух flags.
+ /// Повторяет polling-loop `LoadPlayerDataFromDB` до одного из двух flags.
     pub(crate) async fn run_player_load_worker<Loader, LoadLargess, GetTick>(
         &self,
         worker_index: u32,
@@ -18355,7 +17201,7 @@ impl CGame {
             .await
     }
 
-    /// Удаляет первую login-запись с указанным ID либо сохраняет список.
+ /// Удаляет первую login-запись с указанным ID либо сохраняет список.
     pub(crate) fn remove_login_player(&mut self, player_id: u32) -> bool {
         let Some(index) = self
             .login_players
@@ -18368,12 +17214,12 @@ impl CGame {
         true
     }
 
-    /// Возвращает регион по signed numeric ID либо старый `nullptr` как `None`.
+ /// Возвращает регион по signed numeric ID либо старый `nullptr` как `None`.
     pub(crate) fn region(&self, region_id: i32) -> Option<&WorldRegionAssignment> {
         self.regions.get(&region_id)
     }
 
-    /// Обновляет владельца города и рассылает exact `0x7FE27` всем GameServer.
+ /// Обновляет владельца города и рассылает `0x7FE27` всем GameServer.
     pub(crate) fn refresh_owned_city_org(
         &self,
         organizing: &COrganizingCtrl,
@@ -18390,8 +17236,8 @@ impl CGame {
         ))
     }
 
-    /// Применяет уже разрешённую organizing-проекцию без повторного заимствования
-    /// controller-а из синхронного доменного callback-а.
+ /// Применяет уже разрешённую organizing-проекцию без повторного заимствования
+ /// controller-а из синхронного доменного callback-а.
     pub(crate) fn refresh_owned_city_org_with_country(
         &self,
         region_id: i32,
@@ -18429,7 +17275,7 @@ impl CGame {
         )
     }
 
-    /// Возвращает только живой concrete `CRegion` create-role ветки.
+ /// Возвращает только живой concrete `CRegion` create-role ветки.
     pub(crate) fn creation_region_base(&self, region_id: i32) -> Option<&CRegion> {
         self.regions
             .get(&region_id)?
@@ -18439,7 +17285,7 @@ impl CGame {
             .map(CWorldRegion::creation_region_base)
     }
 
-    /// Применяет три tax-поля к достигнутому `tagRegion::pRegion`.
+ /// Применяет три tax-поля к действующему `tagRegion::pRegion`.
     pub(crate) fn set_region_param_from_game_server(
         &mut self,
         region_id: i32,
@@ -18461,7 +17307,7 @@ impl CGame {
         WorldRegionParamUpdateOutcome::Applied
     }
 
-    /// Передаёт remaining wire и общий cursor точному region-param owner-у.
+ /// Передаёт remaining wire и общий cursor точному region-param owner-у.
     pub(crate) fn decode_region_param_from_game_server(
         &mut self,
         region_id: i32,
@@ -18481,8 +17327,8 @@ impl CGame {
         )
     }
 
-    /// Сериализует initial-config регионы в signed map-order и передаёт каждый
-    /// элемент visitor-у до перехода к следующему узлу.
+ /// Сериализует initial-config регионы в signed map-order и передаёт каждый
+ /// элемент visitor-у до перехода к следующему узлу.
     pub(crate) fn visit_initial_region_snapshots<Visit>(
         &self,
         target_game_server_index: u32,
@@ -18534,7 +17380,7 @@ impl CGame {
         Ok(())
     }
 
-    /// Проходит `tagRegion::pRegion`, не смешивая отсутствующий key и null.
+ /// Проходит `tagRegion::pRegion`, не смешивая отсутствующий key и null.
     pub(crate) fn region_name(&self, region_id: i32) -> WorldRegionNameLookup<'_> {
         let Some(assignment) = self.region(region_id) else {
             return WorldRegionNameLookup::RegionNotFound;
@@ -18545,17 +17391,17 @@ impl CGame {
         WorldRegionNameLookup::Name(region.get_name())
     }
 
-    /// Повторяет ordered `GetRegion(char const*)` с case-sensitive `strcmp`.
-    ///
-    /// Route-поля являются typed snapshot найденного `tagRegion`, а не новой
-    /// ступенью поиска; null owner безопасно учитывается вместо старого UB.
+ /// Повторяет ordered `GetRegion(char const*)` с case-sensitive `strcmp`.
+ ///
+ /// Route-поля являются typed snapshot найденного `tagRegion`, а не новой
+ /// ступенью поиска; null owner безопасно учитывается вместо старого UB.
     pub(crate) fn named_region_lookup(&self, name: &[u8]) -> WorldNamedRegionLookup {
         let name = legacy_c_string_prefix(name);
         let mut skipped_null_owners = 0;
         for assignment in self.regions.values() {
             let Some(region) = assignment.region.as_ref().map(WorldRegionOwner::base) else {
-                // В EXE `GetRegion(name)` разыменовывал null `pRegion`. Это
-                // внутренний UB повреждённого состояния, а не wire-контракт.
+ // В EXE `GetRegion(name)` разыменовывал null `pRegion`. Это
+ // внутренний UB повреждённого состояния, а не wire-контракт.
                 skipped_null_owners += 1;
                 continue;
             };
@@ -18579,7 +17425,7 @@ impl CGame {
         }
     }
 
-    /// Собирает exact ordered fan-out по фактическому `pRegion->ID`.
+ /// Собирает ordered fan-out по фактическому `pRegion->ID`.
     pub(crate) fn region_routes_by_owner_id(&self, region_id: i32) -> WorldRegionIdRouteScan {
         let mut skipped_null_owners = 0;
         let mut matching_region_keys = 0;
@@ -18608,46 +17454,46 @@ impl CGame {
         }
     }
 
-    /// Проверяет обе ступени исходного `GetRegion -> tagRegion::pRegion`.
+ /// Проверяет обе ступени исходного `GetRegion -> tagRegion::pRegion`.
     pub(crate) fn has_materialized_region(&self, region_id: i32) -> bool {
         self.region(region_id)
             .and_then(|assignment| assignment.region.as_ref())
             .is_some()
     }
 
-    /// Возвращает владельца только для materialized `tagRegion::pRegion`.
+ /// Возвращает владельца только для materialized `tagRegion::pRegion`.
     pub(crate) fn region_owned_faction_id(&self, region_id: i32) -> Option<i32> {
         self.region(region_id)
             .and_then(|assignment| assignment.region.as_ref())
             .map(|region| region.base().get_owned_city_faction())
     }
 
-    /// Возвращает reached country byte только живого region-owner-а.
+ /// Возвращает reached country byte только живого region-owner-а.
     pub(crate) fn region_country_id(&self, region_id: i32) -> Option<u8> {
         self.region(region_id)
             .and_then(|assignment| assignment.region.as_ref())
             .and_then(|region| region.base().region_base().country())
     }
 
-    /// Находит назначенный региону GameServer через две исходные map-ступени.
+ /// Находит назначенный региону GameServer через две исходные map-ступени.
     pub(crate) fn get_region_game_server(&self, region_id: i32) -> Option<&WorldGameServerEntry> {
         let region = self.region(region_id)?;
         self.game_server(region.game_server_index)
     }
 
-    /// Возвращает `dwIndex` назначенного GameServer либо исходный ноль.
+ /// Возвращает `dwIndex` назначенного GameServer либо исходный ноль.
     pub(crate) fn game_server_number_by_region_id(&self, region_id: i32) -> i32 {
         self.get_region_game_server(region_id)
             .map_or(0, |game_server| game_server.index as i32)
     }
 
-    /// Находит GameServer через online-игрока и его унаследованный region ID.
+ /// Находит GameServer через online-игрока и его унаследованный region ID.
     pub(crate) fn player_game_server(&self, player_id: i32) -> Option<&WorldGameServerEntry> {
         let player = self.online_player_by_id(player_id as u32)?;
         self.get_region_game_server(player.get_region_id())
     }
 
-    /// Возвращает `dwIndex` GameServer online-игрока либо исходный ноль.
+ /// Возвращает `dwIndex` GameServer online-игрока либо исходный ноль.
     pub(crate) fn game_server_number_by_player_id(&self, player_id: i32) -> i32 {
         let Some(player) = self.online_player_by_id(player_id as u32) else {
             return 0;
@@ -18658,7 +17504,7 @@ impl CGame {
         game_server.index as i32
     }
 
-    /// Делегирует живое сообщение готовому `CMessage::SendToMapID`.
+ /// Делегирует живое сообщение готовому `CMessage::SendToMapID`.
     pub(crate) fn send_msg_to_game_server(
         &self,
         map_id: i32,
@@ -18668,7 +17514,7 @@ impl CGame {
         message.send_to_map_id(sender.as_ref(), map_id)
     }
 
-    /// Начинает точный цикл опроса GameServer из ветки `0x4FC01`.
+ /// Начинает точный цикл опроса GameServer из ветки `0x4FC01`.
     pub(crate) fn begin_game_server_ping(&mut self) -> (usize, u32) {
         self.ping_in_progress = true;
         let cleared_responses = self.ping_game_servers.len();
@@ -18678,13 +17524,13 @@ impl CGame {
         (cleared_responses, started_at_ms)
     }
 
-    /// Добавляет один ответ GameServer без проверки текущего ping-флага.
+ /// Добавляет один ответ GameServer без проверки текущего ping-флага.
     pub(crate) fn record_game_server_ping(&mut self, response: WorldPingGameServerInfo) -> usize {
         self.ping_game_servers.push(response);
         self.ping_game_servers.len()
     }
 
-    /// Добавляет request `(IP, player_id)` без замены прежнего duplicate IP.
+ /// Добавляет request `(IP, player_id)` без замены прежнего duplicate IP.
     pub(crate) fn add_item_to_bai_tan_request_list(&mut self, ip: u32, player_id: i32) -> bool {
         if let std::collections::btree_map::Entry::Vacant(entry) = self.bai_tan_requests.entry(ip) {
             entry.insert(player_id);
@@ -18694,7 +17540,7 @@ impl CGame {
         }
     }
 
-    /// Выполняет три независимых insert-а active BaiTan registries.
+ /// Выполняет три независимых insert-а active BaiTan registries.
     pub(crate) fn add_item_to_bai_tan_list(
         &mut self,
         player_id: i32,
@@ -18740,7 +17586,7 @@ impl CGame {
         }
     }
 
-    /// Удаляет player->IP и player->route, уменьшая найденный IP refcount.
+ /// Удаляет player->IP и player->route, уменьшая найденный IP refcount.
     pub(crate) fn del_item_from_bai_tan_list(&mut self, player_id: i32) -> WorldBaiTanRemoval {
         let mapped_ip = self.bai_tan_player_ips.get(&player_id).copied();
         let remaining_ip_refcount = mapped_ip.and_then(|ip| self.del_item_to_bai_tan_ip_list(ip));
@@ -18755,7 +17601,7 @@ impl CGame {
         }
     }
 
-    /// Обрабатывает весь request map в unsigned IP-order и очищает его в конце.
+ /// Обрабатывает весь request map в unsigned IP-order и очищает его в конце.
     pub(crate) fn done_bai_tan_list(&mut self) -> WorldDoneBaiTanListReport {
         let requests: Vec<(u32, i32)> = self
             .bai_tan_requests
@@ -18787,27 +17633,27 @@ impl CGame {
         }
     }
 
-    /// Возвращает текущий active route, сохранённый при первом player insert.
+ /// Возвращает текущий active route, сохранённый при первом player insert.
     pub(crate) fn bai_tan_game_server_index(&self, player_id: i32) -> Option<i32> {
         self.bai_tan_routes.get(&player_id).copied()
     }
 
-    /// Возвращает текущий refcount одного BaiTan IP.
+ /// Возвращает текущий refcount одного BaiTan IP.
     pub(crate) fn bai_tan_ip_refcount(&self, ip: u32) -> Option<i32> {
         self.bai_tan_ip_refcounts.get(&ip).copied()
     }
 
-    /// Безусловно присваивает signed LoginServer ID из ветки `0x4FC03`.
+ /// Безусловно присваивает signed LoginServer ID из ветки `0x4FC03`.
     pub(crate) fn assign_login_server_id(&mut self, login_server_id: i32) -> i32 {
         std::mem::replace(&mut self.login_server_id, login_server_id)
     }
 
-    /// Возвращает signed LoginServer ID для финального initial packet `0x3B`.
+ /// Возвращает signed LoginServer ID для финального initial packet `0x3B`.
     pub(crate) const fn login_server_id(&self) -> i32 {
         self.login_server_id
     }
 
-    /// Сбрасывает live/queued honor counters и общий elimination-ledger.
+ /// Сбрасывает live/queued honor counters и общий elimination-ledger.
     pub(crate) fn reset_honor_eliminate_info(&mut self, rank_mask: u32) -> bool {
         for player in self.players.values_mut() {
             player.reset_honor_eliminate_info(rank_mask);
@@ -18818,7 +17664,7 @@ impl CGame {
         true
     }
 
-    /// Повторяет online-check и per-player duplicate-ledger ветки `0x5FD0D`.
+ /// Повторяет online-check и per-player duplicate-ledger ветки `0x5FD0D`.
     pub(crate) fn register_honor_eliminator(
         &mut self,
         player_id: u32,
@@ -18839,16 +17685,16 @@ impl CGame {
         WorldHonorEliminatorRegistration::Accepted
     }
 
-    /// Публикует owned сообщение в исходную receive FIFO `s_pNetServer`.
+ /// Публикует owned сообщение в исходную receive FIFO `s_pNetServer`.
     pub(crate) fn queue_local_world_message(
         &self,
         message: CMessage,
     ) -> Result<(), WorldLocalMessageQueueBlock> {
         let message_type = message.message_type();
         let Some(net_server) = self.net_server.as_ref() else {
-            // Исходный владелец безусловно разыменовывал
-            // обязательный s_pNetServer. Safe Rust не подменяет этот путь
-            // прямым вызовом handler-а и сохраняет границу FIFO.
+ // Исходный владелец безусловно разыменовывал
+ // обязательный s_pNetServer. Safe Rust не подменяет этот путь
+ // прямым вызовом handler-а и сохраняет границу FIFO.
             return Err(WorldLocalMessageQueueBlock { message_type });
         };
         net_server.publish_local_message(message);
@@ -18878,8 +17724,8 @@ pub(crate) fn create_game(
     game: &mut Option<Box<CGame>>,
 ) -> Result<WorldCreateGameReport, WorldCreateGameBlock> {
     if game.is_some() {
-        // Повторный CreateGame перезаписывал бы global pointer и терял прежний
-        // owner. Такой caller не доказан, поэтому safe API не создаёт утечку.
+ // Повторный CreateGame перезаписывал бы global pointer и терял прежний
+ // owner. Такой caller не доказан, поэтому safe API не создаёт утечку.
         return Err(WorldCreateGameBlock);
     }
     *game = Some(Box::new(CGame::new()));
@@ -20051,9 +18897,9 @@ impl CountryWarVictoryContext for WorldCountryWarEffects<'_> {
             ],
         );
         let visible = legacy_c_string_prefix(&formatted);
-        // Нормальный output сохраняется byte-exact; переполнение старого
-        // 256-byte `_sprintf` было внутренним UB, поэтому safe adapter
-        // оставляет место под C-string NUL вместо чтения за stack-buffer.
+ // Нормальный output сохраняется byte-; переполнение старого
+ // 256-byte `_sprintf` было внутренним UB, поэтому safe adapter
+ // оставляет место под C-string NUL вместо чтения за stack-buffer.
         Ok(visible[..visible.len().min(0xff)].to_vec())
     }
 
@@ -22870,38 +21716,38 @@ impl WorldRunSaveGuard<'_> {
 }
 
 impl<'save> WorldSaveThreadGuard<'save> {
-    /// Явно завершает заблокированный typed owner после решения его границы.
+ /// Явно завершает заблокированный typed owner после решения его границы.
     pub(crate) fn into_save_owner(self) -> &'save mut WorldSaveDataOwner {
         self.save
     }
 
-    /// Завершает normal-path сериализацию перед отдельным end-log.
+ /// Завершает normal-path сериализацию перед отдельным end-log.
     fn release(self) {}
 
-    /// Заканчивает внешний owner немедленно, не изображая normal unlock-путь.
+ /// Заканчивает внешний owner немедленно, не изображая normal unlock-путь.
     fn stop_outer_owner(self) {}
 }
 
 /// Доказанный результат тела `SaveThreadFunc` внутри process-owned потока.
 pub(crate) enum WorldSaveThreadReport<'save> {
-    /// Start-log остановился после входа в save-сериализацию.
+ /// Start-log остановился после входа в save-сериализацию.
     BlockedStartLog {
         guard: WorldSaveThreadGuard<'save>,
         block: SaveDataLogPublishBlock,
     },
-    /// `DoSaveData` не вернулся; COM-uninit/unlock/end-log не назначены.
+ /// `DoSaveData` не вернулся; COM-uninit/unlock/end-log не назначены.
     BlockedLifecycle {
         guard: WorldSaveThreadGuard<'save>,
         start_log: SaveDataLogPublishDisposition,
         lifecycle: DoSaveDataLifecycleReport,
     },
-    /// Lifecycle вернулся и serialization снята, но последний log заблокирован.
+ /// Lifecycle вернулся и serialization снята, но последний log заблокирован.
     BlockedEndLog {
         start_log: SaveDataLogPublishDisposition,
         lifecycle: DoSaveDataLifecycleReport,
         block: SaveDataLogPublishBlock,
     },
-    /// Оба thread-log-а и весь lifecycle завершены; старый exit code равен нулю.
+ /// Оба thread-log-а и весь lifecycle завершены; старый exit code равен нулю.
     Complete {
         start_log: SaveDataLogPublishDisposition,
         lifecycle: DoSaveDataLifecycleReport,
@@ -22928,7 +21774,7 @@ pub(crate) trait WorldSaveRuntimeContext {
     ) -> WorldSaveThreadHandleState;
 }
 
-/// Одноразовая обязанность достигнутого `__beginthreadex(SaveThreadFunc)`.
+/// Одноразовая обязанность действующего `__beginthreadex(SaveThreadFunc)`.
 ///
 /// Сам request не угадывает handle: process save-owner возвращает наблюдаемое
 /// `Open/Empty` состояние после фактической попытки запуска.
@@ -22942,7 +21788,7 @@ pub(crate) struct WorldSaveThreadLaunchRequest {
     pub(crate) thread_id_output_requested: bool,
 }
 
-/// Snapshot/cleanup отчёт Run-ветви вместе с достигнутым launch call-site.
+/// Snapshot/cleanup отчёт Run-ветви вместе с действующим launch call-site.
 #[derive(Debug)]
 pub(crate) struct WorldRunSaveLaunchReport {
     pub(crate) snapshot: WorldGenerateDbDataReport,
@@ -22971,7 +21817,7 @@ pub(crate) struct WorldCollectPlayerDataBroadcast {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Process-global save-флаги и tick, прочитанные достигнутым участком Run.
+/// Process-global save-флаги и tick, прочитанные действующим участком Run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldRunSaveTriggerState {
     pub(crate) send_save_message_now: bool,
@@ -22980,14 +21826,14 @@ pub(crate) struct WorldRunSaveTriggerState {
     pub(crate) last_save_point_time_ms: u32,
 }
 
-/// Manual save-request log и первое достигнутое чтение `dwSavePointTime`.
+/// Manual save-request log и первое действующее чтение `dwSavePointTime`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldManualSaveRequestReport {
     pub(crate) log: AddLogTextDisposition,
     pub(crate) save_point_time_ms: u32,
 }
 
-/// Результат interval/try-lock pre-gate до уже восстановленного save-решения.
+/// Результат interval/try-lock pre-gate до уже действующего save-решения.
 pub(crate) enum WorldRunSavePreGateReport<'game> {
     IntervalNotElapsed {
         manual_request: Option<WorldManualSaveRequestReport>,
@@ -23094,9 +21940,9 @@ fn save_thread_log_event(payload: &'static [u8]) -> SaveDataLogEvent {
     }
 }
 
-/// Выполняет exact body `SaveThreadFunc` внутри уже созданного worker-thread.
+/// Выполняет body `SaveThreadFunc` внутри уже созданного worker-thread.
 ///
-/// `CoInitialize/CoUninitialize` не имеют Linux runtime-аналога: достигнутые
+/// `CoInitialize/CoUninitialize` не имеют Linux runtime-аналога: действующие
 /// DB-owner-ы используют Tiberius, поэтому COM apartment был заменяемым
 /// техническим механизмом, а не наблюдаемым серверным контрактом.
 #[allow(
@@ -23176,8 +22022,8 @@ where
         disposition => disposition,
     };
 
-    // DB batch и cloneable Login FIFO были сняты атомарно в trigger-позиции;
-    // дальнейший MainLoop уже не разделяет с worker-ом mutable game-owner.
+ // DB batch и cloneable Login FIFO были сняты атомарно в trigger-позиции;
+ // дальнейший MainLoop уже не разделяет с worker-ом mutable game-owner.
     let login_sender = guard.save.login_sender.as_deref();
     let lifecycle = {
         let mut session = WorldDbDataSaveSession {
@@ -23229,7 +22075,7 @@ where
         };
     }
 
-    // Эта точка одновременно заменяет CoUninitialize и исходный unlock.
+ // Эта точка одновременно заменяет CoUninitialize и исходный unlock.
     guard.release();
     release_serialization();
     let end_log = match log_sink.publish(&save_thread_log_event(b"SaveThread end...")) {
@@ -23646,14 +22492,14 @@ fn normalize_script_path(path: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// Достигнутый результат условной публикации `ShowSaveInfo`.
+/// Действующий результат условной публикации `ShowSaveInfo`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ShowSaveInfoDisposition {
     Suppressed,
     Logged(AddLogTextDisposition),
 }
 
-/// Выполняет exact gate и два последовательных formatting-владельца.
+/// Выполняет gate и два последовательных formatting-владельца.
 ///
 /// `formatted_message` — результат первого variadic call-site форматирования
 /// без конечного NUL. При выключенном `show_save_info` значение сознательно не

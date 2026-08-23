@@ -1,18 +1,12 @@
 //! Владелец fairy-container исторического `WorldServer`.
 //!
-//! Статус constructor/destructor-state RVA `0x000D7A70/0x000D7B20`,
-//! `Clear/Release` folded RVA `0x000D7AA0/0x000D7AB0` и собственного
-//! `Serialize/Unserialize` RVA `0x000D7AD0/0x000D7B80`, folded
-//! `Add/Add(position)/Find/Remove` RVA
-//! `0x000D7AC0/0x000D7830/0x000D7840/0x000D7850` и `AddFromDB` RVA
-//! `0x000D7C10` — `IMPLEMENTED`. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\container\cfairycontainer.cpp:14,22,50,89,102`.
+//! `Clear/Release` folded и собственного
+//! `Serialize/Unserialize`, folded
+//! `Add/Add(position)/Find/Remove`
+//! и `AddFromDB`
+//! — часть контракта owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Exact PDB задаёт размер `0x88`: base `CVolumeLimitGoodsContainer` по `+0x0`
+//! Layout сохраняет размер `0x88`: base `CVolumeLimitGoodsContainer` по `+0x0`
 //! и массив пяти `unsigned long m_dwHatchTime` общей длиной `0x14` по `+0x74`.
 //! Constructor создаёт base с volume `0` и пять нулей. `Clear`, `Release` и
 //! `SetContainerVolume` меняют только base-state: hatch-time сохраняются.
@@ -28,11 +22,11 @@
 //!
 //! Поэтому короткий source после успешного base-wire сохраняет очищенный и
 //! частично декодированный container, cursor, уже назначенные ранние hatch-
-//! time и старые значения ещё не достигнутого хвоста. Безразмерное legacy-
+//! time и старые значения ещё не действующего хвоста. Безразмерное legacy-
 //! чтение возвращает локальную типизированную ошибку, а не дополняет данные
-//! нулями. Volume `0x0E` задаёт будущий `CPlayer::DecordFromByteArray` отдельно
+//! нулями. Volume `0x0E` задаёт связанный `CPlayer::DecordFromByteArray` отдельно
 //! между `Release` и этим decoder-ом; constructor не получает его заранее.
-//! Folded `Add/Find/Remove` имеют общие RVA с `CBattleFairyContainer` и являются
+//! Folded `Add/Find/Remove` имеют общие с `CBattleFairyContainer` и являются
 //! тонкими volume-tail-calls без дополнительной type-policy. `AddFromDB`
 //! намеренно проверяет cell до делегирования, после чего base повторяет ту же
 //! проверку перед direct map/cell insert; collision возвращает false и писал
@@ -47,14 +41,14 @@ use crate::worldserver::appworld::goods::cgoods::CGoods;
 
 const HATCH_TIME_COUNT: usize = 5;
 
-/// Достигнутое состояние исходного `CFairyContainer`, не копия его x86 ABI.
+/// Действующее состояние исходного `CFairyContainer`, не копия его x86 ABI.
 pub(crate) struct CFairyContainer {
     volume_state: CVolumeLimitGoodsContainer,
     hatch_times: [u32; HATCH_TIME_COUNT],
 }
 
 impl CFairyContainer {
-    /// Создаёт base с нулевым volume и пять нулевых hatch-time.
+ /// Создаёт base с нулевым volume и пять нулевых hatch-time.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             volume_state: CVolumeLimitGoodsContainer::with_constructor_defaults(),
@@ -62,22 +56,22 @@ impl CFairyContainer {
         }
     }
 
-    /// Сбрасывает только base-state и задаёт точное unsigned число cells.
+ /// Сбрасывает только base-state и задаёт точное unsigned число cells.
     pub(crate) fn set_container_volume(&mut self, size: u32) {
         self.volume_state.set_container_volume(size);
     }
 
-    /// Очищает товары и cells, сохраняя volume и все hatch-time.
+ /// Очищает товары и cells, сохраняя volume и все hatch-time.
     pub(crate) fn clear(&mut self) {
         self.volume_state.clear();
     }
 
-    /// Сбрасывает inherited owner, товары и volume, сохраняя hatch-time.
+ /// Сбрасывает inherited owner, товары и volume, сохраняя hatch-time.
     pub(crate) fn release(&mut self) {
         self.volume_state.release();
     }
 
-    /// Делегирует folded automatic volume Add без новой fairy-policy.
+ /// Делегирует folded automatic volume Add без новой fairy-policy.
     pub(crate) fn add(
         &mut self,
         goods: Box<CGoods>,
@@ -86,7 +80,7 @@ impl CFairyContainer {
         self.volume_state.add(goods, registry)
     }
 
-    /// Делегирует folded positional volume Add.
+ /// Делегирует folded positional volume Add.
     pub(crate) fn add_at(
         &mut self,
         position: u32,
@@ -96,17 +90,17 @@ impl CFairyContainer {
         self.volume_state.add_at(position, goods, registry)
     }
 
-    /// Делегирует folded locked-aware GUID lookup.
+ /// Делегирует folded locked-aware GUID lookup.
     pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         self.volume_state.find(ex_id)
     }
 
-    /// Возвращает mutable DB-view exact fairy cell-а.
+ /// Возвращает mutable DB-view fairy cell-а.
     pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         self.volume_state.get_goods_mut(position)
     }
 
-    /// Делегирует folded volume removal с точным factory/cell порядком.
+ /// Делегирует folded volume removal с точным factory/cell порядком.
     pub(crate) fn remove(
         &mut self,
         ex_id: &CGuid,
@@ -115,7 +109,7 @@ impl CFairyContainer {
         self.volume_state.remove(ex_id, registry)
     }
 
-    /// Выполняет derived collision check до повторной base DB-проверки.
+ /// Выполняет derived collision check до повторной base DB-проверки.
     pub(crate) fn add_from_db(
         &mut self,
         position: u32,
@@ -128,7 +122,7 @@ impl CFairyContainer {
         self.volume_state.add_from_db(position, goods, registry)
     }
 
-    /// Замораживает inherited volume traversal, не сбрасывая hatch-time.
+ /// Замораживает inherited volume traversal, не сбрасывая hatch-time.
     pub(crate) fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -136,7 +130,7 @@ impl CFairyContainer {
         self.volume_state.db_save_entries(registry)
     }
 
-    /// Кодирует base volume-wire, затем пять hatch-time и обнуляет их по одному.
+ /// Кодирует base volume-wire, затем пять hatch-time и обнуляет их по одному.
     pub(crate) fn serialize(
         &mut self,
         destination: &mut Vec<u8>,
@@ -153,7 +147,7 @@ impl CFairyContainer {
         Ok(base_result)
     }
 
-    /// Декодирует base volume-wire, затем последовательно назначает hatch-time.
+ /// Декодирует base volume-wire, затем последовательно назначает hatch-time.
     pub(crate) fn unserialize(
         &mut self,
         source: &[u8],
@@ -182,8 +176,8 @@ fn read_hatch_time(source: &[u8], cursor: &mut usize) -> Result<u32, VolumeConta
         .into());
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Старый владелец не получал длину источника. При коротком буфере он
-        // выходил за его границы; Rust не воспроизводит это UB.
+ // Старый владелец не получал длину источника. При коротком буфере он
+ // выходил за его границы; Rust не воспроизводит это UB.
         return Err(AmountContainerCodecError::UnexpectedEnd {
             field: "CFairyContainer hatch time",
             offset,

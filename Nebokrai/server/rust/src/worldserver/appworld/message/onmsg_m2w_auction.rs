@@ -1,12 +1,10 @@
 //! WorldServer dispatcher-owner `OnMSG_M2W_AUCTION`.
 //!
-//! Статус владельца: `IMPLEMENTED`. Точная пара: `WorldServer/Nworldserver.exe +
 //! WorldServer/WorldServer.pdb`, исходный owner
-//! `e:\\svn\\fengyun_russia_dev\\server\\worldserver\\appworld\\message\\onmsg_m2w_auction.cpp:12`,
-//! RVA `0x000A5230`.
+//!
 //!
 //! `0x15EB01` и non-`STATE_PRE_BUY` путь `0x15EB02` передают owned `DbNote`
-//! в уже восстановленную input queue с exact operation. `0x15EB02` в
+//! в действующую input queue с operation. `0x15EB02` в
 //! `STATE_PRE_BUY` находит buyer GameServer, проверяет `bConnected`, затем
 //! строит и обновляет `0x80406 + 1 + CGoodsNode`; `0x15EB05` вызывает тот же
 //! `DoneOT_IN_READ_AUCTION` через live DB context. `0x15EB03/04` сначала снимают один map byte, затем без преобразования
@@ -33,7 +31,7 @@ const BROADCAST_AUCTION_RESULT: i32 = 0x0015_EB06;
 const FORWARD_PLAYER_SEARCH: i32 = 0x0015_EB07;
 const FORWARD_PLAYER_GOODS: i32 = 0x0015_EB08;
 
-/// Наблюдаемый результат одной реализованной M2W auction-ветви.
+/// Наблюдаемый результат одной действующей M2W auction-ветви.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldMiscAuctionMessageOutcome {
     pub(crate) request_type: i32,
@@ -47,7 +45,7 @@ pub(crate) struct WorldMiscAuctionMessageOutcome {
 }
 
 /// Результат M2W auction-dispatcher-а; все literal case текущего owner-а уже
-/// обработаны, а default exact switch является no-op.
+/// обработаны, а default switch является no-op.
 pub(crate) enum WorldMiscAuctionMessageDispatch {
     Handled(WorldMiscAuctionMessageOutcome),
     Pending(CMessage),

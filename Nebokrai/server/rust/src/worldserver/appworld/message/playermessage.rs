@@ -1,21 +1,18 @@
 //! WorldServer dispatcher-owner `OnPlayerMessage`.
 //!
-//! Статус корпуса: `IMPLEMENTED`. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, функция RVA
-//! `0x000AD580`, исходный owner
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\playermessage.cpp:17`.
-//! Exact `0x004AD580..0x004AD5E5` подтверждает четыре in-place relay branch:
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, функция
+//! исходный owner
+//! подтверждает четыре in-place relay branch:
 //! `0x5FC01 -> 0x7FA08`, `0x5FC02 -> 0x7FA09`, `0x5FC03 -> 0x7FA0A`,
 //! `0x5FC04 -> 0x7FA0B`. Только первая до broadcast дописывает signed
 //! `m_lMapID`; остальные сохраняют payload byte-for-byte. Все четыре вызывают
 //! общий `CMessage::SendAll`, не делают `Update`, не читают payload и не
 //! проверяют socket/map ownership или хвост. Эти дополнительные проверки и
-//! `SendAllCurrentMaps` из старого Linux-донора в EXE отсутствуют и не
-//! перенесены. Неизвестный opcode завершает exact owner без mutation/send и
+//! перенесены. Неизвестный opcode завершает owner без mutation/send и
 //! без передачи следующему dispatcher-у; Rust представляет это `NoOp`.
 //!
 //! Compiler catch/unwind-записи не являются отдельными source-owner-ами;
-//! после машинной сверки они свёрнуты вместе с реализованным RAW.
+//! после сверки контракта они свёрнуты вместе с действующим оригинал.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::CGame;
@@ -27,7 +24,7 @@ const USE_SKILL: i32 = 0x0005_FC04;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldPlayerMessageOutcome {
-    /// Default полного exact `OnPlayerMessage` без side effects.
+ /// Default полного `OnPlayerMessage` без side effects.
     NoOp {
         request_type: i32,
     },
@@ -45,7 +42,7 @@ pub(crate) enum WorldPlayerMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет весь exact `OnPlayerMessage` owner.
+/// Исполняет весь `OnPlayerMessage` owner.
 pub(crate) fn on_player_message(
     game: &CGame,
     mut message: CMessage,

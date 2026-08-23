@@ -1,49 +1,13 @@
-//! Владелец операторского журнала исторического `WorldServer`.
+//! Технические функции process-owner-а исторического WorldServer.
 //!
-//! `SaveLogText` RVA `0x0001E520`, `AddLogText` RVA `0x0001E630`,
-//! `AddErrorLogText` RVA `0x0001E720` и `RefeashInfoText` RVA `0x0001E810`,
-//! а также `AddPlayerList` RVA `0x00001000` как exact no-op реализованы
-//! действующими Rust-owner-ами. Точная пара доказательных артефактов:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
-//! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\worldserver\worldserver.cpp:718,754`.
+//! Источник контракта — точная пара WorldServer EXE/PDB. Файл хранит
+//! operator-log адаптеры, имя/состояние процесса и узкие lifecycle helpers,
+//! используемые `CGame`; доменный `Init/MainLoop/Release` остаётся в `game.rs`.
 //!
-//! `SaveLogText(false)` при первом вызове отдельно снимает initial tick, затем
-//! ещё один tick для проверки. Пока wrapping elapsed не превышает
-//! `tagSetup::dwSaveInfoTime` и операторский log короче 64000 ANSI-байт, flush
-//! не выполняется. Force, истёкший интервал либо достигнутый размер сначала
-//! снимают новый last tick, затем передают в `PutLogInfo` заголовок, отдельно
-//! снятое local time, не более 63999 байт текущего info-text, CRLF и footer;
-//! только между CRLF и footer очищается operator log.
-//!
-//! `AddLogText` всегда выполняет эту проверку до собственного `GetLocalTime`,
-//! строит `[MM-DD HH:MM:SS] `, дописывает уже материализованный payload и CRLF,
-//! сначала передаёт строку `PutLogInfo`, затем добавляет её в operator log.
-//! Windows edit-control заменён owned byte-буферами, а внешний файловый writer
-//! — синхронным callback: это сохраняет байты и порядок эффектов без Windows
-//! GUI/FFI. Адрес следующего буфера `AddErrorLogText` `0x0058DED0` минус адрес
-//! буфера `AddLogText` `0x0057E4D0` точно задаёт вместимость 64000 байт.
-//!
-//! Owned output не переносит переполнение старого `_vsprintf`-буфера.
-//! Отдельный no-arguments вход сохраняет второе форматирование `ShowSaveInfo`:
-//! `%%` превращается в `%`, а любой иной specifier требовал отсутствующий
-//! vararg и остаётся заблокированным, а не получает придуманное UB-поведение.
-//! Обычный вход принимает результат call-site форматирования, сознательно
-//! заменяя variadic ABI на byte-slice.
-//!
-//! `RefeashInfoText` принимает один caller-owned snapshot вместо повторных
-//! `GetGame()` и прямых чтений process-global containers. Он обновляет
-//! четырнадцать high-water значений в исходном порядке, дважды читает clock
-//! только при ненулевом save-start tick, строит точный operator payload и
-//! заменяет `SetWindowTextA` готовым `WorldLogTextOwner::set_info_text`.
-//! Отсутствующий network owner отсекается в `CGame` до этого вызова, как
-//! исходная guard-пара. Значения team/Largess/load/reback owners и уже
-//! посчитанный caller-ом write FIFO передаются единым snapshot-ом.
-//! Потерянная экспортом вторая строка status-table точечно прочитана из exact
-//! EXE: таблица VA `0x0056A69C` содержит `0x0053FE54 -> "(Normal)"` и
-//! `0x0053FE44 -> "(Abnormal!!!!)"` (`VERIFIED_DISASSEMBLY`).
+//! Windows MFC/console side effects заменены структурированными результатами и
+//! stderr process-оболочки. Byte-exact format keys, порядок публикации и
+//! различие штатной ошибки, retained owner и безопасной остановки сохраняются.
+//! Rust не вводит второй singleton либо дополнительный process lifecycle.
 
 use std::sync::Arc;
 
@@ -83,11 +47,11 @@ pub(crate) enum AddLogTextBlock {
 /// Полностью материализованная строка, переданная file и operator sinks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldLogLine {
-    /// ANSI-байты вместе с исходным завершающим CRLF, но без C NUL.
+ /// ANSI-байты вместе с исходным завершающим CRLF, но без C NUL.
     pub(crate) bytes: Vec<u8>,
 }
 
-/// Достигнутый результат `AddLogText` после обязательной rotation-проверки.
+/// Действующий результат `AddLogText` после обязательной rotation-проверки.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AddLogTextDisposition {
     Written {
@@ -162,7 +126,7 @@ pub(crate) struct WorldRefreshSaveState {
     pub(crate) this_save_start_tick_ms: u32,
 }
 
-/// Строка из exact двухэлементной status-table WorldServer.
+/// Строка из двухэлементной status-table WorldServer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldRefreshSaveStatus {
     Normal,
@@ -286,7 +250,7 @@ fn update_signed_u32_max(high_water: &mut u32, current: u32) {
 }
 
 impl WorldLogTextOwner {
-    /// Заменяет `SetWindowTextA(g_hInfoText, ...)` для будущих info-owner-ов.
+ /// Заменяет `SetWindowTextA(g_hInfoText,...)` для связанный info-owner-ов.
     pub(crate) fn set_info_text(&self, text: &[u8]) {
         let mut state = self.state.lock();
         state.info_text.clear();
@@ -294,12 +258,12 @@ impl WorldLogTextOwner {
             .extend_from_slice(legacy_c_string_prefix(text));
     }
 
-    /// Текущее содержимое старого `g_hLogText` без C NUL.
+ /// Текущее содержимое старого `g_hLogText` без C NUL.
     pub(crate) fn log_text(&self) -> Vec<u8> {
         self.state.lock().log_text.clone()
     }
 
-    /// Воспроизводит `SaveLogText(force)` и точный порядок вызовов sink-а.
+ /// Воспроизводит `SaveLogText(force)` и точный порядок вызовов sink-а.
     pub(crate) fn save_log_text<GetTick, GetLocalTime, PutLogInfo>(
         &self,
         force: bool,
@@ -322,7 +286,7 @@ impl WorldLogTextOwner {
         )
     }
 
-    /// Воспроизводит `AddLogText` после безопасной materialization его varargs.
+ /// Воспроизводит `AddLogText` после безопасной materialization его varargs.
     pub(crate) fn add_log_text<GetTick, GetLocalTime, PutLogInfo>(
         &self,
         message: &[u8],
@@ -347,7 +311,7 @@ impl WorldLogTextOwner {
         )
     }
 
-    /// Воспроизводит `AddErrorLogText` с exact ` <error> ` marker-ом.
+ /// Воспроизводит `AddErrorLogText` с ` <error> ` marker-ом.
     pub(crate) fn add_error_log_text<GetTick, GetLocalTime, PutLogInfo>(
         &self,
         message: &[u8],
@@ -372,7 +336,7 @@ impl WorldLogTextOwner {
         )
     }
 
-    /// Сохраняет `AddLogText(local_104)` из `ShowSaveInfo` без varargs.
+ /// Сохраняет `AddLogText(local_104)` из `ShowSaveInfo` без varargs.
     pub(crate) fn add_log_text_no_arguments<GetTick, GetLocalTime, PutLogInfo>(
         &self,
         format: &[u8],

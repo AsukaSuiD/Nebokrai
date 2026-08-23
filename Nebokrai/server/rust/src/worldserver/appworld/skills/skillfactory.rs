@@ -1,24 +1,16 @@
 //! Ordered cache и initial-config serializer навыков WorldServer.
 //!
-//! Статус `CSkillFactory::Serialize` RVA `0x00060E90` и безопасной замены
-//! `ClearSkillCache` RVA `0x00060DC0`, `StringToUsage` `0x00060F80`,
-//! `ClearUsageCache` `0x00061E00`, `LoadConfigration` `0x00062050`,
-//! `LoadUsage` `0x000628E0`, `LoadSkillCache` `0x00062510` и
-//! `LoadUsageCache` `0x00062A70`: `IMPLEMENTED`. Resource-owner перечисляет
+//! `ClearSkillCache`, `StringToUsage`,
+//! `ClearUsageCache`, `LoadConfigration`,
+//! `LoadUsage`, `LoadSkillCache` и
+//! `LoadUsageCache` — часть контракта owner-а. Resource-owner перечисляет
 //! и открывает файлы снаружи; factory принимает полученный список в его
 //! исходном порядке.
-//! Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! SHA-256 PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\skills\skillfactory.cpp`.
 //!
 //! EXE пишет signed count map-а, затем в unsigned ascending-key порядке для
 //! каждого slot-а `u32 length + record`. Null skill и skill с unknown type или
 //! нулевым ID не удаляются из framing: им соответствует нулевая длина. Вопреки
-//! сырому псевдокоду, точные инструкции после освобождения временного record-а
+//! сырому оригинал, точные инструкции после освобождения временного record-а
 //! продолжают итерацию, а не выходят из функции.
 //!
 //! `BTreeMap` заменяет MSVC tree и сохраняет порядок. `Option<CSkill>` оставляет
@@ -57,12 +49,12 @@ pub(crate) struct CSkillFactory {
 }
 
 impl CSkillFactory {
-    /// Вставляет нормальный skill под exact composite key.
+ /// Вставляет нормальный skill под composite key.
     pub(crate) fn insert(&mut self, skill: CSkill) -> Option<CSkill> {
         self.skills.insert(skill.cache_key(), Some(skill)).flatten()
     }
 
-    /// Сохраняет выразимым legacy null-slot и его позицию в ordered framing.
+ /// Сохраняет выразимым legacy null-slot и его позицию в ordered framing.
     pub(crate) fn insert_slot(
         &mut self,
         key: u32,
@@ -80,31 +72,31 @@ impl CSkillFactory {
         self.skills.clear();
     }
 
-    /// Точная запись имени из `.usage`: `std::map::operator[]` заменял прежнее
-    /// значение при том же byte-sensitive наборе байтов.
+ /// Точная запись имени из `.usage`: `std::map::operator[]` заменял прежнее
+ /// значение при том же byte-sensitive наборе байтов.
     pub(crate) fn set_usage_name(&mut self, name: &[u8], usage: u32) -> Option<u32> {
         self.usage_names.insert(name.to_vec(), usage)
     }
 
-    /// Exact `StringToUsage`; null указатель и несуществующее имя возвращают
-    /// `SKILL_USAGE_UNKNOW`, а не создают новую map-запись.
+ /// `StringToUsage`; null указатель и несуществующее имя возвращают
+ /// `SKILL_USAGE_UNKNOW`, а не создают новую map-запись.
     pub(crate) fn string_to_usage(&self, name: Option<&[u8]>) -> u32 {
         name.and_then(|name| self.usage_names.get(visible_c_string(name)).copied())
             .unwrap_or(UNKNOWN_SKILL_USAGE)
     }
 
-    /// Safe replacement `ClearUsageCache`; Rust Drop освобождает ключи вместе
-    /// с map вместо ручного `_Tree::_Erase`.
+ /// Safe replacement `ClearUsageCache`; Rust Drop освобождает ключи вместе
+ /// с map вместо ручного `_Tree::_Erase`.
     pub(crate) fn clear_usage_cache(&mut self) {
         self.usage_names.clear();
     }
 
-    /// Content-половина exact `LoadUsage` после открытия `CRFile`.
-    ///
-    /// Каждая пара whitespace-токенов сразу заменяет существующий key. При
-    /// оборванной/переполненной паре старый код мог читать неинициализированные
-    /// stack-поля; Rust останавливает именно эту недоказанную UB-границу, не
-    /// придумывая очередное имя либо usage.
+ /// Content-половина `LoadUsage` после открытия `CRFile`.
+ ///
+ /// Каждая пара whitespace-токенов сразу заменяет существующий key. При
+ /// оборванной/переполненной паре старый код мог читать неинициализированные
+ /// stack-поля; Rust останавливает именно эту недоказанную UB-границу, не
+ /// придумывая очередное имя либо usage.
     pub(crate) fn load_usage(&mut self, source: &[u8]) -> Result<usize, SkillFactoryLoadError> {
         let mut cursor = 0;
         let mut loaded = 0;
@@ -121,12 +113,12 @@ impl CSkillFactory {
         Ok(loaded)
     }
 
-    /// Content-половина exact `LoadConfigration` после открытия `CRFile`.
-    ///
-    /// `Read`/`ReadTo` последовательно ищут четыре ASCII marker-а. До первого
-    /// `Level` одиночные токены игнорируются; далее каждый не-`Level` токен
-    /// потребляет одно unsigned cost-слово. Неизвестный usage не попадает в
-    /// skill record, а повтор composite key освобождает прежний owner.
+ /// Content-половина `LoadConfigration` после открытия `CRFile`.
+ ///
+ /// `Read`/`ReadTo` последовательно ищут четыре ASCII marker-а. До первого
+ /// `Level` одиночные токены игнорируются; далее каждый не-`Level` токен
+ /// потребляет одно unsigned cost-слово. Неизвестный usage не попадает в
+ /// skill record, а повтор composite key освобождает прежний owner.
     pub(crate) fn load_configuration(
         &mut self,
         source: &[u8],
@@ -188,10 +180,10 @@ impl CSkillFactory {
         })
     }
 
-    /// Safe owner exact `LoadSkillCache` после перечисления файлов resource
-    /// subsystem. Входной порядок намеренно не сортируется: им определялась
-    /// итоговая замена равных composite key. Любой path с `rhg_314` EXE
-    /// пропускал до `LoadConfigration`, включая отсутствующий resource.
+ /// Safe owner `LoadSkillCache` после перечисления файлов resource
+ /// subsystem. Входной порядок намеренно не сортируется: им определялась
+ /// итоговая замена равных composite key. Любой path с `rhg_314` EXE
+ /// пропускал до `LoadConfigration`, включая отсутствующий resource.
     pub(crate) fn load_skill_cache<'a, I>(&mut self, resources: I) -> SkillFactoryCacheLoadReport
     where
         I: IntoIterator<Item = SkillFactoryCacheResource<'a>>,
@@ -229,9 +221,9 @@ impl CSkillFactory {
         report
     }
 
-    /// Safe owner exact `LoadUsageCache` после перечисления файлов resource
-    /// subsystem. В отличие от skill cache, каждый переданный `.usage` файл
-    /// открывается; на первой ошибке EXE стирал уже загруженный prefix.
+ /// Safe owner `LoadUsageCache` после перечисления файлов resource
+ /// subsystem. В отличие от skill cache, каждый переданный `.usage` файл
+ /// открывается; на первой ошибке EXE стирал уже загруженный prefix.
     pub(crate) fn load_usage_cache<'a, I>(&mut self, resources: I) -> SkillFactoryCacheLoadReport
     where
         I: IntoIterator<Item = SkillFactoryCacheResource<'a>>,
@@ -264,7 +256,7 @@ impl CSkillFactory {
         report
     }
 
-    /// Дописывает exact `count + ordered (length, record)` wire.
+ /// Дописывает `count + ordered (length, record)` wire.
     pub(crate) fn serialize(
         &self,
         destination: &mut Vec<u8>,
@@ -321,7 +313,7 @@ pub(crate) struct SkillFactoryCacheResource<'a> {
     pub(crate) contents: Option<&'a [u8]>,
 }
 
-/// Итог exact cache-load. `legacy_result` повторяет исходный BOOL: список без
+/// Итог cache-load. `legacy_result` повторяет исходный BOOL: список без
 /// файлов успешен, а первая ошибка даёт `false` и оставляет целевую карту пустой.
 #[derive(Debug)]
 pub(crate) struct SkillFactoryCacheLoadReport {
@@ -583,5 +575,4 @@ impl Error for SkillFactorySerializeError {
     }
 }
 
-// Сырой C++ ниже остаётся документацией ещё не восстановленных loaders и
 // usage-name cache, а не Rust-реализацией.

@@ -1,17 +1,13 @@
-//! Конкретная session команды WorldServer.
+//! Конкретная session команды WorldServer из точной пары EXE/PDB.
 //!
-//! Четырнадцать функций `CTeam` RVA `0x000DDC20..0x000DE3C0` восстановлены
-//! по точной паре `Nworldserver.exe + WorldServer.pdb`; исходный owner:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteam.cpp`.
-//! Rust сохраняет delay `125`, минутный leader-check, allocation `0`, team
+//! Owner сохраняет delay `125`, минутный leader-check, allocation `0`, team
 //! wire, порядок Start-before-plug-count при unserialize и opcodes
 //! `0x7FD02..0x7FD0C` через ordered effects фабрики.
 //!
-//! Важная совместимая странность exact owner-а: `SetAllocationScheme`
+//! Важная совместимая странность owner-а: `SetAllocationScheme`
 //! передаёт в `OnPlugChangeState` player leader ID как будто это factory plug
-//! ID. Исправление очищенного C++-прохода меняло наблюдаемую доставку, поэтому
-//! здесь оно не перенесено. Safe Rust исправляет только внутренние pointer/STL
-//! дефекты: owner identity кэшируется рядом с ordered plug ID, а обращения к
+//! ID. Этот quirk сохраняется, потому что влияет на наблюдаемую доставку.
+//! Owner identity кэшируется рядом с ordered plug ID, а обращения к
 //! factory/game выполняются немедленными typed effects.
 
 use crate::worldserver::appworld::session::csession::{

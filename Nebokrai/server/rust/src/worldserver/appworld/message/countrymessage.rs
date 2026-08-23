@@ -1,6 +1,6 @@
 //! WorldServer dispatcher-owner country messages `OnCountryMessage`.
 //!
-//! Dispatcher RVA `0x000A47F0` — `IMPLEMENTED`: country relays
+//! Dispatcher — часть контракта owner-а: country relays
 //! `0x60310 -> 0x7FF11` и `0x60311 -> 0x7FF12`, смена country игрока
 //! `0x60301 -> CPlayer::ChangeCountry/0x7FF01`, а также вход country victory
 //! `0x60318`, scalar-sync `0x60314`, quest-switch `0x60315`, appoint-minister
@@ -14,16 +14,16 @@
 //! `0x6030D -> 0x7FF0E`, `0x6030E -> 0x7FF15`, `0x60316 -> 0x7FF15`, war-declare
 //! `0x60317 -> 0x7FF16` и four-nation result
 //! `0x60319 -> 0x7FE49`, `0x6031A -> 0x7FE46/DB`, no-op `0x6031B` и
-//! `0x6031C -> 0x7FE47`, `0x6031D -> 0x7FA04` имеют статус
-//! `IMPLEMENTED`. Victory читает один
+//! `0x6031C -> 0x7FE47`, `0x6031D -> 0x7FA04` входят в контракт owner-а
+//! действует. Victory читает один
 //! unsigned country byte и вызывает исходно
 //! названный `CountryWarSys::on_flag_destory`; соседние opcodes helper не
-//! интерпретирует. Точная пара
+//! интерпретирует. Источник контракта — точная пара WorldServer EXE/PDB.
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, исходник
-//! `appworld/message/countrymessage.cpp`. Exact `0x004A4FA3..0x004A4FC4`
+//! `appworld/message/countrymessage.cpp`.
 //! подтверждает, что оба relay меняют type исходного сообщения и вызывают
 //! общий `SendAll`, не читая payload, не вызывая `Update` и не добавляя
-//! ownership/tail gates. Exact `0x004A48C6..0x004A496E` задаёт для `0x60314`
+//! ownership/tail gates. задаёт для `0x60314`
 //! wire `unsigned char country, signed char selector, signed long value` и
 //! тихие no-op на отсутствующей стране или неизвестном selector. Scalar-setter
 //! сохраняет несимметричные исходные ограничения: treasury/power ограничены
@@ -32,20 +32,19 @@
 //! принимает уже принадлежащий main-loop параметр явно.
 //! Вне полного списка case dispatcher завершается общим epilogue без чтения,
 //! отправки и передачи следующему owner-у; Rust фиксирует это `NoOp`.
-//! Exact `0x004A4EF1..0x004A4F9E` и PDB layout `COfficer` подтверждают для
-//! `0x60315` три unsigned byte `country/job/raw switch`, выбор встроенного king
+//! и PDB layout `COfficer` подтверждают для
+//! `0x60315` три unsigned byte `country/job/оригинал switch`, выбор встроенного king
 //! при job `1`, `GetMinister` только для `2..=7` и запись именно
-//! `_bQuestSwitch +0x25`. Строка `king`-лога сохраняет исходный raw switch и
-//! byte-exact хвост `A1 A3`; безопасный accessor `CGlobeSetup` заменяет только
+//! `_bQuestSwitch +0x25`. Строка `king`-лога сохраняет исходный оригинал switch и
+//! byte- хвост `A1 A3`; безопасный accessor `CGlobeSetup` заменяет только
 //! старое адресное вычисление country-name slot.
-//! Exact `0x004A4E43..0x004A4ED9` задаёт для `0x60316` signed player ID и
+//! задаёт для `0x60316` signed player ID и
 //! country byte, вызов `GetExileResTime` до проверки online-player и общий
-//! ответ `0x7FF15 { remaining_seconds:i32, player_id:i32 }`. Exact
+//! ответ `0x7FF15 { remaining_seconds:i32, player_id:i32 }`.
 //! `GetExileResTime` снимает tick до поиска `ExileMap`, использует wrapping
 //! signed 32-bit milliseconds, делит к нулю и зажимает отрицательный результат.
-//! `SuccessExiled` в точном EXE не наполняет map, хотя Linux-донор это исправил;
 //! dispatcher сохраняет машинную ошибку, а не принимает donor fix за контракт.
-//! Exact `0x004A4C57..0x004A4E3E` задаёт `0x6030E`: signed player ID, два
+//! задаёт `0x6030E`: signed player ID, два
 //! signed `char` success/country, ранний stop до чтения списка при отсутствующей
 //! стране, затем синхронный `SuccessExiled` и `0x7FF15 { country:u8,
 //! count:i32, player_ids:i32[] }`. Signed count `<= 0` не читает элементы, но
@@ -54,72 +53,68 @@
 //! цикл дополнял оборванный inter-server payload нулями до заявленного размера
 //! и мог выделять до `INT_MAX` элементов, что является внутренним malformed-
 //! input дефектом, а не Miracle-протоколом.
-//! Exact `0x6030D` читает target/king как signed long и country через signed
+//! `0x6030D` читает target/king как signed long и country через signed
 //! `char -> unsigned char`, затем строго вызывает `GetCountry -> IsKing ->
 //! CanOperate(4) -> Exile`. Missing country и любой false gate останавливают
 //! цепочку; source map/socket и хвост не участвуют. Donor ownership/socket
 //! gates и pending-request registry поэтому не перенесены.
 //! `0x6030C` имеет тот же wire target/king/country, но selector `5` и вызов
-//! `Silence`; exact owner возвращает target ID только после всех трёх success-
+//! `Silence`; owner возвращает target ID только после всех трёх success-
 //! рассылок. Source metadata и хвост также не проверяются.
 //! `0x6030B` декодирует тот же target/king/country wire, вызывает selector `3`
-//! и `Absolve`; donor payload/ownership gates в exact dispatcher отсутствуют.
+//! и `Absolve`; donor payload/ownership gates в dispatcher отсутствуют.
 //! `0x6030A` дополнительно читает signed job-byte между target и king, затем
-//! вызывает selector `2`, exact `IsMinister` и mode `7`; source/tail/job-range
-//! gates старого Linux-донора не переносятся.
+//! вызывает selector `2`, `IsMinister` и mode `7`; source/tail/job-range
 //! `0x60309` имеет тот же wire, но selector `1` и mode `6`; donor gates также
 //! отсутствуют, а вложенный `HasJob -> IsKing` сохраняет неожиданный WS0034.
 //! `0x60308` декодирует target/king как signed long и country через signed
 //! `char -> unsigned char`, затем вызывает selector `0` и полный `Demise` без
-//! source/tail gate. Точный EXE подтверждает, что return вложенного
+//! source/tail gate. подтверждает, что return вложенного
 //! `RegisterKing` игнорируется, а финальный `0x7FF10` строится уже по текущему
-//! king state; Linux-донор для self-target возвращал неверный ID.
 //! `0x60307` декодирует `page:i32, king:i32, country:i8 -> u8`,
 //! затем строго `GetCountry -> IsKing -> GetPlayersList`; source/tail/page gates
-//! отсутствуют. Exact owner сохраняет wrapping page arithmetic,
+//! отсутствуют. owner сохраняет wrapping page arithmetic,
 //! GM-фильтр и return king ID; добавленные donor-ом валидации и
 //! return count не переносятся.
 //! `0x60306` читает `king:i32, country:i8 -> u8` и строго идёт
 //! `GetCountry -> IsKing -> GetInfo`; последний только вызывает уже
-//! восстановленный `SendBaseInfoToClient -> 0x7FF07`. Source/tail/country-
-//! range gates старого Linux-донора в exact dispatcher отсутствуют.
+//! действующий `SendBaseInfoToClient -> 0x7FF07`. Source/tail/country-
 //! `0x60304` читает `country:i8 -> u8, player:i32, appoint:i8 -> u8`.
-//! При appoint `1` exact сначала делает upper-clamped control point
+//! При appoint `1` сначала делает upper-clamped control point
 //! `100000`, затем `SetKing -> DeposeKing(3)/0x7FF05` и `RegisterKing(0) ->
-//! 0x7FF04/0x7FF12`; иной raw byte без range-check становится job для
+//! 0x7FF04/0x7FF12`; иной оригинал byte без range-check становится job для
 //! `DeposeMinister(job, 7)` и затем `AppointMinister(player, job, 6)`.
 //! Donor ownership/payload/player/country/job gates в поставочном EXE отсутствуют.
-//! Exact `0x004A4FC9..0x004A5049` задаёт `0x60317`: два signed long,
+//! задаёт `0x60317`: два signed long,
 //! синхронный `player_declare`, затем ответ `char accepted, player, target` в
 //! исходный `m_lMapID`. Проверок socket-owner и полного tail здесь нет; они
-//! были добавлены Linux-донором и не являются поведением поставленного EXE.
-//! Exact `0x004A506A..0x004A5078` для `0x60319` только получает singleton и
+//! для `0x60319` только получает singleton и
 //! передаёт исходное сообщение static `RecvResultFromGS`: source metadata и
 //! хвост не проверяются, отдельного ответа источнику нет.
-//! Exact `0x004A5096..0x004A50B4` для `0x6031A` читает два signed long и
+//! для `0x6031A` читает два signed long и
 //! вызывает `ConvertMoraleToExploit(player_id, increment)` без source/tail
 //! gate. Последующий DB/online-маршрут материализован в общем async
 //! `ProcessMessage`, поскольку `tiberius` требует await.
-//! Exact `0x004A507D..0x004A5094` для `0x6031B` читает один signed country и
-//! вызывает static `OneCountrySignUp`. Сам owner `0x00494340..0x00494431`
+//! для `0x6031B` читает один signed country и
+//! вызывает static `OneCountrySignUp`. Сам owner
 //! только для `1..=4` форматирует неиспользуемый локальный текст; состояния,
 //! log-а и network side effect нет, поэтому Rust сохраняет typed no-op без
 //! мёртвого `_snprintf`.
-//! Exact `0x004A50B6..0x004A50DE` для `0x6031C` читает signed player ID,
+//! для `0x6031C` читает signed player ID,
 //! 32-bit war-time и signed country; route/wire выполняет подтверждённый
 //! `SendPlayerWarTimeToGS` без source/tail gate.
-//! Exact `0x004A50E0..0x004A50FE` для `0x6031D` читает две signed страны и
+//! для `0x6031D` читает две signed страны и
 //! вызывает `OneCountryFail`; source metadata и хвост не проверяются.
-//! Exact switch target `0x004A504E..0x004A5065` подтверждает, что `0x60318`
-//! читает один unsigned country byte и сразу передаёт его достигнутому
+//! switch target подтверждает, что `0x60318`
+//! читает один unsigned country byte и сразу передаёт его действующему
 //! `CountryWarSys`; конкретный region/country/localization/network context
 //! подключён в общем `ProcessMessage`, а не оставлен отдельным helper-ом.
-//! Exact `0x004A483F..0x004A48B0` задаёт для `0x60301` signed player DWORD и
+//! задаёт для `0x60301` signed player DWORD и
 //! `char -> unsigned char` country, online lookup, затем ответ `0x7FF01`
 //! { player_id:i32, result:i32 }` исходному `m_lMapID`. При отсутствующем
 //! online-player ответа нет. Source socket, хвост и donor-ограничения country
 //! диапазона/ownership не участвуют.
-//! Exact `0x004A4FAE..0x004A4FC0` задаёт bodyless `0x60313`: без чтения
+//! задаёт bodyless `0x60313`: без чтения
 //! payload/source metadata он вызывает `CCountryHandler::SetNewDay(10)`.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
@@ -587,7 +582,7 @@ pub(crate) struct WorldFourNationCountryFailSync {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
-    /// Default полного exact `OnCountryMessage` без side effects.
+ /// Default полного `OnCountryMessage` без side effects.
     NoOp {
         request_type: i32,
     },

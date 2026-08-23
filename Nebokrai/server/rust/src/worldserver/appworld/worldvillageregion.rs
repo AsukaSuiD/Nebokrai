@@ -1,14 +1,11 @@
-//! Владелец `CWorldVillageRegion` исторического WorldServer — `IMPLEMENTED`.
+//! Владелец `CWorldVillageRegion` исторического WorldServer — часть контракта owner-а.
 //!
-//! Constructor RVA `0x00079F50` создаёт ровно один `CWorldWarRegion` и задаёт
-//! его три DWORD `1/1/1`. Virtual `Load` RVA `0x00079F90` намеренно вызывает
+//! Constructor создаёт ровно один `CWorldWarRegion` и задаёт
+//! его три DWORD `1/1/1`. Virtual `Load` намеренно вызывает
 //! непосредственно `CWorldRegion::Load`, не читает `.war`, игнорирует его
 //! legacy `0/1` result и всегда возвращает `1`; safe parser-блоки при этом не
 //! превращаются в успех. Serializer наследуется от `CWorldWarRegion` и потому
-//! дописывает `1/1/1`. Точная пара
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
+//! дописывает `1/1/1`. Источник контракта — точная пара WorldServer EXE/PDB.
 //! source `worldvillageregion.cpp:22,35`. Destructors/compiler cleanup заменены
 //! обычным `Drop`; Rust layout не объявляется старым ABI.
 
@@ -36,8 +33,8 @@ impl CWorldVillageRegion {
         &mut self.war
     }
 
-    /// Выполняет прямой base Load; caller для Village не проверяет
-    /// `loaded.base_failure`, воспроизводя unconditional legacy success.
+ /// Выполняет прямой base Load; caller для Village не проверяет
+ /// `loaded.base_failure`, воспроизводя unconditional legacy success.
     pub(crate) fn load_from_context<Context, ResolveName>(
         &mut self,
         context: &mut Context,

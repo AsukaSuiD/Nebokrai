@@ -1,19 +1,17 @@
 //! Участник World-команды `CTeamate`.
 //!
-//! Все десять функций owner-а восстановлены по точной паре
+//! Все десять функций owner-а действуют по точной паре
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`: `SetOwnerRegionID`
-//! RVA `0x000DEB80`, `OnChangeState` `0x000DEBB0`, `PlayerStillExisted`
-//! `0x000DEBD0`, `IsPlugAvailable` `0x000DEBE0`, `GetOwnerName` `0x000DED00`,
-//! `Serialize` `0x000DED20`, constructor/destructor `0x000DED90/0x000DEDD0`,
-//! `SetOwnerName` `0x000DEE70`, `Unserialize` `0x000DEEA0`. Исходный owner:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cteamate.cpp`.
+//! `OnChangeState`, `PlayerStillExisted`
+//! `IsPlugAvailable`, `GetOwnerName`,
+//! `Serialize`, constructor/destructor,
+//! `SetOwnerName`, `Unserialize`. Исходный owner:
 //!
 //! Constructor задаёт plug type `5`, region/timestamp `0`, existence `1` и
-//! пустое byte-exact имя. `SetOwnerRegionID` сначала меняет поле, затем
+//! пустое byte- имя. `SetOwnerRegionID` сначала меняет поле, затем
 //! синхронно публикует state `6`; safe Rust сохраняет это через немедленно
 //! дренируемый factory effect базового `CPlug`. Проверка существования хранит
 //! исходный минутный unsigned gate, повторные вызовы `timeGetTime` и пакет
-//! `0x7FD09 [plug ID, owner type, owner ID]`; добавленные Linux-донором pending
 //! map/peer validation и требование успешной отправки в EXE отсутствуют.
 //!
 //! Wire suffix — region `long`, имя и NUL после базового plug header. Owned
@@ -82,7 +80,7 @@ impl CTeamate {
         &self.owner_name
     }
 
-    /// Выполняет точный минутный availability/probe lifecycle.
+ /// Выполняет точный минутный availability/probe lifecycle.
     pub(crate) fn is_plug_available(&mut self, game: &CGame) -> i32 {
         let now = legacy_tick_ms();
         if self.last_queried_timestamp_ms == 0 {
@@ -115,8 +113,8 @@ impl CTeamate {
         result
     }
 
-    /// Исходный callback только пытается найти plug в той же session и
-    /// независимо от результата возвращает `1`.
+ /// Исходный callback только пытается найти plug в той же session и
+ /// независимо от результата возвращает `1`.
     pub(crate) const fn on_change_state(&self, _plug_id: i32) -> i32 {
         1
     }

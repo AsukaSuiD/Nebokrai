@@ -1,29 +1,22 @@
 //! Владелец войн фракций исторического `WorldServer`.
 //!
-//! Реестр и жизненный цикл, `IsEnemyRelation` RVA `0x00064090`,
-//! `ClearEnemyFaction` RVA `0x000640D0`, `AddOneEnmeyFaction` RVA
-//! `0x00064A30`, `GetDecWarMoneyByType` RVA `0x00064D40`,
-//! `DigUpTheHatchet` RVA `0x00064D80`, `OnPlayerDied` RVA `0x00065750`,
-//! `StopFactionWar` RVA `0x00065D10`,
-//! `GenerateSaveData` RVA `0x000662F0`, constructor RVA `0x000663F0` и
-//! `Run` RVA `0x00066590`, `LoadIni` RVA `0x00064BB0` и
-//! `Initialize` RVA `0x00066530` реализованы в Rust. Точная пара
-//! доказательных артефактов: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256
-//! EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\factionwarsys.h`
-//! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\factionwarsys.cpp:26,574`.
+//! Реестр и жизненный цикл, `IsEnemyRelation`,
+//! `ClearEnemyFaction`, `AddOneEnmeyFaction`
+//! `GetDecWarMoneyByType`,
+//! `DigUpTheHatchet`, `OnPlayerDied`,
+//! `StopFactionWar`,
+//! `GenerateSaveData`, constructor и
+//! `Run`, `LoadIni` и
+//! `Initialize` входят в контракт owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
 //!
-//! Exact PDB задаёт `CFactionWarSys` размером `0x1C`: ordered
+//! Layout сохраняет `CFactionWarSys` размером `0x1C`: ordered
 //! `std::map<long, tagWarType>` по `+0x00`, `EnemyFactionList` по `+0x0C` и
 //! unsigned `m_dwStartTime` по `+0x18`. `tagWarType` содержит signed
 //! `lType/lFightTime/lMoney`, а `tagEnemyFaction` имеет размер `0x0C`:
 //! signed `lFactionID1/lFactionID2` и unsigned `dwDisandTime`. Generator
 //! проходит live-список в list-order, для каждой записи выделяет отдельную
 //! полную копию и передаёт pointer-list по значению в
-//! `CGame::SetEnemyFactions` RVA `0x00014D90`.
+//! `CGame::SetEnemyFactions`.
 //!
 //! `SetEnemyFactions` под `g_CriticalSectionSavePlayerList` сначала уничтожает
 //! прежние non-null значения и nodes `m_stDBData.listEnemyFactions`, затем
@@ -34,7 +27,7 @@
 //! `Some` для успешно материализованных копий; исчерпание памяти остаётся
 //! политикой стандартного allocator-а и не получает выдуманного продолжения
 //! старой null/UB ветви. Inlined STL allocation/cleanup не является отдельной
-//! доменной семантикой и удалён вместе с заменённым raw-блоком.
+//! доменной семантикой и удалён вместе с заменённым оригинал-блоком.
 //!
 //! Constructor создаёт оба пустых registry и единожды принимает аналог
 //! `timeGetTime`; singleton `GetInstance/Release` заменён явным owned значением
@@ -50,7 +43,7 @@
 //! side-order вызывается virtual `UpdateEnemyFaction` (`+0x154`) и имя с
 //! завершающей запятой добавляется в notice. `WS0234` форматируется аргументами
 //! второй, затем первой стороны, рассылается message `0x7FA03` с
-//! `0xFFFFFE92/0xFFFF0000` и пишется в `war`-лог.
+//! и пишется в `war`-лог.
 //!
 //! `OnPlayerDied` принимает только master-а проигравшей faction; если она в
 //! union, дополнительно требуется её статус master-faction. Победитель должен
@@ -59,7 +52,7 @@
 //! membership, каждая попарная связь удаляется из registry и обеих faction,
 //! обе стороны получают `UpdateEnemyFaction`, а `WS0233` форматируется как
 //! `(victor names, defeated names)` уже без временных завершающих запятых.
-//! Broadcast использует `0xFFFFFE92/0xFFFF0000`, после него идёт `war`-log.
+//! Broadcast использует, после него идёт `war`-log.
 //! `Vec` заменяет только временные MSVC list/string owner-ы.
 //!
 //! Еще сырые `COrganizingCtrl`, `CFaction`, `StringTable` и logger не
@@ -97,7 +90,7 @@ pub(crate) struct FactionWarType {
 }
 
 impl FactionWarType {
-    /// Материализует уже разобранную запись `FactionWarSys.ini`.
+ /// Материализует уже разобранную запись `FactionWarSys.ini`.
     pub(crate) const fn new(war_type: i32, fight_time_ms: i32, money: i32) -> Self {
         Self {
             war_type,
@@ -231,19 +224,19 @@ pub(crate) trait FactionWarDeclarationContext {
         faction_id: i32,
     ) -> Result<Option<FactionWarFactionSnapshot>, Self::Block>;
 
-    /// Свободная faction даёт один root, union — member map-order.
+ /// Свободная faction даёт один root, union — member map-order.
     fn faction_side(&self, root_faction_id: i32) -> Result<Vec<i32>, Self::Block>;
 
     fn player_money(&self, player_id: i32) -> Option<u32>;
 
-    /// Выполняет concrete `CFaction::AddEnemyOrganizing`, включая `WS0158` log.
+ /// Выполняет concrete `CFaction::AddEnemyOrganizing`, включая `WS0158` log.
     fn add_enemy_organizing(
         &mut self,
         faction_id: i32,
         enemy_id: i32,
     ) -> Result<(), Self::Block>;
 
-    /// Выполняет virtual `UpdateEnemyFaction` и все его client/player эффекты.
+ /// Выполняет virtual `UpdateEnemyFaction` и все его client/player эффекты.
     fn update_enemy_faction(&mut self, faction_id: i32) -> Result<(), Self::Block>;
 
     fn organizing_name(&self, faction_id: i32) -> Result<Vec<u8>, Self::Block>;
@@ -285,41 +278,41 @@ pub(crate) struct FactionWarRunReport {
 pub(crate) trait FactionWarStopContext {
     type Block;
 
-    /// Повторяет nullable `GetpFactionById` для положительного signed ID.
+ /// Повторяет nullable `GetpFactionById` для положительного signed ID.
     fn faction_exists(&self, faction_id: i32) -> bool;
 
-    /// Возвращает старый `COrganizing*` list-order одной стороны.
-    ///
-    /// Реализация обязана воспроизвести `IsFreeFaction`: свободная фракция
-    /// даёт один root ID; найденный союз — virtual `GetOrganizingList`; null
-    /// union даёт пустой список. Неизвестная null/UB граница возвращается как
-    /// `Block`, а не получает придуманного продолжения.
+ /// Возвращает старый `COrganizing*` list-order одной стороны.
+ ///
+ /// Реализация обязана воспроизвести `IsFreeFaction`: свободная фракция
+ /// даёт один root ID; найденный союз — virtual `GetOrganizingList`; null
+ /// union даёт пустой список. Неизвестная null/UB граница возвращается как
+ /// `Block`, а не получает придуманного продолжения.
     fn faction_side(&self, root_faction_id: i32) -> Result<Vec<i32>, Self::Block>;
 
-    /// Выполняет virtual `CFaction::DelEnemyOrganizing`, включая `WS0159` log.
+ /// Выполняет virtual `CFaction::DelEnemyOrganizing`, включая `WS0159` log.
     fn del_enemy_organizing(
         &mut self,
         faction_id: i32,
         enemy_id: i32,
     ) -> Result<(), Self::Block>;
 
-    /// Выполняет virtual `CFaction::UpdateEnemyFaction` (`vftable +0x154`).
+ /// Выполняет virtual `CFaction::UpdateEnemyFaction` (`vftable +0x154`).
     fn update_enemy_faction(&mut self, faction_id: i32) -> Result<(), Self::Block>;
 
-    /// Возвращает текущее byte-exact имя organizing после update-callback-а.
+ /// Возвращает текущее byte- имя organizing после update-callback-а.
     fn organizing_name(&self, faction_id: i32) -> Result<Vec<u8>, Self::Block>;
 
-    /// Повторяет `StringTable::getStringByID` + `_sprintf` для `WS0234`.
+ /// Повторяет `StringTable::getStringByID` + `_sprintf` для `WS0234`.
     fn format_world_string(&mut self, string_id: &[u8], arguments: &[&[u8]]) -> Vec<u8>;
 
-    /// Повторяет broadcast overload `SendOrgaInfoToClient`.
+ /// Повторяет broadcast overload `SendOrgaInfoToClient`.
     fn send_orga_info_to_all(&mut self, info: &[u8], kind: u32, color: u32);
 
-    /// Повторяет `PutStringToFile("war", ...)`.
+ /// Повторяет `PutStringToFile("war",...)`.
     fn put_war_log(&mut self, info: &[u8]);
 }
 
-/// Наблюдаемый исход exact `OnPlayerDied` до/после снятия войны.
+/// Наблюдаемый исход `OnPlayerDied` до/после снятия войны.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionWarPlayerDiedOutcome {
     DefeatedPlayerNotMaster,
@@ -382,7 +375,7 @@ pub(crate) struct CFactionWarSys {
 }
 
 impl CFactionWarSys {
-    /// Создаёт оба пустых registry и сохраняет единственный constructor tick.
+ /// Создаёт оба пустых registry и сохраняет единственный constructor tick.
     pub(crate) const fn new(start_time_ms: u32) -> Self {
         Self {
             faction_wars: BTreeMap::new(),
@@ -391,21 +384,21 @@ impl CFactionWarSys {
         }
     }
 
-    /// Очищает live relation-list до самостоятельного DB open.
-    ///
-    /// Это отдельная операция, поскольку exact `CRsEnemyFactions::LoadAll…`
-    /// выполнял clear *до* `CreateCn/OpenCn`; ошибка подключения оставляла
-    /// именно пустой список, а не предыдущий snapshot.
+ /// Очищает live relation-list до самостоятельного DB open.
+ ///
+ /// Это отдельная операция, поскольку `CRsEnemyFactions::LoadAll…`
+ /// выполнял clear *до* `CreateCn/OpenCn`; ошибка подключения оставляла
+ /// именно пустой список, а не предыдущий snapshot.
     pub(crate) fn clear_enemy_factions_for_load(&mut self) {
         self.enemy_factions.clear();
     }
 
-    /// Завершает `CFactionWarSys::Initialize` после самостоятельного DB read.
-    ///
-    /// Caller обязан вызвать `clear_enemy_factions_for_load` перед запуском
-    /// DB-owner-а. Каждая строка сначала проходит exact unordered upsert, затем
-    /// итоговый live list в list-order передаётся `SetEnemyFactionRelation`.
-    /// Только после всех этих effects перечитывается `FactionWarSys.ini`.
+ /// Завершает `CFactionWarSys::Initialize` после самостоятельного DB read.
+ ///
+ /// Caller обязан вызвать `clear_enemy_factions_for_load` перед запуском
+ /// DB-owner-а. Каждая строка сначала проходит unordered upsert, затем
+ /// итоговый live list в list-order передаётся `SetEnemyFactionRelation`.
+ /// Только после всех этих effects перечитывается `FactionWarSys.ini`.
     pub(crate) fn initialize_from_loaded_relations<ApplyRelation>(
         &mut self,
         load: EnemyFactionsLoadOutcome,
@@ -443,14 +436,14 @@ impl CFactionWarSys {
         })
     }
 
-    /// Загружает package-resource `data/FactionWarSys.ini` в exact map-order.
-    ///
-    /// `ReadTo("#")` находит marker среди whitespace-токенов, после чего
-    /// три signed значения образуют `lType`, минуты и `lMoney`. Минуты
-    /// умножаются тем же 32-bit wrapping-product, с которым MSVC записывал
-    /// `lFightTime`; повторный тип заменяет map-value. Отсутствующий resource
-    /// очищает map и возвращает literal старого лога через report, поэтому
-    /// caller сохраняет его исходную позицию в общем log owner-е.
+ /// Загружает package-resource `data/FactionWarSys.ini` в map-order.
+ ///
+ /// `ReadTo("#")` находит marker среди whitespace-токенов, после чего
+ /// три signed значения образуют `lType`, минуты и `lMoney`. Минуты
+ /// умножаются тем же 32-bit wrapping-product, с которым MSVC записывал
+ /// `lFightTime`; повторный тип заменяет map-value. Отсутствующий resource
+ /// очищает map и возвращает literal старого лога через report, поэтому
+ /// caller сохраняет его исходную позицию в общем log owner-е.
     pub(crate) fn load_ini_from_resource(
         &mut self,
         source: Option<&[u8]>,
@@ -505,17 +498,17 @@ impl CFactionWarSys {
         }
     }
 
-    /// Повторяет map `operator[]` загрузчика: key берётся из `lType` записи.
+ /// Повторяет map `operator[]` загрузчика: key берётся из `lType` записи.
     pub(crate) fn insert_faction_war_type(&mut self, war_type: FactionWarType) {
         self.faction_wars.insert(war_type.war_type, war_type);
     }
 
-    /// Возвращает `lMoney` найденного типа либо исходный ноль.
+ /// Возвращает `lMoney` найденного типа либо исходный ноль.
     pub(crate) fn get_dec_war_money_by_type(&self, war_type: i32) -> i32 {
         self.faction_wars.get(&war_type).map_or(0, |war| war.money)
     }
 
-    /// Проверяет unordered пару в исходном list-order.
+ /// Проверяет unordered пару в исходном list-order.
     pub(crate) fn is_enemy_relation(&self, faction_id_1: i32, faction_id_2: i32) -> bool {
         self.enemy_factions.iter().any(|enemy| {
             (enemy.faction_id_1 == faction_id_1 && enemy.faction_id_2 == faction_id_2)
@@ -523,7 +516,7 @@ impl CFactionWarSys {
         })
     }
 
-    /// Удаляет только первую совпавшую unordered пару.
+ /// Удаляет только первую совпавшую unordered пару.
     pub(crate) fn clear_enemy_faction(&mut self, faction_id_1: i32, faction_id_2: i32) {
         let Some(position) = self.enemy_factions.iter().position(|enemy| {
             (enemy.faction_id_1 == faction_id_1 && enemy.faction_id_2 == faction_id_2)
@@ -534,7 +527,7 @@ impl CFactionWarSys {
         self.enemy_factions.remove(position);
     }
 
-    /// Обновляет первую unordered пару, сохраняя её orientation/position, либо добавляет в хвост.
+ /// Обновляет первую unordered пару, сохраняя её orientation/position, либо добавляет в хвост.
     pub(crate) fn add_one_enemy_faction(
         &mut self,
         faction_id_1: i32,
@@ -555,12 +548,12 @@ impl CFactionWarSys {
         });
     }
 
-    /// Объявляет войну в точном порядке RVA `0x00064D80`.
-    ///
-    /// Registry relation обновляется до двух faction-callback-ов для каждой
-    /// пары; затем стороны обновляются и их имена собираются в map-order.
-    /// Деньги здесь только проверяются: фактическое списание инициирует caller
-    /// через успешный ответ `0x7FE19`, как и в исходном WorldServer.
+ /// Объявляет войну в точном порядке.
+ ///
+ /// Registry relation обновляется до двух faction-callback-ов для каждой
+ /// пары; затем стороны обновляются и их имена собираются в map-order.
+ /// Деньги здесь только проверяются: фактическое списание инициирует caller
+ /// через успешный ответ `0x7FE19`, как и в исходном WorldServer.
     pub(crate) fn dig_up_the_hatchet<Context>(
         &mut self,
         player_id: i32,
@@ -663,7 +656,7 @@ impl CFactionWarSys {
         })
     }
 
-    /// Выполняет полный доказанный expiry callback с синхронными внешними эффектами.
+ /// Выполняет полный доказанный expiry callback с синхронными внешними эффектами.
     pub(crate) fn stop_faction_war<Context: FactionWarStopContext>(
         &mut self,
         faction_id_1: i32,
@@ -735,7 +728,7 @@ impl CFactionWarSys {
         })
     }
 
-    /// Завершает faction-war при смерти допустимого master-а проигравшей стороны.
+ /// Завершает faction-war при смерти допустимого master-а проигравшей стороны.
     pub(crate) fn on_player_died<Context>(
         &mut self,
         defeated_master_player_id: i32,
@@ -826,7 +819,7 @@ impl CFactionWarSys {
         })
     }
 
-    /// Выполняет strict 60-second gate и stop-проход по отдельным копиям.
+ /// Выполняет strict 60-second gate и stop-проход по отдельным копиям.
     pub(crate) fn run<Context, GetTick>(
         &mut self,
         context: &mut Context,
@@ -887,7 +880,7 @@ impl CFactionWarSys {
         })
     }
 
-    /// Полностью заменяет enemy-faction snapshot в `CGame::tagDBData`.
+ /// Полностью заменяет enemy-faction snapshot в `CGame::tagDBData`.
     pub(crate) fn generate_save_data(&self, game: &CGame) {
         let snapshot = self
             .enemy_factions

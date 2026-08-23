@@ -1,12 +1,11 @@
 //! Базовый plug-owner исторического WorldServer.
 //!
 //! Все девять функций `CPlug` из
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\session\cplug.cpp`
-//! восстановлены по точной паре `Nworldserver.exe + WorldServer.pdb`:
-//! constructor/destructor RVA `0x000DE9E0/0x000DEA00`, `SetOwner`
-//! `0x000DEA10`, `IsPlugEnded` `0x000DEA30`, `SetSession/GetSession`
-//! `0x000DEA60/0x000DEA70`, `Serialize` `0x000DEA80`, `ChangeState`
-//! `0x000DEAE0`, `Exit` `0x000DEB20`, `Unserialize` `0x000DEB60`.
+//! действуют по точной паре `Nworldserver.exe + WorldServer.pdb`:
+//! constructor/destructor, `SetOwner`
+//! `IsPlugEnded`, `SetSession/GetSession`
+//! `Serialize`, `ChangeState`
+//! `Exit`, `Unserialize`.
 //!
 //! Wire сохраняет четыре little-endian `long`: plug type, owner type, owner
 //! ID и полный signed ended-флаг. Factory header уже читает первые три поля,
@@ -14,7 +13,7 @@
 //! `ChangeState/Exit` синхронно искали session по сохранённому ID и вызывали
 //! `OnPlugChangeState`; Rust ставит тот же вызов в короткую owned-очередь,
 //! которую `CSessionFactory::with_teamate` немедленно доставляет в единственный
-//! session registry. Так устраняется global raw pointer, но сохраняются
+//! session registry. Так устраняется global оригинал pointer, но сохраняются
 //! порядок вызова и правило `Exit`: ended назначается только при найденной
 //! session, независимо от результата её virtual handler-а.
 //!
@@ -25,7 +24,7 @@
 use crate::worldserver::appworld::baseobject::CBaseObject;
 use crate::worldserver::appworld::session::csessionfactory::WorldPlugSessionEffect;
 
-/// Достигнутое base-состояние всех session plug-ов.
+/// Действующее base-состояние всех session plug-ов.
 pub(crate) struct CPlug {
     object: CBaseObject,
     session_id: i32,
@@ -37,7 +36,7 @@ pub(crate) struct CPlug {
 }
 
 impl CPlug {
-    /// Воспроизводит constructor defaults до derived plug type assignment.
+ /// Воспроизводит constructor defaults до derived plug type assignment.
     pub(crate) const fn new() -> Self {
         Self {
             object: CBaseObject::with_reached_constructor_defaults(),
@@ -88,7 +87,7 @@ impl CPlug {
         self.ended
     }
 
-    /// Дописывает исходный plug header и всегда возвращает `1`.
+ /// Дописывает исходный plug header и всегда возвращает `1`.
     pub(crate) fn serialize(&self, output: &mut Vec<u8>) -> i32 {
         output.extend_from_slice(&self.plug_type.to_le_bytes());
         output.extend_from_slice(&self.owner_type.to_le_bytes());
@@ -97,7 +96,7 @@ impl CPlug {
         1
     }
 
-    /// Ставит немедленный state-call сохранённой session.
+ /// Ставит немедленный state-call сохранённой session.
     pub(crate) fn change_state(&mut self, state: i32, value: &[u8]) {
         self.session_effects.push(WorldPlugSessionEffect {
             session_id: self.session_id,
@@ -108,7 +107,7 @@ impl CPlug {
         });
     }
 
-    /// Ставит state `1`; ended будет назначен factory только при живой session.
+ /// Ставит state `1`; ended будет назначен factory только при живой session.
     pub(crate) fn exit(&mut self) {
         self.session_effects.push(WorldPlugSessionEffect {
             session_id: self.session_id,
@@ -127,7 +126,7 @@ impl CPlug {
         self.ended = 1;
     }
 
-    /// Читает единственный virtual suffix `m_bPlugEnded`.
+ /// Читает единственный virtual suffix `m_bPlugEnded`.
     pub(crate) fn unserialize(&mut self, stream: &[u8], offset: &mut i32) -> i32 {
         let Some(ended) = read_i32(stream, offset) else {
             return 0;

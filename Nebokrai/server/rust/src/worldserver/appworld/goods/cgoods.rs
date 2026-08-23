@@ -1,37 +1,30 @@
 //! Владелец товара исторического `WorldServer`.
 //!
-//! `CGoods::Serialize/Unserialize` RVA `0x000518E0/0x00053220`,
-//! byte-array wrappers `0x000516E0/0x00051700`, `Release` RVA `0x000533C0`,
-//! scalar `GetAddonPropertyValues` RVA `0x000517B0`, `GetMaxStackNumber` RVA
-//! `0x00052530`, `GetWeight` RVA `0x00051730`,
-//! `GetAllAddonProperties/GetGoodsName/IsAddonProperyExist` RVA
-//! `0x00051780/0x000517A0/0x00051880`, vector `GetAddonPropertyValues` RVA
-//! `0x00052760`, wire-based `Clone` RVA `0x000523B0`,
-//! `SetExID` RVA `0x000530E0`, base-подобъекта и defaults конструктора RVA
-//! `0x00053060`, а также непосредственной destructor-цепочки RVA `0x000534B0`
-//! и сломанный `CanUpgraded` RVA `0x000528E0`, а также локальный adapter
-//! применения joined addon-строк `CDBGoods::LoadGoods` реализованы в Rust.
-//! Точная пара доказательных артефактов:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.h` и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\goods\cgoods.cpp:16-36`.
+//! `CGoods::Serialize/Unserialize`,
+//! byte-array wrappers, `Release`,
+//! scalar `GetAddonPropertyValues`, `GetMaxStackNumber`
+//! `GetWeight`,
+//! `GetAllAddonProperties/GetGoodsName/IsAddonProperyExist`
+//! vector `GetAddonPropertyValues`
+//! wire-based `Clone`,
+//! `SetExID`, base-подобъекта и defaults конструктора
+//! а также непосредственной destructor-цепочки
+//! и сломанный `CanUpgraded`, а также локальный adapter
+//! применения joined addon-строк `CDBGoods::LoadGoods` входят в контракт owner-а.
 //!
-//! Exact PDB задаёт размеры старых `CShape/CGoods` `0x6C/0xA4`. Constructor
-//! по `0x00453079` передаёт неизменённый `this` в `CShape::CShape`, а по
-//! `0x004530B5` выполняет `mov [esi+4], 0x2BC`: object type `700` хранится в
-//! унаследованном `CBaseObject::m_lType`. Запись по `0x004530AF` повторно
-//! обнуляет inherited `m_lID +0x8`, а не собственное поле, как показывал raw.
+//! Layout сохраняет размеры старых `CShape/CGoods` `0x6C/0xA4`. Constructor
+//! по передаёт неизменённый `this` в `CShape::CShape`, а по
+//! выполняет `mov [esi+4], 0x2BC`: object type `700` хранится в
+//! унаследованном `CBaseObject::m_lType`. Запись по повторно
+//! обнуляет inherited `m_lID +0x8`, а не собственное поле, как показывал оригинал.
 //! Собственный `m_dwBasePropertiesIndex +0x6C` этот constructor не назначает,
 //! поэтому Rust хранит его как `Option<u32>` до setter/decode; amount получает
 //! `1`, price `0`, description и addon-vector пусты.
 //!
-//! Raw destructor ошибочно показывал ранний возврат после освобождения
-//! heap-строки. Exact EXE `0x004534DB..0x0045351F` сохраняет порядок
+//! оригинал destructor ошибочно показывал ранний возврат после освобождения
+//! heap-строки. сохраняет порядок
 //! `Release -> vector tidy -> string cleanup -> CShape::~CShape` для обеих
-//! форм строки. Rust-композиция материализует только единственный достигнутый
+//! форм строки. Rust-композиция материализует только единственный действующий
 //! `CShape` base-подобъект и type-default. Helper не называется `new`,
 //! собственный cleanup не подменяется пустым `Drop`, а Rust layout не
 //! объявляется копией старого ABI.
@@ -42,8 +35,8 @@
 //! тройки `u32/i32/i32`. `Vec` заменяет только последовательный STL storage.
 //! `Unserialize` сначала выполняет точный `Release`: index/amount становятся
 //! нулями, description/addons очищаются, price сохраняется до последующей
-//! записи из wire. Exact `0x00453390..0x004533B5` подтвердил normal return `1`
-//! перед security-cookie epilogue; после ответа reverse прекращён.
+//! записи из wire. подтвердил normal return `1`
+//! перед security-cookie epilogue.
 //!
 //! Description читался без length в stack buffer `0x404`. Safe slice/cursor
 //! принимает только NUL в этой границе; overflow/overread возвращает локальную
@@ -52,19 +45,19 @@
 //! index возвращаются typed ошибками, а не получают выдуманные wire-байты.
 //!
 //! Scalar addon lookup сохраняет первое property/value совпадение и signed
-//! 32-битное сложение `lBaseValue + lModifier`. Max-stack запрашивает exact
+//! 32-битное сложение `lBaseValue + lModifier`. Max-stack запрашивает
 //! base-properties index, допускает только `GT_USELESS/GT_CONSUMABLE`, берёт
 //! `lBaseValue` первого stacking-value с `dwId == 1` и иначе возвращает `1`.
 //! PDB исправляет ошибочное имя folded-вызова `CShape::GetDir` на
-//! `CGoodsBaseProperties::GetGoodsType`; exact EXE `0x004525E1..0x004525EE`
+//! `CGoodsBaseProperties::GetGoodsType`;
 //! подтверждает возврат именно signed DWORD по `tagAddonPropertyValue +4`,
 //! побитово наблюдаемого как исходный `unsigned long`. После этих двух ответов
-//! точечный reverse прекращён.
+//! точечный проверка прекращён.
 //! Weight запрашивает те же base-properties, возвращает `0` при отсутствии и
 //! умножает unsigned вес одной единицы на amount с точным 32-битным wrapping;
-//! exact EXE использует `IMUL EAX, ESI`.
+//! использует `IMUL EAX, ESI`.
 //! `CanUpgraded` в matching EXE после всех lookup/allocation путей безусловно
-//! выполняет `xor eax,eax` по `0x004529BF`: результат всегда `0`. Rust удаляет
+//! выполняет `xor eax,eax` по: результат всегда `0`. Rust удаляет
 //! только ненаблюдаемые map lookup и временный vector, но сохраняет этот
 //! внешний запрет upgrade буквально; исправленное donor-тело сюда не входит.
 
@@ -155,9 +148,9 @@ impl From<ShapeDecodeError> for GoodsCodecError {
 /// Неразрешённая граница материализации frozen `CGoods` для WorldDB.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GoodsDbSnapshotBlock {
-    /// Constructor/decode ещё не назначили обязательный base-properties index.
+ /// Constructor/decode ещё не назначили обязательный base-properties index.
     MissingBasePropertiesIndex,
-    /// Исходный `unsigned char` loop не достигает конца слишком длинного values.
+ /// Исходный `unsigned char` loop не достигает конца слишком длинного values.
     AddonValueCount {
         property_index: usize,
         value_count: usize,
@@ -187,7 +180,7 @@ pub(super) struct GoodsAddonProperty {
 
 /// Итог safe-доступа `CGoodsFactory::Upgrade` к первому destination-value.
 ///
-/// Raw owner находил первый совпавший property и без проверки разыменовывал
+/// оригинал owner находил первый совпавший property и без проверки разыменовывал
 /// `vValues._Myfirst`. Пустой value-vector не является нормальным игровым
 /// состоянием и не получает искусственной mutation в Rust.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -197,7 +190,7 @@ pub(super) enum FirstAddonModifierAdjustment {
     Adjusted,
 }
 
-/// Достигнутая base-часть исходного `CGoods`.
+/// Действующая base-часть исходного `CGoods`.
 pub(crate) struct CGoods {
     shape_base: CShape,
     base_properties_index: Option<u32>,
@@ -208,7 +201,7 @@ pub(crate) struct CGoods {
 }
 
 impl CGoods {
-    /// Создаёт только доказанный base-подобъект с object type `700`.
+ /// Создаёт только доказанный base-подобъект с object type `700`.
     pub(crate) const fn with_constructor_base_and_type() -> Self {
         let mut shape_base = CShape::with_constructor_region_default();
         shape_base.set_type(700);
@@ -222,67 +215,67 @@ impl CGoods {
         }
     }
 
-    /// Возвращает унаследованный object type без дополнительных эффектов.
+ /// Возвращает унаследованный object type без дополнительных эффектов.
     pub(crate) const fn get_type(&self) -> i32 {
         self.shape_base.get_type()
     }
 
-    /// Возвращает унаследованный signed object ID.
+ /// Возвращает унаследованный signed object ID.
     pub(crate) const fn get_id(&self) -> i32 {
         self.shape_base.get_id()
     }
 
-    /// Присваивает унаследованный signed object ID.
+ /// Присваивает унаследованный signed object ID.
     pub(crate) const fn set_id(&mut self, id: i32) {
         self.shape_base.set_id(id);
     }
 
-    /// Заимствует унаследованный GUID товара.
+ /// Заимствует унаследованный GUID товара.
     pub(crate) const fn get_ex_id(&self) -> &crate::public::guid::CGuid {
         self.shape_base.get_ex_id()
     }
 
-    /// Копирует унаследованный GUID товара.
+ /// Копирует унаследованный GUID товара.
     pub(crate) const fn set_ex_id(&mut self, ex_id: &crate::public::guid::CGuid) {
         self.shape_base.set_ex_id(ex_id);
     }
 
-    /// Присваивает унаследованное byte-exact имя до первого NUL.
+ /// Присваивает унаследованное byte- имя до первого NUL.
     pub(crate) fn set_name(&mut self, name: &[u8]) {
         self.shape_base.set_name(name);
     }
 
-    /// Заимствует exact inherited goods-name без завершающего NUL.
+ /// Заимствует inherited goods-name без завершающего NUL.
     pub(crate) fn get_goods_name(&self) -> &[u8] {
         self.shape_base.get_name()
     }
 
-    /// Присваивает унаследованный signed graphics ID.
+ /// Присваивает унаследованный signed graphics ID.
     pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
         self.shape_base.set_graphics_id(graphics_id);
     }
 
-    /// Возвращает назначенный unsigned индекс base-properties.
+ /// Возвращает назначенный unsigned индекс base-properties.
     pub(crate) const fn get_base_properties_index(&self) -> Option<u32> {
         self.base_properties_index
     }
 
-    /// Присваивает unsigned индекс base-properties.
+ /// Присваивает unsigned индекс base-properties.
     pub(crate) const fn set_base_properties_index(&mut self, index: u32) {
         self.base_properties_index = Some(index);
     }
 
-    /// Присваивает исходное unsigned количество товара.
+ /// Присваивает исходное unsigned количество товара.
     pub(crate) const fn set_amount(&mut self, amount: u32) {
         self.amount = amount;
     }
 
-    /// Возвращает исходное unsigned количество товара.
+ /// Возвращает исходное unsigned количество товара.
     pub(crate) const fn get_amount(&self) -> u32 {
         self.amount
     }
 
-    /// Возвращает сумму первого совпавшего addon-value либо signed ноль.
+ /// Возвращает сумму первого совпавшего addon-value либо signed ноль.
     pub(crate) fn get_addon_property_value(&self, property_type: i32, id: u32) -> i32 {
         self.get_addon_property_values(property_type)
             .iter()
@@ -290,24 +283,24 @@ impl CGoods {
             .map_or(0, |value| value.base_value.wrapping_add(value.modifier))
     }
 
-    /// Заимствует все addon-ы в exact vector-order.
+ /// Заимствует все addon-ы в vector-order.
     pub(super) fn get_all_addon_properties(&self) -> &[GoodsAddonProperty] {
         &self.addon_properties
     }
 
-    /// Заимствует все addon-ы для mutation в exact vector-order.
+ /// Заимствует все addon-ы для mutation в vector-order.
     pub(super) fn get_all_addon_properties_mut(&mut self) -> &mut Vec<GoodsAddonProperty> {
         &mut self.addon_properties
     }
 
-    /// Проверяет наличие numeric-типа независимо от enabled-флага и values.
+ /// Проверяет наличие numeric-типа независимо от enabled-флага и values.
     pub(crate) fn is_addon_property_exist(&self, property_type: i32) -> bool {
         self.addon_properties
             .iter()
             .any(|property| property.property_type == property_type)
     }
 
-    /// Применяет одну non-null строку `extend_properties` в exact row-order.
+ /// Применяет одну non-null строку `extend_properties` в row-order.
     pub(crate) fn apply_loaded_addon(
         &mut self,
         property_type: i32,
@@ -370,7 +363,7 @@ impl CGoods {
         Ok(())
     }
 
-    /// Возвращает values первого addon-а совпавшего numeric-типа.
+ /// Возвращает values первого addon-а совпавшего numeric-типа.
     pub(super) fn get_addon_property_values(
         &self,
         property_type: i32,
@@ -381,12 +374,12 @@ impl CGoods {
             .map_or(&[], |property| property.values.as_slice())
     }
 
-    /// Меняет modifier первого addon-value точным private factory-путём.
-    ///
-    /// Сначала выбирается первый property данного numeric-типа, затем его
-    /// первый value. Сложение/вычитание происходят как signed 32-bit x86
-    /// arithmetic; increase ветвь ограничивает только верх `65535`, а
-    /// decrease ветвь — только нижний ноль.
+ /// Меняет modifier первого addon-value точным private factory-путём.
+ ///
+ /// Сначала выбирается первый property данного numeric-типа, затем его
+ /// первый value. Сложение/вычитание происходят как signed 32-bit x86
+ /// arithmetic; increase ветвь ограничивает только верх `65535`, а
+ /// decrease ветвь — только нижний ноль.
     pub(super) fn adjust_first_addon_modifier(
         &mut self,
         property_type: i32,
@@ -418,7 +411,7 @@ impl CGoods {
         FirstAddonModifierAdjustment::Adjusted
     }
 
-    /// Возвращает exact unsigned stacking-limit для текущих base-properties.
+ /// Возвращает unsigned stacking-limit для текущих base-properties.
     pub(crate) fn get_max_stack_number(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -442,7 +435,7 @@ impl CGoods {
             .map_or(1, |value| value.base_value() as u32))
     }
 
-    /// Возвращает exact unsigned общий вес с 32-битным переполнением.
+ /// Возвращает unsigned общий вес с 32-битным переполнением.
     pub(crate) fn get_weight(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -457,22 +450,22 @@ impl CGoods {
         )
     }
 
-    /// Возвращает exact сломанный результат matching EXE: upgrade запрещён всегда.
+ /// Возвращает сломанный результат matching EXE: upgrade запрещён всегда.
     pub(crate) const fn can_upgraded(&self) -> bool {
         false
     }
 
-    /// Присваивает исходную unsigned цену.
+ /// Присваивает исходную unsigned цену.
     pub(crate) const fn set_price(&mut self, price: u32) {
         self.price = price;
     }
 
-    /// Возвращает исходную unsigned цену.
+ /// Возвращает исходную unsigned цену.
     pub(crate) const fn get_price(&self) -> u32 {
         self.price
     }
 
-    /// Материализует точный caller-owned view для `CDBGoods::SaveGoods`.
+ /// Материализует точный caller-owned view для `CDBGoods::SaveGoods`.
     pub(crate) fn db_save_snapshot(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -524,7 +517,7 @@ impl CGoods {
         })
     }
 
-    /// Сохраняет description bytes как исходный `std::string` owner.
+ /// Сохраняет description bytes как исходный `std::string` owner.
     pub(crate) fn set_goods_description(&mut self, description: &[u8]) {
         let visible = description
             .iter()
@@ -534,7 +527,7 @@ impl CGoods {
         self.description.extend_from_slice(&description[..visible]);
     }
 
-    /// Добавляет один factory-rolled addon в исходный vector-order.
+ /// Добавляет один factory-rolled addon в исходный vector-order.
     pub(super) fn push_factory_addon_property(
         &mut self,
         property_type: i32,
@@ -556,7 +549,7 @@ impl CGoods {
         });
     }
 
-    /// Сбрасывает точные собственные поля `CGoods::Release`.
+ /// Сбрасывает точные собственные поля `CGoods::Release`.
     pub(crate) fn release(&mut self) {
         self.base_properties_index = Some(0);
         self.amount = 0;
@@ -567,7 +560,7 @@ impl CGoods {
         self.description.clear();
     }
 
-    /// Клонирует через exact virtual wire-путь исходного owner-а.
+ /// Клонирует через virtual wire-путь исходного owner-а.
     pub(crate) fn clone_into(&self, target: &mut CGoods) -> Result<bool, GoodsCodecError> {
         let mut wire = Vec::new();
         let _ = self.serialize(&mut wire, true)?;
@@ -575,7 +568,7 @@ impl CGoods {
         target.unserialize(&wire, &mut cursor, true)
     }
 
-    /// Кодирует полный goods snapshot в точном legacy-порядке.
+ /// Кодирует полный goods snapshot в точном legacy-порядке.
     pub(crate) fn serialize(
         &self,
         destination: &mut Vec<u8>,
@@ -602,7 +595,7 @@ impl CGoods {
         Ok(true)
     }
 
-    /// Декодирует полный goods snapshot после точного раннего `Release`.
+ /// Декодирует полный goods snapshot после точного раннего `Release`.
     pub(crate) fn unserialize(
         &mut self,
         source: &[u8],
@@ -627,7 +620,7 @@ impl CGoods {
         Ok(true)
     }
 
-    /// Сохраняет virtual wrapper `CGoods::AddToByteArray`.
+ /// Сохраняет virtual wrapper `CGoods::AddToByteArray`.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -636,7 +629,7 @@ impl CGoods {
         self.serialize(destination, include_child)
     }
 
-    /// Сохраняет virtual wrapper `CGoods::DecordFromByteArray`.
+ /// Сохраняет virtual wrapper `CGoods::DecordFromByteArray`.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],
@@ -751,8 +744,8 @@ fn read_goods_description(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, 
         return Ok(bytes[..length].to_vec());
     }
 
-    // `_GetStringFromByteArray` не получал capacity и
-    // продолжал запись за stack buffer либо чтение за source.
+ // `_GetStringFromByteArray` не получал capacity и
+ // продолжал запись за stack buffer либо чтение за source.
     Err(GoodsCodecError::UnterminatedDescription { offset, available })
 }
 
@@ -788,8 +781,8 @@ fn read_goods_array<const N: usize>(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Старый вспомогательный код не получал длину источника. При коротком
-        // буфере он выходил за его границы; Rust не воспроизводит это UB.
+ // Старый вспомогательный код не получал длину источника. При коротком
+ // буфере он выходил за его границы; Rust не воспроизводит это UB.
         return Err(GoodsCodecError::UnexpectedEnd {
             field,
             offset,

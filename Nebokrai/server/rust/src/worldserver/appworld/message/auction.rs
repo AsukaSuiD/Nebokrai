@@ -1,14 +1,9 @@
-//! WorldServer dispatcher-owner `OnMSG_S2W_AUCTION`.
-//!
-//! Статус владельца: `IMPLEMENTED` для relay/DB queue/BaiTan/auction-bang
-//! ветвей `0x60801..14`. Точная пара: `WorldServer/Nworldserver.exe +
-//! WorldServer/WorldServer.pdb`, исходный owner
-//! `e:\\svn\\fengyun_russia_dev\\server\\worldserver\\appworld\\message\\auction.cpp:10`,
-//! RVA `0x000A5650`.
+//! WorldServer dispatcher-owner `OnMSG_S2W_AUCTION` из точной пары EXE/PDB.
 //!
 //! `0x60801/04/06` создают один owned `DbNote`, декодируют `CGoodsNode` и
 //! ставят соответствующий input operation; только non-DB item `0x60801`
-//! зануляет buyer и немедленно отправляет `0x14ED01`. Реализованные relay меняют только literal opcode и сохраняют отсутствие
+//! зануляет buyer и немедленно отправляет `0x14ED01`. Relay меняют только
+//! literal opcode и сохраняют отсутствие
 //! `Update` там, где его нет в EXE. `0x60807` добавляет source map как один
 //! unsigned byte перед непрочитанным payload. `0x60811/12` сохраняют порядок
 //! чтения и точные BaiTan mutations; `0x60814` проверяет только существование
@@ -17,9 +12,9 @@
 //! layout и order side effects.
 //! `0x6080B` сначала мутирует page, затем строит `0x80409`; C-string без NUL
 //! остаётся typed boundary после этой мутации. `0x6080C` строит `0x8040A` в
-//! доказанном порядке second-ID, first-ID, log data, только потом `Update`.
+//! порядке second-ID, first-ID, log data, только потом `Update`.
 //! `0x6080D` требует online player, после чего `CollectNoNotice` сначала
-//! помечает live records и по одному публикует exact SQL в общий FIFO, затем
+//! помечает live records и по одному публикует SQL в общий FIFO, затем
 //! строит, обновляет и отправляет `0x8040B` в source map.
 //! `0x6080E` читает unsigned player ID и декодирует полный player-wire с
 //! текущего cursor только у online owner-а; virtual/CRT plumbing заменён
@@ -168,7 +163,7 @@ pub(crate) enum WorldServerAuctionMessageOutcome {
 }
 
 /// Результат S2W auction-dispatcher-а; все literal case текущего owner-а уже
-/// обработаны, а default exact switch является no-op.
+/// обработаны, а default switch является no-op.
 pub(crate) enum WorldServerAuctionMessageDispatch {
     Handled(WorldServerAuctionMessageOutcome),
     Pending(CMessage),

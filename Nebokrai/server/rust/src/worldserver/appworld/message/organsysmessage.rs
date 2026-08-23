@@ -1,385 +1,27 @@
-//! Dispatcher полностью реализует нормальные достижимые organizing opcode,
-//! включая смерть faction-master-а `0x60101`, создание фракции `0x60103`,
-//! initial organizing data `0x60104`, список фракций страны `0x60107`,
-//! подачу заявки `0x60108`, отмену
-//! заявки `0x60109`, решение по заявке `0x6010A`, исключение участника
-//! `0x6010B`, исключение фракции из союза `0x6010C`, выход из фракции
-//! `0x6010D`, выход фракции из союза `0x6010E`, передачу главы фракции
-//! `0x6010F`, передачу главы союза `0x60110`, роспуск фракции `0x60111`,
-//! роспуск союза `0x60112`, назначение title/job-level `0x60113`, выдачу и
-//! отзыв права `0x60114/0x60115`, приглашение faction/выбор union-действия
-//! `0x60116`, заявку союза `0x60118`,
-//! общий session-result dispatch, billboard
-//! `0x60125`, улучшение фракции `0x60126`, запрос значка `0x60127`, выбор
-//! вкладчика `0x60128`, вклад опыта `0x60129` и изменение состояния участника
-//! `0x6012A`, парные city-tax gate `0x6012B/0x6012C` и region-param update
-//! `0x6012D`, region route `0x6012E`, city-gate route `0x6012F` и полный
-//! city-transfer ingress `0x60130`, admission-permit `0x60132`, city-war
-//! terminal `0x60133`, village-war application `0x60135`, её result ingress
-//! `0x60136`, city-war application `0x60137`, её result ingress `0x60138` и
-//! Goods War command `0x60139`, faction-win `0x6013A` и player quest routes
-//! `0x6013B/0x6013C`, run-script `0x6013D`, faction parameter `0x6013E` и
-//! межрегиональный маршрут `0x60144`.
+//! Dispatcher `OnOrgasysMessage` WorldServer из
+//! `appworld/message/organsysmessage.cpp`.
 //!
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! `OnOrgasysMessage` RVA `0x000A6110`. Exact диапазоны
-//! ingress `0x60101` читает два полных `Long` как `(defeated master,
-//! victor player)` и без route/tail/online gates передаёт их
-//! `CFactionWarSys::OnPlayerDied`. Его exact owner
-//! `0x00465750..0x00465CDF` проверяет master/union/enemy связи, попарно снимает
-//! войну сторон и публикует `WS0233(victor, defeated)` с war-log. Добавленные
-//! старым Linux-донором validation gates в EXE отсутствуют.
-//! Exact диапазоны
-//! `0x004A6186..0x004A6685` восстанавливают `0x60103`: запрос читает
-//! `(request ID, cookie, player ID, country, name[20])`, после непустого имени
-//! снимает один local-time и декодирует online player из остатка сообщения.
-//! Country/level/goods/money gates отвечают `0x7FE01` с result `0`; успешный
-//! `CreateFaction` обновляет player faction-data и отправляет оба faction
-//! snapshot-а. `Fail/NameExist/Ok` отображаются в `WS0115/WS0116/WS0117`,
-//! затем всегда идут ответ и organizing notice с `WS0118`. Persistent
-//! player-name lookup остаётся на своей exact позиции между двумя частями
-//! concrete `CreateFaction`; технически ADO заменён параметризованным
-//! `tiberius`, но порядок и политика ошибки сохранены.
-//! Exact `0x004A6685..0x004A66D7` для `0x60104` читает один player ID,
-//! требует online player с `m_bGetFactionData != true` и без проверки
-//! результатов последовательно вызывает faction, union и all-faction
-//! snapshot owner-ы. Route/tail gates Linux-донора отсутствуют. Concrete
-//! `AddUnionToClientByPlayerID` `0x004376F0..0x00437807` ставит player flag
-//! только после отправки полного `0x7FE04`.
-//! Exact диапазоны
-//! `0x004A66DC..0x004A69A4` восстанавливают `0x60107`: запрос читает
-//! `(request ID, cookie, player ID, page)`, берёт country только у online
-//! player-а, считает faction этой страны и отвечает `0x7FE07`. Нулевой список
-//! предваряется `WS0120/WS0119`; успешный ответ добавляет исходную page,
-//! текущую apply-faction игрока и exact payload `AddFactionListToByteArray`.
-//! Страница вне signed wrapping-границы ответа не получает. Проверки route,
-//! exact-tail и batch-map отправка старого Linux-донора в EXE отсутствуют.
-//! Exact `0x004A6EC9..0x004A6FA7` для `0x60108` читает `(player ID,
-//! discarded Long, name[20])`, требует online player, находит faction либо
-//! union готовым `FindOrgaByName` и сравнивает virtual `GetCountry` с player
-//! country. Только при равенстве вызывает virtual
-//! `ApplyForJoin(player ID, 0, 0)`. Vtable `CUnion` подтверждает, что его
-//! `GetCountry` `0x004C1F10..0x004C1F12` возвращает literal `0`, а не страну
-//! master-faction, как предполагал старый Linux-донор. Route/tail gates и
-//! прямой wire-ответ отсутствуют; union-ветвь поэтому достижима только для
-//! player country `0` и сохраняет странный player-ID-as-faction-ID вызов.
-//! Exact `0x004A6FAC..0x004A70E1` для `0x60109` читает только player ID,
-//! запоминает первую apply-faction, удаляет player из apply-list всех faction
-//! в signed map-order и лишь при переходе `positive -> non-positive` отправляет
-//! `WS0125/WS0119`. Online/route/tail gates и wire-ответ отсутствуют.
-//! Exact `0x004A70E6..0x004A717B` для `0x6010A` читает три полных `Long` как
-//! `(manager ID, applicant ID, approve flag)`, разрешает faction manager-а
-//! через `IsFreePlayer` и `GetFactionOrganizing`, снимает один local-time,
-//! повторяет тот же faction lookup и вызывает virtual
-//! `DoJoin(manager, applicant, approve, time)` в slot `+0x18`. Online-manager,
-//! route/tail gates и прямой wire-ответ отсутствуют; добавленные Linux-донором
-//! проверки не перенесены. Побочные сообщения, member mutations и join-log
-//! остаются внутри уже восстановленного concrete `CFaction::DoJoin`.
-//! Exact `0x004A7180..0x004A71CC` для `0x6010B` читает два полных `Long` как
-//! `(manager ID, target ID)`, разрешает faction manager-а через
-//! `IsFreePlayer`, дважды выполняет nullable `GetFactionOrganizing` и вызывает
-//! virtual `CFaction::FireOut(manager, target)` в slot `+0x24`. Между двумя
-//! lookup нет наблюдаемого действия, поэтому Rust сводит их к одному live
-//! borrow. Online-manager, route/tail gates и прямой wire-ответ отсутствуют;
-//! проверки старого Linux-донора не перенесены. War/Goods-War gates,
-//! уведомления, member mutations, fire-log и локальный `0x60508` остаются
-//! внутри exact concrete owner `0x004BB140..0x004BB897`.
-//! Exact `0x004A71D1..0x004A722D` для `0x6010C` читает `(manager ID, target
-//! faction ID)`, один раз выполняет `COrganizingCtrl::GetUnion(manager ID)` и
-//! при non-null вызывает virtual `CUnion::FireOut(manager, target)` в том же
-//! slot `+0x24`. Результат игнорируется: затем безусловно читается member count
-//! и при `<= 1` вызывается `DisbandConferation(manager, union ID)`, даже если
-//! `FireOut` отказал. Online/route/tail gates и wire-ответ отсутствуют; старый
-//! Linux-донор добавлял ingress-проверки, которых нет в EXE.
-//! Exact `0x004A754A..0x004A757B` для `0x6010D` читает один полный `Long` как
-//! player ID, разрешает его faction через ordered `IsFreePlayer`, один раз
-//! выполняет nullable `GetFactionOrganizing` и вызывает virtual
-//! `CFaction::Exit(player ID)` в slot `+0x20`. `char` в RAW-прототипе является
-//! артефактом: ASM передаёт исходный 32-битный ID. Online/route/tail gates и
-//! прямой wire-ответ отсутствуют; проверки Linux-донора не перенесены.
-//! Exact `0x004A7580..0x004A75F6` для `0x6010E` читает один полный `Long`
-//! player ID, последовательно вызывает `IsFreePlayer`, `IsFreeFaction` и
-//! nullable `GetConfederationOrganizing`, затем virtual `CUnion::Exit` в slot
-//! `+0x20`. Результат игнорируется: при member count `<= 1` вызывается
-//! `DisbandConferation(GetPlayerHeader(), union ID)`. Online/route/tail gates и
-//! прямой wire-ответ отсутствуют; Linux-проверки payload/route не перенесены.
-//! Exact `0x004A7232..0x004A727E` для `0x6010F` читает два полных `Long` как
-//! `(old master player ID, new master player ID)`, разрешает faction через
-//! `IsFreePlayer(old master)`, дважды выполняет один и тот же nullable
-//! `GetFactionOrganizing` и вызывает virtual `CFaction::Demise(old, new)` в
-//! slot `+0x44`. `char` второго аргумента в RAW — артефакт: ASM передаёт весь
-//! 32-битный ID. Между двумя lookup нет мутации, поэтому Rust удерживает один
-//! safe mutable owner. Route/online/tail gates и прямой wire-ответ отсутствуют.
-//! Exact `0x004A7283..0x004A72B3` для `0x60110` читает два полных `Long` как
-//! `(old master player ID, new master faction ID)`, вызывает готовый
-//! `COrganizingCtrl::GetUnion(old master)` и при non-null — virtual
-//! `CUnion::Demise(old, new faction)` в том же slot `+0x44`. Результат
-//! игнорируется; route/online/tail gates и прямой wire-ответ отсутствуют.
-//! Concrete owner `0x004C5060..0x004C5762` сохраняет wrapping cooldown,
-//! city/standard-war порядок, online operator gate, две `OP_Update`
-//! публикации, `WS0281/WS0282`, общий player refresh и второй tick в момент
-//! успеха. Linux-донор ошибочно заменял первую публикацию на `(0, Delete)`;
-//! exact ASM передаёт old faction ID и literal `2`.
-//! Exact `0x004A72B8..0x004A72DC` для `0x60111` читает один полный `Long`
-//! player ID, разрешает faction через ordered `IsFreePlayer` и безусловно
-//! вызывает уже восстановленный `DisbandFaction(player, faction)`, включая
-//! literal faction `0` при membership miss. Bool-result игнорируется;
-//! online/route/tail gates и прямой wire-ответ отсутствуют. Concrete owner
-//! сохраняет war notices, двойную delete-публикацию, delete-очередь, сброс
-//! player faction-data, optional DB-log и немедленное уничтожение удалённого
-//! faction-owner-а. Linux-донорские exact-payload/ownership rejects не
-//! перенесены.
-//! Exact `0x004A72E1..0x004A7301` с общим leaf
-//! `0x004A7216..0x004A722D` для `0x60112` читает один полный `Long` player
-//! ID, выполняет nullable `GetUnion(player)`, берёт ID найденного owner-а
-//! виртуальным slot `+0x5C` и вызывает уже восстановленный
-//! `DisbandConferation(player, union ID)`. Result игнорируется;
-//! online/route/tail gates и прямой wire-ответ отсутствуют. Дополнительные
-//! payload/ownership rejects Linux-донора не перенесены.
-//! Exact `0x004A7306..0x004A73DC` для `0x60113` читает `(target ID, job
-//! level, title[20], manager ID)`, разрешает faction через ordered
-//! `IsFreePlayer(manager)`, дважды выполняет один и тот же nullable
-//! `GetFactionOrganizing` и вызывает virtual `CFaction::DubAndSetJobLvl` в
-//! slot `+0x28`. Оба числовых аргумента передаются полными 32-битными
-//! значениями; `char` job-level в RAW — артефакт. Между lookup нет мутации,
-//! поэтому Rust удерживает один safe mutable owner. Online/route/tail gates и
-//! прямой wire-ответ отсутствуют; Linux-донорские ingress-rejects не
-//! перенесены. Invalid-string filter и optional title-log остаются внешними
-//! техническими владельцами готового concrete faction owner-а.
-//! Exact `0x004A73E1..0x004A743D` и `0x004A7442..0x004A749E` для
-//! `0x60114/0x60115` симметрично читают `(target ID, purview, manager ID)`,
-//! разрешают faction через ordered `IsFreePlayer(manager)`, дважды выполняют
-//! nullable `GetFactionOrganizing` и вызывают virtual slots `+0x2C/+0x30`.
-//! Все три аргумента остаются полными 32-битными значениями; `char` purview в
-//! RAW — артефакт. Online/route/tail gates и прямой wire-ответ отсутствуют;
-//! Linux-донорские ingress-rejects не перенесены. Optional purview-log остаётся
-//! внешним техническим владельцем concrete faction owner-а.
-//! Exact `0x004A74A3..0x004A74C1` для `0x60116` читает два полных `Long` как
-//! `(player ID, invited faction ID)` и безусловно вызывает готовый
-//! `COrganizingCtrl::OnPlayerInviteFaction`. Online/route/tail gates и прямой
-//! wire-ответ отсутствуют; выбор Create/Apply/Invite и war-notices остаётся
-//! внутри exact concrete controller owner-а.
-//! Exact диапазоны
-//! `0x004A74C6..0x004A7509` и `0x004A7511..0x004A7543` исправляют повреждённый
-//! RAW. Общий branch читает
-//! `GetLONG64`, `GetLong`, именно `GetChar`, затем `GetLong`, то есть
-//! `(session ID, cookie.second, result byte, cookie.first)`. `movzx` расширяет
-//! result как unsigned byte до 32 бит. Затем вызывается уже восстановленный
-//! `CNetSessionManager::OnSyncCallbackResult(session, first, second, &result)`;
-//! manager проверяет cookie, синхронно вызывает endpoint и удаляет session.
-//! Эту ветку разделяют opcode `0x60117/0x60119/0x60120/0x60122/0x60124/0x60131`.
-//! `0x60118` читает `(master player ID, applicant faction ID)`, разрешает union
-//! через `COrganizingCtrl::GetUnion(master player ID)` и при non-null вызывает
-//! virtual `ApplyForJoin(applicant faction ID, 0, master player ID)`.
-//! Exact `0x004A75FB..0x004A763F` подтверждает соседний `0x6011A`: один
-//! `GetLong`, ordered `IsFactionMaster`, nullable faction lookup и virtual
-//! `SetLWFunction(true)` в slot `+0x104`.
-//! Exact `0x004A7644..0x004A771A` для `0x6011B` очищает 210-byte buffer,
-//! вызывает `GetStr(..., 0xD2)`, читает player ID, разрешает его faction через
-//! `IsFreePlayer`, копирует все восемь WORD полей одного `GetLocalTime` в
-//! `tagTime` и вызывает virtual `CFaction::LeaveWord` в slot `+0x38`.
-//! Exact `0x004A771F..0x004A776D` для `0x6011C` читает leave-word ID, затем
-//! player ID, разрешает faction через `IsFreePlayer` и вызывает virtual
-//! `CFaction::EditLeaveWord(player ID, leave-word ID, EOperator::Delete)` в
-//! slot `+0x3C`.
-//! Exact `0x004A7772..0x004A784A` для `0x6011D` очищает 0x5000-byte buffer,
-//! вызывает `GetStr(..., 0x5000)`, читает player ID, разрешает faction через
-//! `IsFreePlayer`, снимает один local `tagTime` и вызывает virtual
-//! `CFaction::Pronounce` в slot `+0x34`.
-//! Exact shared leaf `0x004A796A..0x004A7971` для `0x60121/0x60123` вызывает
-//! один `GetLong` и не использует возвращённое значение.
-//! Exact `0x004A69A9..0x004A6EC4` для `0x6011E` читает `(request ID, cookie,
-//! player ID, page)`, проверяет faction/master и формирует ответ `0x7FE18`.
-//! Пустые ответы не содержат page/payload; успешный ответ содержит total,
-//! исходный page и 11-элементный `AddDeclareWarFactionInfoToByteArray` payload.
-//! Exact `0x004A784F..0x004A7965` для `0x6011F` читает `(request ID, cookie,
-//! player ID, target faction ID, war type)`, декодирует полный player snapshot
-//! с текущего message cursor, снимает local `tagTime`, вызывает готовый
-//! `CFactionWarSys::DigUpTheHatchet` и отправляет `0x7FE19`. Стоимость войны
-//! попадает в ответ только при истинном результате; сам WorldServer её здесь
-//! не списывает.
-//! Exact `0x004A812D..0x004A82C8` для `0x60125` при первом входе лениво и
-//! навсегда локализует `WS0134/WS0133/WS0132`, затем читает `(request ID,
-//! billboard type)`. Значение выше `2` не получает ответа. Для `0/1/2`
-//! строится socket-response `0x7FE1D`: request ID, соответствующий C-string
-//! title и payload готового `AddFactionBillboardToByteArray`, после чего
-//! выполняется явный `Update`. Несовпадение нумерации сохранено: serializer
-//! распознаёт `1/2/3`, поэтому type `0` пишет count `0`, `1` отдаёт members,
-//! `2` — offense; defense недостижим. Отрицательный type исходник не отсекал
-//! и индексировал память перед статическим массивом процесса; Rust возвращает
-//! типизированную ошибку вместо этого внутреннего выхода за границы.
-//! Exact `0x004A799C..0x004A79FE` для `0x60126` читает `(faction ID,
-//! player ID)`, ищет online player, декодирует в него полный snapshot с
-//! текущего message cursor и только затем повторно разрешает faction. При
-//! non-null faction вызывается virtual slot `+0x50`, то есть уже
-//! восстановленный `CFaction::Upgrade(long)`, с полным 32-битным player ID;
-//! bool-result игнорируется и wire-ответ не формируется. Приведение к `char`
-//! в RAW было артефактом декомпиляции. Дополнительных ownership/tail-проверок
-//! старого Linux-донора в EXE нет, поэтому они не перенесены.
-//! Exact `0x004A7A03..0x004A7A78` для `0x60127` читает `(faction ID,
-//! player ID)`, дважды выполняет nullable faction lookup, а между успешными
-//! lookup снимает один полный local `tagTime`. Затем virtual slot `+0x54`
-//! вызывает готовый `CFaction::UploadIcon(player ID, &time)`. Online-player
-//! lookup, payload decoder и wire-ответ отсутствуют; сам `UploadIcon` время не
-//! читает и реализует только master/property/interval gate. Добавленные старым
-//! Linux-донором ownership и exact-tail проверки поэтому не переносятся.
-//! Exact `0x004A80CF..0x004A8128` для `0x60128` читает `(target player ID,
-//! enabled long, requester player ID)`, преобразует enabled строго через
-//! `!= 0`, разрешает faction requester-а через ordered `IsFreePlayer` и
-//! вызывает virtual slot `+0x128`, то есть готовый
-//! `SetControbuter(requester, target, enabled)`. Online-player ownership,
-//! payload decoder и wire-ответ отсутствуют. Linux-донор верно подсказал форму
-//! трёх полей, но его exact-tail/ownership проверки в EXE не подтверждаются.
-//! Exact `0x004A82CD..0x004A83DB` для `0x60129` читает `(faction ID,
-//! player ID, experience delta)`, разрешает faction, проверяет virtual
-//! `IsControbute(player ID)` в slot `+0x124`, дважды читает прежний опыт через
-//! `+0x68` и передаёт в `SetExp` (`+0x6C`) их машинную 32-битную сумму с delta.
-//! Результат `SetExp` не влияет на дальнейший log gate. При включённых setup и
-//! faction-exp флагах online-player даёт фактические ID/name для SQL
-//! `faction_experience_log`; колонки `before_exp/exp` получают старый опыт и
-//! именно delta. Wire-ответ отсутствует. Rust callback передаёт typed поля
-//! владельцу DB-очереди вместо `_sprintf` в 256-байтовый heap-buffer и тем
-//! самым устраняет внутренние overflow/leak, не меняя DB-контракт.
-//! Exact `0x004A83E0..0x004A8451` для `0x6012A` сначала читает `(faction ID,
-//! player ID, operation)` и разрешает faction. Только для найденной faction и
-//! operation `1/2` читается четвёртый `Long`: новый level передаётся virtual
-//! `OnMemberLvlChange` в slot `+0x144`, region ID — `OnMemberPosChange` в
-//! соседний `+0x148`. Иные operation и missing faction прекращают ветвь, не
-//! потребляя четвёртое поле. Online-player lookup, ownership/tail-проверки и
-//! wire-ответ отсутствуют; дополнительные rejects Linux-донора не перенесены.
-//! Exact `0x004A7ABA..0x004A7CEC/0x004A7CF1..0x004A7F1A` для парных
-//! `0x6012B/0x6012C` читает `(player ID, region ID)`, разрешает faction через
-//! ordered `IsFreePlayer` и проверяет сначала `CAttackCitySys::GetCityState`,
-//! затем `CVillageWarSys::GetRegionState` на literal `CIS_Fight`. Эти ветви
-//! отправляют соответственно `WS0126/WS0121` и `WS0127/WS0121`. Вне войны
-//! virtual slot `+0x48` вызывает готовый `CFaction::OperatorTax(player,
-//! region)`; только true-result меняет type исходного сообщения на
-//! `0x7FE28/0x7FE29` соответственно и отправляет весь исходный payload в его
-//! socket. Online-player ownership и exact-tail checks отсутствуют.
-//! Exact `0x004A7F1F..0x004A7F89` для `0x6012D` читает `(region ID,
-//! today total tax, total tax, current tax rate)`, при существующем ненулевом
-//! `tagRegion::pRegion` переставляет последние три значения в сигнатуру
-//! `CWorldRegion::SetParamFromGS(current, today, total)`, меняет type исходного
-//! сообщения на `0x7FE2E` и вызывает общий `SendAll`. Оба miss являются
-//! no-op; исходный payload пересылается целиком, результат send игнорируется.
-//! Exact `0x004A7F8E..0x004A7FB4` для `0x6012E` читает один region ID,
-//! безусловно получает `CGame::GetGameServerNumber_ByRegionID`, меняет type
-//! исходного сообщения на `0x7FE2D` и вызывает `SendToMapID` с результатом
-//! lookup. Miss даёт literal route `0` и не отменяет send; payload остаётся
-//! исходным, дополнительных ownership/tail checks нет.
-//! Exact `0x004A7FB9..0x004A801D` для `0x6012F` читает `(player ID, region
-//! ID)`, разрешает faction через ordered `IsFreePlayer` и вызывает virtual
-//! `CFaction::OperatorCityGate(player, region)` в slot `+0x4C`. Только
-//! true-result меняет type исходного сообщения на `0x7FE2A`, получает route
-//! через `GetGameServerNumber_ByRegionID(region)` и безусловно вызывает
-//! `SendToMapID`, включая literal `0` при miss. War/online/tail gates нет.
-//! Exact `0x004A8022..0x004A804A` для `0x60130` читает ровно `(requester
-//! player ID, target faction ID, region ID)` и вызывает восстановленный
-//! `COrganizingCtrl::TransferIOwnerCity`; bool-result игнорируется, прямого
-//! wire-ответа ingress не создаёт. Подтверждение идёт отдельным `0x7FE2B`, а
-//! terminal decision возвращается через уже общий `0x60131` session branch.
-//! Exact `0x004A8078..0x004A80CA` для `0x60132` читает `(permit long,
-//! player ID)`, преобразует permit строго через `!= 0`, разрешает faction
-//! player-а ordered `IsFreePlayer` и при nullable-success вызывает уже
-//! восстановленный `CFaction::SetIsPermit(player, permit)` в slot `+0x11C`.
-//! Online/route/tail checks Linux-донора в EXE отсутствуют; wire-ответа нет.
-//! Exact `0x004A7A7D..0x004A7AB5` для `0x60133` читает ровно `(result,
-//! region ID, attacker player ID, defender faction ID)` и без route/tail
-//! проверок вызывает полный `COrganizingCtrl::OnAttackCityEnd`; прямого
-//! wire-ответа ingress не создаёт, сообщения войны рождает concrete owner.
-//! Exact `0x004A8456..0x004A84D4` для `0x60135` читает ровно `(player ID,
-//! village-war number, legacy money)`, вызывает готовый
-//! `CVillageWarSys::ApplyForVillageWar` и только при true-result строит
-//! `0x7FE34(player ID, legacy money)`, направленный в исходный `m_lMapID`.
-//! Третий параметр owner не использует: EXE лишь возвращает его GameServer-у.
-//! Сам owner подтверждён в `0x0046CCF0..0x0046D0D7`: после gates публикует
-//! `0x7FE36`, форматирует `WS0289` в 500-byte границе, отправляет общий
-//! organizing-info с kind `-366`, цветом `0xFFFF0000` и пишет war log.
-//! Balance/online/route/tail gates старого Linux-донора в машине отсутствуют.
-//! Exact `0x004A84D9..0x004A8511` для `0x60136` читает четыре `Long` в порядке
-//! `(war number, war region ID, winner faction ID, legacy auxiliary ID)` и
-//! без проверок вызывает полный `CVillageWarSys::OnFacWinVillage`; прямого
-//! wire-ответа ingress не создаёт. Четвёртый параметр owner не читает. Timer,
-//! ownership, faction counters, `WS0290..WS0294`, top-info и `0x7FE32`
-//! остаются внутри уже подтверждённого concrete owner-а.
-//! Exact `0x004A8553..0x004A85A7` и общий leaf
-//! `0x004A84AA..0x004A84D4` для `0x60137` читают ровно `(player ID, city-war
-//! number, legacy money)`, вызывают полный
-//! `CAttackCitySys::OnPlayerDeclareWar` и только при true-result отвечает
-//! `0x7FE37(player ID, legacy money)` исходному `m_lMapID`. Owner не читает
-//! третий параметр; balance/online/route/tail gates отсутствуют. Заявка,
-//! `0x7FE35`, полная пересборка city-war enemy relations и `WS0145/WS0146`
-//! остаются в подтверждённом concrete owner-е.
-//! Exact `0x004A8516..0x004A854E` для `0x60138` читает четыре `Long` в порядке
-//! `(war number, city region ID, winner faction ID, reported union ID)` и без
-//! ingress-проверок вызывает полный `CAttackCitySys::OnFacWinCity`. Четвёртый
-//! параметр попадает только во входной diagnostic; owner заново вычисляет
-//! union победителя. Timer, завершение войны, ownership/country mutations,
-//! `WS0147..WS0153`, top-info и `0x7FE22` остаются внутри concrete owner-а.
-//! `m_bIsWarring=false` выполняется у живого `CCountry` напрямую после exact
-//! region/country lookup. Связка `SetKing(master)+m_lCityID=region` также
-//! подключена к живому country-owner-у полным governance-контекстом. Exact EXE
-//! `0x00471D38..0x00471D43` игнорирует return `SetKing`, затем пишет region в
-//! `CCountry+0x20`; сам `SetKing` `0x004CC290..0x004CC313` вызывает
-//! `DeposeKing(3)`, назначает king, публикует `0x7FF05` и возвращает master ID.
-//! Rust временно передаёт `Box<CCountry>` из handler-а контексту, сохраняет все
-//! эти side effects и пишет city только после normal typed completion; это
-//! ownership-замена singleton/raw-pointer alias, а не новый lifecycle.
-//! Exact `0x004A88D1..0x004A8952` для `0x60139` сначала читает один operation
-//! `Long`. Только literal `2/0x11/0x12` читают второй `Long` и вызывают
-//! `DeleteOneMember/InsertOneFaction/AppendOneFaction2Count`; literal `4`
-//! вызывает `RefreshAll` без второго поля. Все остальные значения являются
-//! no-op и не потребляют хвост. Прямого ingress-ответа нет: concrete Goods War
-//! owner при фактических mutations публикует свои `0x7FF20/0x7FF21`.
-//! Exact `0x004A889D..0x004A88CC` для `0x6013A` читает один faction ID,
-//! разрешает faction и только при non-null вызывает `FactionWin`. Сам owner
-//! подтверждён машиной `0x004A2BD0..0x004A2ED5`: берёт ordered member IDs,
-//! insert-only добавляет отсутствующие ключи, публикует `0x7FF20(1, faction,
-//! new members..., -master, 0)`, затем best-effort дописывает `bzhsmd.txt`.
-//! Уже существующие player keys не переназначаются; отрицательный master —
-//! только wire sentinel. Donor-очистка с удалением прежних записей и
-//! обязательной вставкой `-master` в map машине противоречит и не перенесена.
-//! Exact `0x004A873F..0x004A87F2` для `0x6013B/0x6013C` в обеих ветвях
-//! читает `(player ID: Long, quest ID: Short)`, разрешает route через
-//! `GetGameServerNumber_ByPlayerID` и при literal zero молча выходит. Иначе
-//! общий leaf отправляет в route `0x7FE38/0x7FE39` соответственно с теми же
-//! `Long + Short`. Donor заменил map-route на socket и добавил tail/ownership
-//! gates; в EXE их нет, поэтому они не перенесены.
-//! Exact `0x004A87F7..0x004A8898` для `0x6013D` читает player `Long`, заранее
-//! обнуляет `char[256]` и вызывает `GetStr(..., 0x100)`. После того же player
-//! route gate ненулевой route получает `0x7FE3A(player ID, C-string script)`.
-//! Route miss не отправляет ответ; socket/ownership/tail gates донора в EXE
-//! отсутствуют.
-//! Exact `0x004A85AC..0x004A8604` для `0x6013E` читает player `Long`, bounded
-//! parameter C-string через `GetStr(..., 0x32)` и ещё один полный `Long`.
-//! Затем `IsFactionMaster` разрешает faction, nullable organizing lookup и
-//! virtual slot `+0x184` вызывают уже готовый `CFaction::SetParam`. Машина
-//! кладёт значение прямым `PUSH EDI`; RAW cast к `char` является ошибкой
-//! декомпиляции. Wire-ответа и дополнительных donor gates нет.
+//! Контракт ветвей подтверждён точной парой WorldServer EXE/PDB. Dispatcher
+//! читает payload в исходном порядке, разрешает player/faction/union/country
+//! owners и делегирует мутации готовым organizing owners. Он не вводит
+//! дополнительных socket, ownership, online или exact-tail gates и не строит
+//! wire-ответ там, где исходная ветвь была void/no-op.
 //!
-//! Старый callback держал singleton-указатели и мутировал organizing state
-//! непосредственно из `CNetSessionManager`. Rust endpoint вместо небезопасной
-//! `'static` ссылки сохраняет terminal action в FIFO под `parking_lot::Mutex`;
-//! единственный main-loop owner забирает её сразу после callback dispatch.
-//! Confirmation send остаётся синхронным внутри `Beging`: route и клонируемый
-//! `ServerCommandHandle` снимаются непосредственно перед созданием session.
-//! Это техническая замена lifetime/lock plumbing, а не изменение wire, cookie,
-//! timeout или порядка terminal actions.
-//! Exact `0x004A8609..0x004A873A` для `0x60144` читает `(request ID, from
-//! region, to region, target X, target Y)`, синхронно вызывает World
-//! `CRegionRouter::ChageRegionRouter` и всегда строит broadcast `0x7FE4A`:
-//! request ID, signed route count и ordered тройки `(region ID, X, Y)`.
-//! Ответ отправляется и при missing/disconnected route с count `0`; входной
-//! map ID, ownership и хвост не проверяются. Exact route owner подтверждён в
-//! `0x004B4350..0x004B4B7D`; `BinaryHeap`/`BTreeMap` заменяют только внутренние
-//! MSVC containers, сохраняя signed tie-break и точки переходов.
+//! Governance, membership, city/war, goods-war, application, transfer,
+//! billboard и parameter opcodes сохраняют свои signed поля, C-строки,
+//! lookup-порядок, partial side effects и странные return/error mappings.
+//! Повторный nullable lookup остаётся повторным, если между обращениями
+//! выполняется observable действие.
 //!
-//! Legacy getters при нехватке возвращают ноль и не двигают cursor; Rust
-//! сохраняет это через `unwrap_or(0)`, а не добавляет отсутствовавший общий
-//! reject. Дополнительный хвост owner не проверял. Проверки exact payload и
-//! GameServer ownership из старого Linux-донора к этой ветке EXE не относятся
-//! и здесь не переносятся. `CMessage`/`CBaseMessage` и session manager уже
-//! материализованы; функция ниже добавляет только конкретный opcode dispatch.
+//! Асинхронные `CNetSessionManager` callbacks не держат `'static` ссылки на
+//! `CGame`: terminal action публикуется в FIFO и применяется единственным
+//! main-loop owner сразу после dispatch. Confirmation send остаётся в исходной
+//! callback-позиции. `parking_lot`, owned payload и typed outcomes заменяют
+//! только pointer lifetime и compiler cleanup.
+//!
+//! Короткий payload и отсутствующий обязательный owner останавливаются на
+//! безопасной границе после уже выполненного prefix. Такие случаи не получают
+//! rollback или новый rejection packet.
 
 use std::collections::VecDeque;
 use std::ffi::CString;
@@ -1012,8 +654,8 @@ impl UnionApplyForJoinEffects for WorldUnionApplicationEffects<'_> {
         &mut self,
         request: UnionApplicationSessionRequest,
     ) -> Result<Self::SessionReport, Self::SessionBlock> {
-        // `Beging` вызывает `DoAsyncCall` синхронно; route и клонируемый
-        // transport handle снимаются непосредственно перед session creation.
+ // `Beging` вызывает `DoAsyncCall` синхронно; route и клонируемый
+ // transport handle снимаются непосредственно перед session creation.
         let game_server_id = self
             .game
             .game_server_number_by_player_id(request.recipient_player_id);
@@ -2083,7 +1725,8 @@ pub(crate) enum OrganizingSessionResultDispatch {
     },
 }
 
-/// Выполняет общий session-result branch `OnOrgasysMessage`.
+/// Декодирует общий session-result branch `OnOrgasysMessage` в исходном
+/// порядке полей и передаёт callback менеджеру без дополнительных ответов.
 pub(crate) fn dispatch_organizing_session_result(
     message: &mut CMessage,
     manager: &CNetSessionManager,
@@ -2124,7 +1767,7 @@ pub(crate) struct OrganizingPlayerInviteFactionDispatch<
         PlayerInviteFactionOutcome<CreationReport, ApplicationReport, InvitationReport>,
 }
 
-/// Выполняет exact ingress `0x60116` без дополнительных транспортных gates.
+/// Выполняет ingress `0x60116` без дополнительных транспортных gates.
 pub(crate) fn dispatch_player_invite_faction<Effects>(
     message: &mut CMessage,
     game: &CGame,
@@ -2797,8 +2440,8 @@ pub(crate) fn dispatch_initial_organizing_data(
 
 /// Узкая граница online-player owner-а для списка faction одной страны.
 pub(crate) trait FactionApplicationListContext: FactionOrganizingInfoContext {
-    /// `None` означает offline miss, внутренний `None` — ещё не
-    /// материализованный country найденного player-owner-а.
+ /// `None` означает offline miss, внутренний `None` — ещё не
+ /// материализованный country найденного player-owner-а.
     fn online_player_country(&self, player_id: i32) -> Option<Option<u8>>;
 }
 
@@ -2849,7 +2492,7 @@ pub(crate) struct OrganizingFactionListDispatch {
     pub(crate) outcome: OrganizingFactionListOutcome,
 }
 
-/// Выполняет exact `0x60107` и строит socket-response `0x7FE07`.
+/// Выполняет `0x60107` и строит socket-response `0x7FE07`.
 pub(crate) fn dispatch_faction_list<Context>(
     message: &mut CMessage,
     organizing: &COrganizingCtrl,
@@ -2981,7 +2624,7 @@ pub(crate) struct OrganizingFactionApplicationDispatch<SessionReport> {
     pub(crate) outcome: OrganizingFactionApplicationOutcome<SessionReport>,
 }
 
-/// Выполняет exact `0x60108`: `(player ID, discarded Long, name[20])`,
+/// Выполняет `0x60108`: `(player ID, discarded Long, name[20])`,
 /// online/country gate и virtual `ApplyForJoin(player ID, 0, 0)`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_application(
@@ -3143,7 +2786,7 @@ pub(crate) struct OrganizingFactionApplicationCancelDispatch {
     pub(crate) notice_sent: bool,
 }
 
-/// Выполняет exact `0x60109`: очищает все faction apply-list и уведомляет
+/// Выполняет `0x60109`: очищает все faction apply-list и уведомляет
 /// только о подтверждённом переходе из положительной apply-faction в пустую.
 pub(crate) fn dispatch_faction_application_cancel<Context>(
     message: &mut CMessage,
@@ -3219,7 +2862,7 @@ pub(crate) struct OrganizingFactionApplicationDecisionDispatch {
     pub(crate) outcome: OrganizingFactionDoJoinOutcome,
 }
 
-/// Выполняет exact `0x6010A`: три `Long`, manager-faction lookup, один local
+/// Выполняет `0x6010A`: три `Long`, manager-faction lookup, один local
 /// time snapshot и virtual `CFaction::DoJoin` без route/tail/wire ingress-а.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_application_decision(
@@ -3302,7 +2945,7 @@ pub(crate) struct OrganizingFactionFireOutDispatch {
     pub(crate) outcome: OrganizingFactionFireOutOutcome,
 }
 
-/// Выполняет exact `0x6010B`: два `Long`, manager-faction lookup и virtual
+/// Выполняет `0x6010B`: два `Long`, manager-faction lookup и virtual
 /// `CFaction::FireOut` без route/tail/wire ingress-а.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_fire_out(
@@ -3379,7 +3022,7 @@ pub(crate) struct OrganizingUnionFireOutDispatch {
     pub(crate) outcome: OrganizingUnionFireOutOutcome,
 }
 
-/// Выполняет exact `0x6010C`: два `Long`, nullable `GetUnion(manager)`, virtual
+/// Выполняет `0x6010C`: два `Long`, nullable `GetUnion(manager)`, virtual
 /// `CUnion::FireOut` и автоматический disband при member count `<= 1`.
 pub(crate) fn dispatch_union_fire_out(
     message: &mut CMessage,
@@ -3438,7 +3081,7 @@ pub(crate) struct OrganizingFactionExitDispatch {
     pub(crate) outcome: OrganizingFactionExitOutcome,
 }
 
-/// Выполняет exact `0x6010D`: один `Long`, faction lookup и virtual
+/// Выполняет `0x6010D`: один `Long`, faction lookup и virtual
 /// `CFaction::Exit` без route/tail/wire ingress-а.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_exit(
@@ -3505,7 +3148,7 @@ pub(crate) struct OrganizingUnionExitDispatch {
     pub(crate) outcome: OrganizingUnionExitOutcome,
 }
 
-/// Выполняет exact `0x6010E`: один `Long`, player/faction/union lookup,
+/// Выполняет `0x6010E`: один `Long`, player/faction/union lookup,
 /// virtual `CUnion::Exit` и automatic disband через `GetPlayerHeader`.
 pub(crate) fn dispatch_union_exit(
     message: &mut CMessage,
@@ -3559,7 +3202,7 @@ pub(crate) struct OrganizingFactionDemiseDispatch {
     pub(crate) outcome: OrganizingFactionDemiseOutcome,
 }
 
-/// Выполняет exact `0x6010F`: два `Long`, faction lookup и virtual
+/// Выполняет `0x6010F`: два `Long`, faction lookup и virtual
 /// `CFaction::Demise` без route/tail/wire ingress-а.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_demise(
@@ -3638,7 +3281,7 @@ pub(crate) struct OrganizingUnionDemiseDispatch {
     pub(crate) outcome: OrganizingUnionDemiseOutcome,
 }
 
-/// Выполняет exact `0x60110`: два полных `Long`, nullable
+/// Выполняет `0x60110`: два полных `Long`, nullable
 /// `GetUnion(old master)` и virtual `CUnion::Demise(old, new faction)`.
 pub(crate) fn dispatch_union_demise(
     message: &mut CMessage,
@@ -3707,7 +3350,7 @@ pub(crate) enum OrganizingFactionDisbandBlock {
     },
 }
 
-/// Выполняет exact synchronous prefix `0x60111`: один `Long`, ordered
+/// Выполняет synchronous prefix `0x60111`: один `Long`, ordered
 /// `IsFreePlayer` и безусловный `DisbandFaction(player, faction)`.
 pub(crate) fn dispatch_faction_disband<Context>(
     message: &mut CMessage,
@@ -3748,7 +3391,7 @@ where
     }))
 }
 
-/// Завершает exact controller continuation: player flag, optional DB-log и
+/// Завершает controller continuation: player flag, optional DB-log и
 /// немедленный Drop удалённого faction-owner-а.
 pub(crate) fn finalize_faction_disband_dispatch<ClearPlayer, WriteLog>(
     pending: PendingOrganizingFactionDisbandDispatch,
@@ -3826,7 +3469,7 @@ pub(crate) struct OrganizingUnionDisbandDispatch {
     pub(crate) outcome: OrganizingUnionDisbandOutcome,
 }
 
-/// Выполняет exact `0x60112`: один `Long`, nullable `GetUnion(player)`,
+/// Выполняет `0x60112`: один `Long`, nullable `GetUnion(player)`,
 /// virtual `GetID` и `DisbandConferation(player, union ID)`.
 pub(crate) fn dispatch_union_disband(
     message: &mut CMessage,
@@ -3898,7 +3541,7 @@ pub(crate) struct OrganizingFactionDubDispatch {
     pub(crate) outcome: OrganizingFactionDubOutcome,
 }
 
-/// Выполняет exact `0x60113`: `(target, job-level, title[20], manager)`,
+/// Выполняет `0x60113`: `(target, job-level, title[20], manager)`,
 /// faction lookup по manager и virtual `CFaction::DubAndSetJobLvl`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_dub(
@@ -4007,7 +3650,7 @@ pub(crate) struct OrganizingFactionPurviewDispatch {
     pub(crate) outcome: OrganizingFactionPurviewOutcome,
 }
 
-/// Выполняет exact парные `0x60114/0x60115`: три `Long`, faction lookup по
+/// Выполняет парные `0x60114/0x60115`: три `Long`, faction lookup по
 /// manager и virtual grant/revoke owner без ingress-gates.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_faction_purview(
@@ -4448,9 +4091,9 @@ pub(crate) fn dispatch_faction_billboard(
         return None;
     }
 
-    // Три `GetStringByID` исходник выполнял при первом входе в case, ещё до
-    // чтения request и проверки типа, после чего process-static строки уже не
-    // реагировали на reload string table.
+ // Три `GetStringByID` исходник выполнял при первом входе в case, ещё до
+ // чтения request и проверки типа, после чего process-static строки уже не
+ // реагировали на reload string table.
     let titles = FACTION_BILLBOARD_TITLES.get_or_init(|| {
         [
             legacy_c_string_prefix(&world_string(b"WS0134")).to_vec(),
@@ -4468,9 +4111,9 @@ pub(crate) fn dispatch_faction_billboard(
         }));
     }
     let Ok(title_index) = usize::try_from(billboard_type) else {
-        // Оригинал проверяет только `2 < type`, поэтому отрицательный selector
-        // индексирует статический `std::string[3]` до начала массива. Rust не
-        // воспроизводит результат такого чтения за границами.
+ // Оригинал проверяет только `2 < type`, поэтому отрицательный selector
+ // индексирует статический `std::string[3]` до начала массива. Rust не
+ // воспроизводит результат такого чтения за границами.
         return Some(Err(OrganizingFactionBillboardBlock {
             request_id,
             billboard_type,
@@ -5360,7 +5003,7 @@ pub(crate) struct OrganizingVillageWarApplicationDispatch {
     pub(crate) response: Option<Result<i32, SendMessageError>>,
 }
 
-/// Живой adapter достигнутых organizing/region/string owner-ов заявки.
+/// Живой adapter действующих organizing/region/string owner-ов заявки.
 struct WorldVillageWarApplicationContext<'game, 'callbacks, 'effects> {
     game: &'game CGame,
     organizing: &'game COrganizingCtrl,
@@ -5500,7 +5143,7 @@ impl VillageWarApplicationContext for WorldVillageWarApplicationContext<'_, '_, 
     }
 }
 
-/// Выполняет exact `0x60135` и при true-result отвечает исходному map-owner-у.
+/// Выполняет `0x60135` и при true-result отвечает исходному map-owner-у.
 pub(crate) fn dispatch_village_war_application(
     message: &mut CMessage,
     game: &CGame,
@@ -5894,7 +5537,7 @@ fn bounded_city_war_notice(
     Ok(notice.to_vec())
 }
 
-/// Выполняет exact `0x60137` и при true-result отвечает source map-owner-у.
+/// Выполняет `0x60137` и при true-result отвечает source map-owner-у.
 #[allow(
     clippy::too_many_arguments,
     reason = "аргументы явно связывают исходные singleton-owner-ы без глобального состояния"
@@ -6520,7 +6163,7 @@ impl AttackCityWarResultContext
     }
 }
 
-/// Выполняет exact `0x60138`: четыре legacy `Long` и полный result-owner.
+/// Выполняет `0x60138`: четыре legacy `Long` и полный result-owner.
 #[allow(
     clippy::too_many_arguments,
     reason = "явные параметры сохраняют границы исходных singleton-owner-ов"
@@ -6706,7 +6349,7 @@ impl GoodsWarMemberContext for WorldGoodsWarMemberContext<'_, '_> {
     }
 }
 
-/// Выполняет exact внутренний switch `0x60139`, потребляя только нужные поля.
+/// Выполняет внутренний switch `0x60139`, потребляя только нужные поля.
 pub(crate) fn dispatch_goods_war_command(
     message: &mut CMessage,
     game: &CGame,
@@ -6771,7 +6414,7 @@ pub(crate) struct OrganizingGoodsWarFactionWinDispatch {
     pub(crate) report: Option<GoodsWarFactionWinReport>,
 }
 
-/// Выполняет exact nullable ingress `0x6013A` и передаёт owned faction snapshot.
+/// Выполняет nullable ingress `0x6013A` и передаёт owned faction snapshot.
 pub(crate) fn dispatch_goods_war_faction_win(
     message: &mut CMessage,
     game: &CGame,
@@ -6829,7 +6472,7 @@ pub(crate) struct OrganizingPlayerQuestCommandDispatch {
     pub(crate) delivery: Option<Result<i32, SendMessageError>>,
 }
 
-/// Маршрутизирует exact парные `Long + Short` ветви `0x6013B/0x6013C`.
+/// Маршрутизирует парные `Long + Short` ветви `0x6013B/0x6013C`.
 pub(crate) fn dispatch_player_quest_command(
     message: &mut CMessage,
     game: &CGame,
@@ -6872,7 +6515,7 @@ pub(crate) struct OrganizingPlayerRunScriptDispatch {
     pub(crate) delivery: Option<Result<i32, SendMessageError>>,
 }
 
-/// Маршрутизирует exact bounded C-string ветвь `0x6013D`.
+/// Маршрутизирует bounded C-string ветвь `0x6013D`.
 pub(crate) fn dispatch_player_run_script(
     message: &mut CMessage,
     game: &CGame,
@@ -6930,7 +6573,7 @@ pub(crate) struct OrganizingFactionParameterDispatch {
     pub(crate) outcome: OrganizingFactionParameterOutcome,
 }
 
-/// Выполняет exact `0x6013E` с полным `Long` value и concrete `SetParam`.
+/// Выполняет `0x6013E` с полным `Long` value и concrete `SetParam`.
 pub(crate) fn dispatch_faction_parameter(
     message: &mut CMessage,
     game: &CGame,
@@ -7008,7 +6651,7 @@ pub(crate) struct OrganizingChangeRegionRouterDispatch {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Выполняет exact `0x60144 -> 0x7FE4A` и безусловный `SendAll`.
+/// Выполняет `0x60144 -> 0x7FE4A` и безусловный `SendAll`.
 pub(crate) fn dispatch_change_region_router(
     message: &mut CMessage,
     router: &RegionRouter,
@@ -7033,7 +6676,7 @@ pub(crate) fn dispatch_change_region_router(
     };
     let mut response = CMessage::new(CHANGE_REGION_ROUTER_RESPONSE_TYPE);
     response.base_mut().add_long(request_id);
-    // `vector::size()` попадал в 32-битный `Add` низшими битами без range gate.
+ // `vector::size()` попадал в 32-битный `Add` низшими битами без range gate.
     response.base_mut().add_long(route.len() as i32);
     for step in route {
         response.base_mut().add_long(step.region_id);
@@ -7279,7 +6922,7 @@ impl VillageWarResultContext for WorldVillageWarResultContext<'_, '_, '_, '_, '_
     }
 }
 
-/// Выполняет exact `0x60136`: четыре legacy `Long` и полный result-owner.
+/// Выполняет `0x60136`: четыре legacy `Long` и полный result-owner.
 pub(crate) fn dispatch_village_war_result<Callback: Copy>(
     message: &mut CMessage,
     game: &CGame,

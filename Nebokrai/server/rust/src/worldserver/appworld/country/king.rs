@@ -1,23 +1,18 @@
 //! Владелец king state исторического `WorldServer`.
 //!
-//! Три setter-а king points RVA `0x000A46C0/0x000A46F0/0x000A4720`,
-//! `ChangeControlPoint` RVA `0x000DFD30` и constructor/destructor
-//! `0x000DFCF0/0x000DFD20` — `IMPLEMENTED`.
-//! Exact EXE подтверждает только upper clamp: отрицательные значения не
-//! исправляются. Rust применяет тот же контракт к достигнутому king-state без
+//! Три setter-а king points,
+//! `ChangeControlPoint` и constructor/destructor
+//! — часть контракта owner-а.
+//! подтверждает только upper clamp: отрицательные значения не
+//! исправляются. Rust применяет тот же контракт к действующему king-state без
 //! воспроизведения C++ inheritance/layout.
-//! `ChangeControlPoint` exact `0x004DFD30..0x004DFD5A` сначала делает wrapping
+//! `ChangeControlPoint` сначала делает wrapping
 //! signed add, затем сравнивает результат с `_max_king_control_point` и только
-//! превышение заменяет максимумом. Достигнутые country call-sites передают
+//! превышение заменяет максимумом. Действующие country call-sites передают
 //! отрицание стоимости через `wrapping_neg`, сохраняя x86 `neg/add` даже для
 //! `INT_MIN`; parameter singleton заменён явной ссылкой на `CCountryParam`.
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! SHA-256 EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F`,
-//! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходный owner PDB:
-//! `e:\\svn\\fengyun_russia_dev\\server\\worldserver\\appworld\\country\\king.cpp:9,19,84`.
 //!
-//! PDB задаёт `m_bRegister` по `+0x34`, но exact constructor обнуляет только
+//! Layout сохраняет `m_bRegister` по `+0x34`, но constructor обнуляет только
 //! officer bytes `+0x24..+0x27` и три точки `+0x28..+0x30`. Старый bool
 //! остаётся неинициализированным, а подтверждённых project-caller-ов у него
 //! нет. Это внутренний UB-дефект, не контракт: safe Rust назначает ему `false`,
@@ -47,7 +42,7 @@ impl Default for CKing {
 }
 
 impl CKing {
-    /// Создаёт exact identity/officer/point prefix и исправленный bool-флаг.
+ /// Создаёт identity/officer/point prefix и исправленный bool-флаг.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             officer: COfficer::with_constructor_defaults(),

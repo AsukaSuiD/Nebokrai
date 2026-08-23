@@ -1,35 +1,28 @@
 //! Владелец базового object-состояния исторического `WorldServer`.
 //!
-//! Статус PDB-inline `CBaseObject::GetType/SetType`, `GetID/SetID`,
 //! `GetExID/SetExID`, `GetGraphicsID/SetGraphicsID`, `GetName`, public
 //! `m_bIncludeChild`,
-//! `CBaseObject::SetName` RVA `0x0000D320`, достигнутых нулевых scalar-записей,
-//! `CBaseObject::AddToByteArray` RVA `0x000D55C0`, вызова `CGUID::CGUID` и
-//! `CBaseObject::DecordFromByteArray` RVA `0x000D5820`, пустого имени внутри
-//! `CBaseObject::CBaseObject` RVA `0x000D5790` — `IMPLEMENTED`. Контракт
+//! `CBaseObject::SetName`, действующих нулевых scalar-записей,
+//! `CBaseObject::AddToByteArray`, вызова `CGUID::CGUID` и
+//! `CBaseObject::DecordFromByteArray`, пустого имени внутри
+//! `CBaseObject::CBaseObject` — часть контракта owner-а. Контракт
 //! child-tree, destructor-а и передачи factory-результата внутри
-//! `CreateChildObject` RVA `0x000D58B0` восстановлен по raw/PDB и точечно
+//! `CreateChildObject` действует по оригинал/PDB и точечно
 //! проверен в EXE. `CreateChildObject`, `AddObject`, `RemoveObject`, обе
 //! перегрузки `FindChildObject`, обе `RecursiveFindObject` и обе
 //! `DeleteChildObject`, `DeleteAllChildObject`, `BoardCast`,
 //! `DgFindObjectsByTypes`, `AI`, constructor и destructor materialизованы
 //! безопасным child-tree owner-ом. Статический `CreateObject`
-//! RVA `0x000D5470` materialизован отдельным tagged factory-result без erased
-//! pointer/vtable. Точная пара:
+//! materialизован отдельным tagged factory-result без erased
+//! pointer/vtable. Источник контракта — точная пара WorldServer EXE/PDB.
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.h` и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\baseobject.cpp:22`.
 //!
-//! Точный PDB задаёт размер старого `CBaseObject` `0x50` и три protected
+//! PDB задаёт размер старого `CBaseObject` `0x50` и три protected
 //! signed `long`: `m_lType` по offset `+0x4`, `m_lID` по `+0x8` и
 //! `m_lGraphicsID` по `+0x1C`, `CGUID m_guExID` по `+0xC`, а также
 //! `std::string m_strName` по `+0x20` и public `bool m_bIncludeChild` по
 //! `+0x3C`. Соответствующие public inline-методы читают либо присваивают одно
-//! поле. Raw `SetName` копирует только prefix до первого NUL, а constructor
+//! поле. оригинал `SetName` копирует только prefix до первого NUL, а constructor
 //! ставит include-child в `true`.
 //! Соседние protected-поля — non-owning `CBaseObject* m_pFather` по `+0x40` и
 //! `std::list<CBaseObject*> m_listObject` по `+0x44`; public inline
@@ -38,27 +31,27 @@
 //! и ставит father в `nullptr`.
 //! Rust хранит scalar-значения как `i32`, а GUID — готовым общим `CGuid`, чей
 //! точный 16-байтовый Microsoft layout, нулевой constructor и четырёхсловное
-//! присваивание уже восстановлены отдельно. Имя хранится как owned `Vec<u8>`:
+//! присваивание уже действуют отдельно. Имя хранится как owned `Vec<u8>`:
 //! кодировка и UTF-8 не навязываются, а внутренний storage и освобождение
 //! `std::string` заменены стандартным владением Rust. `GetExID` сохраняет
 //! исходное const-заимствование; `SetExID` принимает неизменяемую ссылку,
 //! поскольку старому mutable reference была нужна только копия значения.
 //! Сразу разыменовываемый `char const*` в `SetName` заменён живым slice, а
 //! возвращаемый `GetName` `c_str()` — slice сохранённых байтов без служебного
-//! NUL: terminator добавляется только будущей wire/file-границей. Rust layout
+//! NUL: terminator добавляется только связанный wire/file-границей. Rust layout
 //! всего `CBaseObject` не объявляется копией старого ABI/vtable.
 //! `AddToByteArray` дописывает в существующий buffer type, ID и graphics ID как
-//! три четырёхбайтовых little-endian signed значения, затем byte-exact имя и
-//! один NUL. Exact World-overload-ы `_AddToByteArray` RVA
-//! `0x000A3340/0x000A3280` подтверждают ширину, порядок in-memory x86 bytes и
+//! три четырёхбайтовых little-endian signed значения, затем byte- имя и
+//! один NUL. World-overload-ы `_AddToByteArray`
+//! подтверждают ширину, порядок in-memory x86 bytes и
 //! terminator. `Vec::extend_from_slice/push` заменяют их STL-вставки; входной
 //! `bool` исходное тело не читает, а результат всегда равен `true`.
 //! Обратный decoder читает те же поля в том же порядке и двигает caller-owned
-//! cursor на `12 + name.len() + 1`. World `_GetStringFromByteArray` RVA
-//! `0x000A3190` подтверждает включение NUL в cursor. Raw decompiler смешал
-//! возвращаемый `bool` с `__security_check_cookie`; точечный разбор exact EXE
-//! подтвердил `mov al, 1` по `0x004D589D` перед cookie-check, поэтому normal
-//! return равен `true` (`VERIFIED_DISASSEMBLY`). Входной `bool` снова не
+//! cursor на `12 + name.len() + 1`. World `_GetStringFromByteArray`
+//! подтверждает включение NUL в cursor. исходный listing смешал
+//! возвращаемый `bool` с `__security_check_cookie`; точечный разбор
+//! подтвердил `mov al, 1` по перед cookie-check, поэтому normal
+//! return равен `true` (). Входной `bool` снова не
 //! читается.
 //! Старые pointer/`long&` заменены `&[u8]` и `&mut usize`. Безразмерный helper
 //! мог читать за источником, а локальный `char[256]` — переполняться; safe Rust
@@ -68,10 +61,10 @@
 //! завершения исходного временного buffer.
 //! Исторически public include-child хранится отдельным `pub(crate) bool` и
 //! получает доказанный default `true`; accessor не придуман, а оба wire-метода
-//! поле не читают. Constructor-helper материализует только шесть достигнутых
-//! полей; father и child-list остаются в полном raw-конструкторе.
+//! поле не читают. Constructor-helper материализует только шесть действующих
+//! полей; father и child-list остаются в полном оригинал-конструкторе.
 //!
-//! Raw child-tree задаёт ownership буквально. `AddObject` сначала записывает
+//! оригинал child-tree задаёт ownership буквально. `AddObject` сначала записывает
 //! father, затем добавляет pointer в хвост без duplicate/null проверки.
 //! `RemoveObject` выполняет `std::list::remove`, то есть убирает все равные
 //! pointers, но не очищает father и не уничтожает объект. Pointer-вариант
@@ -80,15 +73,15 @@
 //! копирует список, проходит snapshot в исходном порядке и через virtual
 //! `DeleteChildObject` удаляет всё, кроме явно переданного исключения; destructor
 //! передаёт `nullptr`, поэтому parent рекурсивно владеет всеми оставшимися
-//! детьми. Exact PDB не содержит override-объявлений этих методов у других
+//! детьми. PDB не содержит override-объявлений этих методов у других
 //! классов World-корпуса.
 //!
-//! `CBaseObject::~CBaseObject` RVA `0x000D5D80` сначала ставит base-vtable,
+//! `CBaseObject::~CBaseObject` сначала ставит base-vtable,
 //! удаляет всех детей, освобождает list/string storage и завершает GUID-cleanup.
 //! Сырой хвост ошибочно подписал последний вызов как `AddPlayerList(unaff_ESI)`:
-//! exact EXE показывает вызов `0x00401000` с `this+0xC`, а по этому адресу
+//! показывает вызов с `this+0xC`, а по этому адресу
 //! находится единственный `ret`. Внешнего player-callback нет
-//! (`VERIFIED_DISASSEMBLY`, `0x004D5D80..0x004D5DFD`).
+//! (, ).
 //! `Drop` у tree-node сначала освобождает parent ownership children в list-order,
 //! затем Rust освобождает base object. Это сохраняет наблюдаемый lifecycle без
 //! base-vtable/CRT cleanup и без dangling child aliases original-а.
@@ -102,11 +95,11 @@
 //! до первого virtual-вызова самого child. Detached-ветви всё равно продолжают
 //! оставшуюся инициализацию и возвращают живой объект с нулевым father.
 //!
-//! Первый child-slot `+0x8` является `Load`. Exact EXE-vtable у `CRegion`
-//! `0x00548DEC` содержит по этому slot `0x004D7570`, то есть именованный
+//! Первый child-slot `+0x8` является `Load`. -vtable у `CRegion`
+//! содержит по этому slot, то есть именованный
 //! `CRegion::Load`; vtable `CPlayer/CNpc/CMonster/CGoods` соответственно
-//! `0x00543DE4/0x00549ED4/0x00549E2C/0x0054296C` содержит общий адрес
-//! `0x004DD3E0`, чьё тело возвращает `1`. Raw ошибочно приписал этот общий
+//! /// содержит общий адрес
+//! чьё тело возвращает `1`. оригинал ошибочно приписал этот общий
 //! COMDAT `std::codecvt_base::do_max_length`, но topology slot-а и Region
 //! override определяют исходный virtual-контракт. Результат `Load` не
 //! проверяется. Перед вызовом восстанавливается сохранённый factory-ID, после
@@ -120,20 +113,20 @@
 //! разнородные `CRegion/CPlayer/CNpc/CMonster/CGoods` остаются собственными
 //! Rust owner-ами и не теряют derived-state либо virtual `Load`.
 //!
-//! Для `CGoods(type=700, id=0, name=nullptr)` raw переходит к шестибайтовому
+//! Для `CGoods(type=700, id=0, name=nullptr)` оригинал переходит к шестибайтовому
 //! сравнению без null-проверки. Достижимость и наблюдаемая реакция этого
 //! старого null-dereference не доказаны; safe Rust не
 //! получает придуманного detached/attached либо fail-closed исхода.
 //!
-//! Точечный xref-аудит exact EXE не нашёл project-call-site
+//! Точечный xref-аудит не нашёл project-call-site
 //! `CreateChildObject`. В executable-секциях нет direct `call` к
-//! `0x004D58B0`; адрес функции встречается только в 17 vtable-ячейках. Все 27
-//! косвенных candidate-инструкций `call [register + 0x28]` сопоставлены с raw и
+//!; адрес функции встречается только в 17 vtable-ячейках. Все 27
+//! косвенных candidate-инструкций `call [register + 0x28]` сопоставлены с оригинал и
 //! PDB: их receivers принадлежат CrashRpt/CRT, container traversal,
 //! `CTimer`, `COrganizing` либо ADO/DB wrappers, но не `CBaseObject`. В
-//! частности, единственный четырёхаргументный project-candidate по `0x004A73CD`
+//! частности, единственный четырёхаргументный project-candidate по
 //! принадлежит `COrganizing` в `OnOrgasysMessage`; его собственная vtable
-//! начинается по `0x00549984`, а не в одной из base-object таблиц.
+//! начинается по, а не в одной из base-object таблиц.
 //! Аналогично точные адреса `RemoveObject` и обеих перегрузок
 //! `DeleteChildObject` не имеют внешних direct-call, а найденные одноимённые
 //! slot-offset-ы принадлежат другим vtable. Внутри самого owner-а остаётся
@@ -141,10 +134,10 @@
 //! `AddObject`, pointer-delete — `RemoveObject`, key-delete и
 //! `DeleteAllChildObject` — pointer-delete, destructor прямо вызывает
 //! `DeleteAllChildObject`. Поиск полей `m_listObject/m_pFather` и трёх PDB-
-//! inline accessor-ов в raw/PDB-корпусе также не дал использования вне этого
+//! inline accessor-ов в оригинал/PDB-корпусе также не дал использования вне этого
 //! файла.
 //!
-//! Следовательно, exact World-проект не сохраняет возвращённый pointer,
+//! Следовательно, World-проект не сохраняет возвращённый pointer,
 //! detached player/goods и alias после `RemoveObject`: он вообще не достигает
 //! публичной child-tree границы. Это доказательство отсутствия текущего
 //! project-caller-а, а не доказательство желаемого Rust-владения и не
@@ -166,8 +159,8 @@
 //! просто не совпадает с `NoAdd\0`: это исправление внутреннего UB без
 //! доказанного внешнего legacy-эффекта.
 //! Заменённые
-//! raw-блоки `SetName`, `AddToByteArray` и `DecordFromByteArray` удалены;
-//! отдельных экспортированных тел остальных inline-методов в корпусе нет, а
+//! оригинал-блоки `SetName`, `AddToByteArray` и `DecordFromByteArray` удалены;
+//! отдельных тел остальных inline-методов в компоненте нет, а
 //! их контракт полностью определён PDB.
 
 use std::cell::RefCell;
@@ -228,7 +221,7 @@ impl Error for BaseObjectDecodeError {}
 ///
 /// Только `CGoods(type=700, factory-ID=0)` обращался к `name` без проверки на
 /// null ради сравнения `NoAdd\0`. До этой точки object уже построен и имя
-/// могло быть присвоено, однако exact EXE немедленно аварийно завершался до
+/// могло быть присвоено, однако немедленно аварийно завершался до
 /// `AddObject` и `Load`. Rust не сохраняет этот внутренний дефект: allocation
 /// освобождается обычным владением, а вызывающий получает явный результат.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -252,8 +245,8 @@ impl Error for BaseObjectChildCreateError {}
 /// Ровно пять literal type, принимаемых `CBaseObject::CreateObject`.
 ///
 /// Это discriminator factory, а не полный wire-enum: прочие signed type могут
-/// существовать в сохранённых объектах, но exact factory возвращает для них
-/// null. Значения подтверждены ветвями `0x004D5470..0x004D55B3`.
+/// существовать в сохранённых объектах, но factory возвращает для них
+/// null. Значения подтверждены ветвями.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BaseObjectFactoryType {
     Region,
@@ -264,7 +257,7 @@ pub(crate) enum BaseObjectFactoryType {
 }
 
 impl BaseObjectFactoryType {
-    /// Возвращает concrete owner только для пяти factory-ветвей original-а.
+ /// Возвращает concrete owner только для пяти factory-ветвей original-а.
     pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
         match value {
             200 => Some(Self::Region),
@@ -276,7 +269,7 @@ impl BaseObjectFactoryType {
         }
     }
 
-    /// Возвращает исходный signed `long`, записываемый после factory constructor-а.
+ /// Возвращает исходный signed `long`, записываемый после factory constructor-а.
     pub(crate) const fn wire_value(self) -> i32 {
         match self {
             Self::Region => 200,
@@ -320,7 +313,7 @@ impl Error for BaseObjectTreeAttachError {}
 /// Безопасный узел historic `m_pFather + m_listObject`.
 ///
 /// `Vec` сохраняет list-order `AddObject`; его strong ownership заменяет
-/// deleting destructor parent-а. `father` намеренно weak: raw pointer не
+/// deleting destructor parent-а. `father` намеренно weak: оригинал pointer не
 /// владел parent-ом. Duplicate children допустимы как в original-е, а cycle
 /// отвергается до изменения state, поскольку его рекурсивные owner-ы не имели
 /// доказанного внешнего эффекта, но приводили к internal lifetime defect.
@@ -330,7 +323,7 @@ pub(crate) struct BaseObjectTreeNode {
     children: Vec<SharedBaseObjectFactoryObject>,
 }
 
-/// Живой heterogeneous child без erased raw-pointer старого ABI.
+/// Живой heterogeneous child без erased оригинал-pointer старого ABI.
 pub(crate) type SharedBaseObjectFactoryObject = Rc<RefCell<BaseObjectTreeNode>>;
 
 impl BaseObjectTreeNode {
@@ -342,7 +335,7 @@ impl BaseObjectTreeNode {
         }
     }
 
-    /// Создаёт root узел через точные пять ветвей `CreateObject`.
+ /// Создаёт root узел через точные пять ветвей `CreateObject`.
     pub(crate) fn create(
         object_type: i32,
         object_id: i32,
@@ -351,27 +344,27 @@ impl BaseObjectTreeNode {
             .map(|object| Rc::new(RefCell::new(Self::from_object(*object))))
     }
 
-    /// Заимствует tagged concrete owner без erased virtual ABI.
+ /// Заимствует tagged concrete owner без erased virtual ABI.
     pub(crate) fn object(&self) -> &BaseObjectFactoryObject {
         &self.object
     }
 
-    /// Заимствует concrete owner для точного `Load`/post-load lifecycle.
+ /// Заимствует concrete owner для точного `Load`/post-load lifecycle.
     pub(crate) fn object_mut(&mut self) -> &mut BaseObjectFactoryObject {
         &mut self.object
     }
 
-    /// Возвращает текущего father либо `None` для root/detached node.
+ /// Возвращает текущего father либо `None` для root/detached node.
     pub(crate) fn father(&self) -> Option<SharedBaseObjectFactoryObject> {
         self.father.as_ref().and_then(std::rc::Weak::upgrade)
     }
 
-    /// Возвращает snapshot children в exact insertion-order.
+ /// Возвращает snapshot children в insertion-order.
     pub(crate) fn children(&self) -> Vec<SharedBaseObjectFactoryObject> {
         self.children.clone()
     }
 
-    /// Выполняет `CBaseObject::AddObject`: father, затем append child.
+ /// Выполняет `CBaseObject::AddObject`: father, затем append child.
     pub(crate) fn add_child(
         parent: &SharedBaseObjectFactoryObject,
         child: &SharedBaseObjectFactoryObject,
@@ -384,8 +377,8 @@ impl BaseObjectTreeNode {
         Ok(())
     }
 
-    /// Выполняет `CBaseObject::RemoveObject`: удаляет все pointer-equal children
-    /// и, как EXE, оставляет child.father неизменённым.
+ /// Выполняет `CBaseObject::RemoveObject`: удаляет все pointer-equal children
+ /// и, как EXE, оставляет child.father неизменённым.
     pub(crate) fn remove_child(
         parent: &SharedBaseObjectFactoryObject,
         child: &SharedBaseObjectFactoryObject,
@@ -396,7 +389,7 @@ impl BaseObjectTreeNode {
             .retain(|candidate| !Rc::ptr_eq(candidate, child));
     }
 
-    /// Повторяет pointer-identity `FindChildObject(CBaseObject*)`.
+ /// Повторяет pointer-identity `FindChildObject(CBaseObject*)`.
     pub(crate) fn find_child(
         parent: &SharedBaseObjectFactoryObject,
         child: &SharedBaseObjectFactoryObject,
@@ -408,7 +401,7 @@ impl BaseObjectTreeNode {
             .any(|candidate| Rc::ptr_eq(candidate, child))
     }
 
-    /// Повторяет list-order `FindChildObject(type, id, ignored_guid)`.
+ /// Повторяет list-order `FindChildObject(type, id, ignored_guid)`.
     pub(crate) fn find_child_by_type_and_id(
         parent: &SharedBaseObjectFactoryObject,
         object_type: i32,
@@ -426,7 +419,7 @@ impl BaseObjectTreeNode {
             .cloned()
     }
 
-    /// Повторяет preorder `RecursiveFindObject(type, id)`.
+ /// Повторяет preorder `RecursiveFindObject(type, id)`.
     pub(crate) fn recursive_find_by_type_and_id(
         root: &SharedBaseObjectFactoryObject,
         object_type: i32,
@@ -437,7 +430,7 @@ impl BaseObjectTreeNode {
         })
     }
 
-    /// Повторяет preorder `RecursiveFindObject(type, c_string_name)`.
+ /// Повторяет preorder `RecursiveFindObject(type, c_string_name)`.
     pub(crate) fn recursive_find_by_type_and_name(
         root: &SharedBaseObjectFactoryObject,
         object_type: i32,
@@ -449,9 +442,9 @@ impl BaseObjectTreeNode {
         })
     }
 
-    /// Выполняет default `DeleteChildObject(child)`: сначала remove всех
-    /// совпадений, затем отпускает parent ownership. Существующий внешний
-    /// `Rc` сохраняет безопасный живой alias вместо старого dangling pointer.
+ /// Выполняет default `DeleteChildObject(child)`: сначала remove всех
+ /// совпадений, затем отпускает parent ownership. Существующий внешний
+ /// `Rc` сохраняет безопасный живой alias вместо старого dangling pointer.
     pub(crate) fn delete_child(
         parent: &SharedBaseObjectFactoryObject,
         child: &SharedBaseObjectFactoryObject,
@@ -459,8 +452,8 @@ impl BaseObjectTreeNode {
         Self::remove_child(parent, child);
     }
 
-    /// Выполняет `DeleteChildObject(type, id, ignored_guid)` через первый
-    /// list-order hit; отсутствие child остаётся no-op.
+ /// Выполняет `DeleteChildObject(type, id, ignored_guid)` через первый
+ /// list-order hit; отсутствие child остаётся no-op.
     pub(crate) fn delete_child_by_type_and_id(
         parent: &SharedBaseObjectFactoryObject,
         object_type: i32,
@@ -471,11 +464,11 @@ impl BaseObjectTreeNode {
         }
     }
 
-    /// Выполняет `DeleteAllChildObject(exception)` по snapshot исходного list.
-    ///
-    /// Каждый неравный exception child проходит default delete в исходном
-    /// порядке. Snapshot не удерживает удалённое дерево после возврата, а
-    /// возможные внешние safe aliases не превращаются в dangling pointers.
+ /// Выполняет `DeleteAllChildObject(exception)` по snapshot исходного list.
+ ///
+ /// Каждый неравный exception child проходит default delete в исходном
+ /// порядке. Snapshot не удерживает удалённое дерево после возврата, а
+ /// возможные внешние safe aliases не превращаются в dangling pointers.
     pub(crate) fn delete_all_children_except(
         parent: &SharedBaseObjectFactoryObject,
         exception: Option<&SharedBaseObjectFactoryObject>,
@@ -489,14 +482,14 @@ impl BaseObjectTreeNode {
         }
     }
 
-    /// Выполняет virtual `BoardCast` каждого direct child в list-order.
-    ///
-    /// Raw проходит сам `std::list`, не создавая snapshot. Вызванный virtual
-    /// owner мог удалить текущий list-node и тем самым оставить старый итератор
-    /// dangling; внешняя семантика такого invalidated-итератора не определена.
-    /// Safe owner берёт snapshot до первого callback: все children, существующие
-    /// на входе, получают broadcast в том же порядке, а reentrant mutation не
-    /// создаёт memory defect.
+ /// Выполняет virtual `BoardCast` каждого direct child в list-order.
+ ///
+ /// оригинал проходит сам `std::list`, не создавая snapshot. Вызванный virtual
+ /// owner мог удалить текущий list-node и тем самым оставить старый итератор
+ /// dangling; внешняя семантика такого invalidated-итератора не определена.
+ /// Safe owner берёт snapshot до первого callback: все children, существующие
+ /// на входе, получают broadcast в том же порядке, а reentrant mutation не
+ /// создаёт memory defect.
     pub(crate) fn broadcast_children(
         parent: &SharedBaseObjectFactoryObject,
         first: i32,
@@ -509,13 +502,13 @@ impl BaseObjectTreeNode {
         }
     }
 
-    /// Выполняет `DgFindObjectsByTypes` с точным snapshot direct children.
-    ///
-    /// Совпавший direct child передаётся callback-у вместе с неизменным
-    /// `parameter`; несовпавший рекурсивно ищется в своём поддереве. Как raw,
-    /// родительская связь child здесь не участвует. Дерево этого factory-owner-а
-    /// содержит только базовые пять concrete типов `CreateObject`, поэтому
-    /// рекурсивный base owner соответствует их подтверждённому dispatch.
+ /// Выполняет `DgFindObjectsByTypes` с точным snapshot direct children.
+ ///
+ /// Совпавший direct child передаётся callback-у вместе с неизменным
+ /// `parameter`; несовпавший рекурсивно ищется в своём поддереве. Как оригинал,
+ /// родительская связь child здесь не участвует. Дерево этого factory-owner-а
+ /// содержит только базовые пять concrete типов `CreateObject`, поэтому
+ /// рекурсивный base owner соответствует их подтверждённому dispatch.
     pub(crate) fn dg_find_objects_by_type(
         parent: &SharedBaseObjectFactoryObject,
         object_type: i32,
@@ -532,11 +525,11 @@ impl BaseObjectTreeNode {
         }
     }
 
-    /// Выполняет virtual `AI` каждого direct child по snapshot исходного list.
-    ///
-    /// Пустой list остаётся no-op. Callback заменяет virtual slot child-а, а
-    /// snapshot сохраняет raw порядок и разрешает callback-у безопасно менять
-    /// дерево, не затрагивая текущий проход.
+ /// Выполняет virtual `AI` каждого direct child по snapshot исходного list.
+ ///
+ /// Пустой list остаётся no-op. Callback заменяет virtual slot child-а, а
+ /// snapshot сохраняет оригинал порядок и разрешает callback-у безопасно менять
+ /// дерево, не затрагивая текущий проход.
     pub(crate) fn run_child_ai(
         parent: &SharedBaseObjectFactoryObject,
         run_ai: &mut impl FnMut(&SharedBaseObjectFactoryObject),
@@ -585,12 +578,12 @@ impl BaseObjectTreeNode {
 
 impl Drop for BaseObjectTreeNode {
     fn drop(&mut self) {
-        // `CBaseObject::~CBaseObject` сперва удаляет children через
-        // `DeleteAllChildObject(nullptr)`, затем освобождает base storage.
-        // Клон list здесь играет его не-владеющий snapshot: до drop каждого
-        // child все его equal entries убираются из parent-list. Повтор одного
-        // raw pointer в original-е приводил бы к dangling delete; `Rc` оставляет
-        // это внутреннее повреждение безопасным и освобождает alias один раз.
+ // `CBaseObject::~CBaseObject` сперва удаляет children через
+ // `DeleteAllChildObject(nullptr)`, затем освобождает base storage.
+ // Клон list здесь играет его не-владеющий snapshot: до drop каждого
+ // child все его equal entries убираются из parent-list. Повтор одного
+ // оригинал pointer в original-е приводил бы к dangling delete; `Rc` оставляет
+ // это внутреннее повреждение безопасным и освобождает alias один раз.
         let children = self.children.clone();
         for child in children {
             self.children
@@ -600,7 +593,7 @@ impl Drop for BaseObjectTreeNode {
 }
 
 impl BaseObjectFactoryObject {
-    /// Возвращает исходный type concrete factory-ветви.
+ /// Возвращает исходный type concrete factory-ветви.
     pub(crate) const fn object_type(&self) -> i32 {
         match self {
             Self::Region(object) => object.get_type(),
@@ -611,7 +604,7 @@ impl BaseObjectFactoryObject {
         }
     }
 
-    /// Возвращает назначенный static factory signed object ID.
+ /// Возвращает назначенный static factory signed object ID.
     pub(crate) const fn object_id(&self) -> i32 {
         match self {
             Self::Region(object) => object.get_id(),
@@ -697,7 +690,7 @@ pub(crate) fn create_base_object(
 /// модели хранения children.
 ///
 /// `attach` является точной точкой virtual `AddObject`: он вызывается после
-/// раннего имени и назначения входного ID, но до восстановления factory-ID и
+/// раннего имени и назначения входного ID, но до присоединения factory-ID и
 /// virtual `Load`. Его вызывают только attachment-ветви; player `type=400`
 /// с нулевым factory-ID и goods `type=700` с нулевым factory-ID и prefix
 /// `NoAdd\0` продолжают инициализацию detached. `load` вызывается во всех
@@ -766,15 +759,15 @@ pub(crate) struct CBaseObject {
     ex_id: CGuid,
     graphics_id: i32,
     name: Vec<u8>,
-    /// Сохраняет public-флаг включения дочерних объектов без wire-эффекта.
+ /// Сохраняет public-флаг включения дочерних объектов без wire-эффекта.
     pub(crate) include_child: bool,
 }
 
 impl CBaseObject {
-    /// Создаёт scalar-начальные состояния точного `CBaseObject` constructor-а.
-    ///
-    /// Father и child-list живут в `BaseObjectTreeNode`, где их начальные
-    /// `None`/empty и destruction-order materialизованы отдельным owner-ом.
+ /// Создаёт scalar-начальные состояния точного `CBaseObject` constructor-а.
+ ///
+ /// Father и child-list живут в `BaseObjectTreeNode`, где их начальные
+ /// `None`/empty и destruction-order materialизованы отдельным owner-ом.
     pub(crate) const fn with_reached_constructor_defaults() -> Self {
         Self {
             object_type: 0,
@@ -786,64 +779,64 @@ impl CBaseObject {
         }
     }
 
-    /// Возвращает signed Windows `long` type без преобразования битов.
+ /// Возвращает signed Windows `long` type без преобразования битов.
     pub(crate) const fn get_type(&self) -> i32 {
         self.object_type
     }
 
-    /// Идентифицирует factory-вариант, не превращая неизвестный type в default.
+ /// Идентифицирует factory-вариант, не превращая неизвестный type в default.
     pub(crate) const fn factory_type(&self) -> Option<BaseObjectFactoryType> {
         BaseObjectFactoryType::from_wire_value(self.object_type)
     }
 
-    /// Присваивает signed Windows `long` type без дополнительных эффектов.
+ /// Присваивает signed Windows `long` type без дополнительных эффектов.
     pub(crate) const fn set_type(&mut self, object_type: i32) {
         self.object_type = object_type;
     }
 
-    /// Возвращает signed Windows `long` ID без преобразования битов.
+ /// Возвращает signed Windows `long` ID без преобразования битов.
     pub(crate) const fn get_id(&self) -> i32 {
         self.id
     }
 
-    /// Присваивает signed Windows `long` ID без дополнительных эффектов.
+ /// Присваивает signed Windows `long` ID без дополнительных эффектов.
     pub(crate) const fn set_id(&mut self, id: i32) {
         self.id = id;
     }
 
-    /// Заимствует GUID в исходной форме `CGUID const&`.
+ /// Заимствует GUID в исходной форме `CGUID const&`.
     pub(crate) const fn get_ex_id(&self) -> &CGuid {
         &self.ex_id
     }
 
-    /// Копирует все 16 legacy-байтов GUID без дополнительных эффектов.
+ /// Копирует все 16 legacy-байтов GUID без дополнительных эффектов.
     pub(crate) const fn set_ex_id(&mut self, ex_id: &CGuid) {
         self.ex_id = *ex_id;
     }
 
-    /// Возвращает signed Windows `long` graphics ID без преобразования битов.
+ /// Возвращает signed Windows `long` graphics ID без преобразования битов.
     pub(crate) const fn get_graphics_id(&self) -> i32 {
         self.graphics_id
     }
 
-    /// Присваивает signed Windows `long` graphics ID без дополнительных эффектов.
+ /// Присваивает signed Windows `long` graphics ID без дополнительных эффектов.
     pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
         self.graphics_id = graphics_id;
     }
 
-    /// Заимствует сохранённые байты имени без служебного C-терминатора.
+ /// Заимствует сохранённые байты имени без служебного C-терминатора.
     pub(crate) fn get_name(&self) -> &[u8] {
         &self.name
     }
 
-    /// Копирует байты имени только до первого NUL.
+ /// Копирует байты имени только до первого NUL.
     pub(crate) fn set_name(&mut self, name: &[u8]) {
         let prefix = legacy_c_string_prefix(name);
         self.name.clear();
         self.name.extend_from_slice(prefix);
     }
 
-    /// Дописывает базовые поля в legacy byte-array и всегда сообщает успех.
+ /// Дописывает базовые поля в legacy byte-array и всегда сообщает успех.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -857,7 +850,7 @@ impl CBaseObject {
         true
     }
 
-    /// Читает базовые поля из legacy byte-array и сохраняет пройденный cursor.
+ /// Читает базовые поля из legacy byte-array и сохраняет пройденный cursor.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],
@@ -888,9 +881,9 @@ fn read_legacy_i32(
         });
     };
     let Some(bytes) = source.get(offset..end) else {
-        // Оригинал сначала сдвигал `long&`, затем читал
-        // безразмерный pointer. Результат за концом источника неизвестен;
-        // безопасный Rust не проходит через несуществующие байты.
+ // Оригинал сначала сдвигал `long&`, затем читал
+ // безразмерный pointer. Результат за концом источника неизвестен;
+ // безопасный Rust не проходит через несуществующие байты.
         return Err(BaseObjectDecodeError::UnexpectedEnd {
             field,
             offset,
@@ -909,10 +902,10 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
     loop {
         let offset = *cursor;
         let Some(byte) = source.get(offset).copied() else {
-            // Вспомогательная функция World RVA `0x000A3190` не знала длину
-            // источника и продолжала чтение до NUL. Реакция при
-            // отсутствующем terminator неизвестна, поэтому байт и cursor не
-            // придумываются.
+ // Вспомогательная функция World не знала длину
+ // источника и продолжала чтение до NUL. Реакция при
+ // отсутствующем terminator неизвестна, поэтому байт и cursor не
+ // придумываются.
             return Err(BaseObjectDecodeError::UnexpectedEnd {
                 field: "m_strName",
                 offset,
@@ -923,9 +916,9 @@ fn read_legacy_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseOb
         *cursor = offset + 1;
 
         if name.len() == LEGACY_NAME_CAPACITY {
-            // Вспомогательная функция уже потребила этот байт перед записью за
-            // границей локального `char[256]`; достижимость и результат такого
-            // повреждения stack не доказаны.
+ // Вспомогательная функция уже потребила этот байт перед записью за
+ // границей локального `char[256]`; достижимость и результат такого
+ // повреждения stack не доказаны.
             return Err(BaseObjectDecodeError::LegacyNameOverflow {
                 first_out_of_bounds_offset: offset,
             });

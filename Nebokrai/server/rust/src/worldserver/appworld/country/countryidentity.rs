@@ -1,12 +1,6 @@
 //! Базовая country-identity исторического `WorldServer`.
 //!
-//! Статус constructor/destructor `CCountryIdentity` RVA
-//! `0x000E0EC0/0x000E0E70`: `IMPLEMENTED`. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходный owner PDB:
-//! `e:\\svn\\fengyun_russia_dev\\server\\worldserver\\appworld\\country\\countryidentity.cpp:7,11`.
+//! — часть контракта owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
 //!
 //! Constructor устанавливает только signed ID `0` и пустое имя. `Vec<u8>`
 //! заменяет MSVC `std::string` и его destructor; Rust layout не объявляется
@@ -27,7 +21,7 @@ impl Default for CCountryIdentity {
 }
 
 impl CCountryIdentity {
-    /// Повторяет подтверждённые нулевые значения constructor-а.
+ /// Повторяет подтверждённые нулевые значения constructor-а.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             id: 0,
@@ -47,7 +41,7 @@ impl CCountryIdentity {
         self.id = id;
     }
 
-    /// Присваивает C-string prefix имени без неявной перекодировки.
+ /// Присваивает C-string prefix имени без неявной перекодировки.
     pub(crate) fn set_name(&mut self, name: &[u8]) {
         let prefix = name.split(|byte| *byte == 0).next().unwrap_or_default();
         self.name.clear();

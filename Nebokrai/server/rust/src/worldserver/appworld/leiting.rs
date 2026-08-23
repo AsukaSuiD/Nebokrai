@@ -1,12 +1,6 @@
 //! Владелец суточного обновления `CLeiTing` исторического WorldServer.
 //!
-//! Статус `getInstance` RVA `0x000A2F00`, `UpdateLeiTing` RVA `0x000A2F60`
-//! и `Run` RVA `0x000A3070` — `IMPLEMENTED`. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
-//! исходный владелец PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\leiting.cpp:25,40,76`.
+//! и `Run` — часть контракта owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
 //!
 //! Singleton хранит единственную полную копию MSVC `tm`, полученную через
 //! `_time/_localtime`. Rust получает её от caller-а и выражает singleton
@@ -95,27 +89,27 @@ pub(crate) struct LeiTingRunReport {
 pub(crate) trait LeiTingContext {
     type Block;
 
-    /// Выполняет отдельный `GetLocalTime` и первый formatted `AddLogText`.
+ /// Выполняет отдельный `GetLocalTime` и первый formatted `AddLogText`.
     fn add_update_start_log(&mut self);
 
-    /// Platform replacement 32-bit CRT `_localtime` для player stamp.
+ /// Platform replacement 32-bit CRT `_localtime` для player stamp.
     fn local_time_from_timestamp(
         &mut self,
         timestamp: u32,
     ) -> Result<LeiTingLocalTime, Self::Block>;
 
-    /// Отдельный Win32 `GetLocalTime().wDayOfWeek` внутри weekly item loop.
+ /// Отдельный Win32 `GetLocalTime().wDayOfWeek` внутри weekly item loop.
     fn current_week_day(&mut self) -> u16;
 
-    /// Синхронно повторяет `CMessage::SendAll`; старый return игнорируется.
+ /// Синхронно повторяет `CMessage::SendAll`; старый return игнорируется.
     fn send_all(&mut self, message: &CMessage);
 
     fn add_database_begin_log(&mut self);
 
-    /// Повторяет `_mktime`, включая допустимую нормализацию mutable `tm`.
+ /// Повторяет `_mktime`, включая допустимую нормализацию mutable `tm`.
     fn mktime(&mut self, local_time: &mut LeiTingLocalTime) -> Result<i32, Self::Block>;
 
-    /// Запускает `CRsPlayer::ResetAllLeitingInDB` без ожидания worker-а.
+ /// Запускает `CRsPlayer::ResetAllLeitingInDB` без ожидания worker-а.
     fn reset_all_lei_ting_in_database(&mut self, update_kind: u32, stamp: i32);
 
     fn add_update_end_log(&mut self);
@@ -146,14 +140,14 @@ pub(crate) struct CLeiTing {
 }
 
 impl CLeiTing {
-    /// Сохраняет полную constructor-копию одного `_localtime`.
+ /// Сохраняет полную constructor-копию одного `_localtime`.
     pub(crate) const fn new(initial_local_time: LeiTingLocalTime) -> Self {
         Self {
             saved_date: initial_local_time,
         }
     }
 
-    /// Выполняет один полный daily gate и все достигнутые side effects.
+ /// Выполняет один полный daily gate и все действующие side effects.
     pub(crate) fn run<Context: LeiTingContext>(
         &mut self,
         mut current: LeiTingLocalTime,

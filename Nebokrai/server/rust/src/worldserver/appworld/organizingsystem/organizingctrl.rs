@@ -1,484 +1,25 @@
-//! Владелец organizing-control исторического `WorldServer`.
+//! Центральный owner `COrganizingCtrl` WorldServer.
 //!
-//! Статус constructor/destructor `COrganizingCtrl` RVA
-//! `0x00036C90/0x00036830`, `COrganizingCtrl::AddOneTopInfo` RVA `0x00036960`,
-//! `SendTopInfoToClient` RVA `0x00033FC0` и
-//! `SendAllTopInfoToInfoToOneClient` RVA `0x000352C0` — `IMPLEMENTED`;
-//! локальные `CreateUnion::{CreateUnion,DoAsyncCall,Release}` RVA
-//! `0x00034E90/0x00033680/0x00034EF0` — `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
-//! `CreateConfederation` RVA `0x000389D0` —
-//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
-//! локальный `CreateUnion::OnAsyncCallback` RVA `0x00038D80` —
-//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
-//! `OnPlayerInviteFaction` RVA `0x0003A780` —
-//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
-//! `OnDeleteRole` RVA `0x0003A2C0` —
-//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
-//! `CreateFaction` RVA `0x000381A0` —
-//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`;
-//! полный DB/calendar/log owner `COrganizingCtrl::Initialize` RVA `0x0003B830`
-//! — `IMPLEMENTED`;
-//! `ReSetPermitDemise` RVA `0x00034810` и calendar-prefix
-//! `Initialize/OnNewDay` RVA `0x0003B830/0x0003A490` — `IMPLEMENTED`;
-//! полный `COrganizingCtrl::Run` RVA `0x0003A550` —
-//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`, `DisbandFaction` RVA `0x00038550` и
-//! `UpdateOtherFacInfoToClient` RVA `0x00034980` и `DisbandConferation` RVA
-//! `0x000393B0` — `IMPLEMENTED`;
-//! `GenerateDBOrganizingID` RVA `0x000341C0`, `IsFreePlayer` RVA
-//! `0x000343A0`, `IsFreeFaction` RVA `0x00034420`,
-//! `SetAllCityFacEnemyChanged/ClearAllCityFacRelation/UpdateAllCityEneFacRelation`
-//! RVA `0x00034240/0x000342C0/0x00034330`,
-//! `RemovePersonFromApplyFactionList/GetFactionByPlayerInApplyList` RVA
-//! `0x00034880/0x000348F0`,
-//! `SetPlayerOrganizing` RVA `0x000370A0` и callback-цепочки
-//! `OnPlayerEnterGame/OnPlayerExitGame` RVA `0x00037B70/0x00037BD0` —
-//! `IMPLEMENTED/VERIFIED_DISASSEMBLY`; `GenerateSaveData` RVA `0x00034A10` —
-//! `IMPLEMENTED`, `GetpFactionById` RVA `0x00034080` и
-//! `GetConfederationOrganizing` RVA `0x00036BF0`,
-//! `GetCountryByFaction` RVA `0x00037B20` и
-//! `AddOwnedCityToFaction` RVA `0x00037C20`,
-//! country-specific `GetFactionNumber` RVA `0x00033D10` и
-//! `AddFactionListToByteArray` RVA `0x00033D90`,
-//! `FindOrgaByName` RVA `0x000345A0`,
-//! `AddAllFactinInfoToClientByPlayerID/AddFactionToClientByPlayerID/
-//! AddUnionToClientByPlayerID` RVA `0x00034D00/0x00037380/0x000376F0`,
-//! `IsFactionMaster` RVA `0x000344A0`, `IsConferationMaster` RVA `0x00034520`,
-//! `ReInitialFacFactionByLvl` RVA
-//! `0x00034C80` и `AddUnionToClientByFactionID` RVA `0x00038010` —
-//! `IMPLEMENTED`; `IsInEstaList/PushToEstaList` RVA
-//! `0x00033BA0/0x000367C0` и оба overload-а
-//! `Release` RVA `0x00036F40` — `IMPLEMENTED`;
-//! `SendOrgaInfoToClient` RVA `0x00033750/0x00033840`, billboard serializer-ы
-//! RVA `0x000339D0/0x00033A50/0x00033AD0/0x00033CC0`, три stat-owner-а
-//! RVA `0x0003AC70/0x0003B050/0x0003B430`, `TransferIOwnerCity` RVA
-//! `0x00039890` и его локальные constructor/`DoAsyncCall`/`OnAsyncCallback`
-//! RVA `0x00033F40/0x00037810/0x0003A070` — `IMPLEMENTED`. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, SHA-256 EXE
-//! `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`, PDB
-//! `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`.
-//! Исходные владельцы PDB:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.h`
-//! и
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\organizingsystem\organizingctrl.cpp:73,164,242,626,725,1105,1238,1352,1414,1641,1655,1910,1952,1960,1970,1998`.
+//! Источник контракта — точная пара WorldServer EXE/PDB. Controller владеет
+//! ordered faction/union registries, free-player/faction lookup, DB initialize
+//! и reload, billboard/top-info snapshots, establishment reservations,
+//! governance callbacks и city/war integrations.
 //!
-//! `GenerateSaveData` проходит faction-map, затем union-map в signed key-order.
-//! `force_all=true` ставит bits `1/2/4/8` четырьмя virtual-вызовами; concrete
-//! clone дописывается в `CGame::tagDBData`, после чего live mask сбрасывается.
-//! Затем delete-faction и delete-union ID переносятся в list-order, и только
-//! после полного переноса каждый исходный список очищается. Все достигнутые
-//! caller-ы полного `CGame::GenerateDBData` передают `false`, но доказанная
-//! bool-ветвь сохранена. Normal ingress помещает в обе map только живой owner;
-//! `None` бывает лишь кратким внутренним split-borrow в синхронных join-path и
-//! до save-фазы обязательно восстанавливается. Поэтому пустой технический
-//! slot пропускается без остановки уже начатой DB-публикации: это устраняет
-//! старое null-разыменование, не создавая нового observable отказа. `BTreeMap`,
-//! `VecDeque`, `Clone` и `Drop` заменяют только MSVC tree/list/RTTI/allocator
-//! и compiler cleanup.
+//! `Initialize` сохраняет порядок очистки, DB loads, faction/union linking,
+//! property initialization, calendar state и публикации. Частичная DB ошибка
+//! возвращает typed disposition после уже выполненных стадий; общая транзакция
+//! или rollback не добавляются. Null values старых maps не разыменовываются:
+//! безопасная граница сообщает map key и прекращает только соответствующий путь.
 //!
-//! `GetpFactionById` ищет signed ID только в `m_FacOrg`. Miss возвращает
-//! `nullptr`; найденный null value возвращается тем же `nullptr` без
-//! разыменования. Узкая Rust-граница возвращает borrow найденного concrete
-//! `CFaction`; текущий DB-caller читает у него только Goods War count и затем
-//! переносит его в save-копию. `BTreeMap::get`, `Option` и borrow заменяют
-//! только MSVC iterator и nullable pointer; raw owner-блок после реализации
-//! удалён.
-//! `GetConfederationOrganizing` принимает только положительный signed ID,
-//! ищет его в `m_ConfedeOrganizings` и возвращает сохранённый pointer либо
-//! null при miss/null value. Exact ASM `0x00436BF0..0x00436C37` исправляет
-//! повреждённое raw-имя key; Rust `confederation_by_id` сохраняет контракт.
-//! Ingress `0x60110` повторяет `GetUnion(old master)` через
-//! `IsFactionMaster -> IsFreeFaction -> GetConfederationOrganizing`, после
-//! чего вызывает concrete `CUnion::Demise`. Rust временно извлекает только
-//! найденный union из map-slot, чтобы его faction lookup/fan-out callbacks
-//! видели остальной controller без raw aliasing, и обязательно возвращает
-//! owner до typed result; дополнительных controller-gates не добавлено.
-//! `GetCountryByFaction` сначала отбрасывает неположительный ID, затем делает
-//! тот же faction-map lookup и только для ненулевого owner-а вызывает virtual
-//! `GetCountry` slot `+0x190`. Exact ASM `0x00437B20..0x00437B6B`
-//! подтверждает key-dataflow и нулевой возврат для всех lookup-gate-ов. Rust
-//! отделяет этот нулевой miss от ещё не материализованного
-//! `CFaction::m_Property`: первый есть `Ok(None)`, второй остаётся typed
-//! safe-границей вместо выдуманной страны `0`.
-//! `DisbandConferation` RVA `0x000393B0` сначала повторяет
-//! standard/city war gates с `WS0246/WS0247`, очищает обе enemy-проекции и
-//! вызывает concrete `CUnion::Disband`. Только его true-result добавляет union
-//! ID в delete-очередь, сбрасывает union у owned cities master-faction,
-//! удаляет owner из map и обновляет player-ов всех прежних member-фракций.
-//! Rust временно detaches `CUnion`, чтобы сохранить reentrant faction-callback
-//! без raw alias; владеющий `Box`/Drop заменяет map erase + delete.
-//! Локальный `CreateUnion` хранит двух игроков, две фракции и имя будущего
-//! союза в safe endpoint-е. Его `DoAsyncCall` отправляет второму игроку exact
-//! `0x7FE16`: second player, first player, C-string имени, session ID и cookie;
-//! ответ `AR_OK` с первым `long == 1` отделён от отказа и non-result terminal.
-//! `Arc`, typed payload и автоматический `Drop` заменяют только множественное
-//! наследование, raw `char *`, ручное выделение и virtual `Release` оригинала.
-//! `CreateConfederation` проверяет reservation в порядке first/second, требует
-//! оба ненулевых faction owner-а, читает их player header, затем проверяет у
-//! первой faction `IsCreateUnionFun`. Отказ использует `WS0242/WS0193`, offline
-//! второго мастера — `WS0243/WS0193`. Только online-ветвь получает process-wide
-//! net-exchange ID, резервирует обе faction и начинает timeout `1000`.
-//! Переданный аргумент имени EXE не читает: endpoint получает имя первой
-//! faction. Rust на внутренней ошибке session setup снимает обе reservation
-//! вместо исходного null dereference; внешнего Miracle-контракта у UB нет.
-//! Creation callback различает approve, явный deny (`WS0245/WS0193`) и прочий
-//! terminal. Approve создаёт union с новым organizing ID, выполняет `Initial`,
-//! рассылает первой faction `WS0244/WS0119` с decimal color `10000`, добавляет
-//! вторую faction и вставляет owner в union-map. Затем машина повторно ставит
-//! superior обеим faction, обновляет их города и двух master-player-ов,
-//! условно отправляет им `0x7FE04` и ещё раз обновляет города первой faction;
-//! этот порядок и дублирующие side effects сохранены. Exact EXE
-//! `0x0043930C..0x00439388` исправляет ошибочный RAW: callback всегда проходит
-//! cleanup first, затем second reservation, без раннего возврата между ними.
-//! `OnPlayerInviteFaction` сначала разрешает первую faction только через
-//! `IsFactionMaster(player)`, затем проверяет обе concrete faction. War-gates
-//! идут строго: first standard/village `WS0237`, first city-only `WS0238`,
-//! invited standard/village `WS0239`, invited city/AttackCity `WS0240`; общий
-//! второй текст этих четырёх отказов — `WS0121`. После двух `IsFreeFaction`
-//! ветви literal: две свободные — `CreateConfederation`, свободная первая —
-//! `ApplyForJoin` союза второй, свободная вторая — `Invite` союза первой,
-//! два союза — `WS0241/WS0193`. Exact ASM `0x0043A780..0x0043AC6C`
-//! подтверждает отсутствие source AttackCity gate и true-return после любого
-//! вызванного owner-а независимо от его bool/result.
-//! `CreateFaction` проверяет membership, затем mutable invalid-string filter и
-//! пять player-name index-ов строго до `FindOrgaByName`. После успеха удаляет
-//! все faction applications, генерирует ID, строит exact `CFaction::Initial`,
-//! назначает country, вставляет owner, ставит dirty `0x0F`, публикует Add всем
-//! faction и только затем пишет optional structured create-log. Exact ASM
-//! `0x004381A0..0x00438549` подтверждает порядок и результаты `Fail/NameExist/
-//! Ok`. Странная country-проверка в прологе машинно является тавтологией и не
-//! ограничивает ни одно `u8`; Rust поэтому не добавляет собственного range
-//! gate. SQL-formatting/heap-buffer остаются за библиотечным log adapter-ом.
-//! `AddOwnedCityToFaction` повторяет те же positive-ID/map/null gates и затем
-//! вызывает virtual `AddOwnedCity` slot `+0x80`. Exact ASM
-//! `0x00437C20..0x00437C69` подтверждает порядок обоих аргументов и отсутствие
-//! иных эффектов controller-а. Concrete `CFaction::add_owned_city` уже
-//! сохраняет list/duplicate/wire/player семантику; controller возвращает её
-//! typed report только для Rust caller-а, не добавляя legacy return value.
-//! Country-specific faction list проходит map в signed order, пропускает null
-//! owners и сравнивает exact virtual country byte. Страница нормализует только
-//! значения `<1`, сохраняет 32-битную wrapping формулу `page*11-11`, пишет
-//! signed count и пары `faction ID + name\0`. Exact ASM
-//! `0x00433D10..0x00433D8D/0x00433D90..0x00433F31` подтверждает повторный
-//! count-вызов на короткой последней странице и increment только для faction
-//! выбранной страны. Небезопасный `strcpy` в `char[256]` заменён локальной
-//! typed safe-границей только для имени, которое вместе с NUL не помещается;
-//! уже записанные count/ID/предыдущие записи сохраняются в progress.
-//! `FindOrgaByName` копирует visible C-string в две 260-байтовые границы,
-//! применяет linked CRT `_strlwr` и сначала проходит faction-map, затем
-//! union-map в signed order. Exact ASM `0x004345A0..0x00434801`, связанный
-//! `_strlwr` `0x0051F25E..0x0051F371` и отсутствие project-call к `_setlocale`
-//! подтверждают ASCII-only folding: high bytes сравниваются byte-exact. Rust
-//! не хранит внутренний `szfacNewName`, который читался только этим owner-ом;
-//! `BTreeMap` и `eq_ignore_ascii_case` заменяют tree/CRT storage. Переполнение
-//! исходного `strcpy/_snprintf` и null map-value остаются typed safe-границей.
-//! Для найденной `0x60108` faction её `ApplyForJoin` временно получает
-//! detached concrete owner и reentrant adapter полного controller-map:
-//! membership и удаление прежних заявок по-прежнему идут в signed key-order,
-//! а target slot в своей точной позиции заменяется живой detached faction.
-//! Union-ветвь так же временно извлекает target owner, заранее фиксирует
-//! результат `IsFreeFaction(applicant)` и обязательно возвращает slot после
-//! concrete вызова. Это safe ownership-замена raw-pointer aliasing; машинный
-//! `CUnion::GetCountry` `0x004C1F10..0x004C1F12` возвращает literal `0`, что
-//! намеренно важнее противоречащего Linux-донора.
-//! `AddFactionToClientByPlayerID` повторно разрешает faction игрока, требует
-//! online owner, строит `0x7FE02(player, full faction snapshot)`, явно делает
-//! `Update`, отправляет по текущему GameServer route и только затем ставит
-//! `m_bGetFactionData=true`, игнорируя send-result. Exact
-//! `0x00437380..0x004374AB` подтверждает оба false-gate и этот порядок.
-//! Misspelled `AddAllFactinInfoToClientByPlayerID` exact
-//! `0x00434D00..0x00434E8C` после тех же membership/online gates строит
-//! `0x7FE08(player, map size, ID/country/name всех faction)` в signed order и
-//! отправляет его, не меняя player flag. Detached adapter `DoJoin` подставляет
-//! живую target faction в обоих проходах на прежний map-key; `Cell<bool>` у
-//! player-а заменяет только raw aliasing, сохраняя момент мутации флага.
-//! `AddUnionToClientByPlayerID` последовательно разрешает faction и union,
-//! требует online player только после live union lookup, отправляет ему
-//! `0x7FE04(player, full union snapshot)` даже на route `0` и лишь после send
-//! ставит `m_bGetFactionData=true`. Missing union после положительного
-//! membership возвращает исходный `true`, offline player — `false`; exact
-//! `0x004376F0..0x00437807` подтверждает эти разные return-path.
-//! Через read-only `FactionOperationAuthorityContext` этот lookup и уже
-//! материализованный `IsFreeFaction` обслуживают faction tax/city-gate owner-ы;
-//! null во время membership scan остаётся typed-границей старого UB.
-//! Тот же nullable lookup обслуживает `CFaction::GetPlayerHeader`: найденный
-//! союз отдельно разрешает master-faction через `m_FacOrg`, где miss/null даёт
-//! старый `0`, а отсутствующий reached master ID concrete Rust-faction остаётся
-//! typed-блокировкой.
-//! `IsFactionMaster` проходит faction-map в signed order и возвращает только
-//! первый положительный concrete faction ID, чей master равен входному player
-//! ID. Null value был разыменованием, а отсутствующий reached Rust master ID
-//! не получает выдуманного продолжения: обе границы возвращаются typed.
+//! Create/disband/transfer/member operations сохраняют lookup order, permission
+//! gates, reservation lifecycle, async session confirmation, logs, callbacks и
+//! wire side effects. Off-by-one selectors, repeated lookups, duplicate
+//! notifications и необычные success codes остаются совместимыми. Комментарии
+//! возле методов отмечают только такие локальные quirks.
 //!
-//! `OnDeleteRole` сначала принимает доказанный результат внешнего DB/country
-//! префикса, затем ищет faction через `IsFreePlayer`. Job-level `<1` вызывает
-//! concrete `CFaction::DelMember` и возвращает `0`. Для job-level `>=1`
-//! exact virtual slot `+0x90` возвращает `GetMembers`; проверка `_Mysize > 0`
-//! после успешного membership lookup штатно даёт код `1`, так что донорское
-//! условие `GetMemberNum() > 1` неверно, а достигнутый `DisbandFaction` path
-//! логически недостижим. Положительный union ID требует живой union-owner,
-//! после чего concrete `CUnion::DelMember` отвязывает faction и всегда даёт
-//! код `3`. Safe Rust останавливает только неполную faction/property проекцию,
-//! соответствующую старому null/invalid-state UB.
-//!
-//! `IsFreePlayer` проходит `m_FacOrg` в порядке исходного ordered map и для
-//! каждого `COrganizing*` вызывает virtual slot `+0xDC`. Точный PDB
-//! именует faction-реализацию `CFaction::IsMember(long)`, а exact EXE
-//! `0x004BD840..0x004BD865` подтверждает: ключом `m_Members.find` служит входной
-//! player ID; при наличии возвращается signed `m_lID`, иначе `0`. Первый
-//! положительный faction ID немедленно завершает обход. В отличие от двух
-//! последующих callbacks, сам scan не проверяет map-value на null. Rust
-//! сохраняет такую запись через `Option<Box<CFaction>>`, но останавливает её
-//! локальной типизированной ошибкой, а не назначает старому null-dereference
-//! продолжение либо fail-closed результат.
-//! `IsConferationMaster` симметрично проходит union-map и возвращает первый
-//! положительный ID concrete union, чья master-faction равна входному ID. Null union-value
-//! остаётся typed safe-границей старого virtual разыменования. Folded exact
-//! `CUnion::IsMaster` `0x004C1EE0..0x004C1EF3` подтверждает сравнение поля
-//! master-faction и возврат union ID.
-//!
-//! `IsFreeFaction` симметрично проходит `m_ConfedeOrganizings`; PDB публикует
-//! `CUnion::IsMember(long)` на том же folded RVA `0x000BD840`, поскольку ID и
-//! member-map обоих concrete owners лежат по одинаковым offsets. Он ищет
-//! входной faction ID и возвращает первый положительный union ID. Null map-
-//! value остаётся такой же локальной неизвестностью старого разыменования.
-//!
-//! `AddUnionToClientByFactionID` при нулевом union ID сначала вызывает
-//! `IsFreeFaction`; неположительный результат и отсутствующий/null union-owner
-//! возвращают `false`. Найденная faction обходится по всем member-key в signed
-//! order — Linux-донор ошибочно ограничивал путь master-ом. Допускается только
-//! online player с ненулевым GameServer ID и полученными faction data. Wire
-//! `0x7FE04` получает live `CPlayer::GetID`, затем заново построенный полный
-//! union snapshot; поэтому cached faction name/level могут обновиться перед
-//! каждым send. Нормальный owner-путь возвращает `true` даже без получателей и
-//! игнорирует send result. `CMessage`, `BTreeMap`, split borrow и `Result`
-//! заменяют transport/MSVC tree/null plumbing; отсутствие faction, которое
-//! машина разыменовывала, остаётся typed safe-границей с выполненным prefix-ом.
-//! `m_RequestEstaUnionPlayers` материализован как `VecDeque<i32>`: scan идёт
-//! от начала, `PushToEstaList` без duplicate-gate добавляет literal ID в хвост,
-//! а terminal callback удаляет только первое совпадение. Проверку отсутствия
-//! перед push сохраняет вызывающий `CUnion::ApplyForJoin`; `VecDeque` заменяет
-//! только MSVC list nodes/allocator и не меняет порядок либо duplicates.
-//! Terminal owner сначала при положительном решении выполняет точный `DoJoin`
-//! найденного union, при отказе отправляет `WS0266/WS0193` на literal faction
-//! ID, затем на normal return сбрасывает pending application и удаляет первое
-//! совпадение из списка. Для безопасного split-borrow union временно извлекается
-//! из собственного map-slot и обязательно возвращается до terminal cleanup;
-//! результат предстоящего `IsFreeFaction(applicant)` снимается до извлечения и
-//! ровно на этот вызов передаётся `DoJoin`, поэтому даже уже оказавшийся в этом
-//! же union applicant или более ранний null/map match не теряется. Остальные
-//! достигнутые callbacks работают с faction-map либо получают union явно;
-//! ownership-замена не меняет их lookup и порядок эффектов.
-//!
-//! `TransferIOwnerCity` exact `0x00439890..0x0043A068` проверяет живой регион
-//! и положительный ID, затем village/attack state, master-faction, страны,
-//! country king, владение регионом, пустой city-list цели, обе war-заявки,
-//! source/target reservation и online target-master. Отказы `WS0248..WS0256`
-//! используют title `WS0193`; отсутствующие region/faction/master и чужой
-//! регион остаются тихими. После успеха source и target ID без duplicate-gate
-//! добавляются в общий establishment-list, online player выдаёт process-wide
-//! NetEx ID и начинается session на `0x2710` ticks. Старый Linux-донор менял
-//! этот порядок и добавлял rollback/session checks; они не являются контрактом
-//! целевого EXE и не перенесены.
-//!
-//! Локальный `DoAsyncCall` exact `0x00437810..0x00437A31` строит `0x7FE2B`:
-//! target master, source faction name C-строка, region name C-строка, session
-//! ID и `cookie.second`, затем маршрутизирует по target player. Callback exact
-//! `0x0043A070..0x0043A2B9` всегда удаляет первые source и target reservation;
-//! только result с decision `1` требует обе faction, вызывает у source именно
-//! безаргументный `ClearOwnedCity` (очищая весь список, а не только переданный
-//! регион), у target `AddOwnedCity(region)`, затем `IsFreeFaction(target ID)`,
-//! `RefreshOwnedCityOrg` и общий `WS0257` broadcast с kind/color
-//! `0xFFDAEDFE/0x328F93FC`. Очередь под `parking_lot::Mutex`, `Arc`, `Box` и
-//! готовый `CNetSessionManager` заменяют singleton/interface lifetime и ручной
-//! `new/delete`, не меняя wire, timeout, FIFO terminal-порядок или mutations.
-//! `SendOrgaInfoToClient(player, first, second, server, color, trailing)` при
-//! `server == -1` разрешает GameServer через live player; только literal `-1`
-//! после lookup прекращает путь. Exact EXE `0x0043378F..0x0043380B` строит
-//! `0x7F804` в порядке `player, first\0, color, trailing, second\0` и отправляет
-//! по numeric map ID. Нулевой lookup не отбрасывается: готовый `CGame` именно
-//! его возвращает при miss, а исходный caller проверял только `-1`.
-//!
-//! `RemovePersonFromApplyFactionList` вызывает `RemoveApplyMember(player)` у
-//! каждой faction в signed map-order, игнорирует все concrete return values и
-//! после полного прохода всегда возвращает `0`. Каждое фактическое удаление
-//! поэтому успевает опубликовать пустой `OP_Delete`-record и поставить dirty
-//! bit `8`, прежде чем обход продолжится. `GetFactionByPlayerInApplyList`
-//! проходит тот же map и возвращает `GetID()` первой faction, чей
-//! `IsInApplyMembers(player)` дал положительное значение; miss возвращает `0`.
-//! Exact ASM `0x00434880..0x004348EC/0x004348F0..0x0043496F` подтверждает
-//! virtual slots, ранний выход lookup и порядок. Rust отчёты сохраняют исходно
-//! игнорировавшиеся результаты удалений; null map-value остаётся локальной
-//! typed-границей после уже завершённого prefix-а.
-//!
-//! Exact `SetPlayerOrganizing` `0x004370A0..0x0043737A` сначала всегда пишет
-//! результат `IsFreePlayer`. Для найденной faction он в точном порядке пишет
-//! level, exp, contribute, name, member-title, master, оба enemy-set, очищает
-//! owned-регионы и проходит faction city-list. Только существующий ненулевой
-//! `tagRegion::pRegion` добавляется с младшими 16 битами `REGION_TYPE`; затем
-//! независимо выполняются `IsFreeFaction` и условная запись union-master.
-//! Exact key-dataflow исправляет повреждённые raw stack-slot имена для обоих
-//! map lookup, `IsControbute` и `GetTitleByID`.
-//!
-//! `CPlayer::AddOwnedRegion` exact `0x0045DD10..0x0045DD75` подтверждает
-//! unique-by-region-ID и append-order, но копирует в wire два
-//! неинициализированных stack-padding байта. GameServer поглощает полные
-//! восемь байт и использует только ID/type, поэтому safe Rust сохраняет ABI-
-//! ширину и обнуляет этот внутренний stack leak. Owned city больше не
-//! блокирует достигнутый `SetPlayerOrganizing`.
-//!
-//! Constructor RVA `0x00036C90` создаёт `m_FacOrg` пустым. `CreateFaction` RVA
-//! `0x000381A0` выделяет concrete `CFaction` и сохраняет base-pointer в map, а
-//! `Release` RVA `0x00036F40` virtual-удаляет каждое ненулевое значение и
-//! обнуляет slot. `BTreeMap<i32, Option<Box<CFaction>>>` заменяет MSVC tree,
-//! pointer/null и доказанное владение, сохраняя signed key-порядок. Достигнутый
-//! `m_ConfedeOrganizings` выражен симметричным map `CUnion`; остальные
-//! доказанные map/list/scalar поля constructor-а materialизованы в том же
-//! lifecycle-owner-е. Rust-layout не выдаётся за Windows ABI.
-//! `COrganizingCtrl::getInstance` в EXE только лениво выделяет process-global
-//! controller. Все достигнутые Rust ingress получают один внешний живой
-//! `&mut COrganizingCtrl` (в том числе через `WorldMainLoopOwners`), поэтому
-//! статическое выделение, повторная попытка `operator_new` и singleton lifetime
-//! устранены как внутренние дефекты без изменения map, wire или порядка
-//! side effects.
-//! Original `Release` не снимал последнее `OnNewDay` calendar-событие перед
-//! self-delete. Rust отменяет именно сохранённый active event до `Drop`: это
-//! устраняет внутренний dangling callback, не добавляя игрового перехода либо
-//! сетевого эффекта shutdown-пути.
-//!
-//! `ReInitialFacFactionByLvl` проходит тот же signed faction-map. Exact EXE
-//! `0x00434C80..0x00434CFE` делает RTTI cast каждого value, пропускает null либо
-//! иной concrete type и вызывает `CFaction::ReInitialPropertyByLvl`; typed map
-//! исключает посторонний concrete owner, а `Option::None` сохраняет skip.
-//! Результаты уже выполненных property-send не откатываются при safe-границе
-//! неполного Rust-owner-а.
-//!
-//! Exact `CUnion::DelMember` `0x004C2B30..0x004C2B8B` не читает union receiver:
-//! для положительного входного ID он дважды использует один stack-slot как key
-//! faction-map, затем вызывает `SetSuperiorOrganizing(0)` и
-//! `UpdatePropertyToClient`; miss/null и неположительный ID пропускаются, а
-//! возврат всегда `true`. Singleton lookup перенесён к фактическому map-owner-у
-//! `COrganizingCtrl::detach_union_member`, без изменения порядка эффектов.
-//!
-//! Оба callback-а сначала сохраняют исходный player ID, вызывают
-//! `IsFreePlayer`, а при положительном результате ищут именно этот faction ID
-//! в `m_FacOrg`. Декомпилят ошибочно подставил this вместо ключа поиска find:
-//! exact EXE `0x00437B7A..0x00437BA6` и `0x00437BDA..0x00437C06` сохраняет
-//! результат в stack-slot и передаёт его и в `find`, и в `operator[]`.
-//! Ненулевой faction получает исходный player ID: enter через slot `+0x13C`,
-//! exit через `+0x140`; PDB именует их
-//! `CFaction::OnMemberEnterGame/OnMemberExitGame`. Enter после любой
-//! faction-ветви безусловно вызывает `SendAllTopInfoToInfoToOneClient`, exit
-//! дополнительных эффектов не имеет. «Безусловно» относится к нормальному
-//! возврату faction callback-а: если safe Rust достигает уже локализованного
-//! старого UB внутри faction, top-info не исполняется как выдуманное
-//! продолжение после невозвратившегося исходного пути. Exit так же передаёт
-//! blocked-результат наружу, чтобы будущий `CGame::RemoveOnlinePlayer` не мог
-//! продолжить операции после исходного невозврата.
-//!
-//! Typed dispatch различает отсутствие membership, отсутствие возвращённого
-//! key, явно null target и выполненный concrete callback. Faction slots мутируют
-//! полный `COrganizing::tagMemInfo` и публикуют member-update; enter
-//! дополнительно читает online-player/region, затем на нормальном возврате
-//! выполняет уже готовую top-info рассылку. Внутренности MSVC tree/string/list
-//! и compiler cleanup не являются отдельной Rust-семантикой.
-//!
-//! `stTopInfo` содержит четыре 32-битных поля `lID/lTimerFlag/lParam/
-//! dwStartTime` и byte-exact `std::string strInfo`; list-node размером `0x34`
-//! подтверждает значение размером `0x2C`. Rust не копирует старый ABI:
-//! `VecDeque<StTopInfo>` сохраняет хвостовую вставку и порядок обхода, `Vec<u8>`
-//! — полное содержимое строки, а `Drop` — освобождение list/string storage.
-//! Public Rust-граница принимает строковые bytes как `&[u8]`, потому что
-//! by-value уничтожение входного MSVC `std::string` было только механизмом
-//! владения; наблюдаемое копирование в запись либо сообщение сохранено.
-//! Process-static `GetTopInfoID::lID` по exact адресу `0x0056A888` начинается с
-//! `1`. Exact EXE `0x00436987..0x00436A68` возвращает прежний ID, wrapping
-//! увеличивает static до снятия tick и не возвращает результат
-//! `__security_check_cookie`; безопасный `AtomicI32::fetch_add` сохраняет
-//! process-lifetime и 32-битное переполнение без исходной data race.
-//!
-//! Broadcast `SendTopInfoToClient` строит `0x7FA04` с player ID `0`, затем
-//! `ID/timer/param/info\0`. Персональная отправка при непустом списке один раз
-//! получает GameServer ID игрока и один wrapping boot tick, проходит записи в
-//! порядке list и для `timer == 2` пропускает `elapsed >= param`; иначе в wire
-//! попадает wrapping `param - elapsed`. Остальные timer-флаги передают исходный
-//! param. Внутренний NUL сохранённой `std::string` обрезает именно C-string wire,
-//! но не storage. Готовые World `CMessage` и `CGame` routing сохраняют
-//! `SendAll/SendToMapID`; их исходно игнорировавшиеся результаты лишь входят в
-//! typed Rust-отчёт и не останавливают следующий элемент. Пустой список не
-//! читает GameServer registry и не снимает tick.
-//!
-//! В отличие от персональной отправки, top-info хвост `Run` безусловно снимает
-//! ровно один tick даже при пустом списке. Exact EXE `0x0043A6BD..0x0043A742`
-//! подтверждает unsigned условие удаления `timer == 2 && param <= now-start`,
-//! предварительное сохранение следующего узла, уменьшение list-size и полный
-//! проход до sentinel после каждого erase. `VecDeque::retain` сохраняет порядок
-//! оставшихся записей, а `Drop` заменяет освобождение node/string. Этот участок
-//! не читает и не меняет process-static top-info ID. Остальные поля полного
-//! constructor-а остаются raw. Первая часть полного `Run` проходит faction-map
-//! в signed order, уменьшает только положительный `m_lDelRemainTime` через
-//! wrapping subtraction, собирает достигшие `<= 0` пары `(faction ID,
-//! master ID)` во временный ordered map и лишь после traversal вызывает
-//! `DisbandFaction(master, faction)`. Внутренний fallible dispatch нужен только
-//! для передачи Game/context без самозаимствования controller-а; MainLoop
-//! подключает к нему concrete `disband_faction`, а не внешний owner-callback.
-//!
-//! `UpdateOtherFacInfoToClient` проходит оставшиеся faction-owner-ы в signed
-//! map-order, пропускает null value и вызывает concrete update slot `+0x170`.
-//! `DisbandFaction` сначала повторяет standard/village и city/attack gates с
-//! собственными `WS0235/WS0236 + WS0121`, очищает city enemy-set и вызывает
-//! внутренний `CFaction::Disband`. После success exact order: erase map-owner,
-//! второй `DeleteOrgaToClient(0)`, append ID в `m_DeleteFactions`, broadcast
-//! empty-name `OP_Delete` оставшимся faction-ам, сброс player faction-data flag,
-//! optional log и virtual delete. Exact ASM `0x00438550..0x004389CA`
-//! подтверждает двойную delete-рассылку и исправляет raw dataflow: faction ID
-//! в update/log — второй аргумент, player ID — первый. Наблюдаемая дубликация
-//! сохранена; утечка 256-байтового SQL buffer при offline player устранена как
-//! чисто внутренний дефект, а DB/war/player owners оставлены узким context.
-//! Rust завершает player/log continuation в `CGame` сразу после возврата core:
-//! имя faction сохраняется до Drop удалённого owner-а, поэтому observable
-//! порядок остаётся тем же без alias между immutable Game и mutable player.
-//!
-//! Billboard snapshot очищается и строится из faction-map: null value
-//! пропускается, ID/name/value копируются из concrete faction. Specialized
-//! `std::map::insert` по exact ASM `0x00436AF0..0x00436BEB` сортирует signed
-//! value по убыванию; при равенстве member-таблица ставит более раннее время
-//! основания первой, offense/defence — более позднее. `tagTime::operator>`
-//! сравнивает year/month/day/hour/minute/second и игнорирует day-of-week с
-//! milliseconds. Равные value и эти шесть полей являются одним map-key:
-//! faction-ID tie-break отсутствует, поэтому остаётся первая faction из
-//! signed map-order. Stable Rust sort и явное удаление повторных key сохраняют
-//! этот эффект; старый Linux-донор ошибочно добавлял tie-break по faction ID.
-//! Отсутствующие reached time/property останавливают конкретный stat-owner
-//! после очистки его списка, не получая выдуманного default.
-//!
-//! Три serializer-а пишут `min(unsigned list size, unsigned configured size)`,
-//! затем для каждого элемента `faction ID, name\0, value`; constructor задаёт
-//! size `10`. Dispatcher намеренно принимает members/offense/defence как
-//! `1/2/3`, иначе пишет нулевой count. Запрос `0x60125` допускает лишь `0/1/2`,
-//! поэтому type `0` получает пустой payload, `1` — members, `2` — offense, а
-//! defence через этот opcode недостижим. Наблюдаемый off-by-one подтверждён
-//! EXE и не «исправлен» по старому донору. Запрос сериализует сохранённый
-//! snapshot без скрытого пересчёта: его lifecycle остаётся `Initialize` и
-//! явным `StatBillboard` после завершения city-war.
-//!
-//! `OnAttackCityEnd` exact ASM `0x00437C70..0x00438003` сначала разрешает
-//! faction атакующего игрока, затем копирует byte-exact имя региона (miss/null
-//! дают пустую строку) и только после этого применяет zero-faction gate;
-//! далее независимо поднимает attacker/defender до union-owner-а.
-//! Ненулевой defender обязан владеть регионом. При результате `1` порядок
-//! side effects: offense victor атакующему owner-у, `DelOwnedCity` защитнику,
-//! `WS0261`, `AddOwnedCity` атакующему и `RefreshOwnedCityOrg(region,
-//! attacker faction, attacker union)`. При `0`: defence victor защитнику и
-//! `WS0262`; прочие значения ничего не меняют. Union virtual-ы используют уже
-//! подтверждённые fan-out и legacy `DelOwnedCity`, который очищает city-list
-//! master-фракции вместо удаления одного ID.
-//!
-//! В ветви `WS0262` машина берёт имя attacker owner-а, а не defender, и
-//! передаёт 28-байтовый MSVC `std::string` в variadic `sprintf` без `c_str()`.
-//! Выбор attacker-name сохранён как наблюдаемая семантика; UB/зависимость от
-//! SSO исправлены безопасной visible C-string-проекцией. Исходные region
-//! `char[0x100]` и два notice `char[0x400]` заменены явными границами;
-//! уже завершённые счётчики при переполнении notice не откатываются.
+//! `BTreeMap`, `VecDeque`, `Arc`, `Box`, traits, `parking_lot` и owned session
+//! actions заменяют STL/RTTI/raw pointers и Win32 synchronization. Они не
+//! меняют faction/union identity, payload layout, DB schema или main-loop order.
 
 use std::any::Any;
 use std::cell::Cell;
@@ -595,7 +136,7 @@ const UNUSED_UNION_APPLICATION_TIME: TagTimeValue = TagTimeValue {
 
 static NEXT_TOP_INFO_ID: AtomicI32 = AtomicI32::new(1);
 
-/// Достигнутая семантика исходного `stTopInfo` без копирования Windows ABI.
+/// Действующая семантика исходного `stTopInfo` без копирования Windows ABI.
 struct StTopInfo {
     id: i32,
     timer_flag: i32,
@@ -643,7 +184,7 @@ pub(crate) struct TopInfoDelivery {
 /// Отчёт полного list-прохода для одного игрока.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct TopInfoDeliveryReport {
-    /// `None` означает точную раннюю ветвь пустого `m_TopInfos`.
+ /// `None` означает точную раннюю ветвь пустого `m_TopInfos`.
     pub(crate) game_server_id: Option<i32>,
     pub(crate) skipped_expired: usize,
     pub(crate) deliveries: Vec<TopInfoDelivery>,
@@ -1129,7 +670,7 @@ pub(crate) struct FactionUnionMembershipLookupBlock {
     pub(crate) map_key: i32,
 }
 
-/// Найденная master-faction союза ещё не имеет достигнутого master ID.
+/// Найденная master-faction союза ещё не имеет действующего master ID.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct UnionPlayerHeaderLookupBlock {
     pub(crate) master_faction_id: i32,
@@ -1486,7 +1027,7 @@ pub(crate) enum OrganizingUnionByMasterBlock {
     UnionMembership(FactionUnionMembershipLookupBlock),
 }
 
-/// Safe-границы exact `IsFreePlayer -> IsFreeFaction` lookup для `0x6010E`.
+/// Safe-границы `IsFreePlayer -> IsFreeFaction` lookup для `0x6010E`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingUnionByPlayerBlock {
     PlayerMembership { map_key: i32 },
@@ -1614,7 +1155,7 @@ pub(crate) enum OrganizingUnionApplyForJoinOutcome<SessionReport> {
     },
 }
 
-/// Ошибка достигнутого lookup либо safe-остановка уже выбранного union-owner-а.
+/// Ошибка действующего lookup либо safe-остановка уже выбранного union-owner-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingUnionApplyForJoinDispatchBlock<SessionBlock> {
     Lookup(OrganizingUnionByMasterBlock),
@@ -1908,7 +1449,7 @@ pub(crate) struct FactionReinitializationEntry {
 pub(crate) struct FactionReinitializationBlock {
     pub(crate) map_key: i32,
     pub(crate) source: FactionInitialPropertyBlock,
-    /// Уже выполненные публикации исходный ordered проход не откатывал бы.
+ /// Уже выполненные публикации исходный ordered проход не откатывал бы.
     pub(crate) completed: Vec<FactionReinitializationEntry>,
 }
 
@@ -1937,7 +1478,7 @@ pub(crate) struct UnionMemberDetachBlock {
 }
 
 /// Наблюдаемый результат `COrganizingCtrl::OnDeleteRole` до wire-ответа
-/// LoginServer. Числа совпадают с exact switch `0..=4`.
+/// LoginServer. Числа совпадают с switch `0..=4`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingDeleteRoleOutcome {
     AllowedNoFaction,
@@ -2054,7 +1595,7 @@ pub(crate) enum OrganizingDisbandBlock {
     },
 }
 
-/// Поля exact `CreateUnion::DoAsyncCall` и его terminal owner-а.
+/// Поля `CreateUnion::DoAsyncCall` и его terminal owner-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ConfederationCreationSessionRequest {
     pub(crate) first_player_id: i32,
@@ -2205,7 +1746,7 @@ impl std::fmt::Debug for ConfederationCreationSessionBlock {
     }
 }
 
-/// Связывает exact creation request с готовым session manager в исходном order.
+/// Связывает creation request с готовым session manager в исходном order.
 pub(crate) fn begin_confederation_creation_session(
     manager: &CNetSessionManager,
     request: ConfederationCreationSessionRequest,
@@ -2887,7 +2428,7 @@ fn send_city_transfer_notice<Effects>(
     });
 }
 
-/// Достигнутые faction-callback и top-info части исходного singleton owner-а.
+/// Действующие faction-callback и top-info части исходного singleton owner-а.
 pub(crate) struct COrganizingCtrl {
     factions: BTreeMap<i32, Option<Box<CFaction>>>,
     confederations: BTreeMap<i32, Option<Box<CUnion>>>,
@@ -2930,10 +2471,10 @@ pub(crate) enum OrganizingDatabaseLoadDisposition {
 pub(crate) struct OrganizingDatabaseLoadReport {
     pub(crate) published_unions: usize,
     pub(crate) published_factions: usize,
-    /// Точный `int` из `CRsUnion::LoadAllConfederation`, который `Initialize`
-    /// передаёт в `%d` log независимо от дальнейшей publication-семантики.
+ /// Точный `int` из `CRsUnion::LoadAllConfederation`, который `Initialize`
+ /// передаёт в `%d` log независимо от дальнейшей publication-семантики.
     pub(crate) union_reported_count: i32,
-    /// Точный `int` из `CRsFaction::LoadAllFaction` для следующего `%d` log.
+ /// Точный `int` из `CRsFaction::LoadAllFaction` для следующего `%d` log.
     pub(crate) faction_reported_count: i32,
     pub(crate) union_load_returned_true: bool,
     pub(crate) disposition: OrganizingDatabaseLoadDisposition,
@@ -2949,9 +2490,9 @@ pub(crate) struct OrganizingNewDayScheduleReport {
 /// Наблюдаемый до уничтожения Rust owner-а итог shutdown `COrganizingCtrl`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OrganizingCtrlReleaseReport {
-    /// Последний поставленный `OnNewDay`, если controller ещё владел им.
+ /// Последний поставленный `OnNewDay`, если controller ещё владел им.
     pub(crate) previous_new_day_event_id: Option<TimerId>,
-    /// Результат снятия именно этого callback из общего timer-owner-а.
+ /// Результат снятия именно этого callback из общего timer-owner-а.
     pub(crate) timer_event_removed: Option<bool>,
 }
 
@@ -2974,7 +2515,7 @@ pub(crate) enum OrganizingNewDayScheduleBlock {
     DateArithmetic(TagTimeArithmeticBlock),
 }
 
-/// Финальный достигнутый suffix `COrganizingCtrl::Initialize` после DB-load.
+/// Финальный действующий suffix `COrganizingCtrl::Initialize` после DB-load.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OrganizingInitializeSuffixReport {
     pub(crate) new_day_schedule: OrganizingNewDayScheduleReport,
@@ -3284,11 +2825,11 @@ where
 }
 
 impl COrganizingCtrl {
-    /// Создаёт полный доказанный constructor-state `COrganizingCtrl`.
-    ///
-    /// Пустые signed map/list, default billboard-size, `m_NewDayTime` 14:15
-    /// и отсутствие назначенного event ID соответствуют owner-у до первого
-    /// `Initialize`; MSVC tree/list и vtable не переносятся.
+ /// Создаёт полный доказанный constructor-state `COrganizingCtrl`.
+ ///
+ /// Пустые signed map/list, default billboard-size, `m_NewDayTime` 14:15
+ /// и отсутствие назначенного event ID соответствуют owner-у до первого
+ /// `Initialize`; MSVC tree/list и vtable не переносятся.
     pub(crate) const fn with_reached_callback_state() -> Self {
         Self {
             factions: BTreeMap::new(),
@@ -3307,13 +2848,13 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Безопасный lifecycle-эквивалент `COrganizingCtrl::Release`.
-    ///
-    /// Raw сначала удалял все ненулевые faction/union pointer-ы, затем удалял
-    /// собственный singleton. Потребление `self` даёт тот же конец владения и
-    /// освобождает также пустые очереди/снимки через `Drop`. В отличие от
-    /// original self-delete, active `OnNewDay` сначала снимается из timer-а,
-    /// чтобы callback не пережил свой controller.
+ /// Безопасный lifecycle-эквивалент `COrganizingCtrl::Release`.
+ ///
+ /// оригинал сначала удалял все ненулевые faction/union pointer-ы, затем удалял
+ /// собственный singleton. Потребление `self` даёт тот же конец владения и
+ /// освобождает также пустые очереди/снимки через `Drop`. В отличие от
+ /// original self-delete, active `OnNewDay` сначала снимается из timer-а,
+ /// чтобы callback не пережил свой controller.
     pub(crate) fn release<Callback>(
         mut self,
         timer: &mut CTimer<Callback>,
@@ -3328,11 +2869,11 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Ставит первый `OnNewDay` на ближайшую полночь exact `Initialize`.
-    ///
-    /// Legacy template хранит только время `14:15`; его нулевые date-поля
-    /// получают дату одного current local snapshot. Первый scheduling явно
-    /// затирает hour/minute/second, а `milliseconds` сохраняет из template.
+ /// Ставит первый `OnNewDay` на ближайшую полночь `Initialize`.
+ ///
+ /// Legacy template хранит только время `14:15`; его нулевые date-поля
+ /// получают дату одного current local snapshot. Первый scheduling явно
+ /// затирает hour/minute/second, а `milliseconds` сохраняет из template.
     pub(crate) fn schedule_initial_new_day<Callback: Copy>(
         &mut self,
         current_time: TagTime,
@@ -3356,7 +2897,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Выполняет `OnNewDay`: reset, day-of-next-event и новое событие 14:15.
+ /// Выполняет `OnNewDay`: reset, day-of-next-event и новое событие 14:15.
     pub(crate) fn on_new_day<Callback: Copy, SetCountryDay>(
         &mut self,
         current_time: TagTime,
@@ -3396,8 +2937,8 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Выполняет часть `Initialize` строго после DB-publication: сначала
-    /// `SetTimeEvent(OnNewDay, 0)`, затем member/offense/defence snapshot-ы.
+ /// Выполняет часть `Initialize` строго после DB-publication: сначала
+ /// `SetTimeEvent(OnNewDay, 0)`, затем member/offense/defence snapshot-ы.
     pub(crate) fn finish_database_initialize<Callback: Copy>(
         &mut self,
         current_time: TagTime,
@@ -3416,14 +2957,14 @@ impl COrganizingCtrl {
         Ok(OrganizingInitializeSuffixReport { new_day_schedule })
     }
 
-    /// Выполняет полный owner-порядок `Initialize`: очищает reservation-list
-    /// до первого DB-вызова, публикует union prefix до запуска faction-loader,
-    /// затем без success-gate ставит calendar event и собирает billboard.
-    ///
-    /// Оба DB `int` остаются в отчёте для исходных `%d`-логов. Отказ одного
-    /// loader-а не останавливает следующий; безопасная остановка возможна
-    /// только при недоказанном raw lifetime/constructor пути publication либо
-    /// при уже описанном suffix-block.
+ /// Выполняет полный owner-порядок `Initialize`: очищает reservation-list
+ /// до первого DB-вызова, публикует union prefix до запуска faction-loader,
+ /// затем без success-gate ставит calendar event и собирает billboard.
+ ///
+ /// Оба DB `int` остаются в отчёте для исходных `%d`-логов. Отказ одного
+ /// loader-а не останавливает следующий; безопасная остановка возможна
+ /// только при недоказанном оригинал lifetime/constructor пути publication либо
+ /// при уже описанном suffix-block.
     pub(crate) async fn initialize_from_database_owners<UnionDb, FactionDb, Callback>(
         &mut self,
         union_db: &mut UnionDb,
@@ -3480,8 +3021,8 @@ impl COrganizingCtrl {
                 union_load_returned_true,
                 disposition: OrganizingDatabaseLoadDisposition::PublishedAll,
             },
-            // Raw `LoadAllFaction` удаляет temporary map на этой ветви, поэтому
-            // из готового prefix не возникает live faction-owner.
+ // оригинал `LoadAllFaction` удаляет temporary map на этой ветви, поэтому
+ // из готового prefix не возникает live faction-owner.
             FactionLoadOutcome::ReturnedFalse { reported_count, .. } => {
                 OrganizingDatabaseLoadReport {
                     published_unions,
@@ -3513,15 +3054,15 @@ impl COrganizingCtrl {
         Ok(OrganizingInitializeReport { database, suffix })
     }
 
-    /// Публикует DB-готовые union/faction owner-ы в порядке `Initialize`.
-    ///
-    /// Exact `Initialize` сперва чистит request-list, затем `LoadAllConfederation`
-    /// materialize-ит и вставляет unions, после чего `LoadAllFaction` вставляет
-    /// factions. При положительном уже найденном union `AddFactionOrganizing`
-    /// не вызывает повторный clear dirty-mask; faction DB owner уже выполнил
-    /// этот финальный clear, поэтому безопасная insertion сохраняет наблюдаемое
-    /// состояние без ненужного virtual dispatch. Repeated map-key заменяет
-    /// прежний owner, но не сохраняет старую pointer leak.
+ /// Публикует DB-готовые union/faction owner-ы в порядке `Initialize`.
+ ///
+ /// `Initialize` сперва чистит request-list, затем `LoadAllConfederation`
+ /// materialize-ит и вставляет unions, после чего `LoadAllFaction` вставляет
+ /// factions. При положительном уже найденном union `AddFactionOrganizing`
+ /// не вызывает повторный clear dirty-mask; faction DB owner уже выполнил
+ /// этот финальный clear, поэтому безопасная insertion сохраняет наблюдаемое
+ /// состояние без ненужного virtual dispatch. Repeated map-key заменяет
+ /// прежний owner, но не сохраняет старую pointer leak.
     pub(crate) fn publish_database_organizing(
         &mut self,
         union_master_title: &[u8],
@@ -3537,7 +3078,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Принимает завершённые DB owner-outcome-ы с их разной cleanup-семантикой.
+ /// Принимает завершённые DB owner-outcome-ы с их разной cleanup-семантикой.
     pub(crate) fn publish_database_load_outcomes(
         &mut self,
         union_master_title: &[u8],
@@ -3568,8 +3109,8 @@ impl COrganizingCtrl {
                 union_load_returned_true,
                 disposition: OrganizingDatabaseLoadDisposition::PublishedAll,
             }),
-            // Exact LoadAllFaction deletes its temporary map on any failed
-            // helper; its completed prefix therefore cannot become live.
+ // LoadAllFaction deletes its temporary map on any failed
+ // helper; its completed prefix therefore cannot become live.
             FactionLoadOutcome::ReturnedFalse { reported_count, .. } => Ok(OrganizingDatabaseLoadReport {
                 published_unions,
                 published_factions: 0,
@@ -3623,10 +3164,10 @@ impl COrganizingCtrl {
         published_factions
     }
 
-    /// Публикует faction ровно по `AddFactionOrganizing`: замена map-key
-    /// выполняется первой; при уже существующем верхнем союзе dirty-mask не
-    /// трогается, иначе вызывается `SetChangeData(0)`. Rust освобождает
-    /// вытесненный owner вместо исходной pointer-leak при повторном ключе.
+ /// Публикует faction ровно по `AddFactionOrganizing`: замена map-key
+ /// выполняется первой; при уже существующем верхнем союзе dirty-mask не
+ /// трогается, иначе вызывается `SetChangeData(0)`. Rust освобождает
+ /// вытесненный owner вместо исходной pointer-leak при повторном ключе.
     fn add_faction_organizing(&mut self, faction_id: i32, mut faction: CFaction) {
         let live_superior_master = faction
             .superior_organizing()
@@ -3650,13 +3191,13 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Выполняет exact ordered `ReSetPermitDemise` без сетевых/DB эффектов.
-    ///
-    /// Каждая concrete faction получает virtual `SetPermitDemise(true)` в
-    /// signed map-order. Empty slot не создаётся ни одним normal ingress: он
-    /// был бы только техническим промежутком Rust-представления raw pointer-а.
-    /// Поэтому `OnNewDay` пропускает его и продолжает calendar lifecycle,
-    /// устраняя старый null-dereference вместо публикации нового отказа.
+ /// Выполняет ordered `ReSetPermitDemise` без сетевых/DB эффектов.
+ ///
+ /// Каждая concrete faction получает virtual `SetPermitDemise(true)` в
+ /// signed map-order. Empty slot не создаётся ни одним normal ingress: он
+ /// был бы только техническим промежутком Rust-представления оригинал pointer-а.
+ /// Поэтому `OnNewDay` пропускает его и продолжает calendar lifecycle,
+ /// устраняя старый null-dereference вместо публикации нового отказа.
     pub(crate) fn reset_permit_demise(&mut self) -> Vec<i32> {
         let mut reset_faction_ids = Vec::with_capacity(self.factions.len());
         for faction in self.factions.values_mut() {
@@ -3669,19 +3210,19 @@ impl COrganizingCtrl {
         reset_faction_ids
     }
 
-    /// Перестраивает три snapshot-а в точном порядке исходного `StatBillboard`.
+ /// Перестраивает три snapshot-а в точном порядке исходного `StatBillboard`.
     pub(crate) fn stat_billboard(&mut self) -> Result<(), FactionBillboardStatBlock> {
         self.stat_member_count_billboard()?;
         self.stat_offense_victories_billboard()?;
         self.stat_defence_victories_billboard()
     }
 
-    /// Сериализует выбранный snapshot с исходной нумерацией dispatcher-а.
-    ///
-    /// Значения `1/2/3` означают members/offense/defence. Любое другое
-    /// значение добавляет только нулевой 32-битный count; это сохраняет
-    /// наблюдаемый off-by-one относительно запроса `0x60125`, принимающего
-    /// только `0/1/2`.
+ /// Сериализует выбранный snapshot с исходной нумерацией dispatcher-а.
+ ///
+ /// Значения `1/2/3` означают members/offense/defence. Любое другое
+ /// значение добавляет только нулевой 32-битный count; это сохраняет
+ /// наблюдаемый off-by-one относительно запроса `0x60125`, принимающего
+ /// только `0/1/2`.
     pub(crate) fn add_faction_billboard_to_byte_array(
         &self,
         output: &mut Vec<u8>,
@@ -3695,7 +3236,7 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Выполняет nullable faction lookup и уже восстановленный `CFaction::Upgrade`.
+ /// Выполняет nullable faction lookup и уже действующий `CFaction::Upgrade`.
     pub(crate) fn upgrade_faction<Context>(
         &mut self,
         game: &CGame,
@@ -3715,7 +3256,7 @@ impl COrganizingCtrl {
             .map(Some)
     }
 
-    /// Выполняет nullable faction lookup и concrete `CFaction::SetParam`.
+ /// Выполняет nullable faction lookup и concrete `CFaction::SetParam`.
     pub(crate) fn set_faction_parameter<Context>(
         &mut self,
         game: &CGame,
@@ -3736,7 +3277,7 @@ impl COrganizingCtrl {
             .map(Some)
     }
 
-    /// Повторно разрешает faction перед уже восстановленным `CFaction::UploadIcon`.
+ /// Повторно разрешает faction перед действующим `CFaction::UploadIcon`.
     pub(crate) fn upload_faction_icon<Context>(
         &mut self,
         parameters: &COrganizingParam,
@@ -3756,7 +3297,7 @@ impl COrganizingCtrl {
             .map(Some)
     }
 
-    /// Разрешает faction requester-а через `IsFreePlayer` и меняет contributor.
+ /// Разрешает faction requester-а через `IsFreePlayer` и меняет contributor.
     pub(crate) fn set_contributor_for_player<Context>(
         &mut self,
         game: &CGame,
@@ -3790,7 +3331,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Применяет wrapping experience delta после exact contributor gate.
+ /// Применяет wrapping experience delta после contributor gate.
     pub(crate) fn add_contributor_experience(
         &mut self,
         game: &CGame,
@@ -3822,8 +3363,8 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Разрешает faction до чтения operation-specific поля и вызывает
-    /// соответствующий соседний virtual owner `OnMember*Change`.
+ /// Разрешает faction до чтения operation-specific поля и вызывает
+ /// соответствующий соседний virtual owner `OnMember*Change`.
     pub(crate) fn change_faction_member_state<ReadValue>(
         &mut self,
         game: &CGame,
@@ -3849,7 +3390,7 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Выполняет конкретный `CFaction::OperatorTax` после внешних war-gates.
+ /// Выполняет конкретный `CFaction::OperatorTax` после внешних war-gates.
     pub(crate) fn operate_faction_tax(
         &self,
         faction_id: i32,
@@ -3867,7 +3408,7 @@ impl COrganizingCtrl {
             .map(Some)
     }
 
-    /// Выполняет конкретный `CFaction::OperatorCityGate` после faction lookup.
+ /// Выполняет конкретный `CFaction::OperatorCityGate` после faction lookup.
     pub(crate) fn operate_faction_city_gate(
         &self,
         faction_id: i32,
@@ -3885,7 +3426,7 @@ impl COrganizingCtrl {
             .map(Some)
     }
 
-    /// Вызывает concrete `SetIsPermit` с точным nullable lookup текущего union.
+ /// Вызывает concrete `SetIsPermit` с точным nullable lookup текущего union.
     pub(crate) fn set_faction_admission_permit(
         &mut self,
         game: &CGame,
@@ -4025,13 +3566,13 @@ impl COrganizingCtrl {
         Ok(())
     }
 
-    /// Материализует organizing save/delete очереди в `CGame::tagDBData`.
-    ///
-    /// Оба map обходятся в signed key-order. Empty технический slot пропускается:
-    /// normal ingress такого значения не создаёт, а синхронный split-borrow
-    /// восстанавливает owner до самостоятельной save-фазы. После успешного
-    /// clone live-mask сбрасывается, а delete-list очищается только после
-    /// полного переноса.
+ /// Материализует organizing save/delete очереди в `CGame::tagDBData`.
+ ///
+ /// Оба map обходятся в signed key-order. Empty технический slot пропускается:
+ /// normal ingress такого значения не создаёт, а синхронный split-borrow
+ /// восстанавливает owner до самостоятельной save-фазы. После успешного
+ /// clone live-mask сбрасывается, а delete-list очищается только после
+ /// полного переноса.
     pub(crate) fn generate_save_data(
         &mut self,
         game: &CGame,
@@ -4094,22 +3635,22 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Возвращает ту же canonical faction, которую искал `GetpFactionById`.
-    ///
-    /// Отсутствующий key и сохранённый null pointer оба дают исходный
-    /// `nullptr`; caller сам сохраняет последующую pointer-семантику.
+ /// Возвращает ту же canonical faction, которую искал `GetpFactionById`.
+ ///
+ /// Отсутствующий key и сохранённый null pointer оба дают исходный
+ /// `nullptr`; caller сам сохраняет последующую pointer-семантику.
     pub(crate) fn faction_by_id(&self, faction_id: i32) -> Option<&CFaction> {
         self.factions.get(&faction_id).and_then(Option::as_deref)
     }
 
-    /// Mutable-вариант того же nullable faction lookup для virtual dispatch.
+ /// Mutable-вариант того же nullable faction lookup для virtual dispatch.
     pub(crate) fn faction_by_id_mut(&mut self, faction_id: i32) -> Option<&mut CFaction> {
         self.factions
             .get_mut(&faction_id)
             .and_then(Option::as_deref_mut)
     }
 
-    /// Повторяет exact `GetCountryByFaction` без singleton и virtual ABI.
+ /// Повторяет `GetCountryByFaction` без singleton и virtual ABI.
     pub(crate) fn country_by_faction(
         &self,
         faction_id: i32,
@@ -4123,7 +3664,7 @@ impl COrganizingCtrl {
         faction.country().map(Some).ok_or(FactionInitialPropertyBlock)
     }
 
-    /// Повторяет exact `AddOwnedCityToFaction` через concrete faction owner.
+ /// Повторяет `AddOwnedCityToFaction` через concrete faction owner.
     pub(crate) fn add_owned_city_to_faction(
         &mut self,
         game: &CGame,
@@ -4145,7 +3686,7 @@ impl COrganizingCtrl {
             .map(Some)
     }
 
-    /// Узкий concrete dispatch достигнутого `CFaction::SetGoodsWarCount`.
+ /// Узкий concrete dispatch действующего `CFaction::SetGoodsWarCount`.
     pub(crate) fn set_faction_goods_war_count(
         &mut self,
         faction_id: i32,
@@ -4155,7 +3696,7 @@ impl COrganizingCtrl {
             .map(|faction| faction.set_goods_war_count(count))
     }
 
-    /// Повторяет nullable `GetConfederationOrganizing` для положительного ID.
+ /// Повторяет nullable `GetConfederationOrganizing` для положительного ID.
     pub(crate) fn confederation_by_id(&self, union_id: i32) -> Option<&CUnion> {
         if union_id < 1 {
             return None;
@@ -4165,7 +3706,7 @@ impl COrganizingCtrl {
             .and_then(Option::as_deref)
     }
 
-    /// Повторяет ordered `IsFactionMaster` и не продолжает после старого UB.
+ /// Повторяет ordered `IsFactionMaster` и не продолжает после старого UB.
     pub(crate) fn faction_id_by_master_player(
         &self,
         player_id: i32,
@@ -4189,7 +3730,7 @@ impl COrganizingCtrl {
         Ok(0)
     }
 
-    /// Повторяет ordered `IsConferationMaster` и его null-owner границу.
+ /// Повторяет ordered `IsConferationMaster` и его null-owner границу.
     pub(crate) fn union_id_by_master_faction(
         &self,
         faction_id: i32,
@@ -4205,7 +3746,7 @@ impl COrganizingCtrl {
         Ok(0)
     }
 
-    /// Разрешает master-faction и включает её leave-word feature.
+ /// Разрешает master-faction и включает её leave-word feature.
     pub(crate) fn enable_leave_word_for_master<Context>(
         &mut self,
         player_id: i32,
@@ -4229,7 +3770,7 @@ impl COrganizingCtrl {
         Ok(OrganizingLeaveWordEnableOutcome::Updated { faction_id, update })
     }
 
-    /// Разрешает faction автора и выполняет concrete `CFaction::LeaveWord`.
+ /// Разрешает faction автора и выполняет concrete `CFaction::LeaveWord`.
     pub(crate) fn leave_word_for_player(
         &mut self,
         game: &mut CGame,
@@ -4261,7 +3802,7 @@ impl COrganizingCtrl {
             .map_err(|source| OrganizingLeaveWordBlock::Faction { faction_id, source })
     }
 
-    /// Разрешает faction редактора и удаляет выбранный leave-word.
+ /// Разрешает faction редактора и удаляет выбранный leave-word.
     pub(crate) fn edit_leave_word_for_player(
         &mut self,
         game: &CGame,
@@ -4293,7 +3834,7 @@ impl COrganizingCtrl {
             .map_err(|source| OrganizingLeaveWordEditBlock::Property { faction_id, source })
     }
 
-    /// Разрешает faction автора и заменяет её текущее объявление.
+ /// Разрешает faction автора и заменяет её текущее объявление.
     pub(crate) fn pronounce_for_player(
         &mut self,
         game: &CGame,
@@ -4325,7 +3866,7 @@ impl COrganizingCtrl {
             .map_err(|source| OrganizingPronounceBlock::Faction { faction_id, source })
     }
 
-    /// Возвращает bit-exact Windows `long` для исходного `m_FacOrg.size()`.
+ /// Возвращает bit- Windows `long` для исходного `m_FacOrg.size()`.
     pub(crate) fn declare_war_faction_count(
         &self,
     ) -> Result<i32, DeclareWarFactionPageBlock> {
@@ -4336,7 +3877,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Считает concrete faction owner-ы одной страны в signed map-order.
+ /// Считает concrete faction owner-ы одной страны в signed map-order.
     pub(crate) fn faction_count_by_country(
         &self,
         country: u8,
@@ -4358,7 +3899,7 @@ impl COrganizingCtrl {
         Ok(count)
     }
 
-    /// Строит exact 11-элементную страницу faction ID/name одной страны.
+ /// Строит 11-элементную страницу faction ID/name одной страны.
     pub(crate) fn faction_list_page(
         &self,
         requested_page: i32,
@@ -4444,7 +3985,7 @@ impl COrganizingCtrl {
         Ok(page)
     }
 
-    /// Ищет organizing по имени в exact порядке faction-map, затем union-map.
+ /// Ищет organizing по имени в порядке faction-map, затем union-map.
     pub(crate) fn organizing_by_name(
         &self,
         requested_name: &[u8],
@@ -4488,7 +4029,7 @@ impl COrganizingCtrl {
         Ok(None)
     }
 
-    /// Выполняет virtual `GetCountry` для результата `FindOrgaByName`.
+ /// Выполняет virtual `GetCountry` для результата `FindOrgaByName`.
     pub(crate) fn country_by_name_match(
         &self,
         matched: OrganizingNameMatch,
@@ -4523,8 +4064,8 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Вызывает union `ApplyForJoin` по уже найденному map-key, не повторяя
-    /// master-player lookup ветки `0x60118`.
+ /// Вызывает union `ApplyForJoin` по уже найденному map-key, не повторяя
+ /// master-player lookup ветки `0x60118`.
     pub(crate) fn apply_for_named_union_join<Effects>(
         &mut self,
         game: &CGame,
@@ -4571,8 +4112,8 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Вызывает faction `ApplyForJoin` через detached owner, сохраняя полный
-    /// signed map-order его reentrant membership/remove проходов.
+ /// Вызывает faction `ApplyForJoin` через detached owner, сохраняя полный
+ /// signed map-order его reentrant membership/remove проходов.
     pub(crate) fn apply_for_faction_join_by_map_key<Effects>(
         &mut self,
         game: &CGame,
@@ -4611,8 +4152,8 @@ impl COrganizingCtrl {
         result.map_err(|source| OrganizingFactionApplicationBlock::Apply { map_key, source })
     }
 
-    /// Выполняет точную controller-цепочку `0x6010A`: первый lookup faction,
-    /// один local-time snapshot, повторный lookup и virtual `DoJoin`.
+ /// Выполняет точную controller-цепочку `0x6010A`: первый lookup faction,
+ /// один local-time snapshot, повторный lookup и virtual `DoJoin`.
     pub(crate) fn do_faction_join_by_manager<Effects, GetLocalTime>(
         &mut self,
         game: &CGame,
@@ -4709,7 +4250,7 @@ impl COrganizingCtrl {
         self.factions.get(&map_key).and_then(Option::as_deref)
     }
 
-    /// Выполняет exact public `AddFactionToClientByPlayerID` без detach.
+ /// Выполняет public `AddFactionToClientByPlayerID` без detach.
     pub(crate) fn add_faction_to_client_by_player_id(
         &self,
         game: &CGame,
@@ -4728,7 +4269,7 @@ impl COrganizingCtrl {
         self.add_faction_to_client_with_detached(game, faction_id, faction, player_id)
     }
 
-    /// Выполняет exact `AddUnionToClientByPlayerID` для одного online player.
+ /// Выполняет `AddUnionToClientByPlayerID` для одного online player.
     pub(crate) fn add_union_to_client_by_player_id(
         &mut self,
         game: &CGame,
@@ -4791,7 +4332,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Выполняет exact public `AddAllFactinInfoToClientByPlayerID` без detach.
+ /// Выполняет public `AddAllFactinInfoToClientByPlayerID` без detach.
     pub(crate) fn add_all_faction_info_to_client_by_player_id(
         &self,
         game: &CGame,
@@ -4815,8 +4356,8 @@ impl COrganizingCtrl {
         )
     }
 
-    /// Выполняет exact `AddFactionToClientByPlayerID` с временно detached
-    /// target faction на её исходной позиции controller-map.
+ /// Выполняет `AddFactionToClientByPlayerID` с временно detached
+ /// target faction на её исходной позиции controller-map.
     fn add_faction_to_client_with_detached(
         &self,
         game: &CGame,
@@ -4851,15 +4392,15 @@ impl COrganizingCtrl {
         let mut message = CMessage::new(0x7FE02);
         message.base_mut().add_long(player_id);
         message.base_mut().add(&snapshot);
-        // Snapshot дописан непосредственно в vector и потому требует exact
-        // `CBaseMessage::Update` перед `SendToMapID`.
+ // Snapshot дописан непосредственно в vector и потому требует
+ // `CBaseMessage::Update` перед `SendToMapID`.
         message.base_mut().update();
         let _ = game.send_msg_to_game_server(game_server_id, &message);
         player.set_faction_data_received(true);
         Ok(true)
     }
 
-    /// Выполняет exact misspelled `AddAllFactinInfoToClientByPlayerID`.
+ /// Выполняет misspelled `AddAllFactinInfoToClientByPlayerID`.
     fn add_all_faction_info_to_client_with_detached(
         &self,
         game: &CGame,
@@ -4909,15 +4450,15 @@ impl COrganizingCtrl {
         Ok(true)
     }
 
-    /// Строит payload одной 11-элементной страницы целей объявления войны.
-    ///
-    /// Exact `AddDeclareWarFactionInfoToByteArray` сначала вызывал
-    /// `GetCountry` у source faction и отбрасывал результат. Этот внутренний
-    /// бессмысленный вызов не переносится: он не менял wire или state. Signed
-    /// page arithmetic остаётся wrapping, а remaining сравнивается unsigned —
-    /// это сохраняет исходный wire-quirk переполненного положительного page.
-    /// Старый `strcpy` через 256-byte stack buffer заменён прямой C-string
-    /// сериализацией: для допустимых имён wire тот же, memory overflow удалён.
+ /// Строит payload одной 11-элементной страницы целей объявления войны.
+ ///
+ /// `AddDeclareWarFactionInfoToByteArray` сначала вызывал
+ /// `GetCountry` у source faction и отбрасывал результат. Этот внутренний
+ /// бессмысленный вызов не переносится: он не менял wire или state. Signed
+ /// page arithmetic остаётся wrapping, а remaining сравнивается unsigned —
+ /// это сохраняет исходный wire-quirk переполненного положительного page.
+ /// Старый `strcpy` через 256-byte stack buffer заменён прямой C-string
+ /// сериализацией: для допустимых имён wire тот же, memory overflow удалён.
     pub(crate) fn declare_war_faction_page(
         &self,
         source_faction_id: i32,
@@ -4998,7 +4539,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Повторяет `GetUnion`: master-player -> faction -> union -> nullable owner.
+ /// Повторяет `GetUnion`: master-player -> faction -> union -> nullable owner.
     pub(crate) fn union_id_by_master_player(
         &self,
         player_id: i32,
@@ -5022,7 +4563,7 @@ impl COrganizingCtrl {
         Ok(self.confederation_by_id(union_id).map(CUnion::union_id))
     }
 
-    /// Повторяет exact lookup `0x6010E`: любой player membership, затем union.
+ /// Повторяет lookup `0x6010E`: любой player membership, затем union.
     pub(crate) fn union_id_by_player_membership(
         &self,
         player_id: i32,
@@ -5044,7 +4585,7 @@ impl COrganizingCtrl {
         Ok(self.confederation_by_id(union_id).map(CUnion::union_id))
     }
 
-    /// Выполняет exact virtual-call ветки `OnOrgasysMessage(0x60118)`.
+ /// Выполняет virtual-call ветки `OnOrgasysMessage(0x60118)`.
     pub(crate) fn apply_for_union_join<Effects>(
         &mut self,
         game: &CGame,
@@ -5067,8 +4608,8 @@ impl COrganizingCtrl {
             return Ok(OrganizingUnionApplyForJoinOutcome::UnionNotFound);
         };
 
-        // `ApplyForJoin` повторно сканирует union-map по applicant. Временный
-        // safe take выбранного owner-а не должен менять результат этого scan.
+ // `ApplyForJoin` повторно сканирует union-map по applicant. Временный
+ // safe take выбранного owner-а не должен менять результат этого scan.
         let applicant_membership = self.is_free_faction(applicant_faction_id);
         let mut union = self
             .confederations
@@ -5099,7 +4640,7 @@ impl COrganizingCtrl {
             })
     }
 
-    /// Вызывает exact `CUnion::Invite(source faction, invited faction)`.
+ /// Вызывает `CUnion::Invite(source faction, invited faction)`.
     pub(crate) fn invite_faction_to_union<Effects>(
         &mut self,
         game: &CGame,
@@ -5144,8 +4685,8 @@ impl COrganizingCtrl {
             })
     }
 
-    /// Выполняет exact controller-цепочку `0x6010C`: `GetUnion(manager)` и
-    /// virtual `CUnion::FireOut(manager, target faction)`.
+ /// Выполняет controller-цепочку `0x6010C`: `GetUnion(manager)` и
+ /// virtual `CUnion::FireOut(manager, target faction)`.
     pub(crate) fn fire_out_union_by_master<Effects>(
         &mut self,
         game: &CGame,
@@ -5213,8 +4754,8 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Выполняет exact controller-цепочку `0x6010E`, включая автоматический
-    /// disband через заново вычисленный `CUnion::GetPlayerHeader()`.
+ /// Выполняет controller-цепочку `0x6010E`, включая автоматический
+ /// disband через заново вычисленный `CUnion::GetPlayerHeader()`.
     pub(crate) fn exit_union_by_player<Effects>(
         &mut self,
         game: &CGame,
@@ -5311,8 +4852,8 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Выполняет exact controller-цепочку `0x60110`: `GetUnion(old master)` и
-    /// virtual `CUnion::Demise(old master, new master faction)`.
+ /// Выполняет controller-цепочку `0x60110`: `GetUnion(old master)` и
+ /// virtual `CUnion::Demise(old master, new master faction)`.
     pub(crate) fn demise_union_by_master<Effects>(
         &mut self,
         game: &CGame,
@@ -5354,8 +4895,8 @@ impl COrganizingCtrl {
             .map_err(|source| OrganizingUnionDemiseBlock::Demise { union_id, source })
     }
 
-    /// Выполняет exact `DisbandConferation`: war gates, concrete union
-    /// disband, delete-очередь, owned-city refresh и удаление owner-а.
+ /// Выполняет `DisbandConferation`: war gates, concrete union
+ /// disband, delete-очередь, owned-city refresh и удаление owner-а.
     pub(crate) fn disband_confederation<Effects>(
         &mut self,
         game: &CGame,
@@ -5465,7 +5006,7 @@ impl COrganizingCtrl {
         ))
     }
 
-    /// Строит и маршрутизирует точный player-targeted organizing-info wire.
+ /// Строит и маршрутизирует точный player-targeted organizing-info wire.
     pub(crate) fn send_organizing_info_to_client(
         game: &CGame,
         request: FactionMemberInfoRequest<'_>,
@@ -5500,7 +5041,7 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Строит exact broadcast-overload `0x7FA03` и вызывает `SendAll`.
+ /// Строит broadcast-overload `0x7FA03` и вызывает `SendAll`.
     pub(crate) fn send_organizing_info_to_all(
         game: &CGame,
         info: &[u8],
@@ -5518,7 +5059,7 @@ impl COrganizingCtrl {
         message.send_all(sender.as_ref())
     }
 
-    /// Публикует одно other-faction изменение всем concrete faction-owner-ам.
+ /// Публикует одно other-faction изменение всем concrete faction-owner-ам.
     pub(crate) fn update_other_faction_info_to_client(
         &self,
         game: &CGame,
@@ -5554,7 +5095,7 @@ impl COrganizingCtrl {
         Ok(completed)
     }
 
-    /// Выполняет оба исходных disband-слоя и удаляет concrete faction-owner.
+ /// Выполняет оба исходных disband-слоя и удаляет concrete faction-owner.
     pub(crate) fn disband_faction<Context>(
         &mut self,
         game: &CGame,
@@ -5660,7 +5201,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Пересчитывает и публикует property всех concrete faction-owner-ов.
+ /// Пересчитывает и публикует property всех concrete faction-owner-ов.
     pub(crate) fn reinitialize_factions_by_level(
         &mut self,
         game: &CGame,
@@ -5669,7 +5210,7 @@ impl COrganizingCtrl {
         let mut completed = Vec::new();
         for (&map_key, faction) in &mut self.factions {
             let Some(faction) = faction.as_deref_mut() else {
-                // Exact RTTI cast null/non-CFaction pointer пропускал.
+ // RTTI cast null/non-CFaction pointer пропускал.
                 continue;
             };
             let result = match faction.reinitialize_property_by_level(game, parameters) {
@@ -5687,7 +5228,7 @@ impl COrganizingCtrl {
         Ok(completed)
     }
 
-    /// Отвязывает faction от union в точном порядке `CUnion::DelMember`.
+ /// Отвязывает faction от union в точном порядке `CUnion::DelMember`.
     pub(crate) fn detach_union_member(
         &mut self,
         game: &CGame,
@@ -5719,16 +5260,16 @@ impl COrganizingCtrl {
         Ok(UnionMemberDetachOutcome::Detached { deliveries })
     }
 
-    /// Повторяет organizing-часть exact `OnDeleteRole` после синхронного
-    /// `CRsPlayer::GetPlayerCountryByID`/`CCountry::HasJob` префикса.
-    ///
-    /// Для обычного участника `DelMember` выполняется до результата `0`.
-    /// Master свободной faction получает `1`: машинный slot `+0x90` возвращает
-    /// `GetMembers`, а проверка читает `_Mysize > 0`; после только что
-    /// успешного `IsFreePlayer` нулевая ветвь `DisbandFaction` недостижима.
-    /// Для faction в союзе достаточно существования union-owner-а: concrete
-    /// `CUnion::DelMember` не читает receiver, отвязывает faction и всегда
-    /// возвращает true, поэтому точный результат равен `3`, а не `2`.
+ /// Повторяет organizing-часть `OnDeleteRole` после синхронного
+ /// `CRsPlayer::GetPlayerCountryByID`/`CCountry::HasJob` префикса.
+ ///
+ /// Для обычного участника `DelMember` выполняется до результата `0`.
+ /// Master свободной faction получает `1`: машинный slot `+0x90` возвращает
+ /// `GetMembers`, а проверка читает `_Mysize > 0`; после только что
+ /// успешного `IsFreePlayer` нулевая ветвь `DisbandFaction` недостижима.
+ /// Для faction в союзе достаточно существования union-owner-а: concrete
+ /// `CUnion::DelMember` не читает receiver, отвязывает faction и всегда
+ /// возвращает true, поэтому точный результат равен `3`, а не `2`.
     pub(crate) fn on_delete_role(
         &mut self,
         game: &CGame,
@@ -5793,13 +5334,13 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Ищет первый положительный faction ID в signed map-порядке.
+ /// Ищет первый положительный faction ID в signed map-порядке.
     pub(crate) fn is_free_player(&self, player_id: i32) -> FreePlayerLookup {
         for (&map_key, faction) in &self.factions {
             let Some(faction) = faction.as_deref() else {
-                // `IsFreePlayer` RVA `0x000343A0` разыменовывает значение map
-                // без проверки на null. Достижимость и наблюдаемая реакция
-                // такого состояния не доказаны.
+ // `IsFreePlayer` разыменовывает значение map
+ // без проверки на null. Достижимость и наблюдаемая реакция
+ // такого состояния не доказаны.
                 return FreePlayerLookup::BlockedNullFaction { map_key };
             };
             let faction_id = faction.is_member(player_id);
@@ -5810,13 +5351,13 @@ impl COrganizingCtrl {
         FreePlayerLookup::NoFaction
     }
 
-    /// Ищет первый положительный union ID в signed map-порядке.
+ /// Ищет первый положительный union ID в signed map-порядке.
     pub(crate) fn is_free_faction(&self, faction_id: i32) -> FreeFactionLookup {
         for (&map_key, union) in &self.confederations {
             let Some(union) = union.as_deref() else {
-                // `IsFreeFaction` RVA `0x00034420` разыменовывает значение map
-                // без проверки на null. Достижимость и наблюдаемая реакция
-                // такого состояния не доказаны.
+ // `IsFreeFaction` разыменовывает значение map
+ // без проверки на null. Достижимость и наблюдаемая реакция
+ // такого состояния не доказаны.
                 return FreeFactionLookup::BlockedNullConfederation { map_key };
             };
             let union_id = union.is_member(faction_id);
@@ -5827,11 +5368,11 @@ impl COrganizingCtrl {
         FreeFactionLookup::NoUnion
     }
 
-    /// Разворачивает faction в concrete faction-организации для city-war.
-    ///
-    /// Свободная faction даёт собственный ID только при живом owner-е. Union
-    /// использует исходный signed member-order и pointer-identity dedupe
-    /// `CUnion::GetAllFacs`; отсутствующие member-owner-ы пропускаются.
+ /// Разворачивает faction в concrete faction-организации для city-war.
+ ///
+ /// Свободная faction даёт собственный ID только при живом owner-е. Union
+ /// использует исходный signed member-order и pointer-identity dedupe
+ /// `CUnion::GetAllFacs`; отсутствующие member-owner-ы пропускаются.
     pub(crate) fn expand_city_war_faction_organizings(
         &self,
         faction_id: i32,
@@ -5857,7 +5398,7 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Добавляет city-war enemy через concrete faction virtual-owner.
+ /// Добавляет city-war enemy через concrete faction virtual-owner.
     pub(crate) fn add_city_war_enemy_organizing<Context>(
         &mut self,
         organizing_id: i32,
@@ -5874,13 +5415,13 @@ impl COrganizingCtrl {
         Ok(true)
     }
 
-    /// Применяет одну загруженную пару `CFactionWarSys` к обоим city-war set.
-    ///
-    /// Exact controller сначала отдельно ищет обе positive faction ID и
-    /// выполняет оба virtual `AddCityWarEnemyOrganizing` только когда обе
-    /// живы. Поэтому первый mutation и его `WS0160` log всегда происходят
-    /// раньше второго; `FactionEnemyMutationContext` остаётся тем же внешним
-    /// string-table/war-log owner-ом, а не упрощается до прямой вставки set.
+ /// Применяет одну загруженную пару `CFactionWarSys` к обоим city-war set.
+ ///
+ /// controller сначала отдельно ищет обе positive faction ID и
+ /// выполняет оба virtual `AddCityWarEnemyOrganizing` только когда обе
+ /// живы. Поэтому первый mutation и его `WS0160` log всегда происходят
+ /// раньше второго; `FactionEnemyMutationContext` остаётся тем же внешним
+ /// string-table/war-log owner-ом, а не упрощается до прямой вставки set.
     pub(crate) fn set_enemy_faction_relation<Context>(
         &mut self,
         first_faction_id: i32,
@@ -5908,7 +5449,7 @@ impl COrganizingCtrl {
         Ok(EnemyFactionRelationOutcome::Applied)
     }
 
-    /// Возвращает следующий organizing ID по exact signed maximum обоих map.
+ /// Возвращает следующий organizing ID по signed maximum обоих map.
     pub(crate) fn generate_db_organizing_id(&self) -> i32 {
         let mut maximum = 1_i32;
         if let Some(&faction_maximum) = self.factions.keys().next_back()
@@ -5924,21 +5465,21 @@ impl COrganizingCtrl {
         maximum.wrapping_add(1)
     }
 
-    /// Ставит city-war changed-флаг всем живым faction в signed map-order.
+ /// Ставит city-war changed-флаг всем живым faction в signed map-order.
     pub(crate) fn set_all_city_faction_enemy_changed(&mut self, changed: bool) {
         for faction in self.factions.values_mut().flatten() {
             faction.set_city_war_enemy_factions_changed(changed);
         }
     }
 
-    /// Очищает city-war relation-set всех живых faction в signed map-order.
+ /// Очищает city-war relation-set всех живых faction в signed map-order.
     pub(crate) fn clear_all_city_faction_relations(&mut self) {
         for faction in self.factions.values_mut().flatten() {
             faction.clear_city_war_enemy_factions();
         }
     }
 
-    /// Публикует изменённые city-war relation-set в signed map-order.
+ /// Публикует изменённые city-war relation-set в signed map-order.
     pub(crate) fn update_all_city_enemy_faction_relations(
         &self,
         game: &CGame,
@@ -5964,20 +5505,20 @@ impl COrganizingCtrl {
             .collect()
     }
 
-    /// Проверяет literal ID в исходном list-order без изменения списка.
+ /// Проверяет literal ID в исходном list-order без изменения списка.
     pub(crate) fn is_union_application_reserved(&self, faction_id: i32) -> bool {
         self.request_establishment_union_players
             .iter()
             .any(|reserved_id| *reserved_id == faction_id)
     }
 
-    /// Добавляет ID в хвост `m_RequestEstaUnionPlayers`, не устраняя duplicate.
+ /// Добавляет ID в хвост `m_RequestEstaUnionPlayers`, не устраняя duplicate.
     pub(crate) fn push_to_establishment_list(&mut self, faction_id: i32) {
         self.request_establishment_union_players
             .push_back(faction_id);
     }
 
-    /// Удаляет первое совпадение, как terminal union callback.
+ /// Удаляет первое совпадение, как terminal union callback.
     pub(crate) fn remove_from_establishment_list(&mut self, faction_id: i32) -> bool {
         let Some(position) = self
             .request_establishment_union_players
@@ -6153,7 +5694,7 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Применяет полный результат войны за город в exact virtual-порядке.
+ /// Применяет полный результат войны за город в virtual-порядке.
     #[allow(
         clippy::too_many_arguments,
         reason = "аргументы являются четырьмя wire-полями и явными process owners"
@@ -6309,7 +5850,7 @@ impl COrganizingCtrl {
         Ok(report)
     }
 
-    /// Выполняет exact `OnPlayerInviteFaction` до выбранного union owner-а.
+ /// Выполняет `OnPlayerInviteFaction` до выбранного union owner-а.
     pub(crate) fn on_player_invite_faction<Effects>(
         &mut self,
         game: &CGame,
@@ -6448,7 +5989,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Выполняет exact prefix до синхронного persistent player-name lookup.
+ /// Выполняет prefix до синхронного persistent player-name lookup.
     pub(crate) fn prepare_faction_creation<Effects>(
         &mut self,
         game: &CGame,
@@ -6509,7 +6050,7 @@ impl COrganizingCtrl {
         Ok(FactionCreationPreparation::ReadyForPersistentLookup)
     }
 
-    /// Завершает `CreateFaction` после exact-position persistent lookup.
+ /// Завершает `CreateFaction` после -position persistent lookup.
     #[allow(
         clippy::too_many_arguments,
         reason = "аргументы сохраняют исходную CreateFaction boundary"
@@ -6615,7 +6156,7 @@ impl COrganizingCtrl {
         }))
     }
 
-    /// Синхронная exact composition для владельцев с готовым name-index.
+ /// Синхронная composition для владельцев с готовым name-index.
     #[allow(
         clippy::too_many_arguments,
         reason = "аргументы сохраняют исходную CreateFaction boundary"
@@ -6656,10 +6197,10 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Проверяет две faction и запускает exact подтверждение учреждения союза.
-    ///
-    /// Переданное старому API имя намеренно не используется: EXE копирует в
-    /// endpoint имя первой faction через virtual slot `+0x60`.
+ /// Проверяет две faction и запускает подтверждение учреждения союза.
+ ///
+ /// Переданное старому API имя намеренно не используется: EXE копирует в
+ /// endpoint имя первой faction через virtual slot `+0x60`.
     pub(crate) fn create_confederation<Effects>(
         &mut self,
         game: &CGame,
@@ -6747,8 +6288,8 @@ impl COrganizingCtrl {
         ) {
             Ok(session) => session,
             Err(source) => {
-                // CreateSession/allocation failure старого кода приводил к
-                // null dereference. Это внутренний UB, не wire-семантика.
+ // CreateSession/allocation failure старого кода приводил к
+ // null dereference. Это внутренний UB, не wire-семантика.
                 let first_reservation_removed =
                     self.remove_from_establishment_list(first_faction_id);
                 let second_reservation_removed =
@@ -6773,7 +6314,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Завершает exact `CreateUnion::OnAsyncCallback` в organizing owner-е.
+ /// Завершает `CreateUnion::OnAsyncCallback` в organizing owner-е.
     #[allow(
         clippy::too_many_arguments,
         reason = "terminal хранит exact поля локального C++ callback-owner-а"
@@ -7109,9 +6650,9 @@ impl COrganizingCtrl {
         }))
     }
 
-    /// Удаляет первое совпадение каждого ID в машинном порядке first/second.
-    /// RAW ошибочно вставляет `return` после первого erase; exact EXE
-    /// `0x0043930C..0x00439388` безусловно продолжает ко второму проходу.
+ /// Удаляет первое совпадение каждого ID в машинном порядке first/second.
+ /// оригинал ошибочно вставляет `return` после первого erase;
+ /// безусловно продолжает ко второму проходу.
     fn finish_confederation_creation_reservations(
         &mut self,
         first_faction_id: i32,
@@ -7124,7 +6665,7 @@ impl COrganizingCtrl {
             self.remove_from_establishment_list(second_faction_id);
     }
 
-    /// Выполняет preflight и запускает `TransferIOwnerCity` в машинном порядке.
+ /// Выполняет preflight и запускает `TransferIOwnerCity` в машинном порядке.
     #[allow(
         clippy::too_many_arguments,
         reason = "явные Game/country/war/session owners заменяют process singletons"
@@ -7319,7 +6860,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Завершает callback: снимает обе reservation и при approve передаёт город.
+ /// Завершает callback: снимает обе reservation и при approve передаёт город.
     pub(crate) fn finish_city_transfer<Effects>(
         &mut self,
         game: &CGame,
@@ -7426,7 +6967,7 @@ impl COrganizingCtrl {
         Ok(report)
     }
 
-    /// Завершает result/timeout локального `PlayerApplyForJoinConfeder`.
+ /// Завершает result/timeout локального `PlayerApplyForJoinConfeder`.
     pub(crate) fn finish_union_application<Effects>(
         &mut self,
         game: &CGame,
@@ -7570,7 +7111,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Завершает result/timeout локального `InviteJoinConfeder`.
+ /// Завершает result/timeout локального `InviteJoinConfeder`.
     #[allow(
         clippy::too_many_arguments,
         reason = "аргументы повторяют exact поля callback-owner-а"
@@ -7715,12 +7256,12 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Отправляет полный union snapshot каждому готовому клиенту одной faction.
-    ///
-    /// Нулевой union ID сначала разрешается через `IsFreeFaction`. Получатели
-    /// обходятся по signed member-key, но в сообщение попадает live player ID;
-    /// snapshot заново строится для каждого получателя, как virtual
-    /// `CUnion::AddToByteArray` в исходном цикле.
+ /// Отправляет полный union snapshot каждому готовому клиенту одной faction.
+ ///
+ /// Нулевой union ID сначала разрешается через `IsFreeFaction`. Получатели
+ /// обходятся по signed member-key, но в сообщение попадает live player ID;
+ /// snapshot заново строится для каждого получателя, как virtual
+ /// `CUnion::AddToByteArray` в исходном цикле.
     pub(crate) fn add_union_to_client_by_faction_id(
         &mut self,
         game: &CGame,
@@ -7766,7 +7307,7 @@ impl COrganizingCtrl {
         send_union_snapshot_to_faction(game, factions, union, faction_id)
     }
 
-    /// Удаляет player из apply-list каждой faction и на normal return даёт `0`.
+ /// Удаляет player из apply-list каждой faction и на normal return даёт `0`.
     pub(crate) fn remove_person_from_apply_faction_list(
         &mut self,
         game: &CGame,
@@ -7788,7 +7329,7 @@ impl COrganizingCtrl {
         RemovePersonFromApplyFactionListOutcome::Completed { removals }
     }
 
-    /// Возвращает ID первой faction с положительным apply-membership.
+ /// Возвращает ID первой faction с положительным apply-membership.
     pub(crate) fn faction_by_player_in_apply_list(&self, player_id: i32) -> ApplyFactionLookup {
         for (&map_key, faction) in &self.factions {
             let Some(faction) = faction.as_deref() else {
@@ -7801,7 +7342,7 @@ impl COrganizingCtrl {
         ApplyFactionLookup::NoFaction
     }
 
-    /// Связывает один точный SetPlayerOrganizing с достигнутым region snapshot.
+ /// Связывает один точный SetPlayerOrganizing с действующим region snapshot.
     pub(crate) const fn player_updater<'a>(
         &'a self,
         region_types: &'a BTreeMap<i32, Option<u16>>,
@@ -7812,7 +7353,7 @@ impl COrganizingCtrl {
         }
     }
 
-    /// Выполняет faction enter-ветвь и затем безусловную top-info отправку.
+ /// Выполняет faction enter-ветвь и затем безусловную top-info отправку.
     pub(crate) fn on_player_enter_game(
         &mut self,
         game: &CGame,
@@ -7837,8 +7378,8 @@ impl COrganizingCtrl {
                         &outcome,
                         MemberEnterOutcome::Blocked(_) | MemberEnterOutcome::Published(Err(_))
                     ) {
-                        // Старый faction callback на этих UB-границах не
-                        // возвращался бы к последующей top-info отправке.
+ // Старый faction callback на этих UB-границах не
+ // возвращался бы к последующей top-info отправке.
                         return PlayerEnterGameOutcome::BlockedDuringFactionCallback {
                             faction_id,
                             outcome,
@@ -7856,7 +7397,7 @@ impl COrganizingCtrl {
         PlayerEnterGameOutcome::Completed { faction, top_info }
     }
 
-    /// Выполняет единственную faction exit-ветвь без дополнительных эффектов.
+ /// Выполняет единственную faction exit-ветвь без дополнительных эффектов.
     pub(crate) fn on_player_exit_game(
         &mut self,
         game: &CGame,
@@ -7893,7 +7434,7 @@ impl COrganizingCtrl {
         PlayerExitGameOutcome::Dispatched(faction)
     }
 
-    /// Сохраняет новую top-info запись в хвост и возвращает process-static ID.
+ /// Сохраняет новую top-info запись в хвост и возвращает process-static ID.
     pub(crate) fn add_one_top_info(&mut self, timer_flag: i32, param: i32, info: &[u8]) -> i32 {
         let id = NEXT_TOP_INFO_ID.fetch_add(1, Ordering::Relaxed);
         let started_at_ms = legacy_tick_ms();
@@ -7907,7 +7448,7 @@ impl COrganizingCtrl {
         id
     }
 
-    /// Удаляет все истёкшие timer-2 записи, сохраняя порядок остальных.
+ /// Удаляет все истёкшие timer-2 записи, сохраняя порядок остальных.
     pub(crate) fn run_top_info_expiry(&mut self) -> usize {
         let now_ms = legacy_tick_ms();
         let old_len = self.top_infos.len();
@@ -7918,12 +7459,12 @@ impl COrganizingCtrl {
         old_len - self.top_infos.len()
     }
 
-    /// Выполняет полный ordered countdown, disband-dispatch и top-info expiry.
-    ///
-    /// Пустой технический slot не создаётся normal ingress и возникает только
-    /// на время синхронного split-borrow join-path; minute-фаза начинается
-    /// после его возврата. Если такой slot всё же встретился, он пропускается,
-    /// а не превращается в новый observable отказ всего main loop.
+ /// Выполняет полный ordered countdown, disband-dispatch и top-info expiry.
+ ///
+ /// Пустой технический slot не создаётся normal ingress и возникает только
+ /// на время синхронного split-borrow join-path; minute-фаза начинается
+ /// после его возврата. Если такой slot всё же встретился, он пропускается,
+ /// а не превращается в новый observable отказ всего main loop.
     pub(crate) fn run<Disband>(
         &mut self,
         minute_delta: i32,
@@ -7982,7 +7523,7 @@ impl COrganizingCtrl {
         })
     }
 
-    /// Рассылает одну top-info запись всем GameServer с player ID `0`.
+ /// Рассылает одну top-info запись всем GameServer с player ID `0`.
     pub(crate) fn send_top_info_to_client(
         &self,
         game: &CGame,
@@ -7996,7 +7537,7 @@ impl COrganizingCtrl {
         message.send_all(sender.as_ref())
     }
 
-    /// Отправляет одному игроку все неистёкшие top-info записи в list-порядке.
+ /// Отправляет одному игроку все неистёкшие top-info записи в list-порядке.
     pub(crate) fn send_all_top_info_to_one_client(
         &self,
         game: &CGame,
@@ -8710,9 +8251,9 @@ fn finish_billboard_rows(
         }
     });
 
-    // Исходный `std::map<tagKey, ...>` не имел faction-ID tie-break:
-    // одинаковые number и шесть сравниваемых полей времени оставляли первую
-    // faction из signed map-order. Stable sort + retain сохраняют именно её.
+ // Исходный `std::map<tagKey,...>` не имел faction-ID tie-break:
+ // одинаковые number и шесть сравниваемых полей времени оставляли первую
+ // faction из signed map-order. Stable sort + retain сохраняют именно её.
     let mut previous_key = None;
     rows.retain(|(number, time, _)| {
         let key = (*number, billboard_time_fields(*time));

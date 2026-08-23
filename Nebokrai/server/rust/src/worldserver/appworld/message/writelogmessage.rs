@@ -1,106 +1,99 @@
 //! WorldServer dispatcher-owner `OnWriteLogMessage`.
 //!
-//! Исходный dispatcher RVA `0x000A8AB0` и все его wire-ветки `0x60201..0x60218`,
+//! Исходный dispatcher и все его wire-ветки `0x60201..0x60218`,
 //! включая reserved no-op `0x60211..0x60213`, материализованы действующим
 //! Rust-owner-ом.
-//! Точная пара:
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; исходный owner
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\writelogmessage.cpp:18`.
 //!
-//! Ветка читает `char type`, строки с exact границами `0x200/0x100`, signed
+//! Ветка читает `char type`, строки с границами `0x200/0x100`, signed
 //! money/player, а только для type `0` — item-name `0x80` и signed amount;
 //! последний `long` форматируется как IPv4 в порядке младшего байта первым.
 //! Amount `>= 1001` не ставит DB-write и не публикует live-запись, а пишет
 //! исходный operator/file error. В обычной ветке SQL сначала попадал в
 //! `CWriteLogQueue`, затем тот же caller-time немедленно публиковался в
 //! `CIncrementLog`; DB commit не ожидался. Это наблюдаемое расхождение со
-//! старым Linux-донором, который перенёс Add в commit callback, не перенесено.
-//! `VERIFIED_DISASSEMBLY`: exact `0x004A9D3D..0x004AA04F` обнуляет account и
+//! обнуляет account и
 //! level, при найденном player копирует account и берёт byte `[player+0x59C]`,
 //! проверяет signed amount через `cmp 0x3E8/jle`, вызывает `GetLocalTime`,
-//! затем `PushWriteLogData` `0x004AA023` и только после него `CIncrementLog::Add`
-//! `0x004AA048`. Null player поэтому сохраняет пустой account и level `0`.
-//! Ветка carriage `0x6020E` по exact `0x004AA07A..0x004AA127` читает три
+//! затем `PushWriteLogData` и только после него `CIncrementLog::Add`
+//! Null player поэтому сохраняет пустой account и level `0`.
+//! Ветка carriage `0x6020E` по читает три
 //! signed long, два signed short и ещё один signed long, затем снимает один
 //! `SYSTEMTIME` и ставит INSERT в общий FIFO. Машинный `_sprintf` неожиданно
 //! подставляет `wDayOfWeek`, а не `wMonth`: event-time имеет вид
 //! `year-weekday-day hour:minute:second`. Это DB-наблюдаемый quirk сохранён;
-//! Linux-донор исправлял его на обычную календарную дату без доказательства.
-//! Ветка plain log `0x6020F` по exact `0x004AA12C..0x004AA207` читает signed
+//! Ветка plain log `0x6020F` по читает signed
 //! player ID/log type и строку с границей `0x100`. Найденный player даёт полные
 //! visible name/account; null lookup буквально пишет `"null"` в оба поля.
 //! Только content проходил `CGame::CheckPoint`; Tiberius bind сохраняет то же
 //! штатное значение без ручного escaping. Donor-truncation `32/32/255` в
 //! машине отсутствует и не перенесена. Неэкранированные name/account оригинала
 //! также bind-ятся как данные: SQL breakage/injection не является контрактом.
-//! Ветка fairy `0x60210` по exact `0x004AA20C..0x004AA850` снимает время до
+//! Ветка fairy `0x60210` по снимает время до
 //! заголовка, затем читает type/player и до subtype payload требует online
 //! player. Ошибки сохраняют исходные тексты `err:palyerid:%d is not online` и
 //! `fairy log ! err type:%d`; unsigned jump-table принимает только type `0..4`.
-//! Пять вариантов grow/take/implantation/incubate/syncretize сохраняют exact
+//! Пять вариантов grow/take/implantation/incubate/syncretize сохраняют
 //! wire-порядок, GUID marker и границы строк `0x40/0x20`. Grow-rate читается как
 //! unsigned 32-bit, умножается на single `0.0001` и попадает в SQL с четырьмя
 //! знаками. Fairy-time сохраняет тот же наблюдаемый weekday-вместо-month quirk,
 //! что carriage. `CheckPoint` и неэкранированный grow goods-id заменены bind:
 //! SQL injection/breakage были внутренним дефектом, не контрактом Miracle.
-//! Auction `0x60214` по exact `0x004AA88C..0x004AA9BD` копирует wire-node
+//! Auction `0x60214` по копирует wire-node
 //! `0x150`, заменяет только `guidKey` новым системным GUID, ставит signed INSERT
 //! в FIFO и сразу после enqueue публикует тот же node в live `CAuctionLog`.
 //! SQL получает normal `year-month-day` caller-time, а live node сохраняет
 //! собственный wire `SYSTEMTIME`. Donor-валидация полей, принудительный
 //! `bNotice=0` и commit-before-live меняли этот контракт и не перенесены.
-//! Sale `0x60215..0x60217` по exact `0x004AA9C2..0x004AAC24` сохраняет три
-//! разных payload-порядка и `%u`-трактовку всех long. Отсутствие NUL в raw
+//! Sale `0x60215..0x60217` по сохраняет три
+//! разных payload-порядка и `%u`-трактовку всех long. Отсутствие NUL в оригинал
 //! `strDescri[256]` больше не даёт читать память за node: owned bytes и bind
 //! устраняют только внутренний memory/SQL defect. Если системный генератор GUID
 //! откажет, точное содержимое старого out-buffer неизвестно и проход явно
 //! возвращает safe block без придуманной DB/live записи.
-//! Player progress `0x60206..0x60208` по exact
-//! `0x004A94AC..0x004A96CB` читает level/experience/death payload в трёх
+//! Player progress `0x60206..0x60208` по
+//! читает level/experience/death payload в трёх
 //! разных порядках. Player ID и long-поля попадают в SQL как signed `%d`, а
 //! оба level и log-type расширяются из char через `movzx`; отсутствующий player
-//! даёт буквальное имя `"NULL"`. Старый Linux-донор ошибочно сменил player ID
 //! на `%u`; это расхождение не перенесено. Параметризация исправляет только
 //! неэкранированное имя и не добавляет отсутствующую в машине валидацию.
-//! Team/killer `0x60209..0x6020A` по exact `0x004A96CB..0x004A9909` независимо
+//! Team/killer `0x60209..0x6020A` по независимо
 //! lookup-ят обоих игроков, подставляя `"NULL"` для каждого отсутствующего, и
 //! расширяют log-type через `movzx`. Killer сохраняет обе wire-координаты.
 //! Team читает обе, но machine `_sprintf` дважды передаёт последний `pos_y`,
 //! поэтому DB `pos_x == pos_y`; этот наблюдаемый quirk сохранён явно, тогда как
-//! Linux-донор молча использовал прочитанный `pos_x`.
-//! Chat/change-map `0x6020B..0x6020C` по exact
-//! `0x004A9909..0x004A9D38` используют signed long и unsigned chat/log type.
+//! Chat/change-map `0x6020B..0x6020C` по
+//! используют signed long и unsigned chat/log type.
 //! Chat отбрасывает пустой content до enqueue; private type `5` единственный
-//! дочитывает receiver ID, остальные подтверждённые типы получают exact метки
+//! дочитывает receiver ID, остальные подтверждённые типы получают метки
 //! `<public>/<Region>/<team>/<GM-code>/<world>/<country>`. Jump-table типов
 //! `2`, `3` и значений вне `0..8` неожиданно попадает прямо в общий enqueue с
-//! пустым SQL-buffer. `PushWriteLogData` `0x004ECC40` пустую строку не
+//! пустым SQL-buffer. `PushWriteLogData` пустую строку не
 //! фильтрует, поэтому этот DB-worker quirk сохранён отдельной typed-командой;
-//! Linux-донор ошибочно делал ранний `return`. Параметризация заменила только
 //! `FixSingleQuotes` и неэкранированные имена. Change-map сохраняет обычный
 //! wire-порядок source/destination координат и не добавляет валидацию.
-//! Goods upgrade/craft `0x60203..0x60205` по exact
-//! `0x004A8F88..0x004A94A7` читает пары GUID/name: upgrade — item `0x100` и
+//! Goods upgrade/craft `0x60203..0x60205` по
+//! читает пары GUID/name: upgrade — item `0x100` и
 //! четыре gem `0x80`, exchange/jewelry — пары с `0x40`. Затем идут signed map
 //! и coordinate/amount long; upgrade также расширяет log-type через `movzx`.
 //! Lookup имени игрока даёт literal `"NULL"`; только upgrade/jewelry goods-name
 //! проходил через `CGame::CheckPoint`. Bind сохраняет штатные bytes без ручного
 //! quoting и не переносит donor-added лимит 32.
-//! Goods trade/basic `0x60201..0x60202` по exact
-//! `0x004A8B74..0x004A8F83` сохраняют wire-порядок всех signed money/map/
+//! Goods trade/basic `0x60201..0x60202` по
+//! сохраняют wire-порядок всех signed money/map/
 //! coordinate/amount полей, unsigned log-type и little-endian IPv4 bytes.
 //! Trade lookup-ит seller/purchaser после обоих наборов координат и пишет
 //! `"NULL"` независимо для каждого. Basic goods расширяет wire `short pk_count`
 //! через `movzx`, поэтому хранит `u16`; goods amount идёт перед name `0x100`,
 //! затем price/map/x/y. `CheckPoint` для goods-name заменён bind без изменения
 //! штатного текста; donor-added полная payload-validation не перенесена.
-//! Exact outer jump-table VA `0x004AACA8` направляет все три wire ID
-//! `0x60211..0x60213` прямо в epilogue `0x004AAC87`; Rust поэтому считает их
+//! outer jump-table VA направляет все три wire ID
+//! `0x60211..0x60213` прямо в epilogue; Rust поэтому считает их
 //! обработанными no-op, не создавая ложный pending owner. Ветка `0x60218` по
-//! `0x004AAC26..0x004AAC82` читает пять signed long и без иных side effects
+//! читает пять signed long и без иных side effects
 //! ставит `ciqinglog` INSERT в тот же FIFO.
 //!
-//! Rust хранит параметризуемую DB-команду вместо SQL-строки: будущий Tiberius
+//! Rust хранит параметризуемую DB-команду вместо SQL-строки: связанный Tiberius
 //! worker не должен повторять `_sprintf`, ручное quoting и stack buffers.
 //! Значения полей, FIFO-позиция и enqueue-before-publish сохраняются. Donor-
 //! added полная tail-validation и меньшие лимиты `32/255/32` отсутствуют в
@@ -524,8 +517,8 @@ pub(crate) enum WorldWriteLogCommand {
     FairyLog(WorldFairyLogWrite),
     AuctionLog(WorldAuctionLogWrite),
     AuctionSaleLog(WorldAuctionSaleLogWrite),
-    /// SQL `CAuctionLog::CollectNoNotice`, созданный только из typed GUID и
-    /// opttype аукционного журнала; сохраняет exact FIFO-публикацию owner-а.
+ /// SQL `CAuctionLog::CollectNoNotice`, созданный только из typed GUID и
+ /// opttype аукционного журнала; сохраняет FIFO-публикацию owner-а.
     AuctionNoticeSql(String),
     PlayerProgressLog(WorldPlayerProgressLogWrite),
     PlayerRelationLog(WorldPlayerRelationLogWrite),
@@ -533,7 +526,7 @@ pub(crate) enum WorldWriteLogCommand {
     GoodsLog(WorldGoodsLogWrite),
     GoodsCraftLog(WorldGoodsCraftLogWrite),
     ChatLog(WorldChatLogWrite),
-    /// Exact chat jump-table ставил в FIFO очищенный SQL-buffer.
+ /// chat jump-table ставил в FIFO очищенный SQL-buffer.
     LegacyEmptyChatSql { log_type: u8 },
     ChangeMapLog(WorldChangeMapLogWrite),
     PlayerDeleteLog(WorldPlayerDeleteLogWrite),
@@ -761,7 +754,7 @@ pub(crate) enum WorldWriteLogMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет достигнутые write-log ветки, exact reserved no-op IDs и default
+/// Исполняет действующие write-log ветки, reserved no-op IDs и default
 /// внешнего switch без side effects.
 pub(crate) fn on_write_log_message(
     game: &mut CGame,

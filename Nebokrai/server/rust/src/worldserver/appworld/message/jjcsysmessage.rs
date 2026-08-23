@@ -1,10 +1,9 @@
 //! Входящий JJC-owner WorldServer.
 //!
-//! `OnJJcSystemMessage` RVA `0x000A45E0` и leaf-ветви RVA
-//! `0x000A43F0/0x000A4540` — `IMPLEMENTED / VERIFIED_DISASSEMBLY` по точной
+//! `OnJJcSystemMessage` и leaf-ветви
+//! — часть контракта owner-а
 //! паре `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`.
 //! Исходный owner:
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\jjcsysmessage.cpp`.
 //!
 //! Dispatcher сохраняет numeric gate `bUseJJc`, порядок cursor-чтений и
 //! opcodes `0x60901..0x60907`. В частности, `0x60901` после отсутствующего

@@ -1,25 +1,22 @@
-//! WorldServer dispatcher-owner `OnGMMessage`.
+//! WorldServer dispatcher-owner `OnGMMessage` из точной пары EXE/PDB.
 //!
-//! Статус `IMPLEMENTED`: exact ветви `0x5FF01` RVA
-//! `0x000AB3C8..0x000AB425` и `0x5FF05` RVA `0x000AB98C..0x000ABA09`
-//! материализуют online-count и online-player-ID queries. Общий owner до
+//! Ветки `0x5FF01` и `0x5FF05` реализуют online-count и online-player-ID
+//! queries. Общий owner до
 //! switch сначала читает request/player ID. Первая ветвь затем читает script
 //! ID, берёт 32-битное число `m_lOnlinePlayer` и строит
 //! `0x7FC01 + request_id + online_count + script_id`; вторая читает bounded
 //! имя и script ID и строит `0x7FC05 + request_id + found_id + script_id`.
 //! Оба ответа уходят в исходный socket. Порядок чтения, signed wire-биты и
-//! `SendToSocket`
-//! подтверждены машинным кодом `Nworldserver.exe`; добавленные Linux-веткой
-//! clamp и error-log отсутствуют в EXE и не перенесены.
+//! `SendToSocket`. Дополнительные clamp и error-log в контракт не входят.
 //! Также материализованы transport-only ветви `0x5FF02/03/07/08/09/0A/0D/0E/0F`
 //! и `0x5FF10/11/13/14/15/16`: они создают либо переписывают точные response
 //! opcodes, сохраняют исходный payload, где это делал EXE, и используют ровно
 //! исходные `SendToSocket`, `SendToMapID` либо `SendAll`.
-//! Region query `0x5FF04` сохраняет case-sensitive `GetRegion(name)`, exact
+//! Region query `0x5FF04` сохраняет case-sensitive `GetRegion(name)`,
 //! `s_mapGameServer[index].bConnected` gate и общий `SendAll` ответа `0x7FC04`;
-//! donor-замены через current socket и ответ только источнику не перенесены.
-//! Reload `0x5FF06` вызывает уже достигнутый `CGame::ReLoad(profile,true,true)`
-//! без добавленного донором failure-log-а.
+//! ответ идёт через общий `SendAll`, а не только источнику.
+//! Reload `0x5FF06` вызывает уже действующий `CGame::ReLoad(profile,true,true)`
+//! без дополнительного failure-log-а.
 //! Kick-map `0x5FF0B` проходит ordered region map по фактическому
 //! `pRegion->ID` и сохраняет исходный многократный `SendToMapID`; null owners
 //! безопасно пропускаются вместо внутреннего UB старого разыменования.
@@ -27,7 +24,7 @@
 //! `0x7FC0B`; отсутствие online-цели возвращает requester-у `0x7FC0C` с
 //! исходным string-table ключом `WS0114`.
 //! Ban `0x5FF12` сначала ищет account в полном player-map без online-gate,
-//! при пустом значении вызывает достигнутый `CRsPlayer::GetCDKey`, а затем
+//! при пустом значении вызывает действующий `CRsPlayer::GetCDKey`, а затем
 //! только для непустого account отправляет `0x20001 + account + minutes`
 //! неприоритетному LoginServer client. Requester ID намеренно лишь считывается:
 //! EXE не проверял права и не строил ответ. Две последовательные ADO-операции
@@ -35,12 +32,9 @@
 //!
 //! Rust `VecDeque::len` шире старого 32-битного `_Mysize`; значение вне
 //! legacy-range безопасно блокируется typed-исходом, а не молча обрезается.
-//! Полный exact switch охватывает `0x5FF01..=0x5FF16`; неизвестный opcode
+//! Полный switch охватывает `0x5FF01..=0x5FF16`; неизвестный opcode
 //! приходит к общему epilogue уже после безусловного чтения request ID, но без
 //! последующих side effects и без передачи следующему owner-у.
-//! Raw ниже сохранён как provenance уже достигнутого owner-а. Точная пара:
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, исходный owner
-//! `e:\svn\fengyun_russia_dev\server\worldserver\appworld\message\gmmessage.cpp`.
 
 use std::ffi::CString;
 
@@ -181,7 +175,7 @@ pub(crate) enum WorldGmOnlinePlayerCountOutcome {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGmMessageOutcome {
-    /// Default полного `OnGMMessage` после его безусловного чтения request ID.
+ /// Default полного `OnGMMessage` после его безусловного чтения request ID.
     NoOp {
         request_type: i32,
         request_id: i32,
@@ -262,7 +256,7 @@ pub(crate) enum WorldGmMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет полный достигнутый GM-owner в exact FIFO-порядке.
+/// Исполняет полный действующий GM-owner в FIFO-порядке.
 pub(crate) async fn on_gm_message(
     game: &mut CGame,
     jjc: &mut CJJcSystem,

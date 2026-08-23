@@ -1,20 +1,17 @@
 //! Владелец промежуточного `CWorldWarRegion` исторического WorldServer.
 //!
-//! Constructor RVA `0x000DD3B0`, `Load` RVA `0x000DD480` и serializer RVA
-//! `0x000DD3F0` имеют статус `IMPLEMENTED`; exact EXE подтверждает три signed
+//! Constructor, `Load` и serializer
+//! действуют; подтверждает три signed
 //! DWORD по offsets `+0x120/+0x124/+0x128` после единственного
 //! `CWorldRegion`. Сам base-constructor их не назначает, поэтому Rust хранит
-//! `Option<i32>`; достигнутые Village/City constructors задают собственные
+//! `Option<i32>`; действующие Village/City constructors задают собственные
 //! `1/1/1` и `3/3/2`. `Load` всегда сначала выполняет полный base Load, затем
 //! независимо читает первый `#` из optional `regions/{id}.war`, но возвращает
 //! именно base-result. Serializer дописывает три DWORD после base snapshot.
-//! Virtual `DecordFromByteArray` RVA `0x000DD440` также `IMPLEMENTED`: он
+//! Virtual `DecordFromByteArray` также действует: он
 //! вызывает доказанный no-op World decoder, не меняет cursor и возвращает
 //! `true`. STL/compiler noise и destructors удалены в пользу стандартных
 //! Rust-механизмов.
-//! Точная пара `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! SHA-256 EXE `F3AC454DAF83E7E9C8F844C725BE2C5A24EFA946C27D75319CFCB68A2F466EF1`,
-//! PDB `04E2CC4CE1187A3AAB455566DDC39E72ED7568CAB0EDBD731B4F84629F6EF1E4`;
 //! исходные owners `worldwarregion.cpp/.h`. STL stream и allocation заменены
 //! заимствованными resource bytes и владением Rust; старый ABI не копируется.
 
@@ -44,7 +41,7 @@ pub(crate) struct CWorldWarRegion {
 }
 
 impl CWorldWarRegion {
-    /// Создаёт literal base-constructor state; три собственных DWORD не заданы.
+ /// Создаёт literal base-constructor state; три собственных DWORD не заданы.
     pub(crate) const fn with_constructor_base() -> Self {
         Self {
             base: CWorldRegion::with_constructor_region_base(),
@@ -54,7 +51,7 @@ impl CWorldWarRegion {
         }
     }
 
-    /// Применяет три значения конкретного derived constructor-а.
+ /// Применяет три значения конкретного derived constructor-а.
     pub(crate) const fn set_constructor_symbols(&mut self, total: i32, win: i32, vic: i32) {
         self.symbol_total_num = Some(total);
         self.win_vic_symbol_num = Some(win);
@@ -69,7 +66,7 @@ impl CWorldWarRegion {
         &mut self.base
     }
 
-    /// Выполняет base Load, затем optional war override, сохраняя base-result.
+ /// Выполняет base Load, затем optional war override, сохраняя base-result.
     pub(crate) fn load_from_context<Context, ResolveName>(
         &mut self,
         context: &mut Context,
@@ -89,7 +86,7 @@ impl CWorldWarRegion {
         Ok(loaded)
     }
 
-    /// Missing `.war` сохраняет constructor/previous values.
+ /// Missing `.war` сохраняет constructor/previous values.
     pub(crate) fn load_war_bytes(
         &mut self,
         bytes: Option<&[u8]>,
@@ -133,7 +130,7 @@ impl CWorldWarRegion {
         Ok(true)
     }
 
-    /// Derived override сохраняет доказанный no-op base decoder и возвращает `true`.
+ /// Derived override сохраняет доказанный no-op base decoder и возвращает `true`.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],
