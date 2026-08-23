@@ -25,6 +25,8 @@
 //! Как в связном `RefreshContainerOwners`, достигнутые equipment и
 //! battle-fairy containers принадлежат player type `400` с его numeric ID;
 //! остальные constructor-owned containers пока не материализованы.
+//! Exact `GetWarSoulGoods` читает headgear cell 10 и признаёт её боевой феей
+//! только при addon `GAP_BF_BATTLE_FAIRY` value-id 1, равном единице.
 //! Поэтому `from_send_state` остаётся явной assembly-границей уже
 //! восстановленного runtime. Figure передаётся как доказанный derived virtual
 //! fact; владение spatial state остаётся у `CMoveShape`.
@@ -32,6 +34,8 @@
 use super::container::cbattlefairycontainer::{BattleFairyCombineCheck, CBattleFairyContainer};
 use super::container::cequipmentcontainer::CEquipmentContainer;
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
+use super::goods::cgoods::CGoods;
+use super::goods::cgoodsbaseproperties::GAP_BF_BATTLE_FAIRY;
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::CMoveShape;
 use super::shape::{CShape, ShapeFigure, ShapeView};
@@ -187,6 +191,14 @@ impl CPlayer {
 
     pub(crate) const fn battle_fairy_container_mut(&mut self) -> &mut CBattleFairyContainer {
         &mut self.battle_fairy_container
+    }
+
+    /// Exact `GetWarSoulGoods`: боевой дух — только headgear в позиции 10,
+    /// чьё первое значение `GAP_BF_BATTLE_FAIRY` равно единице.
+    pub(crate) fn war_soul_goods(&self, factory: &CGoodsFactory) -> Option<&CGoods> {
+        self.equipment
+            .get_goods(10)
+            .filter(|goods| goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) == 1)
     }
 
     /// Достигнутая часть exact `RefreshContainerOwners`: owner ID должен быть
