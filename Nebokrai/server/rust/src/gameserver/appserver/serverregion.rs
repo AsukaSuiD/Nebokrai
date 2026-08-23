@@ -812,6 +812,12 @@ impl CServerRegion {
         self.owned_monsters.get_mut(&id)
     }
 
+    pub(crate) fn monster_base_property_keys(&self) -> impl Iterator<Item = &[u8]> {
+        self.owned_monsters
+            .values()
+            .filter_map(CMonster::base_property_key)
+    }
+
     pub(crate) fn add_npc<Context: ServerRegionNpcContext>(
         &mut self,
         setup: &ServerRegionNpcSetup,

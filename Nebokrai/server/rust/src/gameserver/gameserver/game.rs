@@ -776,6 +776,13 @@ pub(crate) enum GameSingleFilePublication {
     RepeatedOwnerFreed,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct MonsterBasePropertyRefreshReport {
+    pub(crate) monsters: usize,
+    pub(crate) resolved: usize,
+    pub(crate) missing: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ServerRegionOwner {
     Base(CServerRegion),
@@ -1234,6 +1241,23 @@ impl CGame {
         origin_name: &[u8],
     ) -> Option<&MonsterProperties> {
         get_monster_property_by_origin_name(&self.monster_registry, origin_name)
+    }
+
+    /// Эквивалент `RefreashAllMonsterBaseProperty`: old raw pointers заменены
+    /// key lookup-ами, поэтому проход подтверждает состояние всех live owners.
+    pub(crate) fn refresh_all_monster_base_property(&self) -> MonsterBasePropertyRefreshReport {
+        let mut report = MonsterBasePropertyRefreshReport::default();
+        for region in self.regions.values() {
+            for key in region.base().monster_base_property_keys() {
+                report.monsters = report.monsters.wrapping_add(1);
+                if self.find_monster_property_by_origin_name(key).is_some() {
+                    report.resolved = report.resolved.wrapping_add(1);
+                } else {
+                    report.missing = report.missing.wrapping_add(1);
+                }
+            }
+        }
+        report
     }
 
     /// Сохраняет исходный `std::map::operator[] = pointer`: повторный ID
@@ -2708,20 +2732,6 @@ impl ShapeResolver for CGame {
 // RVA: 0x0000A48A
 // ADDRESS: 0040a48a
 // PROTOTYPE: undefined Catch@0040a48a()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::RefreashAllMonsterBaseProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1052
-// RVA: 0x0000A890
-// ADDRESS: 0040a890
-// PROTOTYPE: void __thiscall RefreashAllMonsterBaseProperty(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

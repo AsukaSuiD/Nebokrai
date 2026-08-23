@@ -104,7 +104,7 @@ use crate::gameserver::appserver::skills::skillfactory::{
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameNetworkInitializationError, GameScriptResourceContext, GameSingleFilePublication,
-    ServerRegionOwner,
+    MonsterBasePropertyRefreshReport, ServerRegionOwner,
 };
 use crate::gameserver::gameserver::honorranks::{HonorRanksDecodeError, HonorRanksDecodeReport};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
@@ -475,8 +475,7 @@ pub(crate) fn dispatch_monster_list_startup(
     message: &mut CMessage,
     game: &mut CGame,
     mut add_log_text: impl FnMut(&[u8]),
-    mut refresh_all_monster_base_property: impl FnMut(&mut CGame),
-) -> Option<Result<MonsterListDecodeReport, MonsterListDecodeError>> {
+) -> Option<Result<MonsterListStartupReport, MonsterListDecodeError>> {
     if selector != MONSTER_LIST_SELECTOR {
         return None;
     }
@@ -487,8 +486,17 @@ pub(crate) fn dispatch_monster_list_startup(
         Err(error) => return Some(Err(error)),
     };
     add_log_text(b"Initial SI_MONSTERLIST...OK!");
-    refresh_all_monster_base_property(game);
-    Some(Ok(report))
+    let refreshed = game.refresh_all_monster_base_property();
+    Some(Ok(MonsterListStartupReport {
+        decoded: report,
+        refreshed,
+    }))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MonsterListStartupReport {
+    pub(crate) decoded: MonsterListDecodeReport,
+    pub(crate) refreshed: MonsterBasePropertyRefreshReport,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
