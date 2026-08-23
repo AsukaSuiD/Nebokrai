@@ -368,7 +368,7 @@ use crate::worldserver::worldserver::game::{
     WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
     WorldPlayerSaveResponseProgress, WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
     WorldRegionParamDecodeOutcome, WorldRegionChangePlayerTransition,
-    WorldRegionChangeTeamUpdate, WorldSaveThreadHandleState, WorldSaveThreadJob,
+    WorldRegionChangeTeamUpdate, WorldSaveRuntimeContext, WorldSaveThreadHandleState,
     WorldSaveThreadLaunchRequest,
     WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner, prepare_save_thread_launch,
 };
@@ -1731,13 +1731,13 @@ pub(crate) fn on_login_client_reconnected(
 
 /// Выполняет snapshot/cleanup хвост завершённой ветви `0x5FA03`.
 ///
-/// Счётчик DB-ответов уже сброшен caller-ом. Handle replacement и внешний
-/// launcher достигаются только после успешных snapshot/cleanup.
+/// Счётчик DB-ответов уже сброшен caller-ом. Handle replacement и передача job
+/// process save-owner-у достигаются только после успешных snapshot/cleanup.
 #[allow(
     clippy::too_many_arguments,
     reason = "исходный handler повторно обращался к тем же singleton/static владельцам"
 )]
-pub(crate) fn materialize_completed_save_response_snapshot<LaunchSaveThread>(
+pub(crate) fn materialize_completed_save_response_snapshot(
     game: &mut CGame,
     registry: &GoodsBasePropertiesRegistry,
     organizing_ctrl: &mut COrganizingCtrl,
@@ -1750,15 +1750,8 @@ pub(crate) fn materialize_completed_save_response_snapshot<LaunchSaveThread>(
     gods_battle: &CGodsBattleConf,
     lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
     save_thread_handle: &mut WorldSaveThreadHandleState,
-    launch_save_thread: &mut LaunchSaveThread,
-) -> Result<WorldCompletedSaveResponseLaunchReport, WorldGenerateDbDataBlock>
-where
-    LaunchSaveThread: FnMut(
-            &WorldSaveThreadLaunchRequest,
-            WorldSaveThreadJob,
-        ) -> WorldSaveThreadHandleState
-        + ?Sized,
-{
+    save_runtime: &mut dyn WorldSaveRuntimeContext,
+) -> Result<WorldCompletedSaveResponseLaunchReport, WorldGenerateDbDataBlock> {
     let snapshot = game.generate_db_data(
         registry,
         organizing_ctrl,
@@ -1781,7 +1774,7 @@ where
         gods_battle,
         lifecycle,
     );
-    let resulting_handle = launch_save_thread(&launch, job);
+    let resulting_handle = save_runtime.launch(&launch, job);
     *save_thread_handle = resulting_handle;
     Ok(WorldCompletedSaveResponseLaunchReport {
         snapshot,
@@ -1803,10 +1796,7 @@ pub(crate) async fn on_server_message(
     honor_ranks: &mut CHonorRanks,
     save_lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
     save_thread_handle: &mut WorldSaveThreadHandleState,
-    launch_save_thread: &mut dyn FnMut(
-        &WorldSaveThreadLaunchRequest,
-        WorldSaveThreadJob,
-    ) -> WorldSaveThreadHandleState,
+    save_runtime: &mut dyn WorldSaveRuntimeContext,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     session_factory: &mut CSessionFactory,
     general_variables: Option<&mut CVariableList>,
@@ -2144,7 +2134,7 @@ pub(crate) async fn on_server_message(
                         gods_battle,
                         Arc::clone(&save_lifecycle),
                         save_thread_handle,
-                        launch_save_thread,
+                        save_runtime,
                     ) {
                         Ok(report) => WorldPlayerSaveMaterialization::Launched(report),
                         Err(block) => WorldPlayerSaveMaterialization::Blocked(block),

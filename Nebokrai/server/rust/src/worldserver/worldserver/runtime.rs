@@ -91,8 +91,8 @@ use super::game::{
     CGame, WorldGameDatabaseInitialization, WorldGameDatabaseOwner, WorldGameInitContext,
     WorldGameInitCallbacks, WorldGameInitOperatorNotice, WorldGameInitResult,
     WorldGameInitWorkerKind, WorldPlayerDataLoadOwner, WorldPlayerLoadDataAdapter,
-    WorldReloadContext, WorldSaveThreadHandleState, WorldSaveThreadJob, WorldSaveThreadReport,
-    save_thread_func,
+    WorldReloadContext, WorldSaveRuntimeContext, WorldSaveThreadHandleState,
+    WorldSaveThreadJob, WorldSaveThreadLaunchRequest, WorldSaveThreadReport, save_thread_func,
 };
 use super::honorranks::CHonorRanks;
 use super::playerranks::CPlayerRanks;
@@ -353,7 +353,7 @@ pub(crate) struct WorldSaveWorker {
     largess: Arc<TiberiusLargess>,
     log: WorldLogTextOwner,
     serialization: Arc<tokio::sync::Mutex<()>>,
-    handle: Option<JoinHandle<WorldSaveWorkerCompletion>>,
+    handles: Vec<JoinHandle<WorldSaveWorkerCompletion>>,
     retained_jobs: Vec<WorldSaveThreadJob>,
     retained_serializations: Vec<tokio::sync::OwnedMutexGuard<()>>,
 }
@@ -373,7 +373,7 @@ impl WorldSaveWorker {
             largess,
             log,
             serialization: Arc::new(tokio::sync::Mutex::new(())),
-            handle: None,
+            handles: Vec::new(),
             retained_jobs: Vec::new(),
             retained_serializations: Vec::new(),
         }
@@ -383,9 +383,13 @@ impl WorldSaveWorker {
         Arc::clone(&self.serialization)
     }
 
-    /// Закрывает прежний завершившийся handle и запускает exact background role.
+    /// Запускает очередной exact background role, не ожидая предыдущий поток.
+    ///
+    /// Исходный caller закрывал только kernel handle: уже запущенный save-thread
+    /// продолжал работу и сериализовался внутри `SaveThreadFunc`. Rust хранит
+    /// join-handle-ы до release, но собирает здесь лишь уже завершившиеся.
     pub(crate) fn launch(&mut self, job: WorldSaveThreadJob) -> WorldSaveThreadHandleState {
-        self.collect_previous();
+        self.collect_finished();
 
         let runtime = self.runtime.clone();
         let started_at = self.started_at;
@@ -489,7 +493,7 @@ impl WorldSaveWorker {
 
         match handle {
             Ok(handle) => {
-                self.handle = Some(handle);
+                self.handles.push(handle);
                 WorldSaveThreadHandleState::Open
             }
             Err(error) => {
@@ -502,10 +506,7 @@ impl WorldSaveWorker {
         }
     }
 
-    fn collect_previous(&mut self) {
-        let Some(handle) = self.handle.take() else {
-            return;
-        };
+    fn collect_completion(&mut self, handle: JoinHandle<WorldSaveWorkerCompletion>) {
         match handle.join() {
             Ok(completion) => {
                 if let Some(job) = completion.retained_job {
@@ -519,14 +520,83 @@ impl WorldSaveWorker {
         }
     }
 
+    fn collect_finished(&mut self) {
+        let handles = std::mem::take(&mut self.handles);
+        for handle in handles {
+            if handle.is_finished() {
+                self.collect_completion(handle);
+            } else {
+                self.handles.push(handle);
+            }
+        }
+    }
+
     pub(crate) fn join(&mut self) -> WorldSaveThreadHandleState {
-        let previous = if self.handle.is_some() {
-            WorldSaveThreadHandleState::Open
-        } else {
+        let previous = if self.handles.is_empty() {
             WorldSaveThreadHandleState::Empty
+        } else {
+            WorldSaveThreadHandleState::Open
         };
-        self.collect_previous();
+        let handles = std::mem::take(&mut self.handles);
+        for handle in handles {
+            self.collect_completion(handle);
+        }
         previous
+    }
+}
+
+/// Process-level связка trigger-guard, текущего opaque handle и save-thread-ов.
+pub(crate) struct WorldProcessSaveRuntime {
+    worker: WorldSaveWorker,
+    trigger_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl WorldProcessSaveRuntime {
+    pub(crate) fn new(worker: WorldSaveWorker) -> Self {
+        Self {
+            worker,
+            trigger_guard: None,
+        }
+    }
+
+    pub(crate) fn wait_for_barrier(&self) {
+        let runtime = self.worker.runtime.clone();
+        let serialization = self.worker.serialization();
+        tokio::task::block_in_place(|| {
+            let guard = runtime.block_on(serialization.lock_owned());
+            drop(guard);
+        });
+    }
+
+    pub(crate) fn join(&mut self) -> WorldSaveThreadHandleState {
+        self.worker.join()
+    }
+}
+
+impl WorldSaveRuntimeContext for WorldProcessSaveRuntime {
+    fn try_enter_trigger(&mut self) -> bool {
+        if self.trigger_guard.is_some() {
+            return false;
+        }
+        match self.worker.serialization().try_lock_owned() {
+            Ok(guard) => {
+                self.trigger_guard = Some(guard);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn leave_trigger(&mut self) {
+        drop(self.trigger_guard.take());
+    }
+
+    fn launch(
+        &mut self,
+        _request: &WorldSaveThreadLaunchRequest,
+        job: WorldSaveThreadJob,
+    ) -> WorldSaveThreadHandleState {
+        self.worker.launch(job)
     }
 }
 

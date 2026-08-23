@@ -5280,9 +5280,7 @@ pub(crate) struct WorldMainLoopOwners<
 pub(crate) struct WorldMainLoopCallbacks<'a> {
     pub(crate) get_tick: &'a mut dyn FnMut() -> u32,
     pub(crate) get_save_point_time: &'a mut dyn FnMut() -> u32,
-    pub(crate) try_enter_save: &'a mut dyn FnMut() -> bool,
-    /// Парный `LeaveCriticalSection` normal-path-а `CGame::Run` после launch.
-    pub(crate) leave_save: &'a mut dyn FnMut(),
+    pub(crate) save_runtime: &'a mut dyn WorldSaveRuntimeContext,
     pub(crate) get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
     pub(crate) put_log_info: &'a mut dyn FnMut(&[u8]),
     pub(crate) get_auction_month_day: &'a mut dyn FnMut() -> i32,
@@ -5292,11 +5290,6 @@ pub(crate) struct WorldMainLoopCallbacks<'a> {
     /// Общий producer исходного `CWriteLogQueue`; faction-owner-ы ставят
     /// typed записи в тот же FIFO непосредственно в своих точках вызова.
     pub(crate) write_log_queue: WorldWriteLogQueue,
-    pub(crate) launch_save_thread:
-        &'a mut dyn FnMut(
-            &WorldSaveThreadLaunchRequest,
-            WorldSaveThreadJob,
-        ) -> WorldSaveThreadHandleState,
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
     pub(crate) get_timer_local_time: &'a mut dyn FnMut() -> TagTime,
     pub(crate) refresh_union_owned_city: &'a mut dyn FnMut(i32, i32, i32),
@@ -8569,7 +8562,6 @@ impl CGame {
     /// сохраняет x87-произведение без лишнего `f32`-округления. Невалидные и
     /// out-of-range setup-значения определённо насыщаются вместо UB старого cast.
     pub(crate) fn get_opt_money_jin(
-        &self,
         globe_setup: &GlobeSetupSnapshot,
         seller_money: Option<u32>,
     ) -> Option<WorldAuctionSellerMoney> {
@@ -11157,7 +11149,7 @@ impl CGame {
     ///
     /// Она не вызывает player-prefix и Country generator: исходник выполнял
     /// только organizing, faction-war, region и HonorRanks перед тем же launch.
-    pub(crate) fn materialize_save_all_organizations_snapshot<LaunchSaveThread>(
+    pub(crate) fn materialize_save_all_organizations_snapshot(
         &mut self,
         organizing_ctrl: &mut COrganizingCtrl,
         faction_war_sys: &CFactionWarSys,
@@ -11167,14 +11159,8 @@ impl CGame {
         gods_battle: &CGodsBattleConf,
         lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
-        launch_save_thread: &mut LaunchSaveThread,
-    ) -> Result<WorldSaveAllOrganizationsLaunchReport, OrganizingSaveDataBlock>
-    where
-        LaunchSaveThread: FnMut(
-            &WorldSaveThreadLaunchRequest,
-            WorldSaveThreadJob,
-        ) -> WorldSaveThreadHandleState,
-    {
+        save_runtime: &mut dyn WorldSaveRuntimeContext,
+    ) -> Result<WorldSaveAllOrganizationsLaunchReport, OrganizingSaveDataBlock> {
         let organizing = organizing_ctrl.generate_save_data(self, false)?;
         faction_war_sys.generate_save_data(self);
         self.geterate_region_db_data();
@@ -11187,7 +11173,7 @@ impl CGame {
             gods_battle,
             lifecycle,
         );
-        let resulting_handle = launch_save_thread(&launch, job);
+        let resulting_handle = save_runtime.launch(&launch, job);
         *save_thread_handle = resulting_handle;
         Ok(WorldSaveAllOrganizationsLaunchReport {
             organizing,
@@ -11198,13 +11184,13 @@ impl CGame {
 
     /// Выполняет snapshot и live-cleanup save-trigger ветви `CGame::Run`.
     ///
-    /// Только после snapshot/cleanup закрывает прежний handle-state, вызывает
-    /// внешний launcher и сохраняет возвращённое opaque `Open/Empty` состояние.
+    /// Только после snapshot/cleanup закрывает прежний handle-state, передаёт
+    /// job process save-owner-у и сохраняет возвращённое `Open/Empty` состояние.
     #[allow(
         clippy::too_many_arguments,
         reason = "исходный Run обращался к тем же семи singleton/static зависимостям"
     )]
-    pub(crate) fn materialize_run_save_snapshot<LaunchSaveThread>(
+    pub(crate) fn materialize_run_save_snapshot(
         &mut self,
         registry: &GoodsBasePropertiesRegistry,
         organizing_ctrl: &mut COrganizingCtrl,
@@ -11217,14 +11203,8 @@ impl CGame {
         gods_battle: &CGodsBattleConf,
         lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
-        launch_save_thread: &mut LaunchSaveThread,
-    ) -> Result<WorldRunSaveLaunchReport, WorldGenerateDbDataBlock>
-    where
-        LaunchSaveThread: FnMut(
-            &WorldSaveThreadLaunchRequest,
-            WorldSaveThreadJob,
-        ) -> WorldSaveThreadHandleState,
-    {
+        save_runtime: &mut dyn WorldSaveRuntimeContext,
+    ) -> Result<WorldRunSaveLaunchReport, WorldGenerateDbDataBlock> {
         let snapshot = self.generate_db_data(
             registry,
             organizing_ctrl,
@@ -11247,7 +11227,7 @@ impl CGame {
             gods_battle,
             lifecycle,
         );
-        let resulting_handle = launch_save_thread(&launch, job);
+        let resulting_handle = save_runtime.launch(&launch, job);
         *save_thread_handle = resulting_handle;
         Ok(WorldRunSaveLaunchReport {
             snapshot,
@@ -11290,19 +11270,16 @@ impl CGame {
     )]
     pub(crate) fn materialize_run_save_pre_gate<
         'game,
-        TryEnter,
         GetSavePointTime,
         GetTick,
         GetLocalTime,
         PutLogInfo,
-        LaunchSaveThread,
     >(
         &'game mut self,
         state: &mut WorldRunSaveTriggerState,
         now_ms: u32,
         get_save_point_time: &mut GetSavePointTime,
-        try_enter: TryEnter,
-        leave_save: &mut dyn FnMut(),
+        save_runtime: &mut dyn WorldSaveRuntimeContext,
         registry: &GoodsBasePropertiesRegistry,
         organizing_ctrl: &mut COrganizingCtrl,
         coefficients: &PlayerPropertyCoefficients,
@@ -11318,18 +11295,12 @@ impl CGame {
         get_tick: &mut GetTick,
         get_local_time: &mut GetLocalTime,
         put_log_info: &mut PutLogInfo,
-        launch_save_thread: &mut LaunchSaveThread,
     ) -> WorldRunSavePreGateReport<'game>
     where
-        TryEnter: FnOnce() -> bool,
         GetSavePointTime: FnMut() -> u32,
         GetTick: FnMut() -> u32,
         GetLocalTime: FnMut() -> WorldLogLocalTime,
         PutLogInfo: FnMut(&[u8]),
-        LaunchSaveThread: FnMut(
-            &WorldSaveThreadLaunchRequest,
-            WorldSaveThreadJob,
-        ) -> WorldSaveThreadHandleState,
     {
         let manual_request = if state.send_save_message_now {
             let log = log.add_log_text(
@@ -11362,7 +11333,7 @@ impl CGame {
             };
         }
 
-        if !try_enter() {
+        if !save_runtime.try_enter_trigger() {
             state.last_save_point_time_ms = state.last_save_point_time_ms.wrapping_add(1_000);
             return WorldRunSavePreGateReport::SaveLockBusy {
                 manual_request,
@@ -11391,8 +11362,7 @@ impl CGame {
             get_tick,
             get_local_time,
             put_log_info,
-            launch_save_thread,
-            leave_save,
+            save_runtime,
         );
         WorldRunSavePreGateReport::AfterLock {
             manual_request,
@@ -11418,7 +11388,6 @@ impl CGame {
         GetTick,
         GetLocalTime,
         PutLogInfo,
-        LaunchSaveThread,
     >(
         &'game mut self,
         state: &mut WorldRunSaveTriggerState,
@@ -11438,17 +11407,12 @@ impl CGame {
         get_tick: &mut GetTick,
         get_local_time: &mut GetLocalTime,
         put_log_info: &mut PutLogInfo,
-        launch_save_thread: &mut LaunchSaveThread,
-        leave_save: &mut dyn FnMut(),
+        save_runtime: &mut dyn WorldSaveRuntimeContext,
     ) -> WorldRunSaveTriggerReport<'game>
     where
         GetTick: FnMut() -> u32,
         GetLocalTime: FnMut() -> WorldLogLocalTime,
         PutLogInfo: FnMut(&[u8]),
-        LaunchSaveThread: FnMut(
-            &WorldSaveThreadLaunchRequest,
-            WorldSaveThreadJob,
-        ) -> WorldSaveThreadHandleState,
     {
         let save_info_time_ms = self.setup.save_info_time_ms;
         let guard = WorldRunSaveGuard { game: self };
@@ -11465,14 +11429,14 @@ impl CGame {
                 gods_battle,
                 Arc::clone(&lifecycle),
                 save_thread_handle,
-                launch_save_thread,
+                save_runtime,
             ) {
                 Ok(save) => save,
                 Err(block) => {
                     return WorldRunSaveTriggerReport::BlockedSaveAllOrganizations { guard, block };
                 }
             };
-            leave_save();
+            save_runtime.leave_trigger();
             guard.release();
             return WorldRunSaveTriggerReport::Complete(
                 WorldRunSaveTriggerDisposition::SaveAllOrganizations(save),
@@ -11501,7 +11465,7 @@ impl CGame {
                 gods_battle,
                 Arc::clone(&lifecycle),
                 save_thread_handle,
-                launch_save_thread,
+                save_runtime,
             ) {
                 Ok(save) => save,
                 Err(block) => {
@@ -11545,7 +11509,7 @@ impl CGame {
             None
         };
 
-        leave_save();
+        save_runtime.leave_trigger();
         guard.release();
         WorldRunSaveTriggerReport::Complete(WorldRunSaveTriggerDisposition::PlayerData {
             immediate,
@@ -13980,10 +13944,7 @@ impl CGame {
         mut player_database: Option<&mut WorldTdsClient>,
         save_lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
-        launch_save_thread: &mut dyn FnMut(
-            &WorldSaveThreadLaunchRequest,
-            WorldSaveThreadJob,
-        ) -> WorldSaveThreadHandleState,
+        save_runtime: &mut dyn WorldSaveRuntimeContext,
         session_factory: &mut CSessionFactory,
         mut general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
@@ -14079,7 +14040,7 @@ impl CGame {
                             player_database.as_deref_mut(),
                             Arc::clone(&save_lifecycle),
                             &mut *save_thread_handle,
-                            &mut *launch_save_thread,
+                            &mut *save_runtime,
                             &mut *session_factory,
                             general_variables.as_deref_mut(),
                             &mut *gods_battle,
@@ -14179,7 +14140,7 @@ impl CGame {
                     player_database.as_deref_mut(),
                     Arc::clone(&save_lifecycle),
                     &mut *save_thread_handle,
-                    &mut *launch_save_thread,
+                    &mut *save_runtime,
                     &mut *session_factory,
                     general_variables.as_deref_mut(),
                     &mut *gods_battle,
@@ -14290,10 +14251,7 @@ impl CGame {
         player_database: Option<&mut WorldTdsClient>,
         save_lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
         save_thread_handle: &mut WorldSaveThreadHandleState,
-        launch_save_thread: &mut dyn FnMut(
-            &WorldSaveThreadLaunchRequest,
-            WorldSaveThreadJob,
-        ) -> WorldSaveThreadHandleState,
+        save_runtime: &mut dyn WorldSaveRuntimeContext,
         session_factory: &mut CSessionFactory,
         general_variables: Option<&mut CVariableList>,
         gods_battle: &mut CGodsBattleConf,
@@ -14386,7 +14344,7 @@ impl CGame {
             player_database,
             save_lifecycle,
             save_thread_handle,
-            launch_save_thread,
+            save_runtime,
             session_factory,
             general_variables,
             gods_battle,
@@ -15989,13 +15947,11 @@ impl CGame {
         let collect_player_data =
             self.materialize_collect_player_data_request(state.collect_player_data);
 
-        let try_enter_save = || (callbacks.try_enter_save)();
         let save = self.materialize_run_save_pre_gate(
             state.save_trigger,
             current_tick_ms,
             &mut callbacks.get_save_point_time,
-            try_enter_save,
-            &mut callbacks.leave_save,
+            &mut *callbacks.save_runtime,
             owners.registry,
             owners.organizing,
             owners.coefficients,
@@ -16014,7 +15970,6 @@ impl CGame {
             &mut callbacks.get_tick,
             &mut callbacks.get_log_local_time,
             &mut callbacks.put_log_info,
-            &mut callbacks.launch_save_thread,
         );
         let save = match save {
             WorldRunSavePreGateReport::IntervalNotElapsed {
@@ -16148,7 +16103,7 @@ impl CGame {
             owners.player_database.as_deref_mut(),
             Arc::clone(state.save_lifecycle),
             state.save_thread_handle,
-            &mut *callbacks.launch_save_thread,
+            &mut *callbacks.save_runtime,
             owners.session_factory,
             owners.general_variables.as_deref_mut(),
             owners.gods_battle,
@@ -20186,10 +20141,7 @@ async fn process_world_message<TimerCallback, DbMiscContextOwner, JjcContext>(
     mut player_database: Option<&mut WorldTdsClient>,
     save_lifecycle: Arc<Mutex<SaveDataLifecycleState>>,
     save_thread_handle: &mut WorldSaveThreadHandleState,
-    launch_save_thread: &mut dyn FnMut(
-        &WorldSaveThreadLaunchRequest,
-        WorldSaveThreadJob,
-    ) -> WorldSaveThreadHandleState,
+    save_runtime: &mut dyn WorldSaveRuntimeContext,
     session_factory: &mut CSessionFactory,
     mut general_variables: Option<&mut CVariableList>,
     gods_battle: &mut CGodsBattleConf,
@@ -20227,7 +20179,7 @@ where
             honor_ranks,
             Arc::clone(&save_lifecycle),
             save_thread_handle,
-            launch_save_thread,
+            save_runtime,
             add_log_text,
             session_factory,
             general_variables.as_deref_mut(),
@@ -22882,9 +22834,20 @@ pub(crate) enum WorldSaveThreadHandleState {
     Open,
 }
 
+/// Единый process-owner критической секции, handle и системного save-thread.
+pub(crate) trait WorldSaveRuntimeContext {
+    fn try_enter_trigger(&mut self) -> bool;
+    fn leave_trigger(&mut self);
+    fn launch(
+        &mut self,
+        request: &WorldSaveThreadLaunchRequest,
+        job: WorldSaveThreadJob,
+    ) -> WorldSaveThreadHandleState;
+}
+
 /// Одноразовая обязанность достигнутого `__beginthreadex(SaveThreadFunc)`.
 ///
-/// Сам request не угадывает handle: внешний launcher возвращает наблюдаемое
+/// Сам request не угадывает handle: process save-owner возвращает наблюдаемое
 /// `Open/Empty` состояние после фактической попытки запуска.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldSaveThreadLaunchRequest {
