@@ -448,6 +448,71 @@ pub(crate) struct WorldPlayerDeleteLogWrite {
     pub(crate) ip_address: Vec<u8>,
 }
 
+/// Owned-поля SQL-записей организационной системы. Один enum сохраняет общий
+/// FIFO, а варианты различают таблицы и их исходный positional контракт.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldFactionLogWrite {
+    Faction {
+        faction_id: i32,
+        faction_name: Vec<u8>,
+        player_id: i32,
+        player_name: Vec<u8>,
+        log_type: i32,
+    },
+    Member {
+        member_id: i32,
+        member_name: Vec<u8>,
+        manager_id: i32,
+        manager_name: Vec<u8>,
+        faction_id: i32,
+        faction_name: Vec<u8>,
+        log_type: i32,
+    },
+    Title {
+        member_id: i32,
+        member_name: Vec<u8>,
+        old_title: Vec<u8>,
+        new_title: Vec<u8>,
+        manager_id: i32,
+        manager_name: Vec<u8>,
+        faction_id: i32,
+        faction_name: Vec<u8>,
+    },
+    Purview {
+        member_id: i32,
+        member_name: Vec<u8>,
+        purview: i32,
+        manager_id: i32,
+        manager_name: Vec<u8>,
+        faction_id: i32,
+        faction_name: Vec<u8>,
+        log_type: i32,
+    },
+    Level {
+        faction_id: i32,
+        faction_name: Vec<u8>,
+        level: i32,
+        master_id: i32,
+        master_name: Vec<u8>,
+    },
+    Experience {
+        faction_id: i32,
+        faction_name: Vec<u8>,
+        member_id: i32,
+        member_name: Vec<u8>,
+        before_experience: i32,
+        experience: i32,
+    },
+    Master {
+        old_master_id: i32,
+        old_master_name: Vec<u8>,
+        new_master_id: i32,
+        new_master_name: Vec<u8>,
+        faction_id: i32,
+        faction_name: Vec<u8>,
+    },
+}
+
 /// Typed очередь сохраняет старый FIFO, но оставляет SQL transport Tiberius-у.
 #[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
@@ -472,6 +537,7 @@ pub(crate) enum WorldWriteLogCommand {
     LegacyEmptyChatSql { log_type: u8 },
     ChangeMapLog(WorldChangeMapLogWrite),
     PlayerDeleteLog(WorldPlayerDeleteLogWrite),
+    FactionLog(WorldFactionLogWrite),
 }
 
 #[derive(Debug)]

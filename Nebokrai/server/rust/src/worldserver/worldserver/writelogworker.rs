@@ -29,6 +29,9 @@
 //! `player_delete_log(player_id,player_name,ip_addr)` после login-response;
 //! typed variant сохраняет общий FIFO, а parameter binding заменяет только
 //! исходный `_sprintf` INSERT.
+//! Те же правила применены к faction-, member-, title-, purview-, level-,
+//! experience- и master-log: доменные owner-ы передают уже подтверждённые
+//! positional поля, worker владеет их копией до pop и выполняет один INSERT.
 //!
 //! `WorldWriteLogWorker` завершает внешний thread/exit owner: отдельный
 //! `JoinHandle` выполняет 1-ms polling, exit сначала дренирует FIFO, а typed
@@ -57,8 +60,9 @@ use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
 use crate::dbaccess::worlddb::writelogqueue::WorldWriteLogQueue;
 use crate::public::date::TagTime;
 use crate::worldserver::appworld::message::writelogmessage::{
-    WorldAuctionSaleLogEvent, WorldFairyLogEvent, WorldGoodsCraftLogEvent,
-    WorldPlayerProgressLogEvent, WorldPlayerRelationLogEvent, WorldWriteLogCommand,
+    WorldAuctionSaleLogEvent, WorldFactionLogWrite, WorldFairyLogEvent,
+    WorldGoodsCraftLogEvent, WorldPlayerProgressLogEvent, WorldPlayerRelationLogEvent,
+    WorldWriteLogCommand,
 };
 
 const INSERT_INCREMENT_LOG_SQL: &str = "INSERT INTO increment_log(\
@@ -145,6 +149,27 @@ const INSERT_CHANGE_MAP_LOG_SQL: &str = "INSERT INTO change_map_log(\
 const INSERT_PLAYER_DELETE_LOG_SQL: &str = "INSERT INTO player_delete_log(\
     player_id,player_name,ip_addr\
 ) VALUES(@P1,@P2,@P3)";
+const INSERT_FACTION_LOG_SQL: &str = "INSERT INTO faction_log(\
+    faction_id,faction_name,player_id,player_name,log_type\
+) VALUES(@P1,@P2,@P3,@P4,@P5)";
+const INSERT_FACTION_MEMBER_LOG_SQL: &str = "INSERT INTO faction_member_log(\
+    member_id,member_name,manager_id,manager_name,faction_id,faction_name,log_type\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7)";
+const INSERT_FACTION_TITLE_LOG_SQL: &str = "INSERT INTO faction_title_log(\
+    member_id,member_name,old_title,new_title,manager_id,manager_name,faction_id,faction_name\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)";
+const INSERT_FACTION_PURVIEW_LOG_SQL: &str = "INSERT INTO faction_purview_log(\
+    member_id,member_name,purview,manager_id,manager_name,faction_id,faction_name,log_type\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)";
+const INSERT_FACTION_LEVEL_LOG_SQL: &str = "INSERT INTO faction_level_log(\
+    faction_id,faction_name,lel,master_id,master_name\
+) VALUES(@P1,@P2,@P3,@P4,@P5)";
+const INSERT_FACTION_EXPERIENCE_LOG_SQL: &str = "INSERT INTO faction_experience_log(\
+    faction_id,faction_name,member_id,member_name,before_exp,exp\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6)";
+const INSERT_FACTION_MASTER_LOG_SQL: &str = "INSERT INTO faction_master_log(\
+    old_master_id,old_master_name,new_master_id,new_master_name,faction_id,faction_name\
+) VALUES(@P1,@P2,@P3,@P4,@P5,@P6)";
 const WRITE_LOG_POLL_INTERVAL: Duration = Duration::from_millis(1);
 const WRITE_LOG_RECONNECT_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -1022,6 +1047,136 @@ pub(crate) async fn execute_world_write_log_command(
             query.execute(connection).await?;
             Ok(())
         }
+        WorldWriteLogCommand::FactionLog(write) => {
+            match write {
+                WorldFactionLogWrite::Faction {
+                    faction_id,
+                    faction_name,
+                    player_id,
+                    player_name,
+                    log_type,
+                } => {
+                    let mut query = Query::new(INSERT_FACTION_LOG_SQL);
+                    query.bind(*faction_id);
+                    query.bind(decode_legacy_text(faction_name));
+                    query.bind(*player_id);
+                    query.bind(decode_legacy_text(player_name));
+                    query.bind(*log_type);
+                    query.execute(connection).await?;
+                }
+                WorldFactionLogWrite::Member {
+                    member_id,
+                    member_name,
+                    manager_id,
+                    manager_name,
+                    faction_id,
+                    faction_name,
+                    log_type,
+                } => {
+                    let mut query = Query::new(INSERT_FACTION_MEMBER_LOG_SQL);
+                    query.bind(*member_id);
+                    query.bind(decode_legacy_text(member_name));
+                    query.bind(*manager_id);
+                    query.bind(decode_legacy_text(manager_name));
+                    query.bind(*faction_id);
+                    query.bind(decode_legacy_text(faction_name));
+                    query.bind(*log_type);
+                    query.execute(connection).await?;
+                }
+                WorldFactionLogWrite::Title {
+                    member_id,
+                    member_name,
+                    old_title,
+                    new_title,
+                    manager_id,
+                    manager_name,
+                    faction_id,
+                    faction_name,
+                } => {
+                    let mut query = Query::new(INSERT_FACTION_TITLE_LOG_SQL);
+                    query.bind(*member_id);
+                    query.bind(decode_legacy_text(member_name));
+                    query.bind(decode_legacy_text(old_title));
+                    query.bind(decode_legacy_text(new_title));
+                    query.bind(*manager_id);
+                    query.bind(decode_legacy_text(manager_name));
+                    query.bind(*faction_id);
+                    query.bind(decode_legacy_text(faction_name));
+                    query.execute(connection).await?;
+                }
+                WorldFactionLogWrite::Purview {
+                    member_id,
+                    member_name,
+                    purview,
+                    manager_id,
+                    manager_name,
+                    faction_id,
+                    faction_name,
+                    log_type,
+                } => {
+                    let mut query = Query::new(INSERT_FACTION_PURVIEW_LOG_SQL);
+                    query.bind(*member_id);
+                    query.bind(decode_legacy_text(member_name));
+                    query.bind(*purview);
+                    query.bind(*manager_id);
+                    query.bind(decode_legacy_text(manager_name));
+                    query.bind(*faction_id);
+                    query.bind(decode_legacy_text(faction_name));
+                    query.bind(*log_type);
+                    query.execute(connection).await?;
+                }
+                WorldFactionLogWrite::Level {
+                    faction_id,
+                    faction_name,
+                    level,
+                    master_id,
+                    master_name,
+                } => {
+                    let mut query = Query::new(INSERT_FACTION_LEVEL_LOG_SQL);
+                    query.bind(*faction_id);
+                    query.bind(decode_legacy_text(faction_name));
+                    query.bind(*level);
+                    query.bind(*master_id);
+                    query.bind(decode_legacy_text(master_name));
+                    query.execute(connection).await?;
+                }
+                WorldFactionLogWrite::Experience {
+                    faction_id,
+                    faction_name,
+                    member_id,
+                    member_name,
+                    before_experience,
+                    experience,
+                } => {
+                    let mut query = Query::new(INSERT_FACTION_EXPERIENCE_LOG_SQL);
+                    query.bind(*faction_id);
+                    query.bind(decode_legacy_text(faction_name));
+                    query.bind(*member_id);
+                    query.bind(decode_legacy_text(member_name));
+                    query.bind(*before_experience);
+                    query.bind(*experience);
+                    query.execute(connection).await?;
+                }
+                WorldFactionLogWrite::Master {
+                    old_master_id,
+                    old_master_name,
+                    new_master_id,
+                    new_master_name,
+                    faction_id,
+                    faction_name,
+                } => {
+                    let mut query = Query::new(INSERT_FACTION_MASTER_LOG_SQL);
+                    query.bind(*old_master_id);
+                    query.bind(decode_legacy_text(old_master_name));
+                    query.bind(*new_master_id);
+                    query.bind(decode_legacy_text(new_master_name));
+                    query.bind(*faction_id);
+                    query.bind(decode_legacy_text(faction_name));
+                    query.execute(connection).await?;
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1078,5 +1233,6 @@ fn world_write_log_command_name(command: &WorldWriteLogCommand) -> &'static str 
         WorldWriteLogCommand::LegacyEmptyChatSql { .. } => "LegacyEmptyChatSql",
         WorldWriteLogCommand::ChangeMapLog(_) => "ChangeMapLog",
         WorldWriteLogCommand::PlayerDeleteLog(_) => "PlayerDeleteLog",
+        WorldWriteLogCommand::FactionLog(_) => "FactionLog",
     }
 }
