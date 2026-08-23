@@ -5060,10 +5060,6 @@ pub(crate) enum WorldMainLoopSaveStageDisposition {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WorldMainLoopConfiguration {
     pub(crate) refresh_external_counts: WorldRefreshExternalCounts,
-    pub(crate) use_appellation_function: bool,
-    pub(crate) country_limits: CountryKingSaveLimits,
-    pub(crate) jjc: JjcRunConfig,
-    pub(crate) gold_coin_index: u32,
 }
 
 /// Platform/log дополнение для concrete weekly JJC DB worker-а.
@@ -5226,14 +5222,11 @@ pub(crate) struct WorldMainLoopOwners<
     DbMiscContextOwner,
     JjcContext,
 > {
-    pub(crate) registry: &'a GoodsBasePropertiesRegistry,
-    pub(crate) original_name_index: &'a GoodsOriginalNameIndex,
-    pub(crate) coefficients: &'a PlayerPropertyCoefficients,
+    pub(crate) resources: &'a mut dyn WorldMainLoopResourceContext,
     pub(crate) load_player_largess: &'a mut dyn FnMut(&mut CPlayer),
     pub(crate) organizing: &'a mut COrganizingCtrl,
     pub(crate) country: &'a mut CCountryHandler,
     pub(crate) country_parameters: &'a mut CCountryParam,
-    pub(crate) player_list: &'a mut CPlayerList,
     pub(crate) time_to_return: &'a mut TimeToReturn,
     pub(crate) time_to_return_callbacks: TimeToReturnCallbacks<TimerCallback>,
     pub(crate) country_war: &'a mut CountryWarSys,
@@ -5259,8 +5252,6 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) faction_war: &'a mut CFactionWarSys,
     pub(crate) attack_city: &'a mut CAttackCitySys,
     pub(crate) attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
-    pub(crate) globe_setup: &'a GlobeSetupSnapshot,
-    pub(crate) region_router: &'a RegionRouter,
     pub(crate) village_war: &'a mut CVillageWarSys,
     pub(crate) goods_war: &'a mut CGoodsWarMember,
     pub(crate) village_war_callbacks: VillageWarCallbacks<TimerCallback>,
@@ -5285,7 +5276,6 @@ pub(crate) struct WorldMainLoopCallbacks<'a> {
     pub(crate) get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
     pub(crate) put_log_info: &'a mut dyn FnMut(&[u8]),
     pub(crate) get_auction_month_day: &'a mut dyn FnMut() -> i32,
-    pub(crate) reload_context: &'a mut dyn WorldReloadContext,
     /// Конкретный `CLargess` owner для исходного `StartWorkerThread` вызова.
     pub(crate) largess: &'a TiberiusLargess,
     /// Общий producer исходного `CWriteLogQueue`; faction-owner-ы ставят
@@ -5296,31 +5286,6 @@ pub(crate) struct WorldMainLoopCallbacks<'a> {
     pub(crate) refresh_union_owned_city:
         &'a mut dyn FnMut(&CGame, i32, i32, i32, Option<u8>),
     pub(crate) update_union_player: &'a mut dyn FnMut(i32),
-    /// Внешние feature-gates exact `CLogSystem::bFactionChat/bPrivateChat`.
-    pub(crate) faction_chat_log_enabled: bool,
-    pub(crate) private_chat_log_enabled: bool,
-    /// Внешний feature-gate exact `CLogSystem::bDeleteLog`.
-    pub(crate) delete_log_enabled: bool,
-    /// Внешний feature-gate `CLogSystem::FactionCreateEnabled`.
-    pub(crate) faction_create_log_enabled: bool,
-    /// Внешний feature-gate `CLogSystem::FactionTitleEnabled`.
-    pub(crate) faction_title_log_enabled: bool,
-    pub(crate) faction_purview_add_log_enabled: bool,
-    pub(crate) faction_purview_revoke_log_enabled: bool,
-    pub(crate) faction_level_log_enabled: bool,
-    pub(crate) faction_experience_log_enabled: bool,
-    /// Внешний feature-gate `CLogSystem::FactionApplyEnabled`.
-    pub(crate) faction_apply_log_enabled: bool,
-    /// Внешний feature-gate `CLogSystem::FactionJoinEnabled`.
-    pub(crate) faction_join_log_enabled: bool,
-    /// Внешний feature-gate `CLogSystem::FactionQuitEnabled`.
-    pub(crate) faction_quit_log_enabled: bool,
-    /// Внешний feature-gate `CLogSystem::FactionFireOutEnabled`.
-    pub(crate) faction_fire_out_log_enabled: bool,
-    /// Внешний feature-gate `CLogSystem::FactionMasterChangedEnabled`.
-    pub(crate) faction_master_log_enabled: bool,
-    /// Внешний feature-gate `CLogSystem::FactionDisbandEnabled`.
-    pub(crate) faction_disband_log_enabled: bool,
     pub(crate) get_lei_ting_local_time: &'a mut dyn FnMut() -> LeiTingLocalTime,
     pub(crate) wait: &'a mut dyn FnMut(u32),
     pub(crate) output_debug: &'a mut dyn FnMut(&'static str),
@@ -5332,6 +5297,9 @@ pub(crate) enum WorldMainLoopBlock<LeiTingContextBlock> {
     Refresh(WorldMainLoopRefreshStageReport),
     Reload(WorldReloadProfilesReport),
     Maintenance(WorldMainLoopMaintenanceBlock),
+    MissingCountryLimit {
+        parameter: &'static str,
+    },
     SaveAllOrganizations {
         block: OrganizingSaveDataBlock,
     },
@@ -5598,6 +5566,29 @@ pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     /// Сохраняет два process-global счётчика после прямого region-owner load.
     fn add_region_object_counts(&mut self, monsters: i32, npcs: i32) -> (i32, i32);
     fn region_object_counts(&mut self) -> (i32, i32);
+}
+
+/// Опубликованная неизменяемая проекция setup-владельцев одного runtime turn.
+///
+/// Она снимается после верхнего reload-gate и заново перед каждым FIFO
+/// сообщением. Поэтому reload из GM/server-владельца виден следующему сообщению
+/// того же turn, а живой `WorldReloadContext` не alias-ится с выданными ему же
+/// Rust-ссылками.
+#[derive(Clone)]
+pub(crate) struct WorldMainLoopResourceSnapshot {
+    pub(crate) registry: GoodsBasePropertiesRegistry,
+    pub(crate) original_name_index: GoodsOriginalNameIndex,
+    pub(crate) coefficients: PlayerPropertyCoefficients,
+    pub(crate) player_list: CPlayerList,
+    pub(crate) globe_setup: GlobeSetupSnapshot,
+    pub(crate) region_router: RegionRouter,
+    pub(crate) log_system: CLogSystem,
+    pub(crate) gold_coin_index: u32,
+}
+
+/// Единый process-owner reload-ресурсов и их согласованно опубликованной проекции.
+pub(crate) trait WorldMainLoopResourceContext: WorldReloadContext {
+    fn main_loop_resource_snapshot(&self) -> WorldMainLoopResourceSnapshot;
 }
 
 /// Рекурсивно собирает host-файлы старого `FindScriptFile`.
@@ -6399,6 +6390,7 @@ pub(crate) enum WorldProcessMessageStageReport {
 #[derive(Debug)]
 pub(crate) enum WorldProcessMessageError {
     MissingNetworkServerOwner,
+    MissingCountryLimit(&'static str),
     ServerMessage(WorldServerMessageError),
 }
 
@@ -6407,6 +6399,10 @@ impl fmt::Display for WorldProcessMessageError {
         match self {
             Self::MissingNetworkServerOwner => formatter
                 .write_str("World ProcessMessage не может прочитать обязательный server-owner"),
+            Self::MissingCountryLimit(parameter) => write!(
+                formatter,
+                "World ProcessMessage не получил country-параметр {parameter}"
+            ),
             Self::ServerMessage(error) => error.fmt(formatter),
         }
     }
@@ -6415,10 +6411,32 @@ impl fmt::Display for WorldProcessMessageError {
 impl Error for WorldProcessMessageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::MissingNetworkServerOwner => None,
+            Self::MissingNetworkServerOwner | Self::MissingCountryLimit(_) => None,
             Self::ServerMessage(error) => Some(error),
         }
     }
+}
+
+fn current_country_save_limits(
+    parameters: &CCountryParam,
+) -> Result<CountryKingSaveLimits, WorldProcessMessageError> {
+    Ok(CountryKingSaveLimits {
+        control_point: parameters
+            .max_king_control_point()
+            .ok_or(WorldProcessMessageError::MissingCountryLimit(
+                "_max_king_control_point",
+            ))?,
+        material_point: parameters
+            .max_king_material_point()
+            .ok_or(WorldProcessMessageError::MissingCountryLimit(
+                "_max_king_material_point",
+            ))?,
+        war_point: parameters
+            .max_king_war_point()
+            .ok_or(WorldProcessMessageError::MissingCountryLimit(
+                "_max_king_war_point",
+            ))?,
+    })
 }
 
 /// Ошибка одной достигнутой попытки World-to-Login reconnect.
@@ -13970,57 +13988,37 @@ impl CGame {
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
         country_parameters: &mut CCountryParam,
-        player_list: &mut CPlayerList,
         country_war: &mut CountryWarSys,
         four_nation_war: &mut CFourNationWarSys,
-        country_limits: CountryKingSaveLimits,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &mut CAttackCitySys,
         attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
-        globe_setup: &GlobeSetupSnapshot,
-        region_router: &RegionRouter,
         village_war: &mut CVillageWarSys,
         goods_war: &mut CGoodsWarMember,
         timer: &mut CTimer<TimerCallback>,
         village_war_callbacks: VillageWarCallbacks<TimerCallback>,
-        registry: &GoodsBasePropertiesRegistry,
-        original_name_index: &GoodsOriginalNameIndex,
-        coefficients: &PlayerPropertyCoefficients,
+        resources: &mut dyn WorldMainLoopResourceContext,
         load_player_largess: &mut dyn FnMut(&mut CPlayer),
         net_sessions: &CNetSessionManager,
         jjc: &mut CJJcSystem,
-        jjc_config: JjcRunConfig,
         jjc_context: &mut JjcContext,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
-        faction_chat_log_enabled: bool,
-        private_chat_log_enabled: bool,
-        delete_log_enabled: bool,
-        faction_create_log_enabled: bool,
         write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
-        faction_title_log_enabled: bool,
         write_faction_title_log:
             &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
-        faction_purview_add_log_enabled: bool,
-        faction_purview_revoke_log_enabled: bool,
         write_faction_purview_log:
             &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
-        faction_apply_log_enabled: bool,
         write_faction_apply_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
-        faction_join_log_enabled: bool,
         write_faction_join_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
-        faction_quit_log_enabled: bool,
         write_faction_quit_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
-        faction_fire_out_log_enabled: bool,
         write_faction_fire_out_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
-        faction_master_log_enabled: bool,
         write_faction_master_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
-        faction_disband_log_enabled: bool,
         write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         rs_player: &mut TiberiusRsPlayer,
         mut player_database: Option<&mut WorldTdsClient>,
@@ -14033,7 +14031,6 @@ impl CGame {
         skills: &mut CSkillFactory,
         mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         mut gods_battle_database: Option<&mut WorldTdsClient>,
-        reload_context: &mut dyn WorldReloadContext,
         add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
         update_player: &mut dyn FnMut(i32),
     ) -> Result<WorldProcessMessageOutcome, WorldProcessMessageError>
@@ -14073,50 +14070,31 @@ impl CGame {
                             organizing_parameters,
                             country_handler,
                             country_parameters,
-                            player_list,
                             country_war,
                             four_nation_war,
-                            country_limits,
+                            current_country_save_limits(country_parameters)?,
                             faction_war_sys,
                             attack_city,
                             attack_city_callbacks,
-                            globe_setup,
-                            region_router,
                             village_war,
                             goods_war,
                             timer,
                             village_war_callbacks,
-                            registry,
-                            original_name_index,
-                            coefficients,
+                            &mut *resources,
                             &mut *load_player_largess,
                             net_sessions,
                             jjc,
-                            jjc_config,
                             jjc_context,
                             application_runtime,
                             application_callbacks,
-                            faction_chat_log_enabled,
-                            private_chat_log_enabled,
-                            delete_log_enabled,
-                            faction_create_log_enabled,
                             &mut *write_faction_create_log,
-                            faction_title_log_enabled,
                             &mut *write_faction_title_log,
-                            faction_purview_add_log_enabled,
-                            faction_purview_revoke_log_enabled,
                             &mut *write_faction_purview_log,
-                            faction_apply_log_enabled,
                             &mut *write_faction_apply_log,
-                            faction_join_log_enabled,
                             &mut *write_faction_join_log,
-                            faction_quit_log_enabled,
                             &mut *write_faction_quit_log,
-                            faction_fire_out_log_enabled,
                             &mut *write_faction_fire_out_log,
-                            faction_master_log_enabled,
                             &mut *write_faction_master_log,
-                            faction_disband_log_enabled,
                             &mut *write_faction_disband_log,
                             &mut *rs_player,
                             player_database.as_deref_mut(),
@@ -14129,7 +14107,6 @@ impl CGame {
                             &mut *skills,
                             rs_gods_battle.as_deref_mut(),
                             gods_battle_database.as_deref_mut(),
-                            &mut *reload_context,
                             &mut *add_log_text,
                             update_player,
                             WorldMessageSource::GameServer,
@@ -14173,50 +14150,31 @@ impl CGame {
                     organizing_parameters,
                     country_handler,
                     country_parameters,
-                    player_list,
                     country_war,
                     four_nation_war,
-                    country_limits,
+                    current_country_save_limits(country_parameters)?,
                     faction_war_sys,
                     attack_city,
                     attack_city_callbacks,
-                    globe_setup,
-                    region_router,
                     village_war,
                     goods_war,
                     timer,
                     village_war_callbacks,
-                    registry,
-                    original_name_index,
-                    coefficients,
+                    &mut *resources,
                     &mut *load_player_largess,
                     net_sessions,
                     jjc,
-                    jjc_config,
                     jjc_context,
                     application_runtime,
                     application_callbacks,
-                    faction_chat_log_enabled,
-                    private_chat_log_enabled,
-                    delete_log_enabled,
-                    faction_create_log_enabled,
                     &mut *write_faction_create_log,
-                    faction_title_log_enabled,
                     &mut *write_faction_title_log,
-                    faction_purview_add_log_enabled,
-                    faction_purview_revoke_log_enabled,
                     &mut *write_faction_purview_log,
-                    faction_apply_log_enabled,
                     &mut *write_faction_apply_log,
-                    faction_join_log_enabled,
                     &mut *write_faction_join_log,
-                    faction_quit_log_enabled,
                     &mut *write_faction_quit_log,
-                    faction_fire_out_log_enabled,
                     &mut *write_faction_fire_out_log,
-                    faction_master_log_enabled,
                     &mut *write_faction_master_log,
-                    faction_disband_log_enabled,
                     &mut *write_faction_disband_log,
                     &mut *rs_player,
                     player_database.as_deref_mut(),
@@ -14229,7 +14187,6 @@ impl CGame {
                     &mut *skills,
                     rs_gods_battle.as_deref_mut(),
                     gods_battle_database.as_deref_mut(),
-                    &mut *reload_context,
                     &mut *add_log_text,
                     update_player,
                     WorldMessageSource::LoginServer,
@@ -14277,57 +14234,37 @@ impl CGame {
         organizing_parameters: &COrganizingParam,
         country_handler: &mut CCountryHandler,
         country_parameters: &mut CCountryParam,
-        player_list: &mut CPlayerList,
         country_war: &mut CountryWarSys,
         four_nation_war: &mut CFourNationWarSys,
-        country_limits: CountryKingSaveLimits,
         faction_war_sys: &mut CFactionWarSys,
         attack_city: &mut CAttackCitySys,
         attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
-        globe_setup: &GlobeSetupSnapshot,
-        region_router: &RegionRouter,
         village_war: &mut CVillageWarSys,
         goods_war: &mut CGoodsWarMember,
         timer: &mut CTimer<TimerCallback>,
         village_war_callbacks: VillageWarCallbacks<TimerCallback>,
-        registry: &GoodsBasePropertiesRegistry,
-        original_name_index: &GoodsOriginalNameIndex,
-        coefficients: &PlayerPropertyCoefficients,
+        resources: &mut dyn WorldMainLoopResourceContext,
         load_player_largess: &mut dyn FnMut(&mut CPlayer),
         net_sessions: &CNetSessionManager,
         jjc: &mut CJJcSystem,
-        jjc_config: JjcRunConfig,
         jjc_context: &mut JjcContext,
         application_runtime: &WorldUnionApplicationRuntimeOwner,
         application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
-        faction_chat_log_enabled: bool,
-        private_chat_log_enabled: bool,
-        delete_log_enabled: bool,
-        faction_create_log_enabled: bool,
         write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
-        faction_title_log_enabled: bool,
         write_faction_title_log:
             &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
-        faction_purview_add_log_enabled: bool,
-        faction_purview_revoke_log_enabled: bool,
         write_faction_purview_log:
             &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
-        faction_apply_log_enabled: bool,
         write_faction_apply_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
-        faction_join_log_enabled: bool,
         write_faction_join_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
-        faction_quit_log_enabled: bool,
         write_faction_quit_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
-        faction_fire_out_log_enabled: bool,
         write_faction_fire_out_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
-        faction_master_log_enabled: bool,
         write_faction_master_log:
             &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
-        faction_disband_log_enabled: bool,
         write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
         rs_player: &mut TiberiusRsPlayer,
         player_database: Option<&mut WorldTdsClient>,
@@ -14340,7 +14277,6 @@ impl CGame {
         skills: &mut CSkillFactory,
         rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
         gods_battle_database: Option<&mut WorldTdsClient>,
-        reload_context: &mut dyn WorldReloadContext,
         log: &mut WorldLogTextOwner,
         get_log_local_time: &mut dyn FnMut() -> WorldLogLocalTime,
         put_log_info: &mut dyn FnMut(&[u8]),
@@ -14377,50 +14313,30 @@ impl CGame {
             organizing_parameters,
             country_handler,
             country_parameters,
-            player_list,
             country_war,
             four_nation_war,
-            country_limits,
             faction_war_sys,
             attack_city,
             attack_city_callbacks,
-            globe_setup,
-            region_router,
             village_war,
             goods_war,
             timer,
             village_war_callbacks,
-            registry,
-            original_name_index,
-            coefficients,
+            resources,
             load_player_largess,
             net_sessions,
             jjc,
-            jjc_config,
             jjc_context,
             application_runtime,
             application_callbacks,
-            faction_chat_log_enabled,
-            private_chat_log_enabled,
-            delete_log_enabled,
-            faction_create_log_enabled,
             write_faction_create_log,
-            faction_title_log_enabled,
             write_faction_title_log,
-            faction_purview_add_log_enabled,
-            faction_purview_revoke_log_enabled,
             write_faction_purview_log,
-            faction_apply_log_enabled,
             write_faction_apply_log,
-            faction_join_log_enabled,
             write_faction_join_log,
-            faction_quit_log_enabled,
             write_faction_quit_log,
-            faction_fire_out_log_enabled,
             write_faction_fire_out_log,
-            faction_master_log_enabled,
             write_faction_master_log,
-            faction_disband_log_enabled,
             write_faction_disband_log,
             rs_player,
             player_database,
@@ -14433,7 +14349,6 @@ impl CGame {
             skills,
             rs_gods_battle,
             gods_battle_database,
-            reload_context,
             &mut add_log_text,
             update_player,
         )
@@ -15376,6 +15291,11 @@ impl CGame {
         self.team_session_ids.get(&team_id).copied().unwrap_or(0)
     }
 
+    /// Текущий размер точного контейнера `m_mTeamSessionID`, читаемый refresh-владельцем.
+    pub(crate) fn team_session_count(&self) -> usize {
+        self.team_session_ids.len()
+    }
+
     /// Воспроизводит `m_mTeamSessionID[teamID] = sessionID` из `CTeam::Start`.
     pub(crate) fn publish_team_session(&mut self, team_id: u32, session_id: i32) {
         self.team_session_ids.insert(team_id, session_id);
@@ -15955,18 +15875,21 @@ impl CGame {
             }
         };
 
+        let reload_input_resources = owners.resources.main_loop_resource_snapshot();
         let mut reload_union_application_callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *callbacks.random,
             refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
-            faction_level_log_enabled: callbacks.faction_level_log_enabled,
+            faction_level_log_enabled: reload_input_resources.log_system.faction_level_enabled(),
             write_faction_level_log: &mut write_faction_level_log,
-            faction_experience_log_enabled: callbacks.faction_experience_log_enabled,
+            faction_experience_log_enabled: reload_input_resources
+                .log_system
+                .faction_experience_enabled(),
             write_faction_experience_log: &mut write_faction_experience_log,
         };
         let reload = reload_profiles(
             self,
             state.reload_flags,
-            &mut *callbacks.reload_context,
+            &mut *owners.resources,
             owners.jjc,
             owners.gods_battle,
             owners.skills,
@@ -15989,7 +15912,7 @@ impl CGame {
             owners.country_parameters,
             owners.organizing_parameters,
             owners.organizing_tax_callback,
-            owners.globe_setup,
+            &reload_input_resources.globe_setup,
             &mut *callbacks.get_tick,
             &mut reload_union_application_callbacks,
             &mut *callbacks.update_union_player,
@@ -16004,10 +15927,37 @@ impl CGame {
                 return Err(Box::new(WorldMainLoopBlock::Reload(blocked)));
             }
         };
+        let resources = owners.resources.main_loop_resource_snapshot();
+        let country_limits = CountryKingSaveLimits {
+            control_point: owners
+                .country_parameters
+                .max_king_control_point()
+                .ok_or_else(|| {
+                    Box::new(WorldMainLoopBlock::MissingCountryLimit {
+                        parameter: "_max_king_control_point",
+                    })
+                })?,
+            material_point: owners
+                .country_parameters
+                .max_king_material_point()
+                .ok_or_else(|| {
+                    Box::new(WorldMainLoopBlock::MissingCountryLimit {
+                        parameter: "_max_king_material_point",
+                    })
+                })?,
+            war_point: owners
+                .country_parameters
+                .max_king_war_point()
+                .ok_or_else(|| {
+                    Box::new(WorldMainLoopBlock::MissingCountryLimit {
+                        parameter: "_max_king_war_point",
+                    })
+                })?,
+        };
 
         let maintenance = self.run_main_loop_maintenance_stage(
             state.player_ranks_request,
-            configuration.use_appellation_function,
+            resources.globe_setup.use_appellation_function(),
             owners.player_ranks,
             owners.rs_player,
             owners.player_database.as_deref_mut(),
@@ -16034,12 +15984,12 @@ impl CGame {
             current_tick_ms,
             &mut callbacks.get_save_point_time,
             &mut *callbacks.save_runtime,
-            owners.registry,
+            &resources.registry,
             owners.organizing,
-            owners.coefficients,
+            &resources.coefficients,
             owners.faction_war,
             owners.country,
-            configuration.country_limits,
+            country_limits,
             owners
                 .general_variables
                 .as_deref()
@@ -16120,9 +16070,9 @@ impl CGame {
         let mut union_application_callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *callbacks.random,
             refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
-            faction_level_log_enabled: callbacks.faction_level_log_enabled,
+            faction_level_log_enabled: resources.log_system.faction_level_enabled(),
             write_faction_level_log: &mut write_faction_level_log,
-            faction_experience_log_enabled: callbacks.faction_experience_log_enabled,
+            faction_experience_log_enabled: resources.log_system.faction_experience_enabled(),
             write_faction_experience_log: &mut write_faction_experience_log,
         };
         let process_message = match self.process_message_main_loop_stage(
@@ -16136,50 +16086,30 @@ impl CGame {
             owners.organizing_parameters,
             owners.country,
             owners.country_parameters,
-            owners.player_list,
             owners.country_war,
             owners.four_nation_war,
-            configuration.country_limits,
             owners.faction_war,
             owners.attack_city,
             owners.attack_city_callbacks,
-            owners.globe_setup,
-            owners.region_router,
             owners.village_war,
             owners.goods_war,
             owners.timer,
             owners.village_war_callbacks,
-            owners.registry,
-            owners.original_name_index,
-            owners.coefficients,
+            &mut *owners.resources,
             &mut *owners.load_player_largess,
             owners.net_sessions,
             owners.jjc,
-            configuration.jjc,
             owners.jjc_context,
             owners.union_application_runtime,
             &mut union_application_callbacks,
-            callbacks.faction_chat_log_enabled,
-            callbacks.private_chat_log_enabled,
-            callbacks.delete_log_enabled,
-            callbacks.faction_create_log_enabled,
             &mut write_faction_create_log,
-            callbacks.faction_title_log_enabled,
             &mut write_faction_title_log,
-            callbacks.faction_purview_add_log_enabled,
-            callbacks.faction_purview_revoke_log_enabled,
             &mut write_faction_purview_log,
-            callbacks.faction_apply_log_enabled,
             &mut write_faction_apply_log,
-            callbacks.faction_join_log_enabled,
             &mut write_faction_join_log,
-            callbacks.faction_quit_log_enabled,
             &mut write_faction_quit_log,
-            callbacks.faction_fire_out_log_enabled,
             &mut write_faction_fire_out_log,
-            callbacks.faction_master_log_enabled,
             &mut write_faction_master_log,
-            callbacks.faction_disband_log_enabled,
             &mut write_faction_disband_log,
             owners.rs_player,
             owners.player_database.as_deref_mut(),
@@ -16192,7 +16122,6 @@ impl CGame {
             owners.skills,
             owners.rs_gods_battle.as_deref_mut(),
             owners.gods_battle_database.as_deref_mut(),
-            &mut *callbacks.reload_context,
             owners.log,
             &mut *callbacks.get_log_local_time,
             &mut *callbacks.put_log_info,
@@ -16208,6 +16137,7 @@ impl CGame {
                 return Err(Box::new(WorldMainLoopBlock::ProcessMessage(blocked)));
             }
         };
+        let resources = owners.resources.main_loop_resource_snapshot();
         let session_factory = self.run_main_loop_session_factory_stage(
             owners.session_factory,
             state.clocks,
@@ -16239,7 +16169,7 @@ impl CGame {
                 owners.country_war_callbacks,
                 owners.four_nation_war,
                 owners.four_nation_war_callbacks,
-                owners.globe_setup,
+                &resources.globe_setup,
                 state.clocks,
                 state.profile,
                 state.copy_number_timer,
@@ -16268,7 +16198,7 @@ impl CGame {
         let lei_ting = self
             .run_main_loop_lei_ting_stage(
                 owners.lei_ting,
-                owners.globe_setup,
+                &resources.globe_setup,
                 owners.lei_ting_context,
                 owners.lei_ting_reset_worker,
                 owners.tokio_runtime.clone(),
@@ -16279,7 +16209,7 @@ impl CGame {
             let save_info_time_ms = self.setup.save_info_time_ms;
             let mut delivery = WorldDbMiscDeliveryContext {
                 game: self,
-                gold_coin_index: configuration.gold_coin_index,
+                gold_coin_index: resources.gold_coin_index,
                 offline_drops: 0,
             };
             let result = Self::run_main_loop_db_misc_stage(
@@ -16305,9 +16235,9 @@ impl CGame {
         let mut union_application_callbacks = WorldUnionApplicationEffectCallbacks {
             random: &mut *callbacks.random,
             refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
-            faction_level_log_enabled: callbacks.faction_level_log_enabled,
+            faction_level_log_enabled: resources.log_system.faction_level_enabled(),
             write_faction_level_log: &mut write_faction_level_log,
-            faction_experience_log_enabled: callbacks.faction_experience_log_enabled,
+            faction_experience_log_enabled: resources.log_system.faction_experience_enabled(),
             write_faction_experience_log: &mut write_faction_experience_log,
         };
         let net_sessions = self.run_main_loop_net_session_stage(
@@ -16335,20 +16265,20 @@ impl CGame {
                 owners.attack_city,
                 owners.village_war,
                 owners.goods_war,
-                owners.globe_setup,
+                &resources.globe_setup,
                 &mut *callbacks.get_tick,
                 &mut *callbacks.refresh_union_owned_city,
                 &mut *callbacks.update_union_player,
-                callbacks.faction_master_log_enabled,
+                resources.log_system.faction_master_changed_enabled(),
                 &mut write_faction_master_log,
-                callbacks.faction_disband_log_enabled,
+                resources.log_system.faction_disband_enabled(),
                 &mut write_faction_disband_log,
             )
             .map_err(|block| Box::new(WorldMainLoopBlock::Minute(block)))?;
         let bai_tan_jjc = self
             .run_main_loop_bai_tan_jjc_stage(
                 owners.jjc,
-                configuration.jjc,
+                resources.globe_setup.jjc_run_config(),
                 owners.jjc_context,
                 owners.jjc_week_clear_worker,
                 owners.tokio_runtime.clone(),
@@ -20238,57 +20168,38 @@ async fn process_world_message<TimerCallback, DbMiscContextOwner, JjcContext>(
     organizing_parameters: &COrganizingParam,
     country_handler: &mut CCountryHandler,
     country_parameters: &mut CCountryParam,
-    player_list: &mut CPlayerList,
     country_war: &mut CountryWarSys,
     four_nation_war: &mut CFourNationWarSys,
     country_limits: CountryKingSaveLimits,
     faction_war_sys: &mut CFactionWarSys,
     attack_city: &mut CAttackCitySys,
     attack_city_callbacks: AttackCityCallbacks<TimerCallback>,
-    globe_setup: &GlobeSetupSnapshot,
-    region_router: &RegionRouter,
     village_war: &mut CVillageWarSys,
     goods_war: &mut CGoodsWarMember,
     timer: &mut CTimer<TimerCallback>,
     village_war_callbacks: VillageWarCallbacks<TimerCallback>,
-    registry: &GoodsBasePropertiesRegistry,
-    original_name_index: &GoodsOriginalNameIndex,
-    coefficients: &PlayerPropertyCoefficients,
+    resources: &mut dyn WorldMainLoopResourceContext,
     load_player_largess: &mut dyn FnMut(&mut CPlayer),
     net_sessions: &CNetSessionManager,
     jjc: &mut CJJcSystem,
-    jjc_config: JjcRunConfig,
     jjc_context: &mut JjcContext,
     application_runtime: &WorldUnionApplicationRuntimeOwner,
     application_callbacks: &mut WorldUnionApplicationEffectCallbacks<'_>,
-    faction_chat_log_enabled: bool,
-    private_chat_log_enabled: bool,
-    delete_log_enabled: bool,
-    faction_create_log_enabled: bool,
     write_faction_create_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
-    faction_title_log_enabled: bool,
     write_faction_title_log:
         &mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
-    faction_purview_add_log_enabled: bool,
-    faction_purview_revoke_log_enabled: bool,
     write_faction_purview_log:
         &mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
-    faction_apply_log_enabled: bool,
     write_faction_apply_log:
         &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
-    faction_join_log_enabled: bool,
     write_faction_join_log:
         &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
-    faction_quit_log_enabled: bool,
     write_faction_quit_log:
         &mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
-    faction_fire_out_log_enabled: bool,
     write_faction_fire_out_log:
         &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
-    faction_master_log_enabled: bool,
     write_faction_master_log:
         &mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
-    faction_disband_log_enabled: bool,
     write_faction_disband_log: &mut dyn FnMut(i32, &[u8], i32, &[u8]),
     rs_player: &mut TiberiusRsPlayer,
     mut player_database: Option<&mut WorldTdsClient>,
@@ -20301,7 +20212,6 @@ async fn process_world_message<TimerCallback, DbMiscContextOwner, JjcContext>(
     skills: &mut CSkillFactory,
     mut rs_gods_battle: Option<&mut TiberiusRsGodsBattle>,
     mut gods_battle_database: Option<&mut WorldTdsClient>,
-    reload_context: &mut dyn WorldReloadContext,
     add_log_text: &mut dyn FnMut(&[u8]) -> AddLogTextDisposition,
     update_player: &mut dyn FnMut(i32),
     source: WorldMessageSource,
@@ -20312,6 +20222,31 @@ where
     DbMiscContextOwner: DbMiscContext,
     JjcContext: JjcRunContext + ?Sized,
 {
+    let mut resource_snapshot = resources.main_loop_resource_snapshot();
+    let registry = &resource_snapshot.registry;
+    let original_name_index = &resource_snapshot.original_name_index;
+    let coefficients = &resource_snapshot.coefficients;
+    let globe_setup = &resource_snapshot.globe_setup;
+    let jjc_config = globe_setup.jjc_run_config();
+    let region_router = &resource_snapshot.region_router;
+    let player_list = &mut resource_snapshot.player_list;
+    let log_system = &resource_snapshot.log_system;
+    let faction_chat_log_enabled = log_system.faction_chat_enabled();
+    let private_chat_log_enabled = log_system.private_chat_enabled();
+    let delete_log_enabled = log_system.delete_log_enabled();
+    let faction_create_log_enabled = log_system.faction_create_enabled();
+    let faction_title_log_enabled = log_system.faction_title_enabled();
+    let faction_purview_add_log_enabled = log_system.faction_purview_add_enabled();
+    let faction_purview_revoke_log_enabled = log_system.faction_purview_revoke_enabled();
+    let faction_apply_log_enabled = log_system.faction_apply_enabled();
+    let faction_join_log_enabled = log_system.faction_join_enabled();
+    let faction_quit_log_enabled = log_system.faction_quit_enabled();
+    let faction_fire_out_log_enabled = log_system.faction_fire_out_enabled();
+    let faction_master_log_enabled = log_system.faction_master_changed_enabled();
+    let faction_disband_log_enabled = log_system.faction_disband_enabled();
+    application_callbacks.faction_level_log_enabled = log_system.faction_level_enabled();
+    application_callbacks.faction_experience_log_enabled =
+        log_system.faction_experience_enabled();
     let message_type = message.message_type();
     let mut selector = WorldOwnerSelector {
         write_log_enabled: game.setup.use_log_system,
@@ -20351,7 +20286,7 @@ where
                     } = report.continuation.clone()
                     {
                         let configuration = game.send_initial_game_server_configuration(
-                            reload_context,
+                            &mut *resources,
                             socket_id,
                             game_server_index,
                             registry,
@@ -20501,7 +20436,7 @@ where
             rs_gods_battle.as_deref_mut(),
             rs_player,
             player_database.as_deref_mut(),
-            reload_context,
+            &mut *resources,
             message,
         )
         .await
@@ -23432,6 +23367,15 @@ where
 
         flags.consume(action);
         let flags_after_clear = flags.snapshot();
+        if action.reload_profile == b"AttackCitySys"
+            || action.reload_profile == b"CityWarPara"
+        {
+            let log_system = context.log_system();
+            application_callbacks.faction_level_log_enabled =
+                log_system.faction_level_enabled();
+            application_callbacks.faction_experience_log_enabled =
+                log_system.faction_experience_enabled();
+        }
         let reload_result = match action.kind {
             WorldReloadActionKind::Reload => match if action.reload_profile == b"CountryWar" {
                 game.reload_country_war(

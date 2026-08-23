@@ -501,6 +501,11 @@ impl TiberiusLargess {
         }
     }
 
+    /// Текущий размер той же общей map, которую читает `RefeashInfoText`.
+    pub(crate) fn entry_count(&self) -> usize {
+        self.entries.lock().len()
+    }
+
     /// Эквивалент `StartWorkerThread`: пропускает запуск при нулевом интервале
     /// и пока предыдущий проход ещё владеет worker-slot.
     pub(crate) fn start_worker(&self, world_number: u32) -> LargessWorkerStartOutcome {

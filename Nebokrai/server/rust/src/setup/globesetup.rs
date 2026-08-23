@@ -68,6 +68,7 @@ const BASE_MAX_RP_LEVEL_1_OFFSET: usize = 0x3F4;
 const BASE_MAX_RP_LEVEL_2_OFFSET: usize = 0x3F6;
 const PLAYER_SPEED_OFFSET: usize = 0x7F8;
 const MONSTER_NUMBER_SCALE_OFFSET: usize = 0x508;
+const SAVE_POINT_TIME_OFFSET: usize = 0x510;
 const AUCTION_ENABLED_OFFSET: usize = 0xC87;
 const AUCTION_FEE_MAXIMUM_OFFSET: usize = 0xC98;
 const AUCTION_FEE_MINIMUM_OFFSET: usize = 0xCA0;
@@ -270,6 +271,12 @@ impl GlobeSetupSnapshot {
     /// Масштаб количества монстров, передаваемый всем region-loader-ам.
     pub(crate) fn monster_number_scale(&self) -> f32 {
         self.read_f32(MONSTER_NUMBER_SCALE_OFFSET)
+    }
+
+    /// Возвращает точное поле `dwSavePointTime` по PDB-смещению `+0x510`.
+    /// `CGame::MainLoop` читает это значение при interval-gate сохранения.
+    pub(crate) fn save_point_time_ms(&self) -> u32 {
+        self.read_u32(SAVE_POINT_TIME_OFFSET)
     }
 
     pub(crate) fn gold_coin_limit(&self) -> u32 {
