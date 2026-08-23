@@ -16,8 +16,8 @@
 //! process-global registry.
 
 use super::cgoodsbaseproperties::{
-    CGoodsBaseProperties, GAP_GOODS_STACKING_LIMIT, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE,
-    GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
+    CGoodsBaseProperties, GAP_DAKONG_1, GAP_GOODS_STACKING_LIMIT, GAP_WEAPON_LEVEL,
+    GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use super::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -184,6 +184,23 @@ impl CGoods {
                 properties.goods_type() == GOODS_TYPE_EQUIPMENT
                     && self.query_attribute(GAP_WEAPON_LEVEL)
             })
+    }
+
+    /// Exact `QueryDaKongCount` считает только непрерывный prefix семи
+    /// instance/base addon-слотов со значением value-id 1 в диапазоне 2..=8.
+    pub(crate) fn da_kong_count(&self, factory: &CGoodsFactory) -> u32 {
+        let mut count = 0;
+        for offset in 0..=6 {
+            let value = self.addon_property_value(factory, GAP_DAKONG_1 + offset, 1);
+            if value < 2 {
+                return count;
+            }
+            if 8 < value {
+                break;
+            }
+            count += 1;
+        }
+        count
     }
 
     pub(crate) fn addon_property_value(
