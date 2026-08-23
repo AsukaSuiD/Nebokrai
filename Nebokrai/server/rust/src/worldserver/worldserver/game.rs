@@ -1532,8 +1532,8 @@ use crate::worldserver::appworld::message::teammessage::{
     WorldTeamMessageOutcome, on_team_message,
 };
 use crate::worldserver::appworld::message::writelogmessage::{
-    WorldWriteLogCommand, WorldWriteLogMessageDispatch, WorldWriteLogMessageOutcome,
-    on_write_log_message,
+    WorldFactionLogWrite, WorldWriteLogCommand, WorldWriteLogMessageDispatch,
+    WorldWriteLogMessageOutcome, on_write_log_message,
 };
 use crate::worldserver::appworld::misc::{
     CopyNumberResetReport, CopyNumberScheduleBlock, CopyNumberScheduleReport,
@@ -5286,6 +5286,9 @@ pub(crate) struct WorldMainLoopCallbacks<'a> {
     pub(crate) reload_context: &'a mut dyn WorldReloadContext,
     /// Конкретный `CLargess` owner для исходного `StartWorkerThread` вызова.
     pub(crate) largess: &'a TiberiusLargess,
+    /// Общий producer исходного `CWriteLogQueue`; faction-owner-ы ставят
+    /// typed записи в тот же FIFO непосредственно в своих точках вызова.
+    pub(crate) write_log_queue: WorldWriteLogQueue,
     pub(crate) launch_save_thread:
         &'a mut dyn FnMut(&WorldSaveThreadLaunchRequest) -> WorldSaveThreadHandleState,
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
@@ -5299,46 +5302,24 @@ pub(crate) struct WorldMainLoopCallbacks<'a> {
     pub(crate) delete_log_enabled: bool,
     /// Внешний feature-gate `CLogSystem::FactionCreateEnabled`.
     pub(crate) faction_create_log_enabled: bool,
-    pub(crate) write_faction_create_log:
-        &'a mut dyn FnMut(i32, &[u8], i32, &[u8]),
     /// Внешний feature-gate `CLogSystem::FactionTitleEnabled`.
     pub(crate) faction_title_log_enabled: bool,
-    pub(crate) write_faction_title_log:
-        &'a mut dyn FnMut(i32, &[u8], &[u8], &[u8], i32, &[u8], i32, &[u8]),
     pub(crate) faction_purview_add_log_enabled: bool,
     pub(crate) faction_purview_revoke_log_enabled: bool,
-    pub(crate) write_faction_purview_log:
-        &'a mut dyn FnMut(i32, &[u8], i32, i32, &[u8], i32, &[u8], i32),
     pub(crate) faction_level_log_enabled: bool,
-    pub(crate) write_faction_level_log:
-        &'a mut dyn FnMut(i32, &[u8], i32, i32, &[u8]),
     pub(crate) faction_experience_log_enabled: bool,
-    pub(crate) write_faction_experience_log:
-        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, i32),
     /// Внешний feature-gate `CLogSystem::FactionApplyEnabled`.
     pub(crate) faction_apply_log_enabled: bool,
-    pub(crate) write_faction_apply_log:
-        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
     /// Внешний feature-gate `CLogSystem::FactionJoinEnabled`.
     pub(crate) faction_join_log_enabled: bool,
-    pub(crate) write_faction_join_log:
-        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
     /// Внешний feature-gate `CLogSystem::FactionQuitEnabled`.
     pub(crate) faction_quit_log_enabled: bool,
-    pub(crate) write_faction_quit_log:
-        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32),
     /// Внешний feature-gate `CLogSystem::FactionFireOutEnabled`.
     pub(crate) faction_fire_out_log_enabled: bool,
-    pub(crate) write_faction_fire_out_log:
-        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8], i32),
     /// Внешний feature-gate `CLogSystem::FactionMasterChangedEnabled`.
     pub(crate) faction_master_log_enabled: bool,
-    pub(crate) write_faction_master_log:
-        &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, &[u8]),
     /// Внешний feature-gate `CLogSystem::FactionDisbandEnabled`.
     pub(crate) faction_disband_log_enabled: bool,
-    pub(crate) write_faction_disband_log:
-        &'a mut dyn FnMut(i32, &[u8], i32, &[u8]),
     pub(crate) get_lei_ting_local_time: &'a mut dyn FnMut() -> LeiTingLocalTime,
     pub(crate) wait: &'a mut dyn FnMut(u32),
     pub(crate) output_debug: &'a mut dyn FnMut(&'static str),
@@ -15502,6 +15483,219 @@ impl CGame {
         DbMiscContextOwner: DbMiscContext,
         JjcContext: WorldJjcRuntimeContext,
     {
+        let queue = callbacks.write_log_queue.clone();
+        let mut write_faction_create_log =
+            move |faction_id: i32, faction_name: &[u8], player_id: i32, player_name: &[u8]| {
+                let _ = queue.push(WorldWriteLogCommand::FactionLog(
+                    WorldFactionLogWrite::Faction {
+                        faction_id,
+                        faction_name: faction_name.to_vec(),
+                        player_id,
+                        player_name: player_name.to_vec(),
+                        log_type: 0,
+                    },
+                ));
+            };
+        let queue = callbacks.write_log_queue.clone();
+        let mut write_faction_title_log = move |
+            member_id: i32,
+            member_name: &[u8],
+            old_title: &[u8],
+            new_title: &[u8],
+            manager_id: i32,
+            manager_name: &[u8],
+            faction_id: i32,
+            faction_name: &[u8],
+        | {
+            let _ = queue.push(WorldWriteLogCommand::FactionLog(
+                WorldFactionLogWrite::Title {
+                    member_id,
+                    member_name: member_name.to_vec(),
+                    old_title: old_title.to_vec(),
+                    new_title: new_title.to_vec(),
+                    manager_id,
+                    manager_name: manager_name.to_vec(),
+                    faction_id,
+                    faction_name: faction_name.to_vec(),
+                },
+            ));
+        };
+        let queue = callbacks.write_log_queue.clone();
+        let mut write_faction_purview_log = move |
+            member_id: i32,
+            member_name: &[u8],
+            purview: i32,
+            manager_id: i32,
+            manager_name: &[u8],
+            faction_id: i32,
+            faction_name: &[u8],
+            log_type: i32,
+        | {
+            let _ = queue.push(WorldWriteLogCommand::FactionLog(
+                WorldFactionLogWrite::Purview {
+                    member_id,
+                    member_name: member_name.to_vec(),
+                    purview,
+                    manager_id,
+                    manager_name: manager_name.to_vec(),
+                    faction_id,
+                    faction_name: faction_name.to_vec(),
+                    log_type,
+                },
+            ));
+        };
+        let queue = callbacks.write_log_queue.clone();
+        let mut write_faction_level_log = move |
+            faction_id: i32,
+            faction_name: &[u8],
+            level: i32,
+            master_id: i32,
+            master_name: &[u8],
+        | {
+            let _ = queue.push(WorldWriteLogCommand::FactionLog(
+                WorldFactionLogWrite::Level {
+                    faction_id,
+                    faction_name: faction_name.to_vec(),
+                    level,
+                    master_id,
+                    master_name: master_name.to_vec(),
+                },
+            ));
+        };
+        let queue = callbacks.write_log_queue.clone();
+        let mut write_faction_experience_log = move |
+            faction_id: i32,
+            faction_name: &[u8],
+            member_id: i32,
+            member_name: &[u8],
+            before_experience: i32,
+            experience: i32,
+        | {
+            let _ = queue.push(WorldWriteLogCommand::FactionLog(
+                WorldFactionLogWrite::Experience {
+                    faction_id,
+                    faction_name: faction_name.to_vec(),
+                    member_id,
+                    member_name: member_name.to_vec(),
+                    before_experience,
+                    experience,
+                },
+            ));
+        };
+        let queue = callbacks.write_log_queue.clone();
+        let mut write_faction_apply_log = move |
+            faction_id: i32,
+            faction_name: &[u8],
+            player_id: i32,
+            player_name: &[u8],
+            log_type: i32,
+        | {
+            let _ = queue.push(WorldWriteLogCommand::FactionLog(
+                WorldFactionLogWrite::Faction {
+                    faction_id,
+                    faction_name: faction_name.to_vec(),
+                    player_id,
+                    player_name: player_name.to_vec(),
+                    log_type,
+                },
+            ));
+        };
+        let queue = callbacks.write_log_queue.clone();
+        let mut write_faction_join_log = move |
+            member_id: i32,
+            member_name: &[u8],
+            manager_id: i32,
+            manager_name: &[u8],
+            faction_id: i32,
+            faction_name: &[u8],
+            log_type: i32,
+        | {
+            let _ = queue.push(WorldWriteLogCommand::FactionLog(
+                WorldFactionLogWrite::Member {
+                    member_id,
+                    member_name: member_name.to_vec(),
+                    manager_id,
+                    manager_name: manager_name.to_vec(),
+                    faction_id,
+                    faction_name: faction_name.to_vec(),
+                    log_type,
+                },
+            ));
+        };
+        let queue = callbacks.write_log_queue.clone();
+        let mut write_faction_quit_log = move |
+            faction_id: i32,
+            faction_name: &[u8],
+            player_id: i32,
+            player_name: &[u8],
+            log_type: i32,
+        | {
+            let _ = queue.push(WorldWriteLogCommand::FactionLog(
+                WorldFactionLogWrite::Faction {
+                    faction_id,
+                    faction_name: faction_name.to_vec(),
+                    player_id,
+                    player_name: player_name.to_vec(),
+                    log_type,
+                },
+            ));
+        };
+        let queue = callbacks.write_log_queue.clone();
+        let mut write_faction_fire_out_log = move |
+            member_id: i32,
+            member_name: &[u8],
+            manager_id: i32,
+            manager_name: &[u8],
+            faction_id: i32,
+            faction_name: &[u8],
+            log_type: i32,
+        | {
+            let _ = queue.push(WorldWriteLogCommand::FactionLog(
+                WorldFactionLogWrite::Member {
+                    member_id,
+                    member_name: member_name.to_vec(),
+                    manager_id,
+                    manager_name: manager_name.to_vec(),
+                    faction_id,
+                    faction_name: faction_name.to_vec(),
+                    log_type,
+                },
+            ));
+        };
+        let queue = callbacks.write_log_queue.clone();
+        let mut write_faction_master_log = move |
+            old_master_id: i32,
+            old_master_name: &[u8],
+            new_master_id: i32,
+            new_master_name: &[u8],
+            faction_id: i32,
+            faction_name: &[u8],
+        | {
+            let _ = queue.push(WorldWriteLogCommand::FactionLog(
+                WorldFactionLogWrite::Master {
+                    old_master_id,
+                    old_master_name: old_master_name.to_vec(),
+                    new_master_id,
+                    new_master_name: new_master_name.to_vec(),
+                    faction_id,
+                    faction_name: faction_name.to_vec(),
+                },
+            ));
+        };
+        let queue = callbacks.write_log_queue.clone();
+        let mut write_faction_disband_log =
+            move |faction_id: i32, faction_name: &[u8], player_id: i32, player_name: &[u8]| {
+                let _ = queue.push(WorldWriteLogCommand::FactionLog(
+                    WorldFactionLogWrite::Faction {
+                        faction_id,
+                        faction_name: faction_name.to_vec(),
+                        player_id,
+                        player_name: player_name.to_vec(),
+                        log_type: 1,
+                    },
+                ));
+            };
+
         let profile_initialization = initialize_main_loop_profile_if_needed(
             state.initialization,
             state.profile,
@@ -15558,9 +15752,9 @@ impl CGame {
             random: &mut *callbacks.random,
             refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
             faction_level_log_enabled: callbacks.faction_level_log_enabled,
-            write_faction_level_log: &mut *callbacks.write_faction_level_log,
+            write_faction_level_log: &mut write_faction_level_log,
             faction_experience_log_enabled: callbacks.faction_experience_log_enabled,
-            write_faction_experience_log: &mut *callbacks.write_faction_experience_log,
+            write_faction_experience_log: &mut write_faction_experience_log,
         };
         let reload = reload_profiles(
             self,
@@ -15717,9 +15911,9 @@ impl CGame {
             random: &mut *callbacks.random,
             refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
             faction_level_log_enabled: callbacks.faction_level_log_enabled,
-            write_faction_level_log: &mut *callbacks.write_faction_level_log,
+            write_faction_level_log: &mut write_faction_level_log,
             faction_experience_log_enabled: callbacks.faction_experience_log_enabled,
-            write_faction_experience_log: &mut *callbacks.write_faction_experience_log,
+            write_faction_experience_log: &mut write_faction_experience_log,
         };
         let process_message = match self.process_message_main_loop_stage(
             owners.honor_ranks,
@@ -15759,24 +15953,24 @@ impl CGame {
             callbacks.private_chat_log_enabled,
             callbacks.delete_log_enabled,
             callbacks.faction_create_log_enabled,
-            &mut *callbacks.write_faction_create_log,
+            &mut write_faction_create_log,
             callbacks.faction_title_log_enabled,
-            &mut *callbacks.write_faction_title_log,
+            &mut write_faction_title_log,
             callbacks.faction_purview_add_log_enabled,
             callbacks.faction_purview_revoke_log_enabled,
-            &mut *callbacks.write_faction_purview_log,
+            &mut write_faction_purview_log,
             callbacks.faction_apply_log_enabled,
-            &mut *callbacks.write_faction_apply_log,
+            &mut write_faction_apply_log,
             callbacks.faction_join_log_enabled,
-            &mut *callbacks.write_faction_join_log,
+            &mut write_faction_join_log,
             callbacks.faction_quit_log_enabled,
-            &mut *callbacks.write_faction_quit_log,
+            &mut write_faction_quit_log,
             callbacks.faction_fire_out_log_enabled,
-            &mut *callbacks.write_faction_fire_out_log,
+            &mut write_faction_fire_out_log,
             callbacks.faction_master_log_enabled,
-            &mut *callbacks.write_faction_master_log,
+            &mut write_faction_master_log,
             callbacks.faction_disband_log_enabled,
-            &mut *callbacks.write_faction_disband_log,
+            &mut write_faction_disband_log,
             owners.rs_player,
             owners.player_database.as_deref_mut(),
             state.save_thread_handle,
@@ -15901,9 +16095,9 @@ impl CGame {
             random: &mut *callbacks.random,
             refresh_owned_city: &mut *callbacks.refresh_union_owned_city,
             faction_level_log_enabled: callbacks.faction_level_log_enabled,
-            write_faction_level_log: &mut *callbacks.write_faction_level_log,
+            write_faction_level_log: &mut write_faction_level_log,
             faction_experience_log_enabled: callbacks.faction_experience_log_enabled,
-            write_faction_experience_log: &mut *callbacks.write_faction_experience_log,
+            write_faction_experience_log: &mut write_faction_experience_log,
         };
         let net_sessions = self.run_main_loop_net_session_stage(
             owners.net_sessions,
@@ -15935,9 +16129,9 @@ impl CGame {
                 &mut *callbacks.refresh_union_owned_city,
                 &mut *callbacks.update_union_player,
                 callbacks.faction_master_log_enabled,
-                &mut *callbacks.write_faction_master_log,
+                &mut write_faction_master_log,
                 callbacks.faction_disband_log_enabled,
-                &mut *callbacks.write_faction_disband_log,
+                &mut write_faction_disband_log,
             )
             .map_err(|block| Box::new(WorldMainLoopBlock::Minute(block)))?;
         let bai_tan_jjc = self
