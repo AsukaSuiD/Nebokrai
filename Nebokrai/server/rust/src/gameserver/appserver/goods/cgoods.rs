@@ -4,8 +4,9 @@
 //! `server/gameserver/appserver/goods/cgoods.h/.cpp`. Материализованы shape
 //! identity, base-properties index, amount/price/add-ticket/description,
 //! ordered addon storage, first-match lookup с fallback в registry, stack
-//! classification/limit и wrapping weight. `Vec` и owned bytes заменяют MSVC
-//! storage, не меняя порядка и signed 32-bit arithmetic.
+//! classification/limit, equipment-upgrade eligibility и wrapping weight.
+//! `Vec` и owned bytes заменяют MSVC storage, не меняя порядка и signed 32-bit
+//! arithmetic.
 //! Единственный legacy null-deref в `CanStacked` при потерянном registry key
 //! выражен typed block-ом, а не тихим `false`.
 //!
@@ -15,7 +16,8 @@
 //! process-global registry.
 
 use super::cgoodsbaseproperties::{
-    CGoodsBaseProperties, GAP_GOODS_STACKING_LIMIT, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_USELESS,
+    CGoodsBaseProperties, GAP_GOODS_STACKING_LIMIT, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE,
+    GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use super::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -171,6 +173,17 @@ impl CGoods {
         self.addon_properties
             .iter()
             .any(|property| property.property_type == property_type)
+    }
+
+    /// Exact `CanUpgraded` проверяет catalog type, но сам upgrade marker ищет
+    /// только среди instance-addon-ов. Registry fallback здесь не применяется.
+    pub(crate) fn can_upgraded(&self, factory: &CGoodsFactory) -> bool {
+        factory
+            .query_goods_base_properties(self.base_properties_index)
+            .is_some_and(|properties| {
+                properties.goods_type() == GOODS_TYPE_EQUIPMENT
+                    && self.query_attribute(GAP_WEAPON_LEVEL)
+            })
     }
 
     pub(crate) fn addon_property_value(
