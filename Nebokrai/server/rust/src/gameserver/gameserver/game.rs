@@ -28,6 +28,10 @@
 //! `FindWindow` single-instance guard; недоказанный default billing bind-port
 //! остаётся typed-границей. Полный общий `Init/Release`, остальные загрузчики
 //! и прочие maps ниже остаются RAW;
+//! Ранний `Init` связан через обязательный World client, общий MSVCRT RNG и
+//! sequence registry до необязательной Billing-попытки. Tokio/socket types
+//! заменяют ненаблюдаемые `CBaseMessage::Initial` и `CMySocket::MySocketInit`;
+//! следующий незакрытый шаг — gameplay owners после Billing.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -48,6 +52,9 @@ use std::time::Duration;
 
 use rustix::system::uname;
 
+use crate::gameserver::appserver::message::sequencestring::{
+    CSequenceRegistry, SequenceRegistryInitializationError,
+};
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver, ShapeView};
@@ -619,9 +626,51 @@ pub(crate) enum GameNetworkInitializationError {
     Host(ServerHostError),
 }
 
+#[derive(Debug)]
+pub(crate) struct GameInitializationThroughBillingReport {
+    pub(crate) setup: GameRuntimeSetupReport,
+    pub(crate) world: GameClientInitialization,
+    pub(crate) sequence_elements: usize,
+    pub(crate) billing: GameClientInitialization,
+}
+
+#[derive(Debug)]
+pub(crate) enum GameInitializationThroughBillingError {
+    Setup(GameRuntimeSetupError),
+    WorldUnavailable {
+        setup: GameRuntimeSetupReport,
+        connection: GameClientInitialization,
+    },
+    Sequence(SequenceRegistryInitializationError),
+}
+
+impl fmt::Display for GameInitializationThroughBillingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Setup(error) => error.fmt(formatter),
+            Self::WorldUnavailable { .. } => {
+                formatter.write_str("GameServer не подключился к обязательному WorldServer")
+            }
+            Self::Sequence(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for GameInitializationThroughBillingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Setup(error) => Some(error),
+            Self::WorldUnavailable { .. } => None,
+            Self::Sequence(error) => Some(error),
+        }
+    }
+}
+
 pub(crate) struct CGame {
     setup: GameSetup,
     setup_ex: GameSetupEx,
+    random_state: u32,
+    sequence_registry: CSequenceRegistry,
     login_server_id: i32,
     world_server_id: i32,
     network_setup: Option<GameNetworkSetup>,
@@ -641,6 +690,8 @@ impl CGame {
         Self {
             setup: GameSetup::default(),
             setup_ex: GameSetupEx::default(),
+            random_state: 1,
+            sequence_registry: CSequenceRegistry::default(),
             login_server_id: 0,
             world_server_id: 0,
             network_setup: None,
@@ -694,6 +745,46 @@ impl CGame {
         };
         self.network_setup = Some(self.setup.network_setup(&self.setup_ex)?);
         Ok(GameRuntimeSetupReport { setup, setup_ex })
+    }
+
+    /// Выполняет достигнутый `Init` от первого RNG seed до Billing-попытки.
+    /// World failure завершает цепочку; Billing failure только остаётся в
+    /// отчёте, как исходное предупреждение с последующим продолжением.
+    pub(crate) async fn init_through_billing(
+        &mut self,
+        paths: &GameRuntimePaths,
+        wall_time_seconds: u32,
+        sequence_seed_ms: u32,
+    ) -> Result<GameInitializationThroughBillingReport, GameInitializationThroughBillingError> {
+        self.random_state = wall_time_seconds;
+        let _discarded_roll = game_legacy_random(&mut self.random_state, 100);
+
+        let setup = self
+            .load_runtime_setup(paths)
+            .map_err(GameInitializationThroughBillingError::Setup)?;
+        let world = self.init_world_client().await;
+        if matches!(&world, GameClientInitialization::Failed { .. }) {
+            return Err(GameInitializationThroughBillingError::WorldUnavailable {
+                setup,
+                connection: world,
+            });
+        }
+
+        self.random_state = sequence_seed_ms;
+        let sequence_count = self.setup.sequence_count;
+        let random_state = &mut self.random_state;
+        self.sequence_registry
+            .initialize(sequence_count, || next_msvc_rand(random_state))
+            .map_err(GameInitializationThroughBillingError::Sequence)?;
+        let sequence_elements = self.sequence_registry.len();
+
+        let billing = self.init_billing_client().await;
+        Ok(GameInitializationThroughBillingReport {
+            setup,
+            world,
+            sequence_elements,
+            billing,
+        })
     }
 
     pub(crate) fn net_server(&self) -> &CMyNetServer {
@@ -759,6 +850,10 @@ impl CGame {
 
     pub(crate) const fn server_ids(&self) -> (i32, i32) {
         (self.login_server_id, self.world_server_id)
+    }
+
+    pub(crate) const fn sequence_registry(&self) -> &CSequenceRegistry {
+        &self.sequence_registry
     }
 
     /// Публикует listener-owner до `Host`, затем сохраняет setup-порядок.
@@ -1130,6 +1225,23 @@ fn missing_setup_reconnect(direction: GameUpstreamDirection) -> GameReconnectPub
             direction,
             failure: Some(GameClientInitializationFailure::MissingNetworkSetup),
         }],
+    }
+}
+
+fn next_msvc_rand(state: &mut u32) -> u32 {
+    *state = state.wrapping_mul(214_013).wrapping_add(2_531_011);
+    (*state >> 16) & 0x7fff
+}
+
+fn game_legacy_random(state: &mut u32, upper_bound: i32) -> i32 {
+    if upper_bound <= 0 {
+        return 0;
+    }
+    loop {
+        let value = (i64::from(next_msvc_rand(state)) * i64::from(upper_bound) / 0x7fff) as i32;
+        if value != upper_bound || value <= 0 {
+            return value;
+        }
     }
 }
 
