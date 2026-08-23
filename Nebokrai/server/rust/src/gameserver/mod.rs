@@ -14,6 +14,7 @@ pub(crate) mod appserver {
         pub(crate) mod cbank;
         pub(crate) mod ccontainer;
         pub(crate) mod cdepot;
+        pub(crate) mod cequipmentcontainer;
         pub(crate) mod cequipmentcomposeshadowcontainer;
         pub(crate) mod cequipmentdakongcontainer;
         pub(crate) mod cequipmentupgradeshadowcontainer;
