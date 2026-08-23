@@ -59,6 +59,8 @@
 //! skills/AI Init и around serialization остаются concrete context callbacks.
 //! Exact EXE подтверждает legacy quirk: его пятый bool не читается, enter
 //! message отправляется всегда, а шестой bool подавляет ранний guard-hook.
+//! One-second AI fragment сохраняет wrapping respawn deadline, сначала пишет
+//! last-reset и затем восполняет только deficit `count-living_count`.
 //! `BTreeMap` используется только для identity lookup: observable обход
 //! старого MSVC `stdext::hash_map` для startup name-cache пока остаётся у
 //! `ServerRegionDecodeContext`, а не подменяется сортировкой Rust-map.
@@ -401,6 +403,9 @@ pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
 
     /// Virtual `OnRefreshRegion(refreshIndex)` для guard AI 10/11.
     fn refresh_guard_region(&mut self, refresh_index: i32);
+
+    /// Ветка `bMoveMonsterWhenRefeash`: точный area/AI owner ещё не замкнут.
+    fn move_existing_monsters_for_refresh(&mut self, refresh_index: i32);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -412,6 +417,13 @@ pub(crate) enum ServerRegionMonsterRectBlock {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ServerRegionMonsterRectReport {
+    pub(crate) created_ids: Vec<i32>,
+    pub(crate) missing_properties: usize,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerRegionMonsterRefreshReport {
+    pub(crate) due_groups: Vec<i32>,
     pub(crate) created_ids: Vec<i32>,
     pub(crate) missing_properties: usize,
 }
@@ -585,6 +597,59 @@ pub(crate) struct CServerRegion {
 }
 
 impl CServerRegion {
+    /// Выполняет только исходный one-second monster refresh fragment region AI;
+    /// modulo gate `s_lAITick % (1000/g_ms)` принадлежит caller-у.
+    pub(crate) fn refresh_monster_groups<Context: ServerRegionMonsterContext>(
+        &mut self,
+        now_ms: u32,
+        area_width: i32,
+        area_height: i32,
+        context: &mut Context,
+    ) -> Result<ServerRegionMonsterRefreshReport, ServerRegionMonsterRectBlock> {
+        let move_existing = self
+            .return_setup
+            .is_some_and(|setup| setup.move_monster_when_refeash != 0);
+        let mut due = Vec::new();
+        for (index, setup) in self.monster_setups.iter_mut().enumerate() {
+            if setup.reset_time > 0
+                && setup.reset_time as u32 <= now_ms.wrapping_sub(setup.last_reset_time_ms)
+            {
+                setup.last_reset_time_ms = now_ms;
+                due.push((index, setup.index));
+            }
+        }
+
+        let mut report = ServerRegionMonsterRefreshReport::default();
+        for (setup_index, refresh_index) in due {
+            report.due_groups.push(refresh_index);
+            if move_existing {
+                context.move_existing_monsters_for_refresh(refresh_index);
+            }
+            let amount = self.monster_setups[setup_index]
+                .count
+                .wrapping_sub(self.monster_setups[setup_index].living_count);
+            if amount <= 0 {
+                continue;
+            }
+            let setup = self.monster_setups[setup_index].clone();
+            let spawned = self.add_monster_rect(
+                &setup,
+                amount,
+                false,
+                false,
+                now_ms,
+                area_width,
+                area_height,
+                context,
+            )?;
+            report.created_ids.extend(spawned.created_ids);
+            report.missing_properties = report
+                .missing_properties
+                .wrapping_add(spawned.missing_properties);
+        }
+        Ok(report)
+    }
+
     pub(crate) fn add_monster_rect<Context: ServerRegionMonsterContext>(
         &mut self,
         setup: &ServerRegionMonsterSetup,
@@ -2780,8 +2845,9 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // FUNCTION: CServerRegion::AI
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // IMPLEMENTED_SUBCHAIN: сбор, unique insert, state reset и отложенное
-// применение `CS_CHANGEAREA` материализованы выше; weather/monster/delete/
-// remove/change-region/ClearPlayerAI остаются RAW в этом блоке.
+// применение `CS_CHANGEAREA`, а также monster refresh due/deficit/spawn
+// материализованы выше; weather/delete/remove/change-region/ClearPlayerAI и
+// точный move-existing-monsters area callback остаются RAW в этом блоке.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:87
