@@ -1,18 +1,22 @@
-//! Правила вставки больших отверстий исторического Miracle.
+//! Правила вставки больших отверстий `CDaKongXiangQian` World/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner
+//! `public/dakongxiangqian.h/.cpp`.
 //!
-//! Контракт World `CDaKongXiangQian::LoadFile`,
-//! `AddToByteArray` и статического `GetAddType`
-//!:; GameServer decoder и runtime query ниже
-//! остаются. `GetAddType` не зависит от загруженного
+//! `GetAddType` не зависит от загруженного
 //! `delux_modify`: EXE вставляет фиксированный набор addon property types в
-//! переданный set и всегда возвращает `true`. Точная пара:
+//! переданный set и всегда возвращает `true`.
 //! Owner читает marker-oriented `data/dakongxiangqian.ini`: main vector и
 //! три ordered attribute map очищаются до открытия, а `DaKongDeluxModify`
 //! сохраняется и дополняется отдельным optional resource. `BTreeMap` заменяет
 //! только MSVC map plumbing, сохраняя order wire `0x2B`; parser намеренно
 //! принимает частичный текст как исходный formatted-stream owner.
+//! Game decoder также очищает primary state, но дописывает deluxe vector.
+//! Gameplay random/query family остаётся RAW.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DaKongInfo {
@@ -74,12 +78,12 @@ pub(crate) enum DaKongSerializeError {
 }
 
 impl CDaKongXiangQian {
- /// Статический World owner `GetAddType` ( ).
- ///
- /// Сохраняет содержимое переданного set и добавляет точно те 34 raw enum
- /// значения, которые EXE передаёт в `std::set::insert`; возвращаемый
- /// `true` является частью исходной сигнатуры, хотя caller его не
- /// использует.
+    /// Статический World owner `GetAddType` ( ).
+    ///
+    /// Сохраняет содержимое переданного set и добавляет точно те 34 raw enum
+    /// значения, которые EXE передаёт в `std::set::insert`; возвращаемый
+    /// `true` является частью исходной сигнатуры, хотя caller его не
+    /// использует.
     pub(crate) fn get_add_type(destination: &mut BTreeSet<i32>) -> bool {
         const ADDON_TYPES: [i32; 34] = [
             0x83, 0x82, 0x81, 0x80, 0x78, 0x77, 0x76, 0x75, 0x69, 0x61, 0x60, 0x5F, 0x5D, 0x5C,
@@ -91,7 +95,7 @@ impl CDaKongXiangQian {
         true
     }
 
- /// Оригинал pre-open transition: deluxe modifiers deliberately persist.
+    /// Оригинал pre-open transition: deluxe modifiers deliberately persist.
     pub(crate) fn clear_primary_state(&mut self) {
         self.info.clear();
         for attributes in &mut self.external_attributes {
@@ -99,7 +103,7 @@ impl CDaKongXiangQian {
         }
     }
 
- /// Replaces the owner-internal `rfOpen` calls with supplied resources.
+    /// Replaces the owner-internal `rfOpen` calls with supplied resources.
     pub(crate) fn load_from_resources(
         &mut self,
         main: Option<&[u8]>,
@@ -160,15 +164,14 @@ impl CDaKongXiangQian {
                         return;
                     };
                     if let Some(attributes) = self.external_attributes.get_mut(group) {
-                        attributes
-                            .entry(goods_id as u32)
-                            .or_default()
-                            .push(DaKongExternalAttribute {
+                        attributes.entry(goods_id as u32).or_default().push(
+                            DaKongExternalAttribute {
                                 property_type: values[0],
                                 probability: values[1],
                                 minimum: values[2],
                                 maximum: values[3],
-                            });
+                            },
+                        );
                     }
                 }
             }
@@ -193,7 +196,7 @@ impl CDaKongXiangQian {
         }
     }
 
- /// Wire: info, map1, map2, map3, then the accumulated deluxe vector.
+    /// Wire: info, map1, map2, map3, then the accumulated deluxe vector.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -246,7 +249,95 @@ impl CDaKongXiangQian {
     pub(crate) const fn key(&self) -> bool {
         self.key
     }
+
+    /// Воспроизводит статический Game decoder selector-а `0x2B`.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<DaKongDecodeReport, DaKongDecodeError> {
+        self.clear_primary_state();
+
+        let info_count = read_wire_i32(source, cursor)?;
+        for _ in 0..info_count.max(0) {
+            self.info.push(DaKongInfo {
+                probability: read_wire_i32(source, cursor)?,
+                red: read_wire_i32(source, cursor)?,
+                green: read_wire_i32(source, cursor)?,
+                blue: read_wire_i32(source, cursor)?,
+                yellow: read_wire_i32(source, cursor)?,
+                cyan: read_wire_i32(source, cursor)?,
+                purple: read_wire_i32(source, cursor)?,
+                delux: read_wire_i32(source, cursor)?,
+            });
+        }
+
+        for map_index in 0..self.external_attributes.len() {
+            let goods_count = read_wire_i32(source, cursor)?;
+            for _ in 0..goods_count.max(0) {
+                let goods_id = read_wire_u32(source, cursor)?;
+                let attribute_count = read_wire_i32(source, cursor)?;
+                for _ in 0..attribute_count.max(0) {
+                    let attribute = DaKongExternalAttribute {
+                        property_type: read_wire_i32(source, cursor)?,
+                        probability: read_wire_i32(source, cursor)?,
+                        minimum: read_wire_i32(source, cursor)?,
+                        maximum: read_wire_i32(source, cursor)?,
+                    };
+                    self.external_attributes[map_index]
+                        .entry(goods_id)
+                        .or_default()
+                        .push(attribute);
+                }
+            }
+        }
+
+        let delux_count = read_wire_i32(source, cursor)?;
+        for _ in 0..delux_count.max(0) {
+            self.delux_modify.push(DaKongDeluxModify {
+                property_type: read_wire_i32(source, cursor)?,
+                add_type: read_wire_i32(source, cursor)?,
+            });
+        }
+
+        Ok(DaKongDecodeReport {
+            info: self.info.len(),
+            external_attributes: self
+                .external_attributes
+                .iter()
+                .flat_map(BTreeMap::values)
+                .map(Vec::len)
+                .sum(),
+            delux_modify: self.delux_modify.len(),
+        })
+    }
 }
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DaKongDecodeReport {
+    pub(crate) info: usize,
+    pub(crate) external_attributes: usize,
+    pub(crate) delux_modify: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DaKongDecodeError {
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for DaKongDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "DaKong snapshot обрывается на {}: нужно {}, доступно {}",
+            self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for DaKongDecodeError {}
 
 fn write_count(destination: &mut Vec<u8>, count: usize) -> Result<(), DaKongSerializeError> {
     let count = i32::try_from(count).map_err(|_| DaKongSerializeError::CountOverflow)?;
@@ -337,5 +428,34 @@ fn parse_legacy_i32(token: &[u8]) -> Option<i32> {
         parsed = true;
         result = result.saturating_mul(10).saturating_add(i32::from(digit));
     }
-    parsed.then_some(if negative { result.saturating_neg() } else { result })
+    parsed.then_some(if negative {
+        result.saturating_neg()
+    } else {
+        result
+    })
+}
+
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, DaKongDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, DaKongDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], DaKongDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(DaKongDecodeError {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes.try_into().expect("размер DaKong scalar уже проверен"))
 }

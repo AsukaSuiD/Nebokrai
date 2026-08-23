@@ -39,6 +39,7 @@ use crate::gameserver::gameserver::game::{CGame, GameNetworkInitializationError}
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
+use crate::public::dakongxiangqian::{DaKongDecodeError, DaKongDecodeReport};
 use crate::public::dupliregionsetup::DupliRegionDecodeError;
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpDecodeError, BattleFairyExpDecodeReport};
 use crate::setup::changebody::ChangeBodyDecodeError;
@@ -78,6 +79,7 @@ const NEW_SKILL_MONSTER_SELECTOR: i32 = 0x22;
 const GOODS_DESTROY_SELECTOR: i32 = 0x23;
 const CHANGE_BODY_SELECTOR: i32 = 0x24;
 const HONOR_ELIMINATE_SELECTOR: i32 = 0x26;
+const DA_KONG_SELECTOR: i32 = 0x2b;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -195,6 +197,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
         level_difference: i32,
         minimum_level: i32,
     },
+    DaKong(DaKongDecodeReport),
     ThingSetup {
         entries: usize,
     },
@@ -221,6 +224,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     GoodsDestroy(GoodsDestroyDecodeError),
     ChangeBody(ChangeBodyDecodeError),
     HonorEliminate(HonorEliminateDecodeError),
+    DaKong(DaKongDecodeError),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -251,6 +255,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::GoodsDestroy(error) => error.fmt(formatter),
             Self::ChangeBody(error) => error.fmt(formatter),
             Self::HonorEliminate(error) => error.fmt(formatter),
+            Self::DaKong(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -278,6 +283,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::GoodsDestroy(error) => Some(error),
             Self::ChangeBody(error) => Some(error),
             Self::HonorEliminate(error) => Some(error),
+            Self::DaKong(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -506,6 +512,16 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
                 level_difference,
                 minimum_level,
             }))
+        }
+        DA_KONG_SELECTOR => {
+            let report = match game
+                .da_kong_xiang_qian_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::DaKong(error))),
+            };
+            Some(Ok(GameOwnedStartupSnapshotReport::DaKong(report)))
         }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game
