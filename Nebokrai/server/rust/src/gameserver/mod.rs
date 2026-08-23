@@ -14,6 +14,7 @@ pub(crate) mod appserver {
         pub(crate) mod ccontainer;
         pub(crate) mod cdepot;
         pub(crate) mod cgoodscontainer;
+        pub(crate) mod cgoodsshadowcontainer;
         pub(crate) mod cjifen;
         pub(crate) mod cvolumelimitgoodscontainer;
         pub(crate) mod cwallet;
