@@ -6,6 +6,9 @@
 //! weight, icons и вложенное дерево addon properties. Порядок элементов,
 //! signedness scalar-ов, first-match lookup и last-write-free vector semantics
 //! сохранены.
+//! Отдельный legacy `m_eBFEquipPlace` constructor и wire decoder не
+//! инициализировали; он хранится как `None`, чтобы не превращать allocator
+//! garbage в выдуманную battle-fairy ячейку.
 //!
 //! `Vec` и обычное владение Rust заменяют MSVC allocator/destructor plumbing.
 //! Повреждённые count/string границы, где старый код уходил в out-of-bounds,
@@ -59,7 +62,14 @@ pub(crate) const GAP_BF_SPRITUALISM: i32 = 160;
 pub(crate) const GAP_BF_STRENGH: i32 = 161;
 pub(crate) const GAP_BF_PULLULATERATE: i32 = 162;
 pub(crate) const GAP_BF_MODULE: i32 = 164;
+pub(crate) const GAP_BF_MATERIAL: i32 = 169;
+pub(crate) const GAP_BF_FETCH_BODY: i32 = 170;
+pub(crate) const GAP_BF_FETCH_STONE: i32 = 171;
 pub(crate) const GAP_BF_BATTLE_FAIRY: i32 = 172;
+pub(crate) const GAP_BF_WEAPON: i32 = 173;
+pub(crate) const GAP_BF_HUXINJING: i32 = 174;
+pub(crate) const GAP_BF_JEWELLERY: i32 = 175;
+pub(crate) const GAP_BF_CLOTH: i32 = 176;
 pub(crate) const GAP_BF_GEM: i32 = 177;
 pub(crate) const GAP_BF_MAX_HP: i32 = 185;
 pub(crate) const GAP_BF_MAX_MP: i32 = 186;
@@ -71,6 +81,10 @@ pub(crate) const GAP_BF_SPRITUALISM_BASE: i32 = 198;
 pub(crate) const GAP_BF_STRENGH_BASE: i32 = 199;
 pub(crate) const GAP_BF_MAX_LEVEL: i32 = 217;
 pub(crate) const GAP_BF_CUT_HURT_SCALE: i32 = 218;
+pub(crate) const GAP_BF_GLOVE: i32 = 220;
+pub(crate) const GAP_BF_PIFENG: i32 = 221;
+pub(crate) const GAP_BF_YAODAI: i32 = 222;
+pub(crate) const GAP_BF_XIEZI: i32 = 223;
 pub(crate) const GAP_BF_BFEQUIPEMENT: i32 = 226;
 pub(crate) const GAP_GOODS_LIFE_TYPE: i32 = 229;
 pub(crate) const GAP_GOODS_START_POINT: i32 = 230;
@@ -172,6 +186,7 @@ pub(crate) struct CGoodsBaseProperties {
     description: Vec<u8>,
     goods_type: i32,
     equip_place: i32,
+    battle_fairy_equip_place: Option<i32>,
     price: u32,
     weight: u32,
     icons: Vec<GoodsBaseIcon>,
@@ -186,6 +201,7 @@ impl Default for CGoodsBaseProperties {
             description: Vec::new(),
             goods_type: GOODS_TYPE_USELESS,
             equip_place: 0,
+            battle_fairy_equip_place: None,
             price: 0,
             weight: 0,
             icons: Vec::new(),
@@ -246,6 +262,10 @@ impl CGoodsBaseProperties {
 
     pub(crate) const fn equip_place(&self) -> i32 {
         self.equip_place
+    }
+
+    pub(crate) const fn battle_fairy_equip_place(&self) -> Option<i32> {
+        self.battle_fairy_equip_place
     }
 
     pub(crate) const fn price(&self) -> u32 {

@@ -1,6 +1,241 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Позиционный storage-prefix `CBattleFairyContainer` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
+//! `server/gameserver/appserver/container/cbattlefairycontainer.cpp`.
+//! Материализованы 17 фиксированных ячеек и exact positional add-фильтры по
+//! goods type/addon marker. Gear-слоты публикуют ранний `BFPropertyAdd(+1)`
+//! effect до base Add, поэтому отказ storage не отменяет этот effect.
+//!
+//! Автоматический overload читает неинициализированный `m_eBFEquipPlace` у
+//! catalog owner-а. Rust выражает этот UB как typed block, а не выбирает
+//! логичную ячейку из позднего C++-донора. Остальные combine/upgrade/summon и
+//! player-integrated remove методы ниже пока остаются RAW.
+
+use super::camountlimitgoodscontainer::{AmountLimitGoodsCleared, AmountLimitGoodsRelease};
+use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome};
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+    GAP_BF_BATTLE_FAIRY, GAP_BF_BFEQUIPEMENT, GAP_BF_CLOTH, GAP_BF_FETCH_BODY, GAP_BF_FETCH_STONE,
+    GAP_BF_GEM, GAP_BF_GLOVE, GAP_BF_HUXINJING, GAP_BF_JEWELLERY, GAP_BF_MATERIAL, GAP_BF_PIFENG,
+    GAP_BF_WEAPON, GAP_BF_XIEZI, GAP_BF_YAODAI, GAP_GEM_TYPE, GOODS_TYPE_CONSUMABLE,
+    GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
+};
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyCell {
+    Weapon = 0,
+    Body = 1,
+    Huxinjing = 2,
+    Jewelry = 3,
+    Glove = 4,
+    Pifeng = 5,
+    Yaodai = 6,
+    Xiezi = 7,
+    Material = 8,
+    FetchStone = 9,
+    FetchBody = 10,
+    Battle = 11,
+    Equipment = 12,
+    GemBase = 13,
+    GemOne = 14,
+    GemTwo = 15,
+    GemThree = 16,
+}
+
+impl BattleFairyCell {
+    pub(crate) const fn from_position(position: u32) -> Option<Self> {
+        Some(match position {
+            0 => Self::Weapon,
+            1 => Self::Body,
+            2 => Self::Huxinjing,
+            3 => Self::Jewelry,
+            4 => Self::Glove,
+            5 => Self::Pifeng,
+            6 => Self::Yaodai,
+            7 => Self::Xiezi,
+            8 => Self::Material,
+            9 => Self::FetchStone,
+            10 => Self::FetchBody,
+            11 => Self::Battle,
+            12 => Self::Equipment,
+            13 => Self::GemBase,
+            14 => Self::GemOne,
+            15 => Self::GemTwo,
+            16 => Self::GemThree,
+            _ => return None,
+        })
+    }
+
+    pub(crate) const fn position(self) -> u32 {
+        self as u32
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyPropertyAddEffect {
+    pub(crate) cell: BattleFairyCell,
+    pub(crate) delta: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyContainerAddBlock {
+    MissingGoods,
+    MissingBaseProperties { index: u32 },
+    AutomaticAddRequiresEquipment { goods_type: i32 },
+    UninitializedBattleFairyEquipPlace,
+    InvalidPosition { position: u32 },
+    GoodsRejected { cell: BattleFairyCell },
+}
+
+#[must_use = "outcome сохраняет ранний BFPropertyAdd effect и ownership incoming"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyContainerAddOutcome {
+    Stored {
+        base: VolumeGoodsAddOutcome,
+        property_effect: Option<BattleFairyPropertyAddEffect>,
+    },
+    Rejected(BattleFairyContainerAddBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CBattleFairyContainer {
+    base: CVolumeLimitGoodsContainer,
+}
+
+impl Default for CBattleFairyContainer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CBattleFairyContainer {
+    pub(crate) fn new() -> Self {
+        Self {
+            base: CVolumeLimitGoodsContainer::new(),
+        }
+    }
+
+    pub(crate) const fn base(&self) -> &CVolumeLimitGoodsContainer {
+        &self.base
+    }
+
+    pub(crate) const fn base_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
+        &mut self.base
+    }
+
+    pub(crate) fn clear(&mut self) -> AmountLimitGoodsCleared {
+        self.base.clear_goods()
+    }
+
+    pub(crate) fn release(&mut self) -> AmountLimitGoodsRelease {
+        self.base.release()
+    }
+
+    pub(crate) fn add(
+        &mut self,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> BattleFairyContainerAddOutcome {
+        let Some(goods) = incoming.as_ref() else {
+            return BattleFairyContainerAddOutcome::Rejected(
+                BattleFairyContainerAddBlock::MissingGoods,
+            );
+        };
+        let index = goods.base_properties_index();
+        let Some(properties) = factory.query_goods_base_properties(index) else {
+            return BattleFairyContainerAddOutcome::Rejected(
+                BattleFairyContainerAddBlock::MissingBaseProperties { index },
+            );
+        };
+        if properties.goods_type() != GOODS_TYPE_EQUIPMENT {
+            return BattleFairyContainerAddOutcome::Rejected(
+                BattleFairyContainerAddBlock::AutomaticAddRequiresEquipment {
+                    goods_type: properties.goods_type(),
+                },
+            );
+        }
+        let Some(raw_place) = properties.battle_fairy_equip_place() else {
+            return BattleFairyContainerAddOutcome::Rejected(
+                BattleFairyContainerAddBlock::UninitializedBattleFairyEquipPlace,
+            );
+        };
+        let Some(cell) = BattleFairyCell::from_position(raw_place as u32) else {
+            return BattleFairyContainerAddOutcome::Rejected(
+                BattleFairyContainerAddBlock::InvalidPosition {
+                    position: raw_place as u32,
+                },
+            );
+        };
+        self.add_at(cell, incoming, factory, owner_progress_allows)
+    }
+
+    pub(crate) fn add_at(
+        &mut self,
+        cell: BattleFairyCell,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> BattleFairyContainerAddOutcome {
+        let Some(goods) = incoming.as_ref() else {
+            return BattleFairyContainerAddOutcome::Rejected(
+                BattleFairyContainerAddBlock::MissingGoods,
+            );
+        };
+        let index = goods.base_properties_index();
+        let Some(properties) = factory.query_goods_base_properties(index) else {
+            return BattleFairyContainerAddOutcome::Rejected(
+                BattleFairyContainerAddBlock::MissingBaseProperties { index },
+            );
+        };
+        let value =
+            |property_type, value_id| goods.addon_property_value(factory, property_type, value_id);
+        let (allowed, applies_property) = match properties.goods_type() {
+            GOODS_TYPE_EQUIPMENT => match cell {
+                BattleFairyCell::Battle => (value(GAP_BF_BATTLE_FAIRY, 1) == 1, false),
+                BattleFairyCell::Weapon => (value(GAP_BF_WEAPON, 1) == 1, true),
+                BattleFairyCell::Huxinjing => (value(GAP_BF_HUXINJING, 1) == 1, true),
+                BattleFairyCell::Body => (value(GAP_BF_CLOTH, 1) == 1, true),
+                BattleFairyCell::Jewelry => (value(GAP_BF_JEWELLERY, 1) == 1, true),
+                BattleFairyCell::Pifeng => (value(GAP_BF_PIFENG, 1) == 1, true),
+                BattleFairyCell::Yaodai => (value(GAP_BF_YAODAI, 1) == 1, true),
+                BattleFairyCell::Xiezi => (value(GAP_BF_XIEZI, 1) == 1, true),
+                BattleFairyCell::Glove => (value(GAP_BF_GLOVE, 1) == 1, true),
+                BattleFairyCell::Equipment => (value(GAP_BF_BFEQUIPEMENT, 2) == 1, false),
+                _ => (false, false),
+            },
+            GOODS_TYPE_USELESS => match cell {
+                BattleFairyCell::Material => (value(GAP_BF_MATERIAL, 1) == 1, false),
+                BattleFairyCell::FetchBody => (value(GAP_BF_FETCH_BODY, 1) == 1, false),
+                BattleFairyCell::FetchStone => (value(GAP_BF_FETCH_STONE, 1) == 1, false),
+                _ => (false, false),
+            },
+            GOODS_TYPE_CONSUMABLE if value(GAP_BF_GEM, 1) == 1 => match cell {
+                BattleFairyCell::GemBase => (value(GAP_GEM_TYPE, 1) == 1, false),
+                BattleFairyCell::GemOne | BattleFairyCell::GemTwo | BattleFairyCell::GemThree => {
+                    (value(GAP_GEM_TYPE, 1) == 2, false)
+                }
+                _ => (false, false),
+            },
+            _ => (false, false),
+        };
+        if !allowed {
+            return BattleFairyContainerAddOutcome::Rejected(
+                BattleFairyContainerAddBlock::GoodsRejected { cell },
+            );
+        }
+        let property_effect =
+            applies_property.then_some(BattleFairyPropertyAddEffect { cell, delta: 1 });
+        BattleFairyContainerAddOutcome::Stored {
+            base: self
+                .base
+                .add_goods_at(cell.position(), incoming, factory, owner_progress_allows),
+            property_effect,
+        }
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -371,6 +606,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: GameServer

@@ -12,6 +12,7 @@ pub(crate) mod appserver {
         pub(crate) mod camountlimitgoodscontainer;
         pub(crate) mod camountlimitgoodsshadowcontainer;
         pub(crate) mod cbank;
+        pub(crate) mod cbattlefairycontainer;
         pub(crate) mod ccontainer;
         pub(crate) mod cdepot;
         pub(crate) mod cequipmentcomposeshadowcontainer;
