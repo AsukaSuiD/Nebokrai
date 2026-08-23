@@ -40,6 +40,7 @@ pub(crate) mod appserver {
         pub(crate) mod cgoods;
         pub(crate) mod cgoodsbaseproperties;
         pub(crate) mod cgoodsfactory;
+        pub(crate) mod fairyproperties;
     }
     pub(crate) mod skills {
         pub(crate) mod skillbaseproperties;
