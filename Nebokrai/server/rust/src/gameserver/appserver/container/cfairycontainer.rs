@@ -1,20 +1,22 @@
-//! Storage-prefix `CFairyContainer` исторического GameServer.
+//! Полный owner `CFairyContainer` исторического GameServer.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cfairycontainer.cpp`. Контейнер
 //! владеет ordinary-fairy товарами через `CVolumeLimitGoodsContainer`:
 //! auto-add сначала выбирает ячейку base-owner-а, positional add сохраняет
 //! отдельное правило `0..12` для headgear с fairy property и исключение
-//! `13/FZ0885`, а remove блокирует фею с ненулевым hatch timer.
+//! `13/FZ0885`, а remove блокирует фею с ненулевым hatch timer. Codec suffix,
+//! инкубация, общий рост, state transition и синкретизация материализованы с
+//! точным порядком проверок, wrapping arithmetic и partial mutation.
 //!
-//! `CVolumeLimitGoodsContainer` и owned `CGoods` заменяют vtable dispatch/raw
-//! pointers, не меняя lock/stack/listener semantics base-owner-а. Пять hatch
-//! timer-ов codec suffix сохранены с partial decode, а state change — с
-//! необратимым remove/add и detached replacement на отказе. Hatch/exp traversal
-//! материализованы с явным clock/config; syncretize ниже пока остаётся RAW.
+//! `CVolumeLimitGoodsContainer`, owned `CGoods`, `Vec` effects и явные
+//! clock/config/player facts заменяют vtable dispatch, raw pointers и globals,
+//! не меняя lock/stack/listener/message semantics. Пять hatch timer-ов codec
+//! suffix сохраняют partial decode; state/syncretize не откатывают уже
+//! выполненные remove/add и возвращают detached ownership на отказе.
 
 use super::camountlimitgoodscontainer::{
-    AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsTaken,
+    AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,
 };
 use super::ccontainer::ContainerListenerHandle;
 use super::cvolumelimitgoodscontainer::{
@@ -207,6 +209,124 @@ pub(crate) struct FairyContainerExpFailure {
     pub(crate) entries: Vec<FairyContainerExpEntry>,
 }
 
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FairySyncreticProperty {
+    FairyAttribute = 0,
+    GrowingRate = 1,
+}
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum FairySyncreticResult {
+    #[default]
+    Unknown = 0,
+    NoRipeFairyOne = 1,
+    NoRipeFairyTwo = 2,
+    DifferentMainProperty = 3,
+    SyncreticTimesError = 4,
+    NotEnoughFragment = 5,
+    NotEnoughMoney = 6,
+    NotEnoughExperience = 7,
+    Failed = 8,
+    Successful = 9,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FairySyncretizeConfig {
+    pub(crate) needed_goods: u32,
+    pub(crate) needed_experience: u32,
+    pub(crate) needed_money: u32,
+    pub(crate) rate_a: f32,
+    pub(crate) rate_b: f32,
+    pub(crate) rate_c: f32,
+    pub(crate) rate_d: f32,
+    pub(crate) rate_e: f32,
+    pub(crate) rate_f: f32,
+    pub(crate) rate_g: f32,
+    pub(crate) rate_h: f32,
+    pub(crate) rate_n: f32,
+    pub(crate) rate_y: f32,
+    pub(crate) log_enabled: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct FairySyncretizePlayer {
+    pub(crate) id: i32,
+    pub(crate) experience: u32,
+    pub(crate) money: u32,
+    pub(crate) vigour: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyContainerAmountChange {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) container_extend_id: u32,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FairySyncretizePlayerUpdate {
+    pub(crate) player_id: i32,
+    pub(crate) experience: u32,
+    pub(crate) vigour: u32,
+    pub(crate) money: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairySyncretizeLog {
+    pub(crate) message_type: u32,
+    pub(crate) log_type: i32,
+    pub(crate) player_id: i32,
+    pub(crate) primary_guid: CGuid,
+    pub(crate) primary_name: Vec<u8>,
+    pub(crate) primary_level: u32,
+    pub(crate) primary_growing_rate: u32,
+    pub(crate) secondary_guid: CGuid,
+    pub(crate) secondary_name: Vec<u8>,
+    pub(crate) secondary_level: u32,
+    pub(crate) secondary_growing_rate: u32,
+    pub(crate) needed_goods: u32,
+    pub(crate) result_guid: CGuid,
+    pub(crate) result_name: Vec<u8>,
+    pub(crate) main_ability: u32,
+    pub(crate) combinated_times: u32,
+    pub(crate) growing_rate: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FairySyncretizeFragmentEffect {
+    AmountChanged(FairyContainerAmountChange),
+    Removed {
+        event: FairyContainerRemovedEvent,
+        effects: Vec<FairyStateChangeEffect>,
+    },
+    RemovalFailed(FairyContainerRemoveOutcome),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FairySyncretizeRemoval {
+    Removed {
+        event: FairyContainerRemovedEvent,
+        effects: Vec<FairyStateChangeEffect>,
+    },
+    Failed(FairyContainerRemoveOutcome),
+}
+
+#[must_use = "report сохраняет необратимые state/remove/fragment/player effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairySyncretizeReport {
+    pub(crate) result: FairySyncreticResult,
+    pub(crate) state_change: Option<FairyStateChangeOutcome>,
+    pub(crate) secondary_removal: Option<FairySyncretizeRemoval>,
+    pub(crate) fragment_effect: Option<FairySyncretizeFragmentEffect>,
+    pub(crate) player_update: Option<FairySyncretizePlayerUpdate>,
+    pub(crate) log: Option<FairySyncretizeLog>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CFairyContainer {
     base: CVolumeLimitGoodsContainer,
@@ -231,6 +351,14 @@ impl CFairyContainer {
 
     pub(crate) const fn base_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
         &mut self.base
+    }
+
+    pub(crate) fn clear(&mut self) -> AmountLimitGoodsCleared {
+        self.base.clear_goods()
+    }
+
+    pub(crate) fn release(&mut self) -> AmountLimitGoodsRelease {
+        self.base.release()
     }
 
     pub(crate) fn add(
@@ -615,6 +743,339 @@ impl CFairyContainer {
         Ok(entries)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn fairy_syncretize(
+        &mut self,
+        property: FairySyncreticProperty,
+        successful_roll: bool,
+        player: Option<&mut FairySyncretizePlayer>,
+        config: FairySyncretizeConfig,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+        fairy_threshold_for_level: &mut dyn FnMut(u32, u32) -> u32,
+        create_goods: &mut dyn FnMut(u32) -> Option<CGoods>,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> FairySyncretizeReport {
+        const PRIMARY_POSITION: u32 = 11;
+        const SECONDARY_POSITION: u32 = 12;
+        const FRAGMENT_POSITION: u32 = 13;
+
+        let Some(primary_goods) = self.base.get_goods(PRIMARY_POSITION) else {
+            return Self::empty_syncretize_report(FairySyncreticResult::NoRipeFairyOne);
+        };
+        let Some(primary) = primary_goods
+            .fairy_properties()
+            .filter(|fairy| fairy.fairy_state == FairyState::Ripe as u32)
+            .cloned()
+        else {
+            return Self::empty_syncretize_report(FairySyncreticResult::NoRipeFairyOne);
+        };
+        let primary_identity = primary_goods.identity();
+        let primary_name = legacy_name_31(primary_goods.name());
+
+        let Some(secondary_goods) = self.base.get_goods(SECONDARY_POSITION) else {
+            return Self::empty_syncretize_report(FairySyncreticResult::NoRipeFairyTwo);
+        };
+        let Some(secondary) = secondary_goods
+            .fairy_properties()
+            .filter(|fairy| fairy.fairy_state == FairyState::Ripe as u32)
+            .cloned()
+        else {
+            return Self::empty_syncretize_report(FairySyncreticResult::NoRipeFairyTwo);
+        };
+        let secondary_identity = secondary_goods.identity();
+        let secondary_name = legacy_name_31(secondary_goods.name());
+        if primary.main_ability != secondary.main_ability {
+            return Self::empty_syncretize_report(FairySyncreticResult::DifferentMainProperty);
+        }
+        if primary.max_combinated_times
+            <= primary
+                .combinated_times
+                .wrapping_add(secondary.combinated_times)
+        {
+            return Self::empty_syncretize_report(FairySyncreticResult::SyncreticTimesError);
+        }
+
+        let Some(fragment) = self.base.get_goods(FRAGMENT_POSITION) else {
+            return Self::empty_syncretize_report(FairySyncreticResult::NotEnoughFragment);
+        };
+        if fragment.amount() < config.needed_goods {
+            return Self::empty_syncretize_report(FairySyncreticResult::NotEnoughFragment);
+        }
+        let Some(fragment_properties) =
+            factory.query_goods_base_properties(fragment.base_properties_index())
+        else {
+            return Self::empty_syncretize_report(FairySyncreticResult::NotEnoughFragment);
+        };
+        if fragment_properties.original_name() != FAIRY_SPECIAL_ORIGINAL_NAME {
+            return Self::empty_syncretize_report(FairySyncreticResult::NotEnoughFragment);
+        }
+        let fragment_identity = fragment.identity();
+
+        let Some(player) = player else {
+            return Self::empty_syncretize_report(FairySyncreticResult::Unknown);
+        };
+        let consume_times = secondary.combinated_times.wrapping_add(1);
+        let required_experience = consume_times.wrapping_mul(config.needed_experience);
+        if player.experience < required_experience {
+            return Self::empty_syncretize_report(FairySyncreticResult::NotEnoughExperience);
+        }
+        let required_money = consume_times.wrapping_mul(config.needed_money);
+        if player.money < required_money {
+            return Self::empty_syncretize_report(FairySyncreticResult::NotEnoughMoney);
+        }
+
+        let primary_goods = self
+            .base
+            .get_goods_mut(PRIMARY_POSITION)
+            .expect("primary position не менялась после validation");
+        let primary_mut = primary_goods
+            .fairy_properties_mut()
+            .expect("primary fairy проверена до mutation");
+        if !successful_roll {
+            let (primary_rate, secondary_rate) = match property {
+                FairySyncreticProperty::FairyAttribute => (config.rate_c, config.rate_d),
+                FairySyncreticProperty::GrowingRate => (config.rate_a, config.rate_b),
+            };
+            primary_mut.base_strength = blend_syncretic_base(
+                primary_mut.base_strength,
+                secondary.base_strength,
+                consume_times,
+                primary_rate,
+                secondary_rate,
+            );
+            primary_mut.base_agility = blend_syncretic_base(
+                primary_mut.base_agility,
+                secondary.base_agility,
+                consume_times,
+                primary_rate,
+                secondary_rate,
+            );
+            primary_mut.base_wakan = blend_syncretic_base(
+                primary_mut.base_wakan,
+                secondary.base_wakan,
+                consume_times,
+                primary_rate,
+                secondary_rate,
+            );
+            primary_mut.base_hp = blend_syncretic_base(
+                primary_mut.base_hp,
+                secondary.base_hp,
+                consume_times,
+                primary_rate,
+                secondary_rate,
+            );
+        } else {
+            let (primary_rate, secondary_rate) = match property {
+                FairySyncreticProperty::FairyAttribute => (config.rate_g, config.rate_h),
+                FairySyncreticProperty::GrowingRate => (config.rate_e, config.rate_f),
+            };
+            primary_mut.growing_rate = blend_syncretic_base(
+                primary_mut.growing_rate,
+                secondary.growing_rate,
+                consume_times,
+                primary_rate,
+                secondary_rate,
+            );
+        }
+        let primary_times = primary_mut.combinated_times.wrapping_add(1);
+        primary_mut.strength = blend_syncretic_visible(
+            primary_mut.strength,
+            primary_times,
+            secondary.strength,
+            consume_times,
+            config.rate_n,
+            config.rate_y,
+            false,
+        );
+        primary_mut.agility = blend_syncretic_visible(
+            primary_mut.agility,
+            primary_times,
+            secondary.agility,
+            consume_times,
+            config.rate_n,
+            config.rate_y,
+            false,
+        );
+        primary_mut.wakan = blend_syncretic_visible(
+            primary_mut.wakan,
+            primary_times,
+            secondary.wakan,
+            consume_times,
+            config.rate_n,
+            config.rate_y,
+            true,
+        );
+        primary_mut.hp = blend_syncretic_visible(
+            primary_mut.hp,
+            primary_times,
+            secondary.hp,
+            consume_times,
+            config.rate_n,
+            config.rate_y,
+            false,
+        );
+        primary_mut.fairy_state = FairyState::Egg as u32;
+        primary_mut.level = 1;
+        if primary_mut.experience().is_some() {
+            primary_mut.link_experience(0);
+        }
+        primary_mut.combinated_times = primary_mut.combinated_times.wrapping_add(consume_times);
+        primary_goods
+            .save_fairy_properties(factory)
+            .expect("primary fairy сохраняет живую catalog entry");
+
+        let state_change = self.fairy_change_state(
+            primary_identity.ex_id,
+            FairyState::Ripe,
+            PRIMARY_POSITION,
+            factory,
+            owner_progress_allows,
+            fairy_threshold_for_level,
+            create_goods,
+            encode_old_client,
+        );
+        let mut report = Self::empty_syncretize_report(FairySyncreticResult::Unknown);
+        let state_changed = matches!(state_change, FairyStateChangeOutcome::Changed { .. });
+        report.state_change = Some(state_change);
+        if !state_changed {
+            return report;
+        }
+
+        let secondary_removal = self.delete_syncretize_goods(secondary_identity.ex_id);
+        let secondary_removed = matches!(secondary_removal, FairySyncretizeRemoval::Removed { .. });
+        report.secondary_removal = Some(secondary_removal);
+        if !secondary_removed {
+            return report;
+        }
+
+        if self
+            .base
+            .get_goods(FRAGMENT_POSITION)
+            .is_some_and(|goods| config.needed_goods < goods.amount())
+        {
+            let owner_type = self.base.base().base().owner_type();
+            let owner_id = self.base.base().base().owner_id();
+            let fragment = self
+                .base
+                .get_goods_mut(FRAGMENT_POSITION)
+                .expect("fragment проверен непосредственно перед mutation");
+            fragment.set_amount(fragment.amount().wrapping_sub(config.needed_goods));
+            report.fragment_effect = Some(FairySyncretizeFragmentEffect::AmountChanged(
+                FairyContainerAmountChange {
+                    owner_type,
+                    owner_id,
+                    position: FRAGMENT_POSITION,
+                    container_extend_id: FAIRY_CONTAINER_EXTEND_ID,
+                    goods: fragment_identity,
+                    amount: fragment.amount(),
+                },
+            ));
+        } else {
+            let removal = self.delete_syncretize_goods(fragment_identity.ex_id);
+            let fragment_removed = matches!(removal, FairySyncretizeRemoval::Removed { .. });
+            report.fragment_effect = Some(match removal {
+                FairySyncretizeRemoval::Removed { event, effects } => {
+                    FairySyncretizeFragmentEffect::Removed { event, effects }
+                }
+                FairySyncretizeRemoval::Failed(removal) => {
+                    FairySyncretizeFragmentEffect::RemovalFailed(removal)
+                }
+            });
+            if !fragment_removed {
+                return report;
+            }
+        }
+
+        player.money = player.money.wrapping_sub(required_money);
+        player.experience = player.experience.wrapping_sub(required_experience);
+        report.player_update = Some(FairySyncretizePlayerUpdate {
+            player_id: player.id,
+            experience: player.experience,
+            vigour: player.vigour,
+            money: player.money,
+        });
+        report.result = if successful_roll {
+            FairySyncreticResult::Successful
+        } else {
+            FairySyncreticResult::Failed
+        };
+
+        if config.log_enabled
+            && let Some(result_goods) = self.base.get_goods(PRIMARY_POSITION)
+            && let Some(result_fairy) = result_goods.fairy_properties()
+        {
+            report.log = Some(FairySyncretizeLog {
+                message_type: FAIRY_WORLD_LOG_MESSAGE_TYPE,
+                log_type: 4,
+                player_id: self.base.base().base().owner_id(),
+                primary_guid: primary_identity.ex_id,
+                primary_name,
+                primary_level: primary.level,
+                primary_growing_rate: primary.growing_rate,
+                secondary_guid: secondary_identity.ex_id,
+                secondary_name,
+                secondary_level: secondary.level,
+                secondary_growing_rate: secondary.growing_rate,
+                needed_goods: config.needed_goods,
+                result_guid: result_goods.identity().ex_id,
+                result_name: legacy_name_31(result_goods.name()),
+                main_ability: primary.main_ability,
+                combinated_times: result_fairy.combinated_times,
+                growing_rate: result_fairy.growing_rate,
+            });
+        }
+        report
+    }
+
+    fn empty_syncretize_report(result: FairySyncreticResult) -> FairySyncretizeReport {
+        FairySyncretizeReport {
+            result,
+            state_change: None,
+            secondary_removal: None,
+            fragment_effect: None,
+            player_update: None,
+            log: None,
+        }
+    }
+
+    fn delete_syncretize_goods(&mut self, goods_id: CGuid) -> FairySyncretizeRemoval {
+        let removal = self.remove(goods_id);
+        let FairyContainerRemoveOutcome::Removed(removed) = removal else {
+            return FairySyncretizeRemoval::Failed(removal);
+        };
+        let taken = match removed {
+            VolumeGoodsRemoveOutcome::Removed(taken)
+            | VolumeGoodsRemoveOutcome::RemovedButCellMissing(taken) => taken,
+        };
+        let AmountLimitGoodsTaken::Removed(removed) = taken else {
+            unreachable!("full syncretize remove cannot split goods")
+        };
+        let identity = removed.goods.identity();
+        let event = FairyContainerRemovedEvent {
+            owner_type: removed.owner_type,
+            owner_id: removed.owner_id,
+            position: removed.position,
+            amount: removed.amount,
+            listeners: removed.listeners,
+        };
+        let effects = vec![
+            FairyStateChangeEffect::ObjectMove(FairyContainerObjectMove {
+                operation: FairyContainerMoveOperation::DeleteObject,
+                owner_type: event.owner_type,
+                owner_id: event.owner_id,
+                position: event.position,
+                container_extend_id: FAIRY_CONTAINER_EXTEND_ID,
+                goods: identity,
+                amount: event.amount,
+                old_client_payload: Vec::new(),
+            }),
+            FairyStateChangeEffect::GarbageCollected(identity),
+        ];
+        drop(removed.goods);
+        FairySyncretizeRemoval::Removed { event, effects }
+    }
+
     /// Base payload сохраняет собственного owner-а; fairy suffix всегда
     /// дописывает пять little-endian hatch значений для ячеек `5..9`, даже
     /// когда base serializer вернул `false`.
@@ -708,164 +1169,47 @@ fn hatch_stat(value: u32, base: u32) -> u32 {
     ((value as f64 + base as f64 * 0.0001_f64).round() as i64 as i32) as u32
 }
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp
+fn blend_syncretic_base(
+    primary: u32,
+    secondary: u32,
+    secondary_times: u32,
+    primary_rate: f32,
+    secondary_rate: f32,
+) -> u32 {
+    let primary = primary as f32;
+    let secondary = secondary as f32;
+    round_syncretic(
+        primary + primary * primary_rate + secondary * secondary_times as f32 * secondary_rate,
+    )
+}
 
-// ============================================================================
-// FUNCTION: CFairyContainer::CFairyContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp:22
-// RVA: 0x000DB650
-// ADDRESS: 004db650
-// PROTOTYPE: undefined __thiscall CFairyContainer(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn blend_syncretic_visible(
+    primary: u32,
+    primary_times: u32,
+    secondary: u32,
+    secondary_times: u32,
+    primary_rate: f32,
+    secondary_rate: f32,
+    secondary_term_first: bool,
+) -> u32 {
+    let primary_term = primary as f32 * primary_times as f32 * primary_rate;
+    let secondary_term = secondary as f32 * secondary_times as f32 * secondary_rate;
+    let combined = if secondary_term_first {
+        secondary_term + primary_term
+    } else {
+        primary_term + secondary_term
+    };
+    round_syncretic(combined)
+}
 
-// ============================================================================
-// FUNCTION: CFairyContainer::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp:41
-// RVA: 0x000DB680
-// ADDRESS: 004db680
-// PROTOTYPE: int __thiscall Add(CBaseObject * param_1, tagPreviousContainer * param_2, void * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn round_syncretic(value: f32) -> u32 {
+    (value.round() as i64 as i32) as u32
+}
 
-// ============================================================================
-// FUNCTION: CFairyContainer::~CFairyContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp:26
-// RVA: 0x000DB6A0
-// ADDRESS: 004db6a0
-// PROTOTYPE: void __thiscall ~CFairyContainer(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFairyContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp:88
-// RVA: 0x000DB700
-// ADDRESS: 004db700
-// PROTOTYPE: CBaseObject * __thiscall Remove(CBaseObject * param_1, void * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFairyContainer::FairyChangeState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp:443
-// RVA: 0x000DB750
-// ADDRESS: 004db750
-// PROTOTYPE: CGoods * __thiscall FairyChangeState(CGoods * param_1, EFairyState param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFairyContainer::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp:518
-// RVA: 0x000DBB60
-// ADDRESS: 004dbb60
-// PROTOTYPE: int __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, int param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFairyContainer::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp:538
-// RVA: 0x000DBBC0
-// ADDRESS: 004dbbc0
-// PROTOTYPE: int __thiscall Unserialize(uchar * param_1, long * param_2, int param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFairyContainer::CheckHatcher
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp:151
-// RVA: 0x000DBC50
-// ADDRESS: 004dbc50
-// PROTOTYPE: void __thiscall CheckHatcher(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFairyContainer::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp:46
-// RVA: 0x000DBDE0
-// ADDRESS: 004dbde0
-// PROTOTYPE: int __thiscall Add(ulong param_1, CGoods * param_2, tagPreviousContainer * param_3, void * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFairyContainer::FairyExpUp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp:106
-// RVA: 0x000DBF00
-// ADDRESS: 004dbf00
-// PROTOTYPE: void __thiscall FairyExpUp(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFairyContainer::FairySyncretize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cfairycontainer.cpp:186
-// RVA: 0x000DC190
-// ADDRESS: 004dc190
-// PROTOTYPE: ESyncreticResult __thiscall FairySyncretize(ESyncreticProperty param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
+fn legacy_name_31(name: &[u8]) -> Vec<u8> {
+    let visible = &name[..name
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(name.len())];
+    visible[..visible.len().min(31)].to_vec()
+}
