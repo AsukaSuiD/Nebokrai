@@ -35,6 +35,7 @@ use crate::dbaccess::worlddb::writelogqueue::WorldWriteLogQueue;
 
 use crate::public::clientresource::DefaultClientResourceOwner;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
+use crate::setup::timetoreturn::TimeToReturnCallbacks;
 use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
 use crate::setup::fairyexpconf::CFairyExpConf;
@@ -57,6 +58,10 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
     upgrade_equipment, GoodsBasePropertiesRegistry, GoodsNameIndex, GoodsOriginalNameIndex,
 };
 use crate::worldserver::appworld::player::{CPlayer, PlayerPropertyCoefficients};
+use crate::worldserver::appworld::country::countrywarsys::CountryWarCallbacks;
+use crate::worldserver::appworld::organizingsystem::attackcitysys::AttackCityCallbacks;
+use crate::worldserver::appworld::organizingsystem::fournationwarsys::FourNationWarCallbacks;
+use crate::worldserver::appworld::organizingsystem::villagewarsys::VillageWarCallbacks;
 use crate::worldserver::appworld::worldregion::WorldRegionResourceContext;
 
 use super::game::{
@@ -65,6 +70,110 @@ use super::game::{
     WorldPlayerLoadDataAdapter, WorldReloadContext,
 };
 use crate::worldserver::appworld::message::writelogmessage::WorldWriteLogCommand;
+
+/// Стабильные typed-ключи всех callback-ов единственного World timer-owner-а.
+///
+/// В EXE это разные адреса функций. Rust хранит их как значения одного enum,
+/// чтобы календарные записи всех подсистем находились в общем `CTimer`, но не
+/// превращались в нетипизированные числовые адреса или отдельные registries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorldTimerCallback {
+    TimeToReturn,
+    CopyNumberReset,
+    OrganizingTax,
+    PlayerRanks,
+    AttackCityDeclare,
+    AttackCityStartInfo,
+    AttackCityStart,
+    AttackCityEndInfo,
+    AttackCityEnd,
+    AttackCityMass,
+    AttackCityClearOtherPlayer,
+    AttackCityRefreshRegion,
+    FourNationSignUpStart,
+    FourNationSignUpEnd,
+    FourNationWarStart,
+    FourNationWarEnd,
+    FourNationWarEndInfo,
+    FourNationEnterStart,
+    FourNationEnterEnd,
+    FourNationRefreshRegion,
+    FourNationClearWar,
+    VillageWarDeclare,
+    VillageWarStartInfo,
+    VillageWarStart,
+    VillageWarEndInfo,
+    VillageWarEnd,
+    VillageWarClearPlayer,
+    CountryWarClear,
+    CountryWarDeclareBegin,
+    CountryWarDeclareEnd,
+    CountryWarPrepareBegin,
+    CountryWarPrepareEnd,
+    CountryWarStart,
+    CountryWarEnd,
+    CountryWarStartInfo,
+    CountryWarEndInfo,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WorldTimerCallbacks {
+    pub(crate) time_to_return: TimeToReturnCallbacks<WorldTimerCallback>,
+    pub(crate) attack_city: AttackCityCallbacks<WorldTimerCallback>,
+    pub(crate) four_nation_war: FourNationWarCallbacks<WorldTimerCallback>,
+    pub(crate) village_war: VillageWarCallbacks<WorldTimerCallback>,
+    pub(crate) country_war: CountryWarCallbacks<WorldTimerCallback>,
+}
+
+impl WorldTimerCallbacks {
+    pub(crate) const fn new() -> Self {
+        Self {
+            time_to_return: TimeToReturnCallbacks {
+                on_time: WorldTimerCallback::TimeToReturn,
+            },
+            attack_city: AttackCityCallbacks {
+                declare: WorldTimerCallback::AttackCityDeclare,
+                start_info: WorldTimerCallback::AttackCityStartInfo,
+                start: WorldTimerCallback::AttackCityStart,
+                end_info: WorldTimerCallback::AttackCityEndInfo,
+                end: WorldTimerCallback::AttackCityEnd,
+                mass: WorldTimerCallback::AttackCityMass,
+                clear_other_player: WorldTimerCallback::AttackCityClearOtherPlayer,
+                refresh_region: WorldTimerCallback::AttackCityRefreshRegion,
+            },
+            four_nation_war: FourNationWarCallbacks {
+                sign_up_start: WorldTimerCallback::FourNationSignUpStart,
+                sign_up_end: WorldTimerCallback::FourNationSignUpEnd,
+                war_start: WorldTimerCallback::FourNationWarStart,
+                war_end: WorldTimerCallback::FourNationWarEnd,
+                war_end_info: WorldTimerCallback::FourNationWarEndInfo,
+                enter_start: WorldTimerCallback::FourNationEnterStart,
+                enter_end: WorldTimerCallback::FourNationEnterEnd,
+                refresh_region: WorldTimerCallback::FourNationRefreshRegion,
+                clear_war: WorldTimerCallback::FourNationClearWar,
+            },
+            village_war: VillageWarCallbacks {
+                declare: WorldTimerCallback::VillageWarDeclare,
+                start_info: WorldTimerCallback::VillageWarStartInfo,
+                start: WorldTimerCallback::VillageWarStart,
+                end_info: WorldTimerCallback::VillageWarEndInfo,
+                end: WorldTimerCallback::VillageWarEnd,
+                clear_player: WorldTimerCallback::VillageWarClearPlayer,
+            },
+            country_war: CountryWarCallbacks {
+                clear: WorldTimerCallback::CountryWarClear,
+                declare_begin: WorldTimerCallback::CountryWarDeclareBegin,
+                declare_end: WorldTimerCallback::CountryWarDeclareEnd,
+                prepare_begin: WorldTimerCallback::CountryWarPrepareBegin,
+                prepare_end: WorldTimerCallback::CountryWarPrepareEnd,
+                start: WorldTimerCallback::CountryWarStart,
+                end: WorldTimerCallback::CountryWarEnd,
+                start_info: WorldTimerCallback::CountryWarStartInfo,
+                end_info: WorldTimerCallback::CountryWarEndInfo,
+            },
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct WorldPlayerLoadSnapshot {
