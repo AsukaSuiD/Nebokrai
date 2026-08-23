@@ -58,6 +58,9 @@
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
 //! effects, потому что transport encoder этого семейства ещё отдельный owner.
+//! Обе exp-таблицы, combine recipes и equipment-compose maps теперь также
+//! достигаются из World startup FIFO selector-ами `0x20/0x2C/0x2D/0x30`,
+//! сохраняя partial publication, cursor и точные startup log-effects.
 //! Equipment add/remove проведены через canonical player registry до war-soul
 //! state/skills, property callbacks, remove vitals clamp и typed around
 //! `0xBF720`; полный virtual property owner остаётся caller adapter-ом.

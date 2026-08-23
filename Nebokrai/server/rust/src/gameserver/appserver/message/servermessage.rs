@@ -53,6 +53,9 @@
 //! Game ID selector `0x12` сохраняет raw byte для старшего байта team ID.
 //! Language table selector `0x2F` и runtime refresh `0x7F807` используют один
 //! clear/decode/log/cursor контракт `CGame::CreateStringTable`.
+//! Battle-fairy resource family `0x20/0x2C/0x2D/0x30` входит в реальный
+//! server FIFO через общий selector owner: обе exp-таблицы, combine recipes и
+//! equipment-compose maps публикуются с исходными partial decode и log order.
 //! Honor ranks `0x27..0x2A` декодируют четыре country-list, а total branch
 //! перед финальным log передаёт точную player-reset семантику context-owner-у.
 //!
@@ -272,17 +275,41 @@ pub(crate) struct GamePlayerCountResponseReport {
     pub(crate) outcome: GamePlayerCountResponseOutcome,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameBattleFairyStartupReport {
+    FairyExp(BattleFairyExpDecodeReport),
+    BattleFairyExp(BattleFairyExpDecodeReport),
+    Combine { entries: usize },
+    EquipmentCompose(EquipmentComposeDecodeReport),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameBattleFairyStartupError {
+    FairyExp(BattleFairyExpDecodeError),
+    BattleFairyExp(BattleFairyExpDecodeError),
+    Combine(BattleFairyComposeDecodeError),
+    EquipmentCompose(EquipmentComposeDecodeError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameBattleFairyStartupMessageReport {
+    pub(crate) decoded: GameBattleFairyStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
     StringTable(GameStringTableMessageReport),
     PlayerCount(GamePlayerCountResponseReport),
+    BattleFairyStartup(GameBattleFairyStartupMessageReport),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageError {
     StartupSelector(GameClientServerStartPayloadError),
     StringTable(MyStringTableDecodeError),
+    BattleFairyStartup(GameBattleFairyStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -339,6 +366,81 @@ pub(crate) fn dispatch_server_message(
                 GameStringTableSource::Startup,
             ))
         }
+        FAIRY_EXP_SELECTOR
+        | BATTLE_FAIRY_EXP_SELECTOR
+        | BATTLE_FAIRY_COMBINE_SELECTOR
+        | EQUIPMENT_COMPOSE_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("battle-fairy selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_battle_fairy_startup(consumed_selector, wire, cursor, game, |text| {
+                    log_effects.push(text.to_vec())
+                })
+                .expect("battle-fairy selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::BattleFairyStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::BattleFairyStartup(
+                GameBattleFairyStartupMessageReport {
+                    decoded,
+                    log_effects,
+                },
+            )))
+        }
+        _ => None,
+    }
+}
+
+fn decode_battle_fairy_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<GameBattleFairyStartupReport, GameBattleFairyStartupError>> {
+    match selector {
+        FAIRY_EXP_SELECTOR => {
+            let report = game
+                .fairy_exp_conf_mut()
+                .decord_from_byte_array(source, cursor)
+                .map_err(GameBattleFairyStartupError::FairyExp);
+            if report.is_ok() {
+                add_log_text(b"Initial SI_FAIRY_EXP...ok!");
+            }
+            Some(report.map(GameBattleFairyStartupReport::FairyExp))
+        }
+        BATTLE_FAIRY_EXP_SELECTOR => {
+            let report = game
+                .battle_fairy_exp_config_mut()
+                .decord_from_byte_array(source, cursor)
+                .map_err(GameBattleFairyStartupError::BattleFairyExp);
+            if report.is_ok() {
+                add_log_text(b"Initial SI_BATLLE_FAIRY_CONF...ok\xA3\xA1");
+            }
+            Some(report.map(GameBattleFairyStartupReport::BattleFairyExp))
+        }
+        BATTLE_FAIRY_COMBINE_SELECTOR => {
+            let entries = game
+                .battle_fairy_property_mut()
+                .decord_byte_array_combine(source, cursor)
+                .map_err(GameBattleFairyStartupError::Combine);
+            if entries.is_ok() {
+                add_log_text(b"Initial SI_BATLLE_FAIRY_COMBINE...ok!");
+            }
+            Some(entries.map(|entries| GameBattleFairyStartupReport::Combine { entries }))
+        }
+        EQUIPMENT_COMPOSE_SELECTOR => Some(
+            game.equipment_compose_list_mut()
+                .decord_from_byte_array(source, cursor)
+                .map(GameBattleFairyStartupReport::EquipmentCompose)
+                .map_err(GameBattleFairyStartupError::EquipmentCompose),
+        ),
         _ => None,
     }
 }
@@ -1051,6 +1153,36 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    if let Some(result) =
+        decode_battle_fairy_startup(selector, source, cursor, game, &mut add_log_text)
+    {
+        return Some(match result {
+            Ok(GameBattleFairyStartupReport::FairyExp(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::FairyExp(report))
+            }
+            Ok(GameBattleFairyStartupReport::BattleFairyExp(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::BattleFairyExp(report))
+            }
+            Ok(GameBattleFairyStartupReport::Combine { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::BattleFairyCombine { entries })
+            }
+            Ok(GameBattleFairyStartupReport::EquipmentCompose(report)) => {
+                Ok(GameOwnedStartupSnapshotReport::EquipmentCompose(report))
+            }
+            Err(GameBattleFairyStartupError::FairyExp(error)) => {
+                Err(GameOwnedStartupSnapshotError::FairyExp(error))
+            }
+            Err(GameBattleFairyStartupError::BattleFairyExp(error)) => {
+                Err(GameOwnedStartupSnapshotError::BattleFairyExp(error))
+            }
+            Err(GameBattleFairyStartupError::Combine(error)) => {
+                Err(GameOwnedStartupSnapshotError::BattleFairyCombine(error))
+            }
+            Err(GameBattleFairyStartupError::EquipmentCompose(error)) => {
+                Err(GameOwnedStartupSnapshotError::EquipmentCompose(error))
+            }
+        });
+    }
     match selector {
         GOODS_LIST_SELECTOR => {
             let report = match game.goods_factory_mut().unserialize(source, cursor) {
@@ -1400,17 +1532,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 entries,
             }))
         }
-        FAIRY_EXP_SELECTOR => {
-            let report = match game
-                .fairy_exp_conf_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::FairyExp(error))),
-            };
-            add_log_text(b"Initial SI_FAIRY_EXP...ok!");
-            Some(Ok(GameOwnedStartupSnapshotReport::FairyExp(report)))
-        }
         SYNTHESIS_SELECTOR => {
             let report = match game.synthesis_mut().decord_from_byte_array(source, cursor) {
                 Ok(report) => report,
@@ -1481,36 +1602,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
             };
             Some(Ok(GameOwnedStartupSnapshotReport::DaKong(report)))
         }
-        BATTLE_FAIRY_EXP_SELECTOR => {
-            let report = match game
-                .battle_fairy_exp_config_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(report) => report,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::BattleFairyExp(error)));
-                }
-            };
-            add_log_text(b"Initial SI_BATLLE_FAIRY_CONF...ok\xA3\xA1");
-            Some(Ok(GameOwnedStartupSnapshotReport::BattleFairyExp(report)))
-        }
-        BATTLE_FAIRY_COMBINE_SELECTOR => {
-            let entries = match game
-                .battle_fairy_property_mut()
-                .decord_byte_array_combine(source, cursor)
-            {
-                Ok(entries) => entries,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::BattleFairyCombine(
-                        error,
-                    )));
-                }
-            };
-            add_log_text(b"Initial SI_BATLLE_FAIRY_COMBINE...ok!");
-            Some(Ok(GameOwnedStartupSnapshotReport::BattleFairyCombine {
-                entries,
-            }))
-        }
         STRING_TABLE_SELECTOR => {
             let report = match game.create_string_table(source, cursor, &mut add_log_text) {
                 Ok(report) => report,
@@ -1519,18 +1610,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 }
             };
             Some(Ok(GameOwnedStartupSnapshotReport::StringTable(report)))
-        }
-        EQUIPMENT_COMPOSE_SELECTOR => {
-            let report = match game
-                .equipment_compose_list_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(report) => report,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::EquipmentCompose(error)));
-                }
-            };
-            Some(Ok(GameOwnedStartupSnapshotReport::EquipmentCompose(report)))
         }
         WORDS_FILTER_SELECTOR => {
             let report = match game.words_filter_mut().from_byte_array(source, cursor) {
