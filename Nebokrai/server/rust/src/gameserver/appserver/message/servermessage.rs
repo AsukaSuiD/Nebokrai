@@ -51,6 +51,9 @@
 //! Lookup/filter resources `0x2B/0x31/0x32` публикуют DaKong tables,
 //! WordsFilter additions и JJC level map одним FIFO pass с исходными
 //! clear/append, partial decode и success-log контрактами.
+//! Equipment enhancements `0x33/0x34` тем же FIFO pass публикуют TaoZhuang и
+//! парные CiQing/LingBao owners, повторно сериализуют client payload и
+//! сохраняют исходный broadcast/log ordering.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -789,6 +792,35 @@ pub(crate) struct GameLookupFilterStartupMessageReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameEquipmentEnhancementStartupReport {
+    TaoZhuang {
+        skill_ids: usize,
+        items: usize,
+        broadcast: Result<i32, SendMessageError>,
+    },
+    CiQingLingBao {
+        ci_qing: CiQingDecodeReport,
+        ling_bao: LingBaoDecodeReport,
+        broadcast: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameEquipmentEnhancementStartupError {
+    TaoZhuangDecode(TaoZhuangDecodeError),
+    TaoZhuangSerialize(TaoZhuangSerializationBlock),
+    CiQingDecode(CiQingDecodeError),
+    LingBaoDecode(LingBaoDecodeError),
+    CiQingSerialize(CiQingSerializationBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameEquipmentEnhancementStartupMessageReport {
+    pub(crate) decoded: GameEquipmentEnhancementStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
     StringTable(GameStringTableMessageReport),
@@ -803,6 +835,7 @@ pub(crate) enum GameServerMessageReport {
     EnvironmentConfigurationStartup(GameEnvironmentConfigurationStartupMessageReport),
     MutationRulesStartup(GameMutationRulesStartupMessageReport),
     LookupFilterStartup(GameLookupFilterStartupMessageReport),
+    EquipmentEnhancementStartup(GameEquipmentEnhancementStartupMessageReport),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -819,6 +852,7 @@ pub(crate) enum GameServerMessageError {
     EnvironmentConfigurationStartup(GameEnvironmentConfigurationStartupError),
     MutationRulesStartup(GameMutationRulesStartupError),
     LookupFilterStartup(GameLookupFilterStartupError),
+    EquipmentEnhancementStartup(GameEquipmentEnhancementStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -1136,6 +1170,107 @@ pub(crate) fn dispatch_server_message(
                     log_effects,
                 },
             )))
+        }
+        TAO_ZHUANG_SELECTOR | CI_QING_LING_BAO_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("equipment-enhancement selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_equipment_enhancement_startup(
+                    consumed_selector,
+                    wire,
+                    cursor,
+                    game,
+                    |text| log_effects.push(text.to_vec()),
+                )
+                .expect("equipment-enhancement selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::EquipmentEnhancementStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::EquipmentEnhancementStartup(
+                GameEquipmentEnhancementStartupMessageReport {
+                    decoded,
+                    log_effects,
+                },
+            )))
+        }
+        _ => None,
+    }
+}
+
+fn decode_equipment_enhancement_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<GameEquipmentEnhancementStartupReport, GameEquipmentEnhancementStartupError>> {
+    match selector {
+        TAO_ZHUANG_SELECTOR => {
+            let decoded = match game.tao_zhuang_setup_mut().decode_from_byte(source, cursor) {
+                Ok(decoded) => decoded,
+                Err(error) => {
+                    return Some(Err(GameEquipmentEnhancementStartupError::TaoZhuangDecode(
+                        error,
+                    )));
+                }
+            };
+            add_log_text(b"Add TaoZhuangSetup....OK");
+            let mut payload = Vec::new();
+            if let Err(error) = game.tao_zhuang_setup().add_byte_to_array(&mut payload) {
+                return Some(Err(
+                    GameEquipmentEnhancementStartupError::TaoZhuangSerialize(error),
+                ));
+            }
+            let mut notice = CMessage::new(0x000B_F81A);
+            notice.base_mut().add(&payload);
+            let broadcast = notice.send_all(game.current_net_server());
+            Some(Ok(GameEquipmentEnhancementStartupReport::TaoZhuang {
+                skill_ids: decoded.skill_ids,
+                items: decoded.items,
+                broadcast,
+            }))
+        }
+        CI_QING_LING_BAO_SELECTOR => {
+            let ci_qing = match game.ci_qing_setup_mut().de_byte_from_array(source, cursor) {
+                Ok(report) => report,
+                Err(error) => {
+                    return Some(Err(GameEquipmentEnhancementStartupError::CiQingDecode(
+                        error,
+                    )));
+                }
+            };
+            let ling_bao = match game
+                .ling_bao_setup_mut()
+                .decode_from_array_ling_bao(source, cursor)
+            {
+                Ok(report) => report,
+                Err(error) => {
+                    return Some(Err(GameEquipmentEnhancementStartupError::LingBaoDecode(
+                        error,
+                    )));
+                }
+            };
+            let mut payload = Vec::new();
+            if let Err(error) = game.ci_qing_setup().add_byte_to_array(&mut payload) {
+                return Some(Err(GameEquipmentEnhancementStartupError::CiQingSerialize(
+                    error,
+                )));
+            }
+            let mut notice = CMessage::new(0x000C_010D);
+            notice.base_mut().add(&payload);
+            let broadcast = notice.send_all(game.current_net_server());
+            add_log_text(b"Add CiQingSetup...ok!");
+            Some(Ok(GameEquipmentEnhancementStartupReport::CiQingLingBao {
+                ci_qing,
+                ling_bao,
+                broadcast,
+            }))
         }
         _ => None,
     }
@@ -2348,6 +2483,45 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     if let Some(result) =
+        decode_equipment_enhancement_startup(selector, source, cursor, game, &mut add_log_text)
+    {
+        return Some(match result {
+            Ok(GameEquipmentEnhancementStartupReport::TaoZhuang {
+                skill_ids,
+                items,
+                broadcast,
+            }) => Ok(GameOwnedStartupSnapshotReport::TaoZhuang {
+                skill_ids,
+                items,
+                broadcast,
+            }),
+            Ok(GameEquipmentEnhancementStartupReport::CiQingLingBao {
+                ci_qing,
+                ling_bao,
+                broadcast,
+            }) => Ok(GameOwnedStartupSnapshotReport::CiQingLingBao {
+                ci_qing,
+                ling_bao,
+                broadcast,
+            }),
+            Err(GameEquipmentEnhancementStartupError::TaoZhuangDecode(error)) => {
+                Err(GameOwnedStartupSnapshotError::TaoZhuang(error))
+            }
+            Err(GameEquipmentEnhancementStartupError::TaoZhuangSerialize(error)) => {
+                Err(GameOwnedStartupSnapshotError::TaoZhuangSerialize(error))
+            }
+            Err(GameEquipmentEnhancementStartupError::CiQingDecode(error)) => {
+                Err(GameOwnedStartupSnapshotError::CiQing(error))
+            }
+            Err(GameEquipmentEnhancementStartupError::LingBaoDecode(error)) => {
+                Err(GameOwnedStartupSnapshotError::LingBao(error))
+            }
+            Err(GameEquipmentEnhancementStartupError::CiQingSerialize(error)) => {
+                Err(GameOwnedStartupSnapshotError::CiQingSerialize(error))
+            }
+        });
+    }
+    if let Some(result) =
         decode_lookup_filter_startup(selector, source, cursor, game, &mut add_log_text)
     {
         return Some(match result {
@@ -2766,57 +2940,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 }
             };
             Some(Ok(GameOwnedStartupSnapshotReport::StringTable(report)))
-        }
-        TAO_ZHUANG_SELECTOR => {
-            let decoded = match game.tao_zhuang_setup_mut().decode_from_byte(source, cursor) {
-                Ok(decoded) => decoded,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::TaoZhuang(error)));
-                }
-            };
-            add_log_text(b"Add TaoZhuangSetup....OK");
-
-            let mut payload = Vec::new();
-            if let Err(error) = game.tao_zhuang_setup().add_byte_to_array(&mut payload) {
-                return Some(Err(GameOwnedStartupSnapshotError::TaoZhuangSerialize(
-                    error,
-                )));
-            }
-            let mut notice = CMessage::new(0x000B_F81A);
-            notice.base_mut().add(&payload);
-            let broadcast = notice.send_all(game.current_net_server());
-            Some(Ok(GameOwnedStartupSnapshotReport::TaoZhuang {
-                skill_ids: decoded.skill_ids,
-                items: decoded.items,
-                broadcast,
-            }))
-        }
-        CI_QING_LING_BAO_SELECTOR => {
-            let ci_qing = match game.ci_qing_setup_mut().de_byte_from_array(source, cursor) {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::CiQing(error))),
-            };
-            let ling_bao = match game
-                .ling_bao_setup_mut()
-                .decode_from_array_ling_bao(source, cursor)
-            {
-                Ok(report) => report,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::LingBao(error))),
-            };
-
-            let mut payload = Vec::new();
-            if let Err(error) = game.ci_qing_setup().add_byte_to_array(&mut payload) {
-                return Some(Err(GameOwnedStartupSnapshotError::CiQingSerialize(error)));
-            }
-            let mut notice = CMessage::new(0x000C_010D);
-            notice.base_mut().add(&payload);
-            let broadcast = notice.send_all(game.current_net_server());
-            add_log_text(b"Add CiQingSetup...ok!");
-            Some(Ok(GameOwnedStartupSnapshotReport::CiQingLingBao {
-                ci_qing,
-                ling_bao,
-                broadcast,
-            }))
         }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game
