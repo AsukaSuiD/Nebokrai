@@ -12,16 +12,62 @@
 //! `+0x40` как текущий `CServerRegion*`; удалённый raw pointer выражен
 //! `Option<i32>` region identity в assembly-проекции.
 //!
-//! Полный огромный constructor и gameplay state игрока остаются RAW. Поэтому
-//! `from_send_state` — явная assembly-граница уже восстановленного runtime,
-//! а не заявление о полном Rust-layout `CPlayer`. Figure передаётся как
-//! доказанный derived virtual fact; владение spatial state остаётся у
-//! `CMoveShape`.
+//! Материализована также подтверждённая setter-family: боевые scalar-ы
+//! насыщаются до `INT_MAX`, contribution — до `±2_000_000_000`, а fetch power
+//! сравнивается с unsigned-представлением setup limit. Это минимальный owned
+//! player state для будущих equipment/battle-fairy side effects, но не замена
+//! полного constructor-а, property recalc или runtime player lifecycle.
+//! Поэтому `from_send_state` остаётся явной assembly-границей уже
+//! восстановленного runtime. Figure передаётся как доказанный derived virtual
+//! fact; владение spatial state остаётся у `CMoveShape`.
 
 use super::moveshape::CMoveShape;
 use super::shape::{CShape, ShapeFigure, ShapeView};
 
 const PLAYER_TYPE: i32 = 400;
+const LEGACY_COMBAT_MAXIMUM: u32 = i32::MAX as u32;
+const CONTRIBUTION_MINIMUM: i32 = -2_000_000_000;
+const CONTRIBUTION_MAXIMUM: i32 = 2_000_000_000;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerBaseProperties {
+    pub(crate) pk_count: u16,
+    pub(crate) experience: u32,
+    pub(crate) fetch_power: u32,
+    pub(crate) battle_fairy_recall: bool,
+    pub(crate) battle_fairy_died: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerCombatProperties {
+    pub(crate) maximum_hp: u32,
+    pub(crate) maximum_mp: u32,
+    pub(crate) strength: u32,
+    pub(crate) dexterity: u32,
+    pub(crate) constitution: u32,
+    pub(crate) intelligence: u32,
+    pub(crate) minimum_attack: u32,
+    pub(crate) maximum_attack: u32,
+    pub(crate) defense: u32,
+    pub(crate) element_resistance: u32,
+    pub(crate) blast_defense_scale_bits: u32,
+    pub(crate) full_miss_scale_bits: u32,
+    pub(crate) critical_rate_bits: u32,
+}
+
+impl PlayerCombatProperties {
+    pub(crate) const fn blast_defense_scale(self) -> f32 {
+        f32::from_bits(self.blast_defense_scale_bits)
+    }
+
+    pub(crate) const fn full_miss_scale(self) -> f32 {
+        f32::from_bits(self.full_miss_scale_bits)
+    }
+
+    pub(crate) const fn critical_rate(self) -> f32 {
+        f32::from_bits(self.critical_rate_bits)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CPlayer {
@@ -30,6 +76,10 @@ pub(crate) struct CPlayer {
     team_id: i32,
     country: u8,
     server_region_id: Option<i32>,
+    base_properties: PlayerBaseProperties,
+    combat_properties: PlayerCombatProperties,
+    ci_qing_open: bool,
+    contribution: i32,
 }
 
 impl CPlayer {
@@ -51,6 +101,10 @@ impl CPlayer {
             team_id,
             country,
             server_region_id,
+            base_properties: PlayerBaseProperties::default(),
+            combat_properties: PlayerCombatProperties::default(),
+            ci_qing_open: false,
+            contribution: 0,
         })
     }
 
@@ -74,6 +128,114 @@ impl CPlayer {
         self.server_region_id
     }
 
+    pub(crate) const fn base_properties(&self) -> PlayerBaseProperties {
+        self.base_properties
+    }
+
+    pub(crate) const fn combat_properties(&self) -> PlayerCombatProperties {
+        self.combat_properties
+    }
+
+    pub(crate) const fn ci_qing_open(&self) -> bool {
+        self.ci_qing_open
+    }
+
+    pub(crate) const fn contribution(&self) -> i32 {
+        self.contribution
+    }
+
+    pub(crate) const fn set_pk_count(&mut self, value: u16) {
+        self.base_properties.pk_count = value;
+    }
+
+    pub(crate) const fn set_ci_qing_open(&mut self, value: bool) {
+        self.ci_qing_open = value;
+    }
+
+    pub(crate) const fn set_experience(&mut self, value: u32) {
+        self.base_properties.experience = value;
+    }
+
+    pub(crate) const fn set_maximum_hp(&mut self, value: u32) {
+        self.combat_properties.maximum_hp = clamp_combat_scalar(value);
+    }
+
+    pub(crate) const fn set_maximum_mp(&mut self, value: u32) {
+        self.combat_properties.maximum_mp = clamp_combat_scalar(value);
+    }
+
+    pub(crate) const fn set_strength(&mut self, value: u32) {
+        self.combat_properties.strength = clamp_combat_scalar(value);
+    }
+
+    pub(crate) const fn set_dexterity(&mut self, value: u32) {
+        self.combat_properties.dexterity = clamp_combat_scalar(value);
+    }
+
+    pub(crate) const fn set_constitution(&mut self, value: u32) {
+        self.combat_properties.constitution = clamp_combat_scalar(value);
+    }
+
+    pub(crate) const fn set_intelligence(&mut self, value: u32) {
+        self.combat_properties.intelligence = clamp_combat_scalar(value);
+    }
+
+    pub(crate) const fn set_minimum_attack(&mut self, value: u32) {
+        self.combat_properties.minimum_attack = clamp_combat_scalar(value);
+    }
+
+    pub(crate) const fn set_maximum_attack(&mut self, value: u32) {
+        self.combat_properties.maximum_attack = clamp_combat_scalar(value);
+    }
+
+    pub(crate) const fn set_defense(&mut self, value: u32) {
+        self.combat_properties.defense = clamp_combat_scalar(value);
+    }
+
+    pub(crate) const fn set_element_resistance(&mut self, value: u32) {
+        self.combat_properties.element_resistance = clamp_combat_scalar(value);
+    }
+
+    pub(crate) const fn set_blast_defense_scale(&mut self, value: f32) {
+        self.combat_properties.blast_defense_scale_bits =
+            (if value < 0.01 { 0.01 } else { value }).to_bits();
+    }
+
+    pub(crate) const fn set_full_miss_scale(&mut self, value: f32) {
+        self.combat_properties.full_miss_scale_bits =
+            (if value < 0.01 { 0.01 } else { value }).to_bits();
+    }
+
+    pub(crate) const fn set_critical_rate(&mut self, value: f32) {
+        self.combat_properties.critical_rate_bits =
+            (if value < 1.0 { 1.0 } else { value }).to_bits();
+    }
+
+    pub(crate) const fn set_contribution(&mut self, value: i32) {
+        self.contribution = if value < CONTRIBUTION_MINIMUM {
+            CONTRIBUTION_MINIMUM
+        } else if value > CONTRIBUTION_MAXIMUM {
+            CONTRIBUTION_MAXIMUM
+        } else {
+            value
+        };
+    }
+
+    /// `lMaxFetchPower` в exact сравнивался после unsigned cast, поэтому
+    /// отрицательный setup limit становится большим unsigned пределом.
+    pub(crate) const fn set_fetch_power(&mut self, value: u32, setup_maximum: i32) {
+        let maximum = setup_maximum as u32;
+        self.base_properties.fetch_power = if maximum < value { maximum } else { value };
+    }
+
+    pub(crate) const fn set_battle_fairy_recall(&mut self, value: bool) {
+        self.base_properties.battle_fairy_recall = value;
+    }
+
+    pub(crate) const fn set_battle_fairy_died(&mut self, value: bool) {
+        self.base_properties.battle_fairy_died = value;
+    }
+
     pub(crate) fn shape_view(&self) -> Option<ShapeView> {
         let identity = self.shape().identity();
         Some(ShapeView {
@@ -82,6 +244,14 @@ impl CPlayer {
             tile_y: self.shape().get_tile_y().ok()?,
             figure: self.figure,
         })
+    }
+}
+
+const fn clamp_combat_scalar(value: u32) -> u32 {
+    if LEGACY_COMBAT_MAXIMUM < value {
+        LEGACY_COMBAT_MAXIMUM
+    } else {
+        value
     }
 }
 
