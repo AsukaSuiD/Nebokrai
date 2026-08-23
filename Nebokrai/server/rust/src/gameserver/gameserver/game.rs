@@ -49,6 +49,9 @@
 //! публикует decoded prefix и сохраняет пустой fallback `GetStringByID`.
 //! `CHonorRanks` хранит четыре rank-type × четыре country snapshots; поля
 //! полного игрока для total-reset остаются отдельной assembly-границей.
+//! `CSkillFactory` принадлежит `CGame`: startup selector `0x06` заменяет весь
+//! composite-key registry, а будущие skill/state owners получают те же runtime
+//! lookup-ы без process-global raw pointers.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -84,6 +87,7 @@ use crate::gameserver::appserver::servergodsbattleregion::CGodsBattleMgr;
 use crate::gameserver::appserver::shape::{
     MoveCheckCellRegistry, ShapeIdentity, ShapeResolver, ShapeView,
 };
+use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::gameserver::honorranks::CHonorRanks;
 use crate::gameserver::gameserver::playerranks::CPlayerRanks;
 use crate::nets::clients::ClientConnectError;
@@ -756,6 +760,7 @@ pub(crate) struct CGame {
     sequence_registry: CSequenceRegistry,
     player_list: CPlayerList,
     trade_list: CTradeList,
+    skill_factory: CSkillFactory,
     thing_setup: CThingSetup,
     increment_shop_list: CIncrementShopList,
     contribute_setup: CContributeSetup,
@@ -826,6 +831,7 @@ impl CGame {
             sequence_registry: CSequenceRegistry::default(),
             player_list: CPlayerList::default(),
             trade_list: CTradeList::default(),
+            skill_factory: CSkillFactory::default(),
             thing_setup: CThingSetup::default(),
             increment_shop_list: CIncrementShopList::default(),
             contribute_setup: CContributeSetup::default(),
@@ -1109,6 +1115,14 @@ impl CGame {
 
     pub(crate) const fn trade_list_mut(&mut self) -> &mut CTradeList {
         &mut self.trade_list
+    }
+
+    pub(crate) const fn skill_factory(&self) -> &CSkillFactory {
+        &self.skill_factory
+    }
+
+    pub(crate) const fn skill_factory_mut(&mut self) -> &mut CSkillFactory {
+        &mut self.skill_factory
     }
 
     pub(crate) const fn thing_setup(&self) -> &CThingSetup {

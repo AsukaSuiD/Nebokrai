@@ -33,6 +33,8 @@
 //! minister records и публикует ordered lookup до финального startup log.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
+//! Skill list `0x06` очищает и заново публикует composite-key registry из
+//! парного WorldServer wire, затем пишет точный startup log.
 //! FourNationWar `0x25` декодирует exact 196-byte setup records и пять rects,
 //! затем проецирует war state и relive rectangles в доступные nation regions.
 //! Script resources `0x0A..0x0D` сохраняют signed lengths, bounded path,
@@ -70,6 +72,9 @@ use crate::gameserver::appserver::country::countrywarsys::{
     CountryWarDecodeError, CountryWarStartupContext, CountryWarSys,
 };
 use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyComposeDecodeError;
+use crate::gameserver::appserver::skills::skillfactory::{
+    SkillFactoryDecodeError, SkillFactoryDecodeReport,
+};
 use crate::gameserver::gameserver::game::{
     CGame, GameNetworkInitializationError, GameScriptResourceContext, GameSingleFilePublication,
 };
@@ -115,6 +120,7 @@ const PLAYER_LIST_SELECTOR: i32 = 0x01;
 const TRADE_LIST_SELECTOR: i32 = 0x03;
 const INCREMENT_SHOP_SELECTOR: i32 = 0x04;
 const CONTRIBUTE_SETUP_SELECTOR: i32 = 0x05;
+const SKILL_LIST_SELECTOR: i32 = 0x06;
 const GLOBE_SETUP_SELECTOR: i32 = 0x07;
 const LOG_SYSTEM_SELECTOR: i32 = 0x08;
 const GM_LIST_SELECTOR: i32 = 0x09;
@@ -291,6 +297,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     ContributeSetup {
         entries: usize,
     },
+    SkillList(SkillFactoryDecodeReport),
     GlobeSetup {
         decoded: GlobeSetupDecodeReport,
         goods_ai_broadcast: Result<i32, SendMessageError>,
@@ -387,6 +394,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     TradeList(TradeListDecodeError),
     IncrementShop(IncrementShopDecodeError),
     ContributeSetup(ContributeSetupDecodeError),
+    SkillList(SkillFactoryDecodeError),
     GlobeSetup(GlobeSetupDecodeError),
     LogSystem(LogSystemDecodeError),
     GmList(GmListDecodeError),
@@ -437,6 +445,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::TradeList(error) => error.fmt(formatter),
             Self::IncrementShop(error) => error.fmt(formatter),
             Self::ContributeSetup(error) => error.fmt(formatter),
+            Self::SkillList(error) => error.fmt(formatter),
             Self::GlobeSetup(error) => error.fmt(formatter),
             Self::LogSystem(error) => error.fmt(formatter),
             Self::GmList(error) => error.fmt(formatter),
@@ -484,6 +493,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::TradeList(error) => Some(error),
             Self::IncrementShop(error) => Some(error),
             Self::ContributeSetup(error) => Some(error),
+            Self::SkillList(error) => Some(error),
             Self::GlobeSetup(error) => Some(error),
             Self::LogSystem(error) => Some(error),
             Self::GmList(error) => Some(error),
@@ -582,6 +592,14 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
             Some(Ok(GameOwnedStartupSnapshotReport::ContributeSetup {
                 entries,
             }))
+        }
+        SKILL_LIST_SELECTOR => {
+            let report = match game.skill_factory_mut().rebuild(source, cursor) {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::SkillList(error))),
+            };
+            add_log_text(b"Initial SI_SKILLLIST...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::SkillList(report)))
         }
         GLOBE_SETUP_SELECTOR => {
             let decoded = {

@@ -18,6 +18,10 @@ pub(crate) mod appserver {
     pub(crate) mod goods {
         pub(crate) mod cbattlefairyproperty;
     }
+    pub(crate) mod skills {
+        pub(crate) mod skillbaseproperties;
+        pub(crate) mod skillfactory;
+    }
     pub(crate) mod message {
         pub(crate) mod countrymessage;
         pub(crate) mod organsysmessage;
