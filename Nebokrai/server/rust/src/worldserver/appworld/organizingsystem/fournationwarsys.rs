@@ -262,7 +262,7 @@ pub(crate) trait FourNationWarCallbackContext {
     fn war_end_notice(&mut self, region_name: &[u8]) -> Vec<u8>;
     fn war_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8>;
     fn current_time(&mut self) -> TagTime;
-    fn war_end_info_text(&mut self) -> Vec<u8>;
+    fn war_end_info_text(&mut self, region_name: &[u8]) -> Vec<u8>;
     fn add_timed_top_info(&mut self, timer_flag: i32, milliseconds: i32, text: &[u8]) -> i32;
     fn send_timed_top_info(&mut self, info_id: i32, timer_flag: i32, milliseconds: i32, text: &[u8]);
 }
@@ -828,10 +828,10 @@ impl CFourNationWarSys {
             .ok_or(FourNationWarRegionIndexBlock { index, setup_count: self.setups.len() })?;
         let current_time = context.current_time();
         if setup.region_id == 0 || setup.region_state != 3 || !current_time.legacy_lt(setup.end_time) { return Ok(()); }
-        if context.region_name(setup.region_id).is_none() { return Ok(()); }
+        let Some(region_name) = context.region_name(setup.region_id) else { return Ok(()); };
         let difference = setup.end_time.get_time_difference(current_time).map_err(|_| FourNationWarRegionIndexBlock { index, setup_count: self.setups.len() })?;
         let milliseconds = ((i32::from(difference.minute) * 60) + i32::from(difference.second)) * 1000;
-        let text = context.war_end_info_text();
+        let text = context.war_end_info_text(&region_name);
         let info_id = context.add_timed_top_info(2, milliseconds, &text);
         context.send_timed_top_info(info_id, 2, milliseconds, &text);
         Ok(())

@@ -3983,6 +3983,173 @@ pub(crate) struct WorldMainLoopTimerStageReport {
     pub(crate) next_stage_started_at_ms: u32,
 }
 
+struct WorldFourNationWarTimerEffects<'a, GetTick> {
+    game: &'a CGame,
+    country_handler: &'a mut CCountryHandler,
+    log: &'a mut WorldLogTextOwner,
+    get_tick: &'a mut GetTick,
+    get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
+    put_log_info: &'a mut dyn FnMut(&[u8]),
+}
+
+impl<GetTick: FnMut() -> u32> WorldFourNationWarTimerEffects<'_, GetTick> {
+    fn format(&self, string_id: &[u8], arguments: &[UnionFormatArgument<'_>]) -> Vec<u8> {
+        format_union_world_string(self.game.get_string_by_id(string_id), arguments)
+    }
+}
+
+impl<GetTick: FnMut() -> u32> FourNationWarCallbackContext
+    for WorldFourNationWarTimerEffects<'_, GetTick>
+{
+    fn send_all(&mut self, message: &CMessage) {
+        let _ = message.send_all(self.game.current_game_server_sender().as_ref());
+    }
+
+    fn region_name(&mut self, region_id: i32) -> Option<Vec<u8>> {
+        match self.game.region_name(region_id) {
+            WorldRegionNameLookup::Name(name) => Some(legacy_c_string_prefix(name).to_vec()),
+            WorldRegionNameLookup::RegionNotFound | WorldRegionNameLookup::NullRegionPointer => {
+                None
+            }
+        }
+    }
+
+    fn war_start_notice(&mut self, region_name: &[u8]) -> Vec<u8> {
+        self.format(b"XBWS0022", &[UnionFormatArgument::Text(region_name)])
+    }
+
+    fn war_start_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8> {
+        self.format(
+            b"XBWS0023",
+            &[
+                UnionFormatArgument::Signed(index),
+                UnionFormatArgument::Text(region_name),
+            ],
+        )
+    }
+
+    fn send_organizing_info(&mut self, text: &[u8], color: u32, trailing: u32) {
+        let _ = COrganizingCtrl::send_organizing_info_to_all(
+            self.game,
+            text,
+            color,
+            trailing,
+        );
+    }
+
+    fn put_war_log(&mut self, text: &[u8]) {
+        put_string_to_file("war", text);
+    }
+
+    fn enter_start_notice(&mut self, region_name: &[u8]) -> Vec<u8> {
+        self.format(b"XBWS0027", &[UnionFormatArgument::Text(region_name)])
+    }
+
+    fn enter_start_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8> {
+        self.format(
+            b"XBWS0028",
+            &[
+                UnionFormatArgument::Signed(index),
+                UnionFormatArgument::Text(region_name),
+            ],
+        )
+    }
+
+    fn enter_end_notice(&mut self, region_name: &[u8]) -> Vec<u8> {
+        self.format(b"XBWS0029", &[UnionFormatArgument::Text(region_name)])
+    }
+
+    fn enter_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8> {
+        self.format(
+            b"XBWS0030",
+            &[
+                UnionFormatArgument::Signed(index),
+                UnionFormatArgument::Text(region_name),
+            ],
+        )
+    }
+
+    fn sign_up_end_log(&mut self, _index: i32, region_name: &[u8]) -> Vec<u8> {
+        self.format(b"XBWS0026", &[UnionFormatArgument::Text(region_name)])
+    }
+
+    fn sign_up_start_notice(&mut self, region_name: &[u8]) -> Vec<u8> {
+        self.format(b"XBWS0024", &[UnionFormatArgument::Text(region_name)])
+    }
+
+    fn sign_up_start_timed_text(&mut self, region_name: &[u8]) -> Vec<u8> {
+        self.format(b"XBWS0025", &[UnionFormatArgument::Text(region_name)])
+    }
+
+    fn sign_up_start_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8> {
+        format_union_world_string(
+            b"(Num:%d)[%s]Four Nation War System start!!.",
+            &[
+                UnionFormatArgument::Signed(index),
+                UnionFormatArgument::Text(region_name),
+            ],
+        )
+    }
+
+    fn war_end_started_log(&mut self) -> Vec<u8> {
+        self.game.get_string_by_id(b"XBWS0032").to_vec()
+    }
+
+    fn add_log_text(&mut self, text: &[u8]) {
+        let _ = self.log.add_log_text_no_arguments(
+            text,
+            self.game.setup.save_info_time_ms,
+            &mut *self.get_tick,
+            &mut *self.get_log_local_time,
+            &mut *self.put_log_info,
+        );
+    }
+
+    fn war_end_notice(&mut self, region_name: &[u8]) -> Vec<u8> {
+        self.format(b"XBWS0033", &[UnionFormatArgument::Text(region_name)])
+    }
+
+    fn war_end_log(&mut self, index: i32, region_name: &[u8]) -> Vec<u8> {
+        self.format(
+            b"XBWS0034",
+            &[
+                UnionFormatArgument::Signed(index),
+                UnionFormatArgument::Text(region_name),
+            ],
+        )
+    }
+
+    fn current_time(&mut self) -> TagTime {
+        TagTime::local_now()
+    }
+
+    fn war_end_info_text(&mut self, region_name: &[u8]) -> Vec<u8> {
+        self.format(b"XBWS0031", &[UnionFormatArgument::Text(region_name)])
+    }
+
+    fn add_timed_top_info(&mut self, timer_flag: i32, milliseconds: i32, text: &[u8]) -> i32 {
+        self.country_handler
+            .add_one_top_info(timer_flag, milliseconds, text, &mut *self.get_tick)
+    }
+
+    fn send_timed_top_info(
+        &mut self,
+        info_id: i32,
+        timer_flag: i32,
+        milliseconds: i32,
+        text: &[u8],
+    ) {
+        let mut delivery = WorldCountryInfoDelivery { game: self.game };
+        let _ = self.country_handler.send_top_info_to_client(
+            info_id,
+            timer_flag,
+            milliseconds,
+            text,
+            &mut delivery,
+        );
+    }
+}
+
 struct WorldTimerHandler<'a, Callback> {
     game: &'a CGame,
     country_war: &'a mut CountryWarSys,
@@ -3990,7 +4157,6 @@ struct WorldTimerHandler<'a, Callback> {
     country_war_callbacks: CountryWarCallbacks<Callback>,
     four_nation_war: &'a mut CFourNationWarSys,
     four_nation_war_callbacks: FourNationWarCallbacks<Callback>,
-    four_nation_war_context: &'a mut dyn FourNationWarCallbackContext,
     globe_setup: &'a GlobeSetupSnapshot,
     organizing_parameters: &'a mut COrganizingParam,
     player_ranks: &'a mut CPlayerRanks,
@@ -4137,6 +4303,14 @@ where
             .kind(&invocation.callback)
         {
             let index = invocation.parameter;
+            let mut effects = WorldFourNationWarTimerEffects {
+                game: self.game,
+                country_handler: self.country_handler,
+                log: self.log,
+                get_tick,
+                get_log_local_time: self.get_log_local_time,
+                put_log_info: self.put_log_info,
+            };
             let region_block = |source: FourNationWarRegionIndexBlock| {
                 WorldTimerCallbackBlock::FourNationWar(
                     FourNationWarCalendarBlock::RegionIndex(source),
@@ -4145,15 +4319,15 @@ where
             match callback {
                 FourNationWarCallbackKind::SignUpStart => self
                     .four_nation_war
-                    .on_sign_up_war_start(index, self.four_nation_war_context)
+                    .on_sign_up_war_start(index, &mut effects)
                     .map_err(WorldTimerCallbackBlock::FourNationWar)?,
                 FourNationWarCallbackKind::SignUpEnd => self
                     .four_nation_war
-                    .on_sign_up_war_end(index, self.four_nation_war_context)
+                    .on_sign_up_war_end(index, &mut effects)
                     .map_err(region_block)?,
                 FourNationWarCallbackKind::WarStart => self
                     .four_nation_war
-                    .on_war_start(index, self.four_nation_war_context)
+                    .on_war_start(index, &mut effects)
                     .map_err(region_block)?,
                 FourNationWarCallbackKind::WarEnd => self
                     .four_nation_war
@@ -4161,29 +4335,29 @@ where
                         index,
                         timer,
                         self.four_nation_war_callbacks,
-                        self.four_nation_war_context,
+                        &mut effects,
                     )
                     .map_err(WorldTimerCallbackBlock::FourNationWar)?,
                 FourNationWarCallbackKind::WarEndInfo => self
                     .four_nation_war
-                    .on_war_end_info(index, self.four_nation_war_context)
+                    .on_war_end_info(index, &mut effects)
                     .map_err(region_block)?,
                 FourNationWarCallbackKind::EnterStart => self
                     .four_nation_war
-                    .on_enter_start(index, self.four_nation_war_context)
+                    .on_enter_start(index, &mut effects)
                     .map_err(region_block)?,
                 FourNationWarCallbackKind::EnterEnd => self
                     .four_nation_war
-                    .on_enter_end(index, self.four_nation_war_context)
+                    .on_enter_end(index, &mut effects)
                     .map_err(region_block)?,
                 FourNationWarCallbackKind::RefreshRegion => {
                     CFourNationWarSys::on_refresh_region(index, &mut |message| {
-                        self.four_nation_war_context.send_all(message)
+                        effects.send_all(message)
                     });
                 }
                 FourNationWarCallbackKind::ClearWar => {
                     CFourNationWarSys::on_clear_war(index, &mut |message| {
-                        self.four_nation_war_context.send_all(message)
+                        effects.send_all(message)
                     });
                 }
             }
@@ -4643,7 +4817,6 @@ pub(crate) struct WorldMainLoopOwners<
     pub(crate) country_war_callbacks: CountryWarCallbacks<TimerCallback>,
     pub(crate) four_nation_war: &'a mut CFourNationWarSys,
     pub(crate) four_nation_war_callbacks: FourNationWarCallbacks<TimerCallback>,
-    pub(crate) four_nation_war_context: &'a mut dyn FourNationWarCallbackContext,
     pub(crate) honor_ranks: &'a mut CHonorRanks,
     pub(crate) organizing_parameters: &'a mut COrganizingParam,
     pub(crate) organizing_tax_callback: TimerCallback,
@@ -14124,7 +14297,6 @@ impl CGame {
         country_war_callbacks: CountryWarCallbacks<Callback>,
         four_nation_war: &mut CFourNationWarSys,
         four_nation_war_callbacks: FourNationWarCallbacks<Callback>,
-        four_nation_war_context: &mut dyn FourNationWarCallbackContext,
         globe_setup: &GlobeSetupSnapshot,
         clocks: &mut WorldMainLoopClockState,
         profile_state: &mut WorldMainLoopProfileState,
@@ -14157,7 +14329,6 @@ impl CGame {
             country_war_callbacks,
             four_nation_war,
             four_nation_war_callbacks,
-            four_nation_war_context,
             globe_setup,
             organizing_parameters,
             player_ranks,
@@ -15242,7 +15413,6 @@ impl CGame {
                 owners.country_war_callbacks,
                 owners.four_nation_war,
                 owners.four_nation_war_callbacks,
-                &mut *owners.four_nation_war_context,
                 owners.globe_setup,
                 state.clocks,
                 state.profile,
