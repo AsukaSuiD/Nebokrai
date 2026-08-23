@@ -1,16 +1,20 @@
-//! Две таблицы преобразования экипировки исторического Miracle.
+//! Две static таблицы преобразования экипировки исторического Miracle.
 //!
-//! World `EquipmentComposeList::LoadList/AddToByteArray`
-//! —; Game decoder и lookup queries ниже
-//! остаются. Точная пара:
-//! Исходный владелец PDB:
+//! `LoadList/AddToByteArray` подтверждены точной парой
+//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, а
+//! `DecordFromByteArray/GetFirstCompose/GetSecondCompose` — точной парой
+//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`. Исходный owner PDB:
+//! `e:\svn\fengyun_russia_dev\public\equipmentcomposelist.cpp`.
 //!
 //! Wire состоит из двух последовательных ordered map: для каждой сначала
 //! signed count, затем пары `u32 source + u32 target`. Loader и Game decoder
 //! использовали `map::insert`, поэтому duplicate source сохраняет первое
-//! значение. Исходная функция всегда возвращала `false` даже после успешной
-//! записи, но reconnect caller игнорировал результат; Rust сообщает только
-//! реальную ошибку представимости count и не переносит бессодержательный flag.
+//! значение. Game decoder сначала очищает обе таблицы и сохраняет полностью
+//! прочитанный prefix; исходная функция всегда возвращала `false` даже после
+//! успешной записи, но reconnect caller игнорировал результат, поэтому Rust
+//! возвращает содержательный report. Отрицательный wire-count не создаётся
+//! парным World owner-ом; вместо legacy unbounded-read он трактуется как пустая
+//! секция, как и в достигнутых соседних snapshot decoder-ах.
 //! `BTreeMap` заменяет MSVC tree без изменения unsigned key-order.
 //! `LoadList` очищает обе таблицы до попытки чтения, ищет два точных маркера
 //! `#`, пропускает следующий label и читает signed count с парами signed
@@ -33,7 +37,7 @@ pub(crate) struct EquipmentComposeList {
 }
 
 impl EquipmentComposeList {
- /// Загружает две ordered map из уже выбранного resource backend-а.
+    /// Загружает две ordered map из уже выбранного resource backend-а.
     pub(crate) fn load_list(&mut self, source: Option<&[u8]>) -> bool {
         self.clear();
         let Some(source) = source else {
@@ -62,7 +66,7 @@ impl EquipmentComposeList {
         self.second.clear();
     }
 
- /// Дописывает оригинал `map1 + map2` wire.
+    /// Дописывает оригинал `map1 + map2` wire.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -70,6 +74,42 @@ impl EquipmentComposeList {
         write_map(destination, &self.first, EquipmentComposeSection::First)?;
         write_map(destination, &self.second, EquipmentComposeSection::Second)?;
         Ok(())
+    }
+
+    /// Повторяет `GetFirstCompose`: отсутствующий source даёт нулевой TID.
+    pub(crate) fn get_first_compose(&self, source: u32) -> u32 {
+        self.first.get(&source).copied().unwrap_or(0)
+    }
+
+    /// Повторяет `GetSecondCompose`: отсутствующий source даёт нулевой TID.
+    pub(crate) fn get_second_compose(&self, source: u32) -> u32 {
+        self.second.get(&source).copied().unwrap_or(0)
+    }
+
+    /// Декодирует GameServer startup snapshot, сохраняя полностью прочитанный
+    /// prefix при безопасной short-buffer границе.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<EquipmentComposeDecodeReport, EquipmentComposeDecodeError> {
+        self.clear();
+        decode_map(
+            source,
+            cursor,
+            EquipmentComposeSection::First,
+            &mut self.first,
+        )?;
+        decode_map(
+            source,
+            cursor,
+            EquipmentComposeSection::Second,
+            &mut self.second,
+        )?;
+        Ok(EquipmentComposeDecodeReport {
+            first: self.first.len(),
+            second: self.second.len(),
+        })
     }
 }
 
@@ -106,12 +146,94 @@ impl fmt::Display for EquipmentComposeSerializeError {
 
 impl Error for EquipmentComposeSerializeError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentComposeDecodeReport {
+    pub(crate) first: usize,
+    pub(crate) second: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentComposeDecodeError {
+    pub(crate) section: EquipmentComposeSection,
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
+}
+
+impl fmt::Display for EquipmentComposeDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} snapshot обрывается на {}: нужно {}, доступно {}",
+            self.section, self.offset, self.needed, self.available
+        )
+    }
+}
+
+impl Error for EquipmentComposeDecodeError {}
+
 fn insert_first_wins(values: &mut BTreeMap<u32, u32>, source: u32, target: u32) -> bool {
     if values.contains_key(&source) {
         return false;
     }
     values.insert(source, target);
     true
+}
+
+fn decode_map(
+    source: &[u8],
+    cursor: &mut usize,
+    section: EquipmentComposeSection,
+    destination: &mut BTreeMap<u32, u32>,
+) -> Result<(), EquipmentComposeDecodeError> {
+    let count = read_wire_i32(source, cursor, section)?;
+    for _ in 0..count.max(0) {
+        let source_id = read_wire_u32(source, cursor, section)?;
+        let target_id = read_wire_u32(source, cursor, section)?;
+        insert_first_wins(destination, source_id, target_id);
+    }
+    Ok(())
+}
+
+fn read_wire_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    section: EquipmentComposeSection,
+) -> Result<i32, EquipmentComposeDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(
+        source, cursor, section,
+    )?))
+}
+
+fn read_wire_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    section: EquipmentComposeSection,
+) -> Result<u32, EquipmentComposeDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(
+        source, cursor, section,
+    )?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+    section: EquipmentComposeSection,
+) -> Result<[u8; N], EquipmentComposeDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(EquipmentComposeDecodeError {
+            section,
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер EquipmentCompose scalar уже проверен"))
 }
 
 fn load_section<'a>(
@@ -174,5 +296,3 @@ fn write_map(
     }
     Ok(())
 }
-
-// и lookup queries, а не как Rust-реализация.

@@ -42,6 +42,9 @@ use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
 use crate::public::dakongxiangqian::{DaKongDecodeError, DaKongDecodeReport};
 use crate::public::dupliregionsetup::DupliRegionDecodeError;
+use crate::public::equipmentcomposelist::{
+    EquipmentComposeDecodeError, EquipmentComposeDecodeReport,
+};
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpDecodeError, BattleFairyExpDecodeReport};
 use crate::setup::changebody::ChangeBodyDecodeError;
 use crate::setup::contributesetup::ContributeSetupDecodeError;
@@ -83,6 +86,7 @@ const HONOR_ELIMINATE_SELECTOR: i32 = 0x26;
 const DA_KONG_SELECTOR: i32 = 0x2b;
 const BATTLE_FAIRY_EXP_SELECTOR: i32 = 0x2c;
 const BATTLE_FAIRY_COMBINE_SELECTOR: i32 = 0x2d;
+const EQUIPMENT_COMPOSE_SELECTOR: i32 = 0x30;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -205,6 +209,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     BattleFairyCombine {
         entries: usize,
     },
+    EquipmentCompose(EquipmentComposeDecodeReport),
     ThingSetup {
         entries: usize,
     },
@@ -234,6 +239,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     DaKong(DaKongDecodeError),
     BattleFairyExp(BattleFairyExpDecodeError),
     BattleFairyCombine(BattleFairyComposeDecodeError),
+    EquipmentCompose(EquipmentComposeDecodeError),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -267,6 +273,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::DaKong(error) => error.fmt(formatter),
             Self::BattleFairyExp(error) => error.fmt(formatter),
             Self::BattleFairyCombine(error) => error.fmt(formatter),
+            Self::EquipmentCompose(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -297,6 +304,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::DaKong(error) => Some(error),
             Self::BattleFairyExp(error) => Some(error),
             Self::BattleFairyCombine(error) => Some(error),
+            Self::EquipmentCompose(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -565,6 +573,18 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             Some(Ok(GameOwnedStartupSnapshotReport::BattleFairyCombine {
                 entries,
             }))
+        }
+        EQUIPMENT_COMPOSE_SELECTOR => {
+            let report = match game
+                .equipment_compose_list_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(report) => report,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::EquipmentCompose(error)));
+                }
+            };
+            Some(Ok(GameOwnedStartupSnapshotReport::EquipmentCompose(report)))
         }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game

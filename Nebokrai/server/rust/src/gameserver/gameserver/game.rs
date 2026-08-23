@@ -77,6 +77,7 @@ use crate::nets::netserver::mynetserver::{
 use crate::nets::servers::ServerHostError;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
+use crate::public::equipmentcomposelist::EquipmentComposeList;
 use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
 use crate::setup::contributesetup::CContributeSetup;
@@ -721,6 +722,7 @@ pub(crate) struct CGame {
     fairy_exp_conf: CFairyExpConf,
     battle_fairy_exp_config: CBattleFairyExpConfig,
     battle_fairy_property: CBattleFairyProperty,
+    equipment_compose_list: EquipmentComposeList,
     synthesis: CSynthesis,
     new_skill_monster_conf: NewSkillMonsterConf,
     goods_destroy_setup: GoodsDestroySetup,
@@ -766,6 +768,7 @@ impl CGame {
             fairy_exp_conf: CFairyExpConf::default(),
             battle_fairy_exp_config: CBattleFairyExpConfig::default(),
             battle_fairy_property: CBattleFairyProperty::default(),
+            equipment_compose_list: EquipmentComposeList::default(),
             synthesis: CSynthesis::default(),
             new_skill_monster_conf: NewSkillMonsterConf::default(),
             goods_destroy_setup: GoodsDestroySetup::default(),
@@ -1040,6 +1043,14 @@ impl CGame {
 
     pub(crate) const fn battle_fairy_property_mut(&mut self) -> &mut CBattleFairyProperty {
         &mut self.battle_fairy_property
+    }
+
+    pub(crate) const fn equipment_compose_list(&self) -> &EquipmentComposeList {
+        &self.equipment_compose_list
+    }
+
+    pub(crate) const fn equipment_compose_list_mut(&mut self) -> &mut EquipmentComposeList {
+        &mut self.equipment_compose_list
     }
 
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {
