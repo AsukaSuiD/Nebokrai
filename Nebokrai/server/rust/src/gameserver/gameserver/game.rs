@@ -65,7 +65,8 @@
 //! registry публикуются в подтверждённом порядке до соответствующих logs.
 //! Game ID, hit-level, emotion и quest resources `0x12/0x14/0x15/0x16`
 //! проходят общий player-rule FIFO pass с точными partial/cursor/log
-//! контрактами; allocation-чувствительный player-ranks owner не маскируется.
+//! контрактами; player-ranks `0x17` соседним owner-ом сохраняет missing-init и
+//! исходный allocation source.
 //! CountryParam и CountryHandler `0x18/0x19` публикуются одним country-state
 //! FIFO pass, сохраняя scalar/map partial mutation, replacement и exact logs.
 //! Proxy/reload/region-level/dupli selectors `0x0F/0x10/0x11/0x1A` проходят
@@ -79,9 +80,9 @@
 //! точными logs и сохранёнными allocation-error sources.
 //! DaKong/WordsFilter/JJC levels `0x2B/0x31/0x32` проходят общий lookup/filter
 //! FIFO pass с исходными clear/append, partial publication и success logs.
-//! TaoZhuang и CiQing/LingBao `0x33/0x34` проходят общий enhancement FIFO pass:
+//! TaoZhuang и CiQing/LingBao `0x34/0x35` проходят общий enhancement FIFO pass:
 //! owners сериализуются в client wire, broadcast-ятся и логируются в exact order.
-//! Leiting/GodsBattle `0x38/0x39` проходят общий world-event FIFO pass с
+//! Leiting/GodsBattle `0x36/0x39` проходят общий world-event FIFO pass с
 //! dynamic/internal/final logs и typed file-audit effects в исходном порядке.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill

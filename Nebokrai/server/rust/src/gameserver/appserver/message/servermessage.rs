@@ -30,8 +30,8 @@
 //! QuestSystem `0x16` сохраняет exact scalar/script/map mutation order и
 //! публикует runtime lookup-owner до финального startup log.
 //! Вместе с Game ID `0x12`, hit-level `0x14` и emotion `0x15` он входит в
-//! живую player-rule resource family; player ranks `0x17` остаётся отдельно
-//! из-за честной allocation-error границы owner-а.
+//! живую player-rule resource family. Player ranks `0x17` проходит соседним
+//! FIFO owner-ом, сохраняя missing-init и исходный allocation error.
 //! CountryParam `0x18` сохраняет scalar prefix, пять ordered maps и известные
 //! technology wire-quirks до точного startup log.
 //! CountryHandler `0x19` заменяет прежние country owners, декодирует byte-count
@@ -51,10 +51,10 @@
 //! Lookup/filter resources `0x2B/0x31/0x32` публикуют DaKong tables,
 //! WordsFilter additions и JJC level map одним FIFO pass с исходными
 //! clear/append, partial decode и success-log контрактами.
-//! Equipment enhancements `0x33/0x34` тем же FIFO pass публикуют TaoZhuang и
+//! Equipment enhancements `0x34/0x35` тем же FIFO pass публикуют TaoZhuang и
 //! парные CiQing/LingBao owners, повторно сериализуют client payload и
 //! сохраняют исходный broadcast/log ordering.
-//! World-event setup `0x38/0x39` публикует Leiting things и GodsBattle manager
+//! World-event setup `0x36/0x39` публикует Leiting things и GodsBattle manager
 //! одним FIFO pass; dynamic log, decoder-local warning, file audit и финальный
 //! startup log остаются на исходных позициях.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
@@ -842,6 +842,68 @@ pub(crate) struct GameWorldEventStartupMessageReport {
     pub(crate) file_effects: Vec<(String, Vec<u8>)>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerRanksStartupReport {
+    pub(crate) entries: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum GamePlayerRanksStartupError {
+    OwnerUnavailable { selector: i32 },
+    Decode(Arc<PlayerRanksDecodeError>),
+}
+
+impl PartialEq for GamePlayerRanksStartupError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::OwnerUnavailable { selector: left },
+                Self::OwnerUnavailable { selector: right },
+            ) => left == right,
+            (Self::Decode(left), Self::Decode(right)) => {
+                player_ranks_decode_errors_equal(left, right)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for GamePlayerRanksStartupError {}
+
+fn player_ranks_decode_errors_equal(
+    left: &PlayerRanksDecodeError,
+    right: &PlayerRanksDecodeError,
+) -> bool {
+    match (left, right) {
+        (
+            PlayerRanksDecodeError::UnexpectedEnd {
+                offset: left_offset,
+                needed: left_needed,
+                available: left_available,
+            },
+            PlayerRanksDecodeError::UnexpectedEnd {
+                offset: right_offset,
+                needed: right_needed,
+                available: right_available,
+            },
+        ) => {
+            left_offset == right_offset
+                && left_needed == right_needed
+                && left_available == right_available
+        }
+        (
+            PlayerRanksDecodeError::MissingStringTerminator {
+                offset: left_offset,
+            },
+            PlayerRanksDecodeError::MissingStringTerminator {
+                offset: right_offset,
+            },
+        ) => left_offset == right_offset,
+        (PlayerRanksDecodeError::Allocation(_), PlayerRanksDecodeError::Allocation(_)) => true,
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
@@ -859,6 +921,7 @@ pub(crate) enum GameServerMessageReport {
     LookupFilterStartup(GameLookupFilterStartupMessageReport),
     EquipmentEnhancementStartup(GameEquipmentEnhancementStartupMessageReport),
     WorldEventStartup(GameWorldEventStartupMessageReport),
+    PlayerRanksStartup(GamePlayerRanksStartupReport),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -877,6 +940,7 @@ pub(crate) enum GameServerMessageError {
     LookupFilterStartup(GameLookupFilterStartupError),
     EquipmentEnhancementStartup(GameEquipmentEnhancementStartupError),
     WorldEventStartup(GameWorldEventStartupError),
+    PlayerRanksStartup(GamePlayerRanksStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -1254,8 +1318,46 @@ pub(crate) fn dispatch_server_message(
                 },
             )))
         }
+        PLAYER_RANKS_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("player-ranks selector проверен без изменения cursor");
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_player_ranks_startup(consumed_selector, wire, cursor, game)
+                    .expect("player-ranks selector проверен outer dispatcher-ом")
+                    .map_err(GameServerMessageError::PlayerRanksStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::PlayerRanksStartup(decoded)))
+        }
         _ => None,
     }
+}
+
+fn decode_player_ranks_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+) -> Option<Result<GamePlayerRanksStartupReport, GamePlayerRanksStartupError>> {
+    if selector != PLAYER_RANKS_SELECTOR {
+        return None;
+    }
+    let Some(ranks) = game.player_ranks_mut() else {
+        return Some(Err(GamePlayerRanksStartupError::OwnerUnavailable {
+            selector,
+        }));
+    };
+    if let Err(error) = ranks.decord_from_byte_array(source, cursor) {
+        return Some(Err(GamePlayerRanksStartupError::Decode(Arc::new(error))));
+    }
+    Some(Ok(GamePlayerRanksStartupReport {
+        entries: ranks.ranks().len(),
+    }))
 }
 
 fn decode_world_event_startup(
@@ -2576,6 +2678,22 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    if let Some(result) = decode_player_ranks_startup(selector, source, cursor, game) {
+        return Some(match result {
+            Ok(GamePlayerRanksStartupReport { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::PlayerRanks { entries })
+            }
+            Err(GamePlayerRanksStartupError::OwnerUnavailable { selector }) => {
+                Err(GameOwnedStartupSnapshotError::OwnerUnavailable { selector })
+            }
+            Err(GamePlayerRanksStartupError::Decode(error)) => {
+                Err(GameOwnedStartupSnapshotError::PlayerRanks(
+                    Arc::try_unwrap(error)
+                        .expect("PlayerRanks decode error ещё не разделён между reports"),
+                ))
+            }
+        });
+    }
     if let Some(result) = decode_world_event_startup(
         selector,
         source,
@@ -3017,19 +3135,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 path_bytes,
                 declared_length,
                 replaced,
-            }))
-        }
-        PLAYER_RANKS_SELECTOR => {
-            let Some(ranks) = game.player_ranks_mut() else {
-                return Some(Err(GameOwnedStartupSnapshotError::OwnerUnavailable {
-                    selector,
-                }));
-            };
-            if let Err(error) = ranks.decord_from_byte_array(source, cursor) {
-                return Some(Err(GameOwnedStartupSnapshotError::PlayerRanks(error)));
-            }
-            Some(Ok(GameOwnedStartupSnapshotReport::PlayerRanks {
-                entries: ranks.ranks().len(),
             }))
         }
         HONOR_ELIMINATE_SELECTOR => {
