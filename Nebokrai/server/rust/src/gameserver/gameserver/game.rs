@@ -22,8 +22,12 @@
 //! `0x0000BDA0/0x0000BE10` также материализованы через общий Linux transport;
 //! точный return listener-а подтверждён машинным кодом. Из `Release` RVA
 //! `0x00009FD0` перенесён только начальный stop/join reconnect workers. Полный
-//! `CGame` constructor, общий `Init/Release`, загрузчики и прочие maps ниже
-//! остаются RAW;
+//! позиционный разбор `LoadSetup/LoadSetupEx` RVA `0x00009960/0x00009160`
+//! материализован с исходными defaults, частичной мутацией и игнорированием
+//! labels. Открытие listener-а заменяет поздней проверкой bind старый
+//! `FindWindow` single-instance guard; недоказанный default billing bind-port
+//! остаётся typed-границей. Полный общий `Init/Release`, остальные загрузчики
+//! и прочие maps ниже остаются RAW;
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -32,8 +36,12 @@
 //! ветвь `CMessage::SendAll` принимает отдельно как `Option`.
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::fs;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -60,6 +68,361 @@ const DEFAULT_SOCKET_TYPE: i32 = 1;
 const WORLD_REGISTRATION: i32 = 0x0005_FA01;
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const RECONNECT_RETRY_DELAY: Duration = Duration::from_millis(8_000);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GameSetup {
+    world_host: Vec<u8>,
+    world_port: u32,
+    billing_host: Vec<u8>,
+    billing_port: u32,
+    billing_backup_host: Vec<u8>,
+    billing_backup_port: u32,
+    billing_bind_ip: Vec<u8>,
+    billing_bind_port: Option<u32>,
+    listen_port: u32,
+    local_ip: Vec<u8>,
+    check_network: bool,
+    maximum_bytes_per_second: u32,
+    maximum_message_length: u32,
+    forbid_time_ms: u32,
+    check_message_content: bool,
+    maximum_clients: i32,
+    maximum_in_flight_sends: i32,
+    permitted_send_bytes: i32,
+    refresh_info_time_ms: u32,
+    save_info_time_ms: u32,
+    watch_runtime_info: bool,
+    watch_runtime_time_ms: u32,
+    enter_time: u32,
+    message_validate_time_ms: u32,
+    sequence_count: u32,
+}
+
+impl Default for GameSetup {
+    fn default() -> Self {
+        Self {
+            world_host: b"127.0.0.1".to_vec(),
+            world_port: 0x1fa4,
+            billing_host: b"127.0.0.1".to_vec(),
+            billing_port: 0x1f98,
+            billing_backup_host: b"127.0.0.1".to_vec(),
+            billing_backup_port: 0x1f98,
+            billing_bind_ip: Vec::new(),
+            billing_bind_port: None,
+            listen_port: 0x092b,
+            local_ip: b"127.0.0.1".to_vec(),
+            check_network: true,
+            maximum_bytes_per_second: 5_000,
+            maximum_message_length: 0x1_9000,
+            forbid_time_ms: 10,
+            check_message_content: true,
+            maximum_clients: 500,
+            maximum_in_flight_sends: 3,
+            permitted_send_bytes: 0xc800,
+            refresh_info_time_ms: 1_000,
+            save_info_time_ms: 60_000,
+            watch_runtime_info: false,
+            watch_runtime_time_ms: 60_000,
+            enter_time: 5,
+            message_validate_time_ms: 0,
+            sequence_count: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GameSetupEx {
+    maximum_block_connections: i32,
+    first_receive_timeout_ms: i32,
+    maximum_yuan_bao: Option<i32>,
+    maximum_money: Option<i32>,
+}
+
+impl Default for GameSetupEx {
+    fn default() -> Self {
+        Self {
+            maximum_block_connections: 10,
+            first_receive_timeout_ms: 4_000,
+            maximum_yuan_bao: None,
+            maximum_money: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameSetupLoadReport {
+    pub(crate) parsed_pairs: usize,
+    pub(crate) stopped_at_pair: Option<usize>,
+}
+
+#[derive(Debug)]
+pub(crate) struct GameSetupOpenError {
+    pub(crate) path: PathBuf,
+    pub(crate) source: io::Error,
+}
+
+impl fmt::Display for GameSetupOpenError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "не удалось прочитать {}: {}",
+            self.path.display(),
+            self.source
+        )
+    }
+}
+
+impl std::error::Error for GameSetupOpenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameRuntimePaths {
+    pub(crate) setup: PathBuf,
+    pub(crate) setup_ex: PathBuf,
+}
+
+impl GameRuntimePaths {
+    pub(crate) fn from_runtime_directory(directory: impl AsRef<Path>) -> Self {
+        let directory = directory.as_ref();
+        Self {
+            setup: directory.join("setup.ini"),
+            setup_ex: directory.join("setupex.ini"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum GameSetupExLoad {
+    Loaded(GameSetupLoadReport),
+    Unavailable(GameSetupOpenError),
+}
+
+#[derive(Debug)]
+pub(crate) struct GameRuntimeSetupReport {
+    pub(crate) setup: GameSetupLoadReport,
+    pub(crate) setup_ex: GameSetupExLoad,
+}
+
+#[derive(Debug)]
+pub(crate) enum GameRuntimeSetupError {
+    Setup(GameSetupOpenError),
+    MissingField(&'static str),
+}
+
+impl fmt::Display for GameRuntimeSetupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Setup(error) => error.fmt(formatter),
+            Self::MissingField(field) => {
+                write!(formatter, "GameServer setup не определил поле {field}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GameRuntimeSetupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Setup(error) => Some(error),
+            Self::MissingField(_) => None,
+        }
+    }
+}
+
+impl GameSetup {
+    fn parse_positional(&mut self, bytes: &[u8]) -> GameSetupLoadReport {
+        let mut tokens = GameSetupTokens::new(bytes);
+
+        macro_rules! read_value {
+            ($field:ident, $parser:expr) => {{
+                let Some(raw) = tokens.next_value() else {
+                    return tokens.report();
+                };
+                let Some(value) = $parser(raw) else {
+                    return tokens.report();
+                };
+                self.$field = value;
+                tokens.parsed();
+            }};
+        }
+
+        macro_rules! read_number {
+            ($field:ident, $type:ty) => {
+                read_value!($field, |raw| parse_game_setup_number::<$type>(raw));
+            };
+        }
+
+        macro_rules! read_bool {
+            ($field:ident) => {
+                read_value!($field, parse_game_setup_bool);
+            };
+        }
+
+        macro_rules! read_bytes {
+            ($field:ident) => {
+                read_value!($field, |raw: &[u8]| Some(raw.to_vec()));
+            };
+        }
+
+        read_bytes!(world_host);
+        read_number!(world_port, u32);
+        read_bytes!(billing_host);
+        read_number!(billing_port, u32);
+        read_bytes!(billing_backup_host);
+        read_number!(billing_backup_port, u32);
+        read_bytes!(billing_bind_ip);
+        read_value!(billing_bind_port, |raw| {
+            parse_game_setup_number::<u32>(raw).map(Some)
+        });
+        read_number!(listen_port, u32);
+        read_bytes!(local_ip);
+        read_bool!(check_network);
+        read_number!(maximum_bytes_per_second, u32);
+        read_number!(maximum_message_length, u32);
+        read_number!(forbid_time_ms, u32);
+        read_bool!(check_message_content);
+        read_number!(maximum_clients, i32);
+        read_number!(maximum_in_flight_sends, i32);
+        read_number!(permitted_send_bytes, i32);
+        read_number!(refresh_info_time_ms, u32);
+        read_number!(save_info_time_ms, u32);
+        read_bool!(watch_runtime_info);
+        read_number!(watch_runtime_time_ms, u32);
+        read_number!(enter_time, u32);
+        read_number!(message_validate_time_ms, u32);
+        read_number!(sequence_count, u32);
+        tokens.report()
+    }
+
+    fn network_setup(
+        &self,
+        setup_ex: &GameSetupEx,
+    ) -> Result<GameNetworkSetup, GameRuntimeSetupError> {
+        let billing_bind_port = self
+            .billing_bind_port
+            .ok_or(GameRuntimeSetupError::MissingField("_bind_port_for_bs"))?;
+        Ok(GameNetworkSetup::new(
+            GameUpstreamEndpoint::new(&self.world_host, self.world_port),
+            GameBillingPlan::new(
+                GameUpstreamEndpoint::new(&self.billing_host, self.billing_port),
+                GameUpstreamEndpoint::new(&self.billing_backup_host, self.billing_backup_port),
+                &self.billing_bind_ip,
+                billing_bind_port,
+            ),
+            &self.local_ip,
+            GameListenerPlan::new(
+                self.listen_port,
+                self.check_network,
+                self.maximum_bytes_per_second,
+                self.forbid_time_ms,
+                self.maximum_message_length,
+                self.maximum_clients,
+                self.maximum_in_flight_sends,
+                self.permitted_send_bytes,
+                setup_ex.maximum_block_connections,
+                setup_ex.first_receive_timeout_ms,
+            ),
+            self.check_message_content,
+        ))
+    }
+}
+
+impl GameSetupEx {
+    fn parse_positional(&mut self, bytes: &[u8]) -> GameSetupLoadReport {
+        let mut tokens = GameSetupTokens::new(bytes);
+
+        macro_rules! read_number {
+            ($field:ident) => {{
+                let Some(raw) = tokens.next_value() else {
+                    return tokens.report();
+                };
+                let Some(value) = parse_game_setup_number::<i32>(raw) else {
+                    return tokens.report();
+                };
+                self.$field = value;
+                tokens.parsed();
+            }};
+        }
+
+        read_number!(maximum_block_connections);
+        read_number!(first_receive_timeout_ms);
+
+        let Some(raw) = tokens.next_value() else {
+            return tokens.report();
+        };
+        let Some(value) = parse_game_setup_number::<i32>(raw) else {
+            return tokens.report();
+        };
+        self.maximum_yuan_bao = Some(value);
+        tokens.parsed();
+
+        let Some(raw) = tokens.next_value() else {
+            return tokens.report();
+        };
+        let Some(value) = parse_game_setup_number::<i32>(raw) else {
+            return tokens.report();
+        };
+        self.maximum_money = Some(value);
+        tokens.parsed();
+        tokens.report()
+    }
+}
+
+struct GameSetupTokens<'a> {
+    tokens: Vec<&'a [u8]>,
+    next: usize,
+    attempted_pairs: usize,
+    parsed_pairs: usize,
+}
+
+impl<'a> GameSetupTokens<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self {
+            tokens: bytes
+                .split(|byte| byte.is_ascii_whitespace())
+                .filter(|token| !token.is_empty())
+                .collect(),
+            next: 0,
+            attempted_pairs: 0,
+            parsed_pairs: 0,
+        }
+    }
+
+    fn next_value(&mut self) -> Option<&'a [u8]> {
+        self.attempted_pairs += 1;
+        let _label = self.tokens.get(self.next)?;
+        let value = self.tokens.get(self.next + 1).copied()?;
+        self.next += 2;
+        Some(value)
+    }
+
+    fn parsed(&mut self) {
+        self.parsed_pairs += 1;
+    }
+
+    fn report(&self) -> GameSetupLoadReport {
+        GameSetupLoadReport {
+            parsed_pairs: self.parsed_pairs,
+            stopped_at_pair: (self.parsed_pairs < self.attempted_pairs)
+                .then_some(self.attempted_pairs),
+        }
+    }
+}
+
+fn parse_game_setup_number<T: FromStr>(raw: &[u8]) -> Option<T> {
+    std::str::from_utf8(raw).ok()?.parse().ok()
+}
+
+fn parse_game_setup_bool(raw: &[u8]) -> Option<bool> {
+    match raw {
+        b"0" => Some(false),
+        b"1" => Some(true),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameUpstreamEndpoint {
@@ -257,6 +620,8 @@ pub(crate) enum GameNetworkInitializationError {
 }
 
 pub(crate) struct CGame {
+    setup: GameSetup,
+    setup_ex: GameSetupEx,
     network_setup: Option<GameNetworkSetup>,
     world_client: Option<CMyNetClient>,
     billing_client: Option<CMyNetClient>,
@@ -268,23 +633,13 @@ pub(crate) struct CGame {
 }
 
 impl CGame {
-    pub(crate) fn with_send_state(net_server: CMyNetServer) -> Self {
+    /// Создаёт достигнутую process-owned проекцию `CGame` с подтверждёнными
+    /// setup defaults; ещё не материализованные gameplay owners не подменяет.
+    pub(crate) fn new() -> Self {
         Self {
+            setup: GameSetup::default(),
+            setup_ex: GameSetupEx::default(),
             network_setup: None,
-            world_client: None,
-            billing_client: None,
-            net_server: Some(net_server),
-            world_reconnect_task: None,
-            billing_reconnect_task: None,
-            players: BTreeMap::new(),
-            team_session_ids: BTreeMap::new(),
-        }
-    }
-
-    /// Создаёт pre-network assembly после уже выполненного `LoadSetup*`.
-    pub(crate) fn with_network_setup(network_setup: GameNetworkSetup) -> Self {
-        Self {
-            network_setup: Some(network_setup),
             world_client: None,
             billing_client: None,
             net_server: None,
@@ -293,6 +648,48 @@ impl CGame {
             players: BTreeMap::new(),
             team_session_ids: BTreeMap::new(),
         }
+    }
+
+    pub(crate) fn with_send_state(net_server: CMyNetServer) -> Self {
+        let mut game = Self::new();
+        game.net_server = Some(net_server);
+        game
+    }
+
+    /// Создаёт pre-network assembly после уже выполненного `LoadSetup*`.
+    pub(crate) fn with_network_setup(network_setup: GameNetworkSetup) -> Self {
+        let mut game = Self::new();
+        game.network_setup = Some(network_setup);
+        game
+    }
+
+    /// Читает обязательный `setup.ini`, затем необязательный `setupex.ini` и
+    /// публикует единый network plan в исходной позиции перед `InitNetServer`.
+    /// Некорректная пара останавливает последующие extraction-ы, сохраняя уже
+    /// применённые значения и constructor defaults оставшихся полей.
+    pub(crate) fn load_runtime_setup(
+        &mut self,
+        paths: &GameRuntimePaths,
+    ) -> Result<GameRuntimeSetupReport, GameRuntimeSetupError> {
+        // Производный plan не должен пережить неуспешную повторную загрузку.
+        self.network_setup = None;
+        let setup_bytes = fs::read(&paths.setup).map_err(|source| {
+            GameRuntimeSetupError::Setup(GameSetupOpenError {
+                path: paths.setup.clone(),
+                source,
+            })
+        })?;
+        let setup = self.setup.parse_positional(&setup_bytes);
+
+        let setup_ex = match fs::read(&paths.setup_ex) {
+            Ok(bytes) => GameSetupExLoad::Loaded(self.setup_ex.parse_positional(&bytes)),
+            Err(source) => GameSetupExLoad::Unavailable(GameSetupOpenError {
+                path: paths.setup_ex.clone(),
+                source,
+            }),
+        };
+        self.network_setup = Some(self.setup.network_setup(&self.setup_ex)?);
+        Ok(GameRuntimeSetupReport { setup, setup_ex })
     }
 
     pub(crate) fn net_server(&self) -> &CMyNetServer {
@@ -707,6 +1104,12 @@ impl CGame {
     }
 }
 
+impl Default for CGame {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn missing_setup_reconnect(direction: GameUpstreamDirection) -> GameReconnectPublication {
     GameReconnectPublication::Failed {
         attempts: vec![GameConnectAttempt {
@@ -971,7 +1374,6 @@ impl ShapeResolver for CGame {
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.h
 
-
 // ============================================================================
 // FUNCTION: Catch@00401323
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -1013,7 +1415,6 @@ impl ShapeResolver for CGame {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // IMPLEMENTED, VERIFIED_DISASSEMBLY: `InitNetServer` материализован выше;
 // exact эпилог возвращает `0` после Host-error и `1` после setup-записей.
