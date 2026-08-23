@@ -549,7 +549,8 @@ use super::union::{
     UnionInviteBlock, UnionInviteEffects, UnionInviteOutcome,
     UnionMemberSnapshotBlock, UnionOperatorValidationContext, UnionOwnedCityBooleanMutationReport,
     UnionOwnedCityFanoutReport, UnionOwnedCityMutationBlock, UnionOwnedCityMutationContext,
-    UnionFormatArgument, UnionPlayerRefreshContext, UnionPlayerRefreshReport,
+    UnionFormatArgument, UnionMasterProjectionMutationContext, UnionPlayerRefreshContext,
+    UnionPlayerRefreshReport,
     UnionSendInfoContext,
     UnionVictorFanoutReport, UnionVictorMutationBlock,
 };
@@ -842,7 +843,10 @@ impl FactionWarDeclarationContext for WorldFactionWarDeclarationEffects<'_> {
         let faction = self.organizing.faction_by_id_mut(faction_id).ok_or(
             OrganizingFactionWarDeclarationBlock::MissingFactionForMutation { faction_id },
         )?;
-        let _ = faction.update_enemy_faction(self.game, &mut *self.update_player);
+        let _ = faction.update_enemy_faction(self.game, |game, faction, player_id| {
+            let _ = game.update_player_faction_info_from_faction(faction, player_id);
+            (self.update_player)(player_id);
+        });
         Ok(())
     }
 
@@ -1002,7 +1006,10 @@ impl FactionWarPlayerDiedContext for WorldFactionWarDeclarationEffects<'_> {
         let faction = self.organizing.faction_by_id_mut(faction_id).ok_or(
             OrganizingFactionWarPlayerDiedBlock::MissingFactionForMutation { faction_id },
         )?;
-        let _ = faction.update_enemy_faction(self.game, &mut *self.update_player);
+        let _ = faction.update_enemy_faction(self.game, |game, faction, player_id| {
+            let _ = game.update_player_faction_info_from_faction(faction, player_id);
+            (self.update_player)(player_id);
+        });
         Ok(())
     }
 
@@ -3166,8 +3173,14 @@ where
         self.effects.format_world_string(string_id, arguments)
     }
 
-    fn update_player_faction_info(&mut self, player_id: i32) {
-        self.effects.update_player_faction_info(player_id);
+    fn update_player_faction_info(
+        &mut self,
+        game: &CGame,
+        faction: &CFaction,
+        player_id: i32,
+    ) {
+        self.effects
+            .update_player_faction_info(game, faction, player_id);
     }
 
     fn faction_join_log_enabled(&self) -> bool {
@@ -3614,12 +3627,17 @@ impl COrganizingCtrl {
     /// выполняется первой; при уже существующем верхнем союзе dirty-mask не
     /// трогается, иначе вызывается `SetChangeData(0)`. Rust освобождает
     /// вытесненный owner вместо исходной pointer-leak при повторном ключе.
-    fn add_faction_organizing(&mut self, faction_id: i32, faction: CFaction) {
-        let has_live_superior = faction
+    fn add_faction_organizing(&mut self, faction_id: i32, mut faction: CFaction) {
+        let live_superior_master = faction
             .superior_organizing()
             .filter(|union_id| *union_id > 0)
             .and_then(|union_id| self.confederations.get(&union_id))
-            .is_some_and(|union| union.is_some());
+            .and_then(|union| union.as_deref())
+            .map(CUnion::master_id);
+        if let Some(union_master_id) = live_superior_master {
+            faction.set_union_master_projection(union_master_id);
+        }
+        let has_live_superior = live_superior_master.is_some();
         self.factions.insert(faction_id, Some(Box::new(faction)));
         if !has_live_superior {
             if let Some(faction) = self
@@ -4120,7 +4138,10 @@ impl COrganizingCtrl {
             return Ok(None);
         };
         faction
-            .add_owned_city(game, region_id, update_player)
+            .add_owned_city(game, region_id, |game, faction, player_id| {
+                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                update_player(player_id);
+            })
             .map(Some)
     }
 
@@ -5684,7 +5705,7 @@ impl COrganizingCtrl {
         };
 
         faction
-            .set_superior_organizing(0, parameters)
+            .set_superior_organizing(0, 0, parameters)
             .map_err(|source| UnionMemberDetachBlock {
                 faction_id,
                 source: UnionMemberDetachBlockSource::SuperiorOrganizing(source),
@@ -5929,7 +5950,14 @@ impl COrganizingCtrl {
                 faction.as_deref().map(|faction| {
                     (
                         map_key,
-                        faction.update_city_war_enemy_faction(game, &mut *update_player),
+                        faction.update_city_war_enemy_faction(
+                            game,
+                            |game, faction, player_id| {
+                                let _ = game
+                                    .update_player_faction_info_from_faction(faction, player_id);
+                                update_player(player_id);
+                            },
+                        ),
                     )
                 })
             })
@@ -6066,7 +6094,10 @@ impl COrganizingCtrl {
             CityWarOrganizingOwner::Faction(faction_id) => self
                 .faction_by_id_mut(faction_id)
                 .expect("resolved city-war faction owner не удаляется")
-                .delete_owned_city(game, region_id, update_player)
+                .delete_owned_city(game, region_id, |game, faction, player_id| {
+                    let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                    update_player(player_id);
+                })
                 .map(CityWarOwnedCityRemoval::Faction)
                 .map_err(CityWarOwnedCityMutationBlock::Faction),
             CityWarOrganizingOwner::Union(union_id) => {
@@ -6098,7 +6129,10 @@ impl COrganizingCtrl {
             CityWarOrganizingOwner::Faction(faction_id) => self
                 .faction_by_id_mut(faction_id)
                 .expect("resolved city-war faction owner не удаляется")
-                .add_owned_city(game, region_id, update_player)
+                .add_owned_city(game, region_id, |game, faction, player_id| {
+                    let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                    update_player(player_id);
+                })
                 .map(CityWarOwnedCityAddition::Faction)
                 .map_err(CityWarOwnedCityMutationBlock::Faction),
             CityWarOrganizingOwner::Union(union_id) => {
@@ -6878,7 +6912,7 @@ impl COrganizingCtrl {
         report.first_superior_assigned = Some(match self
             .faction_by_id_mut(first_faction_id)
             .expect("обе faction проверены перед созданием union")
-            .set_superior_organizing(union_id, parameters)
+            .set_superior_organizing(union_id, first_faction_id, parameters)
         {
             Ok(()) => true,
             Err(source) => {
@@ -6896,7 +6930,7 @@ impl COrganizingCtrl {
         report.second_superior_assigned = Some(match self
             .faction_by_id_mut(second_faction_id)
             .expect("обе faction проверены перед созданием union")
-            .set_superior_organizing(union_id, parameters)
+            .set_superior_organizing(union_id, first_faction_id, parameters)
         {
             Ok(()) => true,
             Err(source) => {
@@ -6959,12 +6993,26 @@ impl COrganizingCtrl {
         report.first_player_refresh = Some(
             self.faction_by_id(first_faction_id)
                 .expect("обе faction проверены перед созданием union")
-                .update_player_faction_info(game, first_player_id, &mut *update_player),
+                .update_player_faction_info(
+                    game,
+                    first_player_id,
+                    |game, faction, player_id| {
+                        let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                        update_player(player_id);
+                    },
+                ),
         );
         report.second_player_refresh = Some(
             self.faction_by_id(second_faction_id)
                 .expect("обе faction проверены перед созданием union")
-                .update_player_faction_info(game, second_player_id, &mut *update_player),
+                .update_player_faction_info(
+                    game,
+                    second_player_id,
+                    |game, faction, player_id| {
+                        let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                        update_player(player_id);
+                    },
+                ),
         );
 
         report.first_player_snapshot = match self.send_created_union_snapshot(
@@ -7323,7 +7371,10 @@ impl COrganizingCtrl {
         let source_cities = self
             .faction_by_id_mut(source_faction_id)
             .expect("source faction owner проверен")
-            .clear_owned_cities(game, &mut *update_player);
+            .clear_owned_cities(game, |game, faction, player_id| {
+                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                update_player(player_id);
+            });
         report.source_cities = Some(match source_cities {
             Ok(source_cities) => source_cities,
             Err(source) => {
@@ -7333,7 +7384,10 @@ impl COrganizingCtrl {
         let target_city = self
             .faction_by_id_mut(target_faction_id)
             .expect("target faction owner проверен")
-            .add_owned_city(game, region_id, &mut *update_player);
+            .add_owned_city(game, region_id, |game, faction, player_id| {
+                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                update_player(player_id);
+            });
         report.target_city = Some(match target_city {
             Ok(target_city) => target_city,
             Err(source) => {
@@ -8191,7 +8245,10 @@ impl UnionOwnedCityMutationContext for COrganizingCtrl {
             return Ok(false);
         };
         faction
-            .add_owned_city_list(game, region_ids, update_player)
+            .add_owned_city_list(game, region_ids, |game, faction, player_id| {
+                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                update_player(player_id);
+            })
             .map(|_| true)
     }
 
@@ -8205,7 +8262,10 @@ impl UnionOwnedCityMutationContext for COrganizingCtrl {
             return Ok(false);
         };
         faction
-            .clear_owned_cities(game, update_player)
+            .clear_owned_cities(game, |game, faction, player_id| {
+                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                update_player(player_id);
+            })
             .map(|_| true)
     }
 
@@ -8281,8 +8341,25 @@ impl UnionPlayerRefreshContext for COrganizingCtrl {
         update_player: &mut dyn FnMut(i32),
     ) -> Option<Vec<i32>> {
         self.faction_by_id(faction_id).map(|faction| {
-            faction.update_player_faction_info(game, 0, update_player)
+            faction.update_player_faction_info(game, 0, |game, faction, player_id| {
+                let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                update_player(player_id);
+            })
         })
+    }
+}
+
+impl UnionMasterProjectionMutationContext for COrganizingCtrl {
+    fn set_union_master_projection(
+        &mut self,
+        faction_ids: &[i32],
+        union_master_id: i32,
+    ) {
+        for faction_id in faction_ids {
+            if let Some(faction) = self.faction_by_id_mut(*faction_id) {
+                faction.set_union_master_projection(union_master_id);
+            }
+        }
     }
 }
 
@@ -8291,12 +8368,13 @@ impl UnionInitialMutationContext for COrganizingCtrl {
         &mut self,
         faction_id: i32,
         union_id: i32,
+        union_master_id: i32,
         parameters: &COrganizingParam,
     ) -> Result<bool, FactionSuperiorOrganizingBlock> {
         let Some(faction) = self.faction_by_id_mut(faction_id) else {
             return Ok(false);
         };
-        faction.set_superior_organizing(union_id, parameters)?;
+        faction.set_superior_organizing(union_id, union_master_id, parameters)?;
         Ok(true)
     }
 }

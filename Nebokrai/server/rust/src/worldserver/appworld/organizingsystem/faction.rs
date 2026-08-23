@@ -609,6 +609,9 @@ use super::organizing::{
 };
 use super::organizingparam::COrganizingParam;
 use crate::nets::networld::message::{CMessage, SendMessageError};
+use crate::worldserver::appworld::player::{
+    PlayerOrganizingState, PlayerOrganizingUpdateError,
+};
 use crate::worldserver::worldserver::game::{
     CGame, WorldLocalMessageQueueBlock, WorldRegionNameLookup,
 };
@@ -1840,7 +1843,7 @@ pub(crate) trait FactionDoJoinEffects: FactionOrganizingInfoContext {
 
     fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8>;
 
-    fn update_player_faction_info(&mut self, player_id: i32);
+    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32);
 
     fn faction_join_log_enabled(&self) -> bool;
 
@@ -1898,7 +1901,7 @@ pub(crate) trait FactionExitContext: FactionOrganizingInfoContext {
 
     fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8>;
 
-    fn update_player_faction_info(&mut self, player_id: i32);
+    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32);
 
     fn faction_quit_log_enabled(&self) -> bool;
 
@@ -1924,7 +1927,7 @@ pub(crate) trait FactionFireOutContext: FactionOrganizingInfoContext {
 
     fn format_world_string(&mut self, string_id: &'static [u8], arguments: &[&[u8]]) -> Vec<u8>;
 
-    fn update_player_faction_info(&mut self, player_id: i32);
+    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32);
 
     fn faction_fire_out_log_enabled(&self) -> bool;
 
@@ -1953,7 +1956,7 @@ pub(crate) trait FactionDubContext: FactionOrganizingInfoContext {
         arguments: &[FactionDubFormatArgument<'_>],
     ) -> Vec<u8>;
 
-    fn update_player_faction_info(&mut self, player_id: i32);
+    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32);
 
     fn faction_title_log_enabled(&self) -> bool;
 
@@ -1998,7 +2001,7 @@ pub(crate) trait FactionLevelContext: FactionOrganizingInfoContext {
 
 /// Узкая граница level-уведомлений и virtual player-refresh для `SetParam`.
 pub(crate) trait FactionSetParameterContext: FactionLevelContext {
-    fn update_player_faction_info(&mut self, player_id: i32);
+    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32);
 }
 
 /// Узкая граница player inventory/money, goods catalog, локализации и level-log.
@@ -2015,7 +2018,7 @@ pub(crate) trait FactionUpgradeContext: FactionLevelContext {
         arguments: &[FactionUpgradeFormatArgument<'_>],
     ) -> Vec<u8>;
 
-    fn update_player_faction_info(&mut self, player_id: i32);
+    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32);
 
     fn faction_level_log_enabled(&self) -> bool;
 
@@ -2037,7 +2040,7 @@ pub(crate) trait FactionContributorContext: FactionOrganizingInfoContext {
         member_name: &[u8],
     ) -> Vec<u8>;
 
-    fn update_player_faction_info(&mut self, player_id: i32);
+    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32);
 }
 
 /// Узкая граница локализации для фактического gate-owner-а `UploadIcon`.
@@ -2085,7 +2088,7 @@ pub(crate) trait FactionDemiseContext: FactionOrganizingInfoContext {
         new_master_name: &[u8],
     ) -> Vec<u8>;
 
-    fn update_player_faction_info(&mut self, player_id: i32);
+    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32);
 
     fn faction_master_log_enabled(&self) -> bool;
 
@@ -2742,6 +2745,9 @@ pub(crate) struct CFaction {
     change_data_type: i32,
     goods_war_count: i32,
     goods_war_last_win_time: String,
+    /// Rust-проекция master faction текущего union для синхронного
+    /// `CPlayer::UpdateFactionInfo` без повторного заимствования controller-а.
+    union_master_id: i32,
 }
 
 impl CFaction {
@@ -2769,6 +2775,7 @@ impl CFaction {
             change_data_type: 0,
             goods_war_count: 0,
             goods_war_last_win_time: String::new(),
+            union_master_id: 0,
         }
     }
 
@@ -2861,6 +2868,7 @@ impl CFaction {
             change_data_type: 0,
             goods_war_count: 0,
             goods_war_last_win_time: String::new(),
+            union_master_id: 0,
         };
         let _ = faction
             .initial_property_by_level(parameters)
@@ -3341,6 +3349,66 @@ impl CFaction {
         Ok(deliveries)
     }
 
+    /// Материализует `SetPlayerOrganizing` из уже заимствованного faction-owner-а.
+    pub(crate) fn set_player_organizing_projection(
+        &self,
+        player_id: i32,
+        region_types: &BTreeMap<i32, Option<u16>>,
+        organizing: &mut PlayerOrganizingState,
+    ) -> Result<(), PlayerOrganizingUpdateError> {
+        if !self.members.contains_key(&player_id) {
+            organizing.faction_id = 0;
+            return Ok(());
+        }
+
+        organizing.faction_id = self.faction_id;
+        organizing.faction_level = self
+            .level()
+            .ok_or(PlayerOrganizingUpdateError::UninitializedFactionField {
+                faction_id: self.faction_id,
+                field: "m_Property.lLvl",
+            })? as u16;
+        organizing.faction_experience = self.experience().ok_or(
+            PlayerOrganizingUpdateError::UninitializedFactionField {
+                faction_id: self.faction_id,
+                field: "m_Property.lExp",
+            },
+        )?;
+        organizing.faction_contribute = self.is_contribute(player_id);
+        organizing.faction_name = self.name.clone();
+        organizing.faction_title = self.member_title(player_id).map_err(|_| {
+            PlayerOrganizingUpdateError::UnterminatedFactionMemberTitle {
+                faction_id: self.faction_id,
+                player_id,
+            }
+        })?;
+        organizing.faction_master_id = self.master_id.ok_or(
+            PlayerOrganizingUpdateError::UninitializedFactionField {
+                faction_id: self.faction_id,
+                field: "m_lMastterID",
+            },
+        )?;
+        organizing.enemy_factions = self.enemy_factions.clone();
+        organizing.city_war_enemy_factions = self.city_war_enemy_factions.clone();
+        organizing.clear_owned_regions();
+        for &region_id in &self.owned_cities {
+            let Some(region_type) = region_types.get(&region_id) else {
+                continue;
+            };
+            let Some(region_type) = *region_type else {
+                return Err(PlayerOrganizingUpdateError::UninitializedRegionType { region_id });
+            };
+            organizing.add_owned_region(region_id, region_type);
+        }
+        organizing.union_id = self.superior_organizing().unwrap_or(0);
+        organizing.union_master_id = if organizing.union_id > 0 {
+            self.union_master_id
+        } else {
+            0
+        };
+        Ok(())
+    }
+
     /// Диспетчеризует `CPlayer::UpdateFactionInfo` только online-игрокам.
     pub(crate) fn update_player_faction_info<F>(
         &self,
@@ -3349,7 +3417,7 @@ impl CFaction {
         mut update_player: F,
     ) -> Vec<i32>
     where
-        F: FnMut(i32),
+        F: FnMut(&CGame, &CFaction, i32),
     {
         let mut updated_player_ids = Vec::new();
         if player_id == 0 {
@@ -3357,11 +3425,11 @@ impl CFaction {
                 if game.online_player_by_id(member_id as u32).is_none() {
                     continue;
                 }
-                update_player(member_id);
+                update_player(game, self, member_id);
                 updated_player_ids.push(member_id);
             }
         } else if game.online_player_by_id(player_id as u32).is_some() {
-            update_player(player_id);
+            update_player(game, self, player_id);
             updated_player_ids.push(player_id);
         }
         updated_player_ids
@@ -3374,7 +3442,7 @@ impl CFaction {
         update_player: F,
     ) -> Result<OwnedCityMutationReport, OwnedCityMutationBuildError>
     where
-        F: FnMut(i32),
+        F: FnMut(&CGame, &CFaction, i32),
     {
         let deliveries = self.update_owned_cities_to_client(game).map_err(|source| {
             OwnedCityMutationBuildError {
@@ -3397,7 +3465,7 @@ impl CFaction {
         update_player: F,
     ) -> Result<OwnedCityBooleanMutationReport, OwnedCityMutationBuildError>
     where
-        F: FnMut(i32),
+        F: FnMut(&CGame, &CFaction, i32),
     {
         let state_changed = !self.owned_cities.is_empty();
         self.owned_cities.clear();
@@ -3416,7 +3484,7 @@ impl CFaction {
         update_player: F,
     ) -> Result<OwnedCityAddOutcome, OwnedCityMutationBuildError>
     where
-        F: FnMut(i32),
+        F: FnMut(&CGame, &CFaction, i32),
     {
         if self.owned_cities.contains(&region_id) {
             return Ok(OwnedCityAddOutcome::AlreadyOwned);
@@ -3434,7 +3502,7 @@ impl CFaction {
         update_player: F,
     ) -> Result<OwnedCityMutationReport, OwnedCityMutationBuildError>
     where
-        F: FnMut(i32),
+        F: FnMut(&CGame, &CFaction, i32),
     {
         let previous_state = self.owned_cities.clone();
         self.owned_cities.extend(region_ids.iter().copied());
@@ -3456,7 +3524,7 @@ impl CFaction {
         update_player: F,
     ) -> Result<OwnedCityBooleanMutationReport, OwnedCityMutationBuildError>
     where
-        F: FnMut(i32),
+        F: FnMut(&CGame, &CFaction, i32),
     {
         let position = self
             .owned_cities
@@ -3779,7 +3847,7 @@ impl CFaction {
         update_player: F,
     ) -> FactionEnemyRefreshReport
     where
-        F: FnMut(i32),
+        F: FnMut(&CGame, &CFaction, i32),
     {
         self.enemy_factions_changed = Some(true);
         let deliveries = self.update_enemy_factions_to_client(game);
@@ -3797,7 +3865,7 @@ impl CFaction {
         update_player: F,
     ) -> CityWarEnemyRefreshOutcome
     where
-        F: FnMut(i32),
+        F: FnMut(&CGame, &CFaction, i32),
     {
         match self.city_war_enemy_factions_changed {
             None => CityWarEnemyRefreshOutcome::ChangeFlagUnknown,
@@ -4195,8 +4263,8 @@ impl CFaction {
             }
         };
         let refreshed_player_ids =
-            self.update_player_faction_info(game, player_id, |player_id| {
-                context.update_player_faction_info(player_id);
+            self.update_player_faction_info(game, player_id, |game, faction, player_id| {
+                context.update_player_faction_info(game, faction, player_id);
             });
         let delete_organizing = match self.delete_organizing_to_client(game, player_id, context) {
             Ok(outcome) => outcome,
@@ -4318,8 +4386,8 @@ impl CFaction {
         };
         let member_update = self.update_member_info_to_client(game, target_id, EOperator::Delete);
         let refreshed_player_ids =
-            self.update_player_faction_info(game, target_id, |player_id| {
-                context.update_player_faction_info(player_id);
+            self.update_player_faction_info(game, target_id, |game, faction, player_id| {
+                context.update_player_faction_info(game, faction, player_id);
             });
         self.set_change_data(2);
 
@@ -4485,8 +4553,8 @@ impl CFaction {
                 |request| context.send_organizing_info(request),
             ));
             progress.title_refreshed_player_ids =
-                self.update_player_faction_info(game, target_id, |player_id| {
-                    context.update_player_faction_info(player_id);
+                self.update_player_faction_info(game, target_id, |game, faction, player_id| {
+                    context.update_player_faction_info(game, faction, player_id);
                 });
         }
 
@@ -4842,7 +4910,9 @@ impl CFaction {
         progress.refreshed_player_ids = Some(self.update_player_faction_info(
             game,
             0,
-            |player_id| context.update_player_faction_info(player_id),
+            |game, faction, player_id| {
+                context.update_player_faction_info(game, faction, player_id)
+            },
         ));
         self.set_change_data(1);
         progress.dirty_bit_requested = true;
@@ -5114,8 +5184,8 @@ impl CFaction {
         });
         self.set_change_data(1);
         progress.dirty_set = true;
-        progress.refreshed_player_ids = self.update_player_faction_info(game, 0, |player_id| {
-            context.update_player_faction_info(player_id);
+        progress.refreshed_player_ids = self.update_player_faction_info(game, 0, |game, faction, player_id| {
+            context.update_player_faction_info(game, faction, player_id);
         });
 
         if context.faction_level_log_enabled() {
@@ -5476,8 +5546,8 @@ impl CFaction {
 
         self.members.insert(applicant_id, member);
         let refreshed_player_ids =
-            self.update_player_faction_info(game, applicant_id, |player_id| {
-                context.update_player_faction_info(player_id);
+            self.update_player_faction_info(game, applicant_id, |game, faction, player_id| {
+                context.update_player_faction_info(game, faction, player_id);
             });
         let add_faction_to_client_result = context
             .add_faction_to_client_by_player_id(self, applicant_id)
@@ -6177,8 +6247,8 @@ impl CFaction {
         progress.base_dirty_set = true;
         self.set_change_data(2);
         progress.members_dirty_set = true;
-        progress.refreshed_player_ids = self.update_player_faction_info(game, 0, |player_id| {
-            context.update_player_faction_info(player_id);
+        progress.refreshed_player_ids = self.update_player_faction_info(game, 0, |game, faction, player_id| {
+            context.update_player_faction_info(game, faction, player_id);
         });
 
         let old_master_name = match self
@@ -6636,6 +6706,10 @@ impl CFaction {
         }
     }
 
+    pub(crate) fn set_union_master_projection(&mut self, union_master_id: i32) {
+        self.union_master_id = union_master_id;
+    }
+
     /// Возвращает player-header с исходным union lookup и faction fallback.
     pub(crate) fn player_header<Context>(
         &self,
@@ -6663,6 +6737,7 @@ impl CFaction {
     pub(crate) fn set_superior_organizing(
         &mut self,
         organizing_id: i32,
+        union_master_id: i32,
         parameters: &COrganizingParam,
     ) -> Result<(), FactionSuperiorOrganizingBlock> {
         let property = self
@@ -6672,6 +6747,11 @@ impl CFaction {
         if property.union_id() != organizing_id {
             property.write_signed(0x18, organizing_id);
         }
+        self.union_master_id = if organizing_id > 0 {
+            union_master_id
+        } else {
+            0
+        };
 
         if organizing_id < 1 {
             let member_count = self.members.len() as u32;
@@ -6812,8 +6892,8 @@ impl CFaction {
             }
         });
         progress.refreshed_player_ids =
-            self.update_player_faction_info(game, target_id, |player_id| {
-                context.update_player_faction_info(player_id);
+            self.update_player_faction_info(game, target_id, |game, faction, player_id| {
+                context.update_player_faction_info(game, faction, player_id);
             });
 
         let target = self
@@ -7049,6 +7129,11 @@ impl CFaction {
             // нормализации SaveFactionProperty.
             goods_war_count: 0,
             goods_war_last_win_time: String::new(),
+            union_master_id: if copy_property {
+                self.union_master_id
+            } else {
+                0
+            },
         }))
     }
 

@@ -2236,7 +2236,8 @@ impl FactionWarStopContext for WorldMainLoopFactionWarEffects<'_> {
             .organizing
             .faction_by_id_mut(faction_id)
             .ok_or(WorldMainLoopFactionWarBlock::MissingFaction { faction_id })?;
-        let _ = faction.update_enemy_faction(self.game, &mut |player_id| {
+        let _ = faction.update_enemy_faction(self.game, |game, faction, player_id| {
+            let _ = game.update_player_faction_info_from_faction(faction, player_id);
             self.players_to_update.push(player_id)
         });
         Ok(())
@@ -8017,6 +8018,52 @@ struct WorldPlayerFactionInfoContext<'a> {
     organizing: WorldPlayerOrganizingContext<'a>,
     game_server_id: i32,
     sender: Option<ServerCommandHandle>,
+}
+
+struct WorldFactionPlayerOrganizingContext<'a> {
+    faction: &'a CFaction,
+    region_types: &'a BTreeMap<i32, Option<u16>>,
+}
+
+impl PlayerOrganizingUpdater for WorldFactionPlayerOrganizingContext<'_> {
+    fn set_player_organizing(
+        &mut self,
+        player_id: i32,
+        organizing: &mut PlayerOrganizingState,
+    ) -> Result<(), PlayerOrganizingUpdateError> {
+        self.faction
+            .set_player_organizing_projection(player_id, self.region_types, organizing)
+    }
+}
+
+struct WorldDetachedFactionInfoContext<'a> {
+    organizing: WorldFactionPlayerOrganizingContext<'a>,
+    game_server_id: i32,
+    sender: Option<ServerCommandHandle>,
+}
+
+impl PlayerOrganizingUpdater for WorldDetachedFactionInfoContext<'_> {
+    fn set_player_organizing(
+        &mut self,
+        player_id: i32,
+        organizing: &mut PlayerOrganizingState,
+    ) -> Result<(), PlayerOrganizingUpdateError> {
+        self.organizing
+            .set_player_organizing(player_id, organizing)
+    }
+}
+
+impl PlayerFactionInfoContext for WorldDetachedFactionInfoContext<'_> {
+    fn send_player_faction_info(
+        &mut self,
+        _player_id: i32,
+        message: &CMessage,
+    ) -> PlayerFactionInfoDelivery {
+        PlayerFactionInfoDelivery {
+            game_server_id: self.game_server_id,
+            result: message.send_to_map_id(self.sender.as_ref(), self.game_server_id),
+        }
+    }
 }
 
 impl PlayerOrganizingUpdater for WorldPlayerFactionInfoContext<'_> {
@@ -17309,20 +17356,18 @@ impl CGame {
 
     /// Выполняет concrete `CPlayer::UpdateFactionInfo` для map-owner-а.
     ///
-    /// Временное извлечение из map заменяет старый raw alias: organizing-
-    /// updater и queue-send не выполняют повторный lookup этого player-а.
-    /// Owner возвращается в map и при typed block, поэтому Rust lifecycle не
-    /// зависит от результата сериализации.
+    /// Изменяемая organizing-проекция находится внутри player-owner-а: это
+    /// позволяет синхронному доменному callback-у обновить игрока через shared
+    /// game-view без второго mutable alias всего `CGame`.
     pub(crate) fn update_player_faction_info(
-        &mut self,
+        &self,
         organizing: &COrganizingCtrl,
         player_id: i32,
     ) -> Result<Option<PlayerFactionInfoUpdateReport>, PlayerFactionInfoUpdateBlock> {
         let region_types = self.player_organizing_region_types();
         let game_server_id = self.game_server_number_by_player_id(player_id);
         let sender = self.current_game_server_sender();
-        let player_key = player_id as u32;
-        let Some(mut player) = self.players.remove(&player_key) else {
+        let Some(player) = self.players.get(&(player_id as u32)) else {
             return Ok(None);
         };
         let outcome = {
@@ -17336,8 +17381,31 @@ impl CGame {
             };
             player.update_faction_info(&mut context)
         };
-        self.players.insert(player_key, player);
         outcome.map(Some)
+    }
+
+    /// Выполняет тот же owner по faction-проекции, переданной непосредственно
+    /// из точки доменной мутации.
+    pub(crate) fn update_player_faction_info_from_faction(
+        &self,
+        faction: &CFaction,
+        player_id: i32,
+    ) -> Result<Option<PlayerFactionInfoUpdateReport>, PlayerFactionInfoUpdateBlock> {
+        let region_types = self.player_organizing_region_types();
+        let game_server_id = self.game_server_number_by_player_id(player_id);
+        let sender = self.current_game_server_sender();
+        let Some(player) = self.players.get(&(player_id as u32)) else {
+            return Ok(None);
+        };
+        let mut context = WorldDetachedFactionInfoContext {
+            organizing: WorldFactionPlayerOrganizingContext {
+                faction,
+                region_types: &region_types,
+            },
+            game_server_id,
+            sender,
+        };
+        player.update_faction_info(&mut context).map(Some)
     }
 
     /// Меняет country только у owner-а, подтверждённого exact online-list.
@@ -19578,7 +19646,8 @@ impl FactionDemiseContext for WorldCountryFactionDemiseEffects<'_> {
         )
     }
 
-    fn update_player_faction_info(&mut self, player_id: i32) {
+    fn update_player_faction_info(&mut self, game: &CGame, faction: &CFaction, player_id: i32) {
+        let _ = game.update_player_faction_info_from_faction(faction, player_id);
         (self.update_player)(player_id);
     }
 
@@ -19672,7 +19741,13 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
         self.organizing
             .faction_by_id_mut(faction_id)
             .ok_or(CountryGovernanceContextBlock::OwnedCityMutation)?
-            .clear_owned_cities(&*self.base.game, &mut *self.update_player)
+            .clear_owned_cities(
+                &*self.base.game,
+                |game, faction, player_id| {
+                    let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                    (self.update_player)(player_id);
+                },
+            )
             .map(|_| ())
             .map_err(|_| CountryGovernanceContextBlock::OwnedCityMutation)
     }
@@ -19685,7 +19760,14 @@ impl CountryExileResultContext for WorldCountryDemiseEffects<'_> {
         self.organizing
             .faction_by_id_mut(faction_id)
             .ok_or(CountryGovernanceContextBlock::OwnedCityMutation)?
-            .add_owned_city(&*self.base.game, city_id, &mut *self.update_player)
+            .add_owned_city(
+                &*self.base.game,
+                city_id,
+                |game, faction, player_id| {
+                    let _ = game.update_player_faction_info_from_faction(faction, player_id);
+                    (self.update_player)(player_id);
+                },
+            )
             .map(|_| ())
             .map_err(|_| CountryGovernanceContextBlock::OwnedCityMutation)
     }

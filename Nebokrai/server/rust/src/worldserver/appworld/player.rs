@@ -346,7 +346,7 @@
 //! без `unsafe` и без недостаточного промежуточного `f64`. Остальные байты
 //! `tagProperty[0x9c]` не меняются.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::ffi::CStr;
@@ -1281,14 +1281,18 @@ pub(crate) struct CPlayer {
     uncreated_carriage: PlayerCarriageInformation,
     recreate_carriage: bool,
     login: bool,
-    city_war_died_state_time: i32,
     country: Option<u8>,
     contribute: Option<i32>,
     jjc_data: [u8; 0x10],
     jjc_pk_state: bool,
     session_id: Vec<u8>,
-    organizing: PlayerOrganizingState,
+    faction_runtime: RefCell<PlayerFactionRuntimeState>,
     faction_data_received: Cell<bool>,
+}
+
+struct PlayerFactionRuntimeState {
+    organizing: PlayerOrganizingState,
+    city_war_died_state_time: i32,
     create_union_operator: bool,
     faction_war_operator: bool,
 }
@@ -1723,31 +1727,33 @@ impl CPlayer {
             },
             recreate_carriage: false,
             login: false,
-            city_war_died_state_time: 0,
             country: None,
             contribute: None,
             jjc_data: [0; 0x10],
             jjc_pk_state: false,
             session_id: Vec::new(),
-            organizing: PlayerOrganizingState {
-                faction_id: 0,
-                faction_logo_id: 0,
-                faction_name: Vec::new(),
-                faction_title: Vec::new(),
-                faction_master_id: 0,
-                union_id: 0,
-                union_master_id: 0,
-                faction_level: 0,
-                faction_experience: 0,
-                force: 0,
-                faction_contribute: false,
-                enemy_factions: BTreeSet::new(),
-                city_war_enemy_factions: BTreeSet::new(),
-                owned_regions: VecDeque::new(),
-            },
+            faction_runtime: RefCell::new(PlayerFactionRuntimeState {
+                organizing: PlayerOrganizingState {
+                    faction_id: 0,
+                    faction_logo_id: 0,
+                    faction_name: Vec::new(),
+                    faction_title: Vec::new(),
+                    faction_master_id: 0,
+                    union_id: 0,
+                    union_master_id: 0,
+                    faction_level: 0,
+                    faction_experience: 0,
+                    force: 0,
+                    faction_contribute: false,
+                    enemy_factions: BTreeSet::new(),
+                    city_war_enemy_factions: BTreeSet::new(),
+                    owned_regions: VecDeque::new(),
+                },
+                city_war_died_state_time: 0,
+                create_union_operator: false,
+                faction_war_operator: false,
+            }),
             faction_data_received: Cell::new(false),
-            create_union_operator: false,
-            faction_war_operator: false,
         }
     }
 
@@ -2197,12 +2203,12 @@ impl CPlayer {
     }
 
     /// Возвращает exact transient-флаг, блокирующий смену главы faction.
-    pub(crate) const fn faction_war_operator(&self) -> bool {
-        self.faction_war_operator
+    pub(crate) fn faction_war_operator(&self) -> bool {
+        self.faction_runtime.borrow().faction_war_operator
     }
 
-    pub(crate) const fn set_faction_war_operator(&mut self, enabled: bool) {
-        self.faction_war_operator = enabled;
+    pub(crate) fn set_faction_war_operator(&self, enabled: bool) {
+        self.faction_runtime.borrow_mut().faction_war_operator = enabled;
     }
 
     /// Возвращает signed ID через унаследованный `CBaseObject` owner.
@@ -2616,11 +2622,12 @@ impl CPlayer {
     ) -> PlayerCountryChangeReport {
         let (legacy_result, disposition) = if self.country == Some(requested_country) {
             (-1, PlayerCountryChangeDisposition::SameCountry)
-        } else if self.organizing.faction_id != 0 {
+        } else if self.faction_runtime.borrow().organizing.faction_id != 0 {
+            let faction_id = self.faction_runtime.borrow().organizing.faction_id;
             (
                 -3,
                 PlayerCountryChangeDisposition::FactionMember {
-                    faction_id: self.organizing.faction_id,
+                    faction_id,
                 },
             )
         } else if !country_exists(requested_country) {
@@ -2640,8 +2647,8 @@ impl CPlayer {
     }
 
     /// Возвращает достигнутый signed faction ID без преобразования.
-    pub(crate) const fn faction_id(&self) -> i32 {
-        self.organizing.faction_id
+    pub(crate) fn faction_id(&self) -> i32 {
+        self.faction_runtime.borrow().organizing.faction_id
     }
 
     /// Возвращает signed `m_lTeamID` без изменения его bit-pattern.
@@ -2838,45 +2845,52 @@ impl CPlayer {
 
     /// Обновляет organizing-состояние игрока через переданного владельца.
     pub(crate) fn set_player_organizing<U: PlayerOrganizingUpdater>(
-        &mut self,
+        &self,
         updater: &mut U,
     ) -> Result<(), PlayerOrganizingUpdateError> {
         let player_id = self.get_id();
-        updater.set_player_organizing(player_id, &mut self.organizing)
+        updater.set_player_organizing(
+            player_id,
+            &mut self.faction_runtime.borrow_mut().organizing,
+        )
     }
 
     /// Выполняет exact `CPlayer::UpdateFactionInfo` и публикует `0x7FE06`.
     pub(crate) fn update_faction_info<Context>(
-        &mut self,
+        &self,
         context: &mut Context,
     ) -> Result<PlayerFactionInfoUpdateReport, PlayerFactionInfoUpdateBlock>
     where
         Context: PlayerFactionInfoContext,
     {
-        self.organizing.faction_id = 0;
-        self.organizing.faction_logo_id = 0;
-        self.organizing.faction_name.clear();
-        self.organizing.faction_title.clear();
-        self.organizing.faction_master_id = 0;
-        self.organizing.faction_level = 0;
-        self.organizing.faction_experience = 0;
-        self.organizing.faction_contribute = false;
-        self.organizing.union_id = 0;
-        self.organizing.union_master_id = 0;
-        self.organizing.enemy_factions.clear();
-        self.city_war_died_state_time = 0;
-        self.organizing.city_war_enemy_factions.clear();
-        self.create_union_operator = false;
-        self.faction_war_operator = false;
-        self.organizing.force = 0;
-        // Исходник оставлял stale owned-region list при переходе во free
-        // player, но serializer при faction ID `0` её никогда не читал.
-        // Это внутренний lifecycle-дефект без внешнего контракта.
-        self.organizing.clear_owned_regions();
+        {
+            let mut runtime = self.faction_runtime.borrow_mut();
+            runtime.organizing.faction_id = 0;
+            runtime.organizing.faction_logo_id = 0;
+            runtime.organizing.faction_name.clear();
+            runtime.organizing.faction_title.clear();
+            runtime.organizing.faction_master_id = 0;
+            runtime.organizing.faction_level = 0;
+            runtime.organizing.faction_experience = 0;
+            runtime.organizing.faction_contribute = false;
+            runtime.organizing.union_id = 0;
+            runtime.organizing.union_master_id = 0;
+            runtime.organizing.enemy_factions.clear();
+            runtime.city_war_died_state_time = 0;
+            runtime.organizing.city_war_enemy_factions.clear();
+            runtime.create_union_operator = false;
+            runtime.faction_war_operator = false;
+            runtime.organizing.force = 0;
+            // Исходник оставлял stale owned-region list при переходе во free
+            // player, но serializer при faction ID `0` её никогда не читал.
+            // Это внутренний lifecycle-дефект без внешнего контракта.
+            runtime.organizing.clear_owned_regions();
+        }
 
         self.set_player_organizing(context)
             .map_err(PlayerFactionInfoUpdateBlock::InitialOrganizing)?;
-        let faction_id_after_initial_update = self.organizing.faction_id;
+        let faction_id_after_initial_update =
+            self.faction_runtime.borrow().organizing.faction_id;
         let faction_data_reset = faction_id_after_initial_update == 0;
         if faction_data_reset {
             self.faction_data_received.set(false);
@@ -3463,7 +3477,13 @@ impl CPlayer {
         destination.extend_from_slice(&self.uncreated_carriage.hp.to_le_bytes());
         destination.push(u8::from(self.recreate_carriage));
         destination.push(u8::from(self.login));
-        destination.extend_from_slice(&self.city_war_died_state_time.to_le_bytes());
+        destination.extend_from_slice(
+            &self
+                .faction_runtime
+                .borrow()
+                .city_war_died_state_time
+                .to_le_bytes(),
+        );
         let _ = self.add_quest_data_to_byte_array(destination)?;
         let country = self
             .country
@@ -3545,7 +3565,8 @@ impl CPlayer {
         self.uncreated_carriage.hp = read_player_u32(source, cursor, "tagCarriageInfo.dwHp")?;
         self.recreate_carriage = read_player_u8(source, cursor, "m_bReCreateCarriage")? != 0;
         self.login = read_player_u8(source, cursor, "m_bLogin")? != 0;
-        self.city_war_died_state_time = read_player_i32(source, cursor, "m_lCityWarDiedStateTime")?;
+        self.faction_runtime.borrow_mut().city_war_died_state_time =
+            read_player_i32(source, cursor, "m_lCityWarDiedStateTime")?;
         let _ = self.decord_quest_data_from_byte_array(source, cursor)?;
         self.country = Some(read_player_u8(source, cursor, "m_btCountry")?);
         self.contribute = Some(read_player_i32(source, cursor, "m_lContribute")?);
@@ -3557,13 +3578,14 @@ impl CPlayer {
 
     /// Обновляет и кодирует organization-блок в точном WorldServer wire-order.
     pub(crate) fn add_org_sys_to_byte_array<U: PlayerOrganizingUpdater>(
-        &mut self,
+        &self,
         destination: &mut Vec<u8>,
         updater: &mut U,
     ) -> Result<bool, PlayerCodecError> {
-        updater.set_player_organizing(self.get_id(), &mut self.organizing)?;
+        let mut runtime = self.faction_runtime.borrow_mut();
+        updater.set_player_organizing(self.get_id(), &mut runtime.organizing)?;
 
-        let organizing = &self.organizing;
+        let organizing = &runtime.organizing;
         destination.extend_from_slice(&organizing.faction_id.to_le_bytes());
         if organizing.faction_id <= 0 {
             return Ok(true);

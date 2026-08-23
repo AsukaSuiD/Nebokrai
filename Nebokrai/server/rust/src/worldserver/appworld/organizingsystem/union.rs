@@ -459,6 +459,7 @@ pub(crate) trait UnionInitialMutationContext {
         &mut self,
         faction_id: i32,
         union_id: i32,
+        union_master_id: i32,
         parameters: &COrganizingParam,
     ) -> Result<bool, FactionSuperiorOrganizingBlock>;
 }
@@ -550,6 +551,7 @@ pub(crate) trait UnionDemiseContext:
     + UnionSendInfoContext
     + UnionFactionMemberContext
     + UnionPlayerRefreshContext
+    + UnionMasterProjectionMutationContext
 {
 }
 
@@ -559,7 +561,17 @@ impl<T> UnionDemiseContext for T where
         + UnionSendInfoContext
         + UnionFactionMemberContext
         + UnionPlayerRefreshContext
+        + UnionMasterProjectionMutationContext
 {
+}
+
+/// Поддерживает faction-local проекцию master ID после смены главы союза.
+pub(crate) trait UnionMasterProjectionMutationContext {
+    fn set_union_master_projection(
+        &mut self,
+        faction_ids: &[i32],
+        union_master_id: i32,
+    );
 }
 
 /// Controller callbacks, которые `CUnion::Exit` вызывал через singleton.
@@ -1763,7 +1775,12 @@ impl CUnion {
 
         let superior_assigned = if master_faction_found {
             context
-                .faction_set_superior_organizing(self.master_id, self.union_id, parameters)
+                .faction_set_superior_organizing(
+                    self.master_id,
+                    self.union_id,
+                    self.master_id,
+                    parameters,
+                )
                 .map_err(|source| UnionInitialBlock::SuperiorOrganizing {
                     faction_id: self.master_id,
                     source,
@@ -2212,7 +2229,12 @@ impl CUnion {
         let replaced_existing_member = self.members.insert(faction_id, member).is_some();
 
         let superior_assigned = context
-            .faction_set_superior_organizing(faction_id, self.union_id, parameters)
+            .faction_set_superior_organizing(
+                faction_id,
+                self.union_id,
+                self.master_id,
+                parameters,
+            )
             .map_err(|source| UnionAddFactionBlock::SuperiorOrganizing {
                 faction_id,
                 member_inserted: true,
@@ -2560,6 +2582,8 @@ impl CUnion {
         let old_job_level = old_member.job_level;
 
         self.master_id = new_master_faction_id;
+        let member_faction_ids = self.members.keys().copied().collect::<Vec<_>>();
+        context.set_union_master_projection(&member_faction_ids, new_master_faction_id);
         {
             let new_member = self
                 .members
