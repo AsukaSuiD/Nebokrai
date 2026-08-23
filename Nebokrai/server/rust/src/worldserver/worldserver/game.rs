@@ -1334,7 +1334,8 @@ use crate::setup::regionrouter::{
     RegionRouter, RegionRouterLoadError, RegionRouterSerializeError,
 };
 use crate::setup::timetoreturn::{
-    TimeToReturn, TimeToReturnCallbacks, TimeToReturnLoadError, TimeToReturnLoadReport,
+    TimeToReturn, TimeToReturnCallbacks, TimeToReturnContext, TimeToReturnFireReport,
+    TimeToReturnLoadError, TimeToReturnLoadReport,
 };
 use crate::public::tools::{ini_decode, put_string_to_file};
 use crate::transport::bind_tcp_ipv4;
@@ -3975,6 +3976,7 @@ pub(crate) struct WorldMainLoopTimerStageReport {
     pub(crate) copy_number_resets: Vec<CopyNumberResetReport>,
     pub(crate) player_ranks: Vec<PlayerRanksTimerRefreshReport>,
     pub(crate) organizing_taxes: Vec<OrganizingTodayTaxRefreshReport>,
+    pub(crate) time_to_returns: Vec<TimeToReturnFireReport>,
     pub(crate) country_wars: Vec<CountryWarTimerReport>,
     pub(crate) four_nation_wars: Vec<FourNationWarTimerReport>,
     pub(crate) finished_at_ms: u32,
@@ -3990,6 +3992,25 @@ struct WorldFourNationWarTimerEffects<'a, GetTick> {
     get_tick: &'a mut GetTick,
     get_log_local_time: &'a mut dyn FnMut() -> WorldLogLocalTime,
     put_log_info: &'a mut dyn FnMut(&[u8]),
+}
+
+struct WorldTimeToReturnEffects<'a> {
+    game: &'a CGame,
+}
+
+impl TimeToReturnContext for WorldTimeToReturnEffects<'_> {
+    fn game_server_number_by_region_id(&mut self, region_id: i32) -> Option<i32> {
+        let map_id = self.game.game_server_number_by_region_id(region_id);
+        (map_id != 0).then_some(map_id)
+    }
+
+    fn send_to_map_id(
+        &mut self,
+        message: &CMessage,
+        map_id: i32,
+    ) -> Result<i32, SendMessageError> {
+        message.send_to_map_id(self.game.current_game_server_sender().as_ref(), map_id)
+    }
 }
 
 impl<GetTick: FnMut() -> u32> WorldFourNationWarTimerEffects<'_, GetTick> {
@@ -4157,6 +4178,8 @@ struct WorldTimerHandler<'a, Callback> {
     country_war_callbacks: CountryWarCallbacks<Callback>,
     four_nation_war: &'a mut CFourNationWarSys,
     four_nation_war_callbacks: FourNationWarCallbacks<Callback>,
+    time_to_return: &'a mut TimeToReturn,
+    time_to_return_callbacks: TimeToReturnCallbacks<Callback>,
     globe_setup: &'a GlobeSetupSnapshot,
     organizing_parameters: &'a mut COrganizingParam,
     player_ranks: &'a mut CPlayerRanks,
@@ -4173,6 +4196,7 @@ struct WorldTimerHandler<'a, Callback> {
     copy_number_resets: Vec<CopyNumberResetReport>,
     refreshes: Vec<PlayerRanksTimerRefreshReport>,
     tax_refreshes: Vec<OrganizingTodayTaxRefreshReport>,
+    time_to_returns: Vec<TimeToReturnFireReport>,
     country_wars: Vec<CountryWarTimerReport>,
     four_nation_wars: Vec<FourNationWarTimerReport>,
     pending_copy_number_registration: Option<usize>,
@@ -4295,6 +4319,20 @@ where
                     callback: invocation.callback,
                     parameter: 0,
                 }),
+            });
+        }
+
+        if invocation.callback == self.time_to_return_callbacks.on_time {
+            let mut effects = WorldTimeToReturnEffects { game: self.game };
+            let report = self.time_to_return.on_time(
+                invocation.parameter,
+                timer,
+                self.time_to_return_callbacks,
+                &mut effects,
+            );
+            self.time_to_returns.push(report);
+            return Ok(AsyncTimerCallbackDisposition::Handled {
+                next_calendar_event: None,
             });
         }
 
@@ -14292,6 +14330,8 @@ impl CGame {
     >(
         &self,
         timer: &mut CTimer<Callback>,
+        time_to_return: &mut TimeToReturn,
+        time_to_return_callbacks: TimeToReturnCallbacks<Callback>,
         country_war: &mut CountryWarSys,
         country_handler: &mut CCountryHandler,
         country_war_callbacks: CountryWarCallbacks<Callback>,
@@ -14329,6 +14369,8 @@ impl CGame {
             country_war_callbacks,
             four_nation_war,
             four_nation_war_callbacks,
+            time_to_return,
+            time_to_return_callbacks,
             globe_setup,
             organizing_parameters,
             player_ranks,
@@ -14344,6 +14386,7 @@ impl CGame {
             copy_number_resets: Vec::new(),
             refreshes: Vec::new(),
             tax_refreshes: Vec::new(),
+            time_to_returns: Vec::new(),
             country_wars: Vec::new(),
             four_nation_wars: Vec::new(),
             pending_copy_number_registration: None,
@@ -14368,6 +14411,7 @@ impl CGame {
         let copy_number_resets = handler.copy_number_resets;
         let player_ranks = handler.refreshes;
         let organizing_taxes = handler.tax_refreshes;
+        let time_to_returns = handler.time_to_returns;
         let country_wars = handler.country_wars;
         let four_nation_wars = handler.four_nation_wars;
         let finished_at_ms = get_tick();
@@ -14380,6 +14424,7 @@ impl CGame {
             copy_number_resets,
             player_ranks,
             organizing_taxes,
+            time_to_returns,
             country_wars,
             four_nation_wars,
             finished_at_ms,
@@ -15408,6 +15453,8 @@ impl CGame {
         let timer = self
             .run_main_loop_timer_stage(
                 owners.timer,
+                owners.time_to_return,
+                owners.time_to_return_callbacks,
                 owners.country_war,
                 owners.country,
                 owners.country_war_callbacks,
