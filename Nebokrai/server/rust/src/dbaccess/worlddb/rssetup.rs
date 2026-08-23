@@ -18,8 +18,8 @@
 //! в singleton на явную передачу владения значениями; DB I/O не скрыт в
 //! allocation-only `Default` либо `new`.
 //!
-//! Destructor только возвращал vtable и разрушал `CMyAdoBase`. `Config`, Tokio
-//! `Runtime` и FIFO notices освобождаются обычным Rust `Drop`, поэтому ручного
+//! Destructor только возвращал vtable и разрушал `CMyAdoBase`. `Config` и FIFO
+//! notices освобождаются обычным Rust `Drop`, поэтому ручного
 //! destructor-тела нет. Попавший в этот source scalar-deleting thunk
 //! `CRsUnion` принадлежит `rsunion.rs`; все `Unwind@...` были compiler/library
 //! cleanup для COM pointers, `VARIANT`, BSTR и `std::string`. Они не являются
@@ -77,7 +77,7 @@
 //! Typed notice объединяет исходную пару
 //! `PutLogInfo("csl_setup:LeaveWordID=%d")` / `PrintErr("save LeaveWordID ERROR")`.
 //!
-//! `tiberius`, Tokio TCP и current-thread runtime заменяют ADO/COM, BSTR,
+//! `tiberius`, Tokio TCP и общий process runtime заменяют ADO/COM, BSTR,
 //! `VARIANT`, recordset и SEH cleanup. Setup-байты декодируются как
 //! Windows-1251, уже выбранная для русской поставки, TLS не добавляется для
 //! локальной baseline MSSQL. Будущий `CGame::Init` обязан вызвать `initialize`
@@ -92,7 +92,6 @@ use std::io;
 use encoding_rs::WINDOWS_1251;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel};
 use tokio::net::TcpStream;
-use tokio::runtime::{Builder, Runtime};
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 pub(crate) type WorldTdsClient = Client<Compat<TcpStream>>;
@@ -212,26 +211,6 @@ pub(crate) enum RsSetupNotice {
     },
 }
 
-/// Ошибка создания синхронного Linux/TDS-владельца.
-#[derive(Debug)]
-pub(crate) struct RsSetupInitializationError(io::Error);
-
-impl fmt::Display for RsSetupInitializationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "не создан синхронный runtime World Setup DB: {}",
-            self.0
-        )
-    }
-}
-
-impl Error for RsSetupInitializationError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
 /// Ошибка доказанной ADO/TDS-границы без credential values.
 #[derive(Debug)]
 pub(crate) enum RsSetupDatabaseError {
@@ -275,12 +254,6 @@ impl From<tiberius::error::Error> for RsSetupDatabaseError {
 
 /// Узкая объектная граница достигнутой функции исходного `CRsSetup`.
 pub(crate) trait RsSetupOwner {
-    /// Возвращает DB `playerID`; пустая таблица либо DB-ошибка дают `0`.
-    fn load_player_id(&mut self) -> u32;
-
-    /// Возвращает DB `LeaveWordID`; пустая таблица либо DB-ошибка дают `0`.
-    fn load_leave_world_id(&mut self) -> i32;
-
     /// Выполняет UPDATE внутри уже начатой caller-транзакции.
     async fn save_player_id(
         &mut self,
@@ -302,34 +275,25 @@ pub(crate) trait RsSetupOwner {
 /// Linux/TDS-замена достигнутой части исходного `CRsSetup`.
 pub(crate) struct TiberiusRsSetup {
     config: Config,
-    runtime: Runtime,
     notices: VecDeque<RsSetupNotice>,
 }
 
 impl TiberiusRsSetup {
     /// Создаёт owner и выполняет два constructor-load в исходном порядке.
-    pub(crate) fn initialize(
-        settings: WorldDatabaseSettings,
-    ) -> Result<(Self, LoadedSetupIds), RsSetupInitializationError> {
-        let runtime = Builder::new_current_thread()
-            .enable_io()
-            .enable_time()
-            .build()
-            .map_err(RsSetupInitializationError)?;
+    pub(crate) async fn initialize(settings: WorldDatabaseSettings) -> (Self, LoadedSetupIds) {
         let mut owner = Self {
             config: settings.tds_config(),
-            runtime,
             notices: VecDeque::new(),
         };
-        let player_id = owner.load_player_id();
-        let leave_world_id = owner.load_leave_world_id();
-        Ok((
+        let player_id = owner.load_player_id().await;
+        let leave_world_id = owner.load_leave_world_id().await;
+        (
             owner,
             LoadedSetupIds {
                 player_id,
                 leave_world_id,
             },
-        ))
+        )
     }
 
     async fn connect(config: Config) -> Result<WorldTdsClient, RsSetupDatabaseError> {
@@ -372,14 +336,8 @@ impl TiberiusRsSetup {
         row.try_get::<i32, _>("LeaveWordID")?
             .ok_or(RsSetupDatabaseError::MissingRequiredValue("LeaveWordID"))
     }
-}
-
-impl RsSetupOwner for TiberiusRsSetup {
-    fn load_player_id(&mut self) -> u32 {
-        match self
-            .runtime
-            .block_on(Self::query_player_id(self.config.clone()))
-        {
+    async fn load_player_id(&mut self) -> u32 {
+        match Self::query_player_id(self.config.clone()).await {
             Ok(player_id) => player_id,
             Err(error) => {
                 self.notices.push_back(RsSetupNotice::PlayerLoad { error });
@@ -388,11 +346,8 @@ impl RsSetupOwner for TiberiusRsSetup {
         }
     }
 
-    fn load_leave_world_id(&mut self) -> i32 {
-        match self
-            .runtime
-            .block_on(Self::query_leave_world_id(self.config.clone()))
-        {
+    async fn load_leave_world_id(&mut self) -> i32 {
+        match Self::query_leave_world_id(self.config.clone()).await {
             Ok(leave_world_id) => leave_world_id,
             Err(error) => {
                 self.notices
@@ -401,7 +356,9 @@ impl RsSetupOwner for TiberiusRsSetup {
             }
         }
     }
+}
 
+impl RsSetupOwner for TiberiusRsSetup {
     async fn save_player_id(
         &mut self,
         active_transaction: &mut WorldTdsClient,

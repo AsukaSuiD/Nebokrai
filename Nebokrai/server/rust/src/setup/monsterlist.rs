@@ -109,6 +109,275 @@ pub(crate) struct MonsterDropList {
 pub(crate) type MonsterRegistry = BTreeMap<Vec<u8>, MonsterProperties>;
 pub(crate) type MonsterDropRegistry = BTreeMap<Vec<u8>, MonsterDropList>;
 
+/// Читает World `data/monsterlist.ini`: поиск `*`, 160-byte scalar prefix,
+/// string-table ID и variable skill tail. Registry очищается до чтения, как
+/// process-global map оригинала; malformed хвост не создаёт текущую запись.
+pub(crate) fn load_monster_list(
+    monsters: &mut MonsterRegistry,
+    source: &[u8],
+    mut resolve_name: impl FnMut(&[u8]) -> Option<Vec<u8>>,
+) -> Result<usize, MonsterListLoadError> {
+    monsters.clear();
+    let tokens: Vec<&[u8]> = source
+        .split(|byte| byte.is_ascii_whitespace())
+        .filter(|token| !token.is_empty())
+        .collect();
+    let mut next = 0;
+    let mut record = 0;
+    while let Some(relative) = tokens[next..].iter().position(|token| *token == b"*") {
+        next += relative + 1;
+        let mut read = |field: &'static str| {
+            let value = tokens
+                .get(next)
+                .copied()
+                .ok_or(MonsterListLoadError::Missing { record, field })?;
+            next += 1;
+            Ok::<_, MonsterListLoadError>(value)
+        };
+        let index = parse_monster_number::<u32>(read("index")?, record, "index")?;
+        let original_name = read("original name")?.to_vec();
+        let name_id = read("name string ID")?.to_vec();
+        let mut scalar = [0_u32; 38];
+        for value in &mut scalar {
+            *value = parse_monster_number::<u32>(read("scalar field")?, record, "scalar field")?;
+        }
+        let attack_avoid =
+            parse_monster_number::<u16>(read("attack avoid")?, record, "attack avoid")?;
+        let element_avoid =
+            parse_monster_number::<u16>(read("element avoid")?, record, "element avoid")?;
+        if attack_avoid > 99 || element_avoid > 99 {
+            return Err(MonsterListLoadError::AvoidanceOutsideRange {
+                record,
+                index,
+                attack_avoid,
+                element_avoid,
+            });
+        }
+        let skill_count =
+            parse_monster_number::<i32>(read("skill count")?, record, "skill count")?;
+        if skill_count < 0 {
+            return Err(MonsterListLoadError::NegativeSkillCount {
+                record,
+                count: skill_count,
+            });
+        }
+        let mut skills = Vec::with_capacity(skill_count as usize);
+        for _ in 0..skill_count {
+            skills.push(MonsterSkill {
+                id: parse_monster_number::<u16>(read("skill ID")?, record, "skill ID")?,
+                level: parse_monster_number::<u16>(
+                    read("skill level")?,
+                    record,
+                    "skill level",
+                )?,
+                odds: parse_monster_number::<u16>(
+                    read("skill odds")?,
+                    record,
+                    "skill odds",
+                )?,
+            });
+        }
+        let monster = MonsterProperties {
+            index,
+            picture_id: scalar[0],
+            picture_level: scalar[1],
+            name_color: scalar[2],
+            hp_bar_color: scalar[3],
+            sound_id: scalar[4],
+            tamable: scalar[5],
+            maximum_tame_attempt_count: scalar[6],
+            figure: scalar[7],
+            level: scalar[8],
+            experience: scalar[9],
+            yp: scalar[10],
+            maximum_hp: scalar[11],
+            minimum_attack: scalar[12],
+            maximum_attack: scalar[13],
+            yao_attack: scalar[14],
+            minimum_element: scalar[15],
+            maximum_element: scalar[16],
+            hit: scalar[17],
+            defence: scalar[18],
+            dodge: scalar[19],
+            attack_speed: scalar[20],
+            strike_out_time: scalar[21],
+            move_speed: scalar[22],
+            element_resistant: scalar[23],
+            soul_resistant: scalar[24],
+            hp_recover_speed: scalar[25],
+            farthest: scalar[26],
+            nearest: scalar[27],
+            fight_range: scalar[28],
+            guard_range: scalar[29],
+            chase_range: scalar[30],
+            ai: scalar[31],
+            race: scalar[32],
+            kind: scalar[33],
+            move_timer: scalar[34],
+            stop_frame: scalar[35],
+            ai_interval: scalar[36],
+            re_ank: scalar[37],
+            attack_avoid,
+            element_avoid,
+            name: resolve_name(&name_id).unwrap_or_default(),
+            original_name: original_name.clone(),
+            skills,
+        };
+        monsters.insert(original_name, monster);
+        record += 1;
+    }
+    Ok(monsters.len())
+}
+
+/// Читает section-based `data/dropgoodslist.ini` и связывает имена предметов
+/// с живым GoodsFactory. Повторная секция заменяет предыдущий список монстра,
+/// как `operator[]`-ветка точного World owner-а.
+pub(crate) fn load_drop_goods_list(
+    drops: &mut MonsterDropRegistry,
+    source: &[u8],
+    mut query_goods_id: impl FnMut(&[u8]) -> u32,
+) -> Result<usize, MonsterListLoadError> {
+    drops.clear();
+    let mut current: Option<Vec<u8>> = None;
+    for (line_index, line) in source.split(|byte| *byte == b'\n').enumerate() {
+        let tokens: Vec<&[u8]> = line
+            .split(|byte| byte.is_ascii_whitespace())
+            .filter(|token| !token.is_empty())
+            .collect();
+        let Some(&first) = tokens.first() else {
+            continue;
+        };
+        if first == b">" {
+            let name = tokens.get(1).ok_or(MonsterListLoadError::MissingSectionName {
+                line: line_index + 1,
+            })?;
+            let name = name.to_vec();
+            drops.insert(
+                name.clone(),
+                MonsterDropList {
+                    monster_original_name: name.clone(),
+                    drops: Vec::new(),
+                },
+            );
+            current = Some(name);
+            continue;
+        }
+        let Some(current_name) = current.as_ref() else {
+            continue;
+        };
+        let values = &tokens[1..];
+        let money = first.eq_ignore_ascii_case(b"MONEY");
+        let implicit_zero_level = !money && values.len() == 3;
+        if values.len() != 4 && !implicit_zero_level {
+            return Err(MonsterListLoadError::DropFieldCount {
+                line: line_index + 1,
+                name: first.to_vec(),
+                actual: values.len(),
+            });
+        }
+        let mut drop = MonsterDrop {
+            name: first.to_vec(),
+            goods_index: query_goods_id(first) as i32,
+            ..MonsterDrop::default()
+        };
+        if money {
+            (drop.odds, drop.maximum_odds) = parse_pair(values[0], b'/').ok_or_else(|| {
+                MonsterListLoadError::DropValue {
+                    line: line_index + 1,
+                    name: first.to_vec(),
+                }
+            })?;
+            (drop.minimum_money, drop.maximum_money) =
+                parse_pair(values[1], b'-').ok_or_else(|| MonsterListLoadError::DropValue {
+                    line: line_index + 1,
+                    name: first.to_vec(),
+                })?;
+        } else if !implicit_zero_level {
+            drop.level = parse_bytes::<i32>(values[0]).ok_or_else(|| {
+                MonsterListLoadError::DropValue {
+                    line: line_index + 1,
+                    name: first.to_vec(),
+                }
+            })?;
+        }
+        let odds_index = usize::from(!implicit_zero_level);
+        let attenuation_index = if implicit_zero_level { 1 } else { 2 };
+        let limit_index = if implicit_zero_level { 2 } else { 3 };
+        if !money {
+            (drop.odds, drop.maximum_odds) =
+                parse_pair(values[odds_index], b'/').ok_or_else(|| {
+                    MonsterListLoadError::DropValue {
+                        line: line_index + 1,
+                        name: first.to_vec(),
+                    }
+                })?;
+        }
+        drop.level_attenuation = parse_bytes::<f32>(values[attenuation_index])
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| MonsterListLoadError::DropValue {
+                line: line_index + 1,
+                name: first.to_vec(),
+            })?;
+        drop.level_attenuation_limit = parse_bytes::<f32>(values[limit_index])
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| MonsterListLoadError::DropValue {
+                line: line_index + 1,
+                name: first.to_vec(),
+            })?;
+        drops
+            .get_mut(current_name)
+            .expect("current section опубликован перед drop-записями")
+            .drops
+            .push(drop);
+    }
+    Ok(drops.len())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MonsterListLoadError {
+    Missing { record: usize, field: &'static str },
+    Invalid { record: usize, field: &'static str, token: Vec<u8> },
+    AvoidanceOutsideRange {
+        record: usize,
+        index: u32,
+        attack_avoid: u16,
+        element_avoid: u16,
+    },
+    NegativeSkillCount { record: usize, count: i32 },
+    MissingSectionName { line: usize },
+    DropFieldCount { line: usize, name: Vec<u8>, actual: usize },
+    DropValue { line: usize, name: Vec<u8> },
+}
+
+impl fmt::Display for MonsterListLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "ошибка формата MonsterList: {self:?}")
+    }
+}
+
+impl Error for MonsterListLoadError {}
+
+fn parse_monster_number<T: std::str::FromStr>(
+    token: &[u8],
+    record: usize,
+    field: &'static str,
+) -> Result<T, MonsterListLoadError> {
+    parse_bytes(token).ok_or_else(|| MonsterListLoadError::Invalid {
+        record,
+        field,
+        token: token.to_vec(),
+    })
+}
+
+fn parse_bytes<T: std::str::FromStr>(token: &[u8]) -> Option<T> {
+    std::str::from_utf8(token).ok()?.parse().ok()
+}
+
+fn parse_pair(token: &[u8], separator: u8) -> Option<(i32, i32)> {
+    let index = token.iter().position(|byte| *byte == separator)?;
+    Some((parse_bytes(&token[..index])?, parse_bytes(&token[index + 1..])?))
+}
+
 /// Ищет свойство по legacy C-строке original name.
 ///
 /// Original owner сначала строил `std::string` до первого NUL и выполнял

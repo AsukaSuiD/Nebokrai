@@ -74,6 +74,55 @@ impl CGMList {
         self.god_passport = god_passport;
     }
 
+    /// Загружает один из двух exact whitespace-списков World GM.
+    /// Неизвестные role-имена, как и в EXE, не создают map-entry.
+    pub(crate) fn load_from_bytes(
+        &mut self,
+        source: &[u8],
+        collection: GmListCollection,
+        passport_source: Option<&[u8]>,
+    ) -> Result<usize, GmListLoadError> {
+        let destination = match collection {
+            GmListCollection::Gm => &mut self.gm_info,
+            GmListCollection::PlayerGm => &mut self.player_gm_info,
+        };
+        destination.clear();
+        let tokens: Vec<&[u8]> = source
+            .split(|byte| byte.is_ascii_whitespace())
+            .filter(|token| !token.is_empty())
+            .collect();
+        if tokens.len() % 2 != 0 {
+            return Err(GmListLoadError::MissingRole {
+                name: tokens.last().copied().unwrap_or_default().to_vec(),
+            });
+        }
+        for pair in tokens.chunks_exact(2) {
+            let level = match (collection, pair[1]) {
+                (GmListCollection::Gm, b"admin") => Some(100),
+                (GmListCollection::Gm, b"arch") => Some(90),
+                (_, b"wizard") => Some(50),
+                (_, b"guardian") => Some(40),
+                (_, b"moderator") => Some(30),
+                _ => None,
+            };
+            if let Some(level) = level {
+                let info = GmInfo {
+                    name: pair[0].to_vec(),
+                    level,
+                };
+                destination.insert(info.name.clone(), info);
+            }
+        }
+        if let Some(passport) = passport_source.and_then(|bytes| {
+            bytes
+                .split(|byte| byte.is_ascii_whitespace())
+                .find(|token| !token.is_empty())
+        }) {
+            self.god_passport = passport.to_vec();
+        }
+        Ok(destination.len())
+    }
+
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -141,6 +190,25 @@ impl fmt::Display for GmListSerializationBlock {
 }
 
 impl Error for GmListSerializationBlock {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GmListLoadError {
+    MissingRole { name: Vec<u8> },
+}
+
+impl fmt::Display for GmListLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingRole { name } => write!(
+                formatter,
+                "CGMList: для записи {:?} отсутствует role",
+                String::from_utf8_lossy(name)
+            ),
+        }
+    }
+}
+
+impl Error for GmListLoadError {}
 
 fn write_gm_map(
     destination: &mut Vec<u8>,

@@ -61,6 +61,53 @@ impl CLogSystem {
         self.items.clear();
     }
 
+    /// Читает 64 positional boolean-а и последующий `* original-name` список.
+    /// Goods lookup выполняется тем же factory-owner-ом, который обслуживает
+    /// runtime и initial configuration.
+    pub(crate) fn load_from_bytes(
+        &mut self,
+        source: &[u8],
+        mut query_goods_id: impl FnMut(&[u8]) -> u32,
+    ) -> Result<LogSystemLoadReport, LogSystemLoadError> {
+        let mut settings = [0_u8; LOG_SETTINGS_LENGTH];
+        let mut setting_count = 0;
+        let mut items = BTreeSet::new();
+        for (line_index, line) in source.split(|byte| *byte == b'\n').enumerate() {
+            let tokens: Vec<&[u8]> = line
+                .split(|byte| byte.is_ascii_whitespace())
+                .filter(|token| !token.is_empty())
+                .collect();
+            if tokens.is_empty() || tokens[0].starts_with(b"//") {
+                continue;
+            }
+            if tokens[0] == b"*" {
+                let original_name = tokens.get(1).ok_or(LogSystemLoadError::MissingGoodsName {
+                    line: line_index + 1,
+                })?;
+                items.insert(query_goods_id(original_name) as i32);
+                continue;
+            }
+            if setting_count < LOG_SETTINGS_LENGTH
+                && tokens.len() >= 2
+                && matches!(tokens[1], b"0" | b"1")
+            {
+                settings[setting_count] = tokens[1][0] - b'0';
+                setting_count += 1;
+            }
+        }
+        if setting_count != LOG_SETTINGS_LENGTH {
+            return Err(LogSystemLoadError::SettingCount {
+                actual: setting_count,
+            });
+        }
+        self.settings = settings;
+        self.items = items;
+        Ok(LogSystemLoadReport {
+            settings: setting_count,
+            items: self.items.len(),
+        })
+    }
+
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -95,6 +142,34 @@ impl fmt::Display for LogSystemSerializeError {
 }
 
 impl Error for LogSystemSerializeError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LogSystemLoadReport {
+    pub(crate) settings: usize,
+    pub(crate) items: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LogSystemLoadError {
+    SettingCount { actual: usize },
+    MissingGoodsName { line: usize },
+}
+
+impl fmt::Display for LogSystemLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SettingCount { actual } => write!(
+                formatter,
+                "LogSystem содержит {actual} positional boolean-настроек вместо 64"
+            ),
+            Self::MissingGoodsName { line } => {
+                write!(formatter, "LogSystem, строка {line}: после '*' отсутствует имя предмета")
+            }
+        }
+    }
+}
+
+impl Error for LogSystemLoadError {}
 
 // Сырой C++ ниже сохранён как локальная документация loader-а, accessors и
 // Game decoder side effects, а не как Rust-реализация.

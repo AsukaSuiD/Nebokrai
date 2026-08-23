@@ -1219,7 +1219,8 @@ use crate::dbaccess::worlddb::dbmisc::{
     DbMiscLoadAuctionReport,
 };
 use crate::dbaccess::worlddb::largess::{
-    LargessOwner, LoadLargessBlock, LoadLargessReport, TiberiusLargess,
+    CostDatabaseSettings, CostDatabaseSettingsParts, LargessOwner, LoadLargessBlock,
+    LoadLargessReport, TiberiusLargess,
 };
 use crate::dbaccess::worlddb::playerdataqueue::{
     CPlayerDataQueue, PlayerDataQueueEntry,
@@ -1305,7 +1306,7 @@ use crate::public::timer::{
     CalendarTimerRegistration, CTimer, TimerCallbackInvocation, TimerCallbackSource, TimerId,
     TimerRunReport,
 };
-use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::setup::globesetup::{GlobeSetupLoadError, GlobeSetupSnapshot};
 use crate::setup::godsbattleconf::{
     CGodsBattleConf, GodsBattleLoadError, GodsBattleSerializeError,
 };
@@ -1314,16 +1315,19 @@ use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
 use crate::setup::newskillmonsterlist::{
     NewSkillMonsterConf, NewSkillMonsterSerializeError,
 };
-use crate::setup::gmlist::CGMList;
-use crate::setup::logsystem::CLogSystem;
-use crate::setup::monsterlist::{MonsterDropRegistry, MonsterRegistry};
-use crate::setup::regionsetup::CRegionSetup;
+use crate::setup::gmlist::{CGMList, GmListCollection, GmListLoadError};
+use crate::setup::logsystem::{CLogSystem, LogSystemLoadError};
+use crate::setup::monsterlist::{
+    MonsterDropRegistry, MonsterListLoadError, MonsterRegistry, load_drop_goods_list,
+    load_monster_list,
+};
+use crate::setup::regionsetup::{CRegionSetup, RegionSetupLoadError};
 use crate::setup::playerlist::{CPlayerList, PlayerListFormatError, PlayerListSerializeError};
 use crate::setup::preciousboxconf::{
     PreciousBoxConf, PreciousBoxSerializeError,
 };
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
-use crate::setup::regionrouter::RegionRouter;
+use crate::setup::regionrouter::{RegionRouter, RegionRouterLoadError};
 use crate::setup::timetoreturn::{
     TimeToReturn, TimeToReturnCallbacks, TimeToReturnLoadError, TimeToReturnLoadReport,
 };
@@ -1795,6 +1799,11 @@ impl Error for WorldClientInitializationError {
 /// Тип намеренно не реализует `Debug`, чтобы credentials не попали в logs.
 pub(crate) struct WorldGameDatabaseInitialization {
     pub(crate) settings: WorldDatabaseSettings,
+    pub(crate) log_settings: WorldDatabaseSettings,
+    pub(crate) cost_settings: CostDatabaseSettings,
+    pub(crate) incoming_cost_settings: CostDatabaseSettings,
+    pub(crate) load_largess_time_ms: u32,
+    pub(crate) use_old_save_largess_way: bool,
     pub(crate) connection_type: Vec<u8>,
     pub(crate) legacy_zero: &'static [u8],
     pub(crate) integrated_security: &'static [u8],
@@ -2065,8 +2074,11 @@ pub(crate) trait WorldGameInitContext: WorldReloadContext {
         &mut self,
         initialization: WorldGameDatabaseInitialization,
     ) -> Result<(), Self::Block>;
-    fn create_database_owner(&mut self, owner: WorldGameDatabaseOwner) -> Result<(), Self::Block>;
-    fn create_rs_setup_owner(&mut self) -> Result<LoadedSetupIds, Self::Block>;
+    async fn create_database_owner(
+        &mut self,
+        owner: WorldGameDatabaseOwner,
+    ) -> Result<(), Self::Block>;
+    async fn create_rs_setup_owner(&mut self) -> Result<LoadedSetupIds, Self::Block>;
 
     fn initialize_void_owner(&mut self, owner: WorldGameInitVoidOwner);
     fn initialize_boolean_owner(&mut self, owner: WorldGameInitBooleanOwner) -> bool;
@@ -2350,7 +2362,10 @@ pub(crate) trait WorldGameThreadRuntime: WorldGameReleaseContext {
         game: &'game mut CGame,
     ) -> Pin<Box<dyn Future<Output = WorldGameInitResult<Self::InitBlock>> + 'game>>;
     fn game_thread_exit_requested(&self) -> bool;
-    fn run_main_loop(&mut self, game: &mut CGame) -> Result<i32, Self::MainLoopBlock>;
+    fn run_main_loop<'game>(
+        &'game mut self,
+        game: &'game mut CGame,
+    ) -> Pin<Box<dyn Future<Output = Result<i32, Self::MainLoopBlock>> + 'game>>;
     fn wait_for_save_barrier(&mut self);
     /// Временно передаёт concrete Goods War owner полному Release.
     fn take_goods_war_member(&mut self) -> CGoodsWarMember;
@@ -4747,10 +4762,14 @@ pub(crate) type WorldReloadOneScriptResult = Result<bool, WorldReloadOneScriptBl
 /// Resource/domain границы, непосредственно вызываемые готовым `CGame::ReLoad`.
 pub(crate) trait WorldReloadContext: WorldRegionResourceContext {
     /// Общие setup owners, читаемые и reload-ом, и initial-config `0x5FA01`.
-    fn monster_registries(&mut self) -> (&MonsterRegistry, &MonsterDropRegistry);
-    fn log_system(&mut self) -> &CLogSystem;
-    fn region_setup(&mut self) -> &CRegionSetup;
-    fn gm_list(&mut self) -> &CGMList;
+    fn monster_registries(&mut self) -> (&mut MonsterRegistry, &mut MonsterDropRegistry);
+    fn log_system(&mut self) -> &mut CLogSystem;
+    fn region_setup(&mut self) -> &mut CRegionSetup;
+    fn gm_list(&mut self) -> &mut CGMList;
+    /// Единый World snapshot, который reload затем сериализует GameServer-ам.
+    fn globe_setup(&mut self) -> &mut GlobeSetupSnapshot;
+    /// Тот же router-owner, который следует за blob в общем wire.
+    fn region_router(&mut self) -> &mut RegionRouter;
     /// Отдельный mutable owner исторических static `CPlayerList` data.
     ///
     /// Он остаётся вне `CGame`, поскольку тот же экземпляр участвует в
@@ -6350,6 +6369,12 @@ pub(crate) struct WorldReloadRegionSnapshotBlock {
 pub(crate) enum WorldReloadBlock {
     RegionList(WorldRegionListBlock),
     RegionSnapshot(WorldReloadRegionSnapshotBlock),
+    GlobeSetup(GlobeSetupLoadError),
+    RegionRouter(RegionRouterLoadError),
+    LogSystem(LogSystemLoadError),
+    GmList(GmListLoadError),
+    RegionSetup(RegionSetupLoadError),
+    MonsterList(MonsterListLoadError),
     ThingSetupCodec(ThingSetupCodecError),
     EmotionFormat(EmotionFormatError),
     EmotionSerialization(EmotionSerializeError),
@@ -8768,19 +8793,56 @@ impl CGame {
                 }
             }
             WorldReloadProfile::MonsterList => {
-                let monsters = context.call_boolean_owner(WorldReloadBooleanOwner::MonsterList);
-                context.add_log_text(if monsters != 0 {
+                let monsters = match context.read_resource(b"data/monsterlist.ini") {
+                    Some(source) => {
+                        let string_table = self.string_table.table();
+                        let (monsters, _) = context.monster_registries();
+                        load_monster_list(monsters, &source, |id| {
+                            string_table.get_string_by_id(id).map(ToOwned::to_owned)
+                        })
+                        .map_err(WorldReloadBlock::MonsterList)?;
+                        true
+                    }
+                    None => false,
+                };
+                context.add_log_text(if monsters {
                     b"Load monsterlist.ini...OK!"
                 } else {
                     b"Load monsterlist.ini...FAILED!"
                 });
-                let drops = context.call_boolean_owner(WorldReloadBooleanOwner::DropGoodsList);
-                context.add_log_text(if monsters & drops != 0 {
+                let drops = match context.read_resource(b"data/dropgoodslist.ini") {
+                    Some(source) => {
+                        let goods_names: Vec<Vec<u8>> = source
+                            .split(|byte| *byte == b'\n')
+                            .filter_map(|line| {
+                                let first = line
+                                    .split(|byte| byte.is_ascii_whitespace())
+                                    .find(|token| !token.is_empty())?;
+                                (first != b">").then(|| first.to_vec())
+                            })
+                            .collect();
+                        let goods_ids: BTreeMap<Vec<u8>, u32> = goods_names
+                            .into_iter()
+                            .map(|name| {
+                                let goods_id = context.query_goods_id_by_original_name(&name);
+                                (name, goods_id)
+                            })
+                            .collect();
+                        let (_, drops) = context.monster_registries();
+                        load_drop_goods_list(drops, &source, |name| {
+                            goods_ids.get(name).copied().unwrap_or(0)
+                        })
+                        .map_err(WorldReloadBlock::MonsterList)?;
+                        true
+                    }
+                    None => false,
+                };
+                context.add_log_text(if monsters && drops {
                     b"Load dropgoodslist.ini...OK!"
                 } else {
                     b"Load dropgoodslist.ini...FAILED!"
                 });
-                if monsters & drops != 0 && send_to_game_servers {
+                if monsters && drops && send_to_game_servers {
                     self.serialize_reload_owner(
                         context,
                         WorldReloadSerializationOwner::MonsterList,
@@ -8902,26 +8964,102 @@ impl CGame {
                 }
             }
             WorldReloadProfile::GlobeSetup | WorldReloadProfile::GameSetup => {
-                let (owner, ok, failed) = if profile == WorldReloadProfile::GlobeSetup {
+                let globe_profile = profile == WorldReloadProfile::GlobeSetup;
+                let (path, ok, failed) = if globe_profile {
                     (
-                        WorldReloadBooleanOwner::GlobeSetup,
+                        b"setup/globesetup.ini".as_slice(),
                         b"Load globesetup.ini...OK!".as_slice(),
                         b"Load globesetup.ini...FAILED!".as_slice(),
                     )
                 } else {
                     (
-                        WorldReloadBooleanOwner::GameSetup,
+                        b"setup/gamesetup.ini".as_slice(),
                         b"Load gamesetup.ini...OK!".as_slice(),
                         b"Load gamesetup.ini...FAILED!".as_slice(),
                     )
                 };
-                let succeeded = Self::reload_boolean_with_log(context, owner, ok, failed);
-                context.add_log_text(if succeeded {
+                let succeeded = match context.read_resource(path) {
+                    Some(source) => {
+                        if globe_profile {
+                            context
+                                .globe_setup()
+                                .load_globe_setup(&source)
+                                .map_err(WorldReloadBlock::GlobeSetup)?;
+                            let string_table = self.string_table.table();
+                            context
+                                .globe_setup()
+                                .resolve_country_text(|id| {
+                                    string_table.get_string_by_id(id).map(ToOwned::to_owned)
+                                })
+                                .map_err(WorldReloadBlock::GlobeSetup)?;
+                        } else {
+                            context
+                                .globe_setup()
+                                .load_game_setup(&source)
+                                .map_err(WorldReloadBlock::GlobeSetup)?;
+                        }
+                        true
+                    }
+                    None => {
+                        let mut message = b"file '".to_vec();
+                        message.extend_from_slice(path);
+                        message.extend_from_slice(b"' can't found!");
+                        context.notify_reload_operator(b"ERROR", &message);
+                        false
+                    }
+                };
+                context.add_log_text(if succeeded { ok } else { failed });
+
+                let game_setup_loaded = if succeeded && globe_profile {
+                    match context.read_resource(b"setup/gamesetup.ini") {
+                        Some(source) => {
+                            context
+                                .globe_setup()
+                                .load_game_setup(&source)
+                                .map_err(WorldReloadBlock::GlobeSetup)?;
+                            true
+                        }
+                        None => false,
+                    }
+                } else {
+                    succeeded
+                };
+                let auction_loaded = if game_setup_loaded {
+                    match context.read_resource(b"setup/AuctionList.ini") {
+                        Some(source) => {
+                            context
+                                .globe_setup()
+                                .load_auction_goods(&source)
+                                .map_err(WorldReloadBlock::GlobeSetup)?;
+                            true
+                        }
+                        None => false,
+                    }
+                } else {
+                    false
+                };
+                context.add_log_text(if auction_loaded {
                     b"Load AuctionList.ini...OK!"
                 } else {
                     b"Load AuctionList.ini...FAILED!"
                 });
-                if succeeded && send_to_game_servers {
+
+                if globe_profile && succeeded {
+                    context
+                        .globe_setup()
+                        .reset_total_jing_li_dan_count();
+                    match context.read_resource(b"data/RegionRouter.ini") {
+                        Some(source) => {
+                            context
+                                .region_router()
+                                .load_router_setup_bytes(&source)
+                                .map_err(WorldReloadBlock::RegionRouter)?;
+                        }
+                        None => context.region_router().clear(),
+                    }
+                }
+                let complete = succeeded && game_setup_loaded && auction_loaded;
+                if complete && send_to_game_servers {
                     self.serialize_reload_owner(
                         context,
                         WorldReloadSerializationOwner::GlobeSetup,
@@ -8935,13 +9073,38 @@ impl CGame {
                 let _ = self.update_string_table(context, profile_name);
             }
             WorldReloadProfile::LogSystem => {
-                if Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::LogSystem,
-                    b"Load LogSystem.ini...OK!",
-                    b"Load LogSystem.ini...FAILED!",
-                ) && send_to_game_servers
-                {
+                let loaded = match context.read_resource(b"setup/logsystem.ini") {
+                    Some(source) => {
+                        let original_names: Vec<Vec<u8>> = source
+                            .split(|byte| *byte == b'\n')
+                            .filter_map(|line| {
+                                let mut tokens = line
+                                    .split(|byte| byte.is_ascii_whitespace())
+                                    .filter(|token| !token.is_empty());
+                                (tokens.next()? == b"*").then(|| tokens.next().map(ToOwned::to_owned)).flatten()
+                            })
+                            .collect();
+                        let goods_ids: BTreeMap<Vec<u8>, u32> = original_names
+                            .into_iter()
+                            .map(|name| {
+                                let goods_id = context.query_goods_id_by_original_name(&name);
+                                (name, goods_id)
+                            })
+                            .collect();
+                        context
+                            .log_system()
+                            .load_from_bytes(&source, |name| goods_ids.get(name).copied().unwrap_or(0))
+                            .map_err(WorldReloadBlock::LogSystem)?;
+                        true
+                    }
+                    None => false,
+                };
+                context.add_log_text(if loaded {
+                    b"Load LogSystem.ini...OK!"
+                } else {
+                    b"Load LogSystem.ini...FAILED!"
+                });
+                if loaded && send_to_game_servers {
                     self.serialize_reload_owner(
                         context,
                         WorldReloadSerializationOwner::LogSystem,
@@ -8952,18 +9115,45 @@ impl CGame {
                 }
             }
             WorldReloadProfile::GmList => {
-                let gm = Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::GmList,
-                    b"Load GMList.ini...OK!",
-                    b"Load gmlist.ini...FAILED!",
-                );
-                let player_gm = Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::PlayerGmList,
-                    b"Load playerGMList.ini...OK!",
-                    b"Load playerGMList.ini...FAILED!",
-                );
+                let passport = context.read_resource(b"data/temp.ini");
+                let gm = match context.read_resource(b"setup/gmlist.ini") {
+                    Some(source) => {
+                        context
+                            .gm_list()
+                            .load_from_bytes(
+                                &source,
+                                GmListCollection::Gm,
+                                passport.as_deref(),
+                            )
+                            .map_err(WorldReloadBlock::GmList)?;
+                        true
+                    }
+                    None => false,
+                };
+                context.add_log_text(if gm {
+                    b"Load GMList.ini...OK!"
+                } else {
+                    b"Load gmlist.ini...FAILED!"
+                });
+                let player_gm = match context.read_resource(b"setup/playergmlist.ini") {
+                    Some(source) => {
+                        context
+                            .gm_list()
+                            .load_from_bytes(
+                                &source,
+                                GmListCollection::PlayerGm,
+                                passport.as_deref(),
+                            )
+                            .map_err(WorldReloadBlock::GmList)?;
+                        true
+                    }
+                    None => false,
+                };
+                context.add_log_text(if player_gm {
+                    b"Load playerGMList.ini...OK!"
+                } else {
+                    b"Load playerGMList.ini...FAILED!"
+                });
                 if gm && player_gm && send_to_game_servers {
                     self.serialize_reload_owner(
                         context,
@@ -9006,12 +9196,22 @@ impl CGame {
                 }
             }
             WorldReloadProfile::RegionLevelSetup => {
-                if Self::reload_boolean_with_log(
-                    context,
-                    WorldReloadBooleanOwner::RegionLevelSetup,
-                    b"Load regionlevelsetup.ini...OK!",
-                    b"Load regionlevelsetup.ini...FAILED!",
-                ) && send_to_game_servers {
+                let loaded = match context.read_resource(b"data/regionlevelsetup.ini") {
+                    Some(source) => {
+                        context
+                            .region_setup()
+                            .load_from_bytes(&source)
+                            .map_err(WorldReloadBlock::RegionSetup)?;
+                        true
+                    }
+                    None => false,
+                };
+                context.add_log_text(if loaded {
+                    b"Load regionlevelsetup.ini...OK!"
+                } else {
+                    b"Load regionlevelsetup.ini...FAILED!"
+                });
+                if loaded && send_to_game_servers {
                     self.serialize_reload_owner(
                         context,
                         WorldReloadSerializationOwner::RegionLevelSetup,
@@ -10780,6 +10980,30 @@ impl CGame {
                 user: self.setup.sql_user_name.clone(),
                 password: self.setup.sql_password.clone(),
             }),
+            log_settings: WorldDatabaseSettings::from_parts(WorldDatabaseSettingsParts {
+                host: self.setup.log_system_server.clone(),
+                database: self.setup.log_system_database.clone(),
+                user: self.setup.log_system_user.clone(),
+                password: self.setup.log_system_password.clone(),
+            }),
+            cost_settings: CostDatabaseSettings::from_parts(CostDatabaseSettingsParts {
+                provider: self.setup.cost_database_provider.clone(),
+                host: self.setup.cost_database_ip.clone(),
+                database: self.setup.cost_database_name.clone(),
+                user: self.setup.cost_database_user.clone(),
+                password: self.setup.cost_database_password.clone(),
+            }),
+            incoming_cost_settings: CostDatabaseSettings::from_parts(
+                CostDatabaseSettingsParts {
+                    provider: self.setup.login_cost_database_provider.clone(),
+                    host: self.setup.login_cost_database_ip.clone(),
+                    database: self.setup.login_cost_database_name.clone(),
+                    user: self.setup.login_cost_database_user.clone(),
+                    password: self.setup.login_cost_database_password.clone(),
+                },
+            ),
+            load_largess_time_ms: self.setup.load_largess_time_ms.unwrap_or(0),
+            use_old_save_largess_way: self.setup.use_old_save_largess_way,
             connection_type: self.setup.sql_connection_type.clone(),
             legacy_zero: b"0",
             integrated_security: b"SSPI",
@@ -11037,13 +11261,16 @@ impl CGame {
         }
         events.push(WorldGameInitEvent::JjcConfigurationLoaded(jjc_configuration));
 
-        if let Err(block) = context.create_database_owner(WorldGameDatabaseOwner::RsPlayer) {
+        if let Err(block) = context
+            .create_database_owner(WorldGameDatabaseOwner::RsPlayer)
+            .await
+        {
             stop!(WorldGameInitBlockReason::Context(block));
         }
         events.push(WorldGameInitEvent::DatabaseOwnerCreated(
             WorldGameDatabaseOwner::RsPlayer,
         ));
-        let loaded_setup_ids = match context.create_rs_setup_owner() {
+        let loaded_setup_ids = match context.create_rs_setup_owner().await {
             Ok(ids) => ids,
             Err(block) => stop!(WorldGameInitBlockReason::Context(block)),
         };
@@ -11061,7 +11288,7 @@ impl CGame {
             WorldGameDatabaseOwner::DbCountry,
         ];
         for &owner in DATABASE_OWNERS_BEFORE_GOODS_WAR {
-            if let Err(block) = context.create_database_owner(owner) {
+            if let Err(block) = context.create_database_owner(owner).await {
                 stop!(WorldGameInitBlockReason::Context(block));
             }
             events.push(WorldGameInitEvent::DatabaseOwnerCreated(owner));
@@ -11086,7 +11313,7 @@ impl CGame {
             WorldGameDatabaseOwner::RsGodsBattle,
         ];
         for &owner in DATABASE_OWNERS_AFTER_GOODS_WAR {
-            if let Err(block) = context.create_database_owner(owner) {
+            if let Err(block) = context.create_database_owner(owner).await {
                 stop!(WorldGameInitBlockReason::Context(block));
             }
             events.push(WorldGameInitEvent::DatabaseOwnerCreated(owner));
@@ -17444,7 +17671,8 @@ pub(crate) async fn game_thread_func<Runtime: WorldGameThreadRuntime>(
                     game_slot
                         .as_deref_mut()
                         .expect("game owner жив до Release/DeleteGame"),
-                );
+                )
+                .await;
                 main_loop_calls = main_loop_calls.wrapping_add(1);
                 match result {
                     Ok(legacy_result) if legacy_result != 0 => {}

@@ -79,6 +79,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 use encoding_rs::WINDOWS_1251;
 use futures_util::TryStreamExt;
@@ -170,7 +171,7 @@ pub(crate) struct DbMiscGameServer {
 /// Технические и соседние owner-границы полного `CDbMisc` queue-dispatch.
 pub(crate) trait DbMiscContext {
     /// Исходный `CGlobeSetup::m_stSetup.lTransferMoneyTime`.
-    fn transfer_money_interval_ms(&self) -> i32;
+    fn transfer_money_interval_ms(&mut self) -> i32;
     fn current_tick_ms(&mut self) -> u32;
     fn is_active_connect(&mut self) -> bool;
     fn log_connect_error_and_reconnect(&mut self);
@@ -253,24 +254,57 @@ pub(crate) enum DbMiscLoadAuctionReport {
 /// Владельцы двух note-очередей и двух стадий player-page deque.
 pub(crate) struct CDbMisc {
     input: Mutex<VecDeque<Box<DbNote>>>,
-    output: Mutex<VecDeque<Box<DbNote>>>,
+    output: Arc<Mutex<VecDeque<Box<DbNote>>>>,
     player_ids: Mutex<VecDeque<i32>>,
     auction_batch: VecDeque<i32>,
     start_read_player_list: bool,
     transfer_money_previous_ms: u32,
 }
 
+/// Клонируемый producer единственной output FIFO аукциона.
+///
+/// Concrete Tiberius bridge получает его до MainLoop-вызова и публикует
+/// полностью materialized DB batch под тем же mutex. Сам `CDbMisc` остаётся
+/// единственным consumer-ом и сохраняет исходный порядок `DoneOutList`.
+#[derive(Clone)]
+pub(crate) struct DbMiscOutputPublisher {
+    output: Arc<Mutex<VecDeque<Box<DbNote>>>>,
+}
+
+impl DbMiscOutputPublisher {
+    fn append(&self, notes: &mut VecDeque<Box<DbNote>>) {
+        self.output.lock().append(notes);
+    }
+}
+
 impl CDbMisc {
     /// Создаёт пустые очереди и вызывает исходный connection initializer.
     pub(crate) fn new(context: &mut impl DbMiscContext) -> Self {
+        let owner = Self::with_empty_queues();
         context.create_normal_connection();
+        owner
+    }
+
+    /// Создаёт queue-owner до process-level сборки concrete context-а.
+    /// Connection по-прежнему обязан быть создан в позиции DB-owner-а Init.
+    pub(crate) fn with_empty_queues() -> Self {
         Self {
             input: Mutex::new(VecDeque::new()),
-            output: Mutex::new(VecDeque::new()),
+            output: Arc::new(Mutex::new(VecDeque::new())),
             player_ids: Mutex::new(VecDeque::new()),
             auction_batch: VecDeque::new(),
             start_read_player_list: false,
             transfer_money_previous_ms: 0,
+        }
+    }
+
+    pub(crate) fn initialize_database(&self, context: &mut impl DbMiscContext) {
+        context.create_normal_connection();
+    }
+
+    pub(crate) fn output_publisher(&self) -> DbMiscOutputPublisher {
+        DbMiscOutputPublisher {
+            output: Arc::clone(&self.output),
         }
     }
 
@@ -1320,6 +1354,46 @@ impl TiberiusAuctionGoodsReader {
         }
     }
 
+    /// Читает exact owner-page seed через уже проверенное normal connection.
+    /// Порядок без `ORDER BY` намеренно остаётся порядком SQL recordset-а.
+    pub(crate) async fn read_owner_ids(
+        &self,
+        normal_connection: &mut WorldTdsClient,
+    ) -> Result<VecDeque<i32>, AuctionGoodsLoadFailure> {
+        let mut rows = normal_connection
+            .simple_query("SELECT DISTINCT dwOwerId FROM Auction WITH (NOLOCK)")
+            .await
+            .map_err(|source| AuctionGoodsLoadFailure::Database {
+                row_index: None,
+                source,
+            })?;
+        let mut owners = VecDeque::new();
+        let mut row_index = 0usize;
+        while let Some(item) = rows.try_next().await.map_err(|source| {
+            AuctionGoodsLoadFailure::Database {
+                row_index: Some(row_index),
+                source,
+            }
+        })? {
+            let Some(row) = item.into_row() else {
+                continue;
+            };
+            let owner_id = row
+                .try_get::<i32, _>("dwOwerId")
+                .map_err(|source| AuctionGoodsLoadFailure::Database {
+                    row_index: Some(row_index),
+                    source,
+                })?
+                .ok_or(AuctionGoodsLoadFailure::MissingRequiredValue {
+                    row_index,
+                    column: "dwOwerId",
+                })?;
+            owners.push_back(owner_id);
+            row_index += 1;
+        }
+        Ok(owners)
+    }
+
     /// Materializes `Auction` + `AuctionGoods` в будущий output batch.
     ///
     /// Набор DaKong addon property types получает здесь сам DB owner через
@@ -1767,6 +1841,328 @@ impl AuctionGoodsRecord {
 enum ReadAuctionGoodsRecordError {
     Failure(AuctionGoodsLoadFailure),
     Block(AuctionGoodsLoadBlock),
+}
+
+/// Долгоживущая DB-часть concrete `DbMiscContext`.
+///
+/// Normal connection сохраняется между MainLoop-проходами и заменяется ровно
+/// в `CreateNormalCn`/reconnect-точках. Отдельные read/delete соединения по-
+/// прежнему создают соответствующие Tiberius owner-ы на один вызов.
+pub(crate) struct TiberiusDbMiscDatabase {
+    writer: TiberiusAuctionWriteOwner,
+    reader: TiberiusAuctionGoodsReader,
+    normal_connection: Option<WorldTdsClient>,
+}
+
+impl TiberiusDbMiscDatabase {
+    pub(crate) fn new(settings: &WorldDatabaseSettings) -> Self {
+        Self {
+            writer: TiberiusAuctionWriteOwner::new(settings),
+            reader: TiberiusAuctionGoodsReader::new(settings),
+            normal_connection: None,
+        }
+    }
+}
+
+/// Диагностика concrete Tiberius bridge без потери типа отказавшей операции.
+pub(crate) enum TiberiusDbMiscRuntimeEvent<'a> {
+    MissingNormalConnection(AuctionWriteOperation),
+    NormalConnectionFailed(&'a AuctionWriteFailure),
+    ConnectionCheck(&'a AuctionConnectionState),
+    Write(&'a AuctionWriteOutcome),
+    GoodsLoad(&'a AuctionGoodsLoadOutcome),
+    MoneyLoad(&'a AuctionMoneyLoadOutcome),
+    OwnerListFailed(&'a AuctionGoodsLoadFailure),
+}
+
+/// Короткоживущие World/domain callbacks одного MainLoop-прохода.
+///
+/// DB owner не хранит ссылок на `CGame` либо reloadable setup. Поэтому caller
+/// каждый проход передаёт актуальные routing/config owners и не создаёт
+/// расходящуюся копию состояния после reload.
+pub(crate) struct TiberiusDbMiscCallbacks<'a> {
+    pub(crate) transfer_money_interval_ms: &'a mut dyn FnMut() -> i32,
+    pub(crate) current_tick_ms: &'a mut dyn FnMut() -> u32,
+    pub(crate) report_reconnect: &'a mut dyn FnMut(),
+    pub(crate) report_runtime_event: &'a mut dyn FnMut(TiberiusDbMiscRuntimeEvent<'_>),
+    pub(crate) seller_money_after_fee: &'a mut dyn FnMut(&CGoodsNode) -> Option<i32>,
+    pub(crate) player_game_server:
+        &'a mut dyn FnMut(u32) -> Option<DbMiscGameServer>,
+    pub(crate) online_player_id: &'a mut dyn FnMut(u32) -> Option<i32>,
+    pub(crate) send_to_map_id: &'a mut dyn FnMut(&CMessage, u32),
+    pub(crate) report_offline_drop: &'a mut dyn FnMut(),
+    pub(crate) gold_coin_index: &'a mut dyn FnMut() -> u32,
+    pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
+}
+
+/// Concrete synchronous owner-contract поверх асинхронного Tiberius.
+///
+/// Старый `CDbMisc` выполнял ADO-вызовы последовательно внутри MainLoop. На
+/// multi-thread Tokio runtime `block_in_place + Handle::block_on` сохраняет
+/// этот caller-visible порядок, но отдаёт TDS I/O асинхронному драйверу и не
+/// создаёт второй module graph либо отдельную копию World owners.
+pub(crate) struct TiberiusDbMiscContext<'a> {
+    runtime: tokio::runtime::Handle,
+    database: &'a mut TiberiusDbMiscDatabase,
+    registry: &'a GoodsBasePropertiesRegistry,
+    output: DbMiscOutputPublisher,
+    callbacks: TiberiusDbMiscCallbacks<'a>,
+}
+
+impl<'a> TiberiusDbMiscContext<'a> {
+    pub(crate) fn new(
+        runtime: tokio::runtime::Handle,
+        database: &'a mut TiberiusDbMiscDatabase,
+        registry: &'a GoodsBasePropertiesRegistry,
+        output: DbMiscOutputPublisher,
+        callbacks: TiberiusDbMiscCallbacks<'a>,
+    ) -> Self {
+        Self {
+            runtime,
+            database,
+            registry,
+            output,
+            callbacks,
+        }
+    }
+
+    fn write_bool(&mut self, outcome: AuctionWriteOutcome) -> bool {
+        let result = outcome.legacy_bool().unwrap_or(false);
+        if !matches!(outcome, AuctionWriteOutcome::Written) {
+            (self.callbacks.report_runtime_event)(TiberiusDbMiscRuntimeEvent::Write(&outcome));
+        }
+        result
+    }
+
+    fn report_write(&mut self, outcome: AuctionWriteOutcome) {
+        if !matches!(outcome, AuctionWriteOutcome::Written) {
+            (self.callbacks.report_runtime_event)(TiberiusDbMiscRuntimeEvent::Write(&outcome));
+        }
+    }
+
+    fn report_missing_connection(&mut self, operation: AuctionWriteOperation) {
+        (self.callbacks.report_runtime_event)(
+            TiberiusDbMiscRuntimeEvent::MissingNormalConnection(operation),
+        );
+    }
+}
+
+impl DbMiscContext for TiberiusDbMiscContext<'_> {
+    fn transfer_money_interval_ms(&mut self) -> i32 {
+        (self.callbacks.transfer_money_interval_ms)()
+    }
+
+    fn current_tick_ms(&mut self) -> u32 {
+        (self.callbacks.current_tick_ms)()
+    }
+
+    fn is_active_connect(&mut self) -> bool {
+        let Some(connection) = self.database.normal_connection.as_mut() else {
+            return false;
+        };
+        let runtime = self.runtime.clone();
+        let writer = &self.database.writer;
+        let state = tokio::task::block_in_place(|| {
+            runtime.block_on(writer.is_active_connection(connection))
+        });
+        let active = state.legacy_bool();
+        if !active {
+            (self.callbacks.report_runtime_event)(
+                TiberiusDbMiscRuntimeEvent::ConnectionCheck(&state),
+            );
+        }
+        active
+    }
+
+    fn log_connect_error_and_reconnect(&mut self) {
+        (self.callbacks.report_reconnect)();
+    }
+
+    fn create_normal_connection(&mut self) {
+        self.database.normal_connection.take();
+        let runtime = self.runtime.clone();
+        let result = tokio::task::block_in_place(|| {
+            runtime.block_on(self.database.writer.create_normal_connection())
+        });
+        match result {
+            Ok(connection) => self.database.normal_connection = Some(connection),
+            Err(error) => (self.callbacks.report_runtime_event)(
+                TiberiusDbMiscRuntimeEvent::NormalConnectionFailed(&error),
+            ),
+        }
+    }
+
+    fn insert_item_to_db(&mut self, goods: &CGoodsNode) -> bool {
+        let Some(connection) = self.database.normal_connection.as_mut() else {
+            self.report_missing_connection(AuctionWriteOperation::InsertItem);
+            return false;
+        };
+        let runtime = self.runtime.clone();
+        let writer = &self.database.writer;
+        let registry = self.registry;
+        let outcome = tokio::task::block_in_place(|| {
+            runtime.block_on(writer.insert_item_to_db(connection, goods, registry))
+        });
+        self.write_bool(outcome)
+    }
+
+    fn modify_goods_state_a2s(&mut self, goods: &CGoodsNode) -> bool {
+        let Some(connection) = self.database.normal_connection.as_mut() else {
+            self.report_missing_connection(AuctionWriteOperation::ModifyStateAuctionToSucceeded);
+            return false;
+        };
+        let runtime = self.runtime.clone();
+        let writer = &self.database.writer;
+        let fields = goods.database_write_fields();
+        let outcome = tokio::task::block_in_place(|| {
+            runtime.block_on(writer.modify_goods_state_a2s(connection, fields))
+        });
+        self.write_bool(outcome)
+    }
+
+    fn transfer_money(&mut self, goods: &CGoodsNode) -> bool {
+        let seller_money_after_fee = (self.callbacks.seller_money_after_fee)(goods);
+        let Some(connection) = self.database.normal_connection.as_mut() else {
+            self.report_missing_connection(AuctionWriteOperation::TransferSellerMoney);
+            return false;
+        };
+        let runtime = self.runtime.clone();
+        let writer = &self.database.writer;
+        let fields = goods.database_write_fields();
+        let outcome = tokio::task::block_in_place(|| {
+            runtime.block_on(writer.transfer_money(
+                connection,
+                fields,
+                seller_money_after_fee,
+            ))
+        });
+        self.write_bool(outcome)
+    }
+
+    fn modify_goods_state_a2b(&mut self, goods: &CGoodsNode) -> bool {
+        let Some(connection) = self.database.normal_connection.as_mut() else {
+            self.report_missing_connection(AuctionWriteOperation::ModifyReturnedGoodsState);
+            return false;
+        };
+        let runtime = self.runtime.clone();
+        let writer = &self.database.writer;
+        let fields = goods.database_write_fields();
+        let outcome = tokio::task::block_in_place(|| {
+            runtime.block_on(writer.modify_goods_state_a2b(connection, fields))
+        });
+        self.write_bool(outcome)
+    }
+
+    fn delete_item_from_db(&mut self, guid: CGuid) {
+        let runtime = self.runtime.clone();
+        let writer = &self.database.writer;
+        let outcome = tokio::task::block_in_place(|| {
+            runtime.block_on(writer.delete_item_from_db(guid))
+        });
+        self.report_write(outcome);
+    }
+
+    fn delete_money_from_db(&mut self, player_id: i32, money: i32) {
+        let Some(connection) = self.database.normal_connection.as_mut() else {
+            self.report_missing_connection(AuctionWriteOperation::DeleteMoney);
+            return;
+        };
+        let runtime = self.runtime.clone();
+        let writer = &self.database.writer;
+        let outcome = tokio::task::block_in_place(|| {
+            runtime.block_on(writer.delete_money_from_db(connection, player_id, money))
+        });
+        self.report_write(outcome);
+    }
+
+    fn player_game_server(&mut self, player_id: u32) -> Option<DbMiscGameServer> {
+        (self.callbacks.player_game_server)(player_id)
+    }
+
+    fn online_player_id(&mut self, player_id: u32) -> Option<i32> {
+        (self.callbacks.online_player_id)(player_id)
+    }
+
+    fn send_to_map_id(&mut self, message: &CMessage, map_id: u32) {
+        (self.callbacks.send_to_map_id)(message, map_id);
+    }
+
+    fn log_player_not_online_drop_goods(&mut self) {
+        (self.callbacks.report_offline_drop)();
+    }
+
+    fn gold_coin_index(&mut self) -> u32 {
+        (self.callbacks.gold_coin_index)()
+    }
+
+    fn read_auction_owner_ids(&mut self, destination: &mut VecDeque<i32>) {
+        let Some(connection) = self.database.normal_connection.as_mut() else {
+            self.report_missing_connection(AuctionWriteOperation::CheckNormalConnection);
+            return;
+        };
+        let runtime = self.runtime.clone();
+        let reader = &self.database.reader;
+        match tokio::task::block_in_place(|| runtime.block_on(reader.read_owner_ids(connection))) {
+            Ok(mut owners) => destination.append(&mut owners),
+            Err(error) => (self.callbacks.report_runtime_event)(
+                TiberiusDbMiscRuntimeEvent::OwnerListFailed(&error),
+            ),
+        }
+    }
+
+    fn load_goods_by_owner_id(&mut self, owner_id: i32, state: i32, limit: i32) {
+        let _ = self.load_owner_auction_goods(owner_id, state, limit);
+    }
+
+    fn load_owner_auction_goods(&mut self, owner_id: i32, state: i32, limit: i32) -> i32 {
+        let runtime = self.runtime.clone();
+        let reader = &self.database.reader;
+        let registry = self.registry;
+        let outcome = tokio::task::block_in_place(|| {
+            runtime.block_on(reader.load_goods_by_owner_id(
+                owner_id,
+                GoodsState::from_raw(state),
+                limit,
+                registry,
+            ))
+        });
+        match outcome {
+            AuctionGoodsLoadOutcome::Loaded(mut notes) => {
+                let count = i32::try_from(notes.len()).unwrap_or(i32::MAX);
+                self.output.append(&mut notes);
+                count
+            }
+            outcome => {
+                (self.callbacks.report_runtime_event)(TiberiusDbMiscRuntimeEvent::GoodsLoad(
+                    &outcome,
+                ));
+                0
+            }
+        }
+    }
+
+    fn load_owner_auction_money(&mut self, owner_id: i32, money_limit: i32) {
+        let runtime = self.runtime.clone();
+        let reader = &self.database.reader;
+        let registry = self.registry;
+        let gold_coin_index = (self.callbacks.gold_coin_index)();
+        let random = &mut self.callbacks.random;
+        let outcome = tokio::task::block_in_place(|| {
+            runtime.block_on(reader.load_money_by_id(
+                owner_id,
+                money_limit,
+                gold_coin_index,
+                registry,
+                *random,
+            ))
+        });
+        match outcome {
+            AuctionMoneyLoadOutcome::Loaded { mut notes, .. } => self.output.append(&mut notes),
+            outcome => (self.callbacks.report_runtime_event)(
+                TiberiusDbMiscRuntimeEvent::MoneyLoad(&outcome),
+            ),
+        }
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: WorldServer

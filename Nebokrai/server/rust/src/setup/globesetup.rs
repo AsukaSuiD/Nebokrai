@@ -48,6 +48,9 @@
 
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 
+use std::error::Error;
+use std::fmt;
+
 pub(crate) const GLOBE_SETUP_BLOB_LENGTH: usize = 0x1114;
 const COUNTRY_NAME_OFFSET: usize = 0x906;
 const COUNTRY_NAME_SLOT_LENGTH: usize = 0x40;
@@ -72,23 +75,160 @@ const AUCTION_FACTOR_C_OFFSET: usize = 0xCB0;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
     bytes: [u8; GLOBE_SETUP_BLOB_LENGTH],
+    country_name_ids: [Vec<u8>; COUNTRY_NAME_COUNT],
+    country_identity_ids: [Vec<u8>; COUNTRY_IDENTITY_COUNT],
 }
 
 impl Default for GlobeSetupSnapshot {
     fn default() -> Self {
         Self {
             bytes: [0; GLOBE_SETUP_BLOB_LENGTH],
+            country_name_ids: std::array::from_fn(|_| Vec::new()),
+            country_identity_ids: std::array::from_fn(|_| Vec::new()),
         }
     }
 }
 
 impl GlobeSetupSnapshot {
     pub(crate) fn from_bytes(bytes: [u8; GLOBE_SETUP_BLOB_LENGTH]) -> Self {
-        Self { bytes }
+        Self {
+            bytes,
+            country_name_ids: std::array::from_fn(|_| Vec::new()),
+            country_identity_ids: std::array::from_fn(|_| Vec::new()),
+        }
     }
 
     pub(crate) fn bytes_mut(&mut self) -> &mut [u8; GLOBE_SETUP_BLOB_LENGTH] {
         &mut self.bytes
+    }
+
+    /// Читает positional `setup/globesetup.ini` в точные PDB-offsets.
+    /// Активный snapshot меняется только после полного успешного разбора.
+    pub(crate) fn load_globe_setup(
+        &mut self,
+        source: &[u8],
+    ) -> Result<GlobeSetupLoadReport, GlobeSetupLoadError> {
+        let records = read_records(source);
+        let specs = globe_record_specs();
+        if records.len() != 549 {
+            return Err(GlobeSetupLoadError::RecordCount {
+                expected_minimum: 549,
+                expected_maximum: 549,
+                actual: records.len(),
+            });
+        }
+        debug_assert_eq!(specs.len(), 549);
+        debug_assert_eq!(specs.iter().map(Vec::len).sum::<usize>(), 571);
+
+        let mut candidate = Self::default();
+        apply_records(&records, &specs, &mut candidate)?;
+        *self = candidate;
+        Ok(GlobeSetupLoadReport {
+            records: records.len(),
+        })
+    }
+
+    /// Накладывает `setup/gamesetup.ini` поверх уже загруженного Globe blob.
+    /// Поставочный RU-файл содержит 47 записей; EXE допускает 48-ю запись
+    /// `lTransferMoneyTime`, оставляя ноль при её отсутствии.
+    pub(crate) fn load_game_setup(
+        &mut self,
+        source: &[u8],
+    ) -> Result<GlobeSetupLoadReport, GlobeSetupLoadError> {
+        let records = read_records(source);
+        let specs = game_record_specs();
+        if !(47..=48).contains(&records.len()) {
+            return Err(GlobeSetupLoadError::RecordCount {
+                expected_minimum: 47,
+                expected_maximum: 48,
+                actual: records.len(),
+            });
+        }
+        debug_assert_eq!(specs.len(), 48);
+
+        let mut candidate = self.clone();
+        apply_records(&records, &specs, &mut candidate)?;
+        *self = candidate;
+        Ok(GlobeSetupLoadReport {
+            records: records.len(),
+        })
+    }
+
+    /// Загружает поставочный `setup/AuctionList.ini` в `long[256]`.
+    pub(crate) fn load_auction_goods(
+        &mut self,
+        source: &[u8],
+    ) -> Result<GlobeSetupLoadReport, GlobeSetupLoadError> {
+        const OFFSET: usize = 3336;
+        const CAPACITY: usize = 256;
+        let records = read_records(source);
+        if records.len() > CAPACITY {
+            return Err(GlobeSetupLoadError::RecordCount {
+                expected_minimum: 0,
+                expected_maximum: CAPACITY,
+                actual: records.len(),
+            });
+        }
+        let mut candidate = self.clone();
+        candidate.bytes[OFFSET..OFFSET + CAPACITY * 4].fill(0);
+        for (index, record) in records.iter().enumerate() {
+            if record.label != b"#" || record.values.len() != 1 {
+                return Err(GlobeSetupLoadError::Record {
+                    line: record.line,
+                    label: record.label.to_vec(),
+                    reason: "ожидалась запись '# <signed 32-bit goods id>'",
+                });
+            }
+            let value = parse_number::<i32>(&record.values[0]).ok_or_else(|| {
+                GlobeSetupLoadError::Record {
+                    line: record.line,
+                    label: record.label.to_vec(),
+                    reason: "goods id не является signed 32-bit числом",
+                }
+            })?;
+            candidate.bytes[OFFSET + index * 4..OFFSET + index * 4 + 4]
+                .copy_from_slice(&value.to_le_bytes());
+        }
+        *self = candidate;
+        Ok(GlobeSetupLoadReport {
+            records: records.len(),
+        })
+    }
+
+    /// Материализует string-table IDs в два fixed `char[64]` массива EXE.
+    pub(crate) fn resolve_country_text(
+        &mut self,
+        mut resolve: impl FnMut(&[u8]) -> Option<Vec<u8>>,
+    ) -> Result<(), GlobeSetupLoadError> {
+        let mut candidate = self.clone();
+        for index in 0..COUNTRY_NAME_COUNT {
+            let value = resolve(&candidate.country_name_ids[index]).unwrap_or_default();
+            write_fixed_string(
+                &mut candidate.bytes,
+                COUNTRY_NAME_OFFSET + index * COUNTRY_NAME_SLOT_LENGTH,
+                &value,
+            )
+            .map_err(|reason| GlobeSetupLoadError::Record {
+                line: 0,
+                label: candidate.country_name_ids[index].clone(),
+                reason,
+            })?;
+        }
+        for index in 0..COUNTRY_IDENTITY_COUNT {
+            let value = resolve(&candidate.country_identity_ids[index]).unwrap_or_default();
+            write_fixed_string(
+                &mut candidate.bytes,
+                COUNTRY_IDENTITY_OFFSET + index * COUNTRY_NAME_SLOT_LENGTH,
+                &value,
+            )
+            .map_err(|reason| GlobeSetupLoadError::Record {
+                line: 0,
+                label: candidate.country_identity_ids[index].clone(),
+                reason,
+            })?;
+        }
+        *self = candidate;
+        Ok(())
     }
 
     /// Возвращает exact signed `short btMaxCharactersNum` ветки create-role.
@@ -200,6 +340,10 @@ impl GlobeSetupSnapshot {
         )
     }
 
+    pub(crate) fn reset_total_jing_li_dan_count(&mut self) {
+        self.bytes[TOTAL_JING_LI_DAN_COUNT_OFFSET..TOTAL_JING_LI_DAN_COUNT_OFFSET + 2].fill(0);
+    }
+
     fn read_f32(&self, offset: usize) -> f32 {
         f32::from_le_bytes(
             self.bytes[offset..offset + 4]
@@ -216,6 +360,401 @@ impl GlobeSetupSnapshot {
         destination.extend_from_slice(&self.bytes);
         router.add_to_byte_array(destination)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GlobeSetupLoadReport {
+    pub(crate) records: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GlobeSetupLoadError {
+    RecordCount {
+        expected_minimum: usize,
+        expected_maximum: usize,
+        actual: usize,
+    },
+    Record {
+        line: usize,
+        label: Vec<u8>,
+        reason: &'static str,
+    },
+}
+
+impl fmt::Display for GlobeSetupLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RecordCount {
+                expected_minimum,
+                expected_maximum,
+                actual,
+            } if expected_minimum == expected_maximum => write!(
+                formatter,
+                "ожидалось {expected_minimum} записей GlobeSetup, найдено {actual}"
+            ),
+            Self::RecordCount {
+                expected_minimum,
+                expected_maximum,
+                actual,
+            } => write!(
+                formatter,
+                "ожидалось от {expected_minimum} до {expected_maximum} записей GlobeSetup, найдено {actual}"
+            ),
+            Self::Record { line, label, reason } => write!(
+                formatter,
+                "GlobeSetup, строка {line} ('{}'): {reason}",
+                String::from_utf8_lossy(label)
+            ),
+        }
+    }
+}
+
+impl Error for GlobeSetupLoadError {}
+
+#[derive(Clone, Copy)]
+enum GlobeFieldKind {
+    Ignore,
+    U8,
+    Bool,
+    U16,
+    I32,
+    U32,
+    F32,
+    Char64,
+    CountryName,
+    CountryIdentity,
+}
+
+#[derive(Clone, Copy)]
+struct GlobeField {
+    offset: usize,
+    kind: GlobeFieldKind,
+}
+
+struct GlobeRecord<'a> {
+    line: usize,
+    label: &'a [u8],
+    values: Vec<&'a [u8]>,
+}
+
+fn field(offset: usize, kind: GlobeFieldKind) -> GlobeField {
+    GlobeField { offset, kind }
+}
+
+fn add_one(records: &mut Vec<Vec<GlobeField>>, offset: usize, kind: GlobeFieldKind) {
+    records.push(vec![field(offset, kind)]);
+}
+
+fn add_array(
+    records: &mut Vec<Vec<GlobeField>>,
+    offset: usize,
+    kind: GlobeFieldKind,
+    count: usize,
+    stride: usize,
+) {
+    for index in 0..count {
+        add_one(records, offset + index * stride, kind);
+    }
+}
+
+fn globe_record_specs() -> Vec<Vec<GlobeField>> {
+    use GlobeFieldKind as K;
+    let mut records = Vec::with_capacity(549);
+    add_one(&mut records, 0, K::U8);
+    for offset in [4, 16, 28, 40, 52, 64, 88, 76, 100] {
+        add_array(&mut records, offset, K::F32, 3, 4);
+    }
+    add_one(&mut records, 112, K::I32);
+    add_one(&mut records, 116, K::F32);
+    add_one(&mut records, 120, K::F32);
+    add_one(&mut records, 124, K::I32);
+    add_one(&mut records, 128, K::I32);
+    add_array(&mut records, 132, K::I32, 3, 4);
+    add_array(&mut records, 144, K::I32, 3, 4);
+    add_array(&mut records, 156, K::F32, 4, 4);
+
+    // Два назначения offset 396 и отсутствующий 268 повторяют extraction-chain EXE.
+    let drop_bases = [
+        172, 204, 236, 396, 300, 332, 364, 396, 428, 460, 492, 524, 556, 588, 620,
+        652, 684, 716,
+    ];
+    for row in 0..2 {
+        for column in 0..4 {
+            for offset in drop_bases {
+                add_one(&mut records, offset + (row * 4 + column) * 4, K::F32);
+            }
+        }
+    }
+    add_array(&mut records, 748, K::F32, 3, 4);
+    add_array(&mut records, 760, K::I32, 15, 4);
+    add_array(&mut records, 820, K::U16, 3, 2);
+    add_array(&mut records, 828, K::F32, 4, 4);
+    add_one(&mut records, 844, K::U32);
+    add_one(&mut records, 848, K::U32);
+    add_one(&mut records, 852, K::I32);
+    add_one(&mut records, 856, K::I32);
+    add_one(&mut records, 860, K::F32);
+    add_one(&mut records, 864, K::I32);
+    add_one(&mut records, 868, K::I32);
+    add_one(&mut records, 872, K::I32);
+    add_one(&mut records, 876, K::U32);
+    for index in 0..3 {
+        add_one(&mut records, 880 + index * 4, K::I32);
+        add_array(&mut records, 892 + index * 16, K::I32, 4, 4);
+        add_one(&mut records, 940 + index * 4, K::I32);
+    }
+    add_array(&mut records, 952, K::F32, 8, 4);
+    add_one(&mut records, 984, K::F32);
+    add_one(&mut records, 988, K::F32);
+    add_one(&mut records, 992, K::I32);
+    add_one(&mut records, 996, K::F32);
+    add_one(&mut records, 1000, K::F32);
+    add_one(&mut records, 1004, K::I32);
+    add_array(&mut records, 1008, K::U16, 5, 2);
+    for index in 0..6 {
+        records.push(vec![field(1020 + index * 4, K::F32), field(1044 + index * 2, K::U16)]);
+    }
+    add_one(&mut records, 1056, K::I32);
+    add_one(&mut records, 1060, K::I32);
+    add_one(&mut records, 1064, K::F32);
+    add_one(&mut records, 1068, K::F32);
+    for index in 0..12 {
+        records.push(vec![field(1072 + index * 4, K::U32), field(1120 + index * 4, K::U32)]);
+    }
+    add_array(&mut records, 1168, K::I32, 3, 4);
+    add_array(&mut records, 1180, K::I32, 3, 4);
+    add_array(&mut records, 1192, K::I32, 3, 4);
+    add_array(&mut records, 0, K::Ignore, 3, 0);
+    add_one(&mut records, 1216, K::U16);
+    for index in 0..4 {
+        records.push(vec![field(1220 + index * 4, K::F32), field(1236 + index * 2, K::U16)]);
+    }
+    add_array(&mut records, 1244, K::U32, 11, 4);
+    add_one(&mut records, 1288, K::F32);
+    add_array(&mut records, 0, K::Ignore, 3, 0);
+    add_one(&mut records, 1300, K::I32);
+    add_one(&mut records, 1304, K::I32);
+    add_array(&mut records, 0, K::Ignore, 2, 0);
+    add_one(&mut records, 1376, K::I32);
+    add_one(&mut records, 1380, K::U32);
+    add_one(&mut records, 1384, K::F32);
+    add_one(&mut records, 1388, K::I32);
+    for offset in [1392, 1432, 1472, 1512, 1552, 1592, 1632, 1672, 1712, 1752, 1792] {
+        add_array(&mut records, offset, K::F32, 10, 4);
+    }
+    add_one(&mut records, 1832, K::U32);
+    add_one(&mut records, 1836, K::U32);
+    add_one(&mut records, 1840, K::F32);
+    add_one(&mut records, 1844, K::U32);
+    add_one(&mut records, 1848, K::U32);
+    add_array(&mut records, 1852, K::F32, 8, 4);
+    add_array(&mut records, 1884, K::U32, 3, 4);
+    add_one(&mut records, 1896, K::Char64);
+    add_one(&mut records, 1960, K::I32);
+    add_one(&mut records, 1964, K::U32);
+    add_one(&mut records, 1968, K::Char64);
+    add_one(&mut records, 2032, K::I32);
+    add_one(&mut records, 2036, K::U32);
+    add_one(&mut records, 2040, K::F32);
+    add_one(&mut records, 2044, K::I32);
+    add_one(&mut records, 2048, K::I32);
+    add_array(&mut records, 2052, K::U32, 7, 4);
+    add_one(&mut records, 2080, K::F32);
+    add_one(&mut records, 2084, K::F32);
+    add_one(&mut records, 2088, K::U32);
+    add_one(&mut records, 2140, K::U32);
+    add_one(&mut records, 2144, K::U32);
+    add_array(&mut records, 2148, K::F32, 5, 4);
+    add_array(&mut records, 2168, K::F32, 10, 4);
+    add_array(&mut records, 2208, K::U32, 3, 4);
+    add_array(&mut records, 2220, K::F32, 4, 4);
+    add_array(&mut records, 3152, K::I32, 4, 4);
+    add_array(&mut records, 3168, K::U32, 4, 4);
+    for index in 0..COUNTRY_NAME_COUNT {
+        add_one(&mut records, index, K::CountryName);
+    }
+    for index in 0..COUNTRY_IDENTITY_COUNT {
+        add_one(&mut records, index, K::CountryIdentity);
+    }
+    add_array(&mut records, 2236, K::F32, 17, 4);
+    add_one(&mut records, 2304, K::I32);
+    add_one(&mut records, 3204, K::Bool);
+    add_array(&mut records, 3208, K::F32, 15, 4);
+    add_one(&mut records, 3268, K::I32);
+    add_one(&mut records, 3276, K::I32);
+    add_one(&mut records, 3272, K::I32);
+    add_one(&mut records, 3332, K::I32);
+    add_one(&mut records, 4361, K::Bool);
+    records
+}
+
+fn game_record_specs() -> Vec<Vec<GlobeField>> {
+    use GlobeFieldKind as K;
+    let mut records = Vec::with_capacity(48);
+    add_array(&mut records, 1204, K::F32, 3, 4);
+    add_one(&mut records, 1292, K::Bool);
+    add_one(&mut records, 1293, K::Bool);
+    add_one(&mut records, 1296, K::U32);
+    add_one(&mut records, 1308, K::U32);
+    add_one(&mut records, 1312, K::Char64);
+    add_array(&mut records, 2092, K::I32, 4, 4);
+    add_array(&mut records, 2108, K::U32, 8, 4);
+    add_one(&mut records, 2309, K::Bool);
+    add_one(&mut records, 3148, K::Bool);
+    add_one(&mut records, 3149, K::Bool);
+    add_one(&mut records, 3150, K::Bool);
+    add_array(&mut records, 3188, K::I32, 4, 4);
+    add_one(&mut records, 2308, K::Bool);
+    add_one(&mut records, 3205, K::Bool);
+    add_one(&mut records, 3207, K::Bool);
+    add_one(&mut records, 3281, K::Bool);
+    add_one(&mut records, 3280, K::Bool);
+    add_one(&mut records, 3206, K::Bool);
+    add_one(&mut records, 3284, K::I32);
+    add_array(&mut records, 3288, K::I32, 8, 4);
+    add_one(&mut records, 3320, K::Bool);
+    add_one(&mut records, 3324, K::I32);
+    add_one(&mut records, 3328, K::Bool);
+    add_one(&mut records, 4360, K::Bool);
+    add_one(&mut records, 4364, K::I32);
+    records
+}
+
+fn read_records(source: &[u8]) -> Vec<GlobeRecord<'_>> {
+    source
+        .split(|byte| *byte == b'\n')
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let mut tokens = line
+                .split(|byte| byte.is_ascii_whitespace())
+                .filter(|token| !token.is_empty());
+            let label = tokens.next()?;
+            if label.starts_with(b"//") {
+                return None;
+            }
+            Some(GlobeRecord {
+                line: index + 1,
+                label,
+                values: tokens.collect(),
+            })
+        })
+        .collect()
+}
+
+fn apply_records(
+    records: &[GlobeRecord<'_>],
+    specs: &[Vec<GlobeField>],
+    candidate: &mut GlobeSetupSnapshot,
+) -> Result<(), GlobeSetupLoadError> {
+    for (record, spec) in records.iter().zip(specs) {
+        if record.values.len() != spec.len() {
+            return Err(GlobeSetupLoadError::Record {
+                line: record.line,
+                label: record.label.to_vec(),
+                reason: "число значений не совпадает с positional-контрактом EXE",
+            });
+        }
+        for (&value, &field) in record.values.iter().zip(spec) {
+            apply_field(candidate, field, value).map_err(|reason| GlobeSetupLoadError::Record {
+                line: record.line,
+                label: record.label.to_vec(),
+                reason,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_field(
+    candidate: &mut GlobeSetupSnapshot,
+    field: GlobeField,
+    value: &[u8],
+) -> Result<(), &'static str> {
+    use GlobeFieldKind as K;
+    match field.kind {
+        K::Ignore => Ok(()),
+        K::CountryName => {
+            candidate.country_name_ids[field.offset] = value.to_vec();
+            Ok(())
+        }
+        K::CountryIdentity => {
+            candidate.country_identity_ids[field.offset] = value.to_vec();
+            Ok(())
+        }
+        K::Char64 => write_fixed_string(&mut candidate.bytes, field.offset, value),
+        K::U8 => write_number::<u8>(&mut candidate.bytes, field.offset, value, "ожидалось unsigned 8-bit число"),
+        K::Bool => {
+            if !matches!(value, b"0" | b"1") {
+                return Err("ожидалось boolean 0 или 1");
+            }
+            write_number::<u8>(&mut candidate.bytes, field.offset, value, "ожидалось boolean 0 или 1")
+        }
+        K::U16 => write_number::<u16>(&mut candidate.bytes, field.offset, value, "ожидалось unsigned 16-bit число"),
+        K::I32 => write_number::<i32>(&mut candidate.bytes, field.offset, value, "ожидалось signed 32-bit число"),
+        K::U32 => write_number::<u32>(&mut candidate.bytes, field.offset, value, "ожидалось unsigned 32-bit число"),
+        K::F32 => {
+            let parsed = parse_number::<f32>(value)
+                .filter(|number| number.is_finite())
+                .ok_or("ожидалось конечное 32-bit floating-point число")?;
+            candidate.bytes[field.offset..field.offset + 4]
+                .copy_from_slice(&parsed.to_le_bytes());
+            Ok(())
+        }
+    }
+}
+
+trait GlobeNumber: Sized {
+    const WIDTH: usize;
+    fn parse(text: &str) -> Option<Self>;
+    fn write(self, destination: &mut [u8]);
+}
+
+macro_rules! globe_number {
+    ($type:ty) => {
+        impl GlobeNumber for $type {
+            const WIDTH: usize = std::mem::size_of::<Self>();
+            fn parse(text: &str) -> Option<Self> {
+                text.parse().ok()
+            }
+            fn write(self, destination: &mut [u8]) {
+                destination.copy_from_slice(&self.to_le_bytes());
+            }
+        }
+    };
+}
+
+globe_number!(u8);
+globe_number!(u16);
+globe_number!(i32);
+globe_number!(u32);
+globe_number!(f32);
+
+fn parse_number<T: GlobeNumber>(value: &[u8]) -> Option<T> {
+    T::parse(std::str::from_utf8(value).ok()?)
+}
+
+fn write_number<T: GlobeNumber>(
+    destination: &mut [u8],
+    offset: usize,
+    value: &[u8],
+    reason: &'static str,
+) -> Result<(), &'static str> {
+    let parsed = parse_number::<T>(value).ok_or(reason)?;
+    parsed.write(&mut destination[offset..offset + T::WIDTH]);
+    Ok(())
+}
+
+fn write_fixed_string(
+    destination: &mut [u8],
+    offset: usize,
+    value: &[u8],
+) -> Result<(), &'static str> {
+    if value.len() >= COUNTRY_NAME_SLOT_LENGTH {
+        return Err("строка не помещается в Windows char[64]");
+    }
+    destination[offset..offset + COUNTRY_NAME_SLOT_LENGTH].fill(0);
+    destination[offset..offset + value.len()].copy_from_slice(value);
+    Ok(())
 }
 
 // Сырой C++ ниже сохранён как локальная документация loaders, accessors и

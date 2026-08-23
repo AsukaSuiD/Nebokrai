@@ -45,6 +45,48 @@ impl CRegionSetup {
         &self.entries
     }
 
+    /// Читает exact World grammar: поиск маркера `#`, затем три signed long.
+    /// Owner очищается до чтения; при malformed записи сохраняется уже
+    /// подтверждённый prefix, но неизвестные значения не материализуются.
+    pub(crate) fn load_from_bytes(
+        &mut self,
+        source: &[u8],
+    ) -> Result<usize, RegionSetupLoadError> {
+        self.entries.clear();
+        let tokens: Vec<&[u8]> = source
+            .split(|byte| byte.is_ascii_whitespace())
+            .filter(|token| !token.is_empty())
+            .collect();
+        let mut next = 0;
+        let mut loaded = 0;
+        while let Some(relative) = tokens[next..].iter().position(|token| *token == b"#") {
+            next += relative + 1;
+            let read = |offset: usize, field| {
+                let token = tokens.get(next + offset).ok_or(RegionSetupLoadError::Missing {
+                    record: loaded,
+                    field,
+                })?;
+                std::str::from_utf8(token)
+                    .ok()
+                    .and_then(|text| text.parse::<i32>().ok())
+                    .ok_or_else(|| RegionSetupLoadError::Invalid {
+                        record: loaded,
+                        field,
+                        token: token.to_vec(),
+                    })
+            };
+            let entry = RegionSetupEntry {
+                id: read(0, "ID")?,
+                can_enter_level: read(1, "уровень")?,
+                required_contribute: read(2, "вклад")?,
+            };
+            self.entries.insert(entry.id, entry);
+            loaded += 1;
+            next += 3;
+        }
+        Ok(loaded)
+    }
+
     /// Дописывает exact `count + ordered 12-byte records` в существующий buffer.
     pub(crate) fn add_to_byte_array(
         &self,
@@ -80,6 +122,40 @@ impl fmt::Display for RegionSetupSerializeError {
 }
 
 impl Error for RegionSetupSerializeError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RegionSetupLoadError {
+    Missing {
+        record: usize,
+        field: &'static str,
+    },
+    Invalid {
+        record: usize,
+        field: &'static str,
+        token: Vec<u8>,
+    },
+}
+
+impl fmt::Display for RegionSetupLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing { record, field } => {
+                write!(formatter, "RegionSetup: запись {record}, отсутствует поле {field}")
+            }
+            Self::Invalid {
+                record,
+                field,
+                token,
+            } => write!(
+                formatter,
+                "RegionSetup: запись {record}, поле {field} содержит нецелое значение {:?}",
+                String::from_utf8_lossy(token)
+            ),
+        }
+    }
+}
+
+impl Error for RegionSetupLoadError {}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

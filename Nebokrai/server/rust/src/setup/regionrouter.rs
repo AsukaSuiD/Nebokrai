@@ -107,6 +107,33 @@ pub(crate) enum RegionRouterLoadError {
     InvalidInteger { field: &'static str, token: Vec<u8> },
 }
 
+impl PartialEq for RegionRouterLoadError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Io(left), Self::Io(right)) => {
+                left.kind() == right.kind() && left.to_string() == right.to_string()
+            }
+            (
+                Self::MissingToken { field: left },
+                Self::MissingToken { field: right },
+            ) => left == right,
+            (
+                Self::InvalidInteger {
+                    field: left_field,
+                    token: left_token,
+                },
+                Self::InvalidInteger {
+                    field: right_field,
+                    token: right_token,
+                },
+            ) => left_field == right_field && left_token == right_token,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for RegionRouterLoadError {}
+
 impl RegionRouter {
     pub(crate) fn insert_node(
         &mut self,
@@ -127,6 +154,15 @@ impl RegionRouter {
     ) -> Result<RegionRouterLoadReport, RegionRouterLoadError> {
         self.clear();
         let bytes = fs::read(path).map_err(RegionRouterLoadError::Io)?;
+        self.load_router_setup_bytes(&bytes)
+    }
+
+    /// Та же grammar для уже открытого package-resource WorldServer.
+    pub(crate) fn load_router_setup_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<RegionRouterLoadReport, RegionRouterLoadError> {
+        self.clear();
         let mut tokens = RegionRouterTokens::new(&bytes);
         tokens.skip("region count label")?;
         let declared_regions = tokens.read_u32("region count")?;
