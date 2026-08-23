@@ -38,6 +38,10 @@
 //! minister records и публикует ordered lookup до финального startup log.
 //! Оба country state selector-а `0x18/0x19` входят в один FIFO pass, чтобы
 //! параметры и canonical country owners сохраняли согласованный startup цикл.
+//! Пространственные owners `0x0F/0x10/0x11/0x1A` также проходят один FIFO
+//! pass: proxy публикуется только после полного decode, reload сохраняет
+//! ранний region miss, а region-level и duplicate registries — исходные
+//! replacement/partial-decode и success-log границы.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -80,6 +84,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 use super::super::organizingsystem::attackcitysys::{
     AttackCityDecodeError, AttackCityRegionContext, CAttackCitySys,
@@ -419,6 +424,75 @@ pub(crate) struct GameCountryStateStartupMessageReport {
     pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameSpatialStartupReport {
+    ProxyRegion { region_id: i32, replaced: bool },
+    RegionReload(RegionSetupReloadReport),
+    RegionSetup { entries: usize },
+    DupliRegions { entries: usize },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum GameSpatialStartupError {
+    ProxyRegion(ProxyRegionDecodeError),
+    RegionReload(RegionSetupReloadError),
+    RegionSetup(RegionSetupDecodeError),
+    OwnerUnavailable { selector: i32 },
+    DupliRegions(Arc<DupliRegionDecodeError>),
+}
+
+impl PartialEq for GameSpatialStartupError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::ProxyRegion(left), Self::ProxyRegion(right)) => left == right,
+            (Self::RegionReload(left), Self::RegionReload(right)) => left == right,
+            (Self::RegionSetup(left), Self::RegionSetup(right)) => left == right,
+            (
+                Self::OwnerUnavailable { selector: left },
+                Self::OwnerUnavailable { selector: right },
+            ) => left == right,
+            (Self::DupliRegions(left), Self::DupliRegions(right)) => {
+                dupli_region_decode_errors_equal(left, right)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for GameSpatialStartupError {}
+
+fn dupli_region_decode_errors_equal(
+    left: &DupliRegionDecodeError,
+    right: &DupliRegionDecodeError,
+) -> bool {
+    match (left, right) {
+        (
+            DupliRegionDecodeError::UnexpectedEnd {
+                offset: left_offset,
+                needed: left_needed,
+                available: left_available,
+            },
+            DupliRegionDecodeError::UnexpectedEnd {
+                offset: right_offset,
+                needed: right_needed,
+                available: right_available,
+            },
+        ) => {
+            left_offset == right_offset
+                && left_needed == right_needed
+                && left_available == right_available
+        }
+        (DupliRegionDecodeError::Allocation(_), DupliRegionDecodeError::Allocation(_)) => true,
+        _ => false,
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameSpatialStartupMessageReport {
+    pub(crate) decoded: GameSpatialStartupReport,
+    pub(crate) log_effects: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
@@ -430,9 +504,10 @@ pub(crate) enum GameServerMessageReport {
     RuntimeConfigurationStartup(GameRuntimeConfigurationStartupMessageReport),
     PlayerRuleStartup(GamePlayerRuleStartupMessageReport),
     CountryStateStartup(GameCountryStateStartupMessageReport),
+    SpatialStartup(GameSpatialStartupMessageReport),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageError {
     StartupSelector(GameClientServerStartPayloadError),
     StringTable(MyStringTableDecodeError),
@@ -442,6 +517,7 @@ pub(crate) enum GameServerMessageError {
     RuntimeConfigurationStartup(GameRuntimeConfigurationStartupError),
     PlayerRuleStartup(GamePlayerRuleStartupError),
     CountryStateStartup(GameCountryStateStartupError),
+    SpatialStartup(GameSpatialStartupError),
 }
 
 /// Маршрутизирует уже материализованные ветви `OnServerMessage`: общий
@@ -651,6 +727,113 @@ pub(crate) fn dispatch_server_message(
                     log_effects,
                 },
             )))
+        }
+        PROXY_REGION_SELECTOR
+        | REGION_RELOAD_SELECTOR
+        | REGION_SETUP_SELECTOR
+        | DUPLI_REGION_SELECTOR => {
+            let consumed_selector = message
+                .base_mut()
+                .get_long()
+                .expect("spatial selector проверен без изменения cursor");
+            let mut log_effects = Vec::new();
+            let decoded = match {
+                let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                decode_spatial_startup(consumed_selector, wire, cursor, game, |text| {
+                    log_effects.push(text.to_vec())
+                })
+                .expect("spatial selector проверен outer dispatcher-ом")
+                .map_err(GameServerMessageError::SpatialStartup)
+            } {
+                Ok(decoded) => decoded,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok(GameServerMessageReport::SpatialStartup(
+                GameSpatialStartupMessageReport {
+                    decoded,
+                    log_effects,
+                },
+            )))
+        }
+        _ => None,
+    }
+}
+
+fn decode_spatial_startup(
+    selector: i32,
+    source: &[u8],
+    cursor: &mut usize,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<GameSpatialStartupReport, GameSpatialStartupError>> {
+    match selector {
+        PROXY_REGION_SELECTOR => {
+            let mut region = CProxyServerRegion::default();
+            if let Err(error) = region.decord_from_byte_array(source, cursor, true) {
+                return Some(Err(GameSpatialStartupError::ProxyRegion(error)));
+            }
+            let region_id = region.get_id();
+            let replaced = game.add_proxy_region(region);
+            add_log_text(b"Add Proxy Region : (%d) %s ...OK!");
+            Some(Ok(GameSpatialStartupReport::ProxyRegion {
+                region_id,
+                replaced,
+            }))
+        }
+        REGION_RELOAD_SELECTOR => {
+            let region_id = match read_initial_region_i32(source, cursor) {
+                Ok(region_id) => region_id,
+                Err(error) => {
+                    return Some(Err(GameSpatialStartupError::RegionReload(
+                        RegionSetupReloadError::RegionId(error),
+                    )));
+                }
+            };
+            let Some(region) = game.find_region_mut(region_id) else {
+                return Some(Ok(GameSpatialStartupReport::RegionReload(
+                    RegionSetupReloadReport {
+                        region_id,
+                        found: false,
+                    },
+                )));
+            };
+            if let Err(error) = region
+                .base_mut()
+                .decord_setup_from_byte_array(source, cursor, true)
+            {
+                return Some(Err(GameSpatialStartupError::RegionReload(
+                    RegionSetupReloadError::Setup(error),
+                )));
+            }
+            add_log_text(b"Reload Region : (%d)%s Setup...OK!");
+            Some(Ok(GameSpatialStartupReport::RegionReload(
+                RegionSetupReloadReport {
+                    region_id,
+                    found: true,
+                },
+            )))
+        }
+        REGION_SETUP_SELECTOR => {
+            let entries = match game
+                .region_setup_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(entries) => entries,
+                Err(error) => return Some(Err(GameSpatialStartupError::RegionSetup(error))),
+            };
+            add_log_text(b"Initial SI_REGIONLEVELSETUP...OK!");
+            Some(Ok(GameSpatialStartupReport::RegionSetup { entries }))
+        }
+        DUPLI_REGION_SELECTOR => {
+            let Some(setup) = game.dupli_region_setup_mut() else {
+                return Some(Err(GameSpatialStartupError::OwnerUnavailable { selector }));
+            };
+            if let Err(error) = setup.decord_from_byte_array(source, cursor) {
+                return Some(Err(GameSpatialStartupError::DupliRegions(Arc::new(error))));
+            }
+            let entries = setup.entries().len();
+            add_log_text(b"Initial SI_DUPLIREGIONSETUP...OK!");
+            Some(Ok(GameSpatialStartupReport::DupliRegions { entries }))
         }
         _ => None,
     }
@@ -1274,27 +1457,15 @@ pub(crate) fn dispatch_region_setup_reload(
     }
 
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-    let region_id = match read_initial_region_i32(source, cursor) {
-        Ok(region_id) => region_id,
-        Err(error) => return Some(Err(RegionSetupReloadError::RegionId(error))),
-    };
-    let Some(region) = game.find_region_mut(region_id) else {
-        return Some(Ok(RegionSetupReloadReport {
-            region_id,
-            found: false,
-        }));
-    };
-    if let Err(error) = region
-        .base_mut()
-        .decord_setup_from_byte_array(source, cursor, true)
-    {
-        return Some(Err(RegionSetupReloadError::Setup(error)));
-    }
-    add_log_text(b"Reload Region : (%d)%s Setup...OK!");
-    Some(Ok(RegionSetupReloadReport {
-        region_id,
-        found: true,
-    }))
+    Some(
+        match decode_spatial_startup(selector, source, cursor, game, &mut add_log_text)
+            .expect("region-reload selector проверен dispatcher-ом")
+        {
+            Ok(GameSpatialStartupReport::RegionReload(report)) => Ok(report),
+            Err(GameSpatialStartupError::RegionReload(error)) => Err(error),
+            _ => unreachable!("selector 0x10 возвращает только region-reload variant"),
+        },
+    )
 }
 
 pub(crate) fn dispatch_monster_list_startup(
@@ -1648,6 +1819,47 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    if matches!(
+        selector,
+        PROXY_REGION_SELECTOR | REGION_SETUP_SELECTOR | DUPLI_REGION_SELECTOR
+    ) && let Some(result) =
+        decode_spatial_startup(selector, source, cursor, game, &mut add_log_text)
+    {
+        return Some(match result {
+            Ok(GameSpatialStartupReport::ProxyRegion {
+                region_id,
+                replaced,
+            }) => Ok(GameOwnedStartupSnapshotReport::ProxyRegion {
+                region_id,
+                replaced,
+            }),
+            Ok(GameSpatialStartupReport::RegionSetup { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::RegionSetup { entries })
+            }
+            Ok(GameSpatialStartupReport::DupliRegions { entries }) => {
+                Ok(GameOwnedStartupSnapshotReport::DupliRegions { entries })
+            }
+            Err(GameSpatialStartupError::ProxyRegion(error)) => {
+                Err(GameOwnedStartupSnapshotError::ProxyRegion(error))
+            }
+            Err(GameSpatialStartupError::RegionSetup(error)) => {
+                Err(GameOwnedStartupSnapshotError::RegionSetup(error))
+            }
+            Err(GameSpatialStartupError::OwnerUnavailable { selector }) => {
+                Err(GameOwnedStartupSnapshotError::OwnerUnavailable { selector })
+            }
+            Err(GameSpatialStartupError::DupliRegions(error)) => {
+                Err(GameOwnedStartupSnapshotError::DupliRegions(
+                    Arc::try_unwrap(error)
+                        .expect("dupli decode error ещё не разделён между reports"),
+                ))
+            }
+            Ok(GameSpatialStartupReport::RegionReload(_))
+            | Err(GameSpatialStartupError::RegionReload(_)) => {
+                unreachable!("selector 0x0F/0x11/0x1A не возвращает reload variant")
+            }
+        });
+    }
     if let Some(result) =
         decode_country_state_startup(selector, source, cursor, game, &mut add_log_text)
     {
@@ -1901,30 +2113,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 replaced,
             }))
         }
-        PROXY_REGION_SELECTOR => {
-            let mut region = CProxyServerRegion::default();
-            if let Err(error) = region.decord_from_byte_array(source, cursor, true) {
-                return Some(Err(GameOwnedStartupSnapshotError::ProxyRegion(error)));
-            }
-            let region_id = region.get_id();
-            let replaced = game.add_proxy_region(region);
-            add_log_text(b"Add Proxy Region : (%d) %s ...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::ProxyRegion {
-                region_id,
-                replaced,
-            }))
-        }
-        REGION_SETUP_SELECTOR => {
-            let entries = match game
-                .region_setup_mut()
-                .decord_from_byte_array(source, cursor)
-            {
-                Ok(entries) => entries,
-                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::RegionSetup(error))),
-            };
-            add_log_text(b"Initial SI_REGIONLEVELSETUP...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::RegionSetup { entries }))
-        }
         PLAYER_RANKS_SELECTOR => {
             let Some(ranks) = game.player_ranks_mut() else {
                 return Some(Err(GameOwnedStartupSnapshotError::OwnerUnavailable {
@@ -1937,19 +2125,6 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
             Some(Ok(GameOwnedStartupSnapshotReport::PlayerRanks {
                 entries: ranks.ranks().len(),
             }))
-        }
-        DUPLI_REGION_SELECTOR => {
-            let Some(setup) = game.dupli_region_setup_mut() else {
-                return Some(Err(GameOwnedStartupSnapshotError::OwnerUnavailable {
-                    selector,
-                }));
-            };
-            if let Err(error) = setup.decord_from_byte_array(source, cursor) {
-                return Some(Err(GameOwnedStartupSnapshotError::DupliRegions(error)));
-            }
-            let entries = setup.entries().len();
-            add_log_text(b"Initial SI_DUPLIREGIONSETUP...OK!");
-            Some(Ok(GameOwnedStartupSnapshotReport::DupliRegions { entries }))
         }
         PRISON_CONF_SELECTOR => {
             let entries = match game

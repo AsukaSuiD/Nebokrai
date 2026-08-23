@@ -68,6 +68,9 @@
 //! контрактами; allocation-чувствительный player-ranks owner не маскируется.
 //! CountryParam и CountryHandler `0x18/0x19` публикуются одним country-state
 //! FIFO pass, сохраняя scalar/map partial mutation, replacement и exact logs.
+//! Proxy/reload/region-level/dupli selectors `0x0F/0x10/0x11/0x1A` проходят
+//! общий spatial FIFO pass с canonical region owners, ранним reload miss и
+//! сохранённой allocation-error причиной duplicate registry.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
