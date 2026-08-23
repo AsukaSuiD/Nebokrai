@@ -17,6 +17,9 @@
 //! сравнивается с unsigned-представлением setup limit. Это минимальный owned
 //! player state для будущих equipment/battle-fairy side effects, но не замена
 //! полного constructor-а, property recalc или runtime player lifecycle.
+//! Silence-timeout, как и оригинал, проверяется лениво при query по
+//! инъецируемому wrapping `timeGetTime`-значению; отдельный scheduler для него
+//! не требуется.
 //! Поэтому `from_send_state` остаётся явной assembly-границей уже
 //! восстановленного runtime. Figure передаётся как доказанный derived virtual
 //! fact; владение spatial state остаётся у `CMoveShape`.
@@ -80,6 +83,8 @@ pub(crate) struct CPlayer {
     combat_properties: PlayerCombatProperties,
     ci_qing_open: bool,
     contribution: i32,
+    silence_minutes: i32,
+    silence_timestamp_minutes: u32,
 }
 
 impl CPlayer {
@@ -105,6 +110,8 @@ impl CPlayer {
             combat_properties: PlayerCombatProperties::default(),
             ci_qing_open: false,
             contribution: 0,
+            silence_minutes: 0,
+            silence_timestamp_minutes: 0,
         })
     }
 
@@ -142,6 +149,10 @@ impl CPlayer {
 
     pub(crate) const fn contribution(&self) -> i32 {
         self.contribution
+    }
+
+    pub(crate) const fn silence_minutes(&self) -> i32 {
+        self.silence_minutes
     }
 
     pub(crate) const fn set_pk_count(&mut self, value: u16) {
@@ -234,6 +245,34 @@ impl CPlayer {
 
     pub(crate) const fn set_battle_fairy_died(&mut self, value: bool) {
         self.base_properties.battle_fairy_died = value;
+    }
+
+    /// Exact `SetSilence`: начало хранится в минутах `timeGetTime`, а
+    /// не абсолютным deadline в миллисекундах.
+    pub(crate) const fn set_silence(&mut self, minutes: i32, now_milliseconds: u32) {
+        if minutes > 0 {
+            self.silence_minutes = minutes;
+            self.silence_timestamp_minutes = now_milliseconds / 60_000;
+        } else {
+            self.silence_minutes = 0;
+            self.silence_timestamp_minutes = 0;
+        }
+    }
+
+    /// Exact `IsInSilence`: равенство deadline ещё считается silence; после
+    /// первой просроченной проверки оба legacy поля обнуляются.
+    pub(crate) const fn is_in_silence(&mut self, now_milliseconds: u32) -> bool {
+        if self.silence_minutes == 0 {
+            return false;
+        }
+        let deadline =
+            (self.silence_timestamp_minutes as i32).wrapping_add(self.silence_minutes) as u32;
+        if now_milliseconds / 60_000 <= deadline {
+            return true;
+        }
+        self.silence_minutes = 0;
+        self.silence_timestamp_minutes = 0;
+        false
     }
 
     pub(crate) fn shape_view(&self) -> Option<ShapeView> {
