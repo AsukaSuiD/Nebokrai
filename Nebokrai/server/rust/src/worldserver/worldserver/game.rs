@@ -2645,13 +2645,13 @@ impl fmt::Display for WorldLocalMessageQueueBlock {
 
 impl Error for WorldLocalMessageQueueBlock {}
 
-/// Сообщение, для которого `Run` выбрал owner, но сам owner ещё не исполнен.
+/// Сообщение, для которого `Run` не выбрал восстановленный owner.
 pub(crate) struct RoutedWorldMessage {
     pub(crate) source: WorldMessageSource,
     pub(crate) message_type: i32,
     pub(crate) owner: Option<WorldMessageOwner>,
     pub(crate) legacy_run_result: i32,
-    /// Полное сообщение остаётся owned до реализации выбранного handler-а.
+    /// Полное сообщение сохраняется для диагностики неизвестного selector-а.
     pub(crate) message: CMessage,
 }
 
@@ -3126,6 +3126,14 @@ pub(crate) enum ProcessedWorldEvent {
         source: WorldMessageSource,
         legacy_run_result: i32,
         outcome: Result<OrganizingPronounceDispatch, OrganizingPronounceBlock>,
+        runtime: WorldUnionApplicationRuntimeReport,
+    },
+    /// Exact default `OnOrgasysMessage`: неизвестный organizing opcode не имеет
+    /// side effects, но уже накопленные terminal callbacks всё равно исполняются.
+    OrganizingNoOp {
+        source: WorldMessageSource,
+        legacy_run_result: i32,
+        request_type: i32,
         runtime: WorldUnionApplicationRuntimeReport,
     },
     LoginClientReconnected(WorldLoginClientReplacement),
@@ -12603,8 +12611,8 @@ impl CGame {
     /// `0x60135`, её result `0x60136`, city-war заявка `0x60137` и её result
     /// `0x60138`, Goods War command `0x60139`, faction-win `0x6013A` и player
     /// quest routes `0x6013B/0x6013C`, run-script `0x6013D` и faction parameter
-    /// `0x6013E` и region-router request `0x60144` исполняются; остальные
-    /// остаются owned pending. Terminal
+    /// `0x6013E` и region-router request `0x60144` исполняются; неизвестные
+    /// organizing opcode завершаются exact default без side effects. Terminal
     /// actions применяются FIFO до следующего сообщения. Async TDS lookup
     /// `0x5FF12` завершается до следующего slot-а, как синхронный ADO EXE;
     /// JJC owner `0x60901..0x60907` и Team owner `0x60001..0x6000C`
@@ -21207,6 +21215,40 @@ where
                 runtime,
             };
         }
+
+        let callbacks = WorldUnionApplicationEffectCallbacks {
+            random: &mut *application_callbacks.random,
+            world_string: &mut *application_callbacks.world_string,
+            format_world_string: &mut *application_callbacks.format_world_string,
+            put_war_log: &mut *application_callbacks.put_war_log,
+            refresh_owned_city: &mut *application_callbacks.refresh_owned_city,
+            faction_level_log_enabled: application_callbacks.faction_level_log_enabled,
+            write_faction_level_log: &mut *application_callbacks.write_faction_level_log,
+            faction_experience_log_enabled:
+                application_callbacks.faction_experience_log_enabled,
+            write_faction_experience_log:
+                &mut *application_callbacks.write_faction_experience_log,
+        };
+        let mut effects = WorldUnionApplicationEffects::new(
+            game,
+            net_sessions,
+            application_runtime,
+            callbacks,
+        );
+        let runtime = drain_union_application_runtime(
+            game,
+            organizing,
+            organizing_parameters,
+            application_runtime,
+            &mut effects,
+            update_player,
+        );
+        return ProcessedWorldEvent::OrganizingNoOp {
+            source,
+            legacy_run_result,
+            request_type: message_type,
+            runtime,
+        };
     }
 
     ProcessedWorldEvent::Message(RoutedWorldMessage {
