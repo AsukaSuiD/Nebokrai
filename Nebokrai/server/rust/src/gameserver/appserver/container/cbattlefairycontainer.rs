@@ -4,9 +4,12 @@
 //! `server/gameserver/appserver/container/cbattlefairycontainer.cpp`.
 //! Материализованы 17 фиксированных ячеек и exact positional add-фильтры по
 //! goods type/addon marker. Gear-слоты публикуют ранний `BFPropertyAdd(+1)`
-//! effect до base Add, поэтому отказ storage не отменяет этот effect. Gem
-//! success/fail/probability и upgrade-price queries сохраняют positional RNG,
-//! signed clamp и неинициализированный cached price как `Option`.
+//! effect до base Add, поэтому отказ storage не отменяет этот effect. Проверка
+//! combine сверяет original-name material/fetch stone/fetch body в порядке
+//! записи compose, публикуя legacy packet `0xbf92c`; его `fistp` использует
+//! truncation к нулю. Gem success/fail/probability и upgrade-price queries
+//! сохраняют positional RNG, signed clamp и неинициализированный cached price
+//! как `Option`.
 //!
 //! Автоматический overload читает неинициализированный `m_eBFEquipPlace` у
 //! catalog owner-а. Rust выражает этот UB как typed block, а не выбирает
@@ -15,6 +18,7 @@
 
 use super::camountlimitgoodscontainer::{AmountLimitGoodsCleared, AmountLimitGoodsRelease};
 use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome};
+use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyCompose;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BF_BATTLE_FAIRY, GAP_BF_BFEQUIPEMENT, GAP_BF_CLOTH, GAP_BF_FETCH_BODY, GAP_BF_FETCH_STONE,
@@ -80,6 +84,51 @@ impl BattleFairyCell {
 pub(crate) struct BattleFairyPropertyAddEffect {
     pub(crate) cell: BattleFairyCell,
     pub(crate) delta: i32,
+}
+
+pub(crate) const BATTLE_FAIRY_COMBINE_MESSAGE_TYPE: u32 = 0x0b_f92c;
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum BattleFairyCombineResult {
+    #[default]
+    None = 0,
+    CanCombine = 5,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyCombineNotification {
+    MissingMaterial,
+    MissingFetchStone,
+    MissingFetchBody,
+    CannotSummon,
+}
+
+impl BattleFairyCombineNotification {
+    pub(crate) const fn string_id(self) -> &'static str {
+        match self {
+            Self::MissingMaterial => "ZHGS0056",
+            Self::MissingFetchStone => "ZHGS0057",
+            Self::MissingFetchBody => "ZHGS0058",
+            Self::CannotSummon => "ZHGS0059",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyCombineAvailability {
+    pub(crate) message_type: u32,
+    pub(crate) deplete_fetch: u32,
+    pub(crate) truncated_success_rate: u32,
+}
+
+#[must_use = "report содержит адресованные игроку notification или availability effect"]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct BattleFairyCombineCheck {
+    pub(crate) result: BattleFairyCombineResult,
+    pub(crate) player_id: Option<i32>,
+    pub(crate) notification: Option<BattleFairyCombineNotification>,
+    pub(crate) availability: Option<BattleFairyCombineAvailability>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -323,6 +372,86 @@ impl CBattleFairyContainer {
 
     pub(crate) const fn stored_upgrade_price(&self) -> Option<u32> {
         self.upgrade_price
+    }
+
+    /// Проверяет только публично наблюдаемый запрос combine. Оригинал сначала
+    /// ищет переданного игрока в `CGame::s_mapPlayer`: когда его нет, не
+    /// публикуется ни packet, ни notification. Не найденные catalog properties
+    /// классифицируются так же, как отсутствующий material (`ZHGS0056`).
+    pub(crate) fn check_battle_fairy_combine(
+        &self,
+        player_id: Option<i32>,
+        factory: &CGoodsFactory,
+        compose: &[BattleFairyCompose],
+    ) -> BattleFairyCombineCheck {
+        let mut check = BattleFairyCombineCheck {
+            player_id,
+            ..BattleFairyCombineCheck::default()
+        };
+        if player_id.is_none() {
+            return check;
+        }
+
+        let Some(material) = self.base.get_goods(BattleFairyCell::Material.position()) else {
+            check.notification = Some(BattleFairyCombineNotification::MissingMaterial);
+            return check;
+        };
+        let Some(fetch_stone) = self.base.get_goods(BattleFairyCell::FetchStone.position()) else {
+            check.notification = Some(BattleFairyCombineNotification::MissingFetchStone);
+            return check;
+        };
+        let Some(fetch_body) = self.base.get_goods(BattleFairyCell::FetchBody.position()) else {
+            check.notification = Some(BattleFairyCombineNotification::MissingFetchBody);
+            return check;
+        };
+
+        let Some(material_properties) =
+            factory.query_goods_base_properties(material.base_properties_index())
+        else {
+            check.notification = Some(BattleFairyCombineNotification::MissingMaterial);
+            return check;
+        };
+        let Some(fetch_stone_properties) =
+            factory.query_goods_base_properties(fetch_stone.base_properties_index())
+        else {
+            check.notification = Some(BattleFairyCombineNotification::MissingMaterial);
+            return check;
+        };
+        let Some(fetch_body_properties) =
+            factory.query_goods_base_properties(fetch_body.base_properties_index())
+        else {
+            check.notification = Some(BattleFairyCombineNotification::MissingMaterial);
+            return check;
+        };
+
+        let Some(recipe) = compose.iter().find(|recipe| {
+            recipe.fetch_stone == fetch_stone_properties.original_name()
+                && recipe.fetch_body == fetch_body_properties.original_name()
+                && recipe.material == material_properties.original_name()
+        }) else {
+            check.notification = Some(BattleFairyCombineNotification::CannotSummon);
+            return check;
+        };
+
+        check.result = BattleFairyCombineResult::CanCombine;
+        check.availability = Some(BattleFairyCombineAvailability {
+            message_type: BATTLE_FAIRY_COMBINE_MESSAGE_TYPE,
+            deplete_fetch: recipe.deplete_fetch,
+            // `fnstcw; or ah, 0x0c; fldcw; fistp` принудительно выбирает
+            // rounding toward zero, не обычное округление до ближайшего.
+            truncated_success_rate: x87_fistp_truncating(recipe.success_rate) as u32,
+        });
+        check
+    }
+}
+
+/// `fistp dword` возвращает integer-indefinite `INT_MIN` для NaN и переполнения;
+/// простое Rust-приведение насыщало бы такие значения и меняло wire payload.
+fn x87_fistp_truncating(value: f32) -> i32 {
+    if !value.is_finite() || value >= 2_147_483_648.0 || value < -2_147_483_648.0 {
+        i32::MIN
+    } else {
+        value.trunc() as i32
     }
 }
 
