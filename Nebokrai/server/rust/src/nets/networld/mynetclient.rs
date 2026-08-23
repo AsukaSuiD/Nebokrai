@@ -245,8 +245,9 @@ impl CMyNetClient {
     ///
     /// Read и send обслуживались разными Windows threads без доказанного
     /// взаимного порядка. `tokio::select!` сохраняет отсутствие такого порядка,
-    /// не создавая busy-loop `Sleep(1)`. Ошибка I/O сама не назначает close-
-    /// политику; доказанный EOF выполняет component `OnClose` немедленно.
+    /// не создавая busy-loop `Sleep(1)`. EOF и нетранзиентная ошибка I/O
+    /// выполняют тот же `HandleClose -> 0x3FC01`, который точный
+    /// `CMyNetClient::OnReceive` вызывал после ошибки `recv`.
     pub(crate) async fn run_io_once(
         &mut self,
         mut recv_time_ms: impl FnMut() -> u32,
@@ -281,6 +282,7 @@ impl CMyNetClient {
                 .map(|messages| WorldClientIoStep::Received { messages })
                 .map_err(WorldClientIoError::Receive),
             Ready::Read(Err(error)) | Ready::Write(Err(error)) => {
+                self.handle_transport_close();
                 Err(WorldClientIoError::Io(error))
             }
             Ready::Write(Ok(())) => {
@@ -288,10 +290,13 @@ impl CMyNetClient {
                     .connection
                     .as_ref()
                     .ok_or(WorldClientIoError::NotConnected)?;
-                self.send_queue
-                    .try_flush(stream)
-                    .map(WorldClientIoStep::Sent)
-                    .map_err(WorldClientIoError::Send)
+                match self.send_queue.try_flush(stream) {
+                    Ok(outcome) => Ok(WorldClientIoStep::Sent(outcome)),
+                    Err(error) => {
+                        self.handle_transport_close();
+                        Err(WorldClientIoError::Send(error))
+                    }
+                }
             }
         }
     }
