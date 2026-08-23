@@ -36,9 +36,10 @@
 //! сохраняет немедленный World request. Tokio/socket types заменяют ненаблюдаемые
 //! `CBaseMessage::Initial` и `CMySocket::MySocketInit`; следующий незакрытый
 //! шаг — resource/runtime owners после завершённого `Init`.
-//! QuestSystem, CountryParam, CountryHandler, CountryWarSys и CEmotion process
-//! singletons хранятся owned-полями `CGame`, сохраняя exact startup wire и
-//! runtime lookup-контракты без отдельных global allocations.
+//! QuestSystem, CountryParam, CountryHandler, CountryWarSys,
+//! CFourNationWarSys и CEmotion process singletons хранятся owned-полями
+//! `CGame`, сохраняя exact startup wire и runtime lookup-контракты без
+//! отдельных global allocations.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -68,6 +69,7 @@ use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
+use crate::gameserver::appserver::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::servergodsbattleregion::CGodsBattleMgr;
 use crate::gameserver::appserver::shape::{
@@ -741,6 +743,7 @@ pub(crate) struct CGame {
     country_param: CCountryParam,
     country_handler: CCountryHandler,
     country_war_sys: CountryWarSys,
+    four_nation_war_sys: CFourNationWarSys,
     emotion: CEmotion,
     region_setup: CRegionSetup,
     hit_level_setup: CHitLevelSetup,
@@ -803,6 +806,7 @@ impl CGame {
             country_param: CCountryParam::default(),
             country_handler: CCountryHandler::default(),
             country_war_sys: CountryWarSys::default(),
+            four_nation_war_sys: CFourNationWarSys::default(),
             emotion: CEmotion::default(),
             region_setup: CRegionSetup::default(),
             hit_level_setup: CHitLevelSetup::default(),
@@ -1133,6 +1137,14 @@ impl CGame {
 
     pub(crate) const fn country_war_sys_mut(&mut self) -> &mut CountryWarSys {
         &mut self.country_war_sys
+    }
+
+    pub(crate) const fn four_nation_war_sys(&self) -> &CFourNationWarSys {
+        &self.four_nation_war_sys
+    }
+
+    pub(crate) const fn four_nation_war_sys_mut(&mut self) -> &mut CFourNationWarSys {
+        &mut self.four_nation_war_sys
     }
 
     pub(crate) const fn emotion(&self) -> &CEmotion {

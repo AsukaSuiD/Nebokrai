@@ -28,6 +28,7 @@ pub(crate) mod appserver {
     pub(crate) mod player;
     pub(crate) mod organizingsystem {
         pub(crate) mod attackcitysys;
+        pub(crate) mod fournationwarsys;
         pub(crate) mod villagewarsys;
     }
     pub(crate) mod region;

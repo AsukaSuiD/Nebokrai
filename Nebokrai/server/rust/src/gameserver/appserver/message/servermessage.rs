@@ -33,6 +33,8 @@
 //! minister records и публикует ordered lookup до финального startup log.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
+//! FourNationWar `0x25` декодирует exact 196-byte setup records и пять rects,
+//! затем проецирует war state и relive rectangles в доступные nation regions.
 //!
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
@@ -44,6 +46,9 @@ use std::fmt;
 
 use super::super::organizingsystem::attackcitysys::{
     AttackCityDecodeError, AttackCityRegionContext, CAttackCitySys,
+};
+use super::super::organizingsystem::fournationwarsys::{
+    CFourNationWarSys, FourNationGameDecodeError, FourNationGameStartupContext, FourNationRect,
 };
 use super::super::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarDecodeError, VillageWarRegionContext,
@@ -965,6 +970,13 @@ pub(crate) trait WarScheduleSetupContext {
     /// Ищет только non-null country region без proxy fallback.
     fn find_country_region(&mut self, region_id: i32) -> Option<Self::Region>;
 
+    /// Ищет main region с proxy fallback и принимает только nation region.
+    fn find_nation_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region>;
+
+    fn reset_nation_war_state(&mut self, region: Self::Region, index: i32, state: i32);
+
+    fn set_nation_relive_rects(&mut self, region: Self::Region, rects: [FourNationRect; 5]);
+
     fn add_log_text(&mut self, text: &'static str);
 }
 
@@ -973,6 +985,7 @@ pub(crate) enum WarScheduleSetupError {
     AttackCity(AttackCityDecodeError),
     Village(VillageWarDecodeError),
     Country(CountryWarDecodeError),
+    FourNation(FourNationGameDecodeError),
 }
 
 impl fmt::Display for WarScheduleSetupError {
@@ -981,6 +994,7 @@ impl fmt::Display for WarScheduleSetupError {
             Self::AttackCity(error) => write!(formatter, "AttackCity snapshot: {error}"),
             Self::Village(error) => write!(formatter, "Village snapshot: {error}"),
             Self::Country(error) => write!(formatter, "CountryWar snapshot: {error}"),
+            Self::FourNation(error) => write!(formatter, "FourNationWar snapshot: {error}"),
         }
     }
 }
@@ -991,11 +1005,12 @@ impl Error for WarScheduleSetupError {
             Self::AttackCity(error) => Some(error),
             Self::Village(error) => Some(error),
             Self::Country(error) => Some(error),
+            Self::FourNation(error) => Some(error),
         }
     }
 }
 
-/// Обрабатывает доказанные war startup selectors `0x1B/0x1C/0x1F`.
+/// Обрабатывает доказанные war startup selectors `0x1B/0x1C/0x1F/0x25`.
 pub(crate) fn dispatch_war_startup_setup<Context: WarScheduleSetupContext>(
     selector: i32,
     payload: &[u8],
@@ -1003,6 +1018,7 @@ pub(crate) fn dispatch_war_startup_setup<Context: WarScheduleSetupContext>(
     attack_city_sys: &mut CAttackCitySys,
     village_war_sys: &mut CVillageWarSys,
     country_war_sys: &mut CountryWarSys,
+    four_nation_war_sys: &mut CFourNationWarSys,
     context: &mut Context,
 ) -> Result<bool, WarScheduleSetupError> {
     match selector {
@@ -1037,6 +1053,17 @@ pub(crate) fn dispatch_war_startup_setup<Context: WarScheduleSetupContext>(
                 country_war_sys.init_country_region_state(&mut adapter);
             }
             context.add_log_text("Initial SI_COUNTRYWAR...OK!");
+            Ok(true)
+        }
+        0x25 => {
+            four_nation_war_sys
+                .decord_from_byte_array(payload, cursor)
+                .map_err(WarScheduleSetupError::FourNation)?;
+            {
+                let mut adapter = FourNationWarContextAdapter(context);
+                let _ = four_nation_war_sys.init_war_state(&mut adapter);
+            }
+            context.add_log_text("Initial SI_FOURNATIONWARSYS_SETUP..OK!!");
             Ok(true)
         }
         _ => Ok(false),
@@ -1092,6 +1119,26 @@ impl<Context: WarScheduleSetupContext> CountryWarStartupContext
 
     fn find_country_region(&mut self, region_id: i32) -> Option<Self::Region> {
         self.0.find_country_region(region_id)
+    }
+}
+
+struct FourNationWarContextAdapter<'a, Context>(&'a mut Context);
+
+impl<Context: WarScheduleSetupContext> FourNationGameStartupContext
+    for FourNationWarContextAdapter<'_, Context>
+{
+    type Region = Context::Region;
+
+    fn find_nation_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region> {
+        self.0.find_nation_region_then_proxy(region_id)
+    }
+
+    fn reset_nation_war_state(&mut self, region: Self::Region, index: i32, state: i32) {
+        self.0.reset_nation_war_state(region, index, state);
+    }
+
+    fn set_nation_relive_rects(&mut self, region: Self::Region, rects: [FourNationRect; 5]) {
+        self.0.set_nation_relive_rects(region, rects);
     }
 }
 

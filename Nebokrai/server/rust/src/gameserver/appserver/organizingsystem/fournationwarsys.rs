@@ -1,6 +1,327 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! GameServer startup-owner войны четырёх стран `CFourNationWarSys`.
+//!
+//! Wire и startup side effects подтверждены точными
+//! `gameserver.exe + GameServer.pdb` и `worldserver.exe + worldserver.pdb`;
+//! исходные owners `organizingsystem/fournationwarsys.cpp/.h`. Snapshot несёт
+//! signed count, 196-байтные setup records, затем signed count и 16-байтные
+//! `tagRECT`. World serializer и Game decoder используют одинаковый порядок.
+//!
+//! Decoder принимает повторный snapshot, пока setup vector остаётся пустым;
+//! при уже опубликованных setup оригинал удалял buffer и оставлял dangling
+//! pointers, поэтому Rust возвращает typed error без разрушения state. Rect
+//! count больше пяти в оригинале писал за static array и здесь блокируется
+//! после сохранения допустимого префикса. Malformed tail также сохраняет все
+//! полностью опубликованные records и cursor.
+//!
+//! `InitWarState` идёт по vector-order, ищет main region с proxy fallback,
+//! принимает только nation region, применяет `(index, region_state)` и копирует
+//! пять relive rectangles. Process singleton заменён owned-полем `CGame`.
+//! Остальные callbacks, morale и player-war-time методы ниже ещё сохраняют RAW.
+
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
+
+use crate::public::date::TagTime;
+
+const FOUR_NATION_SETUP_WIRE_SIZE: usize = 0xc4;
+const FOUR_NATION_RECT_COUNT: usize = 5;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FourNationGameSetup {
+    pub(crate) time_index: i32,
+    pub(crate) region_id: i32,
+    pub(crate) sign_up_start_event_id: u32,
+    pub(crate) sign_up_start_time: TagTime,
+    pub(crate) sign_up_end_event_id: u32,
+    pub(crate) sign_up_end_time: TagTime,
+    pub(crate) start_event_id: u32,
+    pub(crate) start_time: TagTime,
+    pub(crate) end_event_id: u32,
+    pub(crate) end_time: TagTime,
+    pub(crate) end_info_event_id: u32,
+    pub(crate) end_info_time: TagTime,
+    pub(crate) enter_start_event_id: u32,
+    pub(crate) enter_start_time: TagTime,
+    pub(crate) enter_end_event_id: u32,
+    pub(crate) enter_end_time: TagTime,
+    pub(crate) refresh_event_id: u32,
+    pub(crate) refresh_region_time: TagTime,
+    pub(crate) clear_war_event_id: u32,
+    pub(crate) clear_war_time: TagTime,
+    pub(crate) region_state: i32,
+    pub(crate) is_every_week: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct FourNationRect {
+    pub(crate) left: i32,
+    pub(crate) top: i32,
+    pub(crate) right: i32,
+    pub(crate) bottom: i32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CFourNationWarSys {
+    setups: Vec<FourNationGameSetup>,
+    rects: [FourNationRect; FOUR_NATION_RECT_COUNT],
+    morale: i32,
+    player_war_times_ms: BTreeMap<i32, u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FourNationGameDecodeReport {
+    pub(crate) declared_setups: i32,
+    pub(crate) decoded_setups: usize,
+    pub(crate) declared_rects: i32,
+    pub(crate) decoded_rects: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FourNationGameInitReport {
+    pub(crate) setups: usize,
+    pub(crate) nation_regions: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FourNationGameDecodeError {
+    AlreadyInitialized {
+        retained_setups: usize,
+    },
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        required: usize,
+        available: usize,
+    },
+    RectCapacity {
+        declared: i32,
+        capacity: usize,
+    },
+}
+
+impl fmt::Display for FourNationGameDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyInitialized { retained_setups } => write!(
+                formatter,
+                "FourNationWar snapshot повторно получен при {retained_setups} опубликованных setup"
+            ),
+            Self::UnexpectedEnd {
+                field,
+                offset,
+                required,
+                available,
+            } => write!(
+                formatter,
+                "FourNationWar snapshot обрывается на {field} в {offset}: нужно {required}, доступно {available}"
+            ),
+            Self::RectCapacity { declared, capacity } => write!(
+                formatter,
+                "FourNationWar snapshot объявляет {declared} rectangles при capacity {capacity}"
+            ),
+        }
+    }
+}
+
+impl Error for FourNationGameDecodeError {}
+
+pub(crate) trait FourNationGameStartupContext {
+    type Region: Copy;
+
+    /// Ищет main region, затем proxy, и возвращает только nation region.
+    fn find_nation_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region>;
+
+    fn reset_nation_war_state(&mut self, region: Self::Region, index: i32, state: i32);
+
+    fn set_nation_relive_rects(
+        &mut self,
+        region: Self::Region,
+        rects: [FourNationRect; FOUR_NATION_RECT_COUNT],
+    );
+}
+
+impl CFourNationWarSys {
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<FourNationGameDecodeReport, FourNationGameDecodeError> {
+        if !self.setups.is_empty() {
+            return Err(FourNationGameDecodeError::AlreadyInitialized {
+                retained_setups: self.setups.len(),
+            });
+        }
+
+        let declared_setups = read_four_nation_i32(source, cursor, "setup count")?;
+        let mut decoded_setups = 0;
+        for _ in 0..declared_setups.max(0) as usize {
+            let bytes = take_four_nation_bytes(
+                source,
+                cursor,
+                FOUR_NATION_SETUP_WIRE_SIZE,
+                "setup record",
+            )?;
+            self.setups.push(decode_four_nation_setup(bytes));
+            decoded_setups += 1;
+        }
+
+        let declared_rects = read_four_nation_i32(source, cursor, "rectangle count")?;
+        let mut decoded_rects = 0;
+        for index in 0..declared_rects.max(0) as usize {
+            if index >= FOUR_NATION_RECT_COUNT {
+                return Err(FourNationGameDecodeError::RectCapacity {
+                    declared: declared_rects,
+                    capacity: FOUR_NATION_RECT_COUNT,
+                });
+            }
+            let bytes = take_four_nation_bytes(source, cursor, 0x10, "rectangle")?;
+            self.rects[index] = FourNationRect {
+                left: four_nation_i32_at(bytes, 0),
+                top: four_nation_i32_at(bytes, 4),
+                right: four_nation_i32_at(bytes, 8),
+                bottom: four_nation_i32_at(bytes, 12),
+            };
+            decoded_rects += 1;
+        }
+
+        Ok(FourNationGameDecodeReport {
+            declared_setups,
+            decoded_setups,
+            declared_rects,
+            decoded_rects,
+        })
+    }
+
+    pub(crate) fn init_war_state<Context: FourNationGameStartupContext>(
+        &self,
+        context: &mut Context,
+    ) -> FourNationGameInitReport {
+        let mut nation_regions = 0;
+        for (index, setup) in self.setups.iter().enumerate() {
+            let Some(region) = context.find_nation_region_then_proxy(setup.region_id) else {
+                continue;
+            };
+            context.reset_nation_war_state(region, index as i32, setup.region_state);
+            context.set_nation_relive_rects(region, self.rects);
+            nation_regions += 1;
+        }
+        FourNationGameInitReport {
+            setups: self.setups.len(),
+            nation_regions,
+        }
+    }
+
+    pub(crate) fn setups(&self) -> &[FourNationGameSetup] {
+        &self.setups
+    }
+
+    pub(crate) const fn rects(&self) -> &[FourNationRect; FOUR_NATION_RECT_COUNT] {
+        &self.rects
+    }
+}
+
+fn decode_four_nation_setup(bytes: &[u8]) -> FourNationGameSetup {
+    let mut offset = 8;
+    let (sign_up_start_event_id, sign_up_start_time) =
+        decode_four_nation_event(bytes, &mut offset);
+    let (sign_up_end_event_id, sign_up_end_time) =
+        decode_four_nation_event(bytes, &mut offset);
+    let (start_event_id, start_time) = decode_four_nation_event(bytes, &mut offset);
+    let (end_event_id, end_time) = decode_four_nation_event(bytes, &mut offset);
+    let (end_info_event_id, end_info_time) = decode_four_nation_event(bytes, &mut offset);
+    let (enter_start_event_id, enter_start_time) =
+        decode_four_nation_event(bytes, &mut offset);
+    let (enter_end_event_id, enter_end_time) = decode_four_nation_event(bytes, &mut offset);
+    let (refresh_event_id, refresh_region_time) = decode_four_nation_event(bytes, &mut offset);
+    let (clear_war_event_id, clear_war_time) = decode_four_nation_event(bytes, &mut offset);
+    debug_assert_eq!(offset, 0xbc);
+    FourNationGameSetup {
+        time_index: four_nation_i32_at(bytes, 0),
+        region_id: four_nation_i32_at(bytes, 4),
+        sign_up_start_event_id,
+        sign_up_start_time,
+        sign_up_end_event_id,
+        sign_up_end_time,
+        start_event_id,
+        start_time,
+        end_event_id,
+        end_time,
+        end_info_event_id,
+        end_info_time,
+        enter_start_event_id,
+        enter_start_time,
+        enter_end_event_id,
+        enter_end_time,
+        refresh_event_id,
+        refresh_region_time,
+        clear_war_event_id,
+        clear_war_time,
+        region_state: four_nation_i32_at(bytes, 0xbc),
+        is_every_week: four_nation_i32_at(bytes, 0xc0),
+    }
+}
+
+fn decode_four_nation_event(bytes: &[u8], offset: &mut usize) -> (u32, TagTime) {
+    let event_id = four_nation_u32_at(bytes, *offset);
+    let time = decode_four_nation_time(&bytes[*offset + 4..*offset + 0x14]);
+    *offset += 0x14;
+    (event_id, time)
+}
+
+fn decode_four_nation_time(bytes: &[u8]) -> TagTime {
+    let mut fields = [0u16; 8];
+    for (index, field) in fields.iter_mut().enumerate() {
+        let offset = index * 2;
+        *field = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+    }
+    TagTime::from_fields(fields)
+}
+
+fn read_four_nation_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, FourNationGameDecodeError> {
+    let bytes = take_four_nation_bytes(source, cursor, 4, field)?;
+    Ok(i32::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+fn take_four_nation_bytes<'a>(
+    source: &'a [u8],
+    cursor: &mut usize,
+    required: usize,
+    field: &'static str,
+) -> Result<&'a [u8], FourNationGameDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(required) else {
+        return Err(FourNationGameDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            required,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(FourNationGameDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            required,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(bytes)
+}
+
+fn four_nation_i32_at(bytes: &[u8], offset: usize) -> i32 {
+    i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn four_nation_u32_at(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -122,34 +443,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CFourNationWarSys::getInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\fournationwarsys.h:52
-// RVA: 0x001BDDC0
-// ADDRESS: 005bddc0
-// PROTOTYPE: CFourNationWarSys * __cdecl getInstance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: GetFourNationWarSys
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\fournationwarsys.cpp:261
-// RVA: 0x001BDDE0
-// ADDRESS: 005bdde0
-// PROTOTYPE: CFourNationWarSys * __cdecl GetFourNationWarSys(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CFourNationWarSys::GetWarRegionIDByTime
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -172,34 +465,6 @@
 // RVA: 0x001BE0B0
 // ADDRESS: 005be0b0
 // PROTOTYPE: ulong __thiscall GetPlayerWarTime(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFourNationWarSys::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\fournationwarsys.cpp:15
-// RVA: 0x001BEA00
-// ADDRESS: 005bea00
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFourNationWarSys::InitWarState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\fournationwarsys.cpp:35
-// RVA: 0x001BEB60
-// ADDRESS: 005beb60
-// PROTOTYPE: void __thiscall InitWarState(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
