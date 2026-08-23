@@ -45,6 +45,8 @@
 //! globals остаются явной context-границей. Повторный function/variable setter
 //! безопасно материализует исходный freed-owner контракт как `None`; старый
 //! `length + 1` NUL-padding заменён bounded `Vec` и C-string prefix adapter-ом.
+//! `MyStringTable` также принадлежит `CGame`: reload сначала очищает map,
+//! публикует decoded prefix и сохраняет пустой fallback `GetStringByID`.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -95,6 +97,9 @@ use crate::public::ciqing::CCiQingSetup;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::equipmentcomposelist::EquipmentComposeList;
+use crate::public::mystringtable::{
+    MyStringTable, MyStringTableDecodeError, MyStringTableDecodeReport,
+};
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::public::wordsfilter::CWordsFilter;
 use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
@@ -762,6 +767,7 @@ pub(crate) struct CGame {
     function_list_file_data: Option<Vec<u8>>,
     variable_list_file_data: Option<Vec<u8>>,
     script_file_data: BTreeMap<Vec<u8>, Vec<u8>>,
+    string_table: MyStringTable,
     quest_system: CQuestSystem,
     country_param: CCountryParam,
     country_handler: CCountryHandler,
@@ -830,6 +836,7 @@ impl CGame {
             function_list_file_data: None,
             variable_list_file_data: None,
             script_file_data: BTreeMap::new(),
+            string_table: MyStringTable::new(),
             quest_system: CQuestSystem::default(),
             country_param: CCountryParam::default(),
             country_handler: CCountryHandler::default(),
@@ -1214,6 +1221,37 @@ impl CGame {
         self.script_file_data
             .get(legacy_c_string_prefix(path))
             .map(Vec::as_slice)
+    }
+
+    /// Очищает и декодирует language table, пишет exact log и лишь затем
+    /// сдвигает внешний message cursor на consumed length.
+    pub(crate) fn create_string_table(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        mut add_log_text: impl FnMut(&[u8]),
+    ) -> Result<MyStringTableDecodeReport, MyStringTableDecodeError> {
+        let start = *cursor;
+        self.string_table.table_mut().free();
+        let payload = source.get(start..).unwrap_or_default();
+        let report = self.string_table.from_byte_array(payload)?;
+        if report.unique_entries == 0 {
+            add_log_text(b"WARNING : Received a NULL language packet from WorldServer!");
+        } else {
+            add_log_text(b"Received Language packet from WorldServer OK!");
+        }
+        *cursor = start
+            .checked_add(report.consumed)
+            .expect("MyStringTable consumed length помещается в message cursor");
+        Ok(report)
+    }
+
+    /// Exact `GetStringByID` fallback: отсутствующий key возвращает пустую строку.
+    pub(crate) fn get_string_by_id(&self, id: &[u8]) -> &[u8] {
+        self.string_table
+            .table()
+            .get_string_by_id(id)
+            .unwrap_or_default()
     }
 
     pub(crate) const fn quest_system(&self) -> &CQuestSystem {
@@ -2127,19 +2165,7 @@ impl ShapeResolver for CGame {
 // IMPLEMENTED: `InitNetClientOfWS/BS` материализованы выше с исходными
 // registration packets и master -> backup Billing порядком.
 
-// ============================================================================
-// FUNCTION: CGame::CreateStringTable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1361
-// RVA: 0x00003000
-// ADDRESS: 00403000
-// PROTOTYPE: bool __thiscall CreateStringTable(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// `CreateStringTable` материализован выше с clear/decode/log/cursor порядком.
 
 // ============================================================================
 // FUNCTION: CGame::FindPlayer
@@ -2689,19 +2715,7 @@ impl ShapeResolver for CGame {
 // IMPLEMENTED: `GetTeamSessionID` и `FindPlayer` материализованы выше;
 // покрытые raw-блоки удалены.
 
-// ============================================================================
-// FUNCTION: GetStringByID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.h:417
-// RVA: 0x0001D5F0
-// ADDRESS: 0041d5f0
-// PROTOTYPE: char * __cdecl GetStringByID(basic_string<char,std::char_traits<char>,std::allocator<char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// `GetStringByID` материализован выше с исходным empty-string fallback.
 
 // `GetScriptFileData` материализован выше как lookup без вставки отсутствующего ключа.
 

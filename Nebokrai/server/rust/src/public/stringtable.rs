@@ -58,6 +58,11 @@ impl StringTable {
         &self.entries
     }
 
+    /// Публикует одну уже декодированную wire-пару; duplicate ID — last-wins.
+    pub(crate) fn insert_owned(&mut self, id: Vec<u8>, value: Vec<u8>) -> Option<Vec<u8>> {
+        self.entries.insert(id, value)
+    }
+
     /// Разбирает один resource-buffer с точными prefix/overwrite эффектами.
     pub(crate) fn load_bytes(&mut self, source: &[u8]) -> bool {
         let mut offset = 0usize;

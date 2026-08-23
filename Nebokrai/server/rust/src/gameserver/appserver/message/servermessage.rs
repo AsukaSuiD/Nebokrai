@@ -38,6 +38,8 @@
 //! Script resources `0x0A..0x0D` сохраняют signed lengths, bounded path,
 //! function/general parser callbacks и разные duplicate-owner контракты.
 //! Game ID selector `0x12` сохраняет raw byte для старшего байта team ID.
+//! Language table selector `0x2F` и runtime refresh `0x7F807` используют один
+//! clear/decode/log/cursor контракт `CGame::CreateStringTable`.
 //!
 //! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
 //! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
@@ -78,6 +80,7 @@ use crate::public::dupliregionsetup::DupliRegionDecodeError;
 use crate::public::equipmentcomposelist::{
     EquipmentComposeDecodeError, EquipmentComposeDecodeReport,
 };
+use crate::public::mystringtable::{MyStringTableDecodeError, MyStringTableDecodeReport};
 use crate::public::taozhuangsetup::{TaoZhuangDecodeError, TaoZhuangSerializationBlock};
 use crate::public::wordsfilter::{WordsFilterDecodeError, WordsFilterDecodeReport};
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpDecodeError, BattleFairyExpDecodeReport};
@@ -136,6 +139,7 @@ const HONOR_ELIMINATE_SELECTOR: i32 = 0x26;
 const DA_KONG_SELECTOR: i32 = 0x2b;
 const BATTLE_FAIRY_EXP_SELECTOR: i32 = 0x2c;
 const BATTLE_FAIRY_COMBINE_SELECTOR: i32 = 0x2d;
+const STRING_TABLE_SELECTOR: i32 = 0x2f;
 const EQUIPMENT_COMPOSE_SELECTOR: i32 = 0x30;
 const WORDS_FILTER_SELECTOR: i32 = 0x31;
 const JJC_REGION_LEVEL_SELECTOR: i32 = 0x32;
@@ -143,6 +147,7 @@ const TAO_ZHUANG_SELECTOR: i32 = 0x34;
 const CI_QING_LING_BAO_SELECTOR: i32 = 0x35;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 const GODS_BATTLE_SELECTOR: i32 = 0x39;
+const STRING_TABLE_REFRESH_MESSAGE: i32 = 0x0007_f807;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GameServerIds {
@@ -346,6 +351,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     BattleFairyCombine {
         entries: usize,
     },
+    StringTable(MyStringTableDecodeReport),
     EquipmentCompose(EquipmentComposeDecodeReport),
     WordsFilter(WordsFilterDecodeReport),
     JjcRegionLevel {
@@ -398,6 +404,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     DaKong(DaKongDecodeError),
     BattleFairyExp(BattleFairyExpDecodeError),
     BattleFairyCombine(BattleFairyComposeDecodeError),
+    StringTable(MyStringTableDecodeError),
     EquipmentCompose(EquipmentComposeDecodeError),
     WordsFilter(WordsFilterDecodeError),
     JjcRegionLevel(JjcRegionLevelDecodeError),
@@ -447,6 +454,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::DaKong(error) => error.fmt(formatter),
             Self::BattleFairyExp(error) => error.fmt(formatter),
             Self::BattleFairyCombine(error) => error.fmt(formatter),
+            Self::StringTable(error) => error.fmt(formatter),
             Self::EquipmentCompose(error) => error.fmt(formatter),
             Self::WordsFilter(error) => error.fmt(formatter),
             Self::JjcRegionLevel(error) => error.fmt(formatter),
@@ -493,6 +501,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::DaKong(error) => Some(error),
             Self::BattleFairyExp(error) => Some(error),
             Self::BattleFairyCombine(error) => Some(error),
+            Self::StringTable(error) => Some(error),
             Self::EquipmentCompose(error) => Some(error),
             Self::WordsFilter(error) => Some(error),
             Self::JjcRegionLevel(error) => Some(error),
@@ -950,6 +959,15 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 entries,
             }))
         }
+        STRING_TABLE_SELECTOR => {
+            let report = match game.create_string_table(source, cursor, &mut add_log_text) {
+                Ok(report) => report,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::StringTable(error)));
+                }
+            };
+            Some(Ok(GameOwnedStartupSnapshotReport::StringTable(report)))
+        }
         EQUIPMENT_COMPOSE_SELECTOR => {
             let report = match game
                 .equipment_compose_list_mut()
@@ -1082,6 +1100,21 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
         }
         _ => None,
     }
+}
+
+/// Обрабатывает runtime language refresh `0x7F807` тем же CGame-owner-ом.
+pub(crate) fn dispatch_string_table_refresh(
+    message_type: i32,
+    message: &mut CMessage,
+    game: &mut CGame,
+    mut add_log_text: impl FnMut(&[u8]),
+) -> Option<Result<MyStringTableDecodeReport, MyStringTableDecodeError>> {
+    if message_type != STRING_TABLE_REFRESH_MESSAGE {
+        return None;
+    }
+
+    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    Some(game.create_string_table(source, cursor, &mut add_log_text))
 }
 
 /// Наблюдаемый итог reconnect-ветви Billing `0x6F904`.
