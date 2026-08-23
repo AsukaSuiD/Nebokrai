@@ -1,28 +1,14 @@
-//! Владелец конфигурации ежедневных LeiTing-действий.
+//! Ежедневные действия `CThingSetup` из WorldServer, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `SetDailyUpdateStamp`, `AddToByteArray`, GameServer
-//! `DecordFromByteArray`, WorldServer `LoadAllThingList` и
-//! `GetDailyThingList` —. Точные пары EXE/PDB и исходные owners
-//! сохранены у raw-блоков.
+//! Wire — signed count и шестибайтные `TID/max/point` records. Daily projection
+//! считает постоянными TID `> 1999`, недельными — строго `1000 < TID < 2000`;
+//! weekday снимается отдельно для каждого weekly элемента. Пустой результат
+//! не очищает destination.
 //!
-//! Исходный singleton/static deque заменён обычным `CThingSetup` и
-//! `VecDeque`. Wire остаётся signed count, затем записи `u16 TID/max/point`
-//! по шесть байт. Daily projection сохраняет странные границы: постоянны
-//! только TID `> 1999`, недельны строго `1000 < TID < 2000`, а weekday
-//! снимается отдельным platform-вызовом для каждого недельного элемента.
-//! Если подходящих элементов нет, старый owner не очищал destination; Rust
-//! также оставляет его без изменения.
-//!
-//! Text loader очищает owner до открытия, ищет byte-оригинал whitespace-маркеры
-//! `#` общим `ReadTo`, логирует каждую добавленную запись и считает пустым файл
-//! без единого маркера. Open/empty возвращает `0`, хотя бы одна запись — `1`.
-//! После найденного маркера исходный код нулями инициализировал node, добавлял
-//! его даже при fail-state formatted extraction и лишь затем прекращал scan;
-//! safe parser сохраняет node/prefix transition и явно сообщает место
-//! остановки в load-report. Точное значение, которое старый MSVC мог записать
-//! при numeric overflow, не переносится: штатный файл содержит только малые
-//! положительные `u16`, а malformed/out-of-range поле безопасно остаётся
-//! нулём. `std::fs` заменяет только `CRFile` plumbing.
+//! Loader очищает owner, ищет `#`, добавляет нулевой record даже при поздней
+//! ошибке extraction и затем прекращает scan. Файл без записей возвращает 0,
+//! с записью — 1; out-of-range поле остаётся нулём.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -117,7 +103,6 @@ pub(crate) enum ThingSetupTextCutoffReason {
     InvalidUnsignedShort { token: Vec<u8> },
 }
 
-/// Safe-диагностика исходного stream fail-state после уже добавленного node.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ThingSetupTextCutoff {
     pub(crate) zero_based_line: usize,
@@ -180,7 +165,6 @@ impl CThingSetup {
         }
     }
 
- /// Оригинал `23:59:59`; остальные поля `tm` не меняются.
     pub(crate) const fn set_daily_update_stamp(local_time: &mut LeiTingLocalTime) {
         local_time.hour = 23;
         local_time.minute = 59;
@@ -202,7 +186,6 @@ impl CThingSetup {
             .map_err(ThingSetupFileLoadError::Empty)
     }
 
- /// Очищает owner до следующей попытки открытия, как оригинал loader.
     pub(crate) fn clear_all_things_for_load(&mut self) {
         self.all_things.clear();
     }
@@ -271,7 +254,6 @@ impl CThingSetup {
         })
     }
 
- /// Кодирует WorldServer initial-config projection.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,

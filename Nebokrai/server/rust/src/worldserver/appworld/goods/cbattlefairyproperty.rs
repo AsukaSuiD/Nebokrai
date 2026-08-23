@@ -1,29 +1,15 @@
-//! Владелец конфигурации объединения боевых фей исторического `WorldServer`.
+//! Конфигурация объединения battle fairy из `cbattlefairyproperty.cpp/.h`,
+//! подтверждённая `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `bLoadCombineConfig` и `AddToByteArray_Combine` входят в контракт owner-а;
-//! оставшиеся блоки являются compiler/STL cleanup.
+//! После успешного открытия loader очищает список и возвращает true даже для
+//! повреждённого хвоста. Один временный record переиспользуется: неполная
+//! последняя запись наследует непрочитанные поля предыдущей и всё равно
+//! добавляется.
 //!
-//! Singleton с process-lifetime leak заменён caller-owned registry, как и в
-//! очищенном C++ reference. loader возвращает false только при ошибке
-//! открытия; после успешного чтения он очищает compose-vector и возвращает
-//! true даже для пустого или повреждённого потока. Один временный `tagCompose`
-//! переиспользуется между `#`-записями: при частичном последнем record уже
-//! прочитанные поля меняются, остальные сохраняют прошлые значения, record
-//! всё равно добавляется. Этот наблюдаемый malformed-input quirk сохранён.
-//! Конструктор копирования `tagCompose` копирует четыре строки, расход,
-//! побитово точный `f32` шанса и индекс; это обычный
-//! `BattleFairyCompose: Clone`. Деструктор очищает только четыре строки и
-//! заменён структурным Drop.
-//!
-//! Wire `0x2D` подтверждён signed 32-bit count и по `0x7C` сырых
-//! bytes каждого MSVC `tagCompose`. GameServer decoder зануляет 124 bytes,
-//! копирует record и вызывает string copy constructor; поэтому корректно
-//! декодируются только SSO-строки длиной до 15 bytes. Для них Rust формирует
-//! точный 32-bit MSVC layout: четыре нулевых allocator/padding bytes, 16-byte
-//! inline buffer, size и capacity `15`. Старый путь для длинной строки посылал
-//! адрес heap-памяти WorldServer и затем разыменовывал его в другом процессе —
-//! внешний, но неработоспособный pointer/lifetime-дефект. Он не воспроизводится
-//! молча: serializer возвращает typed compatibility error.
+//! Wire subtype `0x2D` содержит signed count и сырые 0x7C-байтные MSVC records.
+//! Rust воспроизводит SSO-layout строк длиной до 15 байт. Длинные строки
+//! отклоняются: старый формат передавал межпроцессный heap pointer и не мог
+//! корректно декодироваться. Caller-owned registry заменяет singleton.
 
 use std::error::Error;
 use std::fmt;
@@ -87,7 +73,6 @@ impl fmt::Display for BattleFairyComposeWireError {
 
 impl Error for BattleFairyComposeWireError {}
 
-/// Действующее owning-состояние `CBattleFairyProperty`, не копия его ABI.
 pub(crate) struct CBattleFairyProperty {
     compose: Vec<BattleFairyCompose>,
     levels: Vec<BattleFairyLevel>,
@@ -111,7 +96,6 @@ impl CBattleFairyProperty {
         &self.levels
     }
 
- /// При open-error сохраняет старое состояние, как исходный early return.
     pub(crate) fn load_combine_config_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -121,7 +105,6 @@ impl CBattleFairyProperty {
         Ok(())
     }
 
- /// Загружает marker/token формат с reuse частичного record-а.
     pub(crate) fn load_combine_config(&mut self, source: &[u8]) {
         self.compose.clear();
         let mut cursor = 0usize;
@@ -143,7 +126,6 @@ impl CBattleFairyProperty {
         }
     }
 
- /// Кодирует client-facing `0x2D` payload в доказанном MSVC SSO-domain.
     pub(crate) fn serialize_combine(
         &self,
         destination: &mut Vec<u8>,

@@ -1,27 +1,12 @@
-//! Поиск товаров при обходе контейнера исторического `WorldServer`.
+//! Listener поиска товаров `CSeekGoodsListener` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `SetTarget` и `OnTraversingContainer` входят в контракт owner-а.
-//! Источник контракта — WorldServer EXE/PDB.
+//! `SetTarget(null)` сохраняет прежний target; непустое имя разрешается через
+//! goods factory и не очищает уже найденные GUID. Traversal добавляет GUID
+//! каждого Goods с совпавшим base-properties index и всегда возвращает 1.
 //!
-//! constructor задаёт target `0` и пустой
-//! `std::vector<CGUID>`; `Vec<CGuid>` и `Drop` заменяют его storage/destructor.
-//! `SetTarget` при null не меняет прежний target, а
-//! при non-null сохраняет результат `CGoodsFactory::QueryGoodsIDByOriginalName`.
-//! В частности, он не очищает уже собранный список — это сохранено буквально.
-//! Очищенный `Nebokrai/server/cpp` принимает готовый numeric id и очищает
-//! результаты в setter-е; Rust намеренно не переносит эти два удобных, но не
-//!
-//! traversal делает RTTI cast к `CGoods`,
-//! сравнивает `GetBasePropertiesIndex()` с target, копирует GUID из поля
-//! товара `+0xC` в конец vector и при любом объекте возвращает `1`. Safe enum
-//! из base owner-а заменяет только RTTI-механику и явно сохраняет non-goods
-//! ветку; container-параметр не представлен, потому что тело его не
-//! читает. Неинициализированный в C++ товар не материализуется как случайный
-//! `u32`: Rust `None` не совпадает ни с каким target.
-//!
-//! Приписанные translation unit тела `CAuctionLog::stLogNode`, ADO wrappers,
-//! `Catch@...`, `Unwind@...` и внутренности `std::vector` относятся к другим
-//! owner-ам либо к библиотечной/компиляторной форме и не получают Rust-копий.
+//! `Vec<CGuid>` заменяет MSVC vector, а typed base-object variant — RTTI.
+//! Неназначенный goods index не совпадает ни с каким target.
 
 use std::ffi::CStr;
 
@@ -33,7 +18,6 @@ use crate::worldserver::appworld::listener::ccontainerlistener::{
     CContainerListener, TraversedContainerObject,
 };
 
-/// Safe Rust-состояние исходного `CSeekGoodsListener`.
 #[derive(Default)]
 pub(crate) struct CSeekGoodsListener {
     target_goods_index: u32,
@@ -41,12 +25,10 @@ pub(crate) struct CSeekGoodsListener {
 }
 
 impl CSeekGoodsListener {
- /// Создаёт listener с target `0` и пустым списком результатов.
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
- /// Назначает target по legacy original-name; `None` оставляет его прежним.
     pub(crate) fn set_target(
         &mut self,
         original_name: Option<&CStr>,
@@ -60,7 +42,6 @@ impl CSeekGoodsListener {
             query_goods_id_by_original_name(original_name_index, Some(original_name));
     }
 
- /// Заимствует GUID в исходном порядке traversal-а, включая дубликаты.
     pub(crate) fn goods_ids(&self) -> &[CGuid] {
         &self.goods_ids
     }

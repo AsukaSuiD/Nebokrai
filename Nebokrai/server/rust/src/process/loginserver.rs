@@ -1,4 +1,4 @@
-//! Linux process-owner LoginServer.
+//! Владелец процесса LoginServer под Linux.
 //!
 //! Оболочка читает обязательный `area_id` из исходного `setupex.ini`, передаёт
 //! сигналы завершения единственному `CGame` и потребляет runtime/DB-наблюдения,
@@ -21,7 +21,6 @@ use crate::nets::servers::{AdmissionOutcome, ServerIoCompletion};
 
 use super::{process_shutdown, run_process};
 
-/// Запускает полный LoginServer process lifecycle и возвращает код процесса.
 pub fn run_loginserver_process() -> std::process::ExitCode {
     run_process("LoginServer", run_login_server)
 }

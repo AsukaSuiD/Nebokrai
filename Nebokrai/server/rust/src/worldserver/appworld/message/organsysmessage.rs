@@ -1,27 +1,14 @@
-//! Dispatcher `OnOrgasysMessage` WorldServer из
-//! `appworld/message/organsysmessage.cpp`.
+//! Организационные сообщения `OnOrgasysMessage` из `organsysmessage.cpp`,
+//! подтверждённые `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт ветвей подтверждён точной парой WorldServer EXE/PDB. Dispatcher
-//! читает payload в исходном порядке, разрешает player/faction/union/country
-//! owners и делегирует мутации готовым organizing owners. Он не вводит
-//! дополнительных socket, ownership, online или exact-tail gates и не строит
-//! wire-ответ там, где исходная ветвь была void/no-op.
+//! Dispatcher разрешает player/faction/union/country и передаёт governance,
+//! membership, city/war, application, transfer и billboard операции их
+//! владельцам в исходном порядке. Дополнительные socket/ownership/tail gates
+//! не добавляются; повторный lookup остаётся повторным.
 //!
-//! Governance, membership, city/war, goods-war, application, transfer,
-//! billboard и parameter opcodes сохраняют свои signed поля, C-строки,
-//! lookup-порядок, partial side effects и странные return/error mappings.
-//! Повторный nullable lookup остаётся повторным, если между обращениями
-//! выполняется observable действие.
-//!
-//! Асинхронные `CNetSessionManager` callbacks не держат `'static` ссылки на
-//! `CGame`: terminal action публикуется в FIFO и применяется единственным
-//! main-loop owner сразу после dispatch. Confirmation send остаётся в исходной
-//! callback-позиции. `parking_lot`, owned payload и typed outcomes заменяют
-//! только pointer lifetime и compiler cleanup.
-//!
-//! Короткий payload и отсутствующий обязательный owner останавливаются на
-//! безопасной границе после уже выполненного prefix. Такие случаи не получают
-//! rollback или новый rejection packet.
+//! Async session callback публикует terminal action в main-loop FIFO и лишь
+//! там изменяет `CGame`; confirmation остаётся на исходной позиции callback.
+//! Короткий payload останавливает ветку после уже выполненного префикса.
 
 use std::collections::VecDeque;
 use std::ffi::CString;
@@ -309,7 +296,6 @@ struct WorldUnionApplicationRuntimeState {
     confederation_creation_blocks: Mutex<VecDeque<ConfederationCreationEndpointBlock>>,
 }
 
-/// Process-lifetime очередь между `CNetSessionManager` и organizing owner-ом.
 #[derive(Clone, Default)]
 pub(crate) struct WorldUnionApplicationRuntimeOwner {
     state: Arc<WorldUnionApplicationRuntimeState>,
@@ -601,7 +587,6 @@ impl CityTransferSessionRuntime for WorldCityTransferEndpointRuntime {
     }
 }
 
-/// Живые callback-и универсальной инфраструктуры, не принадлежащие union state.
 pub(crate) struct WorldUnionApplicationEffectCallbacks<'a> {
     pub(crate) random: &'a mut dyn FnMut(i32) -> i32,
     pub(crate) refresh_owned_city:
@@ -614,7 +599,6 @@ pub(crate) struct WorldUnionApplicationEffectCallbacks<'a> {
         &'a mut dyn FnMut(i32, &[u8], i32, &[u8], i32, i32),
 }
 
-/// Тонкий concrete adapter готовых string/transport/session owners.
 pub(crate) struct WorldUnionApplicationEffects<'a> {
     game: &'a CGame,
     manager: &'a CNetSessionManager,
@@ -854,7 +838,6 @@ impl UnionFireOutEffects for WorldUnionFireOutEffects<'_, '_, '_> {
     }
 }
 
-/// Тонкий text-filter/string/player/log adapter faction `0x60113`.
 struct WorldFactionDubEffects<'game, 'callbacks, 'effects, 'update, 'log> {
     game: &'game CGame,
     callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
@@ -928,7 +911,6 @@ impl FactionDubContext for WorldFactionDubEffects<'_, '_, '_, '_, '_> {
     }
 }
 
-/// Тонкий string/log adapter парных faction permission owner-ов.
 struct WorldFactionPurviewEffects<'game, 'callbacks, 'effects, 'log> {
     game: &'game CGame,
     callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
@@ -1162,7 +1144,6 @@ impl FactionApplyForJoinEffects for WorldFactionApplicationEffects<'_, '_> {
     }
 }
 
-/// Concrete war/goods/string/player/log adapter faction `DoJoin` ветви.
 struct WorldFactionDoJoinEffects<'game, 'callbacks, 'effects, 'update, 'log> {
     game: &'game CGame,
     village_war: &'game CVillageWarSys,
@@ -1240,7 +1221,6 @@ impl FactionDoJoinEffects for WorldFactionDoJoinEffects<'_, '_, '_, '_, '_> {
     }
 }
 
-/// Concrete war/country/Goods-War/string/player/log adapter faction `Demise`.
 struct WorldFactionDemiseEffects<'game, 'callbacks, 'effects, 'update, 'log> {
     game: &'game CGame,
     attack_city: &'game CAttackCitySys,
@@ -1335,7 +1315,6 @@ impl FactionDemiseContext for WorldFactionDemiseEffects<'_, '_, '_, '_, '_> {
     }
 }
 
-/// Concrete war/goods/string/player/log adapter faction `Exit` ветви.
 struct WorldFactionExitEffects<'game, 'callbacks, 'effects, 'update, 'log> {
     game: &'game CGame,
     village_war: &'game CVillageWarSys,
@@ -1413,7 +1392,6 @@ impl FactionExitContext for WorldFactionExitEffects<'_, '_, '_, '_, '_> {
     }
 }
 
-/// Concrete war/goods/string/player/log adapter faction `FireOut` ветви.
 struct WorldFactionFireOutEffects<'game, 'callbacks, 'effects, 'update, 'log> {
     game: &'game CGame,
     village_war: &'game CVillageWarSys,
@@ -1508,7 +1486,6 @@ impl FactionFireOutContext for WorldFactionFireOutEffects<'_, '_, '_, '_, '_> {
     }
 }
 
-/// Узкий adapter строк/уведомлений для уже готового `CFaction::SetParam`.
 struct WorldFactionSetParameterEffects<'game, 'callbacks, 'effects, 'update> {
     game: &'game CGame,
     callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
@@ -1545,7 +1522,6 @@ impl FactionSetParameterContext for WorldFactionSetParameterEffects<'_, '_, '_, 
     }
 }
 
-/// Concrete player/goods/string/log adapter для готового `CFaction::Upgrade`.
 struct WorldFactionUpgradeEffects<'game, 'callbacks, 'effects, 'update> {
     game: &'game CGame,
     registry: &'game GoodsBasePropertiesRegistry,
@@ -1648,7 +1624,6 @@ impl FactionUpgradeContext for WorldFactionUpgradeEffects<'_, '_, '_, '_> {
     }
 }
 
-/// Узкий string/player adapter для готового `CFaction::UploadIcon`.
 struct WorldFactionUploadIconEffects<'game, 'callbacks, 'effects> {
     game: &'game CGame,
     callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
@@ -1677,7 +1652,6 @@ impl FactionUploadIconContext for WorldFactionUploadIconEffects<'_, '_, '_> {
     }
 }
 
-/// Узкий string/player adapter для готового `CFaction::SetControbuter`.
 struct WorldFactionContributorEffects<'game, 'callbacks, 'effects, 'update> {
     game: &'game CGame,
     callbacks: &'callbacks mut WorldUnionApplicationEffectCallbacks<'effects>,
@@ -1767,7 +1741,6 @@ pub(crate) struct OrganizingPlayerInviteFactionDispatch<
         PlayerInviteFactionOutcome<CreationReport, ApplicationReport, InvitationReport>,
 }
 
-/// Выполняет ingress `0x60116` без дополнительных транспортных gates.
 pub(crate) fn dispatch_player_invite_faction<Effects>(
     message: &mut CMessage,
     game: &CGame,
@@ -1823,7 +1796,6 @@ pub(crate) struct OrganizingUnionApplicationDispatch<SessionReport> {
     pub(crate) outcome: OrganizingUnionApplyForJoinOutcome<SessionReport>,
 }
 
-/// Читает и выполняет точную producer-ветвь union application.
 pub(crate) fn dispatch_union_application<Effects>(
     message: &mut CMessage,
     game: &CGame,
@@ -1868,7 +1840,6 @@ pub(crate) struct OrganizingLeaveWordEnableDispatch {
     pub(crate) outcome: OrganizingLeaveWordEnableOutcome,
 }
 
-/// Выполняет `0x6011A`: master lookup и virtual `SetLWFunction(true)`.
 pub(crate) fn dispatch_leave_word_enable<Context>(
     message: &mut CMessage,
     organizing: &mut COrganizingCtrl,
@@ -1910,7 +1881,6 @@ fn capture_local_tag_time() -> TagTimeValue {
     }
 }
 
-/// Выполняет `0x6011B`: bounded C-string, player membership и `LeaveWord`.
 pub(crate) fn dispatch_leave_word(
     message: &mut CMessage,
     game: &mut CGame,
@@ -1945,7 +1915,6 @@ pub(crate) struct OrganizingLeaveWordEditDispatch {
     pub(crate) outcome: OrganizingLeaveWordEditOutcome,
 }
 
-/// Выполняет `0x6011C`: player membership и `EditLeaveWord(..., Delete)`.
 pub(crate) fn dispatch_leave_word_edit(
     message: &mut CMessage,
     game: &CGame,
@@ -1976,7 +1945,6 @@ pub(crate) struct OrganizingPronounceDispatch {
     pub(crate) outcome: OrganizingPronounceOutcome,
 }
 
-/// Выполняет `0x6011D`: bounded C-string, player membership и `Pronounce`.
 pub(crate) fn dispatch_pronounce(
     message: &mut CMessage,
     game: &CGame,
@@ -2438,10 +2406,9 @@ pub(crate) fn dispatch_initial_organizing_data(
     })
 }
 
-/// Узкая граница online-player owner-а для списка faction одной страны.
 pub(crate) trait FactionApplicationListContext: FactionOrganizingInfoContext {
  /// `None` означает offline miss, внутренний `None` — ещё не
- /// материализованный country найденного player-owner-а.
+ /// Готовый country найденного player-owner-а.
     fn online_player_country(&self, player_id: i32) -> Option<Option<u8>>;
 }
 
@@ -2492,7 +2459,6 @@ pub(crate) struct OrganizingFactionListDispatch {
     pub(crate) outcome: OrganizingFactionListOutcome,
 }
 
-/// Выполняет `0x60107` и строит socket-response `0x7FE07`.
 pub(crate) fn dispatch_faction_list<Context>(
     message: &mut CMessage,
     organizing: &COrganizingCtrl,
@@ -3738,7 +3704,6 @@ pub(crate) struct OrganizingConsumedLongDispatch {
     pub(crate) value: i32,
 }
 
-/// Выполняет общий leaf `0x60121/0x60123`: читает и отбрасывает один `Long`.
 pub(crate) fn dispatch_consumed_long(
     message: &mut CMessage,
 ) -> Option<OrganizingConsumedLongDispatch> {
@@ -3803,7 +3768,6 @@ pub(crate) struct OrganizingDeclareWarFactionListDispatch {
     pub(crate) outcome: OrganizingDeclareWarFactionListOutcome,
 }
 
-/// Выполняет `0x6011E` и строит точный socket-response `0x7FE18`.
 pub(crate) fn dispatch_declare_war_faction_list<Context>(
     message: &mut CMessage,
     organizing: &COrganizingCtrl,
@@ -3959,7 +3923,6 @@ pub(crate) struct OrganizingDeclareFactionWarDispatch {
     pub(crate) response: OrganizingDeclareFactionWarResponse,
 }
 
-/// Выполняет `0x6011F`: player decode, объявление войны и socket-response `0x7FE19`.
 pub(crate) fn dispatch_declare_faction_war(
     message: &mut CMessage,
     game: &mut CGame,
@@ -4080,7 +4043,6 @@ pub(crate) struct OrganizingFactionBillboardBlock {
     pub(crate) billboard_type: i32,
 }
 
-/// Выполняет `0x60125` и сохраняет несовпадающую нумерацию request/serializer.
 pub(crate) fn dispatch_faction_billboard(
     message: &mut CMessage,
     organizing: &COrganizingCtrl,
@@ -4166,7 +4128,6 @@ pub(crate) struct OrganizingFactionUpgradeDispatch {
     pub(crate) outcome: OrganizingFactionUpgradeOutcome,
 }
 
-/// Выполняет `0x60126`: live player snapshot и virtual `CFaction::Upgrade`.
 #[allow(
     clippy::too_many_arguments,
     reason = "opcode использует прежние game/faction/goods/string/log singleton-ы"
@@ -4256,7 +4217,6 @@ pub(crate) struct OrganizingFactionUploadIconDispatch {
     pub(crate) outcome: OrganizingFactionUploadIconOutcome,
 }
 
-/// Выполняет `0x60127`: два faction lookup и local-time перед `UploadIcon`.
 pub(crate) fn dispatch_faction_upload_icon(
     message: &mut CMessage,
     game: &CGame,
@@ -4307,7 +4267,6 @@ pub(crate) struct OrganizingFactionContributorDispatch {
     pub(crate) outcome: OrganizingContributorOutcome,
 }
 
-/// Выполняет `0x60128`: requester membership и virtual `SetControbuter`.
 pub(crate) fn dispatch_faction_contributor(
     message: &mut CMessage,
     game: &CGame,
@@ -4366,7 +4325,6 @@ pub(crate) struct OrganizingFactionExperienceDispatch {
     pub(crate) outcome: OrganizingFactionExperienceOutcome,
 }
 
-/// Выполняет `0x60129`: contributor gate, wrapping delta и optional DB-log.
 pub(crate) fn dispatch_faction_experience(
     message: &mut CMessage,
     game: &CGame,
@@ -4450,7 +4408,6 @@ pub(crate) struct OrganizingFactionMemberStateDispatch {
     pub(crate) outcome: OrganizingFactionMemberStateOutcome,
 }
 
-/// Выполняет `0x6012A`, сохраняя условное чтение четвёртого legacy `Long`.
 pub(crate) fn dispatch_faction_member_state(
     message: &mut CMessage,
     game: &CGame,
@@ -4517,7 +4474,6 @@ pub(crate) struct OrganizingFactionTaxDispatch {
     pub(crate) outcome: OrganizingFactionTaxOutcome,
 }
 
-/// Выполняет `0x6012B/0x6012C`: два ordered war-gate и `CFaction::OperatorTax`.
 pub(crate) fn dispatch_faction_tax<Context>(
     message: &mut CMessage,
     organizing: &COrganizingCtrl,
@@ -4660,7 +4616,6 @@ pub(crate) struct OrganizingRegionParamDispatch {
     pub(crate) broadcast: Option<OrganizingRegionParamBroadcast>,
 }
 
-/// Выполняет `0x6012D` и пересылает in-place `0x7FE2E` только после мутации.
 pub(crate) fn dispatch_region_param_update(
     message: &mut CMessage,
     game: &mut CGame,
@@ -4706,7 +4661,6 @@ pub(crate) struct OrganizingRegionRouteDispatch {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Выполняет безусловный in-place route `0x6012E -> 0x7FE2D`.
 pub(crate) fn dispatch_region_route(
     message: &mut CMessage,
     game: &CGame,
@@ -4764,7 +4718,6 @@ pub(crate) struct OrganizingCityGateDispatch {
     pub(crate) outcome: OrganizingCityGateOutcome,
 }
 
-/// Выполняет `0x6012F`: `OperatorCityGate` и условный in-place region route.
 pub(crate) fn dispatch_city_gate(
     message: &mut CMessage,
     game: &CGame,
@@ -4840,7 +4793,6 @@ pub(crate) struct OrganizingCityTransferDispatch<SessionReport> {
     pub(crate) outcome: CityTransferStartOutcome<SessionReport>,
 }
 
-/// Выполняет `0x60130`: три legacy `Long` и полный `TransferIOwnerCity`.
 pub(crate) fn dispatch_city_transfer<Effects>(
     message: &mut CMessage,
     game: &CGame,
@@ -4900,7 +4852,6 @@ pub(crate) enum OrganizingAdmissionPermitBlock {
     },
 }
 
-/// Выполняет `0x60132`: literal bool, membership и virtual `SetIsPermit`.
 pub(crate) fn dispatch_admission_permit(
     message: &mut CMessage,
     game: &CGame,
@@ -4946,7 +4897,6 @@ pub(crate) struct OrganizingAttackCityEndDispatch {
     pub(crate) outcome: AttackCityEndReport,
 }
 
-/// Выполняет `0x60133`: четыре legacy `Long` и полный `OnAttackCityEnd`.
 pub(crate) fn dispatch_attack_city_end<Effects>(
     message: &mut CMessage,
     game: &CGame,
@@ -5003,7 +4953,6 @@ pub(crate) struct OrganizingVillageWarApplicationDispatch {
     pub(crate) response: Option<Result<i32, SendMessageError>>,
 }
 
-/// Живой adapter действующих organizing/region/string owner-ов заявки.
 struct WorldVillageWarApplicationContext<'game, 'callbacks, 'effects> {
     game: &'game CGame,
     organizing: &'game COrganizingCtrl,
@@ -5143,7 +5092,6 @@ impl VillageWarApplicationContext for WorldVillageWarApplicationContext<'_, '_, 
     }
 }
 
-/// Выполняет `0x60135` и при true-result отвечает исходному map-owner-у.
 pub(crate) fn dispatch_village_war_application(
     message: &mut CMessage,
     game: &CGame,
@@ -5258,7 +5206,6 @@ impl FactionEnemyMutationContext for CityWarEnemyMutationEffects<'_> {
     }
 }
 
-/// Живой adapter organizing/region/setup/string owner-ов city-war заявки.
 struct WorldAttackCityApplicationContext<'game, 'organizing, 'callbacks, 'effects, 'update> {
     game: &'game CGame,
     globe_setup: &'game GlobeSetupSnapshot,
@@ -5537,7 +5484,6 @@ fn bounded_city_war_notice(
     Ok(notice.to_vec())
 }
 
-/// Выполняет `0x60137` и при true-result отвечает source map-owner-у.
 #[allow(
     clippy::too_many_arguments,
     reason = "аргументы явно связывают исходные singleton-owner-ы без глобального состояния"
@@ -6163,7 +6109,6 @@ impl AttackCityWarResultContext
     }
 }
 
-/// Выполняет `0x60138`: четыре legacy `Long` и полный result-owner.
 #[allow(
     clippy::too_many_arguments,
     reason = "явные параметры сохраняют границы исходных singleton-owner-ов"
@@ -6349,7 +6294,6 @@ impl GoodsWarMemberContext for WorldGoodsWarMemberContext<'_, '_> {
     }
 }
 
-/// Выполняет внутренний switch `0x60139`, потребляя только нужные поля.
 pub(crate) fn dispatch_goods_war_command(
     message: &mut CMessage,
     game: &CGame,
@@ -6414,7 +6358,6 @@ pub(crate) struct OrganizingGoodsWarFactionWinDispatch {
     pub(crate) report: Option<GoodsWarFactionWinReport>,
 }
 
-/// Выполняет nullable ingress `0x6013A` и передаёт owned faction snapshot.
 pub(crate) fn dispatch_goods_war_faction_win(
     message: &mut CMessage,
     game: &CGame,
@@ -6472,7 +6415,6 @@ pub(crate) struct OrganizingPlayerQuestCommandDispatch {
     pub(crate) delivery: Option<Result<i32, SendMessageError>>,
 }
 
-/// Маршрутизирует парные `Long + Short` ветви `0x6013B/0x6013C`.
 pub(crate) fn dispatch_player_quest_command(
     message: &mut CMessage,
     game: &CGame,
@@ -6515,7 +6457,6 @@ pub(crate) struct OrganizingPlayerRunScriptDispatch {
     pub(crate) delivery: Option<Result<i32, SendMessageError>>,
 }
 
-/// Маршрутизирует bounded C-string ветвь `0x6013D`.
 pub(crate) fn dispatch_player_run_script(
     message: &mut CMessage,
     game: &CGame,
@@ -6573,7 +6514,6 @@ pub(crate) struct OrganizingFactionParameterDispatch {
     pub(crate) outcome: OrganizingFactionParameterOutcome,
 }
 
-/// Выполняет `0x6013E` с полным `Long` value и concrete `SetParam`.
 pub(crate) fn dispatch_faction_parameter(
     message: &mut CMessage,
     game: &CGame,
@@ -6651,7 +6591,6 @@ pub(crate) struct OrganizingChangeRegionRouterDispatch {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Выполняет `0x60144 -> 0x7FE4A` и безусловный `SendAll`.
 pub(crate) fn dispatch_change_region_router(
     message: &mut CMessage,
     router: &RegionRouter,
@@ -6731,7 +6670,6 @@ pub(crate) struct OrganizingVillageWarResultDispatch {
     >,
 }
 
-/// Живой region/faction/string adapter полного `OnFacWinVillage`.
 struct WorldVillageWarResultContext<'game, 'organizing, 'callbacks, 'effects, 'update> {
     game: &'game CGame,
     organizing: &'organizing mut COrganizingCtrl,
@@ -6922,7 +6860,6 @@ impl VillageWarResultContext for WorldVillageWarResultContext<'_, '_, '_, '_, '_
     }
 }
 
-/// Выполняет `0x60136`: четыре legacy `Long` и полный result-owner.
 pub(crate) fn dispatch_village_war_result<Callback: Copy>(
     message: &mut CMessage,
     game: &CGame,

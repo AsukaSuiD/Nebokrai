@@ -1,34 +1,14 @@
-//! DB-владелец `CRsGenVar` WorldServer из `rsgenvar.cpp`.
+//! World DB-владелец `CRsGenVar` из `rsgenvar.cpp`, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Источник контрактов `Load` и `Save` — WorldServer EXE/PDB. Constructor и
-//! destructor в этот owner не входят.
+//! Load читает `CSL_GENVAR` в recordset order и сразу передаёт VarName/SValue/
+//! CValue в `CVariableList`; поздняя ошибка оставляет применённый префикс.
 //!
-//! Оригинал `Load` открывает самостоятельные connection/recordset, выполняет
-//! literal `SELECT * FROM CSL_GENVAR` и в recordset-order передаёт `VarName`,
-//! `SValue`, `CValue` в `CVariableList::LoadOneVar`. Любой ADO/field отказ
-//! возвращает `false`, оставляя уже применённый prefix; `LoadVarData` в
-//! `CGame::Init` игнорирует этот bool. `WorldDatabaseSettings`/Tiberius
-//! заменяют только ADO/COM lifetime, а ANSI-поля снова кодируются в CP1251.
-//!
-//! `Save` проходит все переменные и пропускает пустое имя. Для остальных строк
-//! выполняется буквальный
-//! `SELECT * FROM CSL_GENVAR WHERE VarName = '%s'`: EOF ведёт к `INSERT` трёх
-//! `VarName/SValue/CValue`, существующая строка — к `UPDATE` только `CValue`.
-//! Нормальный эпилог возвращает `true`, null/create/query/insert
-//! failure и catch — `false` с `Save CSL_GENVAR ERROR`.
-//!
-//! Существенная странность сохранена: результат `ExecuteCn` для INSERT
-//! проверялся, а для UPDATE игнорировался, после чего цикл
-//! продолжался и итог мог быть `true`. Typed notice фиксирует эту ошибку, но
-//! не меняет результат. SQL остаётся буквальным batch без escaping, поэтому
-//! апостроф в runtime-значении вызывает тот же SQL-синтаксис/эффект, а не
-//! незаметно исправляется параметризацией.
-//!
-//! Rust строит batch в owned buffer и не переносит переполнение старого
-//! `_sprintf(char[1024])`. ANSI-байты после сборки
-//! декодируются Windows-1251, как уже доказано для русской поставки, и
-//! отправляются закреплённым `tiberius`; `Vec`, stream consumption и Rust Drop
-//! заменяют `std::string`, ADO recordset/COM и compiler cleanup.
+//! Save пропускает пустые имена. Новая переменная INSERT-ится целиком,
+//! существующая обновляет только CValue. Ошибка UPDATE оригиналом игнорировалась,
+//! поэтому общий результат может остаться успешным; ошибка INSERT — фатальна.
+//! SQL намеренно остаётся буквальным batch без escaping. CP1251 и Tiberius
+//! заменяют ANSI/ADO transport, не меняя текст или порядок.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -55,21 +35,18 @@ const UPDATE_MIDDLE: &[u8] = b"' WHERE VarName = '";
 const UPDATE_SUFFIX: &[u8] = b"'";
 const LOAD_GENERAL_VARIABLES_SQL: &str = "SELECT * FROM CSL_GENVAR";
 
-/// Доказанный bool-результат.
 #[derive(Debug)]
 pub(crate) enum GenVarSaveOutcome {
     Saved,
     Failed,
 }
 
-/// Bool-результат самостоятельного `CRsGenVar::Load` с уже применённым prefix.
 #[derive(Debug)]
 pub(crate) enum GenVarLoadOutcome {
     ReturnedTrue { loaded_rows: usize, applied_rows: usize },
     ReturnedFalse { loaded_rows: usize, applied_rows: usize },
 }
 
-/// Этап, на котором исходный ADO-вызов отказал.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum GenVarDatabaseOperation {
     Select,
@@ -77,7 +54,6 @@ pub(crate) enum GenVarDatabaseOperation {
     Update,
 }
 
-/// Структурированная замена исходных `PrintErr`/SQL-file ветвей.
 #[derive(Debug)]
 pub(crate) enum RsGenVarNotice {
     LoadSettingsMissing,
@@ -94,14 +70,12 @@ pub(crate) enum RsGenVarNotice {
         operation: GenVarDatabaseOperation,
         error: RsGenVarDatabaseError,
     },
- /// `ExecuteCn` печатал ошибку, но caller сознательно игнорировал `false`.
     UpdateFailedIgnored {
         variable_index: usize,
         error: RsGenVarDatabaseError,
     },
 }
 
-/// Ошибка действующей ADO/TDS-границы без runtime SQL и variable values.
 #[derive(Debug)]
 pub(crate) struct RsGenVarDatabaseError(tiberius::error::Error);
 
@@ -127,24 +101,20 @@ impl From<tiberius::error::Error> for RsGenVarDatabaseError {
     }
 }
 
-/// Узкая объектная граница действующего `CRsGenVar::Save`.
 pub(crate) trait RsGenVarOwner {
  /// Открывает отдельное World DB connection и применяет recordset в его
  /// исходном порядке к уже опубликованному списку.
     async fn load_general_variables(&mut self, variables: &mut CVariableList) -> GenVarLoadOutcome;
 
- /// Сохраняет список внутри уже начатой caller-транзакции.
     async fn save<S: VariableListSaveSource>(
         &mut self,
         variables: &S,
         active_transaction: &mut WorldTdsClient,
     ) -> GenVarSaveOutcome;
 
- /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<RsGenVarNotice>;
 }
 
-/// Linux/TDS-замена действующей части исходного `CRsGenVar`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsGenVar {
     settings: Option<WorldDatabaseSettings>,

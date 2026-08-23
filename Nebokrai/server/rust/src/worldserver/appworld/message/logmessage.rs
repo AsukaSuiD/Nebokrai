@@ -1,52 +1,19 @@
-//! WorldServer dispatcher-owner `OnLogMessage`.
+//! Login/player lifecycle `OnLogMessage` из `logmessage.cpp`, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Источник контракта — `WorldServer/Nworldserver.exe` и
-//! `WorldServer/WorldServer.pdb`. Owner обрабатывает player lifecycle
-//! `0x5FB01/0x5FB02`, player-list `0x4FB01`, delete-role `0x4FB02`,
-//! restore-role `0x4FB03`, create-role `0x4FB04`, select-player `0x4FB05` и
-//! account cleanup `0x4FB06/0x4FB07`. Неизвестный opcode возвращается без
-//! побочных эффектов и не передаётся следующему dispatcher-у.
+//! Ветки `0x4FB01..0x4FB07` и `0x5FB01..0x5FB02` сохраняют переходы
+//! login/offline/online, create/delete/restore/select и account cleanup.
+//! Online player отправляется GameServer до изменения списков; offline snapshot
+//! отвечает LoginServer до списков и уведомлений друзей.
 //!
-//! Lifecycle сохраняет порядок переходов между login, offline и online,
-//! вызов team-exit и адресную отправку GameServer. Успешный online-маршрут
-//! отправляет полный `CPlayer` до изменения списков. Два дополнительных long
-//! после player ID читаются и игнорируются; они не меняют исходный payload
-//! success-ответа. Offline snapshot сначала очищает transient pet/faction
-//! state, затем отвечает LoginServer, обновляет списки и только после этого
-//! уведомляет online-друзей в исходном порядке.
+//! Player list объединяет DB rows перед creation rows и накладывает live/save
+//! состояние. Delete-role снимает время до faction/DB gates; restore/deletion
+//! списки меняются в исходном порядке. Create-role выполняет limit, RU sex/
+//! occupation, country, filter и name checks до выдачи ID и equipment.
 //!
-//! Restore удаляет первое совпадение из live deletion-list, добавляет уникальный
-//! ID в хвост restore-list и посылает `0x1FF04/0x15` без priority. Account
-//! cleanup сначала предпочитает действующий online-маршрут; только при его
-//! отсутствии удаляет первый login account и отвечает `0x1FF06`.
-//!
-//! `CRsPlayer::OpenPlayerBase` сначала выполняет отдельный `SELECT ID`, затем
-//! кодирует account и wrapping-сумму DB/creation rows. Нулевой результат
-//! содержит дополнительный `long(0)`. Ненулевой путь читает
-//! `SELECT * ... ORDER BY id`, публикует DB rows перед creation rows, подменяет
-//! scalar-ы действующей map/save-копией и вычисляет deletion-status с
-//! приоритетом restore, live deletion, DB `DelDate`. N+1 lookup `DelDate` и
-//! SQL-порядок сохранены.
-//!
-//! Delete-role снимает время до organizing/DB gates. Ошибки `1..=4` отвечают
-//! `0x1FF03/0x13`; повторное удаление использует тот же ответ с нулём. Успех
-//! снимает restore, добавляет live deletion time и отвечает `0x14` с signed
-//! byte `dwDelDays`; optional delete-log ставится в FIFO только после send.
-//! Faction-проверка использует `GetMembers`, union-ветвь отвязывает faction и
-//! даёт код `3`; код `2` недостижим в этом owner-е.
-//!
-//! Create-role строго выполняет limit, RU sex/occupation, country,
-//! `WordsFilter` и шесть name lookup-ов. Первая terminal-проверка определяет
-//! ответ `0x18/0x19/0x1A/0x17`. Успех применяет default property, выдаёт новый
-//! player ID, добавляет начальную экипировку и лишь затем помещает игрока в
-//! creation-list; ответ сохраняет исходный порядок identity, equipment и
-//! region. Select-player проверяет binding через live map, frozen save-map и
-//! только затем DB. При miss он ставит fixed account record в player-load FIFO;
-//! direct clone публикует Largess/login/map до friends и сброса flags.
-//!
-//! `VecDeque`, owned wire snapshots и параметризованный Tiberius заменяют
-//! list/deque nodes, ADO/COM, `_sprintf` и временные C++ buffers. Они не меняют
-//! wire, SQL-порядок, очереди и частичные lifecycle-эффекты.
+//! Select сначала проверяет live map, frozen save-map и лишь затем DB. При miss
+//! ставится player-load FIFO; direct clone публикует Largess/login/map до friends
+//! и сброса flags. Tiberius и owned snapshots заменяют ADO/STL без перестановки.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -435,7 +402,6 @@ pub(crate) enum WorldPlayerReturnOutcome {
 
 #[derive(Debug)]
 pub(crate) enum WorldLogMessageOutcome {
- /// Default полного `OnLogMessage` без чтения и side effects.
     NoOp {
         request_type: i32,
     },

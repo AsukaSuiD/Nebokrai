@@ -1,266 +1,26 @@
-//! Обработчики server-семейств WorldServer из точной пары EXE/PDB.
+//! Server-обработчики `appworld/message/servermessage.cpp`, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! внутрипроцессного события `0x3FC03`,
-//! регистрации GameServer и reconnect player-data хвоста в `0x5FA01`,
-//! перехода игрока между GameServer `0x5FA02`,
-//! полного player-save batch `0x5FA03`, обычных opcode `0x4FC01..=0x4FC03`,
-//! `0x5FA04..=0x5FA07`, `0x5FA09`, `0x5FA0A..=0x5FA0D` и
-//! `0x5FA0F..=0x5FA10` из
-//! `OnServerMessage`; каждая ветвь представлена отдельным typed outcome.
-//! Opcode вне полной машинной таблицы завершается общим epilogue без чтения,
-//! отправки или перехода к следующему owner-у; Rust фиксирует это `NoOp`.
+//! Внутрипроцессный reconnect заменяет GameServer client в той же FIFO-позиции:
+//! старое соединение закрывается и уничтожается до публикации нового, после
+//! чего ставятся CD-key snapshot и регистрация. Уже выполненная замена не
+//! откатывается при ошибке последующей отправки.
 //!
-//! Старый reconnect передавал `CMyNetClient*` как `long` внутри сообщения.
-//! Rust получает тот же элемент общей FIFO как typed event: сначала вызывает
-//! `Close` прежнего owner-а и уничтожает его, затем публикует новый, выдаёт
-//! операторское подтверждение, ставит CD-key snapshot, приоритетную регистрацию
-//! `0x1FE01 + dwNumber + strName\0` и лишь после попытки `Send` включает
-//! control-send. Результат обоих send исходник игнорировал; typed outcome
-//! сохраняет их без изменения порядка. `Option`, owned client и `Drop` заменяют
-//! nullable pointer, integer-pointer и ручной deleting destructor.
+//! `0x5FA01` различает первичное подключение и восстановление игроков. Первичная
+//! ветвь назначает map ID и отправляет GameServer всю конфигурацию в исходном
+//! порядке; ошибки отдельных `Send` не прерывают цепочку. Reconnect сначала
+//! очищает удалённую сторону, затем восстанавливает полные player records и
+//! завершает CD-key snapshot. Неизвестный тип записи потребляет только свой tag.
 //!
-//! Если инвариант CD-key snapshot нарушен, replacement и позиция
-//! операторского подтверждения уже действуют, но регистрацию и control-send
-//! исходный код ещё не выполнял. Ошибка сохраняет этот частичный эффект, не
-//! выбирая реакцию старого null-dereference.
+//! Остальные ветви сохраняют исходный порядок ping, переходов между GameServer,
+//! player save/load, маршрутизации, region updates и журналов. Короткие числовые
+//! поля дают legacy-ноль без сдвига курсора; безопасные проверки длины
+//! останавливают только чтение, которое в оригинале выходило бы за буфер.
 //!
-//! `gameserv_conn_log` строит `0x1FE05 + peer IPv4 word + GameServer index`
-//! и неприоритетно ставит его текущему nullable LoginServer client. Оба поля
-//! остаются беззнаковыми 32-битными словами; отсутствие client сохраняет
-//! исходный нулевой результат, а проигнорированный `Send` доступен вызывающему.
-//!
-//! Начальная часть `0x5FA01` читает signed `char`, 32-битный порт и ограниченную
-//! C-строку IP, ищет её в настроенном реестре GameServer, ставит
-//! `bConnected`, затем строго по порядку назначает socket map-ID, достигает
-//! операторского сообщения о подключении, условно рассылает `0x80403` для
-//! индекса `5`,
-//! посылает `0x7F80D` и вызывает `gameserv_conn_log`. Неизвестный адрес
-//! прекращает ветку после чтения payload. Отсутствующий сетевой owner и ещё не
-//! материализованный `CGlobeSetup::bAuction` выражены позиционными безопасными
-//! границами после уже выполненных эффектов, а не выдуманными значениями.
-//!
-//! Реальные `serverSetup.ini` содержат канонический `95.78.126.81` и hostname
-//! `miracle_misc`: первый переводится в x86 IPv4 word, второй точно даёт
-//! `INADDR_NONE`. Для иных числовых форм, которые старый `inet_addr` мог читать
-//! как octal/hex/сокращённый адрес, отправка `0x1FE05` останавливается отдельной
-//! границей после `0x7F80D`; строгий parser стандартной библиотеки не выдаётся
-//! за полную Winsock-грамматику. Нулевой sync flag возвращает обязанность
-//! продолжить большую цепочку начальной конфигурации; ненулевой — отдельный
-//! хвост `count -> 0x8040E -> player snapshots -> CD-key snapshot`. Ни один
-//! хвост не объявляется исполненным частично. Reconnect сначала безусловно
-//! отправляет пустой `0x8040E`, затем для каждого packet type `1` декодирует
-//! полный `CPlayer`, восстанавливает map/offline/online ownership и после
-//! цикла отправляет CD-key snapshot. Неизвестный packet type потребляет только
-//! собственный `long`, как исходник. Единственное техническое отличие — после
-//! уже действующей отправки `0x8040E` заведомо невозможный по оставшимся байтам
-//! положительный count останавливается typed-границей: это не меняет wire и
-//! порядок наблюдаемых эффектов корректного сообщения, но не даёт входу
-//! вызвать неограниченный пустой цикл.
-//!
-//! Начальная конфигурация материализована до следующего owner-а
-//! `CMonsterList`: `0x7F801/0x2B` DaKong, `0x2F` StringTable, условный
-//! `0x31` валидного WordsFilter, `0` фабрики товаров и broadcast `0x36`
-//! ThingSetup. Первые четыре адресных сообщения уходят только новому socket,
-//! а `0x36` — всем GameServer, даже уже подключённым. Результаты send исходник
-//! игнорировал, поэтому ошибка очереди записывается в отчёт и не переставляет
-//! последующие пакеты. `CGoodsFactory::Serialize` уже заменён его точным
-//! serializer-ом; `CThingSetup::AddToByteArray` теперь также вызывается как
-//! concrete owner на своей позиции. Ещё сырые owner-ы передают готовые
-//! byte snapshots и тем самым не объявляются действующими. Невозможный
-//! безопасный state registry товаров или 32-битный count ThingSetup
-//! останавливает цепочку после уже отправленного prefix-а, вместо старого
-//! null-dereference либо выхода за 32-битный размер.
-//! Следующий `CMonsterList` уже использует действующий общий setup-owner:
-//! оба ordered registry кодируются им в пакет `0x7F801/2`, после чего точной
-//! следующей границей остаётся `CHitLevelSetup`. Это адресный send только
-//! подключившемуся socket; его результат также не управляет продолжением.
-//! `CHitLevelSetup` затем строит `0x7F801/0x14` из своего действующего
-//! `count + 12-byte records` owner-а и переводит ветку к `CPlayerList`.
-//! `CPlayerList` кодирует пять доказанных секций и адресно отправляет subtype
-//! `1`; следующая граница ветки — process-global `CEmotion::Serialize`.
-//! действующий `CEmotion` отправляется следом как `0x7F801/0x15`.
-//! `CSkillFactory` затем сохраняет ordered slot framing и исторические восемь
-//! байт padding каждого record-а, но обнуляет прежний heap-мусор, и адресно
-//! отправляется как subtype `6`. `CTradeList` сохраняет следующий ordered
-//! `C-string + count + 8-byte goods records` payload и уходит subtype `3`.
-//! Singleton `CIncrementShopList` следом кодирует ordered multimap, точные
-//! 24-байтные item-prefix-ы и affiche как subtype `4`. `CContributeSetup`
-//! затем передаёт одиннадцать positional scalars и contribution items subtype
-//! `5`. `PrisonConf` сохраняет signed-char key order и компактные десятибайтные
-//! записи как subtype `0x1D`. Следующие действующие owner-ы доводят цепочку
-//! через `PreciousBoxConf`, fairy exp, synthesis, equipment compose, new-skill
-//! monsters и goods-destroy до общего `CGlobeSetup + CRegionRouter` subtype
-//! `7`. `CLogSystem` затем сохраняет 64-байтный ABI snapshot и ordered signed
-//! item set в subtype `8`. Уже действующий `CCountryParam` следом отправляет
-//! 39 scalar-полей и пять ordered map-секций subtype `0x18`. После него
-//! country-map с вложенными `CCountry` records уходит subtype `0x19` через
-//! `CCountryHandler`. `CGodsBattleConf` затем передаёт семь positional секций
-//! subtype `0x39`; явный старый `Update` уже является инвариантом каждого
-//! `CBaseMessage::add`. Ordered region map следом отправляет назначенные этому
-//! GameServer регионы как subtype `0x0E + region type + full snapshot`, а
-//! остальные — как subtype `0x0F + proxy snapshot`. Старый `Sleep(100)` после
-//! каждого назначенного региона выражен injected delay-callback-ом: wire-order
-//! и точка задержки сохранены без навязывания Rust-слою конкретного runtime-а.
-//! Общий `CRegionSetup` затем сохраняет signed count и ordered 12-байтные
-//! records в subtype `0x11`. `CDupliRegionSetup` следом передаёт insertion-order
-//! пары region/duplicate-region subtype `0x1A`. `HonorElimilateConfig` затем
-//! отправляет два signed scalar-а subtype `0x26`. Четыре history-среза
-//! `CHonorRanks` идут subtype `0x27..0x2A`; total-пакет сохраняет отдельный
-//! positional ноль перед тем же rank payload. Nullable function/variable
-//! file-data следуют subtype `10/11` как `signed size + оригинал bytes`, без
-//! C-string преобразования. Nullable general `CVariableList` затем передаёт
-//! `count + payload length + tagged values` subtype `12`. Ordered script-file
-//! map следует отдельными subtype `13`: C-string path, signed `lstrlenA` data
-//! и C-string data. `CQuestSystem` затем передаёт setup и ordered quest records
-//! subtype `0x16`. `CPlayerRanks` следом отправляет insertion-order рейтинг
-//! subtype `0x17`. `CGMList` затем передаёт два ordered name/level map-а и god
-//! passport subtype `9`. GameServer index следом передаётся subtype `0x12` как
-//! точный narrowing cast `u32 -> u8`; старшее содержимое исходного `dwIndex`
-//! отбрасывается, как в EXE. `CFourNationWarSys` следом передаёт ABI-точную
-//! setup/RECT конфигурацию subtype `0x25`. Следующая граница — повторная
-//! battle-fairy-exp конфигурация subtype `0x2C`; она использует уже
-//! действующий общий base-owner. Следующая граница —
-//! `CBattleFairyProperty` subtype `0x2D`, подключённый через его точный
-//! MSVC-SSO serializer. Следующая граница — объединённые `CCiQingSetup +
-//! CLingBaoSetup` subtype `0x35`: два positional serializer-а дописывают один
-//! payload без дополнительного framing между ними. Следующая граница —
-//! `CTaoZhuangSetup` subtype `0x34`, который сохраняет различие declared и
-//! фактических nested count-ов. Следующая граница — `CAttackCitySys` subtype
-//! `0x1B`; он использует уже действующий schedule owner и его downstream-
-//! compatible snapshot. Следующая граница — `CVillageWarSys` subtype `0x1C`;
-//! он также использует уже действующий schedule owner и нормализованный
-//! snapshot. Следующая граница — `CountryWarSys` subtype `0x1F`, причём её
-//! подтверждённый World-layout сохраняется даже при несовпадении с layout
-//! парного Game-декодера. Цепочку завершает identity packet subtype `0x3B`:
-//! signed LoginServer ID и unsigned world number без дополнительного framing.
-//! Если setup ещё не назначил исходно неинициализированный `dwNumber`, Rust не
-//! подставляет выдуманный ноль и не отправляет неполный packet.
-//!
-//! `0x4FC03` читает один signed Windows `long` и без дополнительных проверок
-//! присваивает его `CGame::_login_server_id`. Готовый `CBaseMessage::get_long`
-//! сдвигает cursor только при наличии всех четырёх little-endian bytes; короткий
-//! payload сохраняет принятую legacy-замену нулём и неподвижный cursor. Typed
-//! outcome сообщает, были ли байты фактически прочитаны, не меняя единственный
-//! исходный побочный эффект. Остальные server-opcode возвращаются owned
-//! вызывающему и не выдаются за исполненные.
-//!
-//! `0x4FC02` не читает payload и не меняет `CGame`: создаёт пустое сообщение
-//! `0x7F80B` и вызывает общий World `SendAll`. Nullable `s_pNetServer` уже
-//! выражен `Option` и даёт исходный `0`; живой `ServerCommandHandle` синхронно
-//! копирует CRC-envelope до возврата. Игнорировавшийся исходником результат
-//! доступен typed outcome, а `Drop` заменяет stack-destructor сообщения.
-//!
-//! `0x4FC01` сначала ставит ping-флаг, полностью очищает накопленные ответы и
-//! только затем запоминает отдельный wrapping `timeGetTime`. После этих мутаций
-//! ветвь рассылает пустой `0x7F809`; ошибка готового `SendAll` доступна typed
-//! outcome и не откатывает уже начатый цикл ping.
-//!
-//! Ответ `0x5FA0A` без проверки ping-флага читает signed player count,
-//! форматирует metadata IPv4 от младшего к старшему octet, копирует signed
-//! map ID и добавляет один `tagPingGameServerInfo`. Короткий payload сохраняет
-//! legacy-ноль и неподвижный cursor; запись всё равно добавляется.
-//!
-//! `0x5FA0C` независимо читает signed payload после снимков setup world number
-//! и metadata map ID. Только два ненулевых ID порождают неприоритетный
-//! `0x1FE07 + world + map + value` текущему nullable Login client. Исходно
-//! неинициализированный до setup `dwNumber` остаётся отдельной safe-границей
-//! после уже доказанного чтения payload, а не получает выдуманный ноль.
-//!
-//! `0x5FA0D` только читает signed `long`, затем byte- строку с границей
-//! `0x80`. Поля не получают недоказанного доменного имени; отсутствие send,
-//! operator-log и мутаций `CGame` сохранено буквально.
-//!
-//! `0x5FA0B` читает и игнорирует один signed `char`, затем signed region ID,
-//! находит назначенный GameServer двумя ordered map lookup, меняет opcode того
-//! же входного сообщения на `0x7F80A` и безусловно вызывает `SendToMapID`, в
-//! том числе с legacy-нулём при отсутствии любой ступени. Короткие getters
-//! сохраняют ноль и неподвижный cursor; typed outcome отдельно сообщает
-//! полноту обоих чтений и исходно игнорировавшийся результат отправки.
-//!
-//! `0x5FA06` последовательно читает четыре signed `long`; первые три не
-//! интерпретируются WorldServer-ом, но остаются в payload того же сообщения.
-//! Четвёртый задаёт player ID. Ненулевой маршрут меняет только opcode на
-//! `0x7F806` и вызывает `SendToMapID`; при нулевом маршруте online-player
-//! получает wrapping `u32` kill и `u16` PK increment. EXE разыменовывал null,
-//! если route отсутствовал вместе с online-owner-ом: безопасный Rust сохраняет
-//! все корректные эффекты, но сообщает `MissingOnlinePlayer` вместо UB/crash.
-//!
-//! `0x5FA07` читает signed region ID, затем только для живого region-owner-а
-//! передаёт тому же virtual selective decoder-у remaining wire и общий cursor.
-//! Готовый decoder потребляет ровно `0x24` bytes и меняет только current tax,
-//! total tax, today total tax и owned faction. Отсутствующие map/region owner-ы
-//! и короткий payload выражены typed-результатом без выдуманной мутации.
-//!
-//! `0x5FA09` сохраняет три subtype-а синхронизации player-data. `0` читает
-//! declared online count, сбрасывает найденный GameServer counter и достигает
-//! operator-log; `1` сначала wrapping-увеличивает уже инициализированный
-//! counter, затем читает player ID и декодирует существующего либо нового
-//! `CPlayer`; новый owner заменяет запись по decoded ID, но не попадает в
-//! offline-list. `2` читает declared sent count и достигает итогового log с
-//! фактическим counter. Неизвестный subtype только потребляет selector.
-//! Неинициализированный loader-ом counter остаётся `Uninitialized`, а не
-//! получает выдуманное значение; player decode после него всё равно идёт в
-//! исходном порядке и сохраняет независимые доказанные эффекты.
-//!
-//! `0x5FA04` сначала читает имя `0x18`, text `0x400` и три signed `long`.
-//! Если named online-player найден, `0x7F804` уходит его GameServer как
-//! `player ID + text + два positional long + target display name`; offline
-//! target отображается ASCII `uid[signed ID]`. Если named player отсутствует,
-//! но online target из третьего long существует, тому уходит failure
-//! `0 + requested name + target ID`. Отсутствующий player или нулевой route
-//! подавляет send после уже выполненных чтений. Все C-строки остаются
-//! byte-, результаты transport-а не управляют дальнейшими эффектами.
-//!
-//! `0x5FA02` сначала читает player/target-region, проверяет target GameServer
-//! и online-owner; все три отказа возвращают `0x7F802 + char 0 + player ID`
-//! тому же socket, не потребляя остальной payload. Успех читает tile X/Y,
-//! direction и два игнорируемых positional long, затем декодирует полный
-//! `CPlayer` и строго выполняет `SetRegionID -> SetTileXY -> SetDir ->
-//! RemoveOfflinePlayer -> RemoveOnlinePlayer -> AppendLoginPlayer`. Ответ
-//! `char 1 + player ID + target IP + port` уходит исходному socket до team
-//! callback-а. оригинал устраняет ошибочные
-//! имена stack-local из оригинал. Rust не воспроизводит overread и неинициализированный
-//! target port: они остаются typed-границами в действующей позиции.
-//!
-//! `0x5FA05` читает signed type и имя `0x100`; type `1` затем читает signed
-//! integer, type `3` — строку `0x100`. Nullable общий `CVariableList` выполняет
-//! ASCII-only `_strcmpi` mutation и только при исходном success `1` World
-//! рассылает `0x7F805` с теми же полями всем GameServer. Sentinel
-//! `-99999999` подавляет send. Для иных type EXE сравнивал неинициализированный
-//! stack-slot с sentinel; Rust фиксирует этот UB как safe typed-границу и не
-//! придумывает недоказанный broadcast.
-//!
-//! `0x5FA0F` всегда сначала читает signed subtype и создаёт временный response
-//! `0x7F80E`. Subtype `0` возвращает два текущих XYD; subtype `1` читает
-//! faction/XYD, применяет только faction `1/2`, добавляет однобайтовый маркер
-//! `1` и возвращает обновлённую пару тому же socket. Subtype `2` читает имя
-//! `0x80` и faction, меняет первую byte- NPC-запись и затем безусловно
-//! достигает nullable `CRSGodsBattle::SaveNpcFaction`; отсутствие совпадения
-//! не подавляет save. `CGodsBattleConf` вызывает именно no-argument overload:
-//! тот открывает отдельное соединение и не входит в caller-transaction opcode.
-//! Rust вызывает тот же автономный Tiberius owner и awaits его до следующего
-//! FIFO slot-а, сохраняя синхронный порядок старого ADO call-site.
-//!
-//! `0x5FA10` не читает payload: nullable `CRSGodsBattle` последовательно
-//! дописывает рейтинг faction `5`, затем faction `6`. Второй SQL и ответ
-//! достигаются только после успешного первого; `0x7F80F` отправляется тому же
-//! socket только после обоих успехов и заканчивается signed-long маркером `0`.
-//! Каждая строка уже кодируется DB-owner-ом как `1 + faction + name\0 + SZL +
-//! Levels`. Await между вызовами сохраняет порядок старого synchronous ADO;
-//! Tiberius и параметризованный SQL являются только технической заменой.
-//!
-//! `0x5FA03` читает signed marker и count. Marker `-1` переходит к completion
-//! до первого packet type; иначе каждый slot читает type, и только type `1`
-//! дополнительно читает ID и полный `CPlayer`. Существующий map-owner декодируется
-//! на месте, отсутствующий создаётся и заменяет запись по декодированному ID.
-//! После любого batch EXE сравнивает `m_nDBResponsed` с числом подключённых
-//! GameServer, кроме index `5`; marker `-1` перед этим делает wrapping increment.
-//! Равенство сначала сбрасывает счётчик, затем выполняет `GenerateDBData` и строго
-//! `ClearMapPlayerForOffline -> ClearRestorePlayer -> ClearCreationPlayer ->
-//! ClearDeletionPlayer -> ClearOfflinePlayer`. После cleanup прежний handle-state
-//! закрывается, process launcher получает frozen `SaveThreadFunc` job, а
-//! возвращённое состояние становится новым handle. Дополнительный cycle-tracker
-//! не подменяет более слабую исходную семантику.
+//! Wire-формат, signedness, byte-exact строки и частичные эффекты не меняются.
+//! Готовые setup/region/country/skill serializers вызываются как отдельные
+//! владельцы; `Option`, Rust-владение и системный IPv4 parser заменяют nullable
+//! указатели, ручное удаление и обычную сетевую инфраструктуру.
 
 use std::error::Error;
 use std::fmt;
@@ -368,20 +128,14 @@ use crate::worldserver::worldserver::playerranks::{
 };
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
-/// Наблюдаемый итог typed-замены LoginServer client из ветки `0x3FC03`.
 #[derive(Debug)]
 pub(crate) struct WorldLoginClientReplacement {
- /// Был ли прежний owner закрыт и уничтожен перед присваиванием нового.
     pub(crate) previous_client_closed: bool,
- /// Соответствует позиции `AddLogText("Connect To LoginServer SUCCESS!")`.
     pub(crate) connected_notice: bool,
- /// Поставленный перед регистрацией полный список online account.
     pub(crate) cdkey_snapshot: WorldCdkeySnapshot,
- /// Исходно игнорировавшийся результат приоритетной регистрации мира.
     pub(crate) registration: Result<i32, SendMessageError>,
 }
 
-/// Наблюдаемый результат `gameserv_conn_log`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGameServerConnectedLog {
     pub(crate) peer_ipv4: u32,
@@ -389,7 +143,6 @@ pub(crate) struct WorldGameServerConnectedLog {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Snapshot/cleanup хвост `0x5FA03` и исполненный launch call-site.
 #[derive(Debug)]
 pub(crate) struct WorldCompletedSaveResponseLaunchReport {
     pub(crate) snapshot: WorldGenerateDbDataReport,
@@ -397,10 +150,8 @@ pub(crate) struct WorldCompletedSaveResponseLaunchReport {
     pub(crate) resulting_handle: WorldSaveThreadHandleState,
 }
 
-/// Результат исполненного обычного opcode `OnServerMessage`.
 #[derive(Debug)]
 pub(crate) enum WorldServerMessageOutcome {
- /// Default полного `OnServerMessage` без side effects.
     NoOp {
         request_type: i32,
     },
@@ -428,13 +179,10 @@ pub(crate) enum WorldServerMessageOutcome {
 /// `CMyNetClient::OnClose`.
 #[derive(Debug)]
 pub(crate) struct WorldLoginServerClosed {
- /// Исходный operator-log выполняется до остановки прежнего reconnect worker-а.
     pub(crate) log: AddLogTextDisposition,
- /// Точный stop/join/start `CGame::CreateConnectLoginThread`.
     pub(crate) reconnect: WorldLoginReconnectThreadRestart,
 }
 
-/// Полный typed-итог server opcode `0x5FA0F`.
 #[derive(Debug)]
 pub(crate) struct WorldGodsBattleMessage {
     pub(crate) subtype: i8,
@@ -484,7 +232,6 @@ pub(crate) enum WorldGodsBattleNpcSave {
     },
 }
 
-/// Полный typed-итог server opcode `0x5FA10`.
 #[derive(Debug)]
 pub(crate) struct WorldGodsBattleTopTenMessage {
     pub(crate) socket_id: i32,
@@ -512,7 +259,6 @@ pub(crate) enum WorldGodsBattleTopTenDisposition {
     },
 }
 
-/// Полный typed-итог server opcode `0x5FA05`.
 #[derive(Debug)]
 pub(crate) struct WorldGeneralVariableUpdate {
     pub(crate) variable_type: i32,
@@ -540,7 +286,6 @@ pub(crate) enum WorldGeneralVariableUpdateDisposition {
     },
 }
 
-/// Полный typed-итог server opcode `0x5FA02`.
 #[derive(Debug)]
 pub(crate) struct WorldRegionChangeMessage {
     pub(crate) player_id: i32,
@@ -602,7 +347,6 @@ pub(crate) enum WorldRegionChangeDisposition {
     },
 }
 
-/// Один positional slot player batch-а `0x5FA03`.
 #[derive(Debug)]
 pub(crate) enum WorldPlayerSavePacket {
     Ignored {
@@ -617,7 +361,6 @@ pub(crate) enum WorldPlayerSavePacket {
         cursor_before_decode: usize,
         cursor_after_decode: usize,
         decode: WorldServerSnapshotPlayerDecode,
- /// Точный текст действующего `AddErrorLogText`, если owner создавался.
         missing_player_notice: Option<Vec<u8>>,
     },
 }
@@ -657,7 +400,6 @@ pub(crate) enum WorldPlayerSaveBatchDisposition {
     },
 }
 
-/// Полный typed-итог server opcode `0x5FA03`.
 #[derive(Debug)]
 pub(crate) struct WorldPlayerSaveBatchMessage {
     pub(crate) marker: i8,
@@ -667,19 +409,14 @@ pub(crate) struct WorldPlayerSaveBatchMessage {
     pub(crate) disposition: WorldPlayerSaveBatchDisposition,
 }
 
-/// Наблюдаемый результат REPORT_MURDERER `0x5FA06`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldMurderReport {
- /// Все четыре positional `long`, включая legacy-ноль короткого payload.
     pub(crate) fields: [i32; 4],
- /// Для каждого поля сообщает, сдвинул ли соответствующий getter cursor.
     pub(crate) fields_complete: [bool; 4],
- /// Маршрут, вычисленный после всех четырёх чтений.
     pub(crate) game_server_number: i32,
     pub(crate) disposition: WorldMurderReportDisposition,
 }
 
-/// Взаимоисключающие хвосты REPORT_MURDERER после route lookup.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldMurderReportDisposition {
     Relayed {
@@ -687,11 +424,9 @@ pub(crate) enum WorldMurderReportDisposition {
         delivery: Result<i32, SendMessageError>,
     },
     CountersIncremented(PlayerMurderCounterUpdate),
- /// Safe-замена исходного null-dereference, не являвшегося контрактом.
     MissingOnlinePlayer,
 }
 
-/// Наблюдаемый итог selective region-param сообщения `0x5FA07`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldRegionParameterUpdate {
     pub(crate) region_id: i32,
@@ -701,7 +436,6 @@ pub(crate) struct WorldRegionParameterUpdate {
     pub(crate) outcome: WorldRegionParamDecodeOutcome,
 }
 
-/// Наблюдаемый итог одного subtype-а player-data sync `0x5FA09`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldPlayerDataSync {
     pub(crate) subtype: i8,
@@ -736,7 +470,6 @@ pub(crate) enum WorldPlayerDataSyncDisposition {
     Ignored,
 }
 
-/// Наблюдаемый итог lookup/relay ветки `0x5FA04`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldPlayerNameMessageRelay {
     pub(crate) requested_name: Vec<u8>,
@@ -773,7 +506,6 @@ pub(crate) enum WorldPlayerNameMessageSuppression {
     NamedPlayerRouteMissing,
 }
 
-/// Следующая точная позиция ветки `0x5FA01` после действующей начальной части.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WorldGameServerConnectionContinuation {
     NotConfigured,
@@ -807,7 +539,6 @@ pub(crate) enum WorldGameServerConnectionContinuation {
     },
 }
 
-/// Условный broadcast auction-state для специального GameServer `5`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGameServerAuctionBroadcast {
     pub(crate) message_type: i32,
@@ -815,7 +546,6 @@ pub(crate) struct WorldGameServerAuctionBroadcast {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Наблюдаемые эффекты действующей части `OnServerMessage(0x5FA01)`.
 #[derive(Debug)]
 pub(crate) struct WorldGameServerConnectionReport {
     pub(crate) sync_flag: i8,
@@ -836,20 +566,17 @@ pub(crate) struct WorldGameServerConnectionReport {
     pub(crate) continuation: WorldGameServerConnectionContinuation,
 }
 
-/// Concrete owner-снимки действующего prefix-а initial-config.
 pub(crate) struct WorldGameServerInitialConfigurationPrefix<'a> {
     pub(crate) da_kong_xiang_qian: &'a [u8],
     pub(crate) goods_registry: &'a GoodsBasePropertiesRegistry,
 }
 
-/// Получатель одного `0x7F801` initial-config сообщения.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldInitialConfigurationTarget {
     Socket(i32),
     AllGameServers,
 }
 
-/// Наблюдаемый результат одного send в initial-config prefix-е.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldInitialConfigurationDelivery {
     pub(crate) subtype: i32,
@@ -870,7 +597,6 @@ pub(crate) struct WorldInitialConfigurationRunReport {
     pub(crate) completion: WorldInitialConfigurationRunCompletion,
 }
 
-/// Следующая точная позиция после действующего initial-config prefix-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldInitialConfigurationPrefixCompletion {
     WordsFilter(WordsFilterSerializeError),
@@ -879,7 +605,6 @@ pub(crate) enum WorldInitialConfigurationPrefixCompletion {
     MonsterListPending { socket_id: i32 },
 }
 
-/// Отчёт prefix-а ветки `0x5FA01` с нулевым sync flag.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldInitialConfigurationPrefixReport {
     pub(crate) deliveries: Vec<WorldInitialConfigurationDelivery>,
@@ -888,287 +613,246 @@ pub(crate) struct WorldInitialConfigurationPrefixReport {
     pub(crate) completion: WorldInitialConfigurationPrefixCompletion,
 }
 
-/// Следующая позиция ветки после сериализации общего monster owner-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldMonsterConfigurationCompletion {
     MonsterList(MonsterListSerializeError),
     HitLevelSetupPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `CMonsterList` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldMonsterConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldMonsterConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CHitLevelSetup`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldHitLevelConfigurationCompletion {
     HitLevelSetup(HitLevelSerializeError),
     PlayerListPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x14` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldHitLevelConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldHitLevelConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CPlayerList`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldPlayerListConfigurationCompletion {
     PlayerList(PlayerListSerializeError),
     EmotionPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/1` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldPlayerListConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldPlayerListConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CEmotion`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldEmotionConfigurationCompletion {
     Emotion(EmotionSerializeError),
     SkillFactoryPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x15` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldEmotionConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldEmotionConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CSkillFactory`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldSkillConfigurationCompletion {
     SkillFactory(SkillFactorySerializeError),
     TradeListPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/6` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldSkillConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldSkillConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CTradeList`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldTradeListConfigurationCompletion {
     TradeList(TradeListSerializeError),
     IncrementShopListPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/3` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldTradeListConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldTradeListConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CIncrementShopList`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldIncrementShopConfigurationCompletion {
     IncrementShop(IncrementShopSerializeError),
     ContributeSetupPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/4` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldIncrementShopConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldIncrementShopConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CContributeSetup`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldContributeConfigurationCompletion {
     ContributeSetup(ContributeSetupSerializeError),
     PrisonConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/5` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldContributeConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldContributeConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `PrisonConf`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldPrisonConfigurationCompletion {
     PrisonConf(PrisonConfSerializeError),
     PreciousBoxConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x1D` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldPrisonConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldPrisonConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `PreciousBoxConf`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldPreciousBoxConfigurationCompletion {
     PreciousBox(PreciousBoxSerializeError),
     FairyExpConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x1E` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldPreciousBoxConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldPreciousBoxConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CFairyExpConf`/base serializer-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldFairyExpConfigurationCompletion {
     FairyExp(BattleFairyExpSerializeError),
     SynthesisConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x20` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldFairyExpConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldFairyExpConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CSynthesis`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldSynthesisConfigurationCompletion {
     Synthesis(SynthesisSerializeError),
     EquipmentComposeConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x21` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldSynthesisConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldSynthesisConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `EquipmentComposeList`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldEquipmentComposeConfigurationCompletion {
     EquipmentCompose(EquipmentComposeSerializeError),
     NewSkillMonsterConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x30` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldEquipmentComposeConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldEquipmentComposeConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CNewSkillMonserConf`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldNewSkillMonsterConfigurationCompletion {
     NewSkillMonster(NewSkillMonsterSerializeError),
     GoodsDestroyConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x22` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldNewSkillMonsterConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldNewSkillMonsterConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CGoodsDestroySetup`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGoodsDestroyConfigurationCompletion {
     GoodsDestroy(GoodsDestroySerializeError),
     GlobeSetupConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x23` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGoodsDestroyConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldGoodsDestroyConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после общего `CGlobeSetup + CRegionRouter` payload.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGlobeSetupConfigurationCompletion {
     RegionRouter(RegionRouterSerializeError),
     LogSystemConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/7` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGlobeSetupConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldGlobeSetupConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CLogSystem`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldLogSystemConfigurationCompletion {
     LogSystem(LogSystemSerializeError),
     CountryParamConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/8` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldLogSystemConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldLogSystemConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CCountryParam`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryParamConfigurationCompletion {
     CountryParam(CountryParamSerializationBlock),
     CountryHandlerConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x18` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldCountryParamConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldCountryParamConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CCountryHandler`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryHandlerConfigurationCompletion {
     CountryHandler(CountryHandlerSerializeError),
     GodsBattleConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x19` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldCountryHandlerConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldCountryHandlerConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CGodsBattleConf`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGodsBattleConfigurationCompletion {
     GodsBattle(GodsBattleSerializeError),
     RegionSnapshotsPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x39` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGodsBattleConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldGodsBattleConfigurationCompletion,
 }
 
-/// Наблюдаемая отправка одного элемента ordered region map.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldRegionConfigurationDelivery {
     pub(crate) map_key: i32,
@@ -1178,104 +862,89 @@ pub(crate) struct WorldRegionConfigurationDelivery {
     pub(crate) delay_after_ms: Option<u32>,
 }
 
-/// Следующая точная позиция ветки после initial-config region traversal.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldRegionConfigurationCompletion {
     RegionSnapshot(WorldInitialRegionSnapshotBlock),
     RegionSetupConfigurationPending { socket_id: i32 },
 }
 
-/// Частичный или полный отчёт ordered region snapshot прохода.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldRegionConfigurationReport {
     pub(crate) deliveries: Vec<WorldRegionConfigurationDelivery>,
     pub(crate) completion: WorldRegionConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после общего `CRegionSetup`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldRegionSetupConfigurationCompletion {
     RegionSetup(RegionSetupSerializeError),
     DupliRegionSetupPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x11` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldRegionSetupConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldRegionSetupConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `CDupliRegionSetup`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldDupliRegionConfigurationCompletion {
     DupliRegionSetup(DupliRegionSerializeError),
     HonorEliminateConfigurationPending { socket_id: i32 },
 }
 
-/// Отчёт отправки `0x7F801/0x1A` новому GameServer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldDupliRegionConfigurationReport {
     pub(crate) delivery: Option<WorldInitialConfigurationDelivery>,
     pub(crate) completion: WorldDupliRegionConfigurationCompletion,
 }
 
-/// Следующая позиция ветки после `HonorElimilateConfig`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldHonorEliminateConfigurationCompletion {
     HonorRanksPending { socket_id: i32 },
 }
 
-/// Отчёт фиксированной отправки `HonorElimilateConfig` subtype `0x26`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldHonorEliminateConfigurationReport {
     pub(crate) delivery: WorldInitialConfigurationDelivery,
     pub(crate) completion: WorldHonorEliminateConfigurationCompletion,
 }
 
-/// Одна из четырёх initial-config history-таблиц `CHonorRanks`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldHonorRanksConfigurationDelivery {
     pub(crate) rank_type: HonorRanksType,
     pub(crate) delivery: WorldInitialConfigurationDelivery,
 }
 
-/// Следующая точная позиция после четырёх history-таблиц.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldHonorRanksConfigurationCompletion {
     HonorRanks(HonorRanksSerializationBlock),
     FunctionListPending { socket_id: i32 },
 }
 
-/// Частичный или полный отчёт отправки subtype `0x27..0x2A`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldHonorRanksConfigurationReport {
     pub(crate) deliveries: Vec<WorldHonorRanksConfigurationDelivery>,
     pub(crate) completion: WorldHonorRanksConfigurationCompletion,
 }
 
-/// Один из двух nullable оригинал script-list owners.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldRawScriptListKind {
     Function,
     Variable,
 }
 
-/// Невозможный для исходного signed `long` размер файла.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldRawScriptListConfigurationBlock {
     pub(crate) kind: WorldRawScriptListKind,
     pub(crate) length: usize,
 }
 
-/// Одна реально состоявшаяся nullable-отправка subtype `0x0A/0x0B`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldRawScriptListConfigurationDelivery {
     pub(crate) kind: WorldRawScriptListKind,
     pub(crate) delivery: WorldInitialConfigurationDelivery,
 }
 
-/// Следующая позиция ветки после function/variable оригинал file-data.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldRawScriptListsConfigurationCompletion {
     FileSize(WorldRawScriptListConfigurationBlock),
@@ -1288,7 +957,6 @@ pub(crate) struct WorldRawScriptListsConfigurationReport {
     pub(crate) completion: WorldRawScriptListsConfigurationCompletion,
 }
 
-/// Следующая позиция после nullable general variable-list.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGeneralVariableConfigurationCompletion {
     VariableList(VariableListSerializationBlock),
@@ -1301,7 +969,6 @@ pub(crate) struct WorldGeneralVariableConfigurationReport {
     pub(crate) completion: WorldGeneralVariableConfigurationCompletion,
 }
 
-/// Невозможная signed length одного `lstrlenA(script_data)`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldScriptFileConfigurationBlock {
     pub(crate) path: Vec<u8>,
@@ -1483,7 +1150,6 @@ pub(crate) struct WorldGameServerIdentityReport {
     pub(crate) completion: WorldGameServerIdentityCompletion,
 }
 
-/// Один элемент reconnect-хвоста после обязательного packet type.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGameServerReconnectRecord {
     Skipped {
@@ -1498,7 +1164,6 @@ pub(crate) enum WorldGameServerReconnectRecord {
     },
 }
 
-/// Точная действующая точка завершения reconnect player-data хвоста.
 #[derive(Debug)]
 pub(crate) enum WorldGameServerReconnectCompletion {
     InvalidElementCount {
@@ -1517,7 +1182,6 @@ pub(crate) enum WorldGameServerReconnectCompletion {
     CdkeySnapshot(Result<Option<WorldCdkeySnapshot>, WorldCdkeySnapshotError>),
 }
 
-/// Полный отчёт продолжения reconnect-ветки `0x5FA01` после общего prefix-а.
 #[derive(Debug)]
 pub(crate) struct WorldGameServerReconnectReport {
     pub(crate) socket_id: i32,
@@ -1528,54 +1192,39 @@ pub(crate) struct WorldGameServerReconnectReport {
     pub(crate) completion: WorldGameServerReconnectCompletion,
 }
 
-/// Итог пустого broadcast из ветки `0x4FC02`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGameServerBroadcast {
- /// Полный opcode построенного исходящего сообщения.
     pub(crate) message_type: i32,
- /// Исходно игнорировавшийся результат `CMessage::SendAll`.
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Наблюдаемый итог запуска цикла ping из ветки `0x4FC01`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGameServerPingStart {
- /// Число накопленных ответов, удалённых до снятия нового tick.
     pub(crate) cleared_responses: usize,
- /// Записанный wrapping millisecond tick нового цикла.
     pub(crate) started_at_ms: u32,
- /// Исходно игнорировавшийся результат `CMessage::SendAll`.
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Наблюдаемый итог принятого ответа GameServer из ветки `0x5FA0A`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGameServerPingResponse {
- /// Полная семантическая копия элемента, добавленного в vector.
     pub(crate) response: WorldPingGameServerInfo,
- /// Размер vector после безусловного `push_back`.
     pub(crate) response_count: usize,
- /// `false` означает legacy-ноль без сдвига cursor короткого payload.
     pub(crate) payload_complete: bool,
 }
 
-/// Typed-результат условной пересылки tuple из ветки `0x5FA0C`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldLoginServerTupleRelay {
- /// Setup ещё не назначил исходно неинициализированный `dwNumber`.
     WorldNumberUnavailable {
         map_id: i32,
         value: i32,
         payload_complete: bool,
     },
- /// Нулевой world либо map ID подавил создание исходящего сообщения.
     Suppressed {
         world_number: u32,
         map_id: i32,
         value: i32,
         payload_complete: bool,
     },
- /// Оба ID ненулевые и попытка неприоритетной отправки выполнена.
     Forwarded {
         world_number: u32,
         map_id: i32,
@@ -1586,59 +1235,39 @@ pub(crate) enum WorldLoginServerTupleRelay {
     },
 }
 
-/// Два намеренно безымянных поля, прочитанных веткой `0x5FA0D`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldOpaqueServerFields {
- /// Signed `long`, включая legacy-ноль короткого payload.
     pub(crate) value: i32,
- /// Был ли numeric getter способен сдвинуть cursor на четыре bytes.
     pub(crate) numeric_complete: bool,
- /// Byte- результат готового ограниченного `GetStr(..., 0x80)`.
     pub(crate) text: Vec<u8>,
 }
 
-/// Наблюдаемый итог региональной пересылки из ветки `0x5FA0B`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldRegionMessageRelay {
- /// Прочитанное, но не использованное исходником первое поле.
     pub(crate) ignored_selector: i8,
- /// Был ли `GetChar` способен сдвинуть cursor на один byte.
     pub(crate) selector_complete: bool,
- /// Signed region ID, включая legacy-ноль короткого payload.
     pub(crate) region_id: i32,
- /// Был ли `GetLong` способен сдвинуть cursor на четыре bytes.
     pub(crate) region_complete: bool,
- /// Найденный `dwIndex` GameServer либо исходный ноль.
     pub(crate) game_server_number: i32,
- /// Полный opcode того же входного сообщения после мутации.
     pub(crate) message_type: i32,
- /// Исходно игнорировавшийся результат `CMessage::SendToMapID`.
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Наблюдаемый итог ветки `0x4FC03`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldLoginServerIdentity {
- /// Значение поля до безусловного присваивания.
     pub(crate) previous_login_server_id: i32,
- /// Новый signed `long`, включая legacy-ноль короткого payload.
     pub(crate) login_server_id: i32,
- /// `false` означает, что `GetLong` не сдвинул cursor и вернул legacy-ноль.
     pub(crate) payload_complete: bool,
 }
 
-/// Узкая диспетчеризация уже выбранного server-owner-а.
 pub(crate) enum WorldServerMessageDispatch {
     Handled(WorldServerMessageOutcome),
     Pending(CMessage),
 }
 
-/// Безопасная граница после уже выполненной замены LoginServer owner-а.
 #[derive(Debug)]
 pub(crate) struct WorldServerMessageError {
- /// Был ли прежний owner закрыт до достижения ошибки snapshot.
     pub(crate) previous_client_closed: bool,
- /// Операторское подтверждение уже находится перед вызовом snapshot.
     pub(crate) connected_notice: bool,
     source: WorldCdkeySnapshotError,
 }
@@ -1659,7 +1288,6 @@ impl Error for WorldServerMessageError {
     }
 }
 
-/// Выполняет точный helper `gameserv_conn_log` перед продолжением `0x5FA01`.
 pub(crate) fn game_server_connected_log(
     game: &CGame,
     peer_ipv4: u32,
@@ -1679,7 +1307,6 @@ pub(crate) fn game_server_connected_log(
     }
 }
 
-/// Выполняет только доказанную ветку `OnServerMessage(0x3FC03)`.
 pub(crate) fn on_login_client_reconnected(
     game: &mut CGame,
     client: CMyNetClient,
@@ -1772,7 +1399,6 @@ pub(crate) fn materialize_completed_save_response_snapshot(
     })
 }
 
-/// Исполняет только уже действующие обычные ветви `OnServerMessage`.
 pub(crate) async fn on_server_message(
     game: &mut CGame,
     mut message: CMessage,
@@ -2504,7 +2130,7 @@ pub(crate) async fn on_server_message(
                 None => {
  // До успешного LoadSetup старый
  // dwNumber был неинициализирован. Реакция его чтения не
- // назначается; доказанное GetLong уже выполнено выше.
+ // назначается; исходное GetLong уже выполнено выше.
                     WorldLoginServerTupleRelay::WorldNumberUnavailable {
                         map_id,
                         value,
@@ -2723,7 +2349,6 @@ pub(crate) async fn on_server_message(
     }
 }
 
-/// Исполняет начало `0x5FA01`; auction-state остаётся у отдельного setup-owner-а.
 pub(crate) fn on_game_server_connected(
     game: &mut CGame,
     message: &mut CMessage,
@@ -2821,7 +2446,6 @@ pub(crate) fn on_game_server_connected(
     report
 }
 
-/// Отправляет точный prefix начальной конфигурации до `CMonsterList`.
 pub(crate) fn continue_game_server_initial_configuration_prefix(
     game: &CGame,
     socket_id: i32,
@@ -2902,7 +2526,6 @@ pub(crate) fn continue_game_server_initial_configuration_prefix(
     }
 }
 
-/// Кодирует и отправляет точный `0x7F801/2` monster-list packet.
 pub(crate) fn continue_game_server_monster_configuration(
     game: &CGame,
     socket_id: i32,
@@ -2929,7 +2552,6 @@ pub(crate) fn continue_game_server_monster_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CHitLevelSetup` initial-config packet.
 pub(crate) fn continue_game_server_hit_level_configuration(
     game: &CGame,
     socket_id: i32,
@@ -2954,7 +2576,6 @@ pub(crate) fn continue_game_server_hit_level_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CPlayerList` initial-config packet.
 pub(crate) fn continue_game_server_player_list_configuration(
     game: &CGame,
     socket_id: i32,
@@ -2980,7 +2601,6 @@ pub(crate) fn continue_game_server_player_list_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CEmotion` initial-config packet.
 pub(crate) fn continue_game_server_emotion_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3005,7 +2625,6 @@ pub(crate) fn continue_game_server_emotion_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CSkillFactory` initial-config packet.
 pub(crate) fn continue_game_server_skill_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3031,7 +2650,6 @@ pub(crate) fn continue_game_server_skill_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CTradeList` initial-config packet.
 pub(crate) fn continue_game_server_trade_list_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3056,7 +2674,6 @@ pub(crate) fn continue_game_server_trade_list_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CIncrementShopList` initial-config packet.
 pub(crate) fn continue_game_server_increment_shop_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3081,7 +2698,6 @@ pub(crate) fn continue_game_server_increment_shop_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CContributeSetup` initial-config packet.
 pub(crate) fn continue_game_server_contribute_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3108,7 +2724,6 @@ pub(crate) fn continue_game_server_contribute_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `PrisonConf` initial-config packet.
 pub(crate) fn continue_game_server_prison_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3135,7 +2750,6 @@ pub(crate) fn continue_game_server_prison_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `PreciousBoxConf` initial-config packet.
 pub(crate) fn continue_game_server_precious_box_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3163,7 +2777,6 @@ pub(crate) fn continue_game_server_precious_box_configuration(
     }
 }
 
-/// Кодирует общий base-state `CFairyExpConf` и отправляет packet.
 pub(crate) fn continue_game_server_fairy_exp_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3191,7 +2804,6 @@ pub(crate) fn continue_game_server_fairy_exp_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CSynthesis` initial-config packet.
 pub(crate) fn continue_game_server_synthesis_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3219,7 +2831,6 @@ pub(crate) fn continue_game_server_synthesis_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `EquipmentComposeList` initial-config packet.
 pub(crate) fn continue_game_server_equipment_compose_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3250,7 +2861,6 @@ pub(crate) fn continue_game_server_equipment_compose_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CNewSkillMonserConf` initial-config packet.
 pub(crate) fn continue_game_server_new_skill_monster_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3278,7 +2888,6 @@ pub(crate) fn continue_game_server_new_skill_monster_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CGoodsDestroySetup` initial-config packet.
 pub(crate) fn continue_game_server_goods_destroy_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3306,7 +2915,6 @@ pub(crate) fn continue_game_server_goods_destroy_configuration(
     }
 }
 
-/// Кодирует единый `CGlobeSetup + CRegionRouter` payload и отправляет packet.
 pub(crate) fn continue_game_server_globe_setup_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3335,7 +2943,6 @@ pub(crate) fn continue_game_server_globe_setup_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CLogSystem` initial-config packet.
 pub(crate) fn continue_game_server_log_system_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3363,7 +2970,6 @@ pub(crate) fn continue_game_server_log_system_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CCountryParam` initial-config packet.
 pub(crate) fn continue_game_server_country_param_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3391,7 +2997,6 @@ pub(crate) fn continue_game_server_country_param_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CCountryHandler` initial-config packet.
 pub(crate) fn continue_game_server_country_handler_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3419,7 +3024,6 @@ pub(crate) fn continue_game_server_country_handler_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CGodsBattleConf` initial-config packet.
 pub(crate) fn continue_game_server_gods_battle_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3445,7 +3049,6 @@ pub(crate) fn continue_game_server_gods_battle_configuration(
     }
 }
 
-/// Отправляет initial-config снимки регионов в точном signed map-order.
 pub(crate) fn continue_game_server_region_configurations<Delay>(
     game: &CGame,
     socket_id: i32,
@@ -3508,7 +3111,6 @@ where
     }
 }
 
-/// Кодирует и отправляет точный общий `CRegionSetup` initial-config packet.
 pub(crate) fn continue_game_server_region_setup_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3536,7 +3138,6 @@ pub(crate) fn continue_game_server_region_setup_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CDupliRegionSetup` initial-config packet.
 pub(crate) fn continue_game_server_dupli_region_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3563,7 +3164,6 @@ pub(crate) fn continue_game_server_dupli_region_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `HonorElimilateConfig` initial-config packet.
 pub(crate) fn continue_game_server_honor_eliminate_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3583,7 +3183,6 @@ pub(crate) fn continue_game_server_honor_eliminate_configuration(
     }
 }
 
-/// Отправляет четыре точных history-среза `CHonorRanks`.
 pub(crate) fn continue_game_server_honor_ranks_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3640,7 +3239,6 @@ pub(crate) fn continue_game_server_honor_ranks_configuration(
     }
 }
 
-/// Отправляет nullable function/variable file-data без C-string преобразования.
 pub(crate) fn continue_game_server_raw_script_lists_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3697,7 +3295,6 @@ pub(crate) fn continue_game_server_raw_script_lists_configuration(
     }
 }
 
-/// Отправляет nullable общий `CVariableList` subtype `0x0C`.
 pub(crate) fn continue_game_server_general_variable_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3731,7 +3328,6 @@ pub(crate) fn continue_game_server_general_variable_configuration(
     }
 }
 
-/// Отправляет ordered `m_mapScript_FileData` как отдельные subtype `0x0D`.
 pub(crate) fn continue_game_server_script_files_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3778,7 +3374,6 @@ pub(crate) fn continue_game_server_script_files_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CQuestSystem` subtype `0x16`.
 pub(crate) fn continue_game_server_quest_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3802,7 +3397,6 @@ pub(crate) fn continue_game_server_quest_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CPlayerRanks` subtype `0x17`.
 pub(crate) fn continue_game_server_player_ranks_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3827,7 +3421,6 @@ pub(crate) fn continue_game_server_player_ranks_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CGMList` subtype `9`.
 pub(crate) fn continue_game_server_gm_list_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3856,7 +3449,6 @@ pub(crate) fn continue_game_server_gm_list_configuration(
     }
 }
 
-/// Отправляет subtype `0x12` с точным однобайтовым cast-ом `dwIndex`.
 pub(crate) fn continue_game_server_index_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3876,7 +3468,6 @@ pub(crate) fn continue_game_server_index_configuration(
     }
 }
 
-/// Кодирует и отправляет точный `CFourNationWarSys` subtype `0x25`.
 pub(crate) fn continue_game_server_four_nation_war_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3904,7 +3495,6 @@ pub(crate) fn continue_game_server_four_nation_war_configuration(
     }
 }
 
-/// Повторно кодирует общий battle-fairy-exp owner как subtype `0x2C`.
 pub(crate) fn continue_game_server_battle_fairy_exp_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3931,7 +3521,6 @@ pub(crate) fn continue_game_server_battle_fairy_exp_configuration(
     }
 }
 
-/// Кодирует MSVC-SSO compose records в subtype `0x2D`.
 pub(crate) fn continue_game_server_battle_fairy_property_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3960,7 +3549,6 @@ pub(crate) fn continue_game_server_battle_fairy_property_configuration(
     }
 }
 
-/// Последовательно кодирует `CCiQingSetup + CLingBaoSetup` в subtype `0x35`.
 pub(crate) fn continue_game_server_ciqing_ling_bao_configuration(
     game: &CGame,
     socket_id: i32,
@@ -3993,7 +3581,6 @@ pub(crate) fn continue_game_server_ciqing_ling_bao_configuration(
     }
 }
 
-/// Кодирует и отправляет `CTaoZhuangSetup` subtype `0x34`.
 pub(crate) fn continue_game_server_tao_zhuang_configuration(
     game: &CGame,
     socket_id: i32,
@@ -4019,7 +3606,6 @@ pub(crate) fn continue_game_server_tao_zhuang_configuration(
     }
 }
 
-/// Отправляет уже действующий `CAttackCitySys` snapshot subtype `0x1B`.
 pub(crate) fn continue_game_server_attack_city_configuration(
     game: &CGame,
     socket_id: i32,
@@ -4041,7 +3627,6 @@ pub(crate) fn continue_game_server_attack_city_configuration(
     }
 }
 
-/// Отправляет уже действующий `CVillageWarSys` snapshot subtype `0x1C`.
 pub(crate) fn continue_game_server_village_war_configuration(
     game: &CGame,
     socket_id: i32,
@@ -4063,7 +3648,6 @@ pub(crate) fn continue_game_server_village_war_configuration(
     }
 }
 
-/// Отправляет точный World-layout `CountryWarSys` subtype `0x1F`.
 pub(crate) fn continue_game_server_country_war_configuration(
     game: &CGame,
     socket_id: i32,
@@ -4085,7 +3669,6 @@ pub(crate) fn continue_game_server_country_war_configuration(
     }
 }
 
-/// Завершает initial chain packet-ом `0x3B + login ID + world number`.
 pub(crate) fn finish_game_server_initial_configuration(
     game: &CGame,
     socket_id: i32,
@@ -4147,7 +3730,6 @@ fn send_initial_configuration_to_all(
     }
 }
 
-/// Продолжает точный reconnect player-data хвост после общего prefix-а.
 pub(crate) fn continue_game_server_reconnect(
     game: &mut CGame,
     socket_id: i32,

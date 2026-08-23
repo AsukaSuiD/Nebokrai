@@ -1,21 +1,12 @@
-//! Конфигурация LingBao исторического Miracle.
+//! LingBao `CLingBaoSetup` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CLingBaoSetup::LoadLingBaoSetup` и
-//! `AddByteLingBao`:; queries и Game decoder
-//! не входят в этот owner и остаются. Точная пара:
-//! Исходный owner PDB:
-//! `lingbao.h`.
+//! Wire пишет signed multimap count, key C-string, ticket и три vector-секции
+//! с records по 8, 5 и 3 `u32`. Равные byte-keys сохраняют insertion order.
 //!
-//! Wire: signed total multimap count, затем ordered C-string key, `u32 ticket`,
-//! три signed vector count-а и подряд записи `8×u32`, `5×u32`, `3×u32`.
-//! `BTreeMap<Vec<u8>, Vec<_>>` заменяет `std::multimap<std::string, _>`:
-//! сохраняет byte-order ключей и insertion-order эквивалентных ключей. Rust
-//! пишет поля little-endian вместо raw ABI-copy, сохраняя размеры 32/20/12
-//! bytes без padding. Внутренний NUL и невозможные signed counts блокируют весь
-//! append до изменения destination. Loader очищает multimap до resource-open,
-//! игнорирует textual labels positional token-stream-а и при missing resource
-//! оставляет state пустым; Rust останавливает повреждённый поток на последней
-//! полной записи вместо исходного чтения неинициализированной памяти.
+//! Loader очищает map, игнорирует labels позиционного token stream и при
+//! missing resource оставляет state пустым. Повреждённый хвост останавливается
+//! после последней полной записи.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -75,7 +66,6 @@ impl CLingBaoSetup {
         self.entries.clear();
     }
 
- /// Оригинал owner lifecycle without Win32 file/MessageBox plumbing.
     pub(crate) fn load_from_bytes(&mut self, source: Option<&[u8]>) -> LingBaoLoadReport {
         self.clear();
         let Some(source) = source else {

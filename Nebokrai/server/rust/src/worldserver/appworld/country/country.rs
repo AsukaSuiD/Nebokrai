@@ -1,189 +1,25 @@
-//! Save-владелец `CCountry` исторического `WorldServer`.
+//! Государство `CCountry` из `country.cpp/.h`, подтверждённое
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `CCountry::SetCountryPower/SetCountryTreasury/SetCountryTech`
-//! `CCountry::AddToByteArray`,
-//! `CCountry::IsKing/HasJob/CanOperate/Exile/SuccessExiled/Silence/Absolve`
+//! Владелец хранит казну, силу, технологии, короля, министров, дневные лимиты
+//! и состояние country war. Административные операции сохраняют порядок
+//! проверок, списания control points, wrapping-счётчиков, сообщений королю и
+//! рассылок GameServer; уже выполненные изменения при позднем отказе не
+//! откатываются.
 //!
-//! governance-цепочка `CanAscend/CanDemise/DeposeKing/RegisterKing/Demise`
-//! `CCountry::CloneCountryData` и
-//! `CCountry::CloneSaveData`, `CCountry::AI`
-//! `GetMinister`, `SendPrivateMsg`
-//! `SendCountryMsg` и `SetKing`
-//! а также destructor `CCountry::~CCountry`
-//! входят в контракт owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
+//! Exile, silence, absolve, назначение и смещение министров, передача престола
+//! и регистрация короля намеренно сохраняют исторические особенности:
+//! `map::operator[]` может создать пустой minister slot, `IsMinister` ищет по
+//! всем должностям, а отдельные проверки используют player ID вместо faction ID.
 //!
-//! Layout сохраняет `CCountry` размером `0xB8`, country/treasury/power/tech
-//! поля по `+0x4..+0x18`, `CKing` по `+0x24`, minister-map по `+0x5C` и signed
-//! `m_lCountryWarRes` по `+0xA8`, а `map<long,long> ExileMap` по `+0xAC`.
-//! `GetExileResTime` сначала снимает 32-битный
-//! `timeGetTime`, затем ищет signed player ID и считает
-//! `_exile_time - now + started_at` с машинным wrapping, делением на 1000 к
-//! нулю и нижней границей ноль. Точный `SuccessExiled`
-//! вызывает `timeGetTime`, но не использует результат
-//! исправлял наблюдаемую ошибку оригинала. Rust сохраняет поведение и
-//! не выдумывает запись, пока её не подтвердит другой машинный owner.
-//! Успешная ветка сначала списывает king control point с исходным upper-only
-//! clamp, публикует `0x7FF10`, затем wrapping увеличивает `m_lExileNum`,
-//! форматирует `WS0077` и рассылает `0x7FF11` каждому connected GameServer.
-//! Отказ форматирует `WS0078` и пишет королю `0x7FF13`; отсутствующий map-player
-//! использует `WS0072`, причём порядок там обратный: king-log до private send.
-//! Старое переполнение `char[260]` не является протоколом: Rust сохраняет не
-//! более 259 видимых bytes и единственный wire-NUL.
-//! Для входного `0x6030D` `CanOperate(4)` сначала читает минимальные
-//! control points, затем проверяет `m_bIsWarring`, минимум и wrapping
-//! `_max_exile_num - 1`; / машинно подтверждают false/
-//! true. `Exile` последовательно проверяет короля, online-player, страну,
-//! наличие exile-rect, unsigned PK и map-route. Только успешный путь отправляет
-//! `0x7FF0E { country:u8, player:i32 }`; возвращает player ID,
-//! request registry и source/tail validation — их нет в поставочном EXE.
-//! Для входного `0x6030C` сохраняет тот же порядок `IsKing`, затем
-//! `CanOperate(5)`: minimum читается до проверки войны, а daily-limit
-//! сравнивается как `m_lSilenceNum <= wrapping(_max_silence_num - 1)`.
-//! `Silence` отклоняет короля (`WS0079`, только log), отсутствующего игрока,
-//! чужую страну и inherited `m_bIsGod` (`WS0080..WS0082`, log затем private).
-//! Успех wrapping увеличивает счётчик, списывает control point с upper-only
-//! clamp, пишет `WS0083`, затем отправляет `0x7FF10` королю,
-//! `0x7FF0D { country:u8, player:i32, silence_count:i32 }` на маршрут цели и
-//! `0x7FF11` всем connected GameServer. возвращает ID цели;
-//! `0x6030B -> CanOperate(3) -> Absolve` сначала обнуляет у online-player
-//! `wPkCount`, затем `dwKillCount`, и лишь после этого читает цену операции.
-//! Успех списывает control point, публикует `0x7FF10`, wrapping увеличивает
-//! `m_lAbsolveNum`, пишет `WS0086`, рассылает `0x7FF0C {country, player}` через
-//! `SendAll` и затем `0x7FF11`. возвращает ID цели; `WS0084/85`
-//! дают log и private, а все отказы возвращают ноль.
-//! `0x6030A` читает `target:i32, job:i8, king:i32, country:i8` и строго идёт
-//! через `IsKing -> CanOperate(2) -> IsMinister -> DeposeMinister(job, 7)`.
-//! `IsMinister` ищет target среди всех министров, не сверяя job.
-//! `DeposeMinister` использует `map::operator[]`: неверный job после успешной
-//! identity-проверки оставляет null slot, который меняет последующие map-count
-//! wire. Rust сохраняет quirk отдельным `BTreeSet`, не вводя nullable owner.
-//! Успешная mode-7 ветка `AppointMinister(0, job, 7)` рассылает `WS0068`,
-//! очищает ID/имя, публикует `0x7FF04 {country, old_player, job, 2}`, затем
-//! `0x7FF10` и полный `0x7FF07` королю; appointed/salary flags не очищаются.
-//! `CCountry::NewTerm` — часть контракта owner-а: он очищает DB/live
-//! appointed/salary flags короля и всех non-null minister owner-ов, рассылает
-//! пустой `0x7FF14`, затем обнуляет четыре дневных счётчика.
-//! `AddVilTax2Treasure` проходит signed-key
-//! `CGame::s_mapRegionList`, выбирает только `REGION_TYPE == 1`, non-null
-//! owner и совпадающий country byte. Для каждой записи он отдельно выполняет
-//! wrapping add дневной казны, заменяет отрицательный signed результат нулём,
-//! затем ограничивает сверху `_max_country_treasury` и пишет `WS0091` в
-//! `king`. Rust `BTreeMap`-проекция и форматтер заменяют только STL/singleton/
-//! `_sprintf`; source/tail/ownership gates в этот контракт не входят.
-//! `AI` снимает unsigned 32-bit tick, сравнивает
-//! его с wrapping `m_dwTimeStamp + _dec_king_control_point_interval` и при
-//! достижении сначала читает decay, затем обновляет timestamp. Списание идёт
-//! через `ChangeControlPoint(wrapping_neg(decay))`; только отрицательный
-//! итог вызывает `DeposeKing(4)`. `CCountryHandler::Run` сохраняет unsigned
-//! country-map order и теперь вызывает этот concrete owner через уже
-//! действующий governance context вместо сырого whole-AI callback-а.
-//! `SetKing` без проверки результата вызывает
-//! `DeposeKing(3)`, пишет новый ID в `CKing+0x4`, строит
-//! `0x7FF05 {country:u8, player:i32}`, делает `SendAll` и возвращает player ID.
-//! City-war result подключает этот полный owner, а не повторяет scalar-записи.
-//! `GetMinister` принимает только job `2..=7`,
-//! дважды выполняет исходный map lookup и возвращает nullable minister-owner.
-//! Rust делает один стандартный `BTreeMap::get`, сохраняя gate и результат.
-//! `SendPrivateMsg/SendCountryMsg` и
-//! независимо подтверждают уже используемый wire:
-//! пустой текст ничего не отправляет; private target `0` означает king ID и
-//! требует ненулевой player route, а country message идёт только connected
-//! GameServer-ам в unsigned map-order.
-//! `SetNewDay` сначала обнуляет silence/PK,
-//! затем только при прежнем `m_nDay != 0` начисляет village tax ненулевому
-//! королю, вызывает `NewTerm`, выполняет настоящий `operator[]` minister slot
-//! `7` и при ненулевом ID вызывает `AppointMinister(0, 7, 8)`. Новый signed
-//! day записывается последним на всех штатных ветвях. Safe Rust явно отражает
-//! вставленный null slot; это наблюдаемая семантика map, а не полезная
-//! альтернативный проверка.
-//! Последующий original clone разыменовывал null slot; безопасный save-clone
-//! его пропускает как внутренний UB, но два наблюдаемых wire-count сохраняет.
-//! `0x60309` использует тот же target/job/king/country wire и selector `1`.
-//! Positive `AppointMinister(..., 6)` проверяет king, slot, pending-флаг,
-//! online/country и `HasJob`; последний намеренно вызывает полный `IsKing` и
-//! оставляет `WS0034` даже для обычного кандидата. Успех ставит appointed до
-//! списания points, пишет `WS0066`, затем публикует `0x7FF04` kind `1`,
-//! `0x7FF10` и `0x7FF07`. оригинал //
-//! подтвердил, что base-info wire несёт quest-switch короля и пары
-//! quest-switch/appointed министров, а не DB salary flags.
-//! `0x60308` читает `target:i32, king:i32, country:i8` и строго идёт через
-//! `IsKing -> CanOperate(0) -> Demise`. Selector `0` после безусловного чтения
-//! общего minimum проверяет войну, `_def_king_control_point_demise_need` и
-//! именно DB/live appointed-флаг короля по `+0x4A`. `CanDemise` требует обоих
-//! online-player и сохраняет `m_bDemiseFaction=true`, если кандидат не master;
-//! этот флаг не откатывается при последующем отказе `CanAscend`. Последний
-//! сохраняет машинную ошибку `IsFreeFaction(king_player_id)` вместо faction ID.
-//! `RegisterKing(1)` либо запоминает первый город, очищает весь city-list старой
-//! faction virtual-вызовом `+0x88`, отдаёт новой только запомненный город и
-//! публикует `0x7FE27`,
-//! либо вызывает полный уже действующий `CFaction::demise`; затем
-//! `DeposeKing(2)` снимает министров в unsigned job-order, назначает нового
-//! короля, списывает demise-cost и публикует `0x7FF04/0x7FF12`. Внешний
-//! `Demise` не проверяет результат регистрации: всегда отправляет `0x7FF10`
-//! текущему королю и при пройденном `CanDemise` возвращает ID прежнего.
-//! / подтверждает отдельный ноль для self-target и этот
-//! опускал часть `0x7FE27`/вложенных side effect; Rust следует EXE/PDB.
-//! `InitialOLPlayersList/Sort/GetPlayersList`
-//! каждый раз пересобирают
-//! online-player срез: только своя страна, level `>= 10` и
-//! `m_bIsGod == false`. multimap с level-key и обратным обходом
-//! даёт убывание level и обратный online-order для равных level;
-//! owned `Vec` и standard sort заменяют только MSVC STL/allocation.
-//! перед каждым построением освобождает
-//! прежний order-vector, обнуляет его три pointer-поля и вызывает
-//! `InitialOLPlayersList`; повторный запрос не является legacy early-return.
-//! Page-start сохраняет wrapping формулу `(page * 3 - 3) * 4`, а
-//! `0x7FF08` несёт не более 12 записей.
-//! опускал GM-фильтр.
-//! Административный `0x60304` ведёт короля через `SetKing`
-//!: `DeposeKing(3)` возврат игнорируется, ID заменяется
-//! безусловно и публикуется `0x7FF05`, после чего `RegisterKing(0)`
-//! проверяет online/country/faction, выставляет default control point,
-//! имя/timestamp и `0x7FF04/0x7FF12`. failure returns ноль;
-//! Clone копирует country ID, treasury, power,
-//! current/level-up tech exp, tech level, king identity/flags и war-result.
-//! Три king-point ограничиваются соответствующими максимумами `CCountryParam`.
-//! `COfficer::_bQuestSwitch` по PDB находится отдельно от
-//! `_bAppointed/_bSalary`; поэтому live quest-флаги короля и министров не
-//! смешиваются с их DB save-проекцией.
-//! Для действующего `CountryWarSys::player_declare` nonzero-ветки
-//! `IsKing/IsMinister` сведены к typed identity-проверкам; исходные WS0034/
-//! WS0037 log-side-effects остаются у caller-а. `IsMinister(player, 5)`
-//! ищет player среди всех министров и использует job `5` только в fail-log —
-//! Rust намеренно не ужесточает это до проверки конкретной должности.
+//! `AI` и смена дня используют 32-битные wrapping ticks. Налоги деревень
+//! начисляются в порядке region ID с исходными ограничениями казны. Country-
+//! сообщения идут только подключённым GameServer, private target `0` означает
+//! короля.
 //!
-//! Minister-map обходится в unsigned key-order, но ключ источника не копируется:
-//! максимум первые шесть non-null `CMinister` вставляются по собственному
-//! `_byteIDType`. Повторный `_byteIDType` оставляет первую запись, как
-//! `std::map::insert`; последующий `CDBCountry::Save` наблюдает только позиции
-//! `2..=7`. Rust `BTreeMap`, owned byte names и `Clone` заменяют только MSVC
-//! map/string/object allocation. Live null minister исходник разыменовывал;
-//! safe reached-state не назначает этому UB новое поведение и представляет
-//! только живого owner-а. Allocation failure остаётся политикой стандартного
-//! allocator-а.
-//!
-//! `CloneSaveData` вызывается только `CCountryHandler::GenerateSaveData`, после
-//! чего копию наблюдает `CDBCountry::Save`. Поэтому Rust меняет форму API и
-//! сразу возвращает полный `CountrySaveSnapshot`; скопированный
-//! `_tech_lelup_exp`, который DB-owner не читает, остаётся локально
-//! зафиксированным полем live save-state, но не выдумывается в DB-контракте.
-//! оригинал тела двух заменённых функций и compiler/STL cleanup удалены.
-//!
-//! Initial-config record сохраняет только наблюдаемую Game-проекцию: country
-//! ID, четыре country scalars, три king points, king ID, war-result и ordered
-//! minister map `job:u8 -> player_id:i32`. `tech_level_up_exp`, имена и flags
-//! в этот wire не входят. `BTreeMap` сохраняет unsigned порядок; signed count
-//! проверяется до записи вместо неограниченного `size_t -> long` narrowing.
-//!
-//! `CCountry::CCountry` обнуляет country,
-//! scalar, officer, lifecycle и exile state, затем через настоящий
-//! `CCountryParam::_country_tech_lels[tech_level + 1]` читает следующий
-//! technology exp. Отсутствующий level поэтому вставляется с нулевыми полями;
-//! Rust сохраняет этот observable `operator[]` эффект в `CCountryParam`, не
-//! копируя tree allocation/erase plumbing. `SetMinisterfromDB`
-//! заменяет value существующего job либо вставляет
-//! новую пару. Старый pointer при overwrite утекал; owned Rust state корректно
-//! освобождает его, поскольку lifetime-дефект не является внешним контрактом.
+//! Initial-config и save snapshots сохраняют различный состав полей и порядок
+//! министров. `BTreeMap`, owned-строки и ограниченное форматирование заменяют
+//! STL, сырые указатели и переполнение внутренних буферов, не меняя wire и БД.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -202,7 +38,6 @@ use super::king::{
     KingPointUpdate, change_control_point, set_control_point, set_material_point, set_war_point,
 };
 
-/// Три текущих максимума `CCountryParam`, читаемые во время clone.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CountryKingSaveLimits {
     pub(crate) control_point: i32,
@@ -210,7 +45,6 @@ pub(crate) struct CountryKingSaveLimits {
     pub(crate) war_point: i32,
 }
 
-/// Действующая live-форма одного minister owner-а.
 #[derive(Clone, Debug)]
 pub(crate) struct CountryMinisterState {
     pub(crate) id_type: u8,
@@ -229,7 +63,6 @@ pub(crate) enum CountryMinisterFromDbUpdate {
     Replaced { previous: Option<CountryMinisterState> },
 }
 
-/// Действующая save-часть живого `CCountry` без копирования MSVC layout.
 #[derive(Clone, Debug)]
 pub(crate) struct CCountry {
     pub(crate) country_id: u8,
@@ -255,7 +88,6 @@ pub(crate) struct CCountry {
     pub(crate) exile_started_at_ms: BTreeMap<i32, i32>,
 }
 
-/// Наблюдаемый результат `CCountry::GetExileResTime`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryExileTimeLookup {
     pub(crate) started_at_ms: Option<i32>,
@@ -405,7 +237,6 @@ pub(crate) enum CountryScalarUpdate {
     KingPoint(KingPointUpdate),
 }
 
-/// Один аргумент `_sprintf` внутри `CCountry::SuccessExiled`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CountryExileTextArgument<'a> {
     Text(&'a [u8]),
@@ -428,7 +259,6 @@ pub(crate) struct CountryExileTarget {
     pub(crate) is_god: bool,
 }
 
-/// Действующий online-player до фильтрации `InitialOLPlayersList`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CountryOnlinePlayer {
     pub(crate) id: i32,
@@ -439,7 +269,6 @@ pub(crate) struct CountryOnlinePlayer {
     pub(crate) is_god: bool,
 }
 
-/// Одна wire-запись `tagPlayerInfo` без MSVC string/pointer layout.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CountryPlayerInfo {
     pub(crate) id: i32,
@@ -456,7 +285,6 @@ pub(crate) enum CountryPlayersListContextBlock {
     FactionMasterLookup,
 }
 
-/// Полный наблюдаемый результат `GetPlayersList`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CountryPlayersListReport {
     pub(crate) page: i32,
@@ -536,7 +364,6 @@ pub(crate) struct CountryAbsolveCounterReset {
     pub(crate) previous_pk_count: u16,
 }
 
-/// Узкая граница player/localization/network/log эффектов исходного owner-а.
 pub(crate) trait CountryExileResultContext {
     fn map_player_name(&mut self, player_id: i32) -> Option<Vec<u8>>;
     fn online_player(&mut self, player_id: i32) -> Option<CountryExileTarget>;
@@ -652,7 +479,6 @@ impl<Context: CountryExileResultContext + ?Sized> CountryHasJobContext for Conte
     }
 }
 
-/// Узкая граница online/organizing/network эффектов player-list owner-а.
 pub(crate) trait CountryPlayersListContext {
     fn online_players(&mut self) -> Vec<CountryOnlinePlayer>;
     fn player_faction(
@@ -1085,7 +911,6 @@ pub(crate) struct CountryAppointMinisterReport {
 }
 
 impl CCountry {
- /// Создаёт reached constructor-state без воспроизведения STL layout.
     pub(crate) fn with_constructor_state(
         parameters: &mut CCountryParam,
     ) -> (Self, CountryConstructorReport) {
@@ -1126,7 +951,6 @@ impl CCountry {
         )
     }
 
- /// Возвращает nullable `GetMinister` только для job `2..=7`.
     fn get_minister(&self, job: u8) -> Option<&CountryMinisterState> {
         if !(2..=7).contains(&job) {
             return None;
@@ -1214,7 +1038,6 @@ impl CCountry {
         Ok(report)
     }
 
- /// Повторяет find-then-replace/insert `SetMinisterfromDB`.
     pub(crate) fn set_minister_from_db(
         &mut self,
         job: u8,
@@ -1238,7 +1061,6 @@ impl CCountry {
         }
     }
 
- /// Повторяет дневной country lifecycle и mode `8` для job `7`.
     pub(crate) fn set_new_day<Context: CountrySetNewDayContext + ?Sized>(
         &mut self,
         requested_day: i32,
@@ -1303,7 +1125,6 @@ impl CCountry {
         }
     }
 
- /// Повторяет начисление дневной казны за каждую village-запись.
     pub(crate) fn add_village_tax_to_treasury<Context: CountryVillageTaxContext + ?Sized>(
         &mut self,
         parameters: &CCountryParam,
@@ -1358,7 +1179,6 @@ impl CCountry {
         Ok(CountryVillageTaxReport { updates })
     }
 
- /// Повторяет `CCountry::NewTerm` без MSVC map/message plumbing.
     pub(crate) fn new_term<Context: CountryNewTermContext + ?Sized>(
         &mut self,
         context: &mut Context,
@@ -1404,7 +1224,6 @@ impl CCountry {
         }
     }
 
- /// `GetInfo`: wrapper без дополнительных side effect.
     pub(crate) fn get_info<Context: CountryExileResultContext + ?Sized>(
         &self,
         parameters: &CCountryParam,
@@ -1413,7 +1232,6 @@ impl CCountry {
         self.send_base_info_to_client(parameters, context)
     }
 
- /// `SetKing`: return `DeposeKing(3)` игнорируется перед `0x7FF05`.
     pub(crate) fn set_king<Context: CountryExileResultContext + ?Sized>(
         &mut self,
         player_id: i32,
@@ -1436,7 +1254,6 @@ impl CCountry {
         })
     }
 
- /// mode `0` исходного `RegisterKing` после административного `SetKing`.
     pub(crate) fn register_initial_king<Context: CountryExileResultContext + ?Sized>(
         &mut self,
         player_id: i32,
@@ -1598,7 +1415,6 @@ impl CCountry {
         }
     }
 
- /// `IsKing` для player-list owner-а с тем же `WS0033/WS0034`.
     pub(crate) fn authorize_king_for_players<Context: CountryPlayersListContext + ?Sized>(
         &self,
         candidate: i32,
@@ -1617,7 +1433,6 @@ impl CCountry {
         false
     }
 
- /// `InitialOLPlayersList -> Sort -> GetPlayersList` без MSVC owner-указателей.
     pub(crate) fn get_players_list<Context: CountryPlayersListContext + ?Sized>(
         &self,
         page: i32,
@@ -1722,7 +1537,6 @@ impl CCountry {
         })
     }
 
- /// `IsKing`: нулевой candidate всегда отклоняется с `WS0033`.
     pub(crate) fn authorize_king<Context: CountryExileResultContext + ?Sized>(
         &self,
         candidate: i32,
@@ -1766,7 +1580,6 @@ impl CCountry {
         false
     }
 
- /// `IsMinister`: job участвует только в отрицательном king-log.
     pub(crate) fn authorize_minister<Context: CountryExileResultContext + ?Sized>(
         &self,
         player_id: i32,
@@ -1790,7 +1603,6 @@ impl CCountry {
         false
     }
 
- /// selector `CanOperate(0)` перед передачей престола.
     pub(crate) fn can_demise<Context: CountryExileResultContext + ?Sized>(
         &self,
         parameters: &CCountryParam,
@@ -2507,7 +2319,6 @@ impl CCountry {
         CountryCanAppointMinisterDisposition::Rejected { reason, text, private_delivery }
     }
 
- /// positive-player ветка `AppointMinister(player, job, 6)`.
     pub(crate) fn appoint_minister<Context: CountryExileResultContext + ?Sized>(
         &mut self,
         player_id: i32,
@@ -2747,7 +2558,6 @@ impl CCountry {
         }
     }
 
- /// `DeposeMinister(job, mode)` и действующая ветка `AppointMinister(0, job, mode)`.
     pub(crate) fn depose_minister<Context: CountryExileResultContext + ?Sized>(
         &mut self,
         job: u8,
@@ -2828,7 +2638,6 @@ impl CCountry {
         }
     }
 
- /// `CanOperate(3)` с исходным порядком warring/points/daily-limit.
     pub(crate) fn can_absolve<Context: CountryExileResultContext + ?Sized>(
         &self,
         parameters: &CCountryParam,
@@ -2877,7 +2686,6 @@ impl CCountry {
         CountryCanAbsolveDisposition::Rejected { reason, text, private_delivery }
     }
 
- /// `CCountry::Absolve`: сбрасывает crime counters и публикует `0x7FF0C`.
     pub(crate) fn absolve<Context: CountryExileResultContext + ?Sized>(
         &mut self,
         player_id: i32,
@@ -3027,7 +2835,6 @@ impl CCountry {
         }
     }
 
- /// `CanOperate(5)` с исходным порядком warring/points/daily-limit.
     pub(crate) fn can_silence<Context: CountryExileResultContext + ?Sized>(
         &self,
         parameters: &CCountryParam,
@@ -3076,7 +2883,6 @@ impl CCountry {
         CountryCanSilenceDisposition::Rejected { reason, text, private_delivery }
     }
 
- /// `CCountry::Silence`: mutating success и три исходных wire-effect.
     pub(crate) fn silence<Context: CountryExileResultContext + ?Sized>(
         &mut self,
         player_id: i32,
@@ -3260,7 +3066,6 @@ impl CCountry {
         }
     }
 
- /// `CanOperate(4)` с исходным порядком warring/points/daily-limit.
     pub(crate) fn can_exile<Context: CountryExileResultContext + ?Sized>(
         &self,
         parameters: &CCountryParam,
@@ -3317,7 +3122,6 @@ impl CCountry {
         }
     }
 
- /// `CCountry::Exile`: валидный путь только отправляет `0x7FF0E`.
     pub(crate) fn exile<Context: CountryExileResultContext + ?Sized>(
         &self,
         player_id: i32,
@@ -3426,7 +3230,6 @@ impl CCountry {
         }
     }
 
- /// Nonzero-ветка `IsKing`; caller отдельно сохраняет исходный log.
     pub(crate) fn has_king_id(&self, player_id: i32) -> bool {
         self.king.id == player_id
     }
@@ -3439,7 +3242,6 @@ impl CCountry {
             .any(|minister| minister.snapshot.id == player_id)
     }
 
- /// Исполняет `CCountry::SuccessExiled` без записи в `ExileMap`.
     pub(crate) fn success_exiled<Context: CountryExileResultContext + ?Sized>(
         &mut self,
         player_id: i32,
@@ -3761,7 +3563,6 @@ impl CCountry {
         })
     }
 
- /// Повторяет выбор `CKing` либо `GetMinister(2..=7)` opcode `0x60315`.
     pub(crate) fn set_quest_switch(
         &mut self,
         job: u8,
@@ -3786,7 +3587,6 @@ impl CCountry {
         })
     }
 
- /// Применяет selector server opcode `0x60314` к действующему live-state.
     pub(crate) fn apply_server_scalar(
         &mut self,
         selector: i8,
@@ -3878,7 +3678,6 @@ impl CCountry {
         }
     }
 
- /// Дописывает один точный country record для `CCountryHandler` wire.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -3911,7 +3710,6 @@ impl CCountry {
         Ok(())
     }
 
- /// Создаёт отдельную DB-наблюдаемую копию country state.
     pub(crate) fn clone_save_data(&self, limits: CountryKingSaveLimits) -> CountrySaveSnapshot {
         let mut cloned_ministers = BTreeMap::new();
         for minister in self.ministers.values().take(6) {

@@ -1,4 +1,5 @@
-//! FIFO загруженных игроков WorldServer из точной пары EXE/PDB.
+//! FIFO загруженных игроков, подтверждённая `worldserver.exe` и
+//! `worldserver.pdb`.
 //!
 //! Запись сохраняет 20-byte account buffer, player/client IDs и nullable
 //! player-owner. Size и pop блокируются независимо, FIFO передаёт владение,
@@ -15,7 +16,6 @@ use crate::worldserver::appworld::player::CPlayer;
 
 pub(crate) const PLAYER_DATA_CDKEY_CAPACITY: usize = 20;
 
-/// Owned-представление одного исходного `tagPlayerDataQueue`.
 pub(crate) struct PlayerDataQueueEntry {
     cdkey: [u8; PLAYER_DATA_CDKEY_CAPACITY],
     player_id: u32,
@@ -24,7 +24,6 @@ pub(crate) struct PlayerDataQueueEntry {
 }
 
 impl PlayerDataQueueEntry {
- /// Создаёт точную запись producer-а после завершения DB-load.
     pub(crate) const fn new(
         cdkey: [u8; PLAYER_DATA_CDKEY_CAPACITY],
         player_id: u32,
@@ -39,7 +38,6 @@ impl PlayerDataQueueEntry {
         }
     }
 
- /// Возвращает account bytes до обязательного NUL старого fixed buffer-а.
     pub(crate) fn cdkey(&self) -> Option<&[u8]> {
         let end = self.cdkey.iter().position(|byte| *byte == 0)?;
         Some(&self.cdkey[..end])
@@ -53,13 +51,11 @@ impl PlayerDataQueueEntry {
         self.client_ip
     }
 
- /// Забирает nullable player-owner, оставляя record без указателя.
     pub(crate) fn take_player(&mut self) -> Option<Box<CPlayer>> {
         self.player.take()
     }
 }
 
-/// Потокобезопасная cloneable FIFO загруженных player-record-ов.
 #[derive(Clone)]
 pub(crate) struct CPlayerDataQueue {
     entries: Arc<Mutex<VecDeque<PlayerDataQueueEntry>>>,
@@ -72,23 +68,19 @@ impl CPlayerDataQueue {
         }
     }
 
- /// Снимает самостоятельный 32-битный snapshot текущего размера.
     pub(crate) fn get_size(&self) -> u32 {
         self.entries.lock().len() as u32
     }
 
- /// Забирает первый record либо возвращает старый `nullptr` как `None`.
     pub(crate) fn pop_player_data(&self) -> Option<PlayerDataQueueEntry> {
         self.entries.lock().pop_front()
     }
 
- /// Передаёт non-null record в хвост и возвращает исходный successful bool.
     pub(crate) fn push_player_data(&self, entry: PlayerDataQueueEntry) -> bool {
         self.entries.lock().push_back(entry);
         true
     }
 
- /// Обновляет каждого non-null queued player, сохраняя FIFO и записи.
     pub(crate) fn reset_honor_eliminate_info(&self, rank_mask: u32) {
         let mut entries = self.entries.lock();
         for entry in entries.iter_mut() {
@@ -98,7 +90,6 @@ impl CPlayerDataQueue {
         }
     }
 
- /// Уничтожает всех player-owner-ов и records в FIFO-порядке под одним lock.
     pub(crate) fn clear(&self) {
         let mut entries = self.entries.lock();
         while let Some(mut entry) = entries.pop_front() {

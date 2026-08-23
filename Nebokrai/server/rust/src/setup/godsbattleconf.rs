@@ -1,31 +1,14 @@
-//! Конфигурация Gods Battle исторического Miracle.
+//! Gods Battle `CGodsBattleConf` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CGodsBattleConf::LoadFile`,
-//! `AddByteToArray`, runtime accessors/mutations
-//! два accessor-а
-//! и persistence call-site `SaveNpcFaction`
-//!:. Точная пара:
-//! Исходный владелец PDB:
+//! Wire последовательно содержит NPC, ordered base-money records, три vector-
+//! секции, два XYD и die-back records; все counts signed. Map key задаёт
+//! unsigned порядок и отдельно не передаётся.
 //!
-//! Wire `CGodsBattleMgr::DecordFromByteArray`: NPC
-//! `i32 + C-string + C-string`, ordered base-money
-//! records по 12 bytes, затем vector records `16/12/12` bytes, два `u32` XYD
-//! и 28-байтные die-back records. Все counts — signed Windows `long`.
-//! `BTreeMap<u32, _>` заменяет `std::map` без изменения unsigned key-order;
-//! его ключ отдельно не передаётся. Owned byte strings сохраняют исходную
-//! кодировку, а typed fields исключают C++ padding и raw-memory lifetime.
-//! Неизменяемая ссылка даёт serializer-у согласованный state; синхронизация
-//! общего runtime owner-а не встраивается в сам wire-value.
-//! Loader читает шесть token-stream файлов последовательно, очищая конкретную
-//! секцию непосредственно перед её open. Поэтому отсутствие или безопасная
-//! format-ошибка позднего файла сохраняет уже обновлённые ранние секции и
-//! прежние поздние: перезагрузка намеренно не транзакционна. Исходное
-//! formatted чтение повреждённых чисел использовало
-//! неинициализированный stack; Rust останавливается на последней полной записи.
-//!
-//! Оригинал подтверждает спорную decompiler-типизацию: читает
-//! `[ecx+0x60]`, — `[ecx+0x64]`, а `SetFactionXYD` пишет те же
-//! offsets. Это `m_XYD[1]/m_XYD[2]`, а не отдельный `CShape` base-owner.
+//! Loader читает шесть ресурсов по очереди и очищает секцию непосредственно
+//! перед её открытием. Ошибка позднего файла сохраняет обновлённые ранние
+//! секции и прежние ещё не начатые. `m_XYD[1..=2]` — те же поля, которые
+//! изменяет `SetFactionXYD`, а не отдельный Shape state.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -91,7 +74,6 @@ pub(crate) struct CGodsBattleConf {
     die_back_positions: Vec<GodsBattleDieBackPosition>,
 }
 
-/// Один из строго упорядоченных resource owner-ов GodsBattle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GodsBattleLoadSection {
     NpcNames,
@@ -114,7 +96,6 @@ impl GodsBattleLoadSection {
         }
     }
 
- /// Оригинал Win32 notice из соответствующей missing-file ветки World.
     pub(crate) const fn missing_notice(self) -> (&'static [u8], &'static [u8]) {
         match self {
             Self::NpcNames => (b"error", b"Can't find file: data/gbNpc.ini "),
@@ -127,7 +108,6 @@ impl GodsBattleLoadSection {
     }
 }
 
-/// Безопасный outcome raw последовательного loader-а.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GodsBattleLoadError {
     MissingResource { section: GodsBattleLoadSection },
@@ -467,12 +447,10 @@ impl CGodsBattleConf {
         self.xyd[2] = faction_two;
     }
 
- /// Возвращает оригинал `m_XYD[1]/m_XYD[2]` пару server response-а.
     pub(crate) const fn faction_xyd(&self) -> (u32, u32) {
         (self.xyd[1], self.xyd[2])
     }
 
- /// Повторяет `SetFactionXYD`: только faction `1/2` меняют состояние.
     pub(crate) fn set_faction_xyd(
         &mut self,
         faction: i32,
@@ -497,7 +475,6 @@ impl CGodsBattleConf {
         }
     }
 
- /// Меняет faction первой byte-оригинал NPC-name записи, как vector scan EXE.
     pub(crate) fn set_npc_faction(
         &mut self,
         name: &[u8],
@@ -516,7 +493,6 @@ impl CGodsBattleConf {
         })
     }
 
- /// Заимствует ordered vector для действующего `CRSGodsBattle` snapshot-а.
     pub(crate) fn npc_names(&self) -> &[GodsBattleFactionNpcName] {
         &self.npc_names
     }

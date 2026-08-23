@@ -1,5 +1,5 @@
 //! DB-владелец аукционных очередей WorldServer из `dbmisc.cpp/.h`.
-//! Источник контракта — точная пара WorldServer EXE/PDB.
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Две очереди `DbNote` и player FIFO сохраняют раздельные locks, выбор
 //! head/tail, правило limit `0 = весь batch`, отрицательный limit `= ничего`
@@ -71,7 +71,6 @@ pub(crate) enum OperatorType {
     OT_IN_MODIFY_MONEY,
 }
 
-/// Владеющая форма старого heap-узла между DB и World MainLoop.
 pub(crate) struct DbNote {
     pub(crate) e_type: OperatorType,
     pub(crate) goods: CGoodsNode,
@@ -86,7 +85,6 @@ impl Default for DbNote {
 }
 
 impl DbNote {
- /// Повторяет `CGoodsNode` constructor + `Clear`, `OT_NULL`, `-1` и `0`.
     pub(crate) fn new() -> Self {
         Self {
             e_type: OperatorType::OT_NULL,
@@ -97,7 +95,6 @@ impl DbNote {
     }
 }
 
-/// Действующие поля результата `CGame::GetPlayerGameServer`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DbMiscGameServer {
     pub(crate) connected: bool,
@@ -117,9 +114,7 @@ pub(crate) trait DbMiscDeliveryContext {
     fn gold_coin_index(&mut self) -> u32;
 }
 
-/// Технические и DB-owner-границы полного `CDbMisc` queue-dispatch.
 pub(crate) trait DbMiscContext {
- /// Исходный `CGlobeSetup::m_stSetup.lTransferMoneyTime`.
     fn transfer_money_interval_ms(&mut self) -> i32;
     fn current_tick_ms(&mut self) -> u32;
     fn is_active_connect(&mut self) -> bool;
@@ -151,7 +146,6 @@ pub(crate) trait DbMiscContext {
     fn load_owner_auction_money(&mut self, owner_id: i32, money_limit: i32);
 }
 
-/// Причина остановки только на недоказанной безопасной границе output batch.
 #[derive(Debug)]
 pub(crate) enum DbMiscDoneOutBlockReason {
     GoodsNodeSerialize(GoodsNodeSerializeError),
@@ -160,14 +154,12 @@ pub(crate) enum DbMiscDoneOutBlockReason {
     EmptyGoodsBaseIndexAfterDelivery,
 }
 
-/// Сохраняет владение текущим и всеми следующими notes после safe-block.
 pub(crate) struct DbMiscDoneOutBlock {
     pub(crate) reason: DbMiscDoneOutBlockReason,
     pub(crate) processed_notes: usize,
     pub(crate) pending_notes: VecDeque<Box<DbNote>>,
 }
 
-/// Наблюдаемые результаты одного output batch без интерпретации send-result.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DbMiscDoneOutReport {
     pub(crate) processed_notes: usize,
@@ -178,7 +170,6 @@ pub(crate) struct DbMiscDoneOutReport {
     pub(crate) dropped_offline_goods: usize,
 }
 
-/// Результат DB-dispatch одного полностью снятого input batch.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DbMiscDoneInReport {
     pub(crate) processed_notes: usize,
@@ -189,14 +180,12 @@ pub(crate) struct DbMiscDoneInReport {
     pub(crate) unhandled_notes: usize,
 }
 
-/// Один вызов действующей части `LoadAuction`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DbMiscLoadAuctionReport {
     LoadedOwner { owner_id: i32 },
     RefilledOwners { count: usize },
 }
 
-/// Владельцы двух note-очередей и двух стадий player-page deque.
 pub(crate) struct CDbMisc {
     input: Mutex<VecDeque<Box<DbNote>>>,
     output: Arc<Mutex<VecDeque<Box<DbNote>>>>,
@@ -223,7 +212,6 @@ impl DbMiscOutputPublisher {
 }
 
 impl CDbMisc {
- /// Создаёт пустые очереди и вызывает исходный connection initializer.
     pub(crate) fn new(context: &mut impl DbMiscContext) -> Self {
         let owner = Self::with_empty_queues();
         context.create_normal_connection();
@@ -253,7 +241,6 @@ impl CDbMisc {
         }
     }
 
- /// Добавляет non-null note в head либо tail; старый return всегда `false`.
     pub(crate) fn push_item_to_list_in(&self, note: Box<DbNote>, push_front: bool) -> bool {
         let mut input = self.input.lock();
         if push_front {
@@ -264,13 +251,11 @@ impl CDbMisc {
         false
     }
 
- /// Добавляет non-null note только в output tail; return остаётся `false`.
     pub(crate) fn push_item_to_list_out(&self, note: Box<DbNote>) -> bool {
         self.output.lock().push_back(note);
         false
     }
 
- /// Снимает input batch после точного transfer-money/reconnect gate.
     pub(crate) fn pop_item_from_list_in(
         &mut self,
         context: &mut impl DbMiscContext,
@@ -297,12 +282,10 @@ impl CDbMisc {
         move_queue_batch(&mut self.input.lock(), limit)
     }
 
- /// Снимает output batch без DB connection gate.
     pub(crate) fn pop_item_from_list_out(&self, limit: i32) -> VecDeque<Box<DbNote>> {
         move_queue_batch(&mut self.output.lock(), limit)
     }
 
- /// Выполняет три DB handlers и три terminal input-перехода в list-order.
     pub(crate) fn done_list_in(
         &self,
         context: &mut impl DbMiscContext,
@@ -328,7 +311,7 @@ impl CDbMisc {
                         OperatorType::OT_OUT_MODIFY_STATE_A2S_OK
                     } else {
  // World действительно использует чужой
- // insert-error discriminant.
+                    // Ветка ошибки INSERT.
                         OperatorType::OT_OUT_INSERT_NEW_ITEM_ERROR
                     };
                     let _ = self.push_item_to_list_out(note);
@@ -362,7 +345,6 @@ impl CDbMisc {
         report
     }
 
- /// Снимает максимум восемь output notes и исполняет полный World dispatch.
     pub(crate) fn done_out_list(
         &self,
         context: &mut impl DbMiscDeliveryContext,
@@ -513,7 +495,6 @@ impl CDbMisc {
         Ok(report)
     }
 
- /// Выполняет действующий direct refresh owner-ID списка.
     pub(crate) fn done_ot_in_read_auction(&self, context: &mut impl DbMiscContext) {
         if !context.is_active_connect() {
             return;
@@ -523,12 +504,10 @@ impl CDbMisc {
         context.read_auction_owner_ids(&mut player_ids);
     }
 
- /// Снимает player-ID по тому же limit-контракту отдельной player lock.
     pub(crate) fn pop_player_list(&self, limit: i32) -> VecDeque<i32> {
         move_queue_batch(&mut self.player_ids.lock(), limit)
     }
 
- /// Читает не больше одного owner-а либо переносит весь новый owner batch.
     pub(crate) fn load_auction(
         &mut self,
         context: &mut impl DbMiscContext,
@@ -567,7 +546,6 @@ impl CDbMisc {
         context.load_owner_auction_goods(owner_id, state.raw(), limit)
     }
 
- /// Оригинал `LoadOwnerBackGoods(owner, limit)`, state `3`.
     pub(crate) fn load_owner_back_goods(
         &self,
         context: &mut impl DbMiscContext,
@@ -577,7 +555,6 @@ impl CDbMisc {
         self.load_goods_by_owner_id(context, owner_id, GoodsState::BACK, limit)
     }
 
- /// Оригинал `LoadOwnerUndoGoods(owner, limit)`, state `4`.
     pub(crate) fn load_owner_undo_goods(
         &self,
         context: &mut impl DbMiscContext,
@@ -587,7 +564,6 @@ impl CDbMisc {
         self.load_goods_by_owner_id(context, owner_id, GoodsState::UNDO, limit)
     }
 
- /// Оригинал `LoadOwnerSuccGoods(owner, limit)`, state `2`.
     pub(crate) fn load_owner_succ_goods(
         &self,
         context: &mut impl DbMiscContext,
@@ -597,7 +573,6 @@ impl CDbMisc {
         self.load_goods_by_owner_id(context, owner_id, GoodsState::SUCESSED, limit)
     }
 
- /// Оригинал `LoadMoneyById`; original caller намеренно игнорировал return.
     pub(crate) fn load_money_by_id(
         &self,
         context: &mut impl DbMiscContext,
@@ -633,7 +608,6 @@ fn output_block(
     }
 }
 
-/// Точная операция одного SQL-перехода записи `CDbMisc`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuctionWriteOperation {
     CreateNormalConnection,
@@ -702,7 +676,7 @@ impl Error for AuctionWriteFailure {
     }
 }
 
-/// Безопасная остановка на недоказанной legacy-границе до либо после уже
+/// Безопасная остановка на неопределённой legacy-границе до либо после уже
 /// выполненного SQL-перехода. Она не подменяется выдуманным `bool` старого
 /// процесса.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -741,7 +715,6 @@ pub(crate) enum AuctionConnectionState {
 }
 
 impl AuctionConnectionState {
- /// Bool для ровно той reconnect-ветки, которую вызывает `DoneListIn`.
     pub(crate) const fn legacy_bool(&self) -> bool {
         matches!(self, Self::Active)
     }
@@ -749,7 +722,7 @@ impl AuctionConnectionState {
 
 impl AuctionWriteOutcome {
  /// Точный bool для внешнего async-адаптера `DbMiscContext`; безопасная
- /// блокировка не выдаётся за доказанный ответ старого процесса.
+ /// блокировка не выдаётся за исходный ответ старого процесса.
     pub(crate) const fn legacy_bool(&self) -> Option<bool> {
         match self {
             Self::Written | Self::ReturnedTrueAfterDatabaseFailure(_) => Some(true),
@@ -1040,7 +1013,6 @@ impl TiberiusAuctionWriteOwner {
         .await
     }
 
- /// Выполняет `exec UpdateGoodsState guid, node_state` для возврата товара.
     pub(crate) async fn modify_goods_state_a2b(
         &self,
         normal_connection: &mut WorldTdsClient,
@@ -1197,7 +1169,6 @@ fn legacy_unsigned_sql_int(
     })
 }
 
-/// Ошибка действующей Tiberius-границы `CDbMisc::LoadGoodsByOwnerId`.
 #[derive(Debug)]
 pub(crate) enum AuctionGoodsLoadFailure {
     Connection(WorldDatabaseConnectionError),
@@ -1411,10 +1382,9 @@ impl TiberiusAuctionGoodsReader {
             };
 
             if !pending.contains_key(&record.guid) {
- // Оригинал `if (param_3 <= map._Mysize) break`: current joined
- // row is not consumed into a new note once the unique-GUID
- // bound has been reached. A non-positive legacy limit is
- // therefore an empty page, after the same connection/query.
+                // `if (param_3 <= map._Mysize) break`: строка с новым GUID не
+                // превращается в note после достижения лимита. Неположительный
+                // legacy-limit даёт пустую страницу после того же DB-запроса.
                 if limit <= i32::try_from(pending.len()).unwrap_or(i32::MAX) {
                     break;
                 }
@@ -1618,7 +1588,6 @@ pub(crate) enum AuctionMoneyLoadOutcome {
     BlockedMissingFact(AuctionMoneyLoadBlock),
 }
 
-/// Безопасные замены недоказанных аварийных границ `LoadMoneyById`.
 #[derive(Debug)]
 pub(crate) enum AuctionMoneyLoadBlock {
     GuidGeneration {
@@ -1819,7 +1788,6 @@ impl TiberiusDbMiscDatabase {
     }
 }
 
-/// Диагностика concrete Tiberius bridge без потери типа отказавшей операции.
 pub(crate) enum TiberiusDbMiscRuntimeEvent<'a> {
     MissingNormalConnection(AuctionWriteOperation),
     NormalConnectionFailed(&'a AuctionWriteFailure),

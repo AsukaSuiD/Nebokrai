@@ -3,7 +3,7 @@
 //! `CKing::CKing` и `CMinister::CMinister` оба сначала
 //! создают `CCountryIdentity`, затем обнуляют ровно четыре bytes по `+0x20`;
 //! это `id_type`, `quest_switch`, `appointed` и `salary_received`. Источник
-//! контракта — WorldServer EXE/PDB.
+//! контракта — `worldserver.exe` и `worldserver.pdb`.
 //!
 //! `CCountry` использует эти значения через отдельный snapshot owner; данный
 //! тип сохраняет только подтверждённый lifecycle identity/officer и не вводит
@@ -11,7 +11,6 @@
 
 use super::countryidentity::CCountryIdentity;
 
-/// Безопасная композиция identity и четырёх byte-полей officer-а.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct COfficer {
     identity: CCountryIdentity,
@@ -28,7 +27,6 @@ impl Default for COfficer {
 }
 
 impl COfficer {
- /// Повторяет reached prefix `CCountryIdentity` и четыре нулевых bytes.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             identity: CCountryIdentity::with_constructor_defaults(),

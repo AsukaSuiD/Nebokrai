@@ -1,4 +1,5 @@
-//! Тонкий DB-owner village-war WorldServer из точной пары EXE/PDB.
+//! DB-владелец village-war, подтверждённый `worldserver.exe` и
+//! `worldserver.pdb`.
 //!
 //! Lifecycle не хранит самостоятельного состояния; save делегируется
 //! существующему соединению с исходными значениями bool и SQL-порядком.

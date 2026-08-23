@@ -1,5 +1,5 @@
 //! DB-владелец `CRsPlayer` WorldServer из `rsplayer.cpp`.
-//! Источник контракта — точная пара WorldServer EXE/PDB.
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Owner охватывает create/open/load/save игрока, отдельные field codecs,
 //! honor ranks, JJC/LeiTing maintenance и lookup-операции account/name/country.
@@ -56,7 +56,6 @@ const HONOR_RANK_TYPE_COUNT: usize = 4;
 const HONOR_RANK_ENTRY_SIZE: usize = 0x24;
 const HONOR_RANK_BLOB_HEADER_SIZE: usize = HONOR_RANK_CATEGORY_COUNT * size_of::<u32>();
 
-/// Полный byte-наблюдаемый layout одного исходного `tagHorRank`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub(crate) struct HonorRankDbEntry {
@@ -64,7 +63,6 @@ pub(crate) struct HonorRankDbEntry {
     pub(crate) level: u8,
     pub(crate) name: [u8; 20],
     pub(crate) occupation_id: u8,
- /// Два байта между `wOccupationID` и первым DWORD также попадали в blob.
     pub(crate) legacy_padding: [u8; 2],
     pub(crate) appellation_id: u32,
     pub(crate) eliminate_num: u32,
@@ -112,7 +110,6 @@ impl HonorRankDbEntry {
 pub(crate) type HonorRankDbLists =
     [[Vec<HonorRankDbEntry>; HONOR_RANK_CATEGORY_COUNT]; HONOR_RANK_TYPE_COUNT];
 
-/// Полная caller-owned копия `CHonorRanks::tagDBData::tCopyTime`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct HonorRanksCopyTimeSnapshot {
     year: u16,
@@ -125,7 +122,6 @@ pub(crate) struct HonorRanksCopyTimeSnapshot {
     milliseconds: u16,
 }
 
-/// Caller-owned копия `CHonorRanks::m_stDBData`, готовая к DB-дренированию.
 pub(crate) struct HonorRanksDbDataSnapshot {
     copy_time: HonorRanksCopyTimeSnapshot,
     history: HonorRankDbLists,
@@ -133,7 +129,6 @@ pub(crate) struct HonorRanksDbDataSnapshot {
 }
 
 impl HonorRanksDbDataSnapshot {
- /// Принимает уже скопированные `GenerateSaveData` списки без перестановки.
     pub(crate) fn from_legacy_copy(
         copy_time: HonorRanksCopyTimeSnapshot,
         history: HonorRankDbLists,
@@ -163,14 +158,12 @@ impl HonorRanksDbDataSnapshot {
     }
 }
 
-/// Исходный bool-параметр выбора массива `m_stDBData`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HonorRanksSavePeriod {
     Current,
     History,
 }
 
-/// Owner-граница последовательной публикации загруженных DB-полей.
 pub(crate) trait HonorRanksLoadSink {
     fn clear_honor_ranks_period(&mut self, period: HonorRanksSavePeriod);
     fn replace_honor_ranks_type(
@@ -181,7 +174,6 @@ pub(crate) trait HonorRanksLoadSink {
     );
 }
 
-/// Malformed-граница старого unchecked blob traversal.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HonorRanksBlobDecodeBlock {
     pub(crate) rank_type: HonorRanksType,
@@ -191,7 +183,6 @@ pub(crate) struct HonorRanksBlobDecodeBlock {
     pub(crate) available_bytes: usize,
 }
 
-/// Стадия, на которой внешний loader вернул исходный `false`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HonorRanksLoadFailure {
     MissingConnection,
@@ -199,14 +190,12 @@ pub(crate) enum HonorRanksLoadFailure {
     MissingRow { period: HonorRanksSavePeriod },
 }
 
-/// Уже действующая malformed-граница после прежних последовательных эффектов.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HonorRanksLoadBlock {
     pub(crate) period: HonorRanksSavePeriod,
     pub(crate) source: HonorRanksBlobDecodeBlock,
 }
 
-/// Доказанный итог полного `CRsPlayer::LoadHonorRanks`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HonorRanksLoadOutcome {
     ReturnedTrue,
@@ -214,7 +203,6 @@ pub(crate) enum HonorRanksLoadOutcome {
     BlockedMissingFact(HonorRanksLoadBlock),
 }
 
-/// Допустимые значения исходного `int type` и связанные DB-поля.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(usize)]
 pub(crate) enum HonorRanksType {
@@ -237,7 +225,6 @@ impl HonorRanksType {
     }
 }
 
-/// Декодирует один оригинал DB-field без старого SAFEARRAY lifetime/OOB дефекта.
 pub(crate) fn decode_honor_ranks_blob(
     rank_type: HonorRanksType,
     blob: Option<&[u8]>,
@@ -308,7 +295,6 @@ impl fmt::Display for HonorRanksBlobDecodeBlock {
 
 impl Error for HonorRanksBlobDecodeBlock {}
 
-/// Typed-замена записи SAFEARRAY в одно поле updateable recordset.
 pub(crate) trait HonorRanksFieldSink {
     type Error;
 
@@ -319,13 +305,11 @@ pub(crate) trait HonorRanksFieldSink {
     ) -> Result<(), Self::Error>;
 }
 
-/// Неразрешённая 32-битная граница старого размера SAFEARRAY.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct HonorRanksBlobBlock {
     pub(crate) total_entries: usize,
 }
 
-/// Доказанный итог `SaveHonorRanksByType` без invalid enum/null sink.
 #[derive(Debug)]
 pub(crate) enum HonorRanksByTypeSaveOutcome<E> {
     Saved,
@@ -333,7 +317,6 @@ pub(crate) enum HonorRanksByTypeSaveOutcome<E> {
     BlockedMissingFact(HonorRanksBlobBlock),
 }
 
-/// Точная позиция неразрешённого размера внутри внешнего save-прохода.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct HonorRanksSaveBlock {
     pub(crate) period: HonorRanksSavePeriod,
@@ -341,7 +324,6 @@ pub(crate) struct HonorRanksSaveBlock {
     pub(crate) blob: HonorRanksBlobBlock,
 }
 
-/// Доказанный bool внешнего `SaveHonorRanks` либо локальная size-граница.
 #[derive(Debug)]
 pub(crate) enum HonorRanksSaveOutcome {
     ReturnedTrue,
@@ -368,7 +350,6 @@ impl HonorRanksFieldSink for CollectedHonorRanksFields {
 }
 
 impl HonorRanksCopyTimeSnapshot {
- /// Принимает полный `SYSTEMTIME`, проверяя только календарную проекцию.
     pub(crate) fn from_legacy_fields(fields: [u16; 8]) -> Option<Self> {
         let [
             year,
@@ -427,7 +408,6 @@ impl HonorRanksCopyTimeSnapshot {
     }
 }
 
-/// Immutable DB-view одного элемента `liDBCreationPlayer`.
 pub(crate) struct PlayerCreationBaseSnapshot {
     pub(crate) id: i32,
     pub(crate) name: Vec<u8>,
@@ -437,14 +417,11 @@ pub(crate) struct PlayerCreationBaseSnapshot {
     pub(crate) sex: u8,
     pub(crate) country: u8,
     pub(crate) head: u8,
- /// SQL-порядок: HELM..FAIRY, как перечислено в owner-документации.
     pub(crate) equipment_ids: [u32; 11],
- /// Тот же SQL-порядок для `*Level`.
     pub(crate) equipment_levels: [u8; 11],
     pub(crate) region_id: i32,
 }
 
-/// Immutable DB-view значений, которые `SavePlayerBase` читает из `CPlayer`.
 pub(crate) struct PlayerBaseSaveSnapshot<'a> {
     pub(crate) id: i32,
     pub(crate) name: &'a [u8],
@@ -453,14 +430,11 @@ pub(crate) struct PlayerBaseSaveSnapshot<'a> {
     pub(crate) sex: u8,
     pub(crate) country: u8,
     pub(crate) head: u8,
- /// SQL-порядок: HELM..FAIRY; отсутствующий runtime goods даёт ноль.
     pub(crate) equipment_ids: [u32; 11],
- /// Тот же SQL-порядок для signed результата `GAP_WEAPON_LEVEL`.
     pub(crate) equipment_levels: [i32; 11],
     pub(crate) region_id: i32,
 }
 
-/// Одна DB-строка оригинал `OpenPlayerBaseInDB` до подмены live/save-копией.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerBaseDatabaseRow {
     pub(crate) id: u32,
@@ -475,7 +449,6 @@ pub(crate) struct PlayerBaseDatabaseRow {
     pub(crate) region_id: i32,
 }
 
-/// Safe-граница ADO row-conversion внутри `OpenPlayerBaseInDB`.
 #[derive(Debug)]
 pub(crate) enum PlayerBaseLoadFailure {
     MissingConnection,
@@ -491,7 +464,6 @@ pub(crate) enum PlayerBaseLoadFailure {
     },
 }
 
-/// Доказанный bool `CreatePlayerBase`.
 #[derive(Debug)]
 pub(crate) enum PlayerBaseCreateOutcome {
     Created,
@@ -508,13 +480,11 @@ pub(crate) struct PlayerCreationSnapshot<'player, 'goods_snapshot> {
     pub(crate) goods: PlayerGoodsFiledSnapshot<'goods_snapshot>,
 }
 
-/// Неразрешённая граница одной из трёх create-стадий.
 #[derive(Debug)]
 pub(crate) enum PlayerCreateBlock {
     Goods(GoodsTraversalBlock),
 }
 
-/// Доказанный bool внешнего `CreatePlayer` либо вложенная неизвестность.
 #[derive(Debug)]
 pub(crate) enum PlayerCreateOutcome {
     ReturnedTrue,
@@ -522,14 +492,11 @@ pub(crate) enum PlayerCreateOutcome {
     BlockedMissingFact(PlayerCreateBlock),
 }
 
-/// Неразрешённая отрицательная `time_t`-граница `DeletePlayer`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PlayerDeleteTimeBlock {
- /// Timestamp, для которого оригинал `_localtime` возвращает null.
     pub(crate) deletion_time: i32,
 }
 
-/// Доказанный bool `DeletePlayer` либо локальная UB-граница времени.
 #[derive(Debug)]
 pub(crate) enum PlayerDeleteOutcome {
     ReturnedTrue,
@@ -537,7 +504,6 @@ pub(crate) enum PlayerDeleteOutcome {
     BlockedMissingFact(PlayerDeleteTimeBlock),
 }
 
-/// Структурированная замена действующих `CRsPlayer` DB/log-ошибок.
 #[derive(Debug)]
 pub(crate) struct RsPlayerNotice {
     pub(crate) operation: RsPlayerOperation,
@@ -569,7 +535,6 @@ pub(crate) enum RsPlayerOperation {
     HonorRanksSave,
 }
 
-/// Причина действующего log-эквивалента без SQL и runtime player values.
 #[derive(Debug)]
 pub(crate) enum RsPlayerSaveError {
     Database(RsPlayerDatabaseError),
@@ -621,7 +586,6 @@ impl Error for RsPlayerSaveError {
     }
 }
 
-/// Ошибка действующей ADO/TDS-границы без SQL и runtime player values.
 #[derive(Debug)]
 pub(crate) struct RsPlayerDatabaseError(tiberius::error::Error);
 
@@ -697,9 +661,7 @@ fn read_ado_integer(
     Err(first_error)
 }
 
-/// Узкая объектная граница действующей стадии исходного `CRsPlayer`.
 pub(crate) trait RsPlayerOwner {
- /// Повторяет отдельный `SELECT ID`/ADO RecordCount и его byte/`0xFF` контракт.
     async fn get_player_count_in_db_by_cdkey(
         &mut self,
         account: &[u8],
@@ -722,35 +684,30 @@ pub(crate) trait RsPlayerOwner {
             })
     }
 
- /// Читает ordered DB-часть списка; live/save merge остаётся у `CGame`.
     async fn open_player_base_in_db(
         &mut self,
         account: &[u8],
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> Result<Vec<PlayerBaseDatabaseRow>, PlayerBaseLoadFailure>;
 
- /// Возвращает local-midnight `DelDate`: null/missing даёт `0`, catch — `-1`.
     async fn get_player_deletion_date(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> i32;
 
- /// Возвращает byte country либо исходный ноль при EOF/DB-отказе.
     async fn get_player_country_by_id(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> u8;
 
- /// Возвращает ANSI player-name либо исходную пустую строку при отказе.
     async fn get_player_name_by_id(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> Vec<u8>;
 
- /// Обходит все DB ID указанного account и сравнивает оригинал u32 bit-pattern.
     async fn validate_player_id_in_cdkey(
         &mut self,
         account: &[u8],
@@ -758,21 +715,18 @@ pub(crate) trait RsPlayerOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Проверяет case-insensitive player-name через parameterized TDS query.
     async fn is_name_exist(
         &mut self,
         player_name: &[u8],
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Возвращает account по имени либо исходную пустую строку при любом отказе.
     async fn get_cd_key(
         &mut self,
         player_name: &[u8],
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> Vec<u8>;
 
- /// Потоково добавляет оригинал TOP-рейтинг в уже очищенный live owner.
     async fn stat_ranks(
         &mut self,
         ranks: &mut CPlayerRanks,
@@ -780,7 +734,6 @@ pub(crate) trait RsPlayerOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> PlayerRanksStatOutcome;
 
- /// Выполняет полную цепочку `LoadPlayer` до первого false/block.
     async fn load_player<J, G, WeekDay>(
         &mut self,
         player: &mut CPlayer,
@@ -798,7 +751,6 @@ pub(crate) trait RsPlayerOwner {
         G: DbGoodsOwner,
         WeekDay: FnMut() -> u16;
 
- /// Выполняет три create-стадии, останавливаясь после первого исходного false.
     async fn create_player<J: RsJjcSysOwner, G: DbGoodsOwner>(
         &mut self,
         snapshot: Option<&PlayerCreationSnapshot<'_, '_>>,
@@ -807,7 +759,6 @@ pub(crate) trait RsPlayerOwner {
         goods_owner: &mut G,
     ) -> PlayerCreateOutcome;
 
- /// Выполняет четыре save-стадии до первого доказанного отказа.
     async fn save_player<J: RsJjcSysOwner, G: DbGoodsOwner>(
         &mut self,
         snapshot: Option<&PlayerSaveSnapshot<'_, '_, '_>>,
@@ -816,21 +767,18 @@ pub(crate) trait RsPlayerOwner {
         goods_owner: &mut G,
     ) -> PlayerSaveOutcome;
 
- /// Выполняет первый INSERT внутри уже начатой caller-транзакции.
     async fn create_player_base(
         &mut self,
         snapshot: &PlayerCreationBaseSnapshot,
         active_transaction: &mut WorldTdsClient,
     ) -> PlayerBaseCreateOutcome;
 
- /// Обновляет существующую base-row, сохраняя исходный порядок 29 полей.
     async fn save_player_base(
         &mut self,
         snapshot: Option<&PlayerBaseSaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Создаёт ability-row в caller-транзакции, затем сохраняет JJc отдельно.
     async fn create_player_abilities<J: RsJjcSysOwner>(
         &mut self,
         snapshot: &PlayerAbilityCreationSnapshot<'_>,
@@ -838,7 +786,6 @@ pub(crate) trait RsPlayerOwner {
         jjc_owner: &mut J,
     ) -> bool;
 
- /// Обновляет существующую ability-row и только после неё сохраняет JJc.
     async fn save_player_abilities<J: RsJjcSysOwner>(
         &mut self,
         snapshot: Option<&PlayerAbilitySaveSnapshot<'_>>,
@@ -846,21 +793,18 @@ pub(crate) trait RsPlayerOwner {
         jjc_owner: &mut J,
     ) -> bool;
 
- /// Обновляет либо создаёт единственный quest-blob текущего игрока.
     async fn save_quest_data(
         &mut self,
         snapshot: Option<&PlayerQuestSaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Снимает `DelDate` у одного unsigned player ID в caller-транзакции.
     async fn restore_player(
         &mut self,
         player_id: u32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Ставит local calendar-date удаления внутри caller-транзакции.
     async fn delete_player(
         &mut self,
         player_id: u32,
@@ -868,21 +812,18 @@ pub(crate) trait RsPlayerOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> PlayerDeleteOutcome;
 
- /// Загружает history текущей даты и current следующей, сохраняя side effects.
     async fn load_honor_ranks<S: HonorRanksLoadSink>(
         &mut self,
         sink: &mut S,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> HonorRanksLoadOutcome;
 
- /// Обеспечивает строки honor-ranks для дня копии и следующего дня.
     async fn insert_honor_ranks(
         &mut self,
         snapshot: &HonorRanksDbDataSnapshot,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Дренирует четыре country-list выбранных period/type в один field blob.
     fn save_honor_ranks_by_type<S: HonorRanksFieldSink>(
         &mut self,
         snapshot: &mut HonorRanksDbDataSnapshot,
@@ -891,18 +832,15 @@ pub(crate) trait RsPlayerOwner {
         sink: &mut S,
     ) -> HonorRanksByTypeSaveOutcome<S::Error>;
 
- /// Записывает History в дату копии, затем Current в следующий день.
     async fn save_honor_ranks(
         &mut self,
         snapshot: &mut HonorRanksDbDataSnapshot,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> HonorRanksSaveOutcome;
 
- /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<RsPlayerNotice>;
 }
 
-/// Linux/TDS-замена действующей части исходного `CRsPlayer`.
 pub(crate) struct TiberiusRsPlayer {
     settings: WorldDatabaseSettings,
     notices: VecDeque<RsPlayerNotice>,
@@ -919,14 +857,12 @@ pub(crate) struct LeiTingDatabaseResetRequest {
     pub(crate) stamp: i32,
 }
 
-/// Наблюдаемый bool-итог `CRsPlayer::DbLetTingUpdate`.
 #[derive(Debug)]
 pub(crate) enum LeiTingDatabaseResetOutcome {
     ReturnedTrue { updated_rows: usize },
     ReturnedFalse(LeiTingDatabaseResetFailure),
 }
 
-/// Причина оригинал false-ветви, сохранённая без исходного catch-all/SEH.
 #[derive(Debug)]
 pub(crate) enum LeiTingDatabaseResetFailure {
     UnsupportedUpdateKind(u32),
@@ -935,7 +871,6 @@ pub(crate) enum LeiTingDatabaseResetFailure {
     MissingRequiredValue { column: &'static str },
 }
 
-/// Caller-owned связка полного `CRsPlayer::LoadPlayer` для `CPlayer::LoadData`.
 pub(crate) struct TiberiusPlayerLoadData<'owner, J, G, WeekDay> {
     pub(crate) player_owner: &'owner mut TiberiusRsPlayer,
     pub(crate) active_transaction: Option<&'owner mut WorldTdsClient>,
@@ -986,7 +921,6 @@ where
     }
 }
 
-/// Scalar-колонка создаваемой строки `CSL_PLAYER_ABILITY`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerAbilityScalarField {
     Id,
@@ -1084,7 +1018,6 @@ pub(crate) enum PlayerAbilityScalarField {
 }
 
 impl PlayerAbilityScalarField {
- /// Возвращает byte-оригинал имя, переданное исходному `Fields::Item`.
     pub(crate) const fn column_name(self) -> &'static str {
         match self {
             Self::Id => "ID",
@@ -1183,35 +1116,24 @@ impl PlayerAbilityScalarField {
     }
 }
 
-/// Значение с точным исходным ADO `VARIANT`-типом.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum PlayerAbilityScalarValue<'a> {
- /// `VT_I4` (`long`).
     I4(i32),
- /// `VT_UI4` (`unsigned long`).
     Ui4(u32),
- /// `VT_UI2` (`unsigned short`).
     Ui2(u16),
- /// `VT_UI1` (`unsigned char`).
     Ui1(u8),
- /// `VT_BOOL`: `true` материализуется как `VARIANT_TRUE` (`-1`).
     VariantBool(bool),
- /// `VT_R4` (`float`).
     R4(f32),
- /// `VT_INT`, отдельно от равного по ширине `VT_I4`.
     Int(i32),
- /// `_bstr_t(char const*)`: ANSI C-string до первого NUL.
     BStr(&'a [u8]),
 }
 
-/// Одно ordered-присваивание `Recordset::Fields::Item(...)->Value`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PlayerAbilityScalarAssignment<'a> {
     pub(crate) field: PlayerAbilityScalarField,
     pub(crate) value: PlayerAbilityScalarValue<'a>,
 }
 
-/// Immutable DB-view значений, прочитанных `CreatePlayerAbilities` из `CPlayer`.
 pub(crate) struct PlayerAbilityScalarSnapshot<'a> {
     pub(crate) id: i32,
     pub(crate) name: &'a [u8],
@@ -1299,7 +1221,6 @@ pub(crate) struct PlayerAbilityScalarSnapshot<'a> {
     pub(crate) lt_60_stamp: u32,
 }
 
-/// Полный scalar-набор, который `CRsPlayer::LoadPlayer` публикует в `CPlayer`.
 pub(crate) struct PlayerAbilityLoadScalarSnapshot<'a> {
     pub(crate) ability: PlayerAbilityScalarSnapshot<'a>,
     pub(crate) silence_time: i32,
@@ -1311,7 +1232,6 @@ pub(crate) struct PlayerAbilityLoadScalarSnapshot<'a> {
     pub(crate) appellation_id: u32,
 }
 
-/// Восстанавливает точный порядок и `VARIANT`-форму 84 scalar-присваиваний.
 pub(crate) fn player_ability_scalar_assignments<'a>(
     snapshot: &PlayerAbilityScalarSnapshot<'a>,
 ) -> [PlayerAbilityScalarAssignment<'a>; 84] {
@@ -1441,7 +1361,6 @@ pub(crate) fn player_ability_scalar_assignments<'a>(
     ]
 }
 
-/// Binary-колонка создаваемой строки `CSL_PLAYER_ABILITY`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerAbilityBinaryField {
     HotKey,
@@ -1454,7 +1373,6 @@ pub(crate) enum PlayerAbilityBinaryField {
 }
 
 impl PlayerAbilityBinaryField {
- /// Возвращает byte-оригинал имя, использованное исходным `AppendChunk`.
     pub(crate) const fn column_name(self) -> &'static str {
         match self {
             Self::HotKey => "HotKey",
@@ -1468,14 +1386,12 @@ impl PlayerAbilityBinaryField {
     }
 }
 
-/// PDB-layout одного элемента `CPlayer::m_listNewSkillID`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAbilitySkill {
     pub(crate) id: u16,
     pub(crate) level: u16,
 }
 
-/// PDB-layout одного элемента `CPlayer::m_listThing`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerThing {
     pub(crate) tid: u16,
@@ -1484,25 +1400,20 @@ pub(crate) struct PlayerThing {
     pub(crate) point: u16,
 }
 
-/// Доказанный valid-state view полей `m_lVariable*` исходного `CPlayer`.
 pub(crate) struct PlayerScriptFlagSnapshot<'a> {
     pub(crate) variable_num: i32,
- /// Срез одновременно доказывает неотрицательную длину и читаемый payload.
     pub(crate) variable_data: &'a [u8],
 }
 
-/// Имя friend-элемента на доказанном C-string-compatible пути.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerFriendName<'a>(&'a [u8]);
 
-/// Локальная граница старого несоответствия `string::size()` и `strlen`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct EmbeddedFriendNameNul {
     pub(crate) offset: usize,
 }
 
 impl<'a> PlayerFriendName<'a> {
- /// Принимает полный byte-content `std::string`, если старые size/strlen равны.
     pub(crate) fn from_legacy_bytes(bytes: &'a [u8]) -> Result<Self, EmbeddedFriendNameNul> {
         match bytes.iter().position(|byte| *byte == 0) {
             Some(offset) => Err(EmbeddedFriendNameNul { offset }),
@@ -1527,7 +1438,6 @@ pub(crate) struct PlayerAbilityCreationSnapshot<'a> {
     pub(crate) jjc: PlayerJjcDataSnapshot,
 }
 
-/// Полный caller-owned view обновления существующей `CSL_PLAYER_ABILITY`.
 pub(crate) struct PlayerAbilitySaveSnapshot<'a> {
     pub(crate) ability: PlayerAbilityCreationSnapshot<'a>,
     pub(crate) silence_time: i32,
@@ -1539,14 +1449,12 @@ pub(crate) struct PlayerAbilitySaveSnapshot<'a> {
     pub(crate) appellation_id: u32,
 }
 
-/// PDB-поля mapped value `CPlayer::tagPlayerQuest`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerQuestSaveEntry {
     pub(crate) quest_id: u16,
     pub(crate) complete: u8,
 }
 
-/// Caller-owned view `CPlayer::m_PlayerQuests` для одного DB update.
 pub(crate) struct PlayerQuestSaveSnapshot<'a> {
     pub(crate) player_id: i32,
     pub(crate) quests: &'a BTreeMap<u16, PlayerQuestSaveEntry>,
@@ -1563,13 +1471,11 @@ pub(crate) struct PlayerSaveSnapshot<'player, 'quest, 'goods_snapshot> {
     pub(crate) goods: PlayerGoodsFiledSnapshot<'goods_snapshot>,
 }
 
-/// Неразрешённая граница одной из четырёх save-стадий.
 #[derive(Debug)]
 pub(crate) enum PlayerSaveBlock {
     Goods(GoodsTraversalBlock),
 }
 
-/// Доказанный bool внешнего `SavePlayer` либо вложенная неизвестность.
 #[derive(Debug)]
 pub(crate) enum PlayerSaveOutcome {
     ReturnedTrue,
@@ -1577,7 +1483,6 @@ pub(crate) enum PlayerSaveOutcome {
     BlockedMissingFact(PlayerSaveBlock),
 }
 
-/// Кодирует mapped values в unsigned key-order исходного `std::map`.
 pub(crate) fn encode_player_quest_data(snapshot: &PlayerQuestSaveSnapshot<'_>) -> Vec<u8> {
     let mut encoded = Vec::with_capacity(snapshot.quests.len() * 3);
     for quest in snapshot.quests.values() {
@@ -1587,7 +1492,6 @@ pub(crate) fn encode_player_quest_data(snapshot: &PlayerQuestSaveSnapshot<'_>) -
     encoded
 }
 
-/// Собирает точный save-порядок 92 scalar-присваиваний.
 pub(crate) fn player_ability_save_scalar_assignments<'a>(
     snapshot: &'a PlayerAbilitySaveSnapshot<'a>,
     save_time: &'a [u8],
@@ -1657,11 +1561,9 @@ impl PlayerAbilityFieldSink for CollectedPlayerAbilityBinaryFields {
     }
 }
 
-/// Синхронная замена действующего `Field20::AppendChunk`.
 pub(crate) trait PlayerAbilityFieldSink {
     type Error;
 
- /// Обязан скопировать `bytes` до возврата, как исходный ADO-вызов.
     fn append_binary_field(
         &mut self,
         field: PlayerAbilityBinaryField,
@@ -1669,7 +1571,6 @@ pub(crate) trait PlayerAbilityFieldSink {
     ) -> Result<(), Self::Error>;
 }
 
-/// Сохраняет byte-оригинал `HotKey` blob создаваемой ability-строки.
 pub(crate) fn save_hot_key_field<S: PlayerAbilityFieldSink>(
     hot_keys: &[u32; 24],
     sink: &mut S,
@@ -1681,7 +1582,6 @@ pub(crate) fn save_hot_key_field<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::HotKey, &bytes)
 }
 
-/// Сохраняет `ListSkill` как последовательность little-endian `tagSkill`.
 pub(crate) fn save_skill_field<S: PlayerAbilityFieldSink>(
     skills: &[PlayerAbilitySkill],
     sink: &mut S,
@@ -1694,7 +1594,6 @@ pub(crate) fn save_skill_field<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::Skill, &bytes)
 }
 
-/// Сохраняет `VariableList`: signed count и следующий за ним opaque payload.
 pub(crate) fn save_script_flag<S: PlayerAbilityFieldSink>(
     snapshot: &PlayerScriptFlagSnapshot<'_>,
     sink: &mut S,
@@ -1705,7 +1604,6 @@ pub(crate) fn save_script_flag<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::ScriptFlag, &bytes)
 }
 
-/// Сохраняет opaque `m_vExStates` byte-оригинал в `ListState`.
 pub(crate) fn save_state_field<S: PlayerAbilityFieldSink>(
     ex_states: &[u8],
     sink: &mut S,
@@ -1713,7 +1611,6 @@ pub(crate) fn save_state_field<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::State, ex_states)
 }
 
-/// Сохраняет `ListFriendName` как list-order последовательность C-строк.
 pub(crate) fn save_friend_field<S: PlayerAbilityFieldSink>(
     friend_names: &[PlayerFriendName<'_>],
     sink: &mut S,
@@ -1727,7 +1624,6 @@ pub(crate) fn save_friend_field<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::Friend, &bytes)
 }
 
-/// Сохраняет sorted unique `m_setCiQingList` в lowercase-поле `ciqing`.
 pub(crate) fn save_ci_qing_field<S: PlayerAbilityFieldSink>(
     ci_qing_ids: &BTreeSet<u32>,
     sink: &mut S,
@@ -1739,7 +1635,6 @@ pub(crate) fn save_ci_qing_field<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::CiQing, &bytes)
 }
 
-/// Сохраняет `ListThing` как deque-order последовательность `tagThing`.
 pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
     things: &[PlayerThing],
     sink: &mut S,
@@ -1754,7 +1649,6 @@ pub(crate) fn save_thing_field<S: PlayerAbilityFieldSink>(
     sink.append_binary_field(PlayerAbilityBinaryField::Thing, &bytes)
 }
 
-/// Кодирует worker-local `GetDailyThingList` в оригинал `ListThing` blob.
 fn encode_lei_ting_daily_things(things: &VecDeque<LeiTingDailyThing>) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(things.len() * 8);
     for thing in things {
@@ -1766,7 +1660,6 @@ fn encode_lei_ting_daily_things(things: &VecDeque<LeiTingDailyThing>) -> Vec<u8>
     bytes
 }
 
-/// Safe-границы исходных unchecked binary-field loader-ов.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerAbilityBlobDecodeBlock {
     HotKeySize {
@@ -1805,14 +1698,12 @@ impl fmt::Display for PlayerAbilityBlobDecodeBlock {
 
 impl Error for PlayerAbilityBlobDecodeBlock {}
 
-/// Owned-результат непустого `VariableList`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LoadedPlayerScriptFlag {
     pub(crate) variable_num: i32,
     pub(crate) variable_data: Vec<u8>,
 }
 
-/// Декодирует оригинал `LoadHotKeyField`: только blob длиной `0x60` допустим.
 pub(crate) fn load_hot_key_field(
     blob: &[u8],
 ) -> Result<[u32; 24], PlayerAbilityBlobDecodeBlock> {
@@ -1832,7 +1723,6 @@ pub(crate) fn load_hot_key_field(
     }))
 }
 
-/// Декодирует `ListSkill`; неполный хвост игнорируется как `size / 4` в EXE.
 pub(crate) fn load_skill_field(blob: &[u8]) -> Vec<PlayerAbilitySkill> {
     blob.chunks_exact(4)
         .map(|entry| PlayerAbilitySkill {
@@ -1842,7 +1732,6 @@ pub(crate) fn load_skill_field(blob: &[u8]) -> Vec<PlayerAbilitySkill> {
         .collect()
 }
 
-/// Декодирует `VariableList`; `0..=3` байта оставляют player-state прежним.
 pub(crate) fn load_script_flag(
     blob: &[u8],
 ) -> Result<Option<LoadedPlayerScriptFlag>, PlayerAbilityBlobDecodeBlock> {
@@ -1862,12 +1751,10 @@ pub(crate) fn load_script_flag(
     }))
 }
 
-/// Декодирует opaque `ListState`; пустое поле не вызывает `SetExStates`.
 pub(crate) fn load_state_field(blob: &[u8]) -> Option<Vec<u8>> {
     (!blob.is_empty()).then(|| blob.to_vec())
 }
 
-/// Декодирует последовательность C-строк `ListFriendName` в list-order.
 pub(crate) fn load_friend_field(
     blob: &[u8],
 ) -> Result<Vec<Vec<u8>>, PlayerAbilityBlobDecodeBlock> {
@@ -1887,14 +1774,12 @@ pub(crate) fn load_friend_field(
     Ok(names)
 }
 
-/// Декодирует `ciqing`; неполный хвост игнорируется, set убирает дубликаты.
 pub(crate) fn load_ci_qing_field(blob: &[u8]) -> BTreeSet<u32> {
     blob.chunks_exact(4)
         .map(|entry| u32::from_le_bytes(entry.try_into().expect("полный tattoo ID")))
         .collect()
 }
 
-/// Декодирует непустой `ListThing`; empty/default-ветвь принадлежит caller-у.
 pub(crate) fn load_thing_field(blob: &[u8]) -> Vec<PlayerThing> {
     blob.chunks_exact(8)
         .map(|entry| PlayerThing {
@@ -1908,7 +1793,6 @@ pub(crate) fn load_thing_field(blob: &[u8]) -> Vec<PlayerThing> {
         .collect()
 }
 
-/// Декодирует `QuestData`; неполный хвост игнорируется как `size / 3` в EXE.
 pub(crate) fn load_quest_data(blob: &[u8]) -> Vec<PlayerQuestSaveEntry> {
     blob.chunks_exact(3)
         .map(|entry| PlayerQuestSaveEntry {
@@ -2056,7 +1940,6 @@ fn ability_blob(
     }
 }
 
-/// Материализует доказанную scalar-часть одной ability-строки без ADO casts.
 pub(crate) fn materialize_player_ability_scalar_row(
     row: &Row,
     player: &mut CPlayer,
@@ -2215,7 +2098,6 @@ pub(crate) fn materialize_player_ability_scalar_row(
     Ok(())
 }
 
-/// Материализует семь binary fields одной ability-строки в оригинал helper-order.
 pub(crate) fn materialize_player_ability_binary_row(
     row: &Row,
     player: &mut CPlayer,
@@ -2285,7 +2167,6 @@ pub(crate) fn materialize_player_ability_binary_row(
 }
 
 impl TiberiusRsPlayer {
- /// Копирует DB setup для исходных методов с автономным connection.
     pub(crate) fn new(settings: &WorldDatabaseSettings) -> Self {
         Self {
             settings: settings.clone(),
@@ -2411,7 +2292,6 @@ impl TiberiusRsPlayer {
         LeiTingDatabaseResetOutcome::ReturnedTrue { updated_rows }
     }
 
- /// Загружает и публикует одну ordered ability-строку по signed player ID.
     pub(crate) async fn load_player_ability_row(
         &mut self,
         player: &mut CPlayer,
@@ -2503,7 +2383,6 @@ impl TiberiusRsPlayer {
         PlayerAbilityQueryLoadOutcome::ReturnedTrue
     }
 
- /// Повторяет отдельный `LoadQuestData`; EOF означает пустой успешный owner.
     pub(crate) async fn load_player_quest_data(
         &mut self,
         player: &mut CPlayer,

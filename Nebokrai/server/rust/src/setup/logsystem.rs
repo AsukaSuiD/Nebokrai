@@ -1,19 +1,10 @@
-//! Настройки журналирования исторического Miracle.
+//! Настройки `CLogSystem` из WorldServer, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CLogSystem::AddToByteArray`:
-//!; text loader, accessors и Game decoder не входят в этот owner и остаются
-//! Точная пара:
-//! Исходный владелец PDB:
-//!
-//! Wire состоит из точного 64-байтного `tagLogSystem`, signed количества и
-//! ordered `long`-ключей предметов. GameServer читает структуру целиком и
-//! использует её поля по ABI offsets, поэтому fixed byte snapshot здесь
-//! сохраняет подтверждённый контракт без выдуманной раскладки. Windows
-//! `long` моделируется `i32`, а `BTreeSet` стандартной библиотеки заменяет
-//! `std::set` и сохраняет его signed-порядок и уникальность. Static storage
-//! оригинала было нулевым до loader-а; `Default` воспроизводит это без
-//! C++ singleton/lifetime plumbing. Typed overlay полей будет уместен вместе
-//! с действуетием loader-а; неизвестные offsets сейчас не именуются.
+//! Wire — raw 64-байтный `tagLogSystem`, signed count и ordered item IDs.
+//! Парный decoder использует ABI offsets, поэтому snapshot остаётся fixed
+//! bytes с нулевым static default. `BTreeSet<i32>` сохраняет signed order и
+//! уникальность; неподтверждённые offsets не получают выдуманных имён.
 
 use std::collections::BTreeSet;
 use std::error::Error;

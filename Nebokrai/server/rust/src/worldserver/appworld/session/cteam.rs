@@ -1,4 +1,5 @@
-//! Конкретная session команды WorldServer из точной пары EXE/PDB.
+//! Командная session `CTeam`, подтверждённая `worldserver.exe` и
+//! `worldserver.pdb`.
 //!
 //! Owner сохраняет delay `125`, минутный leader-check, allocation `0`, team
 //! wire, порядок Start-before-plug-count при unserialize и opcodes

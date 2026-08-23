@@ -1,5 +1,5 @@
 //! DB-владелец Gods Battle WorldServer из `rsgodsbattle.cpp`.
-//! Источник контракта — точная пара WorldServer EXE/PDB.
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Сохраняются SaveFactionXYD, SaveNpcFaction и top-ten query: порядок строк
 //! провайдера, значения bool и уже применённые записи при последующей ошибке.
@@ -31,28 +31,24 @@ const TOP_TEN_SZL_SQL: &str = "SELECT TOP 10 Name,SZL,Levels FROM CSL_PLAYER_ABI
 const TOP_TEN_NAME_VISIBLE_BYTES: usize = 16;
 const NPC_FACTION_NAME_VISIBLE_BYTES: usize = 16;
 
-/// Два значения, которые исходный DB-владелец читал из `CGodsBattleConf`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GodsBattleFactionXydSnapshot {
     pub(crate) a_faction_xyd: i32,
     pub(crate) b_faction_xyd: u32,
 }
 
-/// Одна запись исходного ordered `m_vNpcName`.
 #[derive(Clone, Debug)]
 pub(crate) struct GodsBattleNpcFactionSnapshot {
     pub(crate) faction: i32,
     pub(crate) name: Vec<u8>,
 }
 
-/// Действующий save-владелец, создавший log-эквивалент.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum GodsBattleSaveOperation {
     FactionXyd,
     NpcFaction,
 }
 
-/// Структурированная замена действующих log-ветвей `CRSGodsBattle`.
 #[derive(Debug)]
 pub(crate) enum RsGodsBattleNotice {
     MissingConnection {
@@ -85,7 +81,6 @@ pub(crate) enum RsGodsBattleNotice {
     },
 }
 
-/// Причина исходного `false` автономного `LoadFactionXYD`.
 #[derive(Debug)]
 pub(crate) enum GodsBattleFactionXydLoadFailure {
     Connection(WorldDatabaseConnectionError),
@@ -99,7 +94,6 @@ pub(crate) enum GodsBattleFactionXydLoadFailure {
     },
 }
 
-/// Причина исходного `false` автономного `GetNpcFaction`.
 #[derive(Debug)]
 pub(crate) enum GodsBattleNpcFactionLoadFailure {
     Connection(WorldDatabaseConnectionError),
@@ -113,7 +107,6 @@ pub(crate) enum GodsBattleNpcFactionLoadFailure {
     },
 }
 
-/// Причина исходного `false` из действующего рейтингового DB-владельца.
 #[derive(Debug)]
 pub(crate) enum GodsBattleTopTenFailure {
     MissingConnection,
@@ -127,7 +120,6 @@ pub(crate) enum GodsBattleTopTenFailure {
     },
 }
 
-/// Ошибка действующей ADO/TDS-границы без runtime SQL и значений строк.
 #[derive(Debug)]
 pub(crate) struct RsGodsBattleDatabaseError(tiberius::error::Error);
 
@@ -149,35 +141,28 @@ impl From<tiberius::error::Error> for RsGodsBattleDatabaseError {
     }
 }
 
-/// Узкая объектная граница действующих save-функций `CRSGodsBattle`.
 pub(crate) trait RsGodsBattleOwner {
- /// Загружает все XYD-строки в порядке провайдера через отдельное DB-соединение.
     async fn load_faction_xyd(&mut self, configuration: &mut CGodsBattleConf) -> bool;
 
- /// Применяет DB-фракции к существующим NPC конфигурации в порядке провайдера.
     async fn get_npc_faction(&mut self, configuration: &mut CGodsBattleConf) -> bool;
 
- /// Заменяет единственную faction-XYD строку внутри caller-транзакции.
     async fn save_faction_xyd(
         &mut self,
         snapshot: GodsBattleFactionXydSnapshot,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Заменяет все NPC-faction строки в исходном vector-order.
     async fn save_npc_faction(
         &mut self,
         snapshot: &[GodsBattleNpcFactionSnapshot],
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Выполняет legacy no-argument сохранение на отдельном соединении.
     async fn save_npc_faction_autonomous(
         &mut self,
         snapshot: &[GodsBattleNpcFactionSnapshot],
     ) -> bool;
 
- /// Дописывает одну faction-секцию рейтинга в существующий byte-vector.
     async fn get_top_ten_szl_players(
         &mut self,
         faction: i32,
@@ -185,18 +170,15 @@ pub(crate) trait RsGodsBattleOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<RsGodsBattleNotice>;
 }
 
-/// Linux/TDS-замена действующей части исходного `CRSGodsBattle`.
 pub(crate) struct TiberiusRsGodsBattle {
     settings: WorldDatabaseSettings,
     notices: VecDeque<RsGodsBattleNotice>,
 }
 
 impl TiberiusRsGodsBattle {
- /// Копирует setup для автономных read-владельцев исходного `CRSGodsBattle`.
     pub(crate) fn new(settings: &WorldDatabaseSettings) -> Self {
         Self {
             settings: settings.clone(),
@@ -204,12 +186,10 @@ impl TiberiusRsGodsBattle {
         }
     }
 
- /// Ставит границу notice-очереди перед отдельным synchronous owner-call.
     pub(crate) fn notice_checkpoint(&self) -> usize {
         self.notices.len()
     }
 
- /// Забирает только notices, созданные после checkpoint, сохраняя прежние.
     pub(crate) fn drain_notices_after(
         &mut self,
         checkpoint: usize,

@@ -31,7 +31,6 @@ struct WorldPlayerLoadWorkerSignal {
     player_load_threads_exit: AtomicBool,
 }
 
-/// Итог одного vector-slot после штатного ordered join.
 #[derive(Debug)]
 pub(crate) enum WorldPlayerLoadWorkerCompletion {
     Empty,
@@ -44,7 +43,6 @@ struct WorldPlayerLoadWorkerSlot {
     handle: Option<JoinHandle<Result<WorldPlayerLoadWorkerReport, WorldPlayerLoadWorkerBlock>>>,
 }
 
-/// Owned vector системных DB-load потоков и два общих exit-флага.
 pub(crate) struct WorldPlayerLoadWorkerPool {
     signal: Arc<WorldPlayerLoadWorkerSignal>,
     workers: Vec<WorldPlayerLoadWorkerSlot>,
@@ -126,7 +124,6 @@ impl WorldPlayerLoadWorkerPool {
         self.workers.len()
     }
 
- /// Выставляет общий load-exit и ждёт все handles в insertion-order.
     pub(crate) fn stop(&mut self) -> Vec<(u32, WorldPlayerLoadWorkerCompletion)> {
         self.request_player_load_threads_exit();
         self.workers

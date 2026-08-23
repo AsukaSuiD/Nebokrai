@@ -1,45 +1,15 @@
-//! Общий рейтинг игроков исторического WorldServer.
+//! Рейтинг `CPlayerRanks` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `UpdateRanksToGameServer`, `StatPlayerRanks`
-//! `AddRank`, `OnStatRanks`
-//! и `Initialize` — часть контракта owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
+//! Wire subtype `0x17` содержит signed count и insertion-order player records.
+//! Статистика очищает список до start-log; DB добавляет доступный префикс, после
+//! чего end-log и публикация выполняются даже при DB `false`. Transport-result
+//! исходный `SendAll` игнорировал.
 //!
-//! World serializer и Game decoder подтверждают wire: signed count и
-//! insertion-order records `i32 player_id + C-string name + u16 occupation +
-//! u16 level + C-string faction_name`. `Vec` заменяет `std::list`, owned bytes
-//! — `std::string`; порядок и little-endian поля не меняются. Внутренний NUL
-//! штатно завершает исходный C-string и поэтому обрезает только wire-поле.
-//! Невозможный 32-битный count блокирует весь append до изменения destination.
-//!
-//! Публикация использует готовые `CMessage` и `ServerCommandHandle`:
-//! `0x7F801 + subtype 0x17 + serialized ranks` сохраняется, а самописные
-//! буфер, CRC-envelope и fan-out не дублируются. Исходный `SendAll` игнорировал
-//! transport-result; Rust оставляет его в отчёте, не меняя порядок вызовов.
-//! `StatPlayerRanks` связан в `CGame` с реальным `CRsPlayer`: список очищается
-//! до start-log, tick снимается после него, DB добавляет live prefix, затем
-//! всегда идут end-log и публикация даже после DB `false`. `AddRank` получает
-//! organizing явно вместо singleton-а и сохраняет empty-name ветви отсутствия
-//! faction; исходный null внутри map остаётся typed-блоком.
-//!
-//! `Initialize` копирует время и signed maximum из `COrganizingParam`, заменяет
-//! в календарной копии только текущие year/month/day и переносит событие на
-//! сутки лишь при strict `< now`. `OnStatRanks` после stat/publication снова
-//! берёт исходное время, подставляет текущую дату и уже безусловно добавляет
-//! сутки. Этот календарный порядок сохраняется буквально.
-//! `Option<TimerId>` заменяет неинициализированный constructor-ом event ID;
-//! сам `CTimer` остаётся библиотечным ordered owner-ом.
-//! `Default` повторяет inline-инициализацию singleton-а, а
-//! явная передача единственного `CPlayerRanks` заменяет process-global
-//! `getInstance`/`GetPlayerRanks`. `Vec` освобождается обычным Rust `Drop`;
-//! уничтожает owner и обнуляет singleton после
-//! `Release`, что Rust выражает обычным владением. Сам `Release` сначала
-//! снимает назначенное calendar-событие, затем очищает ranks. Constructor-ная
-//! дыра event ID не
-//! превращается в случайный `KillTimeEvent`: `None` исправляет внутреннее
-//! чтение неинициализированного DWORD, которое не является контрактом игры.
-//! Два входных поля теперь приходят из действующего `COrganizingParam`;
-//! PlayerRanks по-прежнему принимает узкую typed-проекцию и не дублирует его
-//! позиционный parser.
+//! Calendar event подставляет текущую дату и переносится на сутки только при
+//! strict `< now`; callback после публикации добавляет сутки безусловно.
+//! Неназначенный timer ID хранится как `None`, поэтому `Release` снимает только
+//! реально зарегистрированное событие.
 
 use std::error::Error;
 use std::fmt;
@@ -90,7 +60,6 @@ pub(crate) struct PlayerRanksInitializationReport {
     pub(crate) legacy_result: bool,
 }
 
-/// Наблюдаемый prefix `Release` до уничтожения Rust owner-а контекстом.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerRanksReleaseReport {
     pub(crate) previous_event_id: Option<TimerId>,
@@ -111,7 +80,6 @@ pub(crate) struct PlayerRanksGameServerUpdate {
 }
 
 impl CPlayerRanks {
- /// Копирует параметры и ставит первое календарное событие owner-а.
     pub(crate) fn initialize<Callback: Copy>(
         &mut self,
         configuration: PlayerRanksInitializationConfig,
@@ -139,7 +107,6 @@ impl CPlayerRanks {
         })
     }
 
- /// Готовит следующее событие после синхронного `OnStatRanks` callback-а.
     pub(crate) fn next_stat_time(
         &self,
         current_time: TagTime,
@@ -151,7 +118,6 @@ impl CPlayerRanks {
         Ok(scheduled_time)
     }
 
- /// Фиксирует side effects после `SetTimeEvent` следующего дня.
     pub(crate) fn finish_stat_schedule(&mut self, event_id: TimerId) {
         self.stat_event_id = Some(event_id);
         self.stat = true;
@@ -181,7 +147,6 @@ impl CPlayerRanks {
         self.ranks.clear();
     }
 
- /// Снимает calendar callback до очистки list-owner-а, как `Release`.
     pub(crate) fn release<Callback>(
         &mut self,
         timer: &mut CTimer<Callback>,
@@ -201,7 +166,6 @@ impl CPlayerRanks {
         self.ranks.push(rank);
     }
 
- /// Добавляет строку DB и вычисляет faction-name по live organizing map.
     pub(crate) fn add_rank(
         &mut self,
         organizing: &COrganizingCtrl,
@@ -263,7 +227,6 @@ impl CPlayerRanks {
         Ok(())
     }
 
- /// Публикует `0x7F801/0x17` всем подключённым GameServer-ам.
     pub(crate) fn update_ranks_to_game_server(
         &self,
         sender: Option<&ServerCommandHandle>,

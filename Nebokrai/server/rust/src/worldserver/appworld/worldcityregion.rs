@@ -1,32 +1,17 @@
-//! Владелец `CWorldCityRegion` исторического WorldServer.
+//! Городской регион `CWorldCityRegion` из `worldcityregion.cpp/.h`,
+//! подтверждённый `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Constructor, `LoadCitySetup`, virtual
-//! `Load` и serializer — часть контракта owner-а.
-//! Конструктор копирования вложенного `tagBuild` копирует одиннадцать signed
-//! `long` в порядке wire-а, а
-//! затем оба C-string значения `strName` и `strScript`. `WorldCityBuild` хранит
-//! эти поля именованно, а обычный `Clone` Rust заменяет только копирование
-//! MSVC `std::string` без переноса SSO и обработки исключений.
-//! Композиция содержит один `CWorldWarRegion`, list gates по
-//! `+0x12C`, defence `tagRegionSetup` по `+0x138`; constructor задаёт war
-//! `3/3/2`, но defence setup не инициализирует. `.city` очищает gates только
-//! после успешного open, читает в первом разделе `0x2C` scalar bytes +
-//! resolved name/script, во втором — только первые пять из восьми defence
-//! DWORD и возвращает `1`; missing resource возвращает `0`.
+//! `.city` после успешного открытия очищает gates, читает 0x2C scalar bytes,
+//! resolved name/script и первые пять полей defence setup. Missing resource
+//! сохраняет прежние lists.
 //!
-//! Serializer буквально дописывает полный `0x20` defence block, count и gates.
-//! Последние три defence DWORD ни constructor, ни loader не задают даже в пяти
-//! поставочных `.city`; safe serializer поэтому возвращает локальную ошибку,
-//! а не подставляет два видимых лишних token-а или нули.
-//! City Load принимает успех лишь при успешных War/City loads, включённом base
-//! return setup и совпадении own ID с обоими return-region ID; offsets guard-а
-//! `+0xC8/+0xAC/+0x138/+0x8` подтверждены оригинал.
-//! `DecordFromByteArray` и `SetEnterPosXY` входят в контракт owner-а; decoder
-//! делегирует no-op War owner, не меняет cursor и
-//! возвращает `true`. Доказанный STL/compiler noise удалён, обычные destructors
-//! заменены `Drop`.
-//! source `worldcityregion.cpp:19,31,48,122,147`. Rust layout старый ABI не
-//! копирует.
+//! Serializer пишет полный 0x20 defence block, count и gates. Последние три
+//! defence DWORD loader не задаёт, поэтому wire блокируется до их явного
+//! значения. `Load` успешен только при успешных War/City loaders, включённом
+//! return setup и совпадении обоих return region IDs.
+//!
+//! Decoder делегирует no-op War owner и не двигает cursor. `Clone` строк
+//! заменяет MSVC SSO, сохраняя одиннадцать scalar fields и две C-строки.
 
 use super::country::countryparam::CCountryParam;
 use super::organizingsystem::attackcitysys::CAttackCitySys;
@@ -63,7 +48,6 @@ pub(crate) enum WorldCityRegionSerializationBlock {
     TooManyGates { count: usize },
 }
 
-/// Локальная safe-граница city enter-пути.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldCityRegionEnterBlock {
     ActiveStateMissingPlayer,
@@ -96,7 +80,6 @@ struct WorldCityBuild {
 }
 
 impl WorldCityBuild {
- /// Возвращает scalar-prefix в точном порядке legacy wire-а.
     const fn wire_scalars(&self) -> [i32; 11] {
         [
             self.id,
@@ -199,7 +182,6 @@ impl CWorldCityRegion {
         Ok(WorldCityRegionLoadOutcome { counts, loaded })
     }
 
- /// Missing `.city` не очищает прежнее состояние и возвращает legacy `0`.
     pub(crate) fn load_city_bytes<ResolveName>(
         &mut self,
         bytes: Option<&[u8]>,
@@ -298,7 +280,6 @@ impl CWorldCityRegion {
         Ok(true)
     }
 
- /// Derived override делегирует no-op War decoder и всегда возвращает `true`.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],
@@ -311,7 +292,6 @@ impl CWorldCityRegion {
         true
     }
 
- /// Переносит defender/attacker только в активных Mass/Fight состояниях.
     pub(crate) fn set_enter_pos_xy<'a, FindRegion, Random>(
         &self,
         player: Option<&mut CPlayer>,

@@ -1,4 +1,5 @@
-//! Потокобезопасная FIFO команд World write-log из точной пары EXE/PDB.
+//! FIFO команд World write-log, подтверждённая `worldserver.exe` и
+//! `worldserver.pdb`.
 //!
 //! Push добавляет в хвост, worker снимает с головы. `Arc<Mutex<VecDeque<_>>>`
 //! заменяет critical section/STL, сохраняя порядок, передачу владения и

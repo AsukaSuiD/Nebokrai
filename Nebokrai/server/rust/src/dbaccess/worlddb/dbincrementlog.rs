@@ -1,7 +1,7 @@
 //! DB-reader журнала increment-shop WorldServer.
 //!
 //! Источник контракта `CDbIncrementLog::LoadAll` —
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`.
+//! `worldserver.exe` и `worldserver.pdb`.
 //! Запрос сохраняет `DATEDIFF(day, log_time, GETDATE()) <= days` и обязательный
 //! порядок `player_id, log_time`. Каждая уже прочитанная строка публиковалась в
 //! `CIncrementLog` до перехода к следующей, поэтому typed результат отдельно

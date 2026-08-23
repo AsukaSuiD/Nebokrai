@@ -1,7 +1,7 @@
 //! Владелец `TimeToReturn` исторического WorldServer.
 //!
 //! `initialize/load/reload/on_time` следуют контракту
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`: owner читает
+//! `worldserver.exe` и `worldserver.pdb`: owner читает
 //! в map-order секции `#` weekly и `*` absolute
 //! `setup/TimeToReturn.ini`, а callback отправляет `0x7FA13` с двумя signed
 //! long: map ID и buffer time. `BTreeMap`, typed `TimerId` и typed errors
@@ -111,7 +111,6 @@ impl TimeToReturn {
         &self.params
     }
 
- /// Оригинал `initialize`: это только вызов `load`.
     pub(crate) fn initialize<Callback: Copy>(
         &mut self,
         source: Option<&[u8]>,
@@ -122,7 +121,6 @@ impl TimeToReturn {
         self.load(source, now, timer, callbacks)
     }
 
- /// Оригинал `load`: очищает registry без отмены старых calendar events.
     pub(crate) fn load<Callback: Copy>(
         &mut self,
         source: Option<&[u8]>,

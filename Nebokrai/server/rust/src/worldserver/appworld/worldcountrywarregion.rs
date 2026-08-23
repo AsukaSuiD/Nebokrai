@@ -1,29 +1,15 @@
-//! Владелец `WorldCountryWarRegion` WorldServer из точной пары EXE/PDB и
-//! исходного owner-а `worldcountrywarregion.cpp`.
+//! Country-war регион `WorldCountryWarRegion` из
+//! `worldcountrywarregion.cpp`, подтверждённый `worldserver.exe` и
+//! `worldserver.pdb`.
 //!
-//! Owner содержит один прямой `CWorldRegion` и шесть ordered list-ов. `Load`
-//! сначала полностью выполняет base Load, затем читает `regions/{id}.country`.
-//! Успешный open очищает и заполняет секции в порядке defend/attack gates,
-//! defend/attack flags, defend/attack areas; missing resource сохраняет прежние
-//! списки и возвращает `0`; успешный разбор возвращает `1`.
+//! После base Load owner читает `regions/{id}.country`. Успешный open очищает
+//! и заполняет defend/attack gates, flags и areas; missing resource сохраняет
+//! прежние списки.
 //!
-//! Gate wire состоит из `0x2C` scalar bytes и двух C-строк, flag — из `0x28`
-//! bytes и двух C-строк, area — из `0x14` bytes. Serializer сначала вызывает
-//! base с тем же `include_child`, затем пишет шесть signed count-ов и записи в
-//! том же порядке. Независимый GameServer decoder
-//! `ServerCountryRegion::DecordFromByteArray` подтверждает
-//! размеры и порядок. Имена и scripts сохраняются byte-: COUNTRY loader,
-//! в отличие от CITY, не обращается к StringTable.
-//! PDB дополнительно задаёт имена всех scalar-полей: gate содержит
-//! `lID/lPicID/lDir/lAction/lMaxHP/lDef/lER/lTitleX/lTitleY/lWidthInc/`
-//! `lHeightInc`, flag — ту же последовательность без `lAction`, area — `lID`
-//! и четыре координаты `tagRECT`. Rust хранит их именованно; `[i32; N]` в
-//! wire helper-е сохраняет x86 little-endian последовательность без старого
-//! MSVC layout.
-//!
-//! `std::list`, stream, allocation, destructors и compiler cleanup заменены
-//! `Vec`, заимствованными resource bytes и обычным `Drop`; Rust layout не
-//! объявляется старым ABI.
+//! Wire пишет base, затем шесть signed counts и ordered records: gate 0x2C с
+//! двумя C-строками, flag 0x28 с двумя C-строками, area 0x14. Имена/scripts
+//! остаются byte-exact и не проходят StringTable. Именованные scalars
+//! сериализуются little-endian без зависимости от Rust/MSVC layout.
 
 use super::worldregion::{
     CWorldRegion, WorldRegionLoadError, WorldRegionLoadedCounts, WorldRegionResourceContext,
@@ -48,7 +34,6 @@ pub(crate) enum WorldCountryWarRegionSerializationBlock {
     TooManyEntries { section: &'static str, count: usize },
 }
 
-/// Профиль country-war ворот из точного PDB `tagGate`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldCountryWarGate {
     id: i32,
@@ -84,7 +69,6 @@ impl WorldCountryWarGate {
     }
 }
 
-/// Профиль country-war флага из точного PDB `tagFlag`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldCountryWarFlag {
     id: i32,
@@ -118,7 +102,6 @@ impl WorldCountryWarFlag {
     }
 }
 
-/// Зона country-war из PDB `tagArea`: ID и legacy `RECT`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldCountryWarArea {
     id: i32,
@@ -192,7 +175,6 @@ impl WorldCountryWarRegion {
         Ok(WorldCountryWarRegionLoadOutcome { counts, loaded })
     }
 
- /// Missing `.country` возвращает legacy `0` и не очищает прежние списки.
     pub(crate) fn load_country_bytes(
         &mut self,
         bytes: Option<&[u8]>,

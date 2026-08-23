@@ -1,49 +1,17 @@
-//! Статический registry-owner сессий и plug-объектов WorldServer.
+//! Фабрика сессий `CSessionFactory` из WorldServer, подтверждённая
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `AI`, `QuerySession`, `GarbageCollect`, `QueryPlug`, `InsertPlug`,
-//! `CreateSession`, `CreatePlug`, `UnserializePlug` и `UnserializeSession`
-//! входят в контракт owner-а. Источник контракта — WorldServer EXE/PDB.
+//! Registry хранит sessions/plugs по signed ID и создаёт `CSession`, `CTeam`,
+//! `CTeamate` и шесть plug types. `AI` удаляет null, abort-ит недоступную,
+//! end-ит завершённую session и только иначе вызывает её `AI`.
 //!
-//! Layout сохраняет `s_lSessionID/s_lPlugID` как signed `long`, оба registry —
-//! как `stdext::hash_map<long, pointer>`, а enum-значения —
-//! `ST_NORMAL_SESSION=0`, `ST_TEAM=1`, шесть `PLUG_TYPE=0..5` и
-//! `TYPE_SESSION/TYPE_PLUG=10/11`; data задаёт обоим ID initial `1`.
-//! Factory напрямую строит конкретные `CSession`, `CTeam` и `CTeamate`.
-//! Factory-owned lifetime выражен через `Box`, а `Drop` вызывается ровно там,
-//! где owner вызывал scalar deleting destructor. Подключённый `OnTeamMessage`
-//! использует те же registry через узкие `WorldTeamSessionOwner` и
-//! `WorldTeamateOwner` проекции: это safe-эквивалент точных RTTI-переходов, а
-//! не отдельное team-состояние.
+//! Порядок MSVC hash-map наблюдаем через callbacks, поэтому узкий registry
+//! воспроизводит bucket `key ^ 0xDEADBEEF` и signed key order. Duplicate ID
+//! заменяет owner; Rust освобождает вытесненный объект вместо утечки.
 //!
-//! `AI` проходит только session registry. Null value стирается сразу;
-//! недоступная session сначала получает `Abort`, завершённая — `End`, затем
-//! owner уничтожается до erase. Иначе вызывается virtual `AI`, после чего
-//! обход продолжается со следующей записью. `CSession` vtable
-//! содержит `AI +0x40`, `IsSessionEnded +0x50`, `IsSessionAvailable +0x60`,
-//! `InsertPlug +0x64`, `End +0x6C`, `Abort +0x70`, `Unserialize +0x94`; у
-//! `CPlug` vtable `Unserialize` находится по `+0x84`.
-//!
-//! Обычный `HashMap` не подходит: действующие MSVC `lower_bound/insert`
-//! хранят элементы в общем list по linear-hash bucket
-//! order, а внутри bucket — по signed key.
-//! Этот порядок наблюдаем через последовательные virtual side effects `AI`.
-//! Стандартные Rust collections не дают выбрать такой iterator contract;
-//! узкий `LegacyMsvcHashRegistry` хранит owners в `Vec`, воспроизводит только
-//! `hash = key ^ 0xDEADBEEF`, mask/max-index growth и итоговый
-//! `(bucket, signed key)` порядок. Bucket nodes, iterator-vector, allocation и
-//! rehash pointer surgery являются удалённым STL noise. При 32-битном ID-
-//! collision новая запись уже заменяет старую по тому же ключу, поэтому
-//! вытесненный owner недостижим из всех factory lookup. Rust освобождает его
-//! сразу: это устраняет старую pointer-утечку без изменения ID, registry-order
-//! либо какого-либо наблюдаемого session/plug side effect.
-//!
-//! Unserialize читает little-endian DWORD после каждого исходного `offset += 4`,
-//! создаёт owner, ищет его по возвращённому ID и делегирует virtual body. Ноль
-//! virtual-результата удаляет только что найденный owner. `None` заменяет
-//! исходный null stream и возвращает ноль без изменения offset. Отрицательный,
-//! переполненный либо короткий slice не имеет безопасно доказанной реакции
-//! старого pointer-read и получает локальную типизированную ошибку, сохраняя
-//! уже выполненное wrapping-присваивание offset.
+//! Unserialize сначала wrapping увеличивает offset, читает ID, создаёт owner
+//! и делегирует virtual body; false удаляет созданный объект. Null stream даёт
+//! ноль без изменения offset, короткий input сохраняет уже выполненный сдвиг.
 
 use std::error::Error;
 use std::fmt;
@@ -58,7 +26,6 @@ const LEGACY_HASH_XOR: u32 = 0xDEAD_BEEF;
 const TYPE_SESSION: i32 = 10;
 const TYPE_PLUG: i32 = 11;
 
-/// Два factory-поддержанных вида session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub(crate) enum WorldSessionType {
@@ -76,7 +43,6 @@ impl WorldSessionType {
     }
 }
 
-/// Полный PDB enum; factory создаёт только `Teamate`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub(crate) enum WorldPlugType {
@@ -102,7 +68,6 @@ impl WorldPlugType {
     }
 }
 
-/// Virtual contract, принадлежащий ещё сырому `CSession/CTeam` owner-у.
 pub(crate) trait WorldSessionOwner {
     fn assign_factory_identity(&mut self, object_type: i32, object_id: i32);
     fn is_session_available(&mut self) -> i32;
@@ -141,13 +106,11 @@ pub(crate) trait WorldSessionOwner {
         false
     }
 
- /// Возвращает доказанный `CTeam`-интерфейс либо RTTI-failure как `None`.
     fn as_team_mut(&mut self) -> Option<&mut dyn WorldTeamSessionOwner> {
         None
     }
 }
 
-/// Узкая проекция virtual API `CTeam`, действующая Team message-owner-ом.
 pub(crate) trait WorldTeamSessionOwner {
     fn query_plug_by_owner(&mut self, owner_type: i32, owner_id: i32) -> Option<i32>;
     fn set_leader(&mut self, player_id: i32);
@@ -158,7 +121,6 @@ pub(crate) trait WorldTeamSessionOwner {
     fn on_plug_change_state(&mut self, plug_id: i32, state: i32, value: &[u8]);
 }
 
-/// Общий virtual contract factory-owned plug-а.
 pub(crate) trait WorldPlugOwner {
     fn assign_factory_identity(&mut self, object_type: i32, object_id: i32);
     fn set_owner(&mut self, owner_type: i32, owner_id: i32);
@@ -172,13 +134,11 @@ pub(crate) trait WorldPlugOwner {
     fn serialize(&self, output: &mut Vec<u8>) -> i32;
     fn unserialize(&mut self, stream: &[u8], offset: &mut i32) -> i32;
 
- /// Возвращает доказанный `CTeamate`-интерфейс либо RTTI-failure как `None`.
     fn as_teamate_mut(&mut self) -> Option<&mut dyn WorldTeamateOwner> {
         None
     }
 }
 
-/// Узкая проекция методов `CTeamate`, вызываемых входящими Team-сообщениями.
 pub(crate) trait WorldTeamateOwner {
     fn exit(&mut self);
     fn set_owner_region_id(&mut self, region_id: i32);
@@ -187,16 +147,13 @@ pub(crate) trait WorldTeamateOwner {
     fn owner_region_id(&self) -> i32;
     fn owner_name(&self) -> &[u8];
 
- /// Забирает синхронные обращения plug-а к его session после мутации поля.
     fn take_session_effects(&mut self) -> Vec<WorldPlugSessionEffect> {
         Vec::new()
     }
 
- /// Завершает `Exit` только после найденной session, как исходный owner.
     fn confirm_exit(&mut self) {}
 }
 
-/// Safe-форма немедленного `CPlug -> CSessionFactory -> CSession` вызова.
 pub(crate) struct WorldPlugSessionEffect {
     pub(crate) session_id: i32,
     pub(crate) plug_id: i32,
@@ -210,7 +167,6 @@ struct LegacyMsvcHashEntry<T> {
     value: Option<T>,
 }
 
-/// Только наблюдаемая ordered-проекция старого MSVC linear hash container.
 struct LegacyMsvcHashRegistry<T> {
     entries: Vec<LegacyMsvcHashEntry<T>>,
     mask: u32,
@@ -291,7 +247,6 @@ fn legacy_bucket(key: i32, mask: u32, max_index: u32) -> u32 {
     bucket
 }
 
-/// Итог одной позиции исходного ordered session AI.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldSessionFactoryAiEvent {
     NullRemoved { session_id: i32 },
@@ -300,13 +255,11 @@ pub(crate) enum WorldSessionFactoryAiEvent {
     Ran { session_id: i32 },
 }
 
-/// Полный ordered результат `CSessionFactory::AI`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldSessionFactoryAiReport {
     pub(crate) events: Vec<WorldSessionFactoryAiEvent>,
 }
 
-/// Результат protected `GarbageCollect` без выдачи оригинал pointer-а наружу.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldSessionFactoryGarbageCollect {
     UnknownObjectType,
@@ -318,7 +271,6 @@ pub(crate) enum WorldSessionFactoryGarbageCollect {
     },
 }
 
-/// Safe-граница старого unchecked `stream + signed offset`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldSessionFactoryInputBlock {
     pub(crate) attempted_offset: i32,
@@ -338,7 +290,6 @@ impl fmt::Display for WorldSessionFactoryInputBlock {
 
 impl Error for WorldSessionFactoryInputBlock {}
 
-/// Владелец двух process-global registry и монотонных signed ID.
 pub(crate) struct CSessionFactory {
     next_session_id: i32,
     next_plug_id: i32,
@@ -347,7 +298,6 @@ pub(crate) struct CSessionFactory {
 }
 
 impl CSessionFactory {
- /// Создаёт точные initial static values до первого factory-вызова.
     pub(crate) const fn new() -> Self {
         Self {
             next_session_id: 1,
@@ -357,19 +307,16 @@ impl CSessionFactory {
         }
     }
 
- /// Возвращает живой session owner либо исходный `nullptr` как `None`.
     pub(crate) fn query_session(&self, session_id: i32) -> Option<&dyn WorldSessionOwner> {
         self.sessions
             .get(session_id)
             .map(|session| session.as_ref())
     }
 
- /// Возвращает живой plug owner либо исходный `nullptr` как `None`.
     pub(crate) fn query_plug(&self, plug_id: i32) -> Option<&dyn WorldPlugOwner> {
         self.plugs.get(plug_id).map(|plug| plug.as_ref())
     }
 
- /// Делегирует `CSession::InsertPlug` найденной ненулевой session.
     pub(crate) fn insert_plug(&mut self, game: &mut CGame, session_id: i32, plug_id: i32) -> i32 {
         let Some(plug) = self.plugs.get_mut(plug_id) else {
             return 0;
@@ -392,7 +339,6 @@ impl CSessionFactory {
         1
     }
 
- /// Проверяет тот же RTTI-переход `CSession -> CTeam`, не выдавая owner.
     pub(crate) fn is_team(&mut self, session_id: i32) -> bool {
         self.sessions
             .get_mut(session_id)
@@ -400,7 +346,6 @@ impl CSessionFactory {
             .is_some()
     }
 
- /// Строит точный session/team header и затем plug wire в list-order.
     pub(crate) fn serialize_team(&mut self, session_id: i32) -> Option<Vec<u8>> {
         let (mut output, plug_ids) = {
             let session = self.sessions.get_mut(session_id)?;
@@ -422,7 +367,6 @@ impl CSessionFactory {
         Some(output)
     }
 
- /// Делегирует операцию живому `CTeam` из единого factory registry.
     pub(crate) fn with_team<ResultValue>(
         &mut self,
         game: &mut CGame,
@@ -434,7 +378,6 @@ impl CSessionFactory {
         Some(result)
     }
 
- /// Делегирует операцию живому `CTeamate` из единого factory registry.
     pub(crate) fn with_teamate<ResultValue>(
         &mut self,
         game: &mut CGame,
@@ -476,7 +419,6 @@ impl CSessionFactory {
         Some(result)
     }
 
- /// Вызывает virtual `CSession::End` без придуманного downcast-а к team.
     pub(crate) fn end_session(&mut self, game: &mut CGame, session_id: i32) -> Option<i32> {
         let result = self.sessions.get_mut(session_id).map(|session| session.end())?;
         self.drain_session_effects(game, session_id);
@@ -741,7 +683,6 @@ impl CSessionFactory {
         }
     }
 
- /// Создаёт `CSession`/`CTeam`, назначает type/ID и публикует owner.
     pub(crate) fn create_session(
         &mut self,
         minimum_plugs: u32,
@@ -774,7 +715,6 @@ impl CSessionFactory {
         session_id
     }
 
- /// Создаёт единственный поддержанный `CTeamate` и публикует plug owner.
     pub(crate) fn create_plug(
         &mut self,
         plug_type: i32,
@@ -797,7 +737,6 @@ impl CSessionFactory {
         plug_id
     }
 
- /// Исполняет ordered session traversal и erase-after-destructor.
     pub(crate) fn ai(&mut self, game: &mut CGame) -> WorldSessionFactoryAiReport {
         let mut events = Vec::new();
         let mut index = 0;
@@ -955,7 +894,6 @@ impl CSessionFactory {
         WorldSessionFactoryAiReport { events }
     }
 
- /// Уничтожает найденный owner до erase только для object types `10/11`.
     pub(crate) fn garbage_collect(
         &mut self,
         object_type: i32,
@@ -1010,7 +948,6 @@ impl CSessionFactory {
         }
     }
 
- /// Читает plug header и делегирует virtual `CPlug::Unserialize`.
     pub(crate) fn unserialize_plug(
         &mut self,
         stream: Option<&[u8]>,
@@ -1033,7 +970,6 @@ impl CSessionFactory {
         Ok(0)
     }
 
- /// Читает session header и делегирует virtual `CSession::Unserialize`.
     pub(crate) fn unserialize_session(
         &mut self,
         game: &mut CGame,

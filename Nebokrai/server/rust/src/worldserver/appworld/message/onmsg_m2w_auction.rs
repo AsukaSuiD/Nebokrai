@@ -1,7 +1,7 @@
-//! WorldServer dispatcher-owner `OnMSG_M2W_AUCTION`.
+//! Auction-dispatcher `OnMSG_M2W_AUCTION` WorldServer.
 //!
-//! Источник контракта — `WorldServer/Nworldserver.exe` и
-//! `WorldServer/WorldServer.pdb`, исходный owner `OnMSG_M2W_AUCTION`.
+//! Источник контракта — `worldserver.exe` и
+//! `worldserver.pdb`, исходный owner `OnMSG_M2W_AUCTION`.
 //!
 //! `0x15EB01` и non-`STATE_PRE_BUY` путь `0x15EB02` передают owned `DbNote`
 //! в действующую input queue с operation. `0x15EB02` в
@@ -31,7 +31,6 @@ const BROADCAST_AUCTION_RESULT: i32 = 0x0015_EB06;
 const FORWARD_PLAYER_SEARCH: i32 = 0x0015_EB07;
 const FORWARD_PLAYER_GOODS: i32 = 0x0015_EB08;
 
-/// Наблюдаемый результат одной действующей M2W auction-ветви.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldMiscAuctionMessageOutcome {
     pub(crate) request_type: i32,
@@ -51,7 +50,6 @@ pub(crate) enum WorldMiscAuctionMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет доказанные relay-ветви `OnMSG_M2W_AUCTION`.
 pub(crate) fn on_msg_m2w_auction(
     game: &CGame,
     db_misc: &CDbMisc,

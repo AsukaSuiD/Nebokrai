@@ -1,62 +1,19 @@
-//! Владелец периодического `CJJcSystem::Run` исторического WorldServer.
+//! Арена `CJJcSystem` из WorldServer, подтверждённая
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `SeasonUpdate`, `ResetJJc`,
-//! `RecycleJJcRegion`, `GetRegionServerID`,
-//! `JJcPKTimeout`, `Run`, apply/matching
-//! цепочка,
-//! два её малых query и
-//! `LoadJJcConfig` — часть контракта owner-а.
+//! Signed maps сохраняют числовой порядок; available regions выбираются по
+//! возрастанию. `Run` снимает время до gate, обновляет rank timestamp до DB
+//! load, затем выполняет reset и ordered fight pass.
 //!
-//! Контракт сохраняет signed `long` keys обоих `std::map`, полный layout
-//! `tagJJcInfo` `0x1C`, `tagJJcRank` `0x30` и поля singleton-а до
-//! `m_bIsThisWeekUpdated +0x9C`. `BTreeMap<i32, _>` сохраняет signed order;
-//! `m_jjcRegionsInUse` остаётся `HashSet<i32>`, поскольку наблюдает только
-//! membership/erase/insert. `m_jjcRegionsLeft` теперь `BTreeSet<i32>`: reached
-//! `GetOneJJcRegion` выбирает `begin()`, а shipped region-list и очищенный C++
-//! reference задают возрастающий practical order. Это отделяет значимый выбор
-//! карты от случайного seed стандартного Rust `HashSet`.
-//! Process-static last-rank time по перенесён в единственный
-//! owned `CJJcSystem`; его точное начальное значение в PE равно нулю.
+//! Timeout отсутствующего первого player удаляет fight и возвращает region;
+//! обычный timeout лишь обнуляет start times, рассылает `0x80505` и сохраняет
+//! запись. Исторический double-increment после erase пропускает следующую fight/
+//! queue запись и намеренно сохранён.
 //!
-//! `Run` снимает Unix time до `bUseJJc`, обновляет last-rank time до сырого
-//! `CRsJJcSys::LoadJJcRank`, затем выполняет reset и signed ordered fight-pass.
-//! DB rank/week/season, INI, clock и logging owners остаются явным
-//! `JjcRunContext`: callback rank получает живой vector и может изменить его
-//! даже при `false`. Сообщения `0x80509/0x8050A/0x80505` строит сам владелец и
-//! отправляет через готовую World transport-границу в исходном порядке.
-//!
-//! В `JJcPKTimeout` отсутствие первого player удаляет fight и возвращает
-//! регион, а настоящий timeout только обнуляет оба `lStartTime`, рассылает
-//! `0x80505` и сохраняет fight-map. Второй player создаётся default-значением
-//! через прежний `map::operator[]`. Recycle принимает только inclusive
-//! `[lJJcRegionIDMin, lJJcRegionIDMax]`, независимо удаляет in-use membership
-//! и вставляет available membership. Ещё одна исходная странность имеет
-//! сначала увеличивает
-//! сохранённый iterator перед erase, присваивает его current, а затем выполняет
-//! общий increment ещё раз. Поэтому после orphan-removal один следующий fight
-//! пропускается до следующего `Run`; Rust сохраняет этот double-increment.
-//! Аналогично `GetOneOpponent` в при удалении записи
-//! без server ID сначала переходит к её successor, а затем выполняет общий
-//! increment loop-а. Следующий queue entry не рассматривается в этом подборе;
-//! это может менять выбранного соперника и поэтому сохранено безопасным
-//! индексным проходом вместо iterator/use-after-erase оригинала.
-//!
-//! `ResetJJc` намеренно не читает настроенную секунду. Более странный факт
-//! подтверждён и
-//!: скопированный `tm_wday` сравнивается с
-//! `m_nWeekToClearDay`, но после прохода флаг очищается по жёсткому
-//! `tm_wday != 0`. Поэтому update на настроенном ненулевом дне может повторяться
-//! каждый вызов в ту же минуту; эта наблюдаемая странность сохранена.
-//! `_localtime`, `GetLocalTime`, `GetTickCount`, `WritePrivateProfileStringA`,
-//! logging и DB остаются Linux-совместимыми callbacks без Windows FFI. STL,
-//! SEH, allocator, singleton destructor и unwind noise удалены у действующих
-//! блоков; `nullptr` transport заменён готовым `Option` внутри `CGame`.
-//! `LoadJJcConfig` использует byte-parser поверх стандартных Rust slices:
-//! не требует декодировать китайский заголовок `JJcLevel.ini`, сохраняет
-//! исходную partial-publication между двумя обязательными resource-файлами и
-//! нулевые Win32 defaults необязательного `setup/JJcConfig.ini`. Повреждённая
-//! marker-запись пропускается вместо внутреннего iostream failbit/stale-value
-//! дефекта, не являющегося контрактом корректных ресурсов.
+//! Weekly reset сравнивает настроенный день, но очищает флаг по жёсткому
+//! `tm_wday != 0`, поэтому может повторяться в ту же минуту. Config loader
+//! сохраняет частичную публикацию двух обязательных файлов и Win32 zero-defaults
+//! необязательного `JJcConfig.ini`.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -67,7 +24,6 @@ pub(crate) const JJC_REGION_LIST_PATH: &[u8] = b"data/JJCRegionlist.ini";
 pub(crate) const JJC_LEVEL_LIST_PATH: &[u8] = b"data/JJcLevel.ini";
 pub(crate) const JJC_CONFIG_PATH: &[u8] = b"setup/JJcConfig.ini";
 
-/// PDB-layout `tagJJcRank` без обещания NUL в 32-байтном имени.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct JjcRank {
     pub(crate) rank: i32,
@@ -77,7 +33,6 @@ pub(crate) struct JjcRank {
     pub(crate) name: [u8; 0x20],
 }
 
-/// Точная owned-проекция семи полей `tagJJcInfo`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct JjcInfo {
     pub(crate) jjc_level: u32,
@@ -89,7 +44,6 @@ pub(crate) struct JjcInfo {
     pub(crate) start_time: i32,
 }
 
-/// Действующие поля `CGlobeSetup::m_stSetup`, читаемые Run-chain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct JjcRunConfig {
     pub(crate) use_jjc: i32,
@@ -100,7 +54,6 @@ pub(crate) struct JjcRunConfig {
     pub(crate) max_regions_in_use: i32,
 }
 
-/// Наблюдаемый итог `LoadJJcConfig`, включая исходную partial-publication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum JjcConfigurationLoadReport {
     MissingRegionList,
@@ -273,7 +226,6 @@ pub(crate) struct JjcQuitReport {
     pub(crate) disposition: JjcQuitDisposition,
 }
 
-/// Девять signed полей 32-bit MSVC `tm` после немедленного copy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct JjcLocalTime {
     pub(crate) second: i32,
@@ -287,7 +239,6 @@ pub(crate) struct JjcLocalTime {
     pub(crate) daylight_saving: i32,
 }
 
-/// Поля отдельного `GetLocalTime`, публикуемые start-log недельного update.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct JjcSystemTime {
     pub(crate) year: u16,
@@ -300,7 +251,6 @@ pub(crate) struct JjcSystemTime {
     pub(crate) milliseconds: u16,
 }
 
-/// Typed logging-события Run-chain в точном порядке вызовов.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum JjcLogEvent {
     Closed,
@@ -369,39 +319,30 @@ pub(crate) enum JjcLogEvent {
     },
 }
 
-/// Явные DB/INI/time/log owners, действующие полным `CJJcSystem::Run`.
 pub(crate) trait JjcRunContext {
- /// Повторяет начальный `_time(nullptr)` уже в 32-bit signed форме.
     fn current_time_seconds(&mut self) -> i32;
 
- /// Повторяет `_localtime` и немедленную копию всех девяти полей.
     fn local_time(&mut self, timestamp: i32) -> JjcLocalTime;
 
     fn system_time(&mut self) -> JjcSystemTime;
     fn tick_count_ms(&mut self) -> u32;
 
- /// `CRsJJcSys::LoadJJcRank`; vector остаётся живым и при `false`.
     fn load_jjc_rank(&mut self, ranks: &mut Vec<JjcRank>) -> bool;
 
- /// `CRsJJcSys::JJcWeekClear`, возвращающий результат thread-start.
     fn start_jjc_week_clear(&mut self) -> bool;
 
- /// `CRsJJcSys::JJcSeasonClear`; caller исторически игнорировал bool.
     fn clear_jjc_season(&mut self) -> bool;
 
- /// Повторяет одну запись в исходный `szIniFile`; return caller не читал.
     fn write_private_profile_string(&mut self, section: &[u8], key: &[u8], value: &[u8]) -> bool;
 
     fn log(&mut self, event: JjcLogEvent);
 }
 
-/// Safe-граница размера, невозможного в 32-bit vector исходного процесса.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct JjcRunBlock {
     pub(crate) rank_count: usize,
 }
 
-/// Один выполненный broadcast и его ещё сырой DB-side effect.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct JjcUpdateBroadcastReport {
     pub(crate) message_type: u32,
@@ -409,14 +350,12 @@ pub(crate) struct JjcUpdateBroadcastReport {
     pub(crate) database_result: bool,
 }
 
-/// Результат двух исходных INI writes после недельного clear.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct JjcIniWriteReport {
     pub(crate) passed_weeks: bool,
     pub(crate) last_clear_time: bool,
 }
 
-/// Полная trigger-ветвь `ResetJJc`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct JjcWeeklyResetUpdateReport {
     pub(crate) local_clock: JjcSystemTime,
@@ -432,7 +371,6 @@ pub(crate) struct JjcWeeklyResetUpdateReport {
     pub(crate) warning_elapsed_ms: Option<u32>,
 }
 
-/// Один вызов `ResetJJc`, включая исходный hard-coded Sunday reset.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct JjcResetReport {
     pub(crate) local_time: JjcLocalTime,
@@ -441,7 +379,6 @@ pub(crate) struct JjcResetReport {
     pub(crate) is_this_week_updated_after: bool,
 }
 
-/// Результат strict rank-refresh gate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum JjcRankRefreshReport {
     Waiting {
@@ -454,7 +391,6 @@ pub(crate) enum JjcRankRefreshReport {
     },
 }
 
-/// Две различимые failure-ветви `GetRegionServerID` и его успех.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum JjcRegionServerLookup {
     Found { game_server_id: i32 },
@@ -471,7 +407,6 @@ impl JjcRegionServerLookup {
     }
 }
 
-/// Наблюдаемая membership-мутация `RecycleJJcRegion`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum JjcRegionRecycleReport {
     Recycled {
@@ -484,7 +419,6 @@ pub(crate) enum JjcRegionRecycleReport {
     },
 }
 
-/// Один элемент signed ordered fight-pass.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum JjcFightRunReport {
     NonPositiveRegion {
@@ -514,7 +448,6 @@ pub(crate) enum JjcFightRunReport {
     },
 }
 
-/// Полный наблюдаемый результат одного `CJJcSystem::Run`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum JjcRunReport {
     Closed {
@@ -529,7 +462,6 @@ pub(crate) enum JjcRunReport {
     },
 }
 
-/// Owned замена единственного process-static `CJJcSystem`.
 pub(crate) struct CJJcSystem {
     queue: BTreeMap<i32, JjcInfo>,
     fighting_list: BTreeMap<i32, (i32, i32)>,
@@ -548,7 +480,6 @@ pub(crate) struct CJJcSystem {
 }
 
 impl CJJcSystem {
- /// Создаёт точное zero-initialized состояние статического singleton-а.
     pub(crate) fn new() -> Self {
         Self {
             queue: BTreeMap::new(),
@@ -568,12 +499,10 @@ impl CJJcSystem {
         }
     }
 
- /// Возвращает живой rank-vector, заменяющий исходные pointer/size поля.
     pub(crate) fn ranks(&self) -> &[JjcRank] {
         &self.ranks
     }
 
- /// Настраивает четыре INI-поля; `second` сохраняется, но Reset его не читает.
     pub(crate) fn set_week_clear_schedule(
         &mut self,
         week_day: i32,
@@ -587,7 +516,6 @@ impl CJJcSystem {
         self.week_clear_second = second;
     }
 
- /// Восстанавливает два значения секции `write` после сырого config load.
     pub(crate) fn set_clear_state(&mut self, passed_weeks: i32, last_clear_time: i32) {
         self.passed_weeks = passed_weeks;
         self.last_clear_time = last_clear_time;
@@ -642,7 +570,6 @@ impl CJJcSystem {
         }
     }
 
- /// Публикует available region pool, не очищая отдельный in-use owner.
     pub(crate) fn replace_available_regions(
         &mut self,
         regions: impl IntoIterator<Item = i32>,
@@ -650,7 +577,6 @@ impl CJJcSystem {
         self.regions_left = regions.into_iter().collect();
     }
 
- /// Публикует ordered `(min,max) -> step` map после resource parse.
     pub(crate) fn replace_level_steps(
         &mut self,
         levels: impl IntoIterator<Item = ((i32, i32), i32)>,
@@ -1114,7 +1040,6 @@ impl CJJcSystem {
         }
     }
 
- /// Выполняет полный периодический JJC owner и всегда сохраняет legacy `0`.
     pub(crate) fn run<Context: JjcRunContext>(
         &mut self,
         game: &CGame,

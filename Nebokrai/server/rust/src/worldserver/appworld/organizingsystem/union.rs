@@ -1,6 +1,6 @@
 //! Owner `CUnion` WorldServer из `appworld/organizingsystem/union.cpp/.h`.
 //!
-//! Источник контракта — точная пара WorldServer EXE/PDB. Union хранит master
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`. Union хранит master
 //! faction, ordered member factions, applications, properties, owned cities,
 //! purview state и DB/wire projections. ID/name/job fields, list/map order,
 //! capacities и dirty bits сохраняются.
@@ -50,14 +50,12 @@ const MAX_UNION_MEMBER_COUNT: i32 = 50;
 const UNION_DEMISE_MEMBER_LIMIT: usize = 6;
 const UNION_DEMISE_COOLDOWN_MS: u32 = 10_800_000;
 
-/// Узкая read-only граница controller-wide `IsFactionMaster`.
 pub(crate) trait UnionOperatorValidationContext {
     type Block;
 
     fn faction_id_by_master_player(&self, player_id: i32) -> Result<i32, Self::Block>;
 }
 
-/// Узкая read-only граница master-faction proxy без singleton-а.
 pub(crate) trait UnionMasterFactionQueryContext {
     fn faction_is_owned_city(&self, faction_id: i32, region_id: i32) -> Option<i32>;
 
@@ -72,7 +70,6 @@ pub(crate) trait UnionMasterFactionQueryContext {
     fn faction_enemy_leader_organizing_id(&self, faction_id: i32) -> Option<i32>;
 }
 
-/// Узкая mutable-граница faction-map для owned-city virtual dispatch.
 pub(crate) trait UnionOwnedCityMutationContext {
     fn faction_add_owned_city(
         &mut self,
@@ -123,7 +120,6 @@ pub(crate) struct UnionOwnedCityBooleanMutationReport {
     pub(crate) invoked_faction_ids: Vec<i32>,
 }
 
-/// Узкая mutable-граница standard enemy и victor virtual dispatch.
 pub(crate) trait UnionFactionStateMutationContext {
     fn faction_clear_enemy_factions(&mut self, faction_id: i32) -> bool;
 
@@ -171,7 +167,6 @@ pub(crate) struct UnionVictorMutationBlock {
     pub(crate) source: FactionInitialPropertyBlock,
 }
 
-/// Read-only faction callback для обновления online player-состояния.
 pub(crate) trait UnionPlayerRefreshContext {
     fn faction_update_player_info(
         &self,
@@ -181,7 +176,6 @@ pub(crate) trait UnionPlayerRefreshContext {
     ) -> Option<Vec<i32>>;
 }
 
-/// Mutable callback `Initial` для назначения union ID master-faction.
 pub(crate) trait UnionInitialMutationContext {
     fn faction_set_superior_organizing(
         &mut self,
@@ -192,7 +186,6 @@ pub(crate) trait UnionInitialMutationContext {
     ) -> Result<bool, FactionSuperiorOrganizingBlock>;
 }
 
-/// Faction-side callbacks полного `CUnion::AddFaction` owner-а.
 pub(crate) trait UnionFactionJoinContext:
     UnionFactionMemberContext
     + UnionInitialMutationContext
@@ -212,7 +205,6 @@ pub(crate) enum UnionFormatArgument<'a> {
     Signed(i32),
 }
 
-/// StringTable, `war` log и внешние эффекты, не принадлежащие union state.
 pub(crate) trait UnionAddFactionEffects {
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8>;
 
@@ -235,7 +227,6 @@ pub(crate) trait UnionAddFactionEffects {
     fn send_organizing_info(&mut self, request: FactionMemberInfoRequest<'_>);
 }
 
-/// Controller callbacks, которые `CUnion::DoJoin` вызывал через singleton.
 pub(crate) trait UnionDoJoinContext {
     type FreeFactionBlock;
     type InitialSnapshotBlock;
@@ -253,7 +244,6 @@ pub(crate) trait UnionDoJoinContext {
     ) -> Result<bool, Self::InitialSnapshotBlock>;
 }
 
-/// Controller callbacks, которые `CUnion::FireOut` вызывал через singleton.
 pub(crate) trait UnionFireOutContext:
     UnionOperatorValidationContext
     + UnionMasterFactionQueryContext
@@ -272,7 +262,6 @@ pub(crate) trait UnionFireOutContext:
     ) -> Result<Self::DetachOutcome, Self::DetachBlock>;
 }
 
-/// Controller callbacks, которые `CUnion::Demise` вызывал через singleton.
 pub(crate) trait UnionDemiseContext:
     UnionOperatorValidationContext
     + UnionMasterFactionQueryContext
@@ -293,7 +282,6 @@ impl<T> UnionDemiseContext for T where
 {
 }
 
-/// Поддерживает faction-local проекцию master ID после смены главы союза.
 pub(crate) trait UnionMasterProjectionMutationContext {
     fn set_union_master_projection(
         &mut self,
@@ -302,7 +290,6 @@ pub(crate) trait UnionMasterProjectionMutationContext {
     );
 }
 
-/// Controller callbacks, которые `CUnion::Exit` вызывал через singleton.
 pub(crate) trait UnionExitContext:
     UnionOperatorValidationContext
     + UnionMasterFactionQueryContext
@@ -321,7 +308,6 @@ pub(crate) trait UnionExitContext:
     ) -> Result<Self::DetachOutcome, Self::DetachBlock>;
 }
 
-/// StringTable, organizing-info и `war` log вне union state.
 pub(crate) trait UnionFireOutEffects {
     fn world_string(&mut self, string_id: &'static [u8]) -> Vec<u8>;
 
@@ -356,7 +342,6 @@ pub(crate) struct UnionApplicationFactionBlock {
     pub(crate) faction_id: i32,
 }
 
-/// Controller state, который синхронная часть `ApplyForJoin` читает и резервирует.
 pub(crate) trait UnionApplyForJoinContext {
     fn union_application_is_reserved(&self, faction_id: i32) -> bool;
 
@@ -379,7 +364,6 @@ pub(crate) struct UnionApplicationSessionRequest {
     pub(crate) applicant_faction_name: Vec<u8>,
 }
 
-/// Нормальные ветви локального `OnAsyncCallback` после typed decode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UnionApplicationTerminal {
     Approved,
@@ -387,23 +371,19 @@ pub(crate) enum UnionApplicationTerminal {
     NonResult { kind: NetSessionAsyncResultKind },
 }
 
-/// Ошибка erased payload на границе, где старый callback читал оригинал pointer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UnionApplicationEndpointBlock {
     BeginPayloadType,
     ResultPayloadType,
 }
 
-/// Живые эффекты локального callback-owner-а, требующие interior synchronization.
 pub(crate) trait UnionApplicationSessionRuntime: Send + Sync {
- /// Маршрутизирует сообщение через GameServer текущего online player-а.
     fn send_union_application_confirmation(
         &self,
         recipient_player_id: i32,
         message: &CMessage,
     );
 
- /// Немедленно выполняет terminal mutation organizing owner-а.
     fn finish_union_application(
         &self,
         union_id: i32,
@@ -411,11 +391,9 @@ pub(crate) trait UnionApplicationSessionRuntime: Send + Sync {
         terminal: UnionApplicationTerminal,
     );
 
- /// Фиксирует safe-остановку вместо чтения значения неверного Rust-типа.
     fn block_union_application_endpoint(&self, block: UnionApplicationEndpointBlock);
 }
 
-/// Safe owner локального `PlayerApplyForJoinConfeder` с двумя старыми interface.
 pub(crate) struct PlayerApplyForJoinConfeder {
     union_id: i32,
     applicant_faction_id: i32,
@@ -526,7 +504,6 @@ impl std::fmt::Debug for UnionApplicationSessionBlock {
     }
 }
 
-/// Связывает доменный request с действующим session manager в order.
 pub(crate) fn begin_union_application_session(
     manager: &CNetSessionManager,
     request: UnionApplicationSessionRequest,
@@ -554,7 +531,6 @@ pub(crate) fn begin_union_application_session(
     Ok(UnionApplicationSessionReport { session })
 }
 
-/// StringTable, client notice и адаптер уже действующего `CNetSessionManager`.
 pub(crate) trait UnionApplyForJoinEffects {
     type SessionReport;
     type SessionBlock;
@@ -1136,7 +1112,6 @@ pub(crate) enum UnionDisbandBlock<OperatorBlock, DetachBlock, DetachOutcome> {
     },
 }
 
-/// Read-only faction callback для полных enemy/owned-city snapshot-ов.
 pub(crate) trait UnionClientSnapshotContext {
     fn faction_update_enemy_snapshot(
         &self,
@@ -1186,7 +1161,6 @@ pub(crate) struct UnionOwnedCitySnapshotBlock {
     pub(crate) source: FactionOwnedCityUpdateBuildError,
 }
 
-/// Read-only faction callback для organizing-info fan-out.
 pub(crate) trait UnionSendInfoContext {
     fn faction_send_info_to_members<'a>(
         &self,
@@ -1210,7 +1184,6 @@ pub(crate) struct UnionInfoFanoutReport {
     pub(crate) factions: Vec<UnionFactionInfoFanout>,
 }
 
-/// Read-only доступ к ordered faction member-player ID.
 pub(crate) trait UnionFactionMemberContext {
     fn faction_member_player_ids(&self, faction_id: i32) -> Option<Vec<i32>>;
 
@@ -1292,7 +1265,6 @@ pub(crate) enum UnionMemberUpdateBlock {
     },
 }
 
-/// Поля `CUnion`, которые буквально копирует и читает save-цепочка.
 pub(crate) struct CUnion {
     union_id: i32,
     name: Vec<u8>,
@@ -1305,12 +1277,12 @@ pub(crate) struct CUnion {
 }
 
 impl CUnion {
- /// Материализует действующую инфраструктурную часть private `CUnion::CUnion`.
+ /// Создаёт действующую инфраструктурную часть private `CUnion::CUnion`.
  ///
  /// Старая функция конструирует пустые string/map и `tagTime`, но не пишет
  /// scalar-поля. Последующее чтение таких полей было внутренним UB, поэтому
  /// safe baseline задаёт нейтральные значения. Время приходит от concrete
- /// фабрики, сохраняя её доказанный момент снятия local clock.
+ /// фабрики, сохраняя её исходный момент снятия local clock.
     fn with_private_constructor_defaults(established_time: TagTimeValue) -> Self {
         Self {
             union_id: 0,
@@ -1384,7 +1356,7 @@ impl CUnion {
         Ok(union)
     }
 
- /// Строит live-union и выполняет доказанный `Initial` с явными callbacks.
+ /// Строит live-union и выполняет исходный `Initial` с явными callbacks.
  ///
  /// При safe-блокировке возвращает сам частично инициализированный owner,
  /// чтобы caller не терял уже выполненные внешние эффекты.
@@ -1412,7 +1384,6 @@ impl CUnion {
         }
     }
 
- /// Создаёт действующую save-проекцию, не имитируя live `Initial`.
     pub(crate) fn from_reached_save_state(
         union_id: i32,
         name: Vec<u8>,
@@ -1430,7 +1401,6 @@ impl CUnion {
         union
     }
 
- /// Выполняет машинный `Initial` поверх уже созданного live-owner-а.
     pub(crate) fn initial_live<Context>(
         &mut self,
         master_title: Option<&[u8]>,
@@ -1530,7 +1500,6 @@ impl CUnion {
         })
     }
 
- /// Воспроизводит nullable результат virtual `CloneSaveData`.
     pub(crate) fn clone_save_data(&self) -> Option<Self> {
         (self.change_data_type != 0).then(|| Self {
             union_id: self.union_id,
@@ -1555,7 +1524,6 @@ impl CUnion {
         true
     }
 
- /// Применяет точную bit-mask семантику virtual `SetChangeData`.
     pub(crate) fn set_change_data(&mut self, change_data_type: i32) {
         if change_data_type == 0 {
             self.change_data_type = 0;
@@ -1576,22 +1544,18 @@ impl CUnion {
         self.master_id
     }
 
- /// Возвращает byte- время учреждения; старый const-reference был Copy.
     pub(crate) const fn established_time(&self) -> TagTimeValue {
         self.established_time
     }
 
- /// Save-проекция не выдумывает transient apply-person; live `Initial` — 0.
     pub(crate) const fn apply_person(&self) -> Option<i32> {
         self.apply_person
     }
 
- /// Сбрасывает pending applicant после нормального terminal callback-а.
     pub(crate) fn finish_union_application_callback(&mut self) {
         self.apply_person = Some(0);
     }
 
- /// Запускает подтверждение заявки faction на вступление в союз.
     pub(crate) fn apply_for_join<Context, Effects>(
         &mut self,
         game: &CGame,
@@ -1715,7 +1679,6 @@ impl CUnion {
         })
     }
 
- /// Запускает подтверждение приглашения свободной faction в этот союз.
     pub(crate) fn invite<Context, Effects>(
         &mut self,
         game: &CGame,
@@ -1843,7 +1806,6 @@ impl CUnion {
         })
     }
 
- /// Очищает единственную union-заявку только при праве `PV_ConMem`.
     pub(crate) fn clear_apply_list<Context>(
         &mut self,
         manager_player_id: i32,
@@ -1863,7 +1825,6 @@ impl CUnion {
         Ok(true)
     }
 
- /// Добавляет faction-member и выполняет полный исходный callback-порядок.
     pub(crate) fn add_faction<Context, Effects>(
         &mut self,
         faction_id: i32,
@@ -2162,7 +2123,6 @@ impl CUnion {
         }))
     }
 
- /// Передаёт руководство союза в точном порядке `CUnion::Demise`.
     pub(crate) fn demise<Context, Effects>(
         &mut self,
         game: &CGame,
@@ -2451,7 +2411,6 @@ impl CUnion {
         }))
     }
 
- /// Исключает member-faction в точном порядке `CUnion::FireOut`.
     pub(crate) fn fire_out<Context, Effects>(
         &mut self,
         game: &CGame,
@@ -2613,7 +2572,6 @@ impl CUnion {
         }))
     }
 
- /// Выводит member-faction в точном порядке `CUnion::Exit`.
     pub(crate) fn exit<Context, Effects>(
         &mut self,
         game: &CGame,
@@ -2775,7 +2733,6 @@ impl CUnion {
         }))
     }
 
- /// Распускает union в точном порядке concrete `CUnion::Disband`.
     pub(crate) fn disband<Context, Effects>(
         &mut self,
         game: &CGame,
@@ -2857,7 +2814,6 @@ impl CUnion {
         }))
     }
 
- /// Legacy union не менял title/job и всегда сообщал успех.
     pub(crate) const fn dub_and_set_job_level(
         &self,
         _manager_id: i32,
@@ -2868,7 +2824,6 @@ impl CUnion {
         true
     }
 
- /// У union нет leave-word мутации; virtual всегда возвращал `false`.
     pub(crate) const fn edit_leave_word(
         &self,
         _player_id: i32,
@@ -2878,12 +2833,10 @@ impl CUnion {
         false
     }
 
- /// У union нет tax-операции; оба аргумента игнорировались.
     pub(crate) const fn operator_tax(&self, _player_id: i32, _operation: i32) -> bool {
         false
     }
 
- /// Virtual присутствовал в общем interface, но union не менял state.
     pub(crate) const fn set_contributor(
         &self,
         _requester_id: i32,
@@ -2891,12 +2844,10 @@ impl CUnion {
         _enabled: bool,
     ) {}
 
- /// Union-upgrade отсутствовал и всегда возвращал `false`.
     pub(crate) const fn upgrade(&self, _player_id: i32) -> bool {
         false
     }
 
- /// Разрешает header через master-faction, сохраняя legacy `0` на miss.
     pub(crate) fn player_header<Lookup, Block>(
         &self,
         master_player_id_by_faction: Lookup,
@@ -2914,12 +2865,10 @@ impl CUnion {
         &self.members
     }
 
- /// Возвращает новый снимок member-ID в исходном signed map-order.
     pub(crate) fn member_ids_snapshot(&self) -> Vec<i32> {
         self.members.keys().copied().collect()
     }
 
- /// Дописывает ordered union-member snapshot в точном клиентском формате.
     pub(crate) fn add_members_to_byte_array<Context>(
         &mut self,
         output: &mut Vec<u8>,
@@ -2985,7 +2934,6 @@ impl CUnion {
         Ok(true)
     }
 
- /// Дописывает полный union snapshot и его member records.
     pub(crate) fn add_to_byte_array<Context>(
         &mut self,
         output: &mut Vec<u8>,
@@ -3010,17 +2958,14 @@ impl CUnion {
         Ok(true)
     }
 
- /// Union не хранит отдельный standard enemy-set и всегда возвращал пустой.
     pub(crate) fn enemy_factions_snapshot(&self) -> BTreeSet<i32> {
         BTreeSet::new()
     }
 
- /// Folded city-war getter также всегда возвращал новый пустой set.
     pub(crate) fn city_war_enemy_factions_snapshot(&self) -> BTreeSet<i32> {
         BTreeSet::new()
     }
 
- /// Разрешает member faction-объекты и сохраняет pointer-identity dedupe.
     pub(crate) fn member_organizings<'a, T, Lookup>(&self, mut lookup: Lookup) -> Vec<&'a T>
     where
         T: ?Sized + 'a,
@@ -3045,7 +2990,6 @@ impl CUnion {
         output
     }
 
- /// Возвращает union ID только для существующего faction-member key.
     pub(crate) fn is_member(&self, faction_id: i32) -> i32 {
         if self.members.contains_key(&faction_id) {
             self.union_id
@@ -3054,7 +2998,6 @@ impl CUnion {
         }
     }
 
- /// Проверяет точное состояние `PST_Permit` одного faction-member права.
     pub(crate) fn is_using_purview(&self, faction_id: i32, purview: i32) -> bool {
         let Some(purview) = EPurview::from_wire_value(purview) else {
             return false;
@@ -3067,7 +3010,6 @@ impl CUnion {
             .is_some_and(|member| member.purview[purview.index()] == EPurviewOwnState::Permit)
     }
 
- /// Переводит только `PST_No` в `PST_Permit`.
     pub(crate) fn set_member_purview(
         &mut self,
         faction_id: i32,
@@ -3087,7 +3029,6 @@ impl CUnion {
         MemberPurviewMutation::Changed
     }
 
- /// Переводит любое не-`PST_No` состояние в `PST_No`.
     pub(crate) fn abolish_member_purview(
         &mut self,
         faction_id: i32,
@@ -3107,7 +3048,6 @@ impl CUnion {
         MemberPurviewMutation::Changed
     }
 
- /// Проверяет право player-а через faction-master scan и union membership.
     pub(crate) fn check_operator_validate<Context>(
         &self,
         manager_player_id: i32,
@@ -3159,7 +3099,6 @@ impl CUnion {
         Ok(manager_permitted != self.is_using_purview(target_faction_id, purview))
     }
 
- /// Делегирует owned-city predicate только найденной master-faction.
     pub(crate) fn is_owned_city<Context>(&self, region_id: i32, context: &Context) -> i32
     where
         Context: UnionMasterFactionQueryContext,
@@ -3172,7 +3111,6 @@ impl CUnion {
             .unwrap_or(0)
     }
 
- /// Делегирует исторический enemy predicate только master-faction.
     pub(crate) fn is_enemy_faction<Context>(&self, enemy_id: i32, context: &Context) -> i32
     where
         Context: UnionMasterFactionQueryContext,
@@ -3185,7 +3123,6 @@ impl CUnion {
             .unwrap_or(0)
     }
 
- /// Возвращает независимый owned-city snapshot вместо dangling reference.
     pub(crate) fn owned_cities_snapshot<Context>(&self, context: &Context) -> VecDeque<i32>
     where
         Context: UnionMasterFactionQueryContext,
@@ -3218,7 +3155,6 @@ impl CUnion {
                 .unwrap_or(false)
     }
 
- /// Делегирует enemy-leader query только найденной master-faction.
     pub(crate) fn enemy_leader_organizing_id<Context>(&self, context: &Context) -> i32
     where
         Context: UnionMasterFactionQueryContext,
@@ -3265,7 +3201,6 @@ impl CUnion {
         })
     }
 
- /// Добавляет region каждой найденной положительной member-faction.
     pub(crate) fn add_owned_city<Context>(
         &self,
         context: &mut Context,
@@ -3281,7 +3216,6 @@ impl CUnion {
         })
     }
 
- /// Добавляет исходный list каждой найденной положительной member-faction.
     pub(crate) fn add_owned_cities<Context>(
         &self,
         context: &mut Context,
@@ -3297,7 +3231,6 @@ impl CUnion {
         })
     }
 
- /// Очищает owned-city state всех найденных member-фракций.
     pub(crate) fn clear_owned_cities<Context>(
         &self,
         context: &mut Context,
@@ -3316,7 +3249,6 @@ impl CUnion {
         })
     }
 
- /// Заменяет owned-city list только у найденной положительной master-faction.
     pub(crate) fn set_owned_cities<Context>(
         &self,
         context: &mut Context,
@@ -3346,7 +3278,6 @@ impl CUnion {
         }
     }
 
- /// Сохраняет подтверждённый баг: аргумент игнорируется, master-list очищается.
     pub(crate) fn delete_owned_city<Context>(
         &self,
         context: &mut Context,
@@ -3376,7 +3307,6 @@ impl CUnion {
         }
     }
 
- /// Очищает standard enemy-set каждой найденной member-faction.
     pub(crate) fn clear_enemy_factions<Context>(
         &self,
         context: &mut Context,
@@ -3395,7 +3325,6 @@ impl CUnion {
         }
     }
 
- /// Очищает city-war enemy-set каждой найденной member-faction.
     pub(crate) fn clear_city_war_enemy_factions<Context>(
         &self,
         context: &mut Context,
@@ -3498,7 +3427,6 @@ impl CUnion {
         }
     }
 
- /// Обновляет online player-ов одной faction либо всех member-фракций.
     pub(crate) fn update_player_faction_info<Context>(
         &self,
         faction_id: i32,
@@ -3529,7 +3457,6 @@ impl CUnion {
         UnionPlayerRefreshReport { factions }
     }
 
- /// Публикует полный standard enemy snapshot выбранных faction-target-ов.
     pub(crate) fn update_enemy_factions_to_client<Context>(
         &self,
         faction_id: i32,
@@ -3558,7 +3485,6 @@ impl CUnion {
         UnionEnemySnapshotReport { factions }
     }
 
- /// Публикует полный city-war enemy snapshot выбранных faction-target-ов.
     pub(crate) fn update_city_war_enemy_factions_to_client<Context>(
         &self,
         faction_id: i32,
@@ -3587,7 +3513,6 @@ impl CUnion {
         UnionEnemySnapshotReport { factions }
     }
 
- /// Публикует полный owned-city snapshot выбранных faction-target-ов.
     pub(crate) fn update_owned_cities_to_client<Context>(
         &self,
         faction_id: i32,
@@ -3621,7 +3546,6 @@ impl CUnion {
         Ok(UnionOwnedCitySnapshotReport { factions })
     }
 
- /// Передаёт organizing-info всем найденным member-фракциям.
     pub(crate) fn send_info_to_all_members<'a, Context>(
         &self,
         first_text: &'a [u8],
@@ -3657,7 +3581,6 @@ impl CUnion {
         UnionInfoFanoutReport { factions }
     }
 
- /// Удаляет union-state у готовых клиентов одной либо всех member-фракций.
     pub(crate) fn delete_organizing_to_client<Context>(
         &self,
         faction_id: i32,
@@ -3709,7 +3632,6 @@ impl CUnion {
         }
     }
 
- /// Публикует delete либо полный union member-faction record всем клиентам.
     pub(crate) fn update_member_info_to_client<Context>(
         &mut self,
         game: &CGame,

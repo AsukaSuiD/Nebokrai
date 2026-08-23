@@ -1,5 +1,5 @@
 //! DB-владелец JJC WorldServer из `rsjjcsys.cpp`.
-//! Источник контракта — точная пара WorldServer EXE/PDB.
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Owner сохраняет load/save игрока, weekly/season clear, исходный порядок
 //! команд и значения bool. Player snapshot и Tiberius заменяют прямой доступ
@@ -25,7 +25,6 @@ const JJC_SEASON_CLEAR_SQL: &str = "EXEC sp_JJcSeasonClear";
 
 type JjcTdsClient = Client<Compat<TcpStream>>;
 
-/// Полный PDB-layout `CPlayer::tagPlayerJJcData` вместе с двумя base-полями.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PlayerJjcDataSnapshot {
     pub(crate) id: i32,
@@ -38,18 +37,15 @@ pub(crate) struct PlayerJjcDataSnapshot {
     pub(crate) season_join: u16,
     pub(crate) season_win: u16,
     pub(crate) season_lose: u16,
- /// Исходный save не читает это поле и ошибочно повторяет `week_tie`.
     pub(crate) season_tie: u16,
 }
 
-/// Структурированная замена действующих DB-catch `CRsJJcSys`.
 #[derive(Debug)]
 pub(crate) struct RsJjcSysNotice {
     pub(crate) operation: RsJjcSysOperation,
     pub(crate) error: RsJjcSysDatabaseError,
 }
 
-/// DB operation, которой принадлежал исходный `PrintErr`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RsJjcSysOperation {
     SavePlayer,
@@ -58,7 +54,6 @@ pub(crate) enum RsJjcSysOperation {
     SeasonClear,
 }
 
-/// Ошибка отдельной connection/procedure-границы без runtime значений.
 #[derive(Debug)]
 pub(crate) enum RsJjcSysDatabaseError {
     Connect(io::Error),
@@ -92,32 +87,27 @@ impl From<tiberius::error::Error> for RsJjcSysDatabaseError {
     }
 }
 
-/// Узкая объектная граница действующих load/save-операций `CRsJJcSys`.
 pub(crate) trait RsJjcSysOwner {
- /// Загружает caller-строку JJC; отсутствие строки остаётся успешным no-op.
     async fn load_jjc_data(
         &mut self,
         player: &mut CPlayer,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> PlayerJjcLoadOutcome;
 
- /// Оригинал `LoadJJcRank` этой пары EXE/PDB не менял vector и возвращал
+ /// Оригинал `LoadJJcRank` этой пары `worldserver.exe`/`worldserver.pdb` не менял vector и возвращал
  /// успех. Обобщённый vector не скрывает JJC layout: он вообще не читается.
     fn load_jjc_rank<Rank>(&mut self, _ranks: &mut Vec<Rank>) -> bool {
         true
     }
 
- /// Открывает отдельное соединение и выполняет одну исходную procedure.
     async fn save_jjc_data(&mut self, snapshot: &PlayerJjcDataSnapshot) -> bool;
 
  /// Выполняет тело detached weekly worker-а: BAKE, затем Clear на новом
  /// соединении. Результат не подменяет bool `JJcWeekClear` thread-start.
     async fn run_jjc_week_clear_database(&mut self) -> bool;
 
- /// Выполняет отдельный сезонный reset и возвращает исходный bool owner-а.
     async fn clear_jjc_season(&mut self) -> bool;
 
- /// Забирает следующий `Clear JJc week data failed`-эквивалент.
     fn pop_notice(&mut self) -> Option<RsJjcSysNotice>;
 }
 
@@ -140,14 +130,12 @@ pub(crate) enum PlayerJjcLoadOutcome {
     ReturnedFalse(PlayerJjcLoadFailure),
 }
 
-/// Linux/TDS-замена действующих load/save-частей исходного singleton-а.
 pub(crate) struct TiberiusRsJjcSys {
     config: Config,
     notices: VecDeque<RsJjcSysNotice>,
 }
 
 impl TiberiusRsJjcSys {
- /// Копирует DB config; каждое сохранение всё равно создаёт новый client.
     pub(crate) fn new(settings: &WorldDatabaseSettings) -> Self {
         Self {
             config: settings.tds_config(),

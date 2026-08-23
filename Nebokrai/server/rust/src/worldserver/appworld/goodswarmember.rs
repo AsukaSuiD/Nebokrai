@@ -1,69 +1,18 @@
-//! Владелец списка участников и faction-count Goods War WorldServer.
+//! Участники Goods War `CGoodsWarMember` из WorldServer, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `RequestCountList`, `AppendOneFaction2Count`
-//! `RefreshMembers/RefreshlistFid/RefreshAll`
-//! `DeleteOneMember` и
-//! `InsertOneFaction`, `MkOne`, `FactionWin`
-//! `DelOneFactionfCount` и
-//! `DeleteMembersByFactionId`, `IsInFactionIdList`,
-//! destructor, `reInitDB` и все действующие
-//! mutation/refresh/faction-win маршруты входят в контракт owner-а. COM/SEH cleanup
-//! исходного бинарника не образует самостоятельного игрового контракта.
+//! Player->faction map и faction set сохраняют signed order; count-list —
+//! отдельный порядок по убыванию count. Замена записи вставляет новую до первой
+//! с меньшим либо равным count и только затем удаляет старое имя. Первая запись
+//! имени публикует top-five, замена существующей — нет.
 //!
-//! `m_member` является signed ordered map `player ID -> faction ID`, а
-//! `m_setGoodsWarFactionIdList` — signed ordered set. `BTreeMap/BTreeSet`
-//! заменяют только MSVC tree. Count-list сохраняет отдельный list-order:
-//! записи сортируются по убыванию count, новая запись ставится перед первой с
-//! `old_count <= new_count`, прежняя запись той же faction ищется как C-строка
-//! по имени и удаляется уже после вставки. Wire `0x7FF20` сохраняет operation
-//! `2/4/5/16`, ordered пары и terminal `(0,0)`; `0x7FF21` публикует максимум
-//! первые пять count-записей как оригинал `char[20] + long`.
-//! В `AppendOneFaction2Count` сохранён observable ранний return: первая запись
-//! имени публикует `0x7FF21`, замена уже существующей записи — нет.
-//! Значимые bytes имени сравниваются до первого NUL, как старый `strcmp`;
-//! остаток fixed wire-поля Rust обнуляет вместо передачи недоказанного
-//! allocator residue из старого неинициализированного heap-блока.
-//! Повреждённые `local_38/local_8` в оригинал `DeleteOneMember/InsertOneFaction`
-//! являются потерянными stack-alias входного параметра: PDB
-//! сохраняет соответствующие сигнатуры, а caller `0x60139` кладёт
-//! прочитанный literal ID непосредственно перед каждым вызовом.
-//! `FactionWin` сохраняет ordered insert-only `MkOne`: уже известный
-//! player не меняет faction и не попадает в delta-сообщение. Отрицательный
-//! master ID является только wire-маркером перед terminal zero и в `m_member`
-//! не вставляется. После `SendAll` legacy-аудит дописывается в `bzhsmd.txt`;
-//! `OpenOptions`/`Write` заменяют CRT FILE plumbing, а CRLF фиксирует байты,
-//! которые исходный Windows text-mode получал из `\n`.
-//! `DeleteMembersByFactionId` удаляет все
-//! пары с данным faction ID в signed player-order и только при хотя бы одном
-//! удалении публикует `0x7FF20 { operation=3, faction_id }` один раз.
-//! `DelOneFactionfCount` сначала требует живой
-//! faction-owner, затем удаляет только первую C-string-равную count-запись и
-//! немедленно публикует обновлённый top-five через `RequestCountList`. В
-//! disband-цепочке то же имя снимается с ещё живого `CFaction` до erase, а
-//! узкий delivery-adapter отделяет эту семантику от уже ненужного map lookup.
-//! `IsInFactionIdList` является обычным find по
-//! signed set; `BTreeSet::contains` заменяет только MSVC tree. Destructor
-//! освобождает count-list, set и map; стандартный
-//! `Drop` их Rust-владельцев является полной технической заменой. Constructor
-//! выражен связкой пустого safe owner-а и async DB-load в исходной позиции
-//! `CGame::Init`; синхронный COM I/O не скрывается внутри `Default`. Тот же
-//! lifecycle замкнут в исходной позиции `CGame::Release`: nullable-жизнь
-//! фиксирует отдельный bool, а collections очищаются стандартным `Drop` без
-//! прежнего opaque delete-callback-а.
-//! `reInitDB` форматирует literal `TOP 5`,
-//! не очищает прежний list и присоединяет строки в DB-order. Дубликаты имён и
-//! положительный count повторно не валидируются: это гарантирует сам SQL.
-//! Ошибка оставляет уже присоединённый prefix и только выдаёт старый error
-//! notice; init не прекращается. Tiberius заменяет ADO/COM, а переполнение
-//! исходного `strcpy` в `char[20]` блокирует конкретную строку до мутации как
-//! внутренний memory defect. Незаполненный хвост имени обнуляется вместо
-//! публикации allocator residue, как и в остальных count-owner-ах.
+//! Wire `0x7FF20` сохраняет operations и terminal `(0,0)`; `0x7FF21` содержит
+//! не более пяти fixed-name records. `FactionWin` вставляет только неизвестных
+//! players, отрицательный master ID остаётся marker-ом.
 //!
-//! Старый unbounded copy faction-name в `char[20]` мог перезаписать count и
-//! links. Это внутренний UB, а не протокол: Rust останавливает append при
-//! visible имени длиннее 19 bytes до изменения faction/count state. DB/ADO
-//! заменены потоковым Tiberius owner-ом; list/map/set остаются обычными safe
-//! collections без переноса COM lifetime и intrusive links.
+//! DB reload не очищает прежний count-list и добавляет TOP 5 в DB order;
+//! поздняя ошибка сохраняет префикс. Имена длиннее 19 байт отклоняются вместо
+//! переполнения `char[20]`; хвост fixed поля обнулён.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
@@ -116,7 +65,6 @@ pub(crate) struct GoodsWarAuditEnvironment {
     pub(crate) world_number: u32,
 }
 
-/// Узкая граница исходных `CMessage::SendAll`-публикаций Goods War.
 pub(crate) trait GoodsWarDeliveryContext {
     fn send_all(&mut self, message: &CMessage) -> i32;
 }
@@ -137,11 +85,10 @@ pub(crate) trait GoodsWarMemberContext: GoodsWarDeliveryContext {
         count: i32,
     ) -> Result<i32, Self::Block>;
 
- /// Возвращает reached runtime-поля для legacy `bzhsmd.txt`; `None`
+ /// Возвращает runtime-поля для legacy `bzhsmd.txt`; `None`
  /// означает, что setup ещё не достиг назначенного `dwNumber`.
     fn faction_win_audit_environment(&mut self) -> Option<GoodsWarAuditEnvironment>;
 
- /// Повторяет поэлементный `GetMapPlayer` уже после записи audit header.
     fn faction_win_audit_player(&mut self, player_id: i32) -> Option<GoodsWarAuditPlayer>;
 }
 
@@ -230,7 +177,6 @@ pub(crate) enum GoodsWarMemberBlock<ContextBlock> {
     },
 }
 
-/// Safe reached-state исходного `CGoodsWarMember` без pointer/list ABI.
 #[derive(Default)]
 pub(crate) struct CGoodsWarMember {
     lifecycle_live: bool,
@@ -249,12 +195,10 @@ impl CGoodsWarMember {
         }
     }
 
- /// Публикует safe owner в позиции исходного успешного `new`.
     pub(crate) const fn begin_lifecycle(&mut self) {
         self.lifecycle_live = true;
     }
 
- /// Выполняет concrete destructor-state и возвращает прежнюю nullable-жизнь.
     pub(crate) fn release_lifecycle(&mut self) -> bool {
         let was_live = self.lifecycle_live;
         *self = Self::with_reached_empty_state();
@@ -368,7 +312,6 @@ impl CGoodsWarMember {
         }
     }
 
- /// Повторяет `IsInFactionIdList` без изменения ordered set.
     pub(crate) fn contains_faction_id(&self, faction_id: i32) -> bool {
         self.faction_ids.contains(&faction_id)
     }
@@ -419,7 +362,6 @@ impl CGoodsWarMember {
         context.send_all(&message)
     }
 
- /// Удаляет literal player key и только при hit публикует operation `2`.
     pub(crate) fn delete_one_member<Context: GoodsWarDeliveryContext + ?Sized>(
         &mut self,
         player_id: i32,
@@ -438,7 +380,6 @@ impl CGoodsWarMember {
         }
     }
 
- /// Удаляет все member-записи faction и публикует один operation `3`.
     pub(crate) fn delete_members_by_faction_id<Context: GoodsWarDeliveryContext + ?Sized>(
         &mut self,
         faction_id: i32,
@@ -461,7 +402,6 @@ impl CGoodsWarMember {
         }
     }
 
- /// Удаляет первую count-запись живой faction по C-string имени.
     pub(crate) fn delete_one_faction_count<Context>(
         &mut self,
         faction_id: i32,
@@ -479,7 +419,6 @@ impl CGoodsWarMember {
         Ok(self.delete_one_faction_count_by_name(&snapshot.name, context))
     }
 
- /// Удаляет первую count-запись по уже подтверждённому C-string имени.
     pub(crate) fn delete_one_faction_count_by_name<Context>(
         &mut self,
         faction_name: &[u8],
@@ -507,7 +446,6 @@ impl CGoodsWarMember {
         }
     }
 
- /// Вставляет существующую faction и при новой записи публикует весь set.
     pub(crate) fn insert_one_faction<Context>(
         &mut self,
         faction_id: i32,
@@ -600,7 +538,6 @@ impl CGoodsWarMember {
         })
     }
 
- /// Публикует members, count top-five и faction IDs строго в этом порядке.
     pub(crate) fn refresh_all<Context: GoodsWarDeliveryContext + ?Sized>(
         &self,
         context: &mut Context,

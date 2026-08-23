@@ -1,4 +1,5 @@
-//! Increment-shop журнал WorldServer из точной пары EXE/PDB.
+//! Increment-shop журнал, подтверждённый `worldserver.exe` и
+//! `worldserver.pdb`.
 //! DB-владелец находится в `dbaccess/worlddb/dbincrementlog.rs`.
 //!
 //! Registry остаётся player-keyed, записи внутри игрока сохраняют insertion/

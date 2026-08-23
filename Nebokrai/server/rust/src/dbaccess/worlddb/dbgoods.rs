@@ -1,5 +1,5 @@
 //! DB-владелец товаров WorldServer из `dbgoods.cpp`.
-//! Источник контракта — точная пара WorldServer EXE/PDB.
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Контракт охватывает delete/load/save товара, base fields и addon properties.
 //! SQL-порядок, signed форматирование legacy `unsigned long`, provider rows и
@@ -28,7 +28,6 @@ use crate::worldserver::appworld::goods::cgoodsfactory::{
 };
 use crate::worldserver::appworld::player::{CPlayer, PlayerLoadedGoodsInsertBlock};
 
-/// Точное содержимое одного `CGoods::tagAddonPropertyValue`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GoodsAddonPropertyValue {
     pub(crate) id: u32,
@@ -36,13 +35,11 @@ pub(crate) struct GoodsAddonPropertyValue {
     pub(crate) modifier: i32,
 }
 
-/// Ошибка материализации старого byte-indexed цикла значений.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GoodsAddonValueCountBlock {
     pub(crate) value_count: usize,
 }
 
-/// Caller-owned view одного addon property и его действующего base-property.
 pub(crate) struct GoodsAddonPropertySnapshot {
     property_type: u32,
     occur_probability: u32,
@@ -50,7 +47,7 @@ pub(crate) struct GoodsAddonPropertySnapshot {
 }
 
 impl GoodsAddonPropertySnapshot {
- /// Материализует только диапазон, в котором исходный `unsigned char` loop
+ /// Создаёт только диапазон, в котором исходный `unsigned char` loop
  /// действительно достигал конца vector.
     pub(crate) fn from_legacy_parts(
         property_type: u32,
@@ -69,33 +66,27 @@ impl GoodsAddonPropertySnapshot {
         })
     }
 
- /// Возвращает доказанные части property для другого DB-owner-а. Порядок
+ /// Возвращает исходные части property для другого DB-owner-а. Порядок
  /// values и все три 32-битных поля остаются исходным `tagAddonProperty`.
     pub(crate) fn legacy_parts(&self) -> (u32, u32, &[GoodsAddonPropertyValue]) {
         (self.property_type, self.occur_probability, &self.values)
     }
 }
 
-/// Состояние lookup-а base-properties после успешного main goods INSERT.
 pub(crate) enum GoodsPropertiesSnapshot {
- /// Пустой либо полностью материализованный addon vector.
     Available(Vec<GoodsAddonPropertySnapshot>),
- /// Addon vector непуст, но `QueryGoodsBaseProperties` вернул null.
     MissingBaseProperties,
 }
 
-/// Caller-owned view одного `CGoods`, общий для обхода контейнера и DB-save.
 pub(crate) struct GoodsObjectSnapshot {
     pub(crate) goods_id: CGuid,
     pub(crate) base_properties_index: u32,
- /// Полный byte-content старого `std::string`; save читает его как C-string.
     pub(crate) name: Vec<u8>,
     pub(crate) price: u32,
     pub(crate) amount: u32,
     pub(crate) properties: GoodsPropertiesSnapshot,
 }
 
-/// Полный caller-owned view одного вызова `CDBGoods::SaveGoods`.
 pub(crate) struct GoodsSaveSnapshot<'goods> {
     pub(crate) player_id: i32,
     pub(crate) goods: &'goods GoodsObjectSnapshot,
@@ -103,16 +94,12 @@ pub(crate) struct GoodsSaveSnapshot<'goods> {
     pub(crate) position: u8,
 }
 
-/// Неразрешённая legacy-граница `SaveGoods`.
 #[derive(Debug)]
 pub(crate) enum GoodsSaveBlock {
- /// `CreateGUID`-аналог не получил полный идентификатор из системного RNG.
     GuidGeneration(getrandom::Error),
- /// `FixSingleQuotes` вышел бы за `char[256]`.
     EscapedNameBuffer { required_bytes: usize },
 }
 
-/// Доказанный bool `SaveGoods` либо локальная UB/OS-граница.
 #[derive(Debug)]
 pub(crate) enum GoodsSaveOutcome {
     Saved,
@@ -120,7 +107,6 @@ pub(crate) enum GoodsSaveOutcome {
     BlockedMissingFact(GoodsSaveBlock),
 }
 
-/// Caller-owned view пятнадцати goods-container-ов одного `CPlayer`.
 pub(crate) struct PlayerGoodsFiledSnapshot<'snapshot> {
     pub(crate) player_id: i32,
     pub(crate) packet: GoodsContainerTraversalSnapshot<'snapshot>,
@@ -140,7 +126,6 @@ pub(crate) struct PlayerGoodsFiledSnapshot<'snapshot> {
     pub(crate) compose_ci_qing: GoodsContainerTraversalSnapshot<'snapshot>,
 }
 
-/// Доказанный bool `SaveGoodsFiled` либо вложенная неизвестная граница.
 #[derive(Debug)]
 pub(crate) enum GoodsFiledSaveOutcome {
     ReturnedTrue,
@@ -195,7 +180,6 @@ pub(crate) enum GoodsLoadOutcome {
     BlockedMissingFact(GoodsLoadBlock),
 }
 
-/// Операция исходного `CDBGoods`, породившая log-эквивалент.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DbGoodsOperation {
     DeleteGoods,
@@ -204,14 +188,12 @@ pub(crate) enum DbGoodsOperation {
     SaveGoodsProperties,
 }
 
-/// Структурированная замена исходных `PrintErr` без SQL и runtime values.
 #[derive(Debug)]
 pub(crate) struct DbGoodsNotice {
     pub(crate) operation: DbGoodsOperation,
     pub(crate) error: DbGoodsSaveError,
 }
 
-/// Причина исходного goods log-эквивалента без SQL и runtime values.
 #[derive(Debug)]
 pub(crate) enum DbGoodsSaveError {
     Database(DbGoodsDatabaseError),
@@ -249,7 +231,6 @@ impl Error for DbGoodsSaveError {
     }
 }
 
-/// Ошибка действующей ADO/TDS-границы goods-owner-а.
 #[derive(Debug)]
 pub(crate) struct DbGoodsDatabaseError(tiberius::error::Error);
 
@@ -271,9 +252,7 @@ impl From<tiberius::error::Error> for DbGoodsDatabaseError {
     }
 }
 
-/// Узкая объектная граница действующих функций `CDBGoods`.
 pub(crate) trait DbGoodsOwner {
- /// Загружает joined goods rows внутри caller-owned connection.
     async fn load_goods(
         &mut self,
         player: &mut CPlayer,
@@ -283,14 +262,12 @@ pub(crate) trait DbGoodsOwner {
         dakong_addon_types: &BTreeSet<i32>,
     ) -> GoodsLoadOutcome;
 
- /// Удаляет старые строки игрока внутри уже начатой caller-транзакции.
     async fn delete_goods(
         &mut self,
         player_id: i32,
         active_transaction: &mut WorldTdsClient,
     ) -> bool;
 
- /// Последовательно сохраняет materialized addon properties одного goods ID.
     async fn save_goods_properties(
         &mut self,
         properties: &[GoodsAddonPropertySnapshot],
@@ -298,32 +275,27 @@ pub(crate) trait DbGoodsOwner {
         active_transaction: &mut WorldTdsClient,
     ) -> bool;
 
- /// Сохраняет основную строку и затем её addon properties в той же транзакции.
     async fn save_goods(
         &mut self,
         snapshot: &GoodsSaveSnapshot<'_>,
         active_transaction: &mut WorldTdsClient,
     ) -> GoodsSaveOutcome;
 
- /// Удаляет прежние строки и обходит 15 player container-ов в исходном порядке.
     async fn save_goods_filed(
         &mut self,
         snapshot: &PlayerGoodsFiledSnapshot<'_>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> GoodsFiledSaveOutcome;
 
- /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<DbGoodsNotice>;
 }
 
-/// Linux/TDS-замена действующей части исходного `CDBGoods`.
 pub(crate) struct TiberiusDbGoods {
     settings: WorldDatabaseSettings,
     notices: VecDeque<DbGoodsNotice>,
 }
 
 impl TiberiusDbGoods {
- /// Копирует DB setup для исходных load-вызовов без caller connection.
     pub(crate) fn new(settings: &WorldDatabaseSettings) -> Self {
         Self {
             settings: settings.clone(),
@@ -684,7 +656,7 @@ impl DbGoodsOwner for TiberiusDbGoods {
  // "CDBGoods::SaveGoodsFiled():%d", player_id)` обрезал строку и
  // мог оставить её без NUL перед `AddErrorLogText`.
  // typed boundary: какие байты старый logger читал после
- // первых четырёх, не доказано; typed notice сохраняет сам факт
+ // первых четырёх, не определёно; typed notice сохраняет сам факт
  // outer-ошибки без воспроизведения чтения за stack-buffer.
             self.notices.push_back(DbGoodsNotice {
                 operation: DbGoodsOperation::SaveGoodsFiled,

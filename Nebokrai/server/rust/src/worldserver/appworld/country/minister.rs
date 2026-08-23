@@ -2,13 +2,12 @@
 //!
 //! Constructor создаёт country identity и обнуляет четыре
 //! officer bytes; destructor не добавляет наблюдаемого эффекта поверх
-//! `COfficer`. Источник контракта — WorldServer EXE/PDB.
+//! `COfficer`. Источник контракта — `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Rust сохраняет отдельный nominal type и composition вместо C++ vtable.
 
 use super::officer::COfficer;
 
-/// Номинальный minister с полным действующим officer-prefix.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CMinister {
     officer: COfficer,
@@ -21,7 +20,6 @@ impl Default for CMinister {
 }
 
 impl CMinister {
- /// Повторяет нулевой constructor-state minister-а.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             officer: COfficer::with_constructor_defaults(),

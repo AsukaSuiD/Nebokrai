@@ -1,39 +1,16 @@
-//! Межрегиональная таблица маршрутизации исторического Miracle.
+//! Маршрутизация `CRegionRouter` из WorldServer, подтверждённая
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CRegionRouter::AddToByteArray` и
-//! `CRegionRouter::LoadRouterSetup` и
-//! `CRegionRouter::ChageRegionRouter`:;
-//! singleton и Game decoder не входят в этот owner и остаются. Точная пара:
-//! Исходный владелец PDB:
+//! Wire пишет ordered regions, их entry/exit/range и ordered next-region точки;
+//! map key задаёт порядок, но в payload идёт ID из value. `sendSelf` не читается.
 //!
-//! Wire: signed region count, затем для каждого ordered map node шесть `i32`
-//! (`region_id`, вход X/Y, выход X/Y, out-range), signed next count и ordered
-//! 12-байтные `next_region_id + X + Y`. Map key отдельно не передаётся: EXE
-//! пишет ID из value; это различие сохранено. Параметр `sendSelf` точным
-//! serializer-ом не читался. `BTreeMap` и owned values заменяют MSVC tree и
-//! raw struct-copy, не меняя signed ordering или compact layout.
+//! Поиск маршрута выбирает минимальное число hops, при равенстве — меньший
+//! signed region key. Для промежуточных узлов выдаются entry и exit-to-next,
+//! для конечного — entry и заданные X/Y; отсутствующая точка даёт `(0, 0)`.
 //!
-//! Route search проверяет наличие обоих map keys, а при совпадении регионов
-//! возвращает единственную конечную точку. Для разных регионов EXE выбирает
-//! среди ещё не закрытых узлов минимальную hop-distance, при равенстве —
-//! меньший signed region key, и обновляет соседей только при строго меньшей
-//! дистанции. `BinaryHeap<Reverse<(distance, region)>>` и `BTreeMap` являются
-//! safe заменой копии MSVC tree и полного линейного поиска минимума; порядок и
-//! tie-break при этом совпадают. Маршрут использует map keys (не дублирующие
-//! ID из values), координаты перехода — из `next[next_region_key]`; для каждого
-//! промежуточного региона выдаются entry и exit-to-next, для конечного — entry
-//! и запрошенные X/Y. Отсутствующий переход даёт `(0, 0)`, как value-initialized
-//! временный `tagPOINT` в EXE. `pOut` и out-range эта функция не читает.
-//!
-//! Loader сначала очищает owner даже при последующей ошибке открытия. Формат
-//! whitespace-token based: ignored label + unsigned 32-bit region count; для
-//! каждого региона — `label + region ID`, `label + entry X/Y`, `label + exit
-//! X/Y`, `label + out-range`, `label + unsigned next count`, затем next count
-//! троек `(next region ID, X, Y)` без labels. Хвост игнорируется. Оба MSVC map
-//! используют insert-only: первый duplicate key остаётся. `std::fs::read` и
-//! byte-token parser заменяют `CRFile + stringstream`. Malformed stream в C++
-//! продолжал читать неинициализированные locals; Rust прекращает загрузку с
-//! typed error, сохраняя уже подтверждённый prefix и исключая внутренний UB.
+//! Loader очищает owner до открытия и читает позиционный whitespace-формат.
+//! Duplicate keys сохраняют первое значение. Ошибка оставляет разобранный
+//! префикс; `BinaryHeap` и `BTreeMap` заменяют линейный MSVC tree search.
 
 use std::cmp::Reverse;
 use std::collections::btree_map::Entry;
@@ -142,7 +119,6 @@ impl RegionRouter {
         self.nodes.clear();
     }
 
- /// Загружает оригинал World whitespace grammar `RegionRouter.ini`.
     pub(crate) fn load_router_setup(
         &mut self,
         path: impl AsRef<Path>,
@@ -152,7 +128,6 @@ impl RegionRouter {
         self.load_router_setup_bytes(&bytes)
     }
 
- /// Та же grammar для уже открытого package-resource WorldServer.
     pub(crate) fn load_router_setup_bytes(
         &mut self,
         bytes: &[u8],

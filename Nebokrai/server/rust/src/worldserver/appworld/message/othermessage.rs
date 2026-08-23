@@ -1,60 +1,19 @@
-//! WorldServer dispatcher-owner `OnOtherMessage`.
+//! Прочие сообщения `OnOtherMessage` из `othermessage.cpp`, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! transport leaves `0x5FD02`, `0x5FD06..0x5FD09`, goods-link publish/lookup
-//! `0x5FD03/0x5FD04`, increment-log page `0x5FD0A`, copy-number `0x5FD0B`,
-//! cursor-only `0x5FD0E`, chat relay `0x5FD01`, player rename `0x5FD05`,
-//! LeiTing update `0x5FD10`, honor-reset `0x5FD0C` и eliminate update
-//! `0x5FD0D` входят в контракт owner-а. Reset читает один Windows `long`,
-//! получает текущий `CGame`
-//! и вызывает `ResetHonorElimilateInfo`.
-//! Недостаточный payload сохраняет старое поведение numeric getter-а: значение
-//! становится нулём без сдвига cursor; отчёт отдельно фиксирует неполноту.
+//! Ветки `0x5FD01..0x5FD10` сохраняют transport relays, rename, copy-number,
+//! chat, goods links, increment pages, honor reset/eliminate и LeiTing update.
+//! Неизвестный opcode — no-op. Numeric getter на коротком payload возвращает
+//! ноль без сдвига cursor.
 //!
-//! Для `0x5FD0D` owner сначала читает player/eliminator,
-//! проверяет online player и duplicate ledger, и только для новой пары читает
-//! четыре прежних счётчика, прибавляет к каждому единицу, обновляет ranks и
-//! отвечает `0x7FA16 + player + char(1)` в исходный socket. Дубликат прекращает
-//! ветку до чтения счётчиков и ответа; этот cursor/order контракт сохранён.
-//! `0x5FD02` читает target map, переписывает исходный type в `0x7FA05` и
-//! маршрутизует то же сообщение; `0x5FD06..09` только переписывают type и
-//! делают `SendAll`. `0x5FD0E` ровно один раз читает и отбрасывает signed long.
-//! Ownership/tail validation отсутствует в EXE.
-//! Полный `switch` завершается общим epilogue после `0x5FD10`: любой
-//! иной opcode не читает payload, не отправляет ответ и не передаётся
-//! следующему owner-у. Rust materialизует это `NoOp`.
-//! `0x5FD0B` отражает первые два signed long, добавляет прежнее значение
-//! `s_nCopyNum` и только при ненулевом третьем поле увеличивает global до
-//! `SendToSocket`; это сохраняет peek/reserve и side-effect-before-send.
-//! `0x5FD10` читает player ID и только для online owner-а делегирует оставшийся
-//! buffer/cursor уже действующему `CPlayer::DecodeByteArrayLeiTing`; malformed
-//! хвост возвращается typed-ошибкой с сохранением доказанных prefix-мутаций.
-//! `0x5FD05` читает signed player ID и `GetStr(..., 0x20)`, оставляет result
-//! `1` при отсутствующем map-owner-е, иначе выполняет восемь проверок
-//! `CPlayer::ChangeName`. Ответ всегда `0x7FA0E + ID + char(result) + name\0`;
-//! parameterized Tiberius query заменяет только старый ADO owner. Только
-//! локальная safe-граница недопустимо длинного уже сохранённого имени не
-//! получает выдуманного response после исходного stack-overread.
-//! `0x5FD0A` читает player/page, требует online owner-а и отвечает
-//! `0x7FA12 + player + page` только когда `CIncrementLog` добавил page.
-//! Empty/missing player history сохраняет исходную ветку без отправки; page
-//! wire и newest-first порядок принадлежат concrete increment-log owner-у.
+//! Eliminate проверяет duplicate до чтения четырёх счётчиков. Copy-number
+//! увеличивает global до отправки. Rename всегда отвечает исходным именем и
+//! result; increment page отвечает только при найденной истории.
 //!
-//! Goods-link publish точно сохраняет три `long`, условную строку type `2`,
-//! title/text, positive signed count и два entry-вида. Changed entry владеет
-//! декодированным `CGoods`, unchanged хранит `type + uchar amount`; ссылка
-//! добавляется до изменения текста. Rewrite удаляет девять байт от `change=`,
-//! заменяет участок с offset `+3` до `>` signed-десятичным индексом и продолжает
-//! после `</goodslink>`. Lookup возвращает `long(found)` и либо прежний goods,
-//! owner/tail/type/count проверки отсутствуют.
-//! Malformed goods и невозможные позиции `std::string` остаются typed safe-
-//! границами; уже добавленные prefix-ссылки при rewrite-ошибке не откатываются.
-//! Chat-ветка сохраняет условное чтение строк: faction name/content читаются
-//! только после найденной faction, а private sender/content — только после
-//! найденного online-адресата и его region GameServer. Ответы `0x7FA01`
-//! сохраняют status `0/1/2`, исходные owner type/ID и прежний порядок строк;
-//! faction delivery делегирован точному `CFaction::talk`. Typed write-log FIFO
-//! и Tiberius заменяют только SQL-строку/ADO, не меняя `bUseLogSys`,
-//! `bFactionChat`/`bPrivateChat`, sender lookup и координатную семантику.
+//! Goods-link publish добавляет записи до переписывания текста; поздняя ошибка
+//! не удаляет уже сохранённый префикс. Chat читает faction/private строки только
+//! после успешного owner lookup и сохраняет статусы 0/1/2. Safe codecs и
+//! Tiberius заменяют overread и ADO без новых owner/tail gates.
 
 use crate::dbaccess::worlddb::rsplayer::TiberiusRsPlayer;
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
@@ -169,7 +128,6 @@ pub(crate) enum WorldOtherChatOutcome {
     },
 }
 
-/// Наблюдаемый итог одной уже действующей ветки `OnOtherMessage`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldHonorEliminateReset {
     pub(crate) rank_mask: u32,
@@ -177,7 +135,6 @@ pub(crate) struct WorldHonorEliminateReset {
     pub(crate) legacy_result: bool,
 }
 
-/// Safe-границы двух `std::string` операций publish-ветки.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldGoodsLinkTextRewriteBlock {
     MissingChangeMarker,
@@ -199,7 +156,6 @@ pub(crate) enum WorldGoodsLinkPublishBlock {
     },
 }
 
-/// Успешно сформированный response одной goods-link ветки.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGoodsLinkResponse {
     pub(crate) response_type: i32,
@@ -207,7 +163,6 @@ pub(crate) struct WorldGoodsLinkResponse {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Publish сохраняет prefix-side-effects: AddGoodsLink предшествует rewrite.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldGoodsLinkPublishOutcome {
     pub(crate) link_type: i32,
@@ -230,7 +185,6 @@ pub(crate) struct WorldGoodsLinkLookupOutcome {
     pub(crate) result: Result<WorldGoodsLinkResponse, GoodsCodecError>,
 }
 
-/// Наблюдаемый исход duplicate-ledger и rank-update ветки `0x5FD0D`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldHonorEliminateUpdate {
     MissingOnlinePlayer {
@@ -275,10 +229,8 @@ pub(crate) struct WorldIncrementLogPageOutcome {
     pub(crate) delivery: Option<Result<i32, SendMessageError>>,
 }
 
-/// Один обработанный результат полного other-owner-а.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldOtherMessageOutcome {
- /// Default полного `switch`: message остаётся без side effects.
     NoOp {
         request_type: i32,
     },
@@ -330,13 +282,11 @@ pub(crate) enum WorldOtherMessageOutcome {
     HonorEliminateUpdate(WorldHonorEliminateUpdate),
 }
 
-/// Узкая диспетчеризация уже выбранного other-owner-а.
 pub(crate) enum WorldOtherMessageDispatch {
     Handled(WorldOtherMessageOutcome),
     Pending(CMessage),
 }
 
-/// Исполняет все transport/cursor/honor ветви other-owner-а.
 pub(crate) async fn on_other_message(
     game: &mut CGame,
     organizing: &COrganizingCtrl,

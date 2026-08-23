@@ -1,5 +1,5 @@
 //! DB-владелец союзов и конфедераций WorldServer из `rsunion.cpp`.
-//! Источник контракта — точная пара WorldServer EXE/PDB.
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Owner сохраняет отдельные delete/save/load операции, ordered membership,
 //! исходные signed IDs и false для missing connection/catch. Tiberius и owned
@@ -56,18 +56,14 @@ pub(crate) enum UnionLoadOutcome {
     },
 }
 
-/// Caller-owned save-копия `CUnion`, созданная исходным `CloneSaveData`.
 pub(crate) struct UnionSaveSnapshot<'union> {
     pub(crate) union_id: i32,
- /// Логические bytes старого `std::string`; `%s` видит prefix до первого NUL.
     pub(crate) name: &'union [u8],
     pub(crate) master_id: i32,
- /// Полная копия `m_Members` в signed-key порядке.
     pub(crate) members: &'union BTreeMap<i32, TagMemInfo>,
 }
 
 impl<'union> UnionSaveSnapshot<'union> {
- /// Заимствует ровно те поля `CUnion` save-копии, которые читает DB-owner.
     pub(crate) fn from_union(union: &'union CUnion) -> Self {
         Self {
             union_id: union.union_id(),
@@ -78,7 +74,6 @@ impl<'union> UnionSaveSnapshot<'union> {
     }
 }
 
-/// Безопасная граница старого null/overread пути union save.
 #[derive(Debug)]
 pub(crate) enum UnionSaveBlock {
     NullUnionPointer,
@@ -110,7 +105,6 @@ impl From<UnterminatedMemberField> for UnionSaveBlock {
     }
 }
 
-/// Исходный bool `SaveConfeMembers` либо локальный missing-fact.
 #[derive(Debug)]
 pub(crate) enum UnionMembersSaveOutcome {
     ReturnedTrue,
@@ -118,7 +112,6 @@ pub(crate) enum UnionMembersSaveOutcome {
     BlockedMissingFact(UnterminatedMemberField),
 }
 
-/// Исходный bool `SaveConfederation` либо локальный missing-fact.
 #[derive(Debug)]
 pub(crate) enum UnionSaveOutcome {
     ReturnedTrue,
@@ -126,7 +119,6 @@ pub(crate) enum UnionSaveOutcome {
     BlockedMissingFact(UnionSaveBlock),
 }
 
-/// Структурированная замена действующих `CRsUnion` log-ветвей.
 #[derive(Debug)]
 pub(crate) struct RsUnionNotice {
     pub(crate) operation: RsUnionOperation,
@@ -210,38 +202,32 @@ impl From<tiberius::error::Error> for RsUnionDatabaseError {
     }
 }
 
-/// Узкая объектная граница действующей стадии исходного `CRsUnion`.
 pub(crate) trait RsUnionOwner {
  /// Открывает самостоятельное World DB connection и возвращает готовый
  /// prefix base/member rows в точном исходном порядке.
     async fn load_all_confederations(&mut self) -> UnionLoadOutcome;
 
- /// Сохраняет base-row и ordered member-map внутри caller-транзакции.
     async fn save_confederation(
         &mut self,
         snapshot: Option<&UnionSaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> UnionSaveOutcome;
 
- /// Перезаписывает ordered member-снимок внутри caller-транзакции.
     async fn save_confe_members(
         &mut self,
         snapshot: Option<&UnionSaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> UnionMembersSaveOutcome;
 
- /// Удаляет base-property row конфедерации внутри caller-транзакции.
     async fn del_confederation(
         &mut self,
         union_id: i32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<RsUnionNotice>;
 }
 
-/// Linux/TDS-замена действующей части исходного `CRsUnion`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsUnion {
     settings: Option<WorldDatabaseSettings>,
@@ -374,7 +360,7 @@ impl RsUnionOwner for TiberiusRsUnion {
         };
         let Some(snapshot) = snapshot else {
  // typed boundary: оригинал сразу загружает vtable из
- // CUnion*. Access violation не является доказанным bool `false`.
+ // CUnion*. Access violation не является исходным bool `false`.
             return UnionSaveOutcome::BlockedMissingFact(UnionSaveBlock::NullUnionPointer);
         };
 
@@ -504,7 +490,7 @@ impl TiberiusRsUnion {
 }
 
 /// Ошибка одного оригинал field/query шага load-цепочки до преобразования в
-/// operator-visible notice. Она не содержит runtime SQL либо DB values.
+/// диагностическое сообщение. Она не содержит runtime SQL либо DB values.
 #[derive(Debug)]
 enum UnionLoadReadError {
     Database(tiberius::error::Error),

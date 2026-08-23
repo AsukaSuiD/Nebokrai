@@ -1,26 +1,13 @@
-//! Конфигурация синтеза исторического Miracle.
+//! Синтез `CSynthesis` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CSynthesis::LoadSynthesisList` и
-//! `AddToByteArray`:; static queries и Game
-//! decoder не входят в этот owner и остаются. Точная пара:
-//! Исходный владелец PDB:
+//! Wire сначала передаёт ordered broadcast map, затем recipes и их formula
+//! records. В recipe probability идёт раньше type, хотя C++ layout обратный;
+//! парный decoder ожидает именно этот порядок.
 //!
-//! Wire сначала содержит ordered broadcast map: signed count, затем
-//! `u16 tag + C-string`. После него идут signed recipe count и vector recipes:
-//! `u32 index + u16 probability + u16 type + u32 goods + i32 coins +
-//! i32 prestige + u16 broadcast_tag + C-string key + signed formula count`,
-//! затем пары `u32 goods + u32 amount`.
-//!
-//! Порядок `probability -> type` намеренно обратен layout исходного
-//! `tagSynthesis`, где type лежит раньше probability; точный Game decoder также
-//! ждёт wire-порядок. Rust не воспроизводит layout/сырой `char*`, но сохраняет
-//! этот compatibility quirk явно. `BTreeMap`, `Vec` и owned bytes заменяют
-//! только MSVC containers и ручной lifetime.
-//!
-//! Loader очищает recipes до открытия, но намеренно не очищает broadcast map:
-//! это разные static owners в EXE, и частично прочитанные Broadcast остаются
-//! после последующей ошибки Item. XML parsing выполняет `quick-xml`; узкий
-//! pre-pass сохраняет TinyXML acceptance historic unquoted attributes.
+//! Loader очищает recipes, но сохраняет прежний broadcast map: это разные
+//! static owners, и ошибка позднего Item не откатывает ранние Broadcast.
+//! `quick-xml` с узкой нормализацией unquoted attributes заменяет TinyXML.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -48,7 +35,6 @@ pub(crate) struct SynthesisRecipe {
     pub(crate) formulas: Vec<SynthesisFormula>,
 }
 
-/// Safe owner двух исходных static containers `CSynthesis`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CSynthesis {
     broadcasts: BTreeMap<u16, Vec<u8>>,
@@ -56,7 +42,6 @@ pub(crate) struct CSynthesis {
 }
 
 impl CSynthesis {
- /// Сохраняет исходную map assignment семантику duplicate tag-а.
     pub(crate) fn insert_broadcast(&mut self, tag: u16, text: Vec<u8>) -> Option<Vec<u8>> {
         self.broadcasts.insert(tag, text)
     }
@@ -70,12 +55,10 @@ impl CSynthesis {
         self.recipes.clear();
     }
 
- /// Оригинал `LoadSynthesisList` clear до resource-open затрагивает только recipes.
     pub(crate) fn clear_recipes(&mut self) {
         self.recipes.clear();
     }
 
- /// Загружает XML `Synthesis` с concrete lookup уже живого `CGoodsFactory`.
     pub(crate) fn load_from_bytes<GoodsLookup>(
         &mut self,
         source: &[u8],
@@ -320,7 +303,6 @@ impl CSynthesis {
         });
     }
 
- /// Дописывает оригинал broadcast + recipe wire.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -465,7 +447,6 @@ fn legacy_atoi(value: &[u8]) -> i32 {
     legacy_atol(value)
 }
 
-/// `_atol` decimal-prefix semantics без signed-overflow UB CRT.
 fn legacy_atol(value: &[u8]) -> i32 {
     let mut bytes = value.iter().copied().skip_while(u8::is_ascii_whitespace).peekable();
     let negative = matches!(bytes.peek(), Some(b'-'));
@@ -490,7 +471,6 @@ fn legacy_atol(value: &[u8]) -> i32 {
     }
 }
 
-/// TinyXML accepts the historic unquoted ASCII attributes of `synthesis.xml`.
 fn normalize_legacy_attributes(source: &[u8]) -> Vec<u8> {
     let mut normalized = Vec::with_capacity(source.len());
     let mut index = 0;

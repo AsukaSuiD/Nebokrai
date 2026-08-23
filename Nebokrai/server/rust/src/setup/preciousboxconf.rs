@@ -1,21 +1,12 @@
-//! Конфигурация Precious Box исторического Miracle.
+//! Precious Box `PreciousBoxConf` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `load_conf` и `AddToByteArray`
-//!:; singleton plumbing и Game decoder/random owner
-//! не входят в этот owner и остаются. Точная пара:
-//! Исходный владелец PDB:
+//! Wire пишет ordered boxes, odds groups и 17 значимых bytes каждого item;
+//! три padding bytes C++ record не передаются.
 //!
-//! Wire начинается с signed количества box-ов. Далее ordered map выдаёт для
-//! каждого box `i32 id + i32 odds_count`; каждая группа содержит
-//! `i32 min_odds + i32 max_odds + i32 item_count`, а каждый предмет —
-//! `i32 item_idx + i32 min_level + i32 max_level + i32 amount + bool-byte`.
-//! Исходные 20-байтные MSVC Item содержат три байта padding после bool, но
-//! serializer намеренно передаёт только 17 значимых байт.
-//!
-//! World `load_conf` очищает оба map-а и публикует XML только в `_box_conf`,
-//! тогда как serializer читает `_box`. Поэтому после XML reload wire `0x1E`
-//! остаётся пустым. `quick-xml` заменяет
-//! TinyXML, `BTreeMap` — только MSVC ordered tree, `Vec`/`Drop` — ручной lifetime.
+//! XML loader очищает `_box_conf` и `_box`, но публикует records только в
+//! `_box_conf`, тогда как serializer читает `_box`. Поэтому после reload
+//! subtype `0x1E` остаётся пустым. `quick-xml` и owned maps заменяют TinyXML/STL.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -57,7 +48,6 @@ struct PreciousBoxConfigOdds {
     items: Vec<PreciousBoxItem>,
 }
 
-/// Safe owner уже материализованного World `_box` state.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PreciousBoxConf {
     box_config: BTreeMap<i32, PreciousBoxConfig>,
@@ -117,7 +107,6 @@ impl PreciousBoxLoadError {
 }
 
 impl PreciousBoxConf {
- /// Явная граница для внешнего подтверждённого XML→range materializer-а.
     pub(crate) fn insert_box(&mut self, box_id: i32, value: PreciousBox) -> Option<PreciousBox> {
         self.boxes.insert(box_id, value)
     }
@@ -127,7 +116,6 @@ impl PreciousBoxConf {
         self.boxes.clear();
     }
 
- /// Оригинал resource adapter. `query_goods_id` is the already-loaded World factory.
     pub(crate) fn load_from_bytes(
         &mut self,
         source: Option<&[u8]>,
@@ -325,7 +313,6 @@ impl PreciousBoxConf {
         }
     }
 
- /// Дописывает оригинал compact wire без C++ Item padding.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -372,7 +359,7 @@ struct ActivePreciousOdds {
     items: Vec<PreciousBoxItem>,
 }
 
-// Raw TinyXML names are GBK byte strings; XML values deliberately stay bytes.
+// Имена TinyXML были GBK-строками; значения XML намеренно остаются байтами.
 const ROOT: &[u8] = &[0xB0, 0xD9, 0xB1, 0xA6, 0xCF, 0xE4, 0xC5, 0xE4, 0xD6, 0xC3];
 const BOX: &[u8] = &[0xB0, 0xD9, 0xB1, 0xA6, 0xCF, 0xE4];
 const ODDS: &[u8] = &[0xBC, 0xB8, 0xC2, 0xCA, 0xC0, 0xE0];

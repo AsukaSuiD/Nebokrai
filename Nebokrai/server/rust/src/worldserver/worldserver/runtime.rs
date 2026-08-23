@@ -283,7 +283,6 @@ pub(crate) struct WorldProcessDomainOwners {
     pub(crate) honor_ranks: CHonorRanks,
     pub(crate) increment_log: CIncrementLog,
     pub(crate) auction_log: CAuctionLog,
- /// Единственные входная/выходная FIFO аукционного DB-конвейера.
     pub(crate) db_misc: CDbMisc,
     pub(crate) session_factory: CSessionFactory,
     pub(crate) net_sessions: CNetSessionManager,
@@ -394,7 +393,6 @@ impl WorldProcessDomainOwners {
     }
 }
 
-/// Единственный набор process-global accumulators полного World MainLoop.
 pub(crate) struct WorldProcessMainLoopState {
     initialization: WorldMainLoopInitializationState,
     clocks: WorldMainLoopClockState,
@@ -486,7 +484,6 @@ impl WorldProcessMainLoopState {
     }
 }
 
-/// Наблюдения одного неблокирующего прохода двух World transport-направлений.
 #[derive(Default)]
 pub(crate) struct WorldProcessNetworkTurn {
     pub(crate) admissions: Vec<AdmissionOutcome>,
@@ -517,7 +514,6 @@ impl Error for WorldProcessNetworkError {
     }
 }
 
-/// Managed accept/read/send tasks единственного World network-owner-а.
 pub(crate) struct WorldProcessNetworkRuntime {
     accept_task: Option<TokioJoinHandle<io::Result<(tokio::net::TcpStream, std::net::SocketAddrV4)>>>,
     io_tasks: JoinSet<ServerIoCompletion>,
@@ -660,7 +656,6 @@ async fn poll_once<Output>(future: impl Future<Output = Output>) -> Option<Outpu
     .await
 }
 
-/// Concrete platform/domain owner точного `CGame::Release` порядка.
 pub(crate) struct WorldProcessReleaseContext<'a> {
     runtime: tokio::runtime::Handle,
     runtime_directory: &'a Path,
@@ -842,15 +837,11 @@ impl WorldGameReleaseContext for WorldProcessReleaseContext<'_> {
     }
 }
 
-/// Результат одного завершившегося системного save-worker-а.
 pub(crate) struct WorldSaveWorkerCompletion {
- /// Незавершённый batch остаётся owned до Release вместо тихой потери.
     pub(crate) retained_job: Option<WorldSaveThreadJob>,
- /// Blocked-путь не изображает действующий `LeaveCriticalSection`.
     retained_serialization: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
-/// Единственный process-owner `g_hSavingThread` и общей save-сериализации.
 pub(crate) struct WorldSaveWorker {
     runtime: tokio::runtime::Handle,
     started_at: Instant,
@@ -1050,7 +1041,6 @@ impl WorldSaveWorker {
     }
 }
 
-/// Process-level связка trigger-guard, текущего opaque handle и save-thread-ов.
 pub(crate) struct WorldProcessSaveRuntime {
     worker: WorldSaveWorker,
     trigger_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
@@ -1138,7 +1128,6 @@ pub(crate) struct WorldPlayerLoadSnapshot {
     pub(crate) write_log_queue: WorldWriteLogQueue,
 }
 
-/// Самостоятельный DB-owner одного фонового player-load потока.
 pub(crate) struct WorldProcessPlayerLoadDatabase {
     player: TiberiusRsPlayer,
     jjc: TiberiusRsJjcSys,
@@ -1211,7 +1200,6 @@ pub(crate) fn world_player_load_largess(
     })
 }
 
-/// Platform/DB owner полного `CGame::Init`, отделённый от reload-ресурсов.
 pub(crate) struct WorldProcessInitContext {
     runtime: tokio::runtime::Handle,
     started_at: Instant,
@@ -1568,7 +1556,6 @@ fn normalize_lei_ting_time(
     })
 }
 
-/// Concrete platform/DB/log owner периодического `CJJcSystem::Run`.
 pub(crate) struct WorldJjcProcessContext {
     runtime: tokio::runtime::Handle,
     started_at: Instant,
@@ -1698,7 +1685,6 @@ impl WorldJjcRuntimeContext for WorldJjcProcessContext {
     }
 }
 
-/// Concrete platform/transport/log owner суточного `CLeiTing::Run`.
 pub(crate) struct WorldLeiTingProcessContext {
     runtime: tokio::runtime::Handle,
     sender: Option<ServerCommandHandle>,
@@ -2518,7 +2504,6 @@ impl WorldMainLoopResourceContext for WorldProcessResources {
     }
 }
 
-/// Управляемый извне stop-owner единственного World game thread.
 #[derive(Clone)]
 pub(crate) struct WorldProcessControl {
     exit_requested: Arc<AtomicBool>,
@@ -2530,7 +2515,6 @@ impl WorldProcessControl {
     }
 }
 
-/// Process-level причина, по которой связный World MainLoop не продолжился.
 pub(crate) enum WorldProcessMainLoopBlock {
     PostInit(WorldMainLoopContextBuildError),
     MissingOwner(&'static str),
@@ -2588,7 +2572,6 @@ impl fmt::Debug for WorldProcessMainLoopBlock {
 
 impl Error for WorldProcessMainLoopBlock {}
 
-/// Единый процессный владелец цепочки `CreateGame -> Init -> MainLoop -> Release`.
 pub(crate) struct WorldProcessRuntime {
     runtime: tokio::runtime::Handle,
     runtime_directory: PathBuf,
@@ -2605,7 +2588,7 @@ pub(crate) struct WorldProcessRuntime {
     window_close_requested: bool,
  /// Статический `ReMsg` исходно заполнен нулями; в точном EXE найден только reader,
  /// поэтому owner сохраняется отдельно и остаётся нулём до появления
- /// доказанного producer-а.
+ /// исходного producer-а.
     reback_messages: i32,
 }
 

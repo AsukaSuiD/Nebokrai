@@ -1,119 +1,23 @@
-//! Владелец мирового региона исторического `WorldServer`.
+//! Мировой регион `CWorldRegion` из `worldregion.cpp/.h`, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Rust-owner включает base-цепочку `CWorldRegion -> CRegion -> CBaseObject`,
-//! полное состояние конструктора `CWorldRegion::CWorldRegion`,
-//! чтение унаследованного byte- имени,
-//! `LoadMonsterList`, `LoadNpcList`,
-//! `LoadWeatherSetup`,
-//! `LoadTaxParam`,
-//! общий `CWorldRegion::Load`,
-//! `CWorldRegion::LoadSetup`,
-//! `CWorldRegion::AddSetupToByteArray`, полный
-//! `CWorldRegion::AddToByteArray`, proxy serializer
-//! selective parameter decoder, parameter
-//! setters, ownership accessors
-//! no-op virtual decoder,
-//! direct `New`, `InitOwnerRelation`,
-//! `GetReturnPoint`,
-//! `SetEnterPosXY`, а также
-//! `CWorldRegion::GenerateSaveData`. Источник контракта — точная пара WorldServer EXE/PDB.
+//! Владелец объединяет базовый `CRegion`, девять полей `tagRegionParam`, setup,
+//! NPC, monsters, weather и tax. Save snapshot копирует только параметры;
+//! имя и прочее runtime-состояние в запись БД не входят.
 //!
-//! PDB задаёт полный размер старого `CWorldRegion` `0x120`, а оригинал
-//! constructor первым вызывает `CRegion::CRegion` с тем же `this`. Уже
-//! проверенный owner `CRegion` создаёт ровно один `CBaseObject` по offset `0`;
-//! его `std::string m_strName` расположен по старому offset `+0x20`.
-//! Следовательно, чтение имени в `CFaction::OnMemberEnterGame` проходит через
-//! тот же единственный base-owner, а не через отдельное поле `CWorldRegion`.
+//! Полный serializer и proxy serializer намеренно различаются. Proxy пишет
+//! базовый объект, country, war type и параметры; selective decoder обновляет
+//! только tax и ownership поля. Общий `DecordFromByteArray` остаётся no-op.
 //!
-//! Layout сохраняет `m_Param` по `CWorldRegion+0xFC` и структуру
-//! `tagRegionParam` размером `0x24`: семь signed `long` и два unsigned `long`
-//! в девяти последовательных DWORD. Constructor обнуляет все девять полей.
-//! `GenerateSaveData` создаёт отдельный базовый `CWorldRegion`, затем копирует
-//! в него всю структуру девятью DWORD и возвращает новый owner, не копируя
-//! имя, region type, lists, weather либо другие поля живого региона.
+//! Setup читается позиционно до маркеров `<end>` и `#`; непрочитанные scalars
+//! остаются `None`. NPC, monster и weather loaders сохраняют исходную token-
+//! грамматику, порядок записей и byte-exact строки. Особый monster prefix
+//! воспроизводит значимую часть старого MSVC string-layout; неопределённый хвост
+//! обнуляется, а неподдерживаемый heap-вариант отклоняется.
 //!
-//! Rust-композиция материализует эту действующую цепочку. `Vec<u8>` в
-//! `CBaseObject` сохраняет байты без навязывания UTF-8, а `&[u8]` заменяет
-//! заимствованный `c_str()` без переноса MSVC SSO-layout. Полная owned
-//! `RegionSaveSnapshot` заменяет выделенный объект save-копии: следующий
-//! `CRsRegion::Save` наблюдает только его полную `m_Param`, после чего
-//! `DoSaveData` уничтожает объект. Это сознательное изменение формы API, но
-//! не содержимого, порядка либо lifetime DB snapshot. Standard allocation и
-//! `Drop` заменяют `operator new`, constructor/destructor и не получают
-//! отдельной доменной семантики. Rust layout не объявляется копией старого ABI
-//! и не выполняет object slicing. Действующие `CWorldVillageRegion`,
-//! `CWorldWarRegion`, load/serializer-часть `CWorldCityRegion` и
-//! `WorldCountryWarRegion` действуют отдельными владельцами.
-//! Virtual AI не наследует оригинал child-tree `CBaseObject::AI`: constructor
-//! vtable-адреса ////
-//! у World/War/Village/City/Country вариантов содержат в slot `+0x40` общий
-//! чьё тело — единственный `ret`. Поэтому MainLoop выполняет
-//! подсказкой к call-site, но не поводом материализовать недостижимое дерево.
-//! `InitOwnerRelation` выполняется только при
-//! исходном положительном owned-faction ID. Miss/null faction обнуляет оба
-//! ownership ID; miss/null union затем отдельно обнуляет union ID. Если после
-//! этого virtual `GetOwnedCityFaction` всё ещё положителен, owner вызывает
-//! concrete `COrganizingCtrl::AddOwnedCityToFaction` с собственным base ID,
-//! повторно получает faction country и записывает byte в `CRegion+0x80`.
-//! `CGame::Init` временно вынимает region owner из map-slot только для
-//! безопасного split borrow и всегда возвращает его в тот же slot; это не
-//! меняет исходный порядок либо lifetime.
-//!
-//! Proxy serializer не является сокращением обычного region serializer-а: он
-//! вызывает непосредственно `CBaseObject::AddToByteArray`, затем пишет country
-//! byte по старому offset `+0x80`, `m_WarRegionType` по `+0xF8` и полный
-//! `m_Param` по `+0xFC`. Эти offsets проверены оригинал
-//! ``; constructor-неизвестный country не превращается в
-//! придуманный byte. Независимый `CProxyServerRegion::DecordFromByteArray` в
-//! GameServer читает ровно этот порядок и `0x24` param bytes.
-//!
-//! `DecordRegionParamFromByteArray` потребляет весь `0x24` snapshot, но
-//! присваивает только current tax, total tax, today total tax и owned faction
-//! по offsets `+0x08/+0x0C/+0x10/+0x1C`; остальные пять текущих полей owner-а
-//! намеренно сохраняются. Короткий безразмерный источник остаётся локальной
-//! безопасной блокировкой. Общий `DecordFromByteArray` у World и derived War/
-//! City в точном корпусе ничего не читает, cursor не двигает и возвращает
-//! `true`; Rust не подменяет его симметричным parser-ом serializer-а.
-//!
-//! `m_stSetup` — восемь последовательных signed DWORD (`lReturnRegionID`,
-//! четыре координаты RECT и три int-флага), всего `0x20` bytes. Constructor
-//! их не назначает, поэтому Rust хранит каждое поле как `Option<i32>` и не
-//! подставляет ноль. `LoadSetup` читает первый token-раздел до `<end>`, при `*`
-//! выполняет восемь последовательных formatted extraction, затем очищает
-//! `m_ForbidMakeGoods` и во втором разделе собирает строки после `#` до второго
-//! `<end>`. Missing resource не меняет состояние; operator notice остаётся у
-//! caller-а. Доказанный loose corpus содержит 872 `.rs`, во всех 872 есть
-//! полный восьмиполейный setup; 741 файл содержит forbidden-goods records.
-//! `AddSetupToByteArray` пишет ровно 32 setup bytes, signed count и каждую
-//! byte- C-строку с NUL. Неинициализированное поле остаётся явной
-//! неизвестностью, а не превращается в придуманный fail-closed wire.
-//!
-//! NPC serializer сохраняет `0x24` bytes значимых scalar/padding полей, затем
-//! name/script C-строки. Monster group сохраняет девять DWORD, варианты —
-//! странный исходный `0x22` prefix и две C-строки. Независимый GameServer
-//! decoder `CServerRegion::DecordFromByteArray` читает ровно
-//! те же размеры и порядок. `0x22` захватывает восемь scalar bytes и первые
-//! 26 bytes старого MSVC `std::string`; все 20 957 вариантов в 529 loose
-//! `.monster` fixtures имеют имя не длиннее 14 bytes, поэтому compatibility
-//! layer строит точный SSO state (capacity `0x0F`) и обнуляет лишь исторически
-//! неопределённый хвост inline-buffer. Иной heap-layout блокируется локально.
-//! 427 `.npc` fixtures дают 4 968 records; 37 `.weather` fixtures подтверждают
-//! time/option/weather grammar. Scripts проходят доказанные `ReplaceLine` и
-//! `_strlwr`; weather odds хранятся накопительно, fog color — как исходные два
-//! DWORD. В 32 monster-файлах неизвестный `id` доказанно завершает variant
-//! phase после пропуска секции. В 12 weather-файлах после index `400` нет
-//! обязательного color-token: оригинал читает два неизвестных stack-байта за
-//! NUL следующего `time`, поэтому serializer возвращает локальную ошибку.
-//! После setup serializer дописывает все девять DWORD
-//! `m_Param`.
-//! PDB называет NPC как `bShowList/lPicID/rectRange/lNum/lDir/lTime`,
-//! а monster group — как `lIndex/rectRange/lNum/lResetTime/lStartTime/lDir`.
-//! `LoadNpcList` присваивает `lTime = 0`; Rust держит все эти значения
-//! именованно и строит wire prefix в исходном x86 порядке. Особый prefix
-//! `tagMonsterList` остаётся отдельным compatibility-слоем из-за захваченного
-//! старого MSVC `std::string`: четыре его scalar-поля `wOdds/wSign/`
-//! `wLeaderSign/wLeaderDistance` также materialized, а 0x22 bytes строятся
-//! только при serializer-е.
+//! `InitOwnerRelation` последовательно проверяет faction и union, очищая только
+//! несуществующие связи. Owned snapshots и стандартные коллекции заменяют
+//! object slicing, STL и ручное владение без изменения wire или порядка загрузки.
 
 use super::country::countryparam::CCountryParam;
 use super::organizingsystem::faction::{
@@ -130,7 +34,6 @@ use crate::dbaccess::worlddb::rsregion::RegionSaveSnapshot;
 use crate::public::clientresource::DefaultClientResourceOwner;
 use crate::worldserver::worldserver::game::CGame;
 
-/// Полная действующая семантика исходного `tagRegionParam`.
 #[derive(Clone, Copy, Debug)]
 struct RegionParamState {
     region_id: i32,
@@ -171,13 +74,11 @@ impl RegionSetupState {
     }
 }
 
-/// Поле исходного `m_stSetup`, которому constructor не назначил значение.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldRegionSetupSerializationBlock {
     pub(crate) field: &'static str,
 }
 
-/// Шесть signed результатов virtual `CWorldRegion::GetReturnPoint`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct WorldReturnPoint {
     pub(crate) region_id: i32,
@@ -188,7 +89,6 @@ pub(crate) struct WorldReturnPoint {
     pub(crate) direction: i32,
 }
 
-/// Локальная safe-граница return/enter пути мирового региона.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldRegionEnterBlock {
     Setup(WorldRegionSetupSerializationBlock),
@@ -197,7 +97,6 @@ pub(crate) enum WorldRegionEnterBlock {
     RandomPosition(RegionRandomPositionBlock),
 }
 
-/// Полный normal-return результат `CWorldRegion::InitOwnerRelation`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WorldRegionOwnerRelationReport {
     pub(crate) initial_faction_id: i32,
@@ -207,7 +106,6 @@ pub(crate) struct WorldRegionOwnerRelationReport {
     pub(crate) country: Option<u8>,
 }
 
-/// Safe-граница после уже выполненного prefix-а owner relation.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldRegionOwnerRelationBlock {
     OwnedCity {
@@ -296,7 +194,6 @@ pub(crate) enum WorldRegionParamDecodeError {
     },
 }
 
-/// Доказанные scalar-поля PDB `CWorldRegion::tagNpc`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldRegionNpc {
     show_list: bool,
@@ -313,7 +210,7 @@ struct WorldRegionNpc {
 }
 
 impl WorldRegionNpc {
- /// Сохраняет доказанные три padding bytes после old `bool` нулевыми,
+ /// Сохраняет исходные три padding bytes после old `bool` нулевыми,
  /// как прежняя safe Rust-реконструкция.
     fn wire_header(&self) -> [u8; 0x24] {
         let mut bytes = [0; 0x24];
@@ -357,7 +254,6 @@ impl WorldRegionMonsterVariant {
     }
 }
 
-/// Доказанные scalar-поля PDB `CWorldRegion::tagMonster`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WorldRegionMonster {
     index: i32,
@@ -436,7 +332,6 @@ impl RegionParamState {
     }
 }
 
-/// Действующие base- и region-save части исходного `CWorldRegion`.
 pub(crate) struct CWorldRegion {
     region: CRegion,
     war_region_type: i32,
@@ -455,7 +350,6 @@ pub(crate) struct CWorldRegion {
 }
 
 impl CWorldRegion {
- /// Создаёт доказанные base-цепочку и нулевой `m_Param`.
     pub(crate) const fn with_constructor_region_base() -> Self {
         Self {
             region: CRegion::with_constructor_base_and_type(),
@@ -472,17 +366,14 @@ impl CWorldRegion {
         }
     }
 
- /// Заимствует concrete `CRegion`, действующий create-role lookup-ом.
     pub(crate) const fn creation_region_base(&self) -> &CRegion {
         &self.region
     }
 
- /// Заимствует унаследованное byte- имя без служебного NUL.
     pub(crate) fn get_name(&self) -> &[u8] {
         self.region.get_name()
     }
 
- /// Копирует все девять полей `m_Param` в отдельный DB snapshot.
     pub(crate) fn generate_save_data(&self) -> RegionSaveSnapshot {
         self.effective_param().save_snapshot()
     }
@@ -493,17 +384,14 @@ impl CWorldRegion {
         param
     }
 
- /// Возвращает унаследованный signed region ID, используемый именами файлов.
     pub(crate) const fn get_id(&self) -> i32 {
         self.region.get_id()
     }
 
- /// Заимствует единственный `CRegion` для точного CGame region lookup.
     pub(crate) const fn region_base(&self) -> &CRegion {
         &self.region
     }
 
- /// Заимствует тот же единственный `CRegion` для действующих base-мутаций.
     pub(crate) const fn region_base_mut(&mut self) -> &mut CRegion {
         &mut self.region
     }
@@ -526,7 +414,6 @@ impl CWorldRegion {
         Ok((use_return_point != 0, return_region_id, self.get_id()))
     }
 
- /// Возвращает локальный setup либо country main-point в точном legacy-порядке.
     pub(crate) fn get_return_point(
         &self,
         player: Option<&CPlayer>,
@@ -571,7 +458,6 @@ impl CWorldRegion {
         })
     }
 
- /// Переносит игрока при активном clear-time деревни через точные owners.
     pub(crate) fn set_enter_pos_xy<'a, FindRegion, Random>(
         &self,
         player: Option<&mut CPlayer>,
@@ -616,13 +502,11 @@ impl CWorldRegion {
         Ok(())
     }
 
- /// Применяет доказанные общие поля одной записи `regionlist.ini`.
     pub(crate) fn set_region_identity(&mut self, region_id: i32, name: &[u8]) {
         self.region.set_id(region_id);
         self.region.set_name(name);
     }
 
- /// Применяет унаследованные `CRegion` поля записи до virtual `Load`.
     pub(crate) fn set_region_list_base_fields(
         &mut self,
         resource_id: u32,
@@ -634,7 +518,6 @@ impl CWorldRegion {
             .set_region_list_fields(resource_id, exp_scale, country, notify);
     }
 
- /// Применяет три собственных `CWorldRegion` поля записи до virtual `Load`.
     pub(crate) const fn set_world_region_list_fields(
         &mut self,
         war_region_type: i32,
@@ -646,7 +529,6 @@ impl CWorldRegion {
         self.no_contribute = no_contribute;
     }
 
- /// Выполняет действующую base-часть virtual `CWorldRegion::Load`.
     pub(crate) fn load_region_resource(
         &mut self,
         path: &[u8],
@@ -655,7 +537,6 @@ impl CWorldRegion {
         self.region.load_from_resource(path, bytes)
     }
 
- /// Заменяет NPC-list содержимым уже открытого `regions/{id}.npc`.
     pub(crate) fn load_npc_bytes<ResolveName>(
         &mut self,
         bytes: &[u8],
@@ -701,7 +582,6 @@ impl CWorldRegion {
         Ok(count)
     }
 
- /// Заменяет monster-list содержимым уже открытого `regions/{id}.Monster`.
     pub(crate) fn load_monster_bytes(
         &mut self,
         bytes: &[u8],
@@ -750,7 +630,7 @@ impl CWorldRegion {
                 let id = tokens.next_i32_field("tagMonsterList.id")?;
                 current = monsters.iter().position(|monster| monster.index == id);
                 if current.is_none() {
- // Доказанная странность поставки: если `id` не найден,
+ // Исходная странность поставки: если `id` не найден,
  // остаётся во внешнем scanner-е, пропускает
  // эту секцию до `<end>` и завершает весь variant-phase.
                     while let Some(token) = tokens.next_bytes_optional() {
@@ -850,7 +730,6 @@ impl CWorldRegion {
         Ok(())
     }
 
- /// Применяет optional `regions/{id}.Tax` и всегда назначает `m_Param.lID`.
     pub(crate) fn load_tax_bytes(
         &mut self,
         bytes: Option<&[u8]>,
@@ -937,7 +816,6 @@ impl CWorldRegion {
         })
     }
 
- /// Сериализует сокращённый proxy-wire: base object, country, type и `m_Param`.
     pub(crate) fn add_to_byte_array_for_proxy(
         &self,
         destination: &mut Vec<u8>,
@@ -996,7 +874,6 @@ impl CWorldRegion {
         Ok(true)
     }
 
- /// Применяет пять DB-полей; tax rate ограничивается старым signed maximum.
     pub(crate) fn set_param_from_db(
         &mut self,
         owned_faction_id: i32,
@@ -1018,7 +895,6 @@ impl CWorldRegion {
         self.param.total_tax = total_tax as u32;
     }
 
- /// Применяет три поля обновления от GameServer без дополнительных проверок.
     pub(crate) const fn set_param_from_gs(
         &mut self,
         current_tax_rate: i32,
@@ -1043,7 +919,6 @@ impl CWorldRegion {
         self.owned_city_organizing.get().1
     }
 
- /// Восстанавливает faction/union/country relation после DB-load.
     pub(crate) fn init_owner_relation(
         &mut self,
         organizing: &mut COrganizingCtrl,
@@ -1102,12 +977,10 @@ impl CWorldRegion {
         Ok(report)
     }
 
- /// Делегирует virtual `New` единственному `CRegion` base-owner-у.
     pub(crate) fn new_region(&mut self) -> Result<i32, RegionLoadError> {
         self.region.new_region()
     }
 
- /// World override намеренно не читает источник и не двигает cursor.
     pub(crate) const fn decord_from_byte_array(
         &mut self,
         _source: &[u8],
@@ -1117,7 +990,6 @@ impl CWorldRegion {
         true
     }
 
- /// Сериализует полный доказанный base `CWorldRegion` в порядке World sender-а.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -1214,7 +1086,6 @@ impl CWorldRegion {
         }
     }
 
- /// Сериализует `m_stSetup + m_ForbidMakeGoods` wire.
     pub(crate) fn add_setup_to_byte_array(
         &self,
     ) -> Result<Vec<u8>, WorldRegionSetupSerializationBlock> {

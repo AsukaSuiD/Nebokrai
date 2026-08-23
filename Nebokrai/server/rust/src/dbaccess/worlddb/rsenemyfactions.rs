@@ -1,46 +1,14 @@
-//! DB-владелец `CRsEnemyFactions` исторического WorldServer из
-//! `rsenemyfactions.cpp`.
+//! World DB-владелец `CRsEnemyFactions` из `rsenemyfactions.cpp`,
+//! подтверждённый `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт `LoadAllEnemyFactions` и
-//! `SaveAllEnemyFactions` —; constructor,
-//! destructor и прочий корпус не входят в этот owner и остаются.
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! исходный путь PDB:
+//! Load очищает live-list до открытия отдельного соединения, читает
+//! `CSL_FactionWar` в recordset order и публикует каждую полную строку сразу.
+//! Поздняя ошибка оставляет очищенное состояние или уже загруженный префикс.
 //!
-//! Загрузчик очищал live-list до открытия собственного независимого World DB
-//! connection, читал `SELECT * FROM CSL_FactionWar` в recordset-order и после
-//! каждой успешно разобранной строки немедленно вызывал
-//! `CFactionWarSys::AddOneEnmeyFaction`. Ошибка connection/query/field оставляла
-//! очищенный либо уже набранный prefix; caller игнорировал его bool, писал
-//! success-log и продолжал relation/INI стадиями. Rust возвращает этот prefix
-//! как typed outcome и не подменяет самостоятельное connection открытием
-//! caller-транзакции.
-//!
-//! Save-владелец выполнял буквальный `DELETE FROM CSL_FactionWar`, затем обходил
-//! переданную по значению копию `std::list<tagEnemyFaction*>` в list-order и
-//! для каждой записи выполнял
-//! `INSERT INTO CSL_FactionWar VALUES(%d,%d,%d)`. Первая ошибка DELETE либо
-//! INSERT немедленно возвращала `false`; после всех строк возвращался `true`.
-//! Метод использовал caller-owned connection внутри уже начатой транзакции и
-//! сам не выполнял begin/commit/rollback.
-//!
-//! Оригинал PDB задаёт `tagEnemyFaction` размером `0x0C`: signed `long`
-//! `lFactionID1` по `+0`, signed `long lFactionID2` по `+4` и unsigned `long`
-//! `dwDisandTime` по `+8`; локальный SQL-буфер имел размер `0x1F4`. Оригинал
-//! входит в контракт: call-site..
-//! передаёт третьим `%d` именно поле `+8`, поэтому Rust сохраняет исходную
-//! signed decimal-интерпретацию через `u32 as i32`. Выходы,
-//! и catch-путь ставят `AL=0`, а полный успех
-//! — `AL=1`.
-//!
-//! `Option` сохраняет nullable connection и nullable элементы pointer-list.
-//! Для null-элемента EXE без проверки разыменовывал `node->_Myval` после уже
-//! успешного DELETE и возможных предыдущих INSERT. Достижимость и дальнейший
-//! эффект такого UB не доказаны, поэтому безопасная граница возвращает только
-//! индекс и не назначает исходнику `false`, skip либо commit. Ordered slice,
-//! Tiberius и Rust `Drop` заменяют копию `std::list`, ADO/COM и compiler
-//! cleanup; null recordset, catch и служебный эпилог не имеют отдельной
-//! семантики.
+//! Save в caller-транзакции сначала выполняет DELETE, затем INSERT для каждого
+//! элемента в list order. Первая SQL-ошибка завершает метод; begin/commit/
+//! rollback принадлежат вызывающему. `dwDisandTime` форматируется как signed
+//! decimal bit-pattern. Null list item после DELETE останавливается до прежнего UB.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -56,7 +24,6 @@ const DELETE_ENEMY_FACTIONS_SQL: &str = "DELETE FROM CSL_FactionWar";
 const INSERT_ENEMY_FACTION_SQL: &str = "INSERT INTO CSL_FactionWar VALUES(@P1,@P2,@P3)";
 const LOAD_ENEMY_FACTIONS_SQL: &str = "SELECT * FROM CSL_FactionWar";
 
-/// Три точных 32-битных поля одной caller-owned save-копии.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EnemyFactionSaveSnapshot {
     pub(crate) faction_id_1: i32,
@@ -64,7 +31,6 @@ pub(crate) struct EnemyFactionSaveSnapshot {
     pub(crate) disband_time: u32,
 }
 
-/// Три оригинал поля одной DB-строки, загруженной до faction-war registry.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EnemyFactionLoadSnapshot {
     pub(crate) faction_id_1: i32,
@@ -72,20 +38,17 @@ pub(crate) struct EnemyFactionLoadSnapshot {
     pub(crate) disband_time: u32,
 }
 
-/// Bool loader-а вместе с уже применяемым caller-ом list-prefix.
 #[derive(Debug)]
 pub(crate) enum EnemyFactionsLoadOutcome {
     ReturnedTrue(Vec<EnemyFactionLoadSnapshot>),
     ReturnedFalse(Vec<EnemyFactionLoadSnapshot>),
 }
 
-/// Локальная неизвестность исходного null-разыменования внутри ordered списка.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EnemyFactionNullEntryBlock {
     pub(crate) row_index: usize,
 }
 
-/// Наблюдаемый bool-результат владельца либо локальный missing-fact.
 #[derive(Debug)]
 pub(crate) enum EnemyFactionsSaveOutcome {
     ReturnedTrue,
@@ -93,7 +56,6 @@ pub(crate) enum EnemyFactionsSaveOutcome {
     BlockedMissingFact(EnemyFactionNullEntryBlock),
 }
 
-/// Структурированная замена действующих `PrintErr`-ветвей владельца.
 #[derive(Debug)]
 pub(crate) enum RsEnemyFactionsNotice {
     LoadSettingsMissing,
@@ -116,7 +78,6 @@ pub(crate) enum RsEnemyFactionsNotice {
     },
 }
 
-/// Ошибка действующей ADO/TDS-границы без runtime SQL и значений строк.
 #[derive(Debug)]
 pub(crate) struct RsEnemyFactionsDatabaseError(tiberius::error::Error);
 
@@ -138,23 +99,18 @@ impl From<tiberius::error::Error> for RsEnemyFactionsDatabaseError {
     }
 }
 
-/// Узкая объектная граница действующего `CRsEnemyFactions` save-владельца.
 pub(crate) trait RsEnemyFactionsOwner {
- /// Открывает самостоятельное connection и читает relation rows в DB-order.
     async fn load_all_enemy_factions(&mut self) -> EnemyFactionsLoadOutcome;
 
- /// Полностью заменяет строки `CSL_FactionWar` внутри caller-транзакции.
     async fn save_all_enemy_factions(
         &mut self,
         snapshot: &[Option<EnemyFactionSaveSnapshot>],
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> EnemyFactionsSaveOutcome;
 
- /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<RsEnemyFactionsNotice>;
 }
 
-/// Linux/TDS-замена действующей части исходного `CRsEnemyFactions`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsEnemyFactions {
     settings: Option<WorldDatabaseSettings>,

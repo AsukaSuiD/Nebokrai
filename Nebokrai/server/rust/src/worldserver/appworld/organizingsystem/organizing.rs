@@ -1,50 +1,15 @@
-//! Владелец общего organizing-состояния исторического `WorldServer`.
+//! Общие структуры организаций из `organizing.cpp/.h`, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! PDB-layout `COrganizing::tagMemInfo`, его вложенные
-//! `ePurview/ePurviewOwnState`, `COrganizing` и billboard-типы представлены
-//! действующими Rust-owner-ами. Источник контракта — точная пара WorldServer EXE/PDB.
+//! `tagMemInfo` сохраняет 0xF0-байтную проекцию: fixed byte-имена, level/job,
+//! title, 11 permission states, region, `tagTime` и contribution flag.
+//! Faction/union wire передаёт permission и time блоки явно little-endian,
+//! не включая padding всего Rust-объекта.
 //!
-//! Полная PDB-запись type index `0x5AE8` задаёт размер `tagMemInfo` `0xF0` и
-//! одиннадцать членов: signed `long lID` `+0x00`, `char strName[32]` `+0x04`,
-//! signed `long lLvl/lOccu/lJobLvl` `+0x24/+0x28/+0x2C`,
-//! `char strTitle[64]` `+0x30`, `ePurviewOwnState listPV[11]` `+0x70`,
-//! `char strRegion[64]` `+0x9C`, `tagTime LastOnlineTime` `+0xDC` и
-//! `bool bControbute` `+0xEC`. `tagTime` type index `0x3268` состоит из восьми
-//! `unsigned short` в порядке `wYear..wMilliseconds` и занимает `0x10`;
-//! `ePurviewOwnState` type index `0x5AE2` имеет signed 32-битную основу и
-//! значения `PST_No=0`, `PST_Forbid=1`, `PST_Permit=2`. Три последних байта
-//! старого `tagMemInfo` являются выравниванием, а не полем.
-//!
-//! Rust сохраняет доказанный layout через `repr(C)` и compile-time offsets,
-//! потому что faction/union публикуют `listPV` сырым блоком `0x2C`, а
-//! `LastOnlineTime` — блоком `0x10`. Сами блоки строятся явно в little-endian:
-//! ни padding всего объекта, ни native Rust memory не отправляются в wire.
-//! Plain `char` хранится как byte- `u8`; фиксированные массивы не
-//! заменяются `String`/`Vec`, а C-string view заканчивается на первом NUL и
-//! включает его. Отсутствующий NUL привёл бы к чтению за границей массива;
-//! безопасный Rust возвращает локальную типизированную ошибку, не
-//! придумывая наблюдаемую реакцию.
-//!
-//! `CFaction::Initial` полностью заполняет локальный
-//! `tagMemInfo` мастера и копирует ровно `0xF0` bytes в `m_Members`.
-//! Контейнерный `_Buynode` копирует key вместе со всеми
-//! `0xF0` bytes значения; `Copy` заменяет этот trivially-copyable механизм без
-//! отдельной STL-семантики. В отличие от полного значения, COMDAT
-//! `map::operator[]` вызывает только нулевой constructor
-//! `LastOnlineTime` и оставляет остальные primitive/array bytes
-//! неопределёнными. Поэтому Rust намеренно не реализует `Default`: безопасное
-//! создание требует все поля сразу, а связанный `m_Members` не сможет незаметно
-//! выбрать нули вместо старой странности.
-//!
-//! Полные порядки `CFaction::AddMembersToByteArray` и
-//! `UpdateMemberInfoToClient` принадлежат `faction.rs`. Этот
-//! owner предоставляет доказанные общие `eOperator`, layout и wire-проекции
-//! фиксированных C-буферов, `listPV` и `LastOnlineTime`; он не вводит
-//! универсальный serializer и не смешивает faction/union форматы. PDB type
-//! `0x5A22` задаёт `eOperator` как signed 32-bit enum со значениями
-//! `OP_Delete=0`, `OP_Add=1`, `OP_Update=2`.
-//! PDB также задаёт общий `eCityState`: `CIS_NO=0`, `CIS_DUTH=1`,
-//! `CIS_Mass=2`, `CIS_Fight=3`; его используют Village/AttackCity owners.
+//! Отсутствующий NUL в fixed buffers отклоняется вместо чтения за массивом.
+//! `map::operator[]` оригинала мог создать лишь частично инициализированный
+//! member, поэтому безопасный тип не реализует неявный `Default`: все поля
+//! задаются вместе. Общие enums сохраняют исходные signed значения.
 
 use std::error::Error;
 use std::fmt;
@@ -54,7 +19,6 @@ const MEMBER_NAME_CAPACITY: usize = 32;
 const MEMBER_TEXT_CAPACITY: usize = 64;
 const PURVIEW_COUNT: usize = 11;
 
-/// Три общих organizing-оператора с точным signed wire-значением.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub(crate) enum EOperator {
@@ -63,7 +27,6 @@ pub(crate) enum EOperator {
     Update = 2,
 }
 
-/// Четыре точных состояния organizing-war региона.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub(crate) enum ECityState {
@@ -73,7 +36,6 @@ pub(crate) enum ECityState {
     Fight = 3,
 }
 
-/// Одиннадцать точных organizing-прав из PDB `COrganizing::ePurview`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub(crate) enum EPurview {
@@ -91,7 +53,6 @@ pub(crate) enum EPurview {
 }
 
 impl EPurview {
- /// Отделяет допустимый enum-контракт от произвольного входного `long`.
     pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
         match value {
             0 => Some(Self::Disband),
@@ -115,7 +76,6 @@ impl EPurview {
 }
 
 impl ECityState {
- /// Принимает только четыре значения точного signed `eCityState`.
     pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
         match value {
             0 => Some(Self::No),
@@ -126,14 +86,12 @@ impl ECityState {
         }
     }
 
- /// Возвращает исходное signed значение enum для wire и message boundaries.
     pub(crate) const fn wire_value(self) -> i32 {
         self as i32
     }
 }
 
 impl EOperator {
- /// Принимает только три значения точного signed `eOperator`.
     pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
         match value {
             0 => Some(Self::Delete),
@@ -143,13 +101,11 @@ impl EOperator {
         }
     }
 
- /// Возвращает значение исходного `eOperator` для `CBaseMessage::Add(long)`.
     pub(crate) const fn wire_value(self) -> i32 {
         self as i32
     }
 }
 
-/// Три состояния одного organizing-права с точным signed wire-значением.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub(crate) enum EPurviewOwnState {
@@ -159,7 +115,6 @@ pub(crate) enum EPurviewOwnState {
 }
 
 impl EPurviewOwnState {
- /// Принимает только три значения точного signed `ePurviewOwnState`.
     pub(crate) const fn from_wire_value(value: i32) -> Option<Self> {
         match value {
             0 => Some(Self::No),
@@ -169,13 +124,11 @@ impl EPurviewOwnState {
         }
     }
 
- /// Возвращает доказанное 32-битное значение элемента `listPV`.
     pub(crate) const fn wire_value(self) -> i32 {
         self as i32
     }
 }
 
-/// Общий typed-результат concrete мутации одного `tagMemInfo::listPV`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MemberPurviewMutation {
     InvalidPurview,
@@ -184,7 +137,6 @@ pub(crate) enum MemberPurviewMutation {
     Changed,
 }
 
-/// Вложенное значение `tagTime`, нужное полному layout `tagMemInfo`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub(crate) struct TagTimeValue {
@@ -199,7 +151,6 @@ pub(crate) struct TagTimeValue {
 }
 
 impl TagTimeValue {
- /// Строит ровно тот 16-байтовый little-endian блок, который отправлял owner.
     pub(crate) fn wire_bytes(self) -> [u8; 16] {
         let mut bytes = [0; 16];
         for (chunk, value) in bytes.chunks_exact_mut(2).zip([
@@ -218,7 +169,6 @@ impl TagTimeValue {
     }
 }
 
-/// Ошибка безопасного C-string view одного фиксированного member-поля.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct UnterminatedMemberField {
     pub(crate) field: &'static str,
@@ -236,7 +186,6 @@ impl fmt::Display for UnterminatedMemberField {
 
 impl Error for UnterminatedMemberField {}
 
-/// Полное доказанное значение исходного `COrganizing::tagMemInfo`.
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) struct TagMemInfo {
@@ -285,22 +234,18 @@ impl TagMemInfo {
         }
     }
 
- /// Возвращает `strName` до первого NUL включительно.
     pub(crate) fn name_wire_bytes(&self) -> Result<&[u8], UnterminatedMemberField> {
         terminated_field(&self.name, "strName")
     }
 
- /// Возвращает `strTitle` до первого NUL включительно.
     pub(crate) fn title_wire_bytes(&self) -> Result<&[u8], UnterminatedMemberField> {
         terminated_field(&self.title, "strTitle")
     }
 
- /// Возвращает `strRegion` до первого NUL включительно.
     pub(crate) fn region_wire_bytes(&self) -> Result<&[u8], UnterminatedMemberField> {
         terminated_field(&self.region, "strRegion")
     }
 
- /// Строит точный `0x2C` little-endian блок `listPV`.
     pub(crate) fn purview_wire_bytes(&self) -> [u8; 44] {
         let mut bytes = [0; 44];
         for (chunk, state) in bytes.chunks_exact_mut(4).zip(self.purview) {
@@ -309,7 +254,6 @@ impl TagMemInfo {
         bytes
     }
 
- /// Строит точный `0x10` блок `LastOnlineTime`.
     pub(crate) fn last_online_wire_bytes(&self) -> [u8; 16] {
         self.last_online_time.wire_bytes()
     }
@@ -322,7 +266,7 @@ fn terminated_field<'a>(
     let Some(terminator) = field.iter().position(|byte| *byte == 0) else {
  // Исходные перегрузки с `char*` продолжали бы чтение за фиксированным
  // массивом. Достижимость и наблюдаемая реакция такого
- // состояния не доказаны и не заменяются добавленным NUL или unsafe.
+ // состояния не определены и не заменяются добавленным NUL или unsafe.
         return Err(UnterminatedMemberField { field: name });
     };
     Ok(&field[..=terminator])

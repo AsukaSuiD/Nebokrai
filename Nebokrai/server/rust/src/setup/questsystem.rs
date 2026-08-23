@@ -1,28 +1,14 @@
-//! Общая конфигурация заданий исторического Miracle.
+//! Конфигурация `CQuestSystem` из WorldServer, подтверждённая
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CQuestSystem::Load` и
-//! `AddToByteArray`:; singleton lifecycle и
-//! Game runtime не входят в этот owner и остаются. Точная пара:
-//! Исходные owner-ы PDB:
+//! Wire содержит max count, level difference, три script C-строки и ordered
+//! quest records. Внутри record region/x/y идут до effect вопреки C++ layout;
+//! ключ map отдельно не передаётся.
 //!
-//! Оригинал World serializer и Game decoder подтверждают positional wire:
-//! max-count, level difference, три C-string script-а, signed quest count и
-//! ordered quest records. `BTreeMap<u16, _>` заменяет `std::map<ushort, _>` и
-//! сохраняет unsigned key-order; ключ отдельно не передаётся. Внутри записи
-//! после пяти `u32` идут пять C-string, затем именно region/x/y/effect и byte
-//! display, хотя PDB layout размещал effect раньше координат. Typed поля и
-//! owned bytes устраняют C++ layout/lifetime; NUL/count ошибки блокируются до
-//! изменения destination. `Load` очищает map до первого resource-open, читает
-//! `Quest.ini` in-place, затем накладывает `QuestEx.ini` по ID. Missing
-//! StringTable key остаётся пустой строкой; script-path проходит exact
-//! `ReplaceLine` и ASCII `_strlwr`. Отсутствующий второй ресурс в EXE вызывал
-//! null dereference без подтверждённого внешнего эффекта: Rust оставляет уже
-//! загруженный основной map и сообщает эту границу через typed completion.
-//! `FilesInfo.ril` подтверждает resource-границу loader-а: `Data/Quest.ini`
-//! берётся из `patch01.pak/data/quest.ini`, где после `MaxQuestNum` есть
-//! `maxlvldiff 130`; `Data/QuestEx.ini` отсутствует в package-index и
-//! открывается как loose resource. Одноимённый loose `quest.ini` без
-//! `maxlvldiff` устарел и не задаёт контракт.
+//! `Load` очищает map, читает `Quest.ini` и накладывает `QuestEx.ini` по ID.
+//! StringTable miss даёт пустую строку, script path проходит `ReplaceLine` и
+//! ASCII lowercase. Отсутствие второго ресурса сохраняет основной map и
+//! возвращает ошибку вместо прежнего null-dereference.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -278,7 +264,6 @@ impl CQuestSystem {
     }
 }
 
-/// Наблюдаемый итог `Load`, включая безопасно заменённую null-resource границу.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QuestSystemLoadCompletion {
     Loaded,
@@ -332,7 +317,6 @@ impl<'source> QuestInput<'source> {
         std::str::from_utf8(token).ok()?.parse().ok()
     }
 
- /// `ReadTo` ищет marker token из текущей stream-позиции.
     fn read_to(&mut self, marker: &[u8]) -> bool {
         while let Some(token) = self.token() {
             if token == marker {
@@ -342,7 +326,6 @@ impl<'source> QuestInput<'source> {
         false
     }
 
- /// Соответствует `getline` после уже извлечённого `<Start>` marker-а.
     fn discard_to_line_end(&mut self) {
         while self.cursor < self.source.len() && self.source[self.cursor] != b'\n' {
             self.cursor += 1;

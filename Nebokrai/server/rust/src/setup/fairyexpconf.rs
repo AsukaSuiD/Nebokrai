@@ -1,11 +1,10 @@
-//! Опыт обычных духов исторического Miracle.
+//! Опыт fairy `CFairyExpConf` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CFairyExpConf::LoadSetup`:; singleton и
-//! GameServer decoder не входят в этот owner и остаются. Точная пара:
-//! Owner наследует `CBattleFairyExpConfig`: wire и ordered map одинаковы, но
-//! XML root/attributes и diagnostics принадлежат отдельному `fairyexp.xml`.
-//! `quick-xml` заменяет TinyXML, сохраняя direct-child traversal, duplicate
-//! checks и правило минимум `maxdengji - 1` значений опыта.
+//! Owner использует тот же ordered map и wire, что `CBattleFairyExpConfig`,
+//! но загружает отдельный `fairyexp.xml`. Direct-child traversal, duplicate
+//! checks и минимум `maxdengji - 1` exp values сохранены; `quick-xml` заменяет
+//! TinyXML.
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
@@ -125,7 +124,7 @@ impl CFairyExpConf {
         let Some((owner_level, max_level)) = pending.take() else {
             return Err(FairyExpLoadError::InvalidFormat);
         };
- // EXE creates map entry only after first `wuhun`; an empty group is skipped.
+        // Map-запись создаётся только после первого `wuhun`; пустая группа пропускается.
         if values.is_empty() {
             return Ok(());
         }

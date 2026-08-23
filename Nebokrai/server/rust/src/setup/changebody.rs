@@ -1,14 +1,10 @@
-//! Ограничения товаров для смены тела исторического Miracle.
+//! Ограничения смены тела `CChangeBodyConf` из WorldServer, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CChangeBodyConf::LoadChangeBodySetup` и
-//! `AddToByteArray`:; GameServer decoder и
-//! singleton plumbing не входят в этот owner и остаются. Точная пара:
-//! Owner очищает vector до resource-open, принимает direct `Goods` children
-//! `RestrictionsGoodsList`, и кодирует signed count с `u32` item-ами. `quick-xml`
-//! заменяет TinyXML; `GS1148..1151` и специальный clear при missing `index`
-//! остаются подтверждённым контрактом. Resource backend передаёт уже выделенный
-//! bytes slice, поэтому только allocation-failure diagnostic `GS1149` не имеет
-//! отдельного безопасного Rust состояния.
+//! Owner очищает vector до открытия XML, принимает direct `Goods` children
+//! `RestrictionsGoodsList` и пишет signed count с `u32` items. Missing `index`
+//! очищает результат; diagnostics сохраняют StringTable IDs `GS1148..1151`.
+//! `quick-xml` заменяет TinyXML.
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;

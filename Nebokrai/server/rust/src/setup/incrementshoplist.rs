@@ -1,30 +1,14 @@
-//! Increment-shop initial configuration исторического Miracle.
+//! Increment shop `CIncrementShopList` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `AddToByteArray`, `Release`
-//! и `LoadItems`:; singleton
-//! plumbing и Game decoder не входят в этот owner и остаются. Точная пара:
-//! Исходный владелец PDB:
+//! Wire пишет signed count, page key, 24-байтный item prefix, description,
+//! localized goods key и общую affiche C-строку. Равные page keys сохраняют
+//! insertion order. Неиспользуемые padding bytes item prefix обнулены.
 //!
-//! Owner хранит `multimap<unsigned char, Item*>`: wire начинается с signed
-//! count, затем идёт unsigned page-key, первые `0x18` байт Item, description и
-//! localized goods key как две C-строки; после всех записей следует C-строка
-//! affiche. Равные page-key сохраняют insertion order, поэтому Rust использует
-//! `BTreeMap<u8, Vec<Item>>`.
-//!
-//! EXE копировал весь 24-байтный prefix, хотя loader заполнял только category,
-//! четыре `u32` и icon: два байта после category и три после icon оставались
-//! heap-мусором. Точный Game decoder пропускает эти reserved-позиции. Rust
-//! сохраняет размер/layout, но пишет нули, устраняя внутреннюю утечку без
-//! изменения принимаемых полей. `LoadItems` сначала освобождает прежнее
-//! состояние, затем для каждой `#`-позиции читает восемь whitespace-полей.
-//! Page/category вне `0..=255`, неразрешённый основной товар, ненулевой
-//! неразрешённый товар скидки, пустое описание либо отсутствующее отображаемое
-//! имя завершают load с уже внесённой частичной картой. Overlap менее `1`
-//! заменяется на `1`; price/icon сохраняют сужение signed long до legacy
-//! `u32/u8`. Второй проход между `<AfficheStart>` и `<AfficheEnd>` добавляет
-//! каждую целую строку с `\n`. Safe owner не допускает null Item slot-ов и
-//! освобождает весь registry через `Drop`, а не воспроизводит ошибочный ручной
-//! lifetime.
+//! Loader освобождает прежнее состояние, читает `#` records и сохраняет уже
+//! добавленные items при позднем отказе. Невалидный основной/discount goods,
+//! пустые description/name завершают загрузку; overlap меньше 1 становится 1.
+//! Affiche собирается отдельным проходом с `\n` после каждой строки.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -34,7 +18,6 @@ use crate::public::readwrite::read_to;
 
 const ITEM_WIRE_LENGTH: usize = 0x18;
 
-/// Значимые поля первых `0x18` байт legacy Item.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct IncrementShopItem {
     pub(crate) category: u16,
@@ -47,14 +30,12 @@ pub(crate) struct IncrementShopItem {
     pub(crate) key: Vec<u8>,
 }
 
-/// Safe owner исходного singleton state.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CIncrementShopList {
     items: BTreeMap<u8, Vec<IncrementShopItem>>,
     affiche: Vec<u8>,
 }
 
-/// Единственная serial lookup-граница `CGoodsFactory` loader-а.
 pub(crate) enum IncrementShopGoodsQuery<'name> {
     OriginalName(&'name [u8]),
     DisplayName(u32),
@@ -65,7 +46,6 @@ pub(crate) enum IncrementShopGoodsResult {
     Name(Option<Vec<u8>>),
 }
 
-/// Результат загрузки: предупреждения original `AddLogText` до success-log.
 pub(crate) struct IncrementShopLoadReport {
     pub(crate) warnings: Vec<Vec<u8>>,
 }
@@ -110,7 +90,6 @@ impl IncrementShopLoadError {
 }
 
 impl CIncrementShopList {
- /// Эквивалент multimap insertion в конец диапазона равного page-key.
     pub(crate) fn insert(&mut self, page: u8, item: IncrementShopItem) {
         self.items.entry(page).or_default().push(item);
     }
@@ -120,7 +99,6 @@ impl CIncrementShopList {
         self.affiche.extend_from_slice(truncate_at_nul(affiche));
     }
 
- /// Сохраняет исходный порядок очистки, а ownership освобождает все Item.
     pub(crate) fn release(&mut self) {
         self.affiche.clear();
         self.items.clear();
@@ -249,7 +227,6 @@ impl CIncrementShopList {
         }
     }
 
- /// Дописывает оригинал `count + items + affiche` wire.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -311,7 +288,6 @@ impl fmt::Display for IncrementShopStringField {
     }
 }
 
-/// Safe boundary для state, не представимого legacy C-string/count wire.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum IncrementShopSerializeError {
     ItemCountOverflow,

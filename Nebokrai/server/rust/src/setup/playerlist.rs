@@ -1,48 +1,17 @@
-//! Базовые свойства игрока и progression setup Miracle.
+//! Player properties и progression `CPlayerList` из WorldServer,
+//! подтверждённые `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CPlayerList::AddToByteArray`,
-//! `GetPropertiesUpgrade`, `LoadPlayerList`,
-//! `LoadPlayerExpList` и `LoadPlayerProperitiesUpgrade` задан EXE/PDB;
-//! остальные lookup-ы и Game decoder в этот owner не входят.
+//! Wire состоит из player map, level-exp и трёх upgrade maps для Fighter,
+//! Hunter и Taoist. Player record сохраняет 0x58-байтный значимый layout, но
+//! неопределённый padding обнулён; upgrade record пишет level и scalars перед
+//! NUL notification.
 //!
-//! Wire строго состоит из пяти секций: ordered player map с raw records по
-//! `0x58` байт, vector level-exp по четыре байта и ordered upgrade map для
-//! Fighter, Hunter, Taoist именно в таком порядке. Ключ player map не пишется;
-//! ключ каждого upgrade map пишется как level перед шестью `u32`, одним `u16`
-//! и NUL-terminated notification. Все count — signed Windows `long`.
+//! Create-role equipment хранит occupation, slot и byte-name в list order.
+//! Отсутствующий `sex + occupation*2` по-прежнему вставляет нулевую запись.
 //!
-//! Оригинал bulk-copy `0x58` захватывал три padding-участка, а World loader не
-//! назначал часть current-state полей до вставки записи. Поэтому старый wire
-//! мог зависеть от неинициализированного stack state. У такого UB нет
-//! стабильного значения для совместимости: Rust кодирует padding нулями, а
-//! current YP/RP остаются обычными явно инициализированными полями. Полезные
-//! offsets и порядок сохраняются без объявления Rust layout копией MSVC ABI.
-//! `BTreeMap`/`Vec` заменяют process-global STL owners; legacy-строки остаются
-//! byte arrays и завершаются на первом NUL.
-//!
-//! Create-role дополнительно достигает process-global `m_listOrginEquip` и
-//! прямого `m_mapPlayerList::operator[]`. PDB задаёт `tagOrginEquip` как byte
-//! occupation, `u16` equipment position и `std::string`;
-//! `CGame::AddOrginGoodsToPlayer` использует offsets
-//! `+0/+2/+8` внутри старого list-value и list-order обход. Typed record и
-//! ordered `Vec` сохраняют значения без копирования MSVC string layout.
-//! Отсутствующий ключ `sex + occupation*2` по-прежнему вставляет нулевую запись.
-//! `GetPropertiesUpgrade` выбирает три static map
-//! только для occupation `0/1/2`, передаёт `find` второй аргумент level и
-//! копирует найденный mapped value; отсутствующий level либо иной occupation
-//! возвращает `0` без вставки.
-//! `LoadPlayerList` сначала очищает property map, загружает `playerlist.ini`,
-//! затем очищает origin-equipment list и загружает `playerOrginEquip.ini`.
-//! Поэтому отсутствие первого файла сохраняет прежний equipment list, а
-//! отсутствие второго оставляет новый property map и пустой equipment list.
-//! `LoadPlayerExpList` и `LoadPlayerProperitiesUpgrade` очищают свои owners до
-//! открытия файла. Форматные ошибки старого formatted extraction могли
-//! использовать неинициализированные locals; Rust прекращает загрузку с typed
-//! error, сохраняя только уже материализованный prefix state.
-//! Деструктор `CPlayerList::tagPropertiesUpgrade` из `organizing.cpp` очищал
-//! только `std::string strNotification`; поле `notification: Vec<u8>` имеет
-//! тот же срок жизни через обычный Rust Drop, без служебной логики аллокатора
-//! MSVC.
+//! Loaders очищают каждый свой owner до открытия. Ошибка первого player файла
+//! сохраняет прежний equipment list; ошибка второго оставляет новый player map
+//! и пустой equipment list. Malformed input сохраняет только полный префикс.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -52,7 +21,6 @@ use std::path::Path;
 
 use crate::public::readwrite::read_to;
 
-/// Содержимое одного исходного 88-байтового player-property record.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerBaseProperties {
     pub(crate) occupation: u8,
@@ -86,7 +54,6 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) intelligence_to_maximum_mp: u16,
 }
 
-/// Одно level-keyed приращение свойств и локализованное уведомление.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerPropertiesUpgrade {
     pub(crate) base_maximum_hp: u32,
@@ -99,7 +66,6 @@ pub(crate) struct PlayerPropertiesUpgrade {
     pub(crate) notification: Vec<u8>,
 }
 
-/// Одна логическая запись точного `CPlayerList::tagOrginEquip`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerOriginEquipment {
     pub(crate) occupation: u8,
@@ -117,7 +83,6 @@ pub(crate) struct PlayerCreationPropertiesLookup {
 pub(crate) type PlayerBasePropertiesMap = BTreeMap<u32, PlayerBaseProperties>;
 pub(crate) type PlayerPropertiesUpgradeMap = BTreeMap<u32, PlayerPropertiesUpgrade>;
 
-/// Value-owner пяти точных секций World/Game setup-а.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CPlayerList {
     player_properties: PlayerBasePropertiesMap,
@@ -129,7 +94,6 @@ pub(crate) struct CPlayerList {
 }
 
 impl CPlayerList {
- /// Создаёт owner из уже проверенных loader-ом секций без global state.
     pub(crate) fn from_parts(
         player_properties: PlayerBasePropertiesMap,
         player_experience: Vec<u32>,
@@ -147,7 +111,6 @@ impl CPlayerList {
         }
     }
 
- /// Заменяет отдельно загружаемый owner `playerOrginEquip.ini`.
     pub(crate) fn set_origin_equipment(&mut self, equipment: Vec<PlayerOriginEquipment>) {
         self.origin_equipment = equipment;
     }
@@ -156,29 +119,24 @@ impl CPlayerList {
         &self.origin_equipment
     }
 
- /// Очищает только оригинал `m_mapPlayerList` до открытия `playerlist.ini`.
     pub(crate) fn clear_player_properties(&mut self) {
         self.player_properties.clear();
     }
 
- /// Очищает только оригинал `m_listOrginEquip` перед вторым resource-open.
     pub(crate) fn clear_origin_equipment(&mut self) {
         self.origin_equipment.clear();
     }
 
- /// Очищает только оригинал vector `m_vectorPlayerExp`.
     pub(crate) fn clear_player_experience(&mut self) {
         self.player_experience.clear();
     }
 
- /// Очищает все три static map `PropertiesUpgrade` до открытия файла.
     pub(crate) fn clear_properties_upgrades(&mut self) {
         self.fighter_upgrades.clear();
         self.hunter_upgrades.clear();
         self.taoist_upgrades.clear();
     }
 
- /// Загружает первую половину `LoadPlayerList` после успешного resource-open.
     pub(crate) fn load_player_properties_from_bytes(
         &mut self,
         source: &[u8],
@@ -241,7 +199,6 @@ impl CPlayerList {
         Ok(loaded)
     }
 
- /// Загружает вторую половину `LoadPlayerList` после успешного resource-open.
     pub(crate) fn load_origin_equipment_from_bytes(
         &mut self,
         source: &[u8],
@@ -261,7 +218,6 @@ impl CPlayerList {
         Ok(self.origin_equipment.len())
     }
 
- /// Выполняет обе уже открытые части оригинал `LoadPlayerList` в порядке EXE.
     pub(crate) fn load_player_list_from_bytes(
         &mut self,
         player_list_source: &[u8],
@@ -275,7 +231,6 @@ impl CPlayerList {
         })
     }
 
- /// File-adapter `LoadPlayerList`, сохраняющий clear-before-open transition.
     pub(crate) fn load_player_list_from_files(
         &mut self,
         player_list_path: impl AsRef<Path>,
@@ -298,7 +253,6 @@ impl CPlayerList {
         })
     }
 
- /// Выполняет `LoadPlayerExpList`: level token читается, но не хранится.
     pub(crate) fn load_player_experience_from_bytes(
         &mut self,
         source: &[u8],
@@ -313,7 +267,6 @@ impl CPlayerList {
         Ok(self.player_experience.len())
     }
 
- /// File-adapter `LoadPlayerExpList` с очисткой до открытия файла.
     pub(crate) fn load_player_experience_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -349,7 +302,6 @@ impl CPlayerList {
         })
     }
 
- /// File-adapter `LoadPlayerProperitiesUpgrade` с очисткой до resource-open.
     pub(crate) fn load_properties_upgrades_from_file<ResolveNotification>(
         &mut self,
         path: impl AsRef<Path>,
@@ -364,7 +316,6 @@ impl CPlayerList {
             .map_err(PlayerListFileLoadError::Format)
     }
 
- /// Выполняет оригинал create-role `map::operator[]` lookup.
     pub(crate) fn creation_properties(
         &mut self,
         sex: u8,
@@ -380,7 +331,6 @@ impl CPlayerList {
         }
     }
 
- /// Повторяет `GetPropertiesUpgrade`: выбор map по occupation и find level.
     pub(crate) fn properties_upgrade(
         &self,
         occupation: u8,
@@ -395,7 +345,6 @@ impl CPlayerList {
         upgrades.get(&u32::from(level))
     }
 
- /// Дописывает оригинал пять секций `CPlayerList::AddToByteArray`.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -425,14 +374,12 @@ impl CPlayerList {
     }
 }
 
-/// Количество полностью применённых записей обеих частей `LoadPlayerList`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerListLoadReport {
     pub(crate) player_properties: usize,
     pub(crate) origin_equipment: usize,
 }
 
-/// Количество записей трёх fixed-order upgrade blocks.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerPropertiesUpgradeLoadReport {
     pub(crate) fighter: usize,
@@ -440,7 +387,6 @@ pub(crate) struct PlayerPropertiesUpgradeLoadReport {
     pub(crate) taoist: usize,
 }
 
-/// Safe граница formatted extraction старого text owner-а.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerListFormatError {
     UnexpectedEnd { field: &'static str },
@@ -470,7 +416,6 @@ impl fmt::Display for PlayerListFormatError {
 
 impl Error for PlayerListFormatError {}
 
-/// Ошибка filesystem adapter-а, не смешивающая IO и format границы.
 #[derive(Debug)]
 pub(crate) enum PlayerListFileLoadError {
     Io(io::Error),
@@ -598,7 +543,6 @@ fn parse_u32(token: &[u8], field: &'static str) -> Result<u32, PlayerListFormatE
         })
 }
 
-/// Безопасная граница размера старого signed `long` count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerListSerializeError {
     pub(crate) owner: &'static str,

@@ -1,31 +1,14 @@
-//! WorldServer dispatcher-owner `OnMSG_S2W_AUCTION` из точной пары EXE/PDB.
+//! Auction-сообщения `OnMSG_S2W_AUCTION` из `auction.cpp`, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `0x60801/04/06` создают один owned `DbNote`, декодируют `CGoodsNode` и
-//! ставят соответствующий input operation; только non-DB item `0x60801`
-//! зануляет buyer и немедленно отправляет `0x14ED01`. Relay меняют только
-//! literal opcode и сохраняют отсутствие
-//! `Update` там, где его нет в EXE. `0x60807` добавляет source map как один
-//! unsigned byte перед непрочитанным payload. `0x60811/12` сохраняют порядок
-//! чтения и точные BaiTan mutations; `0x60814` проверяет только существование
-//! online player и region GameServer, но не `bConnected`. Стандартные owned
-//! buffers и `Result` заменяют allocator/exception plumbing, не меняя wire
-//! layout и order side effects.
-//! `0x6080B` сначала мутирует page, затем строит `0x80409`; C-string без NUL
-//! остаётся typed boundary после этой мутации. `0x6080C` строит `0x8040A` в
-//! порядке second-ID, first-ID, log data, только потом `Update`.
-//! `0x6080D` требует online player, после чего `CollectNoNotice` сначала
-//! помечает live records и по одному публикует SQL в общий FIFO, затем
-//! строит, обновляет и отправляет `0x8040B` в source map.
-//! `0x6080E` читает unsigned player ID и декодирует полный player-wire с
-//! текущего cursor только у online owner-а; virtual/CRT plumbing заменён
-//! существующим безопасным codec-ом без нового wire-формата.
-//! `0x60808` строит `0x80403` с signed long `0/1`: единица возможна только
-//! для подключённого GameServer `5` и `CGlobeSetup::bAuction != 0`; `Update`
-//! перед source-map send отсутствует и намеренно не добавляется.
-//! `0x6080A` читает owner, goods-limit и money-limit. Ровно в порядке EXE
-//! вызывает DB owner для `BACK(3)`, затем при неполном результате `UNDO(4)` и
-//! `SUCCESSED(2)` с остатком; `LoadMoneyById` вызывается всегда и публикует
-//! свой output note независимо от числа товаров.
+//! Input operations декодируют `CGoodsNode` и ставят DB note; relays меняют
+//! только opcode. Page меняется до построения ответа. Collect-no-notice сначала
+//! помечает live records и публикует SQL по одному, затем отправляет результат.
+//!
+//! Auction enable отвечает `1` только подключённому GameServer 5 при
+//! `bAuction != 0`, без `Update`. Money restore вызывает BACK, при неполном
+//! результате UNDO и SUCCESSED с остатком; `LoadMoneyById` выполняется всегда.
+//! Owned notes и safe codecs заменяют allocator/virtual plumbing, сохраняя wire.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::dbaccess::worlddb::dbmisc::{CDbMisc, DbMiscContext, DbNote, OperatorType};
@@ -63,7 +46,6 @@ const REMOVE_BAI_TAN: i32 = 0x0006_0812;
 const BROADCAST_AUCTION_RESULT: i32 = 0x0006_0813;
 const FORWARD_PLAYER_RESULT: i32 = 0x0006_0814;
 
-/// Наблюдаемый результат одной доказанной S2W auction-ветви.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldServerAuctionMessageOutcome {
     InputQueued {
@@ -169,7 +151,6 @@ pub(crate) enum WorldServerAuctionMessageDispatch {
     Pending(CMessage),
 }
 
-/// Тонкая граница `CAuctionLog -> CGame::m_qWriteLogData` для одной ветви.
 struct WorldAuctionNoticeWriteQueue<'a> {
     game: &'a CGame,
     queued_sql_count: usize,
@@ -193,7 +174,6 @@ impl AuctionNoticeWriteQueue for WorldAuctionNoticeWriteQueue<'_> {
     }
 }
 
-/// Исполняет доказанные S2W auction-ветви, не требующие сырого DB owner-а.
 pub(crate) fn on_msg_s2w_auction(
     game: &mut CGame,
     auction_log: &mut CAuctionLog,

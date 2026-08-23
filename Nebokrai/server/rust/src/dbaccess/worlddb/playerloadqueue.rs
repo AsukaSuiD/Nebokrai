@@ -1,4 +1,5 @@
-//! FIFO запросов загрузки игроков WorldServer из точной пары EXE/PDB.
+//! FIFO запросов загрузки игроков, подтверждённая `worldserver.exe` и
+//! `worldserver.pdb`.
 //!
 //! Owner сохраняет first-match removal, head-to-tail pop, отдельные lock
 //! области и передачу владения batch-у. `Mutex<VecDeque<_>>` заменяет critical
@@ -15,7 +16,6 @@ use crate::public::tools::put_string_to_file;
 pub(crate) const PLAYER_LOAD_CDKEY_CAPACITY: usize = 20;
 const PLAYER_LOAD_LOG_NAME: &str = "TemptLoadDataLog_";
 
-/// Owned-представление точного `tagPlayerLoadQueue` без x86 ABI-зависимости.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerLoadQueueEntry {
     cdkey: [u8; PLAYER_LOAD_CDKEY_CAPACITY],
@@ -36,13 +36,11 @@ impl PlayerLoadQueueEntry {
         }
     }
 
- /// Возвращает старую C-string часть fixed buffer-а.
     pub(crate) fn cdkey(&self) -> Option<&[u8]> {
         let end = self.cdkey.iter().position(|byte| *byte == 0)?;
         Some(&self.cdkey[..end])
     }
 
- /// Копирует весь оригинал fixed buffer для следующего queue-record owner-а.
     pub(crate) const fn fixed_cdkey(&self) -> [u8; PLAYER_LOAD_CDKEY_CAPACITY] {
         self.cdkey
     }
@@ -68,7 +66,6 @@ pub(crate) enum PlayerLoadPushOutcome {
     Duplicate(PlayerLoadQueueEntry),
 }
 
-/// Потокобезопасная cloneable FIFO ожидающих DB-load запросов.
 #[derive(Clone)]
 pub(crate) struct CPlayerLoadQueue {
     entries: Arc<Mutex<VecDeque<PlayerLoadQueueEntry>>>,
@@ -81,12 +78,10 @@ impl CPlayerLoadQueue {
         }
     }
 
- /// Снимает самостоятельный 32-битный snapshot размера очереди.
     pub(crate) fn get_size(&self) -> u32 {
         self.entries.lock().len() as u32
     }
 
- /// Добавляет новую запись либо возвращает duplicate producer-у.
     pub(crate) fn push_player_load_data(
         &self,
         entry: PlayerLoadQueueEntry,
@@ -107,7 +102,6 @@ impl CPlayerLoadQueue {
         PlayerLoadPushOutcome::Queued
     }
 
- /// Удаляет и возвращает только первое совпадение по signed player ID.
     pub(crate) fn remove_player_load_data(
         &self,
         player_id: i32,
@@ -128,13 +122,11 @@ impl CPlayerLoadQueue {
         entries.remove(index)
     }
 
- /// Переносит всю текущую очередь в FIFO-список одним lock-owner-ом.
     pub(crate) fn pop_player_load_data_to_list(&self) -> VecDeque<PlayerLoadQueueEntry> {
         let mut entries = self.entries.lock();
         entries.drain(..).collect()
     }
 
- /// Уничтожает все записи в FIFO-порядке под исходной областью блокировки.
     pub(crate) fn clear(&self) {
         let mut entries = self.entries.lock();
         while let Some(entry) = entries.pop_front() {

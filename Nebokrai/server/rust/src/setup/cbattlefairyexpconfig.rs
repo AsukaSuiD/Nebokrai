@@ -1,24 +1,12 @@
-//! Таблица опыта боевых духов исторического Miracle.
+//! Опыт battle fairy `CBattleFairyExpConfig` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CBattleFairyExpConfig::bLoadSetup` и
-//! `AddToByteArray`:; singleton plumbing и
-//! Game decoder/query не входят в этот owner и остаются. Точная пара:
-//! Исходный владелец PDB:
+//! Wire — signed group count, затем ordered owner level, signed value count и
+//! `u32` exp values. `CFairyExpConf` наследует этот serializer.
 //!
-//! `CFairyExpConf` наследует этот owner и заполняет тот же protected map своим
-//! XML loader-ом. Поэтому reconnect call-site получает `CFairyExpConf`
-//! singleton, но вызывает именно base serializer. Wire: signed group count,
-//! затем ordered `u32 owner_level + signed value_count + u32 exp...`; все поля
-//! передаются little-endian по четыре байта. `BTreeMap<u32, Vec<u32>>`
-//! сохраняет MSVC map/vector контракт, а Rust ownership заменяет singleton
-//! allocation и ручной lifetime без изменения wire.
-
-//! Loader принимает direct `ZhanHunPinZhong` children root-а
-//! `ZHUANHUNJINGYANLIEBIAO`. У каждой группы обязательны `RenZhuLevel` и
-//! `MaxLevel`; duplicate level, отсутствующий `UpdateLevelExp` и менее чем
-//! `MaxLevel - 1` значений очищают всю map. `Level` на child `ZhanHun` EXE не
-//! читает. `quick-xml` заменяет только TinyXML plumbing; numeric `atol` и
-//! порядок vector/map остаются owner-контрактом.
+//! Loader принимает `ZHUANHUNJINGYANLIEBIAO/ZhanHunPinZhong`, требует
+//! `RenZhuLevel`, `MaxLevel` и не менее `MaxLevel - 1` значений. Duplicate level
+//! или неполная группа очищает всю map; child `Level` не читается.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -29,14 +17,12 @@ use std::path::Path;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-/// Safe owner общего state `CBattleFairyExpConfig`/`CFairyExpConf`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CBattleFairyExpConfig {
     exp_lists: BTreeMap<u32, Vec<u32>>,
 }
 
 impl CBattleFairyExpConfig {
- /// Явная граница для последующего точного XML loader-а производного owner-а.
     pub(crate) fn insert_exp_list(
         &mut self,
         owner_level: u32,
@@ -45,17 +31,14 @@ impl CBattleFairyExpConfig {
         self.exp_lists.insert(owner_level, values)
     }
 
- /// Проверка duplicate owner-level до mutation derived `CFairyExpConf`.
     pub(crate) fn contains_exp_list(&self, owner_level: u32) -> bool {
         self.exp_lists.contains_key(&owner_level)
     }
 
- /// Очищает map на оригинал позиции до resource-open.
     pub(crate) fn clear(&mut self) {
         self.exp_lists.clear();
     }
 
- /// Загружает точный XML state `bLoadSetup` после успешного resource-open.
     pub(crate) fn load_from_bytes(
         &mut self,
         source: &[u8],
@@ -200,7 +183,6 @@ impl CBattleFairyExpConfig {
         Ok(report)
     }
 
- /// File-adapter оригинал clear-before-open state transition.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -211,7 +193,6 @@ impl CBattleFairyExpConfig {
             .map_err(BattleFairyExpFileLoadError::Format)
     }
 
- /// Дописывает оригинал ordered map/vector wire.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -257,7 +238,6 @@ pub(crate) enum BattleFairyExpLoadError {
 }
 
 impl BattleFairyExpLoadError {
- /// StringTable ID оригинал loader diagnostic-а до общего reload failure-log.
     pub(crate) const fn string_id(&self) -> &'static [u8] {
         match self {
             Self::MissingRoot | Self::ZhanHunOutsideGroup | Self::Xml(_) => b"ZHGS0031",
@@ -349,7 +329,6 @@ fn ensure_minimum_exp_values(
     Ok(())
 }
 
-/// Оригинал signed `_atol` decimal-prefix behaviour without its overflow UB.
 fn legacy_atol(value: &[u8]) -> i32 {
     let mut bytes = value.iter().copied().skip_while(u8::is_ascii_whitespace).peekable();
     let negative = matches!(bytes.peek(), Some(b'-'));

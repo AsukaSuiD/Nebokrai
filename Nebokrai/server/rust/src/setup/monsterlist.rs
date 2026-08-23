@@ -1,30 +1,17 @@
-//! Реестр и wire-сериализатор списка монстров Miracle.
+//! Реестр `CMonsterList` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт `CMonsterList::AddToByteArray` WorldServer и
-//! `CMonsterList::GetPropertyByOrginName`:;
-//! загрузчики не входят в этот owner и остаются.
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! Исходный владелец PDB:
+//! Wire пишет ordered monster map: 160-байтный scalar prefix, две C-строки и
+//! шестибайтные skills; затем ordered drop map с именами и 32-байтными records.
+//! Map keys задают порядок, но отдельно не передаются.
 //!
-//! Оригинал owner сначала пишет 32-битное число записей ordered map, для каждой
-//! записи — непрерывный 160-байтовый scalar prefix, две NUL-terminated legacy
-//! строки, 32-битное число skills и элементы по шесть байт. Затем тем же
-//! способом идёт ordered drop-map: имя монстра, число drops, а у каждого drop
-//! сначала имя и потом 32-байтовый scalar prefix. Ключи map в wire не входят;
-//! они задают только порядок обхода.
-//!
-//! `BTreeMap<Vec<u8>, _>` заменяет `std::map<std::string, _>` и сохраняет
-//! byte-лексикографический порядок. `Vec` заменяет list/vector и владеет
-//! элементами без raw pointers. Строки остаются произвольными legacy-байтами:
-//! первый внутренний NUL завершает их так же, как старый `char const*` helper.
-//! Недостижимый для MSVC32 размер коллекции выражен typed-ошибкой вместо
-//! усечения `size_t`; корректный wire от этого не меняется.
+//! `BTreeMap<Vec<u8>, _>` сохраняет byte-лексикографический порядок, `Vec` —
+//! порядок skills/drops. Первый внутренний NUL завершает legacy-строку.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-/// Один точный шестибайтовый skill-элемент монстра.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct MonsterSkill {
     pub(crate) id: u16,
@@ -32,7 +19,6 @@ pub(crate) struct MonsterSkill {
     pub(crate) odds: u16,
 }
 
-/// Доказанные поля `CMonsterList::tagMonster`, попадающие в setup wire.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct MonsterProperties {
     pub(crate) index: u32,
@@ -81,7 +67,6 @@ pub(crate) struct MonsterProperties {
     pub(crate) skills: Vec<MonsterSkill>,
 }
 
-/// Один 32-байтовый drop prefix с предшествующим legacy-именем.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct MonsterDrop {
     pub(crate) goods_index: i32,
@@ -95,7 +80,6 @@ pub(crate) struct MonsterDrop {
     pub(crate) name: Vec<u8>,
 }
 
-/// Drop-набор одного original monster name.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct MonsterDropList {
     pub(crate) monster_original_name: Vec<u8>,
@@ -391,7 +375,6 @@ pub(crate) fn get_monster_property_by_origin_name<'registry>(
     monsters.get(c_string)
 }
 
-/// Безопасная граница только для состояния вне 32-битного owner-контракта.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MonsterListSerializeError {
     pub(crate) owner: &'static str,
@@ -410,7 +393,6 @@ impl fmt::Display for MonsterListSerializeError {
 
 impl Error for MonsterListSerializeError {}
 
-/// Кодирует оба ordered registry в оригинал `CMonsterList::AddToByteArray` wire.
 pub(crate) fn serialize_monster_list(
     monsters: &MonsterRegistry,
     drop_goods: &MonsterDropRegistry,

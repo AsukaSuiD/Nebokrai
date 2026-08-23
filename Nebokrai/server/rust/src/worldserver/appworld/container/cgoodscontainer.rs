@@ -1,42 +1,16 @@
-//! Владелец общего goods-container исторического `WorldServer`.
+//! Общая часть `CGoodsContainer` из `cgoodscontainer.cpp/.h`, подтверждённая
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! object `Add`,
-//! `AddFromDB`, positional `Add` и positional `Remove`
-//! входят в контракт owner-а.
+//! Stacking проверяет base index, particular attribute и max-stack именно в
+//! исходном порядке; amount и свободное место используют unsigned wrapping.
+//! Успех поглощает incoming товар, отказ возвращает владение вызывающему.
 //!
-//! Ветка работает только с уже найденным товаром позиции:
-//! сначала сравнивает unsigned base-properties index, затем signed particular
-//! attribute `GAP_PARTICULAR_ATTRIBUTE/1`, после чего требует max-stack больше
-//! `1`. Вычитание свободного места и сложение amount остаются 32-битными
-//! wrapping-операциями исходного `unsigned long`. Успех уничтожает incoming
-//! товар через Rust ownership, эквивалентно `CGoodsFactory::GarbageCollect`, и
-//! возвращает `None`; false возвращает тот же `Box` вызывающему как `Some`.
+//! Встроенные listeners фактически no-op. `Clear` не меняет base-state,
+//! `Release` обнуляет owner и освобождает listener storage. Общие GUID-wrapper-ы
+//! передают lookup/remove конкретному контейнеру без нового порядка.
 //!
-//! Receiver второго base-index/addon вызова загружается из `pObject`, а не из
-//! numeric position. Listener loop после успеха сохранён как доказанный no-op:
-//! действующий embedded listener amount-owner-а имеет оба слота
-//! `mov eax,1; ret 0xC`, а других override-ов в World owner нет.
-//!
-//! base-state подтверждает owner type/ID по `+0x14/+0x18`.
-//! `Clear` — folded пустой `ret 4`, а `Release` сначала обнуляет owner и затем
-//! освобождает только listener-vector `CContainer`. Rust выражает inheritance
-//! композицией двух safe state-owner-ов; embedded listeners конкретных goods-
-//! контейнеров пока не регистрируются, поскольку оба их callback-а доказанно
-//! сведены линкером к no-op.
-//! GUID-object и typed-GUID forwarder-ы ниже делегируют concrete storage через
-//! общий `ContainerGuidStorage`: null object сохраняет null, а type scalar,
-//! как в EXE, не читается. Это заменяет только erased `CBaseObject*` и vtable,
-//! не меняя identity либо порядок lookup/remove у concrete контейнеров.
-//! `Add(CBaseObject*, void*)` точным direct jump приходит в base
-//! `CContainer::Remove`, который всегда возвращает null: Rust materialизует
-//! этот внешний ложный результат без mutation. `AddFromDB` сначала virtual
-//! читает позицию, на occupied ветви пишет diagnostic callback и возвращает
-//! false; на пустой позиции не вставляет goods, а возвращает только non-null
-//! status incoming pointer. Устаревший source-pointer null при occupied slot
-//! разыменовывался; Rust возвращает typed block без log и без UB.
-//! `Remove(position, amount, context)` сначала создаёт split, сообщает о нём
-//! listener-у и только затем уменьшает amount; full amount делегирует concrete
-//! GUID removal. Общий safe adapter сохраняет этот порядок без RTTI/оригинал pointer.
+//! Base `AddFromDB` лишь проверяет позицию и не вставляет товар. Частичный
+//! `Remove` создаёт split и уведомляет listener до уменьшения исходного amount.
 
 use super::super::goods::cgoods::{CGoods, GoodsCodecError};
 use super::super::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
@@ -44,19 +18,14 @@ use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use crate::public::guid::CGuid;
 use super::ccontainer::{CContainerState, SharedContainerListener};
 
-/// Наблюдаемый результат base `CGoodsContainer::AddFromDB`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BaseGoodsContainerDbAddOutcome {
- /// Позиция свободна и incoming non-null, но abstract base ничего не вставляет.
     AcceptedWithoutInsert,
- /// Позиция свободна, но legacy incoming pointer был null.
     RejectedMissingIncoming,
- /// Позиция занята: diagnostic уже отправлен callback-у.
     RejectedOccupied,
 }
 
 impl BaseGoodsContainerDbAddOutcome {
- /// Возвращает точный `int` normal-result owner-а.
     pub(crate) const fn legacy_result(self) -> i32 {
         match self {
             Self::AcceptedWithoutInsert => 1,
@@ -65,7 +34,6 @@ impl BaseGoodsContainerDbAddOutcome {
     }
 }
 
-/// Safe-граница null dereference conflict-ветви base `AddFromDB`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BaseGoodsContainerDbAddBlock {
     MissingIncomingOnOccupiedPosition { position: u32 },
@@ -80,7 +48,6 @@ pub(crate) trait GoodsContainerPositionStorage {
     fn remove_by_guid(&mut self, ex_id: &CGuid) -> Option<Box<CGoods>>;
 }
 
-/// Действующее base-состояние исходного `CGoodsContainer`, не копия ABI.
 pub(crate) struct CGoodsContainerState {
     container_base: CContainerState,
     owner_type: i32,
@@ -88,7 +55,6 @@ pub(crate) struct CGoodsContainerState {
 }
 
 impl CGoodsContainerState {
- /// Создаёт base defaults constructor-а.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             container_base: CContainerState::with_constructor_defaults(),
@@ -97,17 +63,14 @@ impl CGoodsContainerState {
         }
     }
 
- /// Base `Clear` доказанно не меняет ни owner, ни listeners.
     pub(crate) const fn clear(&mut self) {}
 
- /// Сбрасывает owner до очистки non-owning listener registry.
     pub(crate) fn release(&mut self) {
         self.owner_type = 0;
         self.owner_id = 0;
         self.container_base.release();
     }
 
- /// Сохраняет два signed owner scalar без дополнительных эффектов.
     pub(crate) const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
         self.owner_type = owner_type;
         self.owner_id = owner_id;
@@ -126,7 +89,6 @@ impl CGoodsContainerState {
     }
 }
 
-/// Выполняет stacking-ветку для уже занятой позиции.
 pub(crate) fn add_to_occupied_position(
     existing: &mut CGoods,
     incoming: Box<CGoods>,
@@ -155,7 +117,7 @@ pub(crate) fn add_to_occupied_position(
     Ok(None)
 }
 
-/// Материализует base `Add(CBaseObject*, void*)`.
+/// Создаёт base `Add(CBaseObject*, void*)`.
 ///
 /// Функция делает direct jump в `CContainer::Remove(GUID, void*)`, а base
 /// implementation всегда возвращает null. Ни object, ни context не читаются.
@@ -163,7 +125,7 @@ pub(crate) const fn add_base_object() -> bool {
     false
 }
 
-/// Материализует abstract base `AddFromDB` без ложной вставки goods.
+/// Создаёт abstract base `AddFromDB` без ложной вставки goods.
 ///
 /// Lookup вызывается до проверки incoming pointer. Occupied-ветвь вызывает
 /// callback ровно один раз и возвращает `0`; пустая позиция возвращает `1`
@@ -192,7 +154,7 @@ where
     Ok(BaseGoodsContainerDbAddOutcome::RejectedOccupied)
 }
 
-/// Материализует `CGoodsContainer::Remove(position, amount, context)`.
+/// Создаёт `CGoodsContainer::Remove(position, amount, context)`.
 ///
 /// Partial remove создаёт новый goods, назначает amount, вызывает listener и
 /// лишь затем уменьшает original с 32-bit wrapping subtraction. Full remove

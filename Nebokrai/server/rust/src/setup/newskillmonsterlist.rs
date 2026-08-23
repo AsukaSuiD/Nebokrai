@@ -1,27 +1,12 @@
-//! Списки монстров для новых навыков исторического Miracle.
+//! Списки монстров новых навыков `CNewSkillMonserConf` из WorldServer,
+//! подтверждённые `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CNewSkillMonserConf::LoadNewSkillMonserConf`
-//! и `AddToByteArray`:; singleton и Game
-//! decoder не входят в этот owner и остаются. Точная пара:
-//! Исходный владелец PDB:
+//! Wire пишет ordered skill ID, signed count и localized monster C-строки.
+//! Duplicate skill ID заменяет всю группу, повторы и порядок имён сохраняются.
 //!
-//! Wire: signed group count, затем ordered `u32 skill_id + signed name_count`
-//! и vector локализованных monster-name C-строк. XML loader назначал vector
-//! через `map::operator[]`, поэтому повторный skill ID заменял предыдущую
-//! группу целиком; порядок и повторы имён внутри vector значимы. Историческая
-//! опечатка `Monser` сохраняется только в имени исходного owner-а.
-//! `BTreeMap<u32, Vec<Vec<u8>>>` и owned bytes заменяют MSVC containers/string
-//! lifetime без изменения unsigned key-order и wire.
-//! Loader очищает map до открытия файла. Корень должен быть
-//! `NewSkillMonsterList`, его direct `monsterlist` children требуют `index`, а
-//! каждый `monster` — `strorgname`. `atoi(index)` сохраняет conversion в `u32`;
-//! duplicate index заменяет всю ранее собранную группу. Original TinyXML
-//! принимал исторические unquoted ASCII attributes из shipped data, поэтому
-//! Rust нормализует только этот технически недопустимый вариант внутри start-tag
-//! перед зрелым
-//! `quick-xml` parser-ом. `StringTable` miss даёт пустую локализованную строку,
-//! как `pcVar8 = ""` в EXE. Missing XML fields вместо null dereference дают
-//! typed error и не назначаются контрактом.
+//! Loader очищает map, требует `NewSkillMonsterList/monsterlist/monster` и
+//! атрибуты `index/strorgname`. StringTable miss даёт пустое имя. `quick-xml`
+//! принимает исторические unquoted ASCII attributes после узкой нормализации.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -32,14 +17,12 @@ use std::path::Path;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-/// Safe owner исходного `m_mSkillMonsterList`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct NewSkillMonsterConf {
     groups: BTreeMap<u32, Vec<Vec<u8>>>,
 }
 
 impl NewSkillMonsterConf {
- /// Сохраняет last-wins assignment loader-а для duplicate skill ID.
     pub(crate) fn insert_group(
         &mut self,
         skill_id: u32,
@@ -52,7 +35,6 @@ impl NewSkillMonsterConf {
         self.groups.clear();
     }
 
- /// Загружает оригинал World `NewSkillMonsterList.xml` в map-order owner.
     pub(crate) fn load_from_bytes<ResolveName>(
         &mut self,
         source: &[u8],
@@ -155,7 +137,6 @@ impl NewSkillMonsterConf {
         Ok(report)
     }
 
- /// File-adapter с clear-before-open state transition оригинал loader-а.
     pub(crate) fn load_from_file<ResolveName>(
         &mut self,
         path: impl AsRef<Path>,
@@ -170,7 +151,6 @@ impl NewSkillMonsterConf {
             .map_err(NewSkillMonsterFileLoadError::Format)
     }
 
- /// Дописывает оригинал ordered map/vector/C-string wire.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -208,7 +188,6 @@ impl ActiveMonsterGroup {
     }
 }
 
-/// Точные `read monster num: %d` значения после каждой группы.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct NewSkillMonsterLoadReport {
     pub(crate) cumulative_monster_count: usize,
@@ -243,7 +222,6 @@ impl fmt::Display for NewSkillMonsterLoadError {
 impl Error for NewSkillMonsterLoadError {}
 
 impl NewSkillMonsterLoadError {
- /// Точные diagnostics `LoadNewSkillMonserConf` до общего reload failure-log.
     pub(crate) fn log_payload(&self) -> &'static [u8] {
         match self {
             Self::RootMissing | Self::Xml(_) => {
@@ -298,7 +276,6 @@ fn attribute(start: &quick_xml::events::BytesStart<'_>, expected: &[u8]) -> Opti
         .map(|attribute| attribute.value.into_owned())
 }
 
-/// Сохраняет `atoi`: пробелы, sign и decimal prefix допустимы; иной prefix — 0.
 fn legacy_atoi(value: &[u8]) -> i32 {
     let value = value.iter().copied().skip_while(u8::is_ascii_whitespace);
     let mut value = value.peekable();

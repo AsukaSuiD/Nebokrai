@@ -1,4 +1,4 @@
-//! Linux process-owner MiscServer.
+//! Владелец процесса MiscServer под Linux.
 //!
 //! Оболочка сохраняет исходный runtime-каталог, передаёт SIGINT/SIGTERM
 //! единственному `CGame` и публикует transport/auction diagnostics без
@@ -17,7 +17,6 @@ use crate::public::aucitionroom::TerminalGoodsDelivery;
 
 use super::{process_shutdown, run_process};
 
-/// Запускает полный MiscServer process lifecycle и возвращает код процесса.
 pub fn run_miscserver_process() -> std::process::ExitCode {
     run_process("MiscServer", run_misc_server)
 }

@@ -1,52 +1,19 @@
-//! WorldServer dispatcher-owner country messages `OnCountryMessage`.
+//! Country-сообщения `OnCountryMessage` из `countrymessage.cpp`, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Источник контракта — `WorldServer/Nworldserver.exe` и
-//! `WorldServer/WorldServer.pdb`; исходный owner —
-//! `appworld/message/countrymessage.cpp`. Он маршрутизирует смену страны
-//! (`0x60301`), управление правителями и министрами (`0x60304`,
-//! `0x60308..0x6030D`), выдачу сведений (`0x60306..0x60307`), синхронизацию
-//! страны (`0x60314..0x60316`) и события войны (`0x60317..0x6031D`).
-//! Неизвестный opcode завершается как `NoOp`: payload не читается и следующему
-//! owner-у не передаётся. Relay `0x60310/0x60311` только меняют type исходного
-//! сообщения на `0x7FF11/0x7FF12` и вызывают `SendAll`.
+//! Ветки `0x60301`, `0x60304`, `0x60306..0x6031D` сохраняют управление
+//! королём/министрами, scalar sync, player lists и country-war events.
+//! Неизвестный opcode — no-op; relays меняют только type и вызывают `SendAll`.
 //!
-//! Управляющие ветки сохраняют точный wire-порядок signed long/char и строгую
-//! последовательность `GetCountry`, проверки должности, `CanOperate` и самой
-//! операции. Первая отсутствующая страна или ложная проверка обрывает цепочку.
-//! Source socket/map, ownership, хвост сообщения и pending-request registry не
-//! участвуют. Byte должности не проверяется по диапазону перед передачей в
-//! `AppointMinister`/`DeposeMinister`; вложенный `HasJob -> IsKing` сохраняет
-//! исходный неожиданный `WS0034`. При назначении короля control point сначала
-//! ограничивается сверху значением `100000`, затем идут `SetKing` и
-//! `RegisterKing(0)`; результат вложенного `RegisterKing` при передаче власти
-//! игнорируется.
+//! Governance идёт через `GetCountry -> permission -> operation`; byte job не
+//! проверяется заранее. Scalar limits несимметричны: treasury/power зажимаются
+//! с двух сторон, tech exp только сверху, tech level только снизу, king points
+//! только сверху.
 //!
-//! `0x60314` читает `country:u8, selector:i8, value:i32`. Неизвестный selector
-//! и отсутствующая страна дают тихий no-op. Ограничения несимметричны:
-//! treasury/power зажимаются с обеих сторон, tech-exp только сверху,
-//! tech-level только снизу, king points только сверху. `0x60315` читает три
-//! byte, выбирает короля для job `1`, министра только для `2..=7` и меняет
-//! `_bQuestSwitch`; лог сохраняет исходный switch и хвост `A1 A3`.
-//!
-//! `0x60316` вызывает `GetExileResTime` до поиска online-player и отвечает
-//! `0x7FF15 { remaining_seconds:i32, player_id:i32 }`. Время вычисляется в
-//! wrapping signed 32-bit миллисекундах, делится к нулю и затем ограничивается
-//! снизу нулём. `0x6030E` прекращает чтение списка при отсутствующей стране;
-//! count `<= 0` не читает элементы, но всё равно публикуется. Для положительного
-//! count Rust требует фактически присутствующие DWORD и не дополняет оборванный
-//! inter-server payload нулями.
-//!
-//! Списки игроков сохраняют wrapping page arithmetic, GM-фильтр и king ID без
-//! дополнительного return count. `0x60317` синхронно выполняет объявление войны
-//! и отвечает в исходный `m_lMapID`; `0x60318` передаёт один country byte в
-//! `CountryWarSys::on_flag_destory`. `0x60319` пересылает исходное сообщение,
-//! `0x6031A` обновляет morale/exploit через общий async DB-маршрут,
-//! `0x6031B` остаётся без побочных эффектов, а `0x6031C/0x6031D` передают время
-//! войны и результат страны без проверки source metadata и хвоста.
-//!
-//! Rust заменяет singleton-доступ явным main-loop context, адресное вычисление
-//! имени страны — accessor-ом `CGlobeSetup`, а небезопасное чтение — typed
-//! codec. Эти замены не меняют порядок вызовов, wire и частичные эффекты.
+//! Exile time вычисляется wrapping-миллисекундами и ограничивается нулём.
+//! Player lists сохраняют page arithmetic и GM filter. War branches не вводят
+//! source/tail checks. Явный main-loop context и safe codec заменяют singleton
+//! и overread без изменения вызовов.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::public::tools::put_string_to_file;
@@ -513,7 +480,6 @@ pub(crate) struct WorldFourNationCountryFailSync {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldCountryMessageOutcome {
- /// Default полного `OnCountryMessage` без side effects.
     NoOp {
         request_type: i32,
     },
@@ -547,7 +513,6 @@ pub(crate) enum WorldCountryMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет оставшиеся scalar-sync и in-place relay ветви `OnCountryMessage`.
 pub(crate) fn on_country_message(
     game: &CGame,
     country_handler: &mut CCountryHandler,

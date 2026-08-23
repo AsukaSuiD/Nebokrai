@@ -1,20 +1,11 @@
-//! Списки операторов и игровых персонажей с операторскими правами.
+//! Операторы `CGMList` из WorldServer, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CGMList::AddToByteArray`:;
-//! loaders, accessors и Game decoder не входят в этот owner и остаются. Точная
-//! Исходный owner PDB:
-//!
-//! Оригинал World serializer и Game decoder подтверждают wire: signed count и
-//! ordered records `C-string name + i32 level` сначала для общего GM map,
-//! затем для player GM map, после них — C-string god passport. Ключ карты
-//! отдельно не передаётся. `BTreeMap<Vec<u8>, _>` заменяет
-//! `std::map<std::string, _>` и сохраняет его лексикографический byte-order;
-//! owned bytes заменяют C++ string lifetime. Уровень намеренно остаётся
-//! полным `i32`: известные enum-значения не дают права отвергать иное значение
-//! из данных. Точный EXE также подтверждает исходный god passport
-//! `@^$^#SDFSDslfld/$dsl2a`; чтение `gmlist.ini` и `data/temp.ini` остаётся
-//! отдельным loader-проходом. Невозможный signed count и внутренний NUL
-//! блокируют весь append до изменения destination.
+//! Wire пишет два ordered map: signed count и `name\0 + i32 level`, затем god
+//! passport. Keys задают byte-лексикографический порядок и отдельно не идут.
+//! Level остаётся произвольным `i32`; исходный passport равен
+//! `@^$^#SDFSDslfld/$dsl2a`. Внутренний NUL или невозможный count блокирует
+//! append до изменения destination.
 
 use std::collections::BTreeMap;
 use std::error::Error;

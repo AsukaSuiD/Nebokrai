@@ -1,101 +1,20 @@
-//! Система войны четырёх стран исторического WorldServer.
+//! Война четырёх стран `CFourNationWarSys` из `fournationwarsys.cpp/.h`,
+//! подтверждённая `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `CFourNationWarSys::AddToByteArray`,
-//! `RecvResultFromGS` и `ConvertMoraleToExploit`
-//! `OnRefreshRegion`/`OnClearWar`/`RequestWarResultFromGS`
-//! `GetWarRegionIDByTime`
-//! `OnSignUpWarStart`/`OnWarEnd`
-//! `Initialize` и `ReLoad`
-//! действуют действующими Rust-owner-ами. Источник контракта — точная пара WorldServer EXE/PDB.
-//! Исходные owner-ы PDB:
-//! и соседний `fournationwarsys.h`.
+//! Wire содержит signed count, 196-байтные setup records и пять `tagRECT`.
+//! Поля записываются явно little-endian; незарегистрированные timer IDs идут
+//! нулями, но отдельно отмечаются, чтобы reload не удалял чужое событие.
 //!
-//! World serializer и Game decoder подтверждают wire: signed setup count,
-//! insertion-order 196-byte setup records, затем signed rect count `5` и пять
-//! 16-byte `tagRECT`. Setup record — два `i32`, девять пар `u32 event_id +
-//! tagTime`, затем `i32 region_state + i32 is_every_week`; `tagTime` содержит
-//! восемь последовательных `u16`. Старый Linux C++ использован только для имён
-//! полей; размеры и порядок подтверждены поздними EXE/PDB и обоими концами
-//! wire. Rust пишет поля явно little-endian вместо копирования ABI-memory:
-//! padding/host ABI устранены, но все 196 наблюдаемых bytes сохраняются.
-//! `Vec` заменяет `std::vector`, фиксированный массив — process-global RECT[5].
-//! Невозможный signed count блокирует append до изменения destination. Точная
-//! `Initialize` восстанавливает country-name snapshot,
-//! очищает setup/fund registries, читает `#` weekly setup и `*` fund records,
-//! ставит достижимые calendar events и загружает `regions/<first>.nation`.
-//! Его точные `AddLogText` для отсутствующего setup/nation ресурса и неверного
-//! time order проходят через явный callback в момент исходной ветки; Rust не
-//! переносит только iostream/CRT cleanup и неинициализированные local fields.
-//! Rust хранит невыставленные timer IDs как ноль для wire, но отдельно помнит
-//! факт регистрации: ID `0` валиден, а старые неинициализированные поля при
-//! `ReLoad` были внутренним риском удаления чужого события.
-//! Проверка country-index nation-файла заменяет доказанный выход за `RECT[5]`
-//! безопасным пропуском без нового внешнего log: исходная ветка ошибки была
-//! внутренне противоречивой (`index < 0 && index > 4`) и не задавала
-//! совместимого результата для повреждённого ресурса.
+//! `Initialize` читает weekly setup, funds, country names и nation regions,
+//! регистрируя доступные calendar events в исходном порядке. Фазы signup/end
+//! сохраняют state, broadcasts, localized logs и перенос девяти timers на
+//! следующую неделю только после успешного region lookup.
 //!
-//! последовательно читает ровно пять signed
-//! `long` в static `s_lMorale[5]`. После slots `1..=4`, до чтения следующего,
-//! выбираются fixed regions `11000/12000/13000/14000`; только route `1..=4`
-//! получает `0x7FE49 { morale:i32 }`. Slot `0` сохраняется, но не публикуется.
-//! Source map/socket, request correlation, connected-state и send-result не
-//! fail-closed публикацию; это новая политика, а не контракт EXE. Rust хранит
-//! morale в instance-owner-е вместо process-global массива, сохраняя порядок
-//! mutation/read/send и не копируя static storage.
-//! Два старых ленивых доступа к singleton (`getInstance` и
-//! `GetFourNationWarSys`) не добавляют наблюдаемого поведения: один
-//! `CFourNationWarSys::default()` создаётся внешним lifecycle owner-ом, а
-//! действующие пути получают тот же живой `&mut CFourNationWarSys` через
-//! `WorldMainLoopOwners`. Поэтому статическое выделение и leak/lifetime
-//! исходника
-//! не переносятся.
-//!
-//! сначала ищет map-player. Для найденного
-//! игрока он либо отправляет `0x7FE46 { player_id:i32, increment:i32 }` его
-//! online GameServer-у, либо выполняет unsigned wrapping-прибавление к
-//! `dwExploit`. Для отсутствующего игрока owner один раз обновляет
-//! `CSL_PLAYER_ABILITY`, затем повторяет тот же поиск и маршрут.
-//! dispatcher читает два signed `long` в порядке
-//! player/increment. Source metadata, полный tail, connected-state и send
-//! очередь, coalescing и retry; они не переносятся как неоригинальная
-//! инфраструктура. SQL выполняется параметризованным `tiberius`-запросом в
-//! dispatcher-owner-е; COM exception plumbing заменён явным Rust-исходом без
-//! повторного player-поиска после ошибки выполнения.
-//!
-//! `OnWarEnd` сначала передаёт `XBWS0032` в
-//! общий `AddLogText`, ставит `CIS_NO`, отправляет `0x7FE43 { index }` и
-//! `0x7FE45 { index }`. Лишь затем успешный live-region lookup даёт
-//! `XBWS0033/0034`; перенос каждой из девяти calendar time на 7 дней и
-//! регистрация нового ID происходят только после этого gate и в точном
-//! порядке. Небезопасный доступ оригинала по timer index заменён typed block;
-//! normal valid-index последовательность не меняется.
-//!
-//! `OnSignUpWarStart` переводит setup в `CIS_DUTH`,
-//! посылает `0x7FE3D { index }`, а затем под live-region gate материализует
-//! `XBWS0024` и `XBWS0025` с именем региона. Второй текст публикуется только
-//! до `StartTime`; `GetTimeDifference` и выражение milliseconds берут
-//! только minute/second. оригинал подтверждает war-log
-//! `(Num:%d)[%s]Four Nation War System start!!.` с аргументами index/name.
-//!
-//! static `OneCountrySignUp` принимает только
-//! countries `1..=4`, получает `XBWS0035` и форматирует локальный `char[256]`,
-//! но никуда не передаёт результат и не меняет состояние. Rust сохраняет
-//! внешний no-op и country gate, удаляя только неиспользуемые allocation,
-//! string lookup и `_snprintf` как внутреннюю мёртвую работу.
-//!
-//! `SendPlayerWarTimeToGS` отображает country
-//! `1..=4` в regions `11000..14000`, принимает только map route `1..=4` и
-//! отправляет `0x7FE47 { player_id:i32, war_time:u32 }`. Source/socket,
-//! connected-state и send-result не влияют на ветвление.
-//!
-//! `OneCountryFail` выбирает `XBWS0036`, когда
-//! обе страны равны, иначе `XBWS0037`; аргументы — копии country-name slots
-//! `m_CountryName[5][10]`. Затем он безусловно вызывает уже подтверждённый
-//! `COrganizingCtrl::SendTopInfoToClient(-1, 1, 2, text)`, то есть реальный
-//! broadcast wire — `0x7FA04`, а не альтернативный `0x7FE48`. Старые `strcpy` в
-//! десятибайтовые slots и последующий `strlen` после возможного `_snprintf`
-//! overflow были внутренним UB: Rust безопасно ограничивает имя девятью,
-//! notice — 255 байтами, сохраняя нормальный C-string wire.
+//! Morale обновляет пять slots, но рассылает только countries 1..=4.
+//! Exploit либо отправляется online player, либо с wrapping добавляется в
+//! состояние после единственной DB-подгрузки. War-time и fail notices сохраняют
+//! исходные region routes и `0x7FA04`; внутренние stack buffers ограничены без
+//! изменения нормальных C-строк.
 
 use std::error::Error;
 use std::fmt;
@@ -158,7 +77,6 @@ pub(crate) struct FourNationWarFund {
     pub(crate) money: i32,
 }
 
-/// Все девять точных calendar callback-ов `CFourNationWarSys`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FourNationWarCallbacks<Callback> {
     pub(crate) sign_up_start: Callback,
@@ -226,14 +144,12 @@ pub(crate) enum FourNationWarLoadError {
     ScheduleIndexOverflow,
 }
 
-/// Безопасная граница старого индексирования `s_vSetup` без bounds-check.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FourNationWarRegionIndexBlock {
     pub(crate) index: i32,
     pub(crate) setup_count: usize,
 }
 
-/// Внешние owner-ы действующих calendar callback-ов войны.
 pub(crate) trait FourNationWarCallbackContext {
     fn send_all(&mut self, message: &CMessage);
     fn region_name(&mut self, region_id: i32) -> Option<Vec<u8>>;
@@ -259,14 +175,12 @@ pub(crate) trait FourNationWarCallbackContext {
     fn send_timed_top_info(&mut self, info_id: i32, timer_flag: i32, milliseconds: i32, text: &[u8]);
 }
 
-/// Безопасная граница calendar callback-ов войны.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FourNationWarCalendarBlock {
     RegionIndex(FourNationWarRegionIndexBlock),
     Calendar(TagTimeArithmeticBlock),
 }
 
-/// Девять `KillTimeEvent` вызовов `CFourNationWarSys::ReLoad`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FourNationWarReloadEvent {
     SignUpStart,
@@ -280,7 +194,6 @@ pub(crate) enum FourNationWarReloadEvent {
     EndInfo,
 }
 
-/// Итог reload-ветки, отдельно сохраняющий legacy `false` активной войны.
 #[derive(Debug)]
 pub(crate) enum FourNationWarReloadDisposition {
     BlockedActive {
@@ -291,7 +204,6 @@ pub(crate) enum FourNationWarReloadDisposition {
     Reloaded(FourNationWarReloadReport),
 }
 
-/// `ReLoad` игнорирует bool `Initialize`; Rust не скрывает его outcome.
 #[derive(Debug)]
 pub(crate) struct FourNationWarReloadReport {
     pub(crate) previous_setups: usize,
@@ -432,7 +344,6 @@ pub(crate) struct FourNationWarResultReport {
     pub(crate) publications: Vec<FourNationMoralePublication>,
 }
 
-/// Общая безопасная materialization трёх static World callback-ов.
 fn send_four_nation_broadcast<SendAll, Delivery>(
     opcode: i32,
     region_id: i32,
@@ -447,7 +358,6 @@ where
 }
 
 impl CFourNationWarSys {
- /// Broadcast `OnRefreshRegion`: `0x7FE41 { region_id:i32 }`.
     pub(crate) fn on_refresh_region<SendAll, Delivery>(
         region_id: i32,
         send_all: &mut SendAll,
@@ -458,7 +368,6 @@ impl CFourNationWarSys {
         send_four_nation_broadcast(0x7FE41, region_id, send_all)
     }
 
- /// Broadcast `OnClearWar`: `0x7FE44 { region_id:i32 }`.
     pub(crate) fn on_clear_war<SendAll, Delivery>(
         region_id: i32,
         send_all: &mut SendAll,
@@ -469,7 +378,6 @@ impl CFourNationWarSys {
         send_four_nation_broadcast(0x7FE44, region_id, send_all)
     }
 
- /// Broadcast `RequestWarResultFromGS`: `0x7FE45 { region_id:i32 }`.
     pub(crate) fn request_war_result_from_gs<SendAll, Delivery>(
         region_id: i32,
         send_all: &mut SendAll,
@@ -484,8 +392,8 @@ impl CFourNationWarSys {
  ///
  /// Source `regions/<first region>.nation` запрашивается лишь после
  /// постановки timers всех принятых setup-записей, как в EXE. Поэтому его
- /// отсутствие завершает bool-owner с уже зарегистрированным prefix side
- /// effect.
+ /// отсутствие завершает bool-owner после регистрации таймеров принятого
+ /// префикса.
     pub(crate) fn initialize<Callback: Copy, NationSource, Log>(
         &mut self,
         country_names: [Vec<u8>; FOUR_NATION_RECT_COUNT as usize],
@@ -701,7 +609,6 @@ impl CFourNationWarSys {
         Ok(())
     }
 
- /// `OnEnterStart`: `CIS_Mass`, broadcast `0x7FE3F`, `XBWS0027/0028`.
     pub(crate) fn on_enter_start<Context: FourNationWarCallbackContext + ?Sized>(
         &mut self,
         index: i32,
@@ -725,7 +632,6 @@ impl CFourNationWarSys {
         Ok(())
     }
 
- /// `OnEnterEnd`: только `XBWS0029` top-info и `XBWS0030` war-log.
     pub(crate) fn on_enter_end<Context: FourNationWarCallbackContext + ?Sized>(
         &self,
         index: i32,
@@ -789,7 +695,6 @@ impl CFourNationWarSys {
         Ok(())
     }
 
- /// `OnSignUpWarEnd`: broadcast `0x7FE3E { index, 1 × 5 }`, затем war-log.
     pub(crate) fn on_sign_up_war_end<Context: FourNationWarCallbackContext + ?Sized>(
         &self,
         index: i32,
@@ -807,7 +712,6 @@ impl CFourNationWarSys {
         Ok(())
     }
 
- /// `OnWarEndInfo`: `0x7FE42`, затем `XBWS0031` до EndTime в CIS_Fight.
     pub(crate) fn on_war_end_info<Context: FourNationWarCallbackContext + ?Sized>(
         &self,
         index: i32,
@@ -883,7 +787,6 @@ impl CFourNationWarSys {
         }
         Ok(())
     }
- /// Сохраняет единственный внешний контракт `OneCountrySignUp`.
     pub(crate) const fn one_country_sign_up(country: i32) -> FourNationSignUpDisposition {
         if 0 < country && country < 5 {
             FourNationSignUpDisposition::ValidCountryNoExternalEffect

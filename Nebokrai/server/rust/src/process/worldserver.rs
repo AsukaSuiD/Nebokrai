@@ -1,4 +1,4 @@
-//! Linux process-owner WorldServer.
+//! Владелец процесса WorldServer под Linux.
 //!
 //! Оболочка связывает SIGINT/SIGTERM с единственным процессным runtime и
 //! публикует итог `CreateGame -> Init -> MainLoop -> Release`, не открывая
@@ -15,7 +15,6 @@ use crate::worldserver::worldserver::runtime::{
 
 use super::{process_shutdown, run_process};
 
-/// Запускает полный WorldServer process lifecycle и возвращает код процесса.
 pub fn run_worldserver_process() -> std::process::ExitCode {
     run_process("WorldServer", run_world_server)
 }

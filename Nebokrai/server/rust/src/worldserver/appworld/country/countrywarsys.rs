@@ -1,119 +1,24 @@
-//! WorldServer-владелец country-war state `CountryWarSys` из точной пары
-//! EXE/PDB и исходного owner-а `appworld/country/countrywarsys.cpp`.
+//! Войны государств `CountryWarSys` из `countrywarsys.cpp/.h`, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт охватывает сериализацию, объявление войны, phase callbacks,
-//! `on_flag_destory` (исходное PDB-написание), initialize/reload и top-info.
+//! Setup хранит расписание по war ID. `initialize` регистрирует девять one-shot
+//! timer callbacks в исходном порядке; `reload` сначала снимает прежние timers,
+//! затем выполняет `end_war` и повторную инициализацию. Отсутствующий timer ID
+//! не подменяется вызовом с нулём.
 //!
-//! PDB/static map хранит `CountryWarRegion` размером `0x0C`: clear-byte с
-//! padding, signed defend и attack country. `BTreeMap` сохраняет map-order.
-//! Для каждой записи с двумя ненулевыми сторонами callback сначала сбрасывает
-//! clear-byte, затем ищет живой region и обе страны. При успехе он рассылает
-//! `0x7FF22` с low byte входной страны; full signed equality выбирает defender
-//! result `2/1` либо attacker result `1/2`. После optional `WS0105/WS0106`
-//! форматирования стороны всегда обнуляются и country-info `0x7FA03` уходит
-//! даже при пустом тексте. Сохраняется порядок state/message/result/clear.
-//! Region, localization, country-map и network owners остаются явной context-
-//! границей; concrete adapter теперь подключён к `ProcessMessage(0x60318)`.
-//! Неизвестность в этих владельцах сохраняет уже выполненные предыдущие эффекты.
-//! Переполнение исходного 256-byte `_sprintf` не воспроизводится: нормальный
-//! output сохраняется, oversized localization безопасно ограничивается 255
-//! байтами под C-string NUL как внутренний UB без gameplay-эффекта.
-//! `player_declare` требует online-player,
-//! чужая target-country, последовательные `IsKing/IsMinister(5)`, первый
-//! свободный region, живой `pRegion`, затем проверки только defend-country.
-//! При успехе state меняется до `0x7FF1F`, результаты обеих рассылок
-//! игнорируются, лишний lookup `WS0103` перезаписывается `WS0104`, и функция
-//! rollback при отказе очереди; эти полезные, но неоригинальные политики сюда
-//! не перенесены. 512-byte `_sprintf` overflow безопасно ограничен нормальным
-//! C-string payload в 511 байт без изменения штатного результата.
+//! Фазы объявления, подготовки, начала, конца и очистки сохраняют порядок
+//! broadcast, локализованного журнала и изменений стран/регионов. Lookup через
+//! `operator[]` по-прежнему вставляет нулевое расписание до проверки времени;
+//! длительность уведомления учитывает только минуты и секунды с 32-битным
+//! wrapping.
 //!
-//! `initialize` очищает только `_country_wars`, читает восемь
-//! пар `label + signed long`, затем последовательно сканирует две секции `#`
-//! через общий `<end>`-ограничитель. `_war_regions` заранее не очищается, а
-//! каждая встреченная запись полностью обнуляет соответствующее состояние.
-//! Вторая секция имеет машинную странность: stack key обнуляется один раз и
-//! никогда не увеличивается, поэтому все допустимые времена пишутся под ID `0`
-//! ID; это исправлено по EXE. `TagTime` сохраняет исходный colon/`atoi` parser
-//! и минутную арифметику, `BTreeMap`, byte slices и `CTimer` заменяют только
-//! `ifstream`, STL и singleton plumbing. Неполные/нечисловые восемь параметров
-//! в оригинале оставляли чтение неинициализированного stack `long`; Rust
-//! локально блокирует такой malformed input вместо выдуманного значения.
-//! Оба старых ленивых доступа к singleton (`get_instance` и
-//! `get_country_war_sys`) не несут самостоятельной игровой семантики: один
-//! `CountryWarSys::default()` создаётся внешним lifecycle owner-ом, а
-//! действующие пути получают этот же живой `&mut CountryWarSys` через
-//! `WorldMainLoopOwners`. Так исключены статическое выделение и lifetime/leak
-//! оригинала без изменения состояния, wire или порядка side effects.
+//! При старте clear-флаг ставится до region lookup. При завершении результаты
+//! стран сбрасываются только для активной пары, а запись войны очищается
+//! независимо от наличия региона. Ошибки рассылки не откатывают эти изменения.
 //!
-//! Регистрация событий также буквально сохраняет порядок EXE. Просроченный
-//! `EndTime` оставляет первый clear-event на `ClearTime`, ставит второй на
-//! текущее время и теряет ID первого. Event `DeclarEnd` ошибочно записывается
-//! в поле `DeclarBeginEventID`, а достижимый `DeclarBegin` перезаписывает его;
-//! отдельное поле `DeclarEndEventID` остаётся неизвестным. `Option<TimerId>`
-//! выражает эту constructor/stack-неизвестность без нулевой заглушки. Логи
-//! missing-file и восьми проверок порядка передаются существующему World
-//! log-owner-у в месте вызова.
-//!
-//! только defender/attacker, не трогая `state_clear`, и затем безусловно
-//! рассылает `0x7FF1D`. `reload` в map-order безусловно читает и передаёт в
-//! `KillTimeEvent` девять ID, затем вызывает `end_war -> initialize`.
-//! `Option<TimerId>` не подменяет отсутствующее поле вызовом `KillEvent(0)`:
-//! typed block возвращается в точке первого недоказанного ID и
-//! сохраняет счётчики уже выполненных kill side effects. Return рассылки
-//! `0x7FF1D` оригинал не проверял; typed report хранит полный `Result`, не
-//! сворачивая ошибку очереди в придуманный signed код.
-//!
-//! Phase callbacks сохраняют точный side-effect порядок. `DeclareBegin`
-//! сначала обходит country IDs `1..=4`, назначая war-result `0` только живым
-//! странам, затем рассылает `0x7FF17` и публикует `WS0095`.
-//! Один и тот же country byte служит ключом `find/operator[]`. Остальные
-//! пары: `DeclareEnd = 0x7FF18/WS0096`, `PrepareBegin = 0x7FF19/WS0097`,
-//! `PrepareEnd = 0x7FF1A/WS0098`; clear callback только рассылает `0x7FF1E`.
-//! Timer parameter во всех пяти функциях не читается. Lookup null превращается
-//! в пустую строку до старого no-argument `_sprintf`; форматирование и
-//! 256-byte UB-граница остаются у явного context-а, а нормальные bytes не
-//! требуют собственного formatter-а.
-//!
-//! `on_war_start_info/on_war_end_info` делают observable `operator[]` по
-//! входному war ID до проверки времени; отсутствующий key поэтому вставляет
-//! value-initialized zero schedule. Только target строго позже local now
-//! достигает публикации. Duration вычисляется как
-//! `(difference.minute * 60 + difference.second) * 1000` с 32-битным
-//! wrapping и намеренно игнорирует hour/day. После `WS0099/WS0100` lookup и
-//! форматирования concrete `CCountryHandler::AddOneTopInfo(2, duration, text)`
-//! вызывается до concrete `SendTopInfoToClient` с возвращённым ID. wire
-//! `0x7FA04` теперь принадлежит `CCountryHandler`, а delivery сохранён в report.
-//!
-//! `on_war_start` сначала выполняет
-//! безусловный `0x7FF1B`, затем map-order обход записей с двумя ненулевыми
-//! сторонами. Для каждой такой записи clear-byte становится `1` до region
-//! lookup; отсутствующий/null region пропускает только `WS0092`, не откатывая
-//! state. Один region ID используется и для `find`, и для `operator[]`. В
-//! `_sprintf`
-//! передавались именно `szCountryName[country][0x40]`, поэтому concrete
-//! adapter теперь форматирует именами стран, а не их числовыми ID. Старый
-//! 256-byte overflow безопасно ограничен 255 видимыми байтами.
-//!
-//! `on_war_end` после `0x7FF1C`
-//! он обрабатывает только `state_clear && defend != 0 && attack != 0`: живой
-//! region получает `WS0093`, затем результаты существующих defender и attacker
-//! сбрасываются в этом порядке. Независимо от region lookup запись после этого
-//! очищается целиком. В конце observable `operator[]` вставляет нулевой schedule
-//! для отсутствующего war ID и, если `ClearTime > now`, публикует `WS0094` тем
-//! же минутно-секундным duration, `AddOneTopInfo` и `0x7FA04` owner-ом.
-//! Девять callback-token-ов, зарегистрированных `initialize`, теперь
-//! распознаются `WorldTimerHandler` по тем же значениям и исполняются внутри
-//! `CTimer::Run`; входной signed parameter остаётся war ID. Это заменяет только
-//! глобальные static function/singleton lookup: неизвестные callback-и по-
-//! прежнему передаются внешнему dispatcher-у, а country-war события остаются
-//! one-shot без выдуманной повторной регистрации.
-//!
-//! Snapshot намеренно сохраняет layout World EXE: `state_clear + 3 bytes
-//! padding`, затем defender и attacker. Парный Game EXE
-//! трактует те же 12 bytes как defender, attacker, `state_clear + padding` —
-//! это подтверждённое несовпадение поставленных бинарников, а не повод молча
-//! менять World wire. Неинициализированный padding старого World нормализован
-//! нулями: он не несёт семантики Miracle и не должен утекать в сеть.
+//! Snapshot сохраняет World-layout `state_clear, defender, attacker` с padding.
+//! Он намеренно отличается от парного Game-декодера; padding нормализован нулями,
+//! потому что не несёт игровой семантики.
 
 use std::collections::BTreeMap;
 
@@ -337,19 +242,14 @@ pub(crate) struct CountryWarVictoryRegion {
 pub(crate) trait CountryWarVictoryContext {
     type Block;
 
- /// Повторяет `s_mapRegionList.find/operator[]` и non-null `pRegion` gate.
     fn region(&mut self, region_id: i32) -> Result<Option<CountryWarVictoryRegion>, Self::Block>;
 
- /// Повторяет отдельный `GetCountry(low byte)`; ID `0` даёт false.
     fn country_exists(&mut self, country: u8) -> Result<bool, Self::Block>;
 
- /// Синхронно повторяет `CMessage::SendAll`; старый return игнорировался.
     fn send_all(&mut self, message: &CMessage) -> i32;
 
- /// Пишет result уже доказанно существующей стране.
     fn set_country_war_result(&mut self, country: u8, result: i32) -> Result<(), Self::Block>;
 
- /// Повторяет `GetStringByID` и старую 256-byte `_sprintf` границу.
     fn format_victory_notice(
         &mut self,
         string_id: &'static [u8],
@@ -532,7 +432,6 @@ impl CountryWarPhase {
 pub(crate) trait CountryWarPhaseContext {
     type Block;
 
- /// Повторяет `GetCountry(1..=4)` и назначает result только живой стране.
     fn reset_country_war_result_if_present(
         &mut self,
         country: u8,
@@ -601,13 +500,11 @@ impl CountryWarTopInfoKind {
 pub(crate) trait CountryWarTopInfoContext {
     type Block;
 
- /// Выполняет GetStringByID/null-empty и штатное no-argument форматирование.
     fn format_top_info_notice(
         &mut self,
         string_id: &'static [u8],
     ) -> Result<Vec<u8>, Self::Block>;
 
- /// Вызывает concrete `CCountryHandler::AddOneTopInfo`.
     fn add_top_info(
         &mut self,
         timer_flag: i32,
@@ -616,7 +513,6 @@ pub(crate) trait CountryWarTopInfoContext {
         get_tick: &mut dyn FnMut() -> u32,
     ) -> i32;
 
- /// Вызывает concrete `CCountryHandler::SendTopInfoToClient`.
     fn send_top_info(
         &mut self,
         top_info_id: i32,
@@ -794,7 +690,6 @@ impl CountryWarSys {
         Ok(report)
     }
 
- /// Отменяет все старые event-ID, завершает войны и повторяет `initialize`.
     pub(crate) fn reload<Callback, Log, SendAll>(
         &mut self,
         source: Option<&[u8]>,
@@ -850,7 +745,6 @@ impl CountryWarSys {
         })
     }
 
- /// Сбрасывает только обе стороны каждой войны и рассылает `0x7FF1D`.
     pub(crate) fn end_war<SendAll>(&mut self, mut send_all: SendAll) -> CountryWarEndReport
     where
         SendAll: FnMut(&CMessage) -> Result<i32, SendMessageError>,
@@ -1150,7 +1044,6 @@ impl CountryWarSys {
         Ok(report)
     }
 
- /// Выполняет `on_war_start_info/on_war_end_info` поверх живого top-info owner-а.
     pub(crate) fn run_top_info<Context, GetTick>(
         &mut self,
         kind: CountryWarTopInfoKind,
@@ -1432,7 +1325,6 @@ struct CountryWarOffsets {
 }
 
 impl CountryWarTime {
- /// Повторяет value-insert `map::operator[]` для отсутствующего war ID.
     fn zero_initialized() -> Self {
         let zero_time = TagTime::default();
         let zero_event = Some(TimerId::from_raw(0));

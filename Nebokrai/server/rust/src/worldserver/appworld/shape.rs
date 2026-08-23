@@ -1,69 +1,23 @@
-//! Владелец базового shape-состояния исторического `WorldServer`.
+//! Форма `CShape` из `shape.cpp/.h`, подтверждённая
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Rust-owner включает унаследованный `CBaseObject::GetName`, полный набор
-//! скалярных accessor-ов `CShape`, `CShape::GetRegionID`,
-//! `CShape::SetRegionID`, `CShape::SetDir`,
-//! `CShape::SetState`, `CShape::SetPosXY`
-//! `CShape::GetTileX/GetTileY`,
-//! `CShape::SetTileXY`,
-//! `CShape::AddToByteArray`,
-//! `CShape::DecordFromByteArray`,
-//! `CShape::AddShapeToByteArray` и
-//! `CShape::DecordShapeFromByteArray`. Источник контракта — точная пара WorldServer EXE/PDB.
+//! Владелец расширяет `CBaseObject` region, position, direction, state/action
+//! и speed `2000.0`. Wire пишет base object, optional GUID, region, bit-exact
+//! floats X/Y/speed, dir/pos и два `u16`; decoder читает тот же порядок, но
+//! намеренно сбрасывает live `m_lPos` в ноль.
 //!
-//! Оба virtual-метода буквально читают и присваивают `m_lRegionID` без
-//! проверок и побочных эффектов. Signed Windows `long` переносится как `i32`;
-//! Rust-тип не объявляет совместимость с исходным ABI, layout или vtable.
-//! Базовый виртуальный `GetFigure` не читает объект и всегда
-//! возвращает нуль; конкретный `CMonster` задаёт отдельное переопределение
-//! через настройку монстра. Его оригинал-дубликат из `union.cpp` закрыт здесь.
-//! `CShape::CShape` отдельно доказывает начальное значение
-//! region ID `0` и первым вызывает готовый `CBaseObject::CBaseObject`.
-//! Полный действующий constructor-state задаёт region/position/direction/pos/
-//! state/action нулями и speed `2000.0`; helper сознательно не называется
-//! `new` и не реализует `Default`, потому что father/child storage остаётся у
-//! ещё не материализованной части base-owner-а.
+//! Tile coordinates используют x87 truncation к нулю. NaN, infinity и значение
+//! вне `i32` блокируются вместо неопределённого преобразования. `SetPosX/Y`
+//! сохраняют вторую координату через getter и общий `SetPosXY`.
 //!
-//! Byte-array сначала вызывает готовый `CBaseObject` owner, затем пишет GUID
-//! как marker `0` либо `16` и, только после `16`, его 16 legacy-байтов. Далее
-//! идут signed region, bit- `f32` X/Y, signed dir/pos, bit- speed и
-//! два `u16` state/action. подтверждает три
-//! `fstp dword ptr [esp]` и общий четырёхбайтовый append target:
-//! оригинал-касты float к `long` были ошибкой прототипа, числового преобразования
-//! нет. Обратный owner читает тот же порядок, но доказанно отбрасывает
-//! serialized `m_lPos` и ставит live поле в `0`.
-//! `SetPosXY` буквально присваивает два `f32`. Tile-getter-ы вызывают virtual
-//! `GetPosX/GetPosY`, а инструкции и
-//! ставят x87 RC bits в `11`: conversion усекается к
-//! нулю. Это; safe Rust блокирует лишь NaN, infinity и
-//! значение вне signed `i32`, для которых достижимое поведение не доказано.
-//!
-//! CPlayer vtable по slot-ам `+0x50..+0xA0` ссылается на эти же
-//! CShape getters/setters и оба shape byte-owner-а; derived override в clone-
-//! пути отсутствует. Safe slice/cursor возвращает локальную типизированную
-//! ошибку при коротком источнике после уже выполненных
-//! присваиваний, не воспроизводя старый безразмерный overread через `unsafe`.
-//!
-//! Отдельные оригинал-блоки getter/setter удалены. STL, CRT и compiler-generated
-//! механизмов в них не было. Историческая цепочка наследования теперь выражена
-//! безопасной композицией `CBaseObject -> CShape -> CMoveShape -> CPlayer`;
-//! единственные object type, `id` и `region_id` остаются у своих owners. PDB задаёт
-//! размеры старых классов `0x50/0x6C`, а текущий оригинал — непосредственный
-//! base-constructor call, поэтому дополнительное оригинал не
-//! требовалось.
-//! `SetPosX/SetPosY` не присваивают поле напрямую: тела берут вторую
-//! координату через virtual getter и вызывают virtual `SetPosXY`. В
-//! действующих World vtable эти slots не override-ятся, поэтому композиция
-//! сохраняет те же X/Y и порядок чтения без искусственного virtual ABI.
-//! Destructor `CShape` только передаёт lifecycle в `CBaseObject`; Rust field
-//! ownership делает это автоматически.
+//! Rust-композиция `CBaseObject -> CShape -> CMoveShape` заменяет ABI/vtable;
+//! короткий wire сохраняет уже выполненные присваивания до ошибки.
 
 use std::error::Error;
 use std::fmt;
 
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
 
-/// Ошибка безопасной границы старого shape byte-array decoder-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShapeDecodeError {
     BaseObject(BaseObjectDecodeError),
@@ -75,7 +29,6 @@ pub(crate) enum ShapeDecodeError {
     },
 }
 
-/// Safe-граница x87 `f32 -> signed long` для tile-координаты.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ShapeTileCoordinateBlock {
     pub(crate) axis: &'static str,
@@ -114,7 +67,6 @@ impl From<BaseObjectDecodeError> for ShapeDecodeError {
     }
 }
 
-/// Действующая region-часть исходного `CShape`.
 pub(crate) struct CShape {
     base_object: CBaseObject,
     region_id: i32,
@@ -128,12 +80,11 @@ pub(crate) struct CShape {
 }
 
 impl CShape {
- /// Повторяет базовый виртуальный `CShape::GetFigure`: нуль без чтения состояния.
     pub(crate) const fn get_figure(&self) -> u8 {
         0
     }
 
- /// Создаёт только доказанное начальное region-состояние исходного
+ /// Создаёт только исходное начальное region-состояние исходного
  /// конструктора.
     pub(crate) const fn with_constructor_region_default() -> Self {
         Self {
@@ -149,113 +100,91 @@ impl CShape {
         }
     }
 
- /// Возвращает object type через унаследованный `CBaseObject` owner.
     pub(crate) const fn get_type(&self) -> i32 {
         self.base_object.get_type()
     }
 
- /// Присваивает object type через унаследованный `CBaseObject` owner.
     pub(crate) const fn set_type(&mut self, object_type: i32) {
         self.base_object.set_type(object_type);
     }
 
- /// Возвращает ID через унаследованный `CBaseObject` owner.
     pub(crate) const fn get_id(&self) -> i32 {
         self.base_object.get_id()
     }
 
- /// Присваивает ID через унаследованный `CBaseObject` owner.
     pub(crate) const fn set_id(&mut self, id: i32) {
         self.base_object.set_id(id);
     }
 
- /// Заимствует GUID через единственный унаследованный `CBaseObject` owner.
     pub(crate) const fn get_ex_id(&self) -> &crate::public::guid::CGuid {
         self.base_object.get_ex_id()
     }
 
- /// Копирует GUID через единственный унаследованный `CBaseObject` owner.
     pub(crate) const fn set_ex_id(&mut self, ex_id: &crate::public::guid::CGuid) {
         self.base_object.set_ex_id(ex_id);
     }
 
- /// Заимствует имя через единственный унаследованный `CBaseObject` owner.
     pub(crate) fn get_name(&self) -> &[u8] {
         self.base_object.get_name()
     }
 
- /// Присваивает byte- имя через единственный base-owner.
     pub(crate) fn set_name(&mut self, name: &[u8]) {
         self.base_object.set_name(name);
     }
 
- /// Присваивает signed graphics ID через единственный base-owner.
     pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
         self.base_object.set_graphics_id(graphics_id);
     }
 
- /// Возвращает signed region ID без преобразования битового шаблона.
     pub(crate) const fn get_region_id(&self) -> i32 {
         self.region_id
     }
 
- /// Возвращает bit- X исходного shape.
     pub(crate) const fn get_pos_x(&self) -> f32 {
         self.pos_x
     }
 
- /// Повторяет `SetPosX`: сохраняет текущий Y и делегирует `SetPosXY`.
     pub(crate) const fn set_pos_x(&mut self, pos_x: f32) {
         self.set_pos_xy(pos_x, self.get_pos_y());
     }
 
- /// Возвращает bit- Y исходного shape.
     pub(crate) const fn get_pos_y(&self) -> f32 {
         self.pos_y
     }
 
- /// Повторяет `SetPosY`: сохраняет текущий X и делегирует `SetPosXY`.
     pub(crate) const fn set_pos_y(&mut self, pos_y: f32) {
         self.set_pos_xy(self.get_pos_x(), pos_y);
     }
 
- /// Возвращает X-клетку с точным x87 truncation toward zero.
     pub(crate) fn get_tile_x(&self) -> Result<i32, ShapeTileCoordinateBlock> {
         truncate_tile_coordinate(self.get_pos_x(), "X")
     }
 
- /// Возвращает Y-клетку с точным x87 truncation toward zero.
     pub(crate) fn get_tile_y(&self) -> Result<i32, ShapeTileCoordinateBlock> {
         truncate_tile_coordinate(self.get_pos_y(), "Y")
     }
 
- /// Возвращает signed direction исходного shape.
     pub(crate) const fn get_direction(&self) -> i32 {
         self.direction
     }
 
- /// Присваивает signed legacy `m_lPos` без дополнительных эффектов.
     pub(crate) const fn set_position(&mut self, position: i32) {
         self.position = position;
     }
 
- /// Возвращает bit- скорость shape.
     pub(crate) const fn get_speed(&self) -> f32 {
         self.speed
     }
 
- /// Присваивает signed region ID без проверки и дополнительных эффектов.
     pub(crate) const fn set_region_id(&mut self, region_id: i32) {
         self.region_id = region_id;
     }
 
- /// Присваивает обе bit- координаты без проверок и побочных эффектов.
     pub(crate) const fn set_pos_xy(&mut self, pos_x: f32, pos_y: f32) {
         self.pos_x = pos_x;
         self.pos_y = pos_y;
     }
 
- /// Сохраняет исходную проверку `0 <= direction < 8`.
     pub(crate) const fn set_direction(&mut self, direction: i32) -> bool {
         if direction < 0 || direction >= 8 {
             return false;
@@ -264,38 +193,31 @@ impl CShape {
         true
     }
 
- /// Присваивает bit- аргумент virtual `CShape::SetSpeed`.
     pub(crate) const fn set_speed(&mut self, speed: f32) {
         self.speed = speed;
     }
 
- /// Ставит shape в центр двух signed tile-координат.
     pub(crate) fn set_tile_xy(&mut self, tile_x: i32, tile_y: i32) {
         self.pos_x = tile_x as f32 + 0.5;
         self.pos_y = tile_y as f32 + 0.5;
     }
 
- /// Присваивает полный unsigned 16-битный shape-state без побочных эффектов.
     pub(crate) const fn set_state(&mut self, state: u16) {
         self.state = state;
     }
 
- /// Возвращает полный unsigned 16-битный shape-state.
     pub(crate) const fn get_state(&self) -> u16 {
         self.state
     }
 
- /// Возвращает полный unsigned 16-битный shape-action.
     pub(crate) const fn get_action(&self) -> u16 {
         self.action
     }
 
- /// Присваивает полный unsigned 16-битный shape-action.
     pub(crate) const fn set_action(&mut self, action: u16) {
         self.action = action;
     }
 
- /// Дописывает base и shape части в точном legacy-порядке.
     pub(crate) fn add_to_byte_array(&self, destination: &mut Vec<u8>, include_child: bool) -> bool {
         let _ = self
             .base_object
@@ -304,7 +226,6 @@ impl CShape {
         true
     }
 
- /// Читает base и shape части, сохраняя cursor и уже выполненные мутации.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],
@@ -374,7 +295,7 @@ fn truncate_tile_coordinate(
 ) -> Result<i32, ShapeTileCoordinateBlock> {
  // x87 `fistp dword` выдаёт integer-indefinite для
  // NaN/inf/out-of-range. Достижимость такого live position и обязанность
- // публиковать именно этот результат соседним owner-ам не доказаны.
+ // публиковать именно этот результат соседним owner-ам не определены.
     if !value.is_finite() || !(-2_147_483_648.0..2_147_483_648.0).contains(&value) {
         return Err(ShapeTileCoordinateBlock {
             axis,

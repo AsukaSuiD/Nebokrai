@@ -1,7 +1,7 @@
-//! Owned write-log worker WorldServer.
+//! Worker журнала WorldServer с явным владением.
 //!
 //! Контракт очереди и reconnect-loop подтверждён точной парой WorldServer
-//! EXE/PDB. Worker извлекает SQL-команду до выполнения; при DB-ошибке уже
+//! `worldserver.exe`/`worldserver.pdb`. Worker извлекает SQL-команду до выполнения; при DB-ошибке уже
 //! извлечённая команда теряется, соединение пересоздаётся, а очередь продолжает
 //! работу с последующего элемента. Ошибка initial/reconnect connect повторяется
 //! через исходный десятисекундный интервал; успешный idle loop сохраняет
@@ -250,7 +250,6 @@ pub(crate) enum WorldWriteLogWorkerCompletion {
     Panicked,
 }
 
-/// Owned thread/exit owner точных `ProcessWriteLogDataFunc` и `DoSaveLog`.
 pub(crate) struct WorldWriteLogWorker {
     signal: Arc<WorldWriteLogWorkerSignal>,
     handle: Option<JoinHandle<WorldWriteLogWorkerReport>>,
@@ -425,7 +424,6 @@ fn run_world_write_log_worker(
     }
 }
 
-/// Ошибка отдельного Log DB connection-owner без раскрытия setup credentials.
 #[derive(Debug)]
 pub(crate) enum WorldWriteLogConnectionError {
     Connect(io::Error),
@@ -450,7 +448,6 @@ impl Error for WorldWriteLogConnectionError {
     }
 }
 
-/// Снимок исходного `GetSize` перед одним batch-проходом `DoSaveLog`.
 #[derive(Debug)]
 pub(crate) struct WorldWriteLogBatch {
     pub(crate) snapshot_size: usize,
@@ -516,7 +513,6 @@ pub(crate) async fn open_world_write_log_connection(
         .map_err(WorldWriteLogConnectionError::Tds)
 }
 
-/// Выполняет одну typed DB-команду параметризованным запросом.
 pub(crate) async fn execute_world_write_log_command(
     connection: &mut WorldTdsClient,
     command: &WorldWriteLogCommand,
@@ -1152,7 +1148,6 @@ pub(crate) async fn execute_world_write_log_command(
     }
 }
 
-/// Повторяет ошибочную подстановку `wDayOfWeek` на месте месяца.
 fn legacy_log_event_time(time: TagTime) -> String {
     format!(
         "{}-{}-{} {}:{}:{}",

@@ -1,24 +1,15 @@
-//! Ограничения входа в регионы исторического Miracle.
+//! Ограничения регионов `CRegionSetup` из WorldServer, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CRegionSetup::AddToByteArray`:
-//!; loader и Game decoder не входят в этот owner и остаются.
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! Исходный owner PDB:
-//!
-//! Оригинал и Game decoder подтверждают wire: signed 32-битный count, затем
-//! ordered records ровно по 12 little-endian bytes: `id`, минимальный уровень
-//! входа и требуемый вклад. `BTreeMap<i32, _>` заменяет `std::map<long, _>` и
-//! сохраняет signed key-order; отдельный map key в wire не передаётся. Typed
-//! поля исключают зависимость от C++ layout/padding, а невозможный для старого
-//! 32-битного контейнера count возвращается как ошибка до изменения buffer-а.
-//! Точный смысл legacy return у `LoadRegionSetup` ещё не подтверждён машинно,
-//! поэтому загрузка файла здесь намеренно не выдаётся за действуетную.
+//! Wire — signed count и ordered 12-байтные records: region ID, minimum level
+//! и required contribution. Map key задаёт signed order, но отдельно не идёт.
+//! `BTreeMap<i32, _>` заменяет MSVC tree. Семантика return у file loader не
+//! подтверждена, поэтому этот owner предоставляет только wire.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-/// Точный 12-байтовый `CRegionSetup::tagRegionSetup`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RegionSetupEntry {
     pub(crate) id: i32,
@@ -26,7 +17,6 @@ pub(crate) struct RegionSetupEntry {
     pub(crate) required_contribute: i32,
 }
 
-/// Value-owner вместо process-global `s_mapRegionSetup`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CRegionSetup {
     entries: BTreeMap<i32, RegionSetupEntry>,
@@ -42,8 +32,8 @@ impl CRegionSetup {
     }
 
  /// Читает оригинал World grammar: поиск маркера `#`, затем три signed long.
- /// Owner очищается до чтения; при malformed записи сохраняется уже
- /// подтверждённый prefix, но неизвестные значения не материализуются.
+ /// Owner очищается до чтения; при некорректной записи сохраняется уже
+ /// прочитанный префикс, а неизвестные значения остаются пустыми.
     pub(crate) fn load_from_bytes(
         &mut self,
         source: &[u8],
@@ -83,7 +73,6 @@ impl CRegionSetup {
         Ok(loaded)
     }
 
- /// Дописывает оригинал `count + ordered 12-byte records` в существующий buffer.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -101,7 +90,6 @@ impl CRegionSetup {
     }
 }
 
-/// Невозможный в исходном 32-битном `std::map` размер.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RegionSetupSerializeError {
     pub(crate) count: usize,

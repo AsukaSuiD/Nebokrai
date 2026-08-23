@@ -1,7 +1,7 @@
-//! WorldServer dispatcher-owner `OnPlayerMessage`.
+//! Player-dispatcher `OnPlayerMessage` WorldServer.
 //!
-//! Источник контракта — `WorldServer/Nworldserver.exe` и
-//! `WorldServer/WorldServer.pdb`. Owner содержит четыре in-place relay branch:
+//! Источник контракта — `worldserver.exe` и
+//! `worldserver.pdb`. Owner содержит четыре in-place relay branch:
 //! `0x5FC01 -> 0x7FA08`, `0x5FC02 -> 0x7FA09`, `0x5FC03 -> 0x7FA0A`,
 //! `0x5FC04 -> 0x7FA0B`. Только первая до broadcast дописывает signed
 //! `m_lMapID`; остальные сохраняют payload byte-for-byte. Все четыре вызывают
@@ -22,7 +22,6 @@ const USE_SKILL: i32 = 0x0005_FC04;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldPlayerMessageOutcome {
- /// Default полного `OnPlayerMessage` без side effects.
     NoOp {
         request_type: i32,
     },
@@ -40,7 +39,6 @@ pub(crate) enum WorldPlayerMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет весь `OnPlayerMessage` owner.
 pub(crate) fn on_player_message(
     game: &CGame,
     mut message: CMessage,

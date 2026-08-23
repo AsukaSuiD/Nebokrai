@@ -25,14 +25,12 @@ const MAX_SKILL_TEXT_LENGTH: usize = 255;
 const SKILL_WIRE_FIXED_LENGTH: usize = 24;
 const SKILL_WIRE_TRAILING_PADDING: usize = 8;
 
-/// Одна точная восьмибайтная пара `tagUsage`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SkillUsage {
     pub(crate) usage: u32,
     pub(crate) cost: u32,
 }
 
-/// Safe owner полей исходного `CSkill`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CSkill {
     usages: Vec<SkillUsage>,
@@ -65,7 +63,6 @@ impl CSkill {
         self.level
     }
 
- /// Точный composite key World cache: `id << 16 | level & 0xffff`.
     pub(crate) fn cache_key(&self) -> u32 {
         self.skill_id.wrapping_shl(16) | (self.level & 0xffff)
     }
@@ -82,7 +79,6 @@ impl CSkill {
         set_bounded_c_string(&mut self.name, name, SkillTextField::Name)
     }
 
- /// Описание сохраняется для owner-а, но намеренно отсутствует в wire.
     pub(crate) fn set_description(&mut self, description: &[u8]) -> Result<(), SkillTextError> {
         set_bounded_c_string(
             &mut self.description,
@@ -99,7 +95,6 @@ impl CSkill {
         self.usages.push(usage);
     }
 
- /// Возвращает `None` для invalid-state: unknown type либо нулевой ID.
     pub(crate) fn serialize(&self) -> Result<Option<Vec<u8>>, SkillSerializeError> {
         if self.skill_type == UNKNOWN_SKILL_TYPE || self.skill_id == 0 {
             return Ok(None);
@@ -163,7 +158,6 @@ impl fmt::Display for SkillTextField {
     }
 }
 
-/// Вместо исходного безграничного `strcpy`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SkillTextError {
     field: SkillTextField,
@@ -182,7 +176,6 @@ impl fmt::Display for SkillTextError {
 
 impl Error for SkillTextError {}
 
-/// Невозможный в 32-битном wire размер skill record-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SkillSerializeError {
     TooManyUsages {
@@ -233,4 +226,4 @@ fn set_bounded_c_string(
     Ok(())
 }
 
-// материализованного owner-а, а не как Rust-реализация.
+// созданного owner-а, а не как Rust-реализация.

@@ -1,44 +1,14 @@
-//! Владелец базовых свойств товаров исторического `WorldServer`.
+//! Базовые свойства `CGoodsBaseProperties` из `cgoodsbaseproperties.cpp/.h`,
+//! подтверждённые `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Конструктор, `Serialize`,
-//! `tagAddonProperty::Serialize`,
-//! `GetPrice/GetWeight/GetName/GetDescribe/GetIconID`
+//! Владелец хранит byte-exact имена и описание, цену, вес, goods/equipment type,
+//! icons и дерево addon properties. Serialize намеренно не включает description:
+//! wire содержит два имени, scalars, icons и полное addon-дерево.
 //!
-//! `GetGoodsType/GetEquipPlace`,
-//! `GetAddonPropertyValues/GetValidAddonProperties`
-//! `GetOccurProbability/IsImplicit`
-//! lifecycle addon-ов
-//! и destructor
-//! входят в контракт owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
-//! inline getter скомпонован линкером по одному с равными scalar-getter-ами.
-//!
-//! Layout сохраняет `GOODS_TYPE` как signed `int`: `GT_USELESS = 0`,
-//! `GT_CONSUMABLE = 1`, `GT_EQUIPMENT = 2`, а соседний signed
-//! `EQUIP_PLACE m_epEquipPlace` лежит по `+0x60`. Его значения `0..16`
-//! буквально соответствуют `EP_UNKNOWN..EP_LINGBAO`. Он же подтверждает
-//! unsigned `m_dwWeight` по `+0x3C`; getter состоит из одной загрузки.
-//! Контракт также сохраняет
-//! `GAP_PARTICULAR_ATTRIBUTE = 0x0D`, `GAP_GOODS_STACKING_LIMIT = 0x26`,
-//! `GAP_WEAPON_LEVEL = 0x30` и
-//! layout `tagAddonPropertyValue`: unsigned `dwId` по `+0`, signed
-//! `lBaseValue` по `+4`, modifier-флаг по `+8`, затем vector modifier-ов.
-//! Rust-owner хранит все поля записи, заполняемые
-//! `CGoodsFactory::Load`: original/localized name, описание, цену, вес, тип,
-//! equip-place, три icon-а и addon-ы с modifier-ами. Неиспользуемые поля
-//! входного формата фабрика только потребляет, как и оригинал.
-//! Serialize намеренно не включает description: wire-owner пишет два
-//! C-string имени, type/place/price/weight, icons и полное addon-дерево.
-//!
-//! `GetAddonPropertyValues` останавливается на первом property совпавшего типа
-//! и копирует все его values. Заимствованный slice заменяет временную копию
-//! только внутри синхронного read-only вызова `CGoods::GetMaxStackNumber`:
-//! порядок, первое совпадение и значения сохраняются, а STL allocation/copy/
-//! destruction не являются наблюдаемым контрактом.
-//!
-//! destructor-а опровергает ложные ранние `return` оригинал:
-//! icons, addon-дерево и три строки освобождаются безусловно. В Rust тот же
-//! lifecycle обеспечивает владение `Vec`; порядок внутренних освобождений не
-//! наблюдаем, потому что у элементов нет внешних callback-ов.
+//! Lookup addon values останавливается на первом property нужного типа и
+//! сохраняет порядок всех его values. Известные numeric enum/property IDs и
+//! signedness соответствуют World wire. `Vec` и borrowed slices заменяют STL
+//! копии и ручной lifecycle без изменения результатов.
 
 use std::error::Error;
 use std::fmt;
@@ -84,7 +54,6 @@ pub(super) struct GoodsBaseAddonPropertyValueModifier {
     upper_limit: i32,
 }
 
-/// Действующие scalar-поля исходного `tagAddonPropertyValue`.
 #[derive(Clone)]
 pub(crate) struct GoodsBaseAddonPropertyValue {
     id: u32,
@@ -102,7 +71,6 @@ struct GoodsBaseAddonProperty {
     values: Vec<GoodsBaseAddonPropertyValue>,
 }
 
-/// Действующая stacking-часть исходного `CGoodsBaseProperties`.
 #[derive(Clone)]
 pub(crate) struct CGoodsBaseProperties {
     original_name: Vec<u8>,
@@ -117,7 +85,6 @@ pub(crate) struct CGoodsBaseProperties {
 }
 
 impl CGoodsBaseProperties {
- /// Создаёт пустое состояние constructor-а.
     pub(super) const fn with_constructor_defaults() -> Self {
         Self {
             original_name: Vec::new(),
@@ -132,42 +99,34 @@ impl CGoodsBaseProperties {
         }
     }
 
- /// Заимствует byte- исходное имя без завершающего NUL.
     pub(crate) fn get_original_name(&self) -> &[u8] {
         &self.original_name
     }
 
- /// Заимствует byte- имя без завершающего NUL.
     pub(crate) fn get_name(&self) -> &[u8] {
         &self.name
     }
 
- /// Заимствует byte- описание без завершающего NUL.
     pub(crate) fn get_description(&self) -> &[u8] {
         &self.description
     }
 
- /// Возвращает unsigned базовую цену.
     pub(crate) const fn get_price(&self) -> u32 {
         self.price
     }
 
- /// Возвращает unsigned вес одной единицы товара.
     pub(crate) const fn get_weight(&self) -> u32 {
         self.weight
     }
 
- /// Возвращает signed `GOODS_TYPE` без дополнительных эффектов.
     pub(crate) const fn get_goods_type(&self) -> i32 {
         self.goods_type
     }
 
- /// Возвращает signed `EQUIP_PLACE` без дополнительных эффектов.
     pub(crate) const fn get_equip_place(&self) -> i32 {
         self.equip_place
     }
 
- /// Возвращает icon первого совпавшего numeric-типа либо исходный `0`.
     pub(crate) fn get_icon_id(&self, icon_type: i32) -> u32 {
         self.icons
             .iter()
@@ -175,7 +134,6 @@ impl CGoodsBaseProperties {
             .map_or(0, |icon| icon.icon_id)
     }
 
- /// Обходит тип каждого enabled property в исходном vector-order.
     pub(super) fn valid_addon_property_types(&self) -> impl Iterator<Item = i32> + '_ {
         self.addon_properties
             .iter()
@@ -183,7 +141,6 @@ impl CGoodsBaseProperties {
             .map(|property| property.property_type)
     }
 
- /// Возвращает implicit-флаг первого property совпавшего типа.
     pub(crate) fn is_implicit(&self, property_type: i32) -> i32 {
         self.addon_properties
             .iter()
@@ -191,7 +148,6 @@ impl CGoodsBaseProperties {
             .map_or(0, |property| property.is_implicit_attribute)
     }
 
- /// Возвращает values первого property совпавшего numeric-типа.
     pub(crate) fn get_addon_property_values(
         &self,
         property_type: i32,
@@ -202,7 +158,6 @@ impl CGoodsBaseProperties {
             .map_or(&[], |property| property.values.as_slice())
     }
 
- /// Возвращает probability первого property совпавшего numeric-типа.
     pub(crate) fn get_occur_probability(&self, property_type: i32) -> u32 {
         self.addon_properties
             .iter()
@@ -210,7 +165,6 @@ impl CGoodsBaseProperties {
             .map_or(0, |property| property.occur_probability)
     }
 
- /// Кодирует client-facing base-properties wire без description.
     pub(crate) fn serialize(
         &self,
         destination: &mut Vec<u8>,
@@ -291,7 +245,6 @@ impl CGoodsBaseProperties {
         self.addon_properties.push(property);
     }
 
- /// Возвращает `false` только для неизвестного value-id, как original loop.
     pub(super) fn push_loaded_modifier(
         &mut self,
         property_index: usize,
@@ -323,7 +276,6 @@ impl CGoodsBaseProperties {
 }
 
 impl GoodsBaseAddonPropertyValue {
- /// Создаёт пустое scalar-состояние с пустым vector modifier-ов.
     const fn with_constructor_defaults() -> Self {
         Self {
             id: 0,
@@ -333,7 +285,6 @@ impl GoodsBaseAddonPropertyValue {
         }
     }
 
- /// Восстанавливает scalar-ы и vector в исходное пустое состояние.
     fn clear(&mut self) {
         self.id = 0;
         self.base_value = 0;
@@ -341,12 +292,10 @@ impl GoodsBaseAddonPropertyValue {
         self.modifiers.clear();
     }
 
- /// Возвращает unsigned идентификатор значения.
     pub(crate) const fn id(&self) -> u32 {
         self.id
     }
 
- /// Возвращает signed базовое значение.
     pub(crate) const fn base_value(&self) -> i32 {
         self.base_value
     }
@@ -396,7 +345,6 @@ impl GoodsBaseAddonPropertyValueModifier {
 }
 
 impl GoodsBaseAddonProperty {
- /// Создаёт состояние constructor-а.
     const fn with_constructor_defaults() -> Self {
         Self {
             property_type: 0,
@@ -407,7 +355,6 @@ impl GoodsBaseAddonProperty {
         }
     }
 
- /// Повторяет `Clear`: сначала scalar-ы, затем values в исходном порядке.
     fn clear(&mut self) {
         self.property_type = 0;
         self.is_enabled = 0;

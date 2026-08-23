@@ -1,50 +1,18 @@
-//! Владелец `CVariableList` исторического WorldServer из `variablelist.cpp`.
+//! Переменные `CVariableList` из `variablelist.cpp`, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `SetVarValue`, `SaveVarData`, `AddToByteArray` и `LoadVarData` входят в
-//! контракт owner-а; посторонние copy/destructor
-//! `CBattleFairyProperty::tagCompose` ниже также выражены живым owner-ом
-//! `goods::cbattlefairyproperty`, а оставшиеся блоки — compiler/STL cleanup.
+//! Loader очищает список и читает scalar, array и quoted string definitions.
+//! DB load заменяет current/saved значения первого byte-sensitive имени и может
+//! заменить объявленный array строкой. Integer setter использует ASCII case-
+//! insensitive имя и index 0; string setter меняет первое строковое совпадение.
 //!
-//! Layout сохраняет `CVariableList` как `m_lVarNum: signed long` и
-//! `m_pVarList: stVariable*`, а 16-байтный `stVariable` содержит `Name` по
-//! `+0`, signed `Array` по `+4` и две union-пары `Value/strValue` и
-//! `SValue/strSValue` по `+8/+0xc`. Действующий `GetOneVar`
-//! отдаёт имя и два уже форматированных ANSI-значения: `%d` для scalar,
-//! `\"%s\"` для string и пустые значения для положительного `Array`.
-//! `VariableListSaveSource` сохраняет именно этот узкий byte- view; сам
-//! layout и остальные операции списка будут материализованы в их владельце.
+//! Wire — signed variable count, payload length и records: C-string name,
+//! signed tag, затем `i32`, C-string либо tag элементов `i32`. Отрицательный
+//! tag строки включает NUL. Typed enum заменяет C++ unions; недопустимая смена
+//! scalar/array в string блокируется до состояния с dangling pointer.
 //!
-//! `LoadVarList` сначала очищает прежний список, затем читает непрерывные
-//! строки после `GeneralVariableList`: `name=value`, `name[N]=value` и
-//! `name="value"`. Scalar/array получают одинаковые current/saved values.
-//! `LoadOneVar` ищет первое byte-sensitive имя из `CSL_GENVAR` и заменяет его
-//! current/saved scalar либо строкой; именно так DB-строка может заменить
-//! объявленный array. Преждевременные return после compiler-owned `delete` не
-//! являются контрактом списка и не переносятся.
-//!
-//! `SaveVarData` не имел собственной DB-семантики: копировал тот же ADO
-//! connection, получал `GetGame()->m_pRsGenVar`, вызывал
-//! `CRsGenVar::Save(this, connection)` и возвращал его `bool`. Rust заменяет
-//! singleton явными owner/connection аргументами и исключает `nullptr` через
-//! ссылки, но не меняет порядок, соединение либо результат. Owned SQL buffer
-//! не переносит переполнение исходного scratch-буфера.
-//!
-//! World serializer и Game decoder задают framing общего списка:
-//! `signed variable count + signed payload length + payload`. Каждая запись
-//! содержит C-string name, signed tag и значение: tag `0` — один `i32`, tag
-//! `<0` — C-string, tag `>0` — ровно tag значений `i32`. Для строки исходный
-//! tag равен `-(bytes + NUL)`. Typed enum заменяет две C++ union-пары, `Vec`
-//! заменяет оригинал-массивы, сохраняя порядок и wire. Невозможные count/length,
-//! внутренний NUL и пустой массив блокируются до изменения destination.
-//!
-//! Действующий World call-site integer-overload всегда передаёт index `0`.
-//! Владелец линейно ищет первое ASCII-only `_strcmpi`-совпадение, меняет
-//! scalar либо нулевой элемент непустого массива и продолжает поиск после
-//! совпавшей string-записи. String-overload меняет первую совпавшую string.
-//! EXE технически позволял переписать integer/array как string, но после этого
-//! сохранённый union интерпретировался как `char*` и дальнейшее чтение имело UB;
-//! Rust останавливает этот недопустимый owner-state typed-границей. `Vec` и
-//! enum заменяют только оригинал allocation/union, не меняя штатную мутацию.
+//! Save делегирует тому же `CRsGenVar` и caller connection без собственной
+//! DB-семантики.
 
 use std::error::Error;
 use std::fmt;
@@ -67,7 +35,6 @@ pub(crate) struct VariableEntry {
     pub(crate) value: VariableValue,
 }
 
-/// Value-owner вместо `m_lVarNum + stVariable*` и двух оригинал union-ов.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CVariableList {
     variables: Vec<VariableEntry>,
@@ -80,7 +47,6 @@ impl Default for CVariableList {
 }
 
 impl CVariableList {
- /// Создаёт пустой список, как конструктор с `m_lVarNum = 0` и null-массивом.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             variables: Vec::new(),
@@ -109,7 +75,7 @@ impl CVariableList {
         name[..end].to_vec()
     }
 
- /// Материализует действующий `LoadVarList` без оригинал allocation и union.
+ /// Создаёт действующий `LoadVarList` без оригинал allocation и union.
  ///
  /// `CIni::GetContinueDataNum` брал только непрерывный блок строк после
  /// index `GeneralVariableList`; пустая или отсутствующая resource поэтому
@@ -205,7 +171,6 @@ impl CVariableList {
         &self.variables
     }
 
- /// Точный действующий `SetVarValue(name, 0, value)` World call-site.
     pub(crate) fn set_zero_index_integer(
         &mut self,
         name: &[u8],
@@ -236,7 +201,6 @@ impl CVariableList {
         VariableSetOutcome::NotFound
     }
 
- /// Штатная часть `SetVarValue(name, string)` без unsafe union-retyping.
     pub(crate) fn set_string(&mut self, name: &[u8], value: &[u8]) -> VariableSetOutcome {
         let name = visible_c_string(name);
         let value = visible_c_string(value);
@@ -343,7 +307,6 @@ impl CVariableList {
     }
 }
 
-/// Наблюдаемый итог configuration-половины `LoadVarList`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct VariableListLoadReport {
     pub(crate) resource_found: bool,
@@ -526,19 +489,15 @@ fn visible_c_string(bytes: &[u8]) -> &[u8] {
         .map_or(bytes, |end| &bytes[..end])
 }
 
-/// Три byte- строки, которые исходный `GetOneVar` отдавал DB-owner-у.
 pub(crate) struct VariableSaveRow {
     pub(crate) name: Vec<u8>,
     pub(crate) initial_value: Vec<u8>,
     pub(crate) current_value: Vec<u8>,
 }
 
-/// Узкий read-only view действующей части `CVariableList`.
 pub(crate) trait VariableListSaveSource {
- /// Число выполняемых исходным signed-циклом итераций.
     fn variable_count(&self) -> usize;
 
- /// Возвращает результат `GetOneVar` для доказанно допустимого индекса.
     fn save_row(&self, index: usize) -> VariableSaveRow;
 }
 
@@ -575,7 +534,6 @@ fn quote_variable_string(value: &[u8]) -> Vec<u8> {
     quoted
 }
 
-/// Делегирует сохранение тому же DB-owner-у на том же активном connection.
 pub(crate) async fn save_var_data<S: VariableListSaveSource, O: RsGenVarOwner>(
     variables: &S,
     database: &mut O,

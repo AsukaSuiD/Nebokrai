@@ -1,6 +1,6 @@
 //! Таблица level/hit/experience Miracle.
 //!
-//! Источник контракта World `LoadHitLevelSetup` и `AddToByteArray` — EXE/PDB;
+//! Источник контракта World `LoadHitLevelSetup` и `AddToByteArray` — `worldserver.exe`/`worldserver.pdb`;
 //! Game decoder в этот owner не входит.
 //!
 //! Отсутствие
@@ -13,7 +13,7 @@
 //!
 //! Каждая запись — ровно три consecutive little-endian `u32`; wire состоит
 //! из signed 32-битного count и `count × 0x0C` байт. `Vec` заменяет старый
-//! static vector, `std::fs` — `CRFile`, а общий доказанный `read_to` сохраняет
+//! static vector, `std::fs` — `CRFile`, а общий исходный `read_to` сохраняет
 //! whitespace token-scan, точный `*` и терминатор `<end>`. Повреждённое число
 //! исходно могло протащить неинициализированные stack-байты; Rust вместо этого
 //! возвращает typed format error, оставляя только уже полностью прочитанные
@@ -25,7 +25,6 @@ use std::path::Path;
 
 use crate::public::readwrite::read_to;
 
-/// Точный 12-байтовый элемент `tagHitLevel`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct HitLevelEntry {
     pub(crate) level: u32,
@@ -33,24 +32,20 @@ pub(crate) struct HitLevelEntry {
     pub(crate) experience: u32,
 }
 
-/// Value-owner вместо двух process-global vector-ов World/Game вариантов.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CHitLevelSetup {
     entries: Vec<HitLevelEntry>,
 }
 
 impl CHitLevelSetup {
- /// Возвращает текущий ordered набор без раскрытия mutable global state.
     pub(crate) fn entries(&self) -> &[HitLevelEntry] {
         &self.entries
     }
 
- /// Очищает owner на той же позиции, что и оригинал loader перед `rfOpen`.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
     }
 
- /// Очищает прежний owner, читает файл стандартной библиотекой и парсит его.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -61,7 +56,6 @@ impl CHitLevelSetup {
             .map_err(HitLevelFileLoadError::Format)
     }
 
- /// Повторяет `ReadTo("*")` и три formatted unsigned-long extraction-а.
     pub(crate) fn load_from_bytes(&mut self, source: &[u8]) -> Result<usize, HitLevelFormatError> {
         self.clear();
         let mut tokens = source
@@ -80,7 +74,6 @@ impl CHitLevelSetup {
         Ok(self.entries.len())
     }
 
- /// Дописывает оригинал `count + raw records` в существующий buffer.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -98,7 +91,6 @@ impl CHitLevelSetup {
     }
 }
 
-/// Ошибка безопасного parser-а вместо formatted extraction из плохого input.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HitLevelFormatError {
     UnexpectedEnd { field: &'static str },
@@ -122,7 +114,6 @@ impl fmt::Display for HitLevelFormatError {
 
 impl Error for HitLevelFormatError {}
 
-/// Ошибка технического file-owner-а с отдельным оригинал format-source.
 #[derive(Debug)]
 pub(crate) enum HitLevelFileLoadError {
     Io(std::io::Error),
@@ -147,7 +138,6 @@ impl Error for HitLevelFileLoadError {
     }
 }
 
-/// Невозможный в исходном 32-битном vector count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct HitLevelSerializeError {
     pub(crate) count: usize,

@@ -1,23 +1,12 @@
-//! Ordered emotion setup исторического Miracle.
+//! Эмоции `CEmotion` из WorldServer, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `LoadSetup` и `Serialize`
-//!:; Game decoder ниже остаётся
-//! Точная пара:
-//! Исходный владелец PDB:
+//! Loader не очищает static map: каждая `*` запись заменяет только свой signed
+//! ID. Missing file не меняет state, открытый файл успешен даже без records;
+//! malformed tail сохраняет полный префикс.
 //!
-//! World loader не очищает static map: каждая `*`-запись заменяет только свой
-//! signed ID, остальные прежние keys сохраняются. Отсутствующий файл возвращал
-//! `0` без мутации, открытый файл — `1` даже без записей. Это отличается от
-//! очищенного C++ reference с transactional replacement и проверкой non-empty;
-//! Rust сохраняет оригинал merge/state-transition, но использует `std::fs` и
-//! caller-owned `BTreeMap`.
-//!
-//! Wire — signed `long` count, затем пары signed `long id/value` в ascending
-//! signed-key порядке. Повреждённая formatted запись исходно могла вставить
-//! неинициализированные locals; безопасный parser вместо этого возвращает
-//! typed error после уже полностью применённых записей. Универсальные parser,
-//! map и file lifetime отданы стандартной библиотеке; собственным остаётся
-//! только Miracle token/wire контракт.
+//! Wire — signed count и ordered пары signed ID/value. `BTreeMap` и стандартный
+//! файловый ввод заменяют MSVC map/CRFile без транзакционной подмены.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -26,14 +15,12 @@ use std::path::Path;
 
 use crate::public::readwrite::read_to;
 
-/// Value-owner исходного `std::map<long, int>`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CEmotion {
     emotions: BTreeMap<i32, i32>,
 }
 
 impl CEmotion {
- /// Читает файл без предварительной мутации; отсутствие сохраняет map.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -43,7 +30,6 @@ impl CEmotion {
             .map_err(EmotionFileLoadError::Format)
     }
 
- /// Применяет оригинал ordered insert-or-replace для каждой `*`-записи.
     pub(crate) fn load_from_bytes(&mut self, source: &[u8]) -> Result<usize, EmotionFormatError> {
         let mut tokens = source
             .split(u8::is_ascii_whitespace)
@@ -58,12 +44,10 @@ impl CEmotion {
         Ok(applied)
     }
 
- /// Возвращает повторяющее значение либо исходный ноль отсутствия.
     pub(crate) fn repeated(&self, emotion_id: i32) -> i32 {
         self.emotions.get(&emotion_id).copied().unwrap_or(0)
     }
 
- /// Дописывает оригинал `count + ordered (id, value)` wire.
     pub(crate) fn serialize(&self, destination: &mut Vec<u8>) -> Result<(), EmotionSerializeError> {
         let count = i32::try_from(self.emotions.len()).map_err(|_| EmotionSerializeError {
             count: self.emotions.len(),
@@ -77,7 +61,6 @@ impl CEmotion {
     }
 }
 
-/// Ошибка безопасного formatted parser-а.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EmotionFormatError {
     UnexpectedEnd { field: &'static str },
@@ -101,7 +84,6 @@ impl fmt::Display for EmotionFormatError {
 
 impl Error for EmotionFormatError {}
 
-/// Ошибка file-adapter-а с сохранённым источником.
 #[derive(Debug)]
 pub(crate) enum EmotionFileLoadError {
     Io(std::io::Error),
@@ -126,7 +108,6 @@ impl Error for EmotionFileLoadError {
     }
 }
 
-/// Невозможный в MSVC32 signed count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct EmotionSerializeError {
     pub(crate) count: usize,

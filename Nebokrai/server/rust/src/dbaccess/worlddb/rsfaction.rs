@@ -1,5 +1,5 @@
 //! DB-владелец `CRsFaction` WorldServer из `rsfaction.cpp`.
-//! Источник контракта — точная пара WorldServer EXE/PDB.
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Сохраняются раздельные операции faction property, members, applications,
 //! leave words, icon, pronounce и ability, их SQL-порядок и исходные bool
@@ -54,14 +54,12 @@ pub(crate) enum FactionPropertyLoadOutcome {
     },
 }
 
-/// Безопасная граница старого `strcpy` имени member-а из DB-строки.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionMemberLoadBlock {
     pub(crate) visible_len: usize,
     pub(crate) capacity: usize,
 }
 
-/// Исход private owner-а `LoadFactionMembers` после готового property staging.
 pub(crate) enum FactionMembersLoadOutcome {
     ReturnedTrue,
     ReturnedFalse,
@@ -69,7 +67,7 @@ pub(crate) enum FactionMembersLoadOutcome {
 }
 
 /// Безопасная граница короткого binary `Pronounce`: оригинал memcpy читал бы за
-/// полученный DB chunk, а внешняя реакция повреждённой строки не доказана.
+/// полученный DB chunk, а внешняя реакция повреждённой строки не определена.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FactionPronounceLoadBlock {
     pub(crate) actual_size: usize,
@@ -115,14 +113,12 @@ fn reported_faction_load_count(factions: &FactionPropertyLoadStaging) -> i32 {
     i32::try_from(factions.len()).unwrap_or(i32::MAX)
 }
 
-/// Scalar-поля property-группы одной действующей save-копии `CFaction`.
 struct FactionPropertySaveSnapshot {
     master_id: i32,
     base_property: FactionBaseProperty,
     delete_remain_time: i32,
 }
 
-/// Локальная граница malformed save-копии перед первым DB-вызовом.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionSaveProjectionBlock {
     MasterId,
@@ -130,16 +126,13 @@ pub(crate) enum FactionSaveProjectionBlock {
     DeleteRemainTime,
 }
 
-/// Действующая save-копия `CFaction`; property materialизуется только для bit 1.
 pub(crate) struct FactionSaveSnapshot<'faction> {
     pub(crate) faction: &'faction mut CFaction,
- /// Результат исходного `GetFactionById`; `None` сохраняет no-op lookup-а.
     canonical_goods_war_count: Option<i32>,
     property: Option<FactionPropertySaveSnapshot>,
 }
 
 impl<'faction> FactionSaveSnapshot<'faction> {
- /// Материализует ровно поля, читаемые `CRsFaction`, из frozen save-копии.
     pub(crate) fn from_faction(
         faction: &'faction mut CFaction,
         canonical_goods_war_count: Option<i32>,
@@ -177,7 +170,6 @@ pub(crate) enum FactionMembersSaveOutcome {
     BlockedMissingFact(UnterminatedMemberField),
 }
 
-/// Неизвестная граница старого C-string/stack-buffer пути leave-word.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FactionLeaveWordSaveBlock {
     UnterminatedContent(UnterminatedLeaveWordField),
@@ -205,7 +197,6 @@ impl From<UnterminatedLeaveWordField> for FactionLeaveWordSaveBlock {
     }
 }
 
-/// Исходный bool-результат `SaveLeaveWords` либо локальный missing-fact.
 #[derive(Debug)]
 pub(crate) enum FactionLeaveWordsSaveOutcome {
     Saved,
@@ -213,14 +204,12 @@ pub(crate) enum FactionLeaveWordsSaveOutcome {
     BlockedMissingFact(FactionLeaveWordSaveBlock),
 }
 
-/// Безопасная граница одного из двух старых overread-путей dispatcher-а.
 #[derive(Debug)]
 pub(crate) enum FactionSaveBlock {
     Member(UnterminatedMemberField),
     LeaveWord(FactionLeaveWordSaveBlock),
 }
 
-/// Наблюдаемый bool-результат `SaveFaction` либо локальный missing-fact.
 #[derive(Debug)]
 pub(crate) enum FactionSaveOutcome {
     ReturnedTrue,
@@ -228,7 +217,6 @@ pub(crate) enum FactionSaveOutcome {
     BlockedMissingFact(FactionSaveBlock),
 }
 
-/// Структурированная замена действующих `CRsFaction` DB-log ветвей.
 #[derive(Debug)]
 pub(crate) struct RsFactionNotice {
     pub(crate) operation: RsFactionOperation,
@@ -322,7 +310,7 @@ impl From<tiberius::error::Error> for RsFactionDatabaseError {
 }
 
 /// Ошибка одного field/query шага `LoadFactionProperty` до преобразования в
-/// operator-visible notice. Runtime SQL и DB-значения намеренно не выдаются.
+/// диагностическое сообщение. Runtime SQL и DB-значения намеренно не выдаются.
 #[derive(Debug)]
 enum FactionLoadReadError {
     Database(tiberius::error::Error),
@@ -883,15 +871,14 @@ fn read_faction_ability(
             .ok_or(FactionAbilityReadError::ShortPronounce(bytes.len()))
             .map(Some)?,
     };
- // Raw `LoadIconData` retrieves this chunk but omits every write to
- // `m_IconData`; reading it still preserves the same DB-type failure path.
+            // `LoadIconData` читает chunk, но не записывает его в `m_IconData`;
+            // само чтение сохраняет прежнюю DB-ошибку неверного типа.
     let _ = read_faction_binary(row, "IconData").map_err(FactionAbilityReadError::Read)?;
     let icon_time = read_faction_time(row, "LastUploadIconDataTime")
         .map_err(FactionAbilityReadError::Read)?;
     Ok((pronounce, icon_time))
 }
 
-/// Узкая объектная граница действующей стадии исходного `CRsFaction`.
 pub(crate) trait RsFactionOwner {
  /// Выполняет полный оригинал порядок пяти load-owner-ов на одном World DB
  /// connection и возвращает ready-to-publish faction staging map.
@@ -912,21 +899,18 @@ pub(crate) trait RsFactionOwner {
         parameters: &COrganizingParam,
     ) -> FactionPropertyLoadOutcome;
 
- /// Вызывает dirty-bit leaf-ы `1/2/4/8` внутри caller-транзакции.
     async fn save_faction(
         &mut self,
         snapshot: Option<&mut FactionSaveSnapshot<'_>>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> FactionSaveOutcome;
 
- /// Удаляет base-property row фракции внутри caller-транзакции.
     async fn del_faction(
         &mut self,
         faction_id: i32,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Сохраняет property dirty-bit `1` внутри caller-транзакции.
     async fn save_faction_property(
         &mut self,
         snapshot: Option<&mut FactionSaveSnapshot<'_>>,
@@ -957,11 +941,9 @@ pub(crate) trait RsFactionOwner {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Забирает следующий исходный DB-log эквивалент.
     fn pop_notice(&mut self) -> Option<RsFactionNotice>;
 }
 
-/// Linux/TDS-замена действующей части исходного `CRsFaction`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsFaction {
     settings: Option<WorldDatabaseSettings>,

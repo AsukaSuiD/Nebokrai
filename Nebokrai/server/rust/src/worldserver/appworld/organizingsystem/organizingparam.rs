@@ -1,33 +1,15 @@
-//! Параметры организаций WorldServer из точной пары EXE/PDB.
+//! Параметры организаций `COrganizingParam` из `organizingparam.cpp/.h`,
+//! подтверждённые `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Owner охватывает загрузку, `Initialize`, `OnGetTodayTax` и `Release`.
+//! `FactionParam.ini` — позиционный whitespace-формат: 12 header values и
+//! level records после `*`; labels и номер уровня не проверяются. Byte-строки
+//! и literal `"0"` сохраняются, malformed input оставляет уже прочитанный
+//! префикс.
 //!
-//! Layout сохраняет размер owner-а `0x88`, `tagLvlParam` `0x2C` и точный порядок
-//! полей. Rust не имитирует MSVC layout: `Vec`, `Vec<u8>`, `Option<TimerId>` и
-//! явная передача owner-а заменяют `std::vector`, `std::string`,
-//! неинициализированный event ID и nullable singleton. Числовые поля исходный
-//! constructor оставлял неинициализированными; безопасный `Default` обнуляет
-//! их, а malformed input возвращает typed error вместо чтения случайной памяти.
-//!
-//! `data/FactionParam.ini` вопреки имени является позиционным whitespace-
-//! форматом: двенадцать header-записей, затем записи после каждого точного `*`.
-//! Названия header-полей и явный номер уровня исходник не проверял; Rust тоже
-//! не приписывает им новую семантику. Строки остаются байтами, включая literal
-//! `"0"`. Стандартное файловое чтение заменяет `CRFile`, а маленький parser
-//! сохраняет специфический `ReadTo("*")` контракт; обычная INI-библиотека для
-//! этого формата непригодна.
-//!
-//! Перед сравнением либо `AddDay(1)` в налоговую копию подставляются текущие
-//! year/month/day,
-//! но не weekday. Первое событие переносится только при strict `< now`, callback
-//! всегда ставит следующий день. Broadcast `0x7FE26`, регистрация следующего
-//! события, lookup `WS0263` и append в `war` сохраняют исходный порядок.
-//! Небезопасный `strcpy` в 256-byte local заменён записью всей owned строки:
-//! переполнение локального буфера не является требуемой семантикой Miracle.
-//! `Release` потребляет явный owner и снимает только его calendar events до
-//! `Drop`. В исходнике singleton удалялся без обращения к `CTimer`; Rust
-//! устраняет этот внутренний dangling-lifecycle дефект, не добавляя ни пакетов,
-//! ни игровых мутаций в shutdown.
+//! Tax timer сравнивает только подставленные year/month/day и переносится на
+//! следующий день при strict `< now`. Callback сохраняет порядок broadcast
+//! `0x7FE26`, регистрации следующего события, StringTable lookup и war-log.
+//! `Release` снимает только принадлежащие owner-у calendar events.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -113,16 +95,11 @@ pub(crate) struct OrganizingTodayTaxRefreshReport {
     pub(crate) logged_bytes: usize,
 }
 
-/// Наблюдаемый до `Drop` итог освобождения параметров организаций.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OrganizingParamReleaseReport {
- /// Последнее назначенное tax-событие до consuming release.
     pub(crate) latest_tax_event_id: Option<TimerId>,
- /// Число calendar registrations, сохранённых данным owner-ом.
     pub(crate) registered_tax_events: usize,
- /// Число реально снятых записей в общем `CTimer`.
     pub(crate) cancelled_tax_events: usize,
- /// Число level-записей, переданных стандартному Rust Drop.
     pub(crate) released_level_records: usize,
 }
 
@@ -173,7 +150,6 @@ impl COrganizingParam {
         }
     }
 
- /// Открывает точный runtime-path, разбирает owner и ставит первое tax-событие.
     pub(crate) fn initialize<Callback: Copy>(
         &mut self,
         runtime_directory: &Path,
@@ -184,7 +160,6 @@ impl COrganizingParam {
         self.load(runtime_directory, current_time, timer, callback)
     }
 
- /// `Load` очищает level-vector ещё до попытки открыть файл, как owner.
     pub(crate) fn load<Callback: Copy>(
         &mut self,
         runtime_directory: &Path,
@@ -304,7 +279,6 @@ impl COrganizingParam {
         self.tax_event_ids.contains(&event_id)
     }
 
- /// Выполняет broadcast и вычисление следующего дня до timer-регистрации.
     pub(crate) fn prepare_today_tax_refresh(
         &self,
         current_event_id: TimerId,
@@ -323,7 +297,6 @@ impl COrganizingParam {
         })
     }
 
- /// Фиксирует `SetTimeEvent`, затем выполняет поздний `WS0263` war-log.
     pub(crate) fn finish_today_tax_refresh(
         &mut self,
         prepared: PreparedTodayTaxRefresh,

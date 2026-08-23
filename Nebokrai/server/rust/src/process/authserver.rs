@@ -1,4 +1,4 @@
-//! Linux process-owner AuthServer.
+//! Владелец процесса AuthServer под Linux.
 //!
 //! Техническая оболочка заменяет `WinMain`, MFC message pump и Windows
 //! game-thread. Доменный lifecycle остаётся у `CGame::GameThreadFunc`;
@@ -14,7 +14,6 @@ use crate::authserver::src::cgame::{
 use crate::nets::servers::ServerIoCompletion;
 use super::{process_shutdown, run_process};
 
-/// Запускает полный AuthServer process lifecycle и возвращает код процесса.
 pub fn run_authserver_process() -> std::process::ExitCode {
     run_process("AuthServer", run_auth_server)
 }

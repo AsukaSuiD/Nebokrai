@@ -1,43 +1,14 @@
-//! Владелец wallet-container исторического `WorldServer`.
+//! Однослотовый `CWallet` из `cwallet.cpp/.h`, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Состояние конструктора `CWallet::CWallet`,
-//! destructor ownership, `GetGoldCoinsAmount`
-//! query-family,
-//! `AddFromDB` и обеих перегрузок `Add`
-//! а также `AddGoldCoinOfLargess`
-//! входят в контракт owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
+//! Пустой wallet принимает первый товар без проверки currency index; занятый
+//! складывает только gold coins. `AddFromDB` может перезаписать занятый slot.
+//! Rust освобождает вытесненный объект вместо внутренней утечки оригинала.
 //!
-//! Layout сохраняет единственное собственное поле `m_pGoldCoins` по `+0x24`;
-//! inherited `CGoodsContainer` хранит signed owner type/ID по `+0x14/+0x18`.
-//! Constructor начинает с owner `0/0` и null goods, а destructor сначала
-//! выполняет base `Release`, затем `GarbageCollect`. Rust `Option<Box<CGoods>>`
-//! заменяет только nullable pointer и deleting-destructor: обычный `Drop`
-//! уничтожает товар один раз. Встроенный secondary listener регистрируется
-//! constructor-ом, но оба его callbacks сведены линкером к доказанному
-//! `mov eax,1; ret 0xC` по; отдельного состояния он не имеет.
-//!
-//! positional `Add` проверяет gold-coin index только когда slot уже
-//! занят; первый товар принимается без currency-validation. Process-global
-//! `GetGoldCoinIndex` заменён явно переданным resolved index, а общая stacking-
-//! ветка — действующим адаптером `CGoodsContainer::Add`. `AddFromDB` сначала
-//! вызывает virtual positional `GetGoods`, поэтому ненулевая позиция способна
-//! перезаписать уже занятый единственный slot. Legacy теряет прежний указатель;
-//! Rust сохраняет наблюдаемую перезапись, но не воспроизводит внутреннюю утечку
-//! и освобождает вытесненный объект обычным ownership. Listener callbacks
-//! доказанно no-op и не материализуются.
-//!
-//! Три base-index query используют resolved gold-coin index, а не индекс
-//! фактически сохранённого товара. `GetGoods(index, vector)` принимает
-//! vector по значению и уничтожает наполненную копию, поэтому не способен
-//! вернуть результат. Этот внутренний дефект сигнатуры без ожидаемого внешнего
-//! эффекта исправлен естественным Rust iterator-ом; критерий выбора сохранён.
-//!
-//! `AddGoldCoinOfLargess` сравнивает base-index двух товаров, но использует
-//! отдельный global gold limit вместо обычного max-stack. Вычитание остатка и
-//! сложение количества — подтверждённая `u32` wrapping-арифметика; она
-//! сохранена, поскольку меняет итоговый баланс. Единственный call site
-//! передаёт позицию `0` и статически вызывает `CWallet` на bank-base, обходя
-//! bank lock.
+//! Wire — marker `0/1` и, при единице, полный `CGoods`; decode сначала
+//! выполняет `Release`. Query по base index сравнивает разрешённый gold index,
+//! а не фактический товар. Largess использует отдельный gold limit и сохраняет
+//! unsigned wrapping остатков и суммы.
 
 use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
 use crate::public::guid::CGuid;
@@ -47,7 +18,6 @@ use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use super::ccontainer::ContainerGuidStorage;
 use super::cgoodscontainer::{CGoodsContainerState, add_to_occupied_position};
 
-/// Действующее состояние исходного `CWallet`, не копия его 32-битного ABI.
 pub(crate) struct CWallet {
     pub(super) container_base: CGoodsContainerState,
     pub(super) gold_coins: Option<Box<CGoods>>,
@@ -78,7 +48,6 @@ impl ContainerGuidStorage for CWallet {
 }
 
 impl CWallet {
- /// Создаёт точные defaults base-owner-а и пустого wallet slot-а.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             container_base: CGoodsContainerState::with_constructor_defaults(),
@@ -86,7 +55,6 @@ impl CWallet {
         }
     }
 
- /// Возвращает количество единственного gold-coins товара либо ноль.
     pub(crate) const fn get_gold_coins_amount(&self) -> u32 {
         match &self.gold_coins {
             Some(goods) => goods.get_amount(),
@@ -94,7 +62,6 @@ impl CWallet {
         }
     }
 
- /// Проверяет наличие wallet-slot-а для resolved gold-coin index.
     pub(crate) fn is_goods_existed(
         &self,
         base_properties_index: u32,
@@ -103,7 +70,6 @@ impl CWallet {
         self.gold_coins.is_some() && base_properties_index == gold_coin_index
     }
 
- /// Возвращает единственный slot только для resolved gold-coin index.
     pub(crate) fn get_the_first_goods(
         &self,
         base_properties_index: u32,
@@ -114,7 +80,6 @@ impl CWallet {
             .flatten()
     }
 
- /// Возвращает usable Rust-view вместо бесполезной legacy vector-by-value копии.
     pub(crate) fn get_goods_by_base_index(
         &self,
         base_properties_index: u32,
@@ -126,7 +91,6 @@ impl CWallet {
             .filter(move |_| base_properties_index == gold_coin_index)
     }
 
- /// Вставляет товар в позицию wallet-а; `Some` сохраняет ownership при false.
     pub(crate) fn add_at(
         &mut self,
         position: u32,
@@ -149,7 +113,6 @@ impl CWallet {
         add_to_occupied_position(existing, goods, registry)
     }
 
- /// Делегирует object-перегрузку позиции `0` после уже выполненного cast-а.
     pub(crate) fn add(
         &mut self,
         goods: Box<CGoods>,
@@ -159,7 +122,6 @@ impl CWallet {
         self.add_at(0, goods, gold_coin_index, registry)
     }
 
- /// Начисляет largess с отдельным global limit и wrapping-арифметикой.
     pub(crate) fn add_gold_coin_of_largess(
         &mut self,
         position: u32,
@@ -189,7 +151,6 @@ impl CWallet {
         Ok(None)
     }
 
- /// Вставляет DB-товар после positional collision-check без factory-validation.
     pub(crate) fn add_from_db(&mut self, position: u32, goods: Box<CGoods>) -> Option<Box<CGoods>> {
         if self.get_goods(position).is_some() {
             return Some(goods);
@@ -198,7 +159,6 @@ impl CWallet {
         None
     }
 
- /// Замораживает nullable wallet-slot для DB traversal с позицией `0`.
     pub(crate) fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,

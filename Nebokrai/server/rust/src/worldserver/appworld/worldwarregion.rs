@@ -9,7 +9,7 @@
 //! независимо читает первый `#` из optional `regions/{id}.war`, но возвращает
 //! именно base-result. Serializer дописывает три DWORD после base snapshot.
 //! Virtual `DecordFromByteArray` также действует: он
-//! вызывает доказанный no-op World decoder, не меняет cursor и возвращает
+//! вызывает исходный no-op World decoder, не меняет cursor и возвращает
 //! `true`. STL/compiler noise и destructors удалены в пользу стандартных
 //! Rust-механизмов.
 //! исходные owners `worldwarregion.cpp/.h`. STL stream и allocation заменены
@@ -41,7 +41,6 @@ pub(crate) struct CWorldWarRegion {
 }
 
 impl CWorldWarRegion {
- /// Создаёт literal base-constructor state; три собственных DWORD не заданы.
     pub(crate) const fn with_constructor_base() -> Self {
         Self {
             base: CWorldRegion::with_constructor_region_base(),
@@ -51,7 +50,6 @@ impl CWorldWarRegion {
         }
     }
 
- /// Применяет три значения конкретного derived constructor-а.
     pub(crate) const fn set_constructor_symbols(&mut self, total: i32, win: i32, vic: i32) {
         self.symbol_total_num = Some(total);
         self.win_vic_symbol_num = Some(win);
@@ -66,7 +64,6 @@ impl CWorldWarRegion {
         &mut self.base
     }
 
- /// Выполняет base Load, затем optional war override, сохраняя base-result.
     pub(crate) fn load_from_context<Context, ResolveName>(
         &mut self,
         context: &mut Context,
@@ -86,7 +83,6 @@ impl CWorldWarRegion {
         Ok(loaded)
     }
 
- /// Missing `.war` сохраняет constructor/previous values.
     pub(crate) fn load_war_bytes(
         &mut self,
         bytes: Option<&[u8]>,
@@ -130,7 +126,6 @@ impl CWorldWarRegion {
         Ok(true)
     }
 
- /// Derived override сохраняет доказанный no-op base decoder и возвращает `true`.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],

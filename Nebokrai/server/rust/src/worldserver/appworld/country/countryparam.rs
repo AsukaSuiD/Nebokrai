@@ -1,35 +1,15 @@
-//! Владелец параметров стран исторического `WorldServer`.
+//! Параметры `CCountryParam` из `countryparam.cpp/.h`, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Constructor, `Load`, `Initialize` и `AddToByteArray` входят в контракт
-//! owner-а `CCountryParam`. Источник контракта — WorldServer EXE/PDB.
+//! `Load` сначала очищает шесть start/main maps, сохраняя technology и exile,
+//! затем позиционно читает 39 scalars и записи `*`, `#`, `+`. Повторный ключ
+//! заменяет значение; ошибка ресурса оставляет scalars/technology/exile прежними
+//! и общий legacy-успех, но шесть maps уже пусты.
 //!
-//! Старый размер класса `0xFC`: первые `0x9C` bytes — 39 signed параметров,
-//! которым constructor не назначал значения, затем восемь `std::map` по
-//! offsets `0x9C..0xF0`. Rust хранит неизвестные scalars как `Option<i32>`, а
-//! ordered map — как `BTreeMap`; process-global lazy singleton заменён явным
-//! owner-ом без изменения его данных или порядка обхода.
-//!
-//! `Load` сначала очищает только шесть start/main maps, но сохраняет прежние
-//! technology/exile entries, затем читает `data/CountryParam.ini`: 39 пар
-//! label/value, records `*` для start/main, `#` для technology и `+` для exile.
-//! Повторяющиеся ключи перезаписываются как `operator[]`; country ID сужается
-//! четыре country, три technology и четыре exile записи. Отсутствующий ресурс
-//! оставляет scalars/technology/exile как были, но уже очищает шесть maps и
-//! сообщает caller-у необходимость старого log.
-//!
-//! `Initialize` в является прямым jump на `Load`; общий epilogue
-//! всегда возвращает `true`, в том числе после missing resource.
-//! Этот возврат подтверждён машинным кодом. При некорректном числовом вводе
-//! форматированное чтение могло продолжить с прежними либо
-//! неинициализированными locals, поэтому safe Rust сохраняет уже выполненные
-//! мутации и останавливает только эту границу.
-//!
-//! Wire содержит 39 DWORD, затем только main-region/main-rect/main-dir,
-//! technology и exile maps с signed DWORD counts. Technology entry имеет
-//! наблюдаемый порядок `level, country_power, country_tech_exp`, отличный от
-//! порядка полей при чтении. Start maps в wire не входят. STL tree/allocation,
-//! SEH, `Unwind@...` и попавшие в этот файл шаблоны соседнего CountryWar
-//! классифицированы как library/compiler noise и после реализации удалены.
+//! Wire содержит 39 DWORD, main region/rect/direction, technology и exile maps
+//! со signed counts; start maps не передаются. Technology record имеет порядок
+//! `level, country_power, country_tech_exp`, отличный от порядка загрузки.
+//! Непрочитанные scalars остаются `None`; `BTreeMap` заменяет MSVC tree.
 
 use std::collections::BTreeMap;
 
@@ -103,7 +83,6 @@ const COUNTRY_PARAMETER_FIELDS: [&str; COUNTRY_PARAMETER_COUNT] = [
     "_inc_exploit",
 ];
 
-/// Точные четыре signed поля старого `tagRECT`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CountryRect {
     pub(crate) left: i32,
@@ -126,7 +105,6 @@ pub(crate) struct CountryTechLevelLookup {
     pub(crate) country_power: i32,
 }
 
-/// Согласованный результат трёх `operator[]`, читаемых точкой возврата.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryReturnPoint {
     pub(crate) region_id: i32,
@@ -134,21 +112,18 @@ pub(crate) struct CountryReturnPoint {
     pub(crate) direction: i32,
 }
 
-/// Наблюдаемый результат старого resource-open и неизменный legacy bool.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryParamLoadReport {
     pub(crate) resource_found: bool,
     pub(crate) legacy_result: bool,
 }
 
-/// Safe-граница formatted extraction старого text-loader-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CountryParamLoadError {
     MissingValue { field: &'static str },
     InvalidValue { field: &'static str },
 }
 
-/// Граница byte-array для constructor-неизвестных полей и 32-битных counts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CountryParamSerializationBlock {
     UninitializedParameter {
@@ -160,13 +135,11 @@ pub(crate) enum CountryParamSerializationBlock {
     },
 }
 
-/// Safe-граница чтения constructor-неизвестного scalar-параметра.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryParameterUnavailable {
     pub(crate) field: &'static str,
 }
 
-/// Полный действующий state исходного `CCountryParam`.
 pub(crate) struct CCountryParam {
     parameters: [Option<i32>; COUNTRY_PARAMETER_COUNT],
     start_regions: BTreeMap<u8, i32>,
@@ -180,7 +153,6 @@ pub(crate) struct CCountryParam {
 }
 
 impl CCountryParam {
- /// Повторяет observable `operator[]` technology map, включая default insert.
     pub(crate) fn technology_level_or_insert(
         &mut self,
         level: i32,
@@ -195,7 +167,6 @@ impl CCountryParam {
         }
     }
 
- /// Создаёт точный constructor-state: восемь пустых maps и неизвестные scalars.
     pub(crate) const fn new() -> Self {
         Self {
             parameters: [None; COUNTRY_PARAMETER_COUNT],
@@ -210,7 +181,6 @@ impl CCountryParam {
         }
     }
 
- /// Выполняет точный `Initialize`, являющийся jump на `Load`.
     pub(crate) fn initialize(
         &mut self,
         source: Option<&[u8]>,
@@ -218,7 +188,6 @@ impl CCountryParam {
         self.load(source)
     }
 
- /// Загружает уже разрешённый `data/CountryParam.ini` либо missing resource.
     pub(crate) fn load(
         &mut self,
         source: Option<&[u8]>,
@@ -287,7 +256,6 @@ impl CCountryParam {
         })
     }
 
- /// Возвращает main return-point и сохраняет zero-insertion трёх `operator[]`.
     pub(crate) fn main_return_point(&mut self, country: u8) -> CountryReturnPoint {
         let region_id = *self.main_regions.entry(country).or_insert(0);
         let rect = *self.main_rects.entry(country).or_default();
@@ -299,7 +267,6 @@ impl CCountryParam {
         }
     }
 
- /// Возвращает первый unconditional `m_mpStartRegions::operator[]` create-role.
     pub(crate) fn start_region_or_insert(&mut self, country: u8) -> i32 {
         *self.start_regions.entry(country).or_insert(0)
     }
@@ -310,7 +277,6 @@ impl CCountryParam {
         *self.start_rects.entry(country).or_default()
     }
 
- /// Возвращает direction, который owner читает уже после выбора клетки.
     pub(crate) fn start_direction_or_insert(&mut self, country: u8) -> i32 {
         *self.start_directions.entry(country).or_insert(0)
     }
@@ -327,7 +293,6 @@ impl CCountryParam {
         self.parameters[DAILY_COUNTRY_TREASURY]
     }
 
- /// Возвращает действующий максимум king control point без default-подстановки.
     pub(crate) const fn max_king_control_point(&self) -> Option<i32> {
         self.parameters[MAX_KING_CONTROL_POINT]
     }
@@ -360,7 +325,6 @@ impl CCountryParam {
         self.parameters[DEFAULT_KING_CONTROL_POINT_DEMISE_NEED]
     }
 
- /// Возвращает `_dec_king_control_point_silence` без default-подстановки.
     pub(crate) const fn silence_control_point_cost(&self) -> Option<i32> {
         self.parameters[DEC_KING_CONTROL_POINT_SILENCE]
     }
@@ -381,7 +345,6 @@ impl CCountryParam {
         self.parameters[SILENCE_TIME]
     }
 
- /// Возвращает `_dec_king_control_point_exile` без default-подстановки.
     pub(crate) const fn exile_control_point_cost(&self) -> Option<i32> {
         self.parameters[DEC_KING_CONTROL_POINT_EXILE]
     }
@@ -394,12 +357,10 @@ impl CCountryParam {
         self.parameters[MAX_ABSOLVE_NUM]
     }
 
- /// Возвращает действующий максимум king material point без default-подстановки.
     pub(crate) const fn max_king_material_point(&self) -> Option<i32> {
         self.parameters[MAX_KING_MATERIAL_POINT]
     }
 
- /// Возвращает действующий максимум king war point без default-подстановки.
     pub(crate) const fn max_king_war_point(&self) -> Option<i32> {
         self.parameters[MAX_KING_WAR_POINT]
     }
@@ -420,7 +381,6 @@ impl CCountryParam {
         self.exile_rects.contains_key(&country)
     }
 
- /// Дописывает полный country-parameter wire в исходном порядке.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,

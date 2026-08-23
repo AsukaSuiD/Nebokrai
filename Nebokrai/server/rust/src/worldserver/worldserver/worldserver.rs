@@ -1,6 +1,6 @@
 //! Технические функции process-owner-а исторического WorldServer.
 //!
-//! Источник контракта — точная пара WorldServer EXE/PDB. Файл хранит
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`. Файл хранит
 //! operator-log адаптеры, имя/состояние процесса и узкие lifecycle helpers,
 //! используемые `CGame`; доменный `Init/MainLoop/Release` остаётся в `game.rs`.
 //!
@@ -20,7 +20,6 @@ const SAVE_LOG_HEADER: &[u8] =
 const SAVE_LOG_FOOTER: &[u8] =
     b"================================ End Save Log ================================\r\n";
 
-/// Значения одного исходного `GetLocalTime` без привязки к Windows ABI.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldLogLocalTime {
     pub(crate) year: u16,
@@ -31,27 +30,22 @@ pub(crate) struct WorldLogLocalTime {
     pub(crate) second: u16,
 }
 
-/// Выполнил ли `SaveLogText` текущий flush операторского журнала.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SaveLogTextDisposition {
     Retained,
     Flushed,
 }
 
-/// Неизвестный результат исходного форматирования без varargs-значения.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AddLogTextBlock {
     MissingNoArgumentValue { percent_offset: usize },
 }
 
-/// Полностью материализованная строка, переданная file и operator sinks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldLogLine {
- /// ANSI-байты вместе с исходным завершающим CRLF, но без C NUL.
     pub(crate) bytes: Vec<u8>,
 }
 
-/// Действующий результат `AddLogText` после обязательной rotation-проверки.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AddLogTextDisposition {
     Written {
@@ -65,7 +59,6 @@ pub(crate) enum AddLogTextDisposition {
     },
 }
 
-/// Caller-owned замена двух MFC edit-control и двух log-tick globals.
 #[derive(Clone, Default)]
 pub(crate) struct WorldLogTextOwner {
     state: Arc<Mutex<WorldLogTextState>>,
@@ -79,7 +72,6 @@ struct WorldLogTextState {
     log_text: Vec<u8>,
 }
 
-/// Текущие четырнадцать значений одного `RefeashInfoText` snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldRefreshInfoCurrent {
     pub(crate) connections: i32,
@@ -98,7 +90,6 @@ pub(crate) struct WorldRefreshInfoCurrent {
     pub(crate) reback_messages: i32,
 }
 
-/// Process-global high-water значения operator info окна.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct WorldRefreshInfoHighWater {
     pub(crate) connections: i32,
@@ -117,7 +108,6 @@ pub(crate) struct WorldRefreshInfoHighWater {
     pub(crate) reback_messages: i32,
 }
 
-/// Четыре process-global save-значения, читаемые info-owner-ом.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorldRefreshSaveState {
     pub(crate) last_save_time: WorldLogLocalTime,
@@ -126,7 +116,6 @@ pub(crate) struct WorldRefreshSaveState {
     pub(crate) this_save_start_tick_ms: u32,
 }
 
-/// Строка из двухэлементной status-table WorldServer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldRefreshSaveStatus {
     Normal,
@@ -142,7 +131,6 @@ impl WorldRefreshSaveStatus {
     }
 }
 
-/// Полный результат одного выполненного `RefeashInfoText`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldRefreshInfoReport {
     pub(crate) current: WorldRefreshInfoCurrent,
@@ -152,7 +140,6 @@ pub(crate) struct WorldRefreshInfoReport {
     pub(crate) text: Vec<u8>,
 }
 
-/// Обновляет high-water значения и публикует точный operator info payload.
 pub(crate) fn refresh_info_text<GetTick>(
     owner: &mut WorldLogTextOwner,
     current: WorldRefreshInfoCurrent,
@@ -250,7 +237,6 @@ fn update_signed_u32_max(high_water: &mut u32, current: u32) {
 }
 
 impl WorldLogTextOwner {
- /// Заменяет `SetWindowTextA(g_hInfoText,...)` для связанный info-owner-ов.
     pub(crate) fn set_info_text(&self, text: &[u8]) {
         let mut state = self.state.lock();
         state.info_text.clear();
@@ -258,12 +244,10 @@ impl WorldLogTextOwner {
             .extend_from_slice(legacy_c_string_prefix(text));
     }
 
- /// Текущее содержимое старого `g_hLogText` без C NUL.
     pub(crate) fn log_text(&self) -> Vec<u8> {
         self.state.lock().log_text.clone()
     }
 
- /// Воспроизводит `SaveLogText(force)` и точный порядок вызовов sink-а.
     pub(crate) fn save_log_text<GetTick, GetLocalTime, PutLogInfo>(
         &self,
         force: bool,
@@ -286,7 +270,6 @@ impl WorldLogTextOwner {
         )
     }
 
- /// Воспроизводит `AddLogText` после безопасной materialization его varargs.
     pub(crate) fn add_log_text<GetTick, GetLocalTime, PutLogInfo>(
         &self,
         message: &[u8],
@@ -311,7 +294,6 @@ impl WorldLogTextOwner {
         )
     }
 
- /// Воспроизводит `AddErrorLogText` с ` <error> ` marker-ом.
     pub(crate) fn add_error_log_text<GetTick, GetLocalTime, PutLogInfo>(
         &self,
         message: &[u8],
@@ -336,7 +318,6 @@ impl WorldLogTextOwner {
         )
     }
 
- /// Сохраняет `AddLogText(local_104)` из `ShowSaveInfo` без varargs.
     pub(crate) fn add_log_text_no_arguments<GetTick, GetLocalTime, PutLogInfo>(
         &self,
         format: &[u8],

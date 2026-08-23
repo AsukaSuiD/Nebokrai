@@ -1,4 +1,5 @@
-//! Базовый session-owner WorldServer из точной пары EXE/PDB.
+//! Базовая session `CSession`, подтверждённая `worldserver.exe` и
+//! `worldserver.pdb`.
 //!
 //! Сохраняются full signed lifecycle-флаги, unsigned wrapping tick/lifetime,
 //! list-order plug-ов, wire header `[type,min,max,remaining_lifetime]` и
@@ -133,7 +134,6 @@ impl CSession {
         1
     }
 
- /// Выполняет только local prefix `AI`; plug traversal принадлежит factory.
     pub(crate) fn ai(&mut self) -> bool {
         if self.started != 1 || self.ended != 0 || self.aborted != 0 {
             return false;

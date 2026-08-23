@@ -1,42 +1,15 @@
-//! Глобальный gameplay snapshot Miracle.
+//! Глобальный setup `CGlobeSetup` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Источник контракта World `CGlobeSetup::AddToByteArray`, `GetBaseMaxRp`,
-//! auction accessors, `CGame::GetOptMoneyJin` и process-полей JJC/DbMisc —
-//! EXE/PDB. Loaders, остальные accessors и Game decoder side effects в этот
-//! owner не входят.
+//! Основной wire — raw 0x1114-байтный `tagSetup`, затем полный
+//! `CRegionRouter`. Парный decoder копирует тот же snapshot, поэтому фиксированный
+//! byte-array сохраняет ABI-формат; static storage и padding обнулены.
 //!
-//! Наблюдаемый протокол здесь намеренно является raw ABI snapshot: EXE сначала
-//! копирует ровно `0x1114` байт static `m_stSetup`, затем дописывает полный
-//! `CRegionRouter` wire с legacy `sendSelf=true` (параметр router serializer не
-//! читает). Game decoder забирает те же `0x1114` байт без field conversion.
-//! Поэтому fixed byte array — точная модель wire, а не перенос C++ ownership;
-//! typed loaders/accessors могут безопасно накладывать подтверждённые offsets
-//! поверх него. Static storage оригинала было zero-initialized, что Rust
-//! сохраняет через `Default` без утечки padding/heap-мусора.
-//! `OnPlayerDeclareWar` индексирует country
-//! name как `m_stSetup + 0x906 + country * 0x40` только для `0..=4`; typed
-//! accessor ниже накладывает эту подтверждённую границу на тот же raw snapshot.
-//! Country `IsMinister` использует соседний `szCountryIdentity` по
-//! `+0xA46`, восемь slots по `0x40`; второй accessor не копирует строки.
-//! PDB type `CGlobeSetup::tagSetup` дополнительно подтверждает
-//! `strSpeStr[0x40]` по `+0x520` и `wTotalJingLiDanCnt` по `+0x1110`;
-//! соседний `dwDelDays` по `+0x51C` читает World player-list owner;
-//! player rename и LeiTing owners читают их прямо из того же snapshot без
-//! отдельного дублирующего state.
-//! Create-role сравнивает zero-extended DB
-//! byte-count с signed word в самом начале `m_stSetup` через `CMP AX`/`JL`.
-//! Поэтому misleading `btMaxCharactersNum` публикуется как `i16` по `+0`, а
-//! не как Rust byte: отрицательная настройка остаётся немедленным отказом.
-//! `GetBaseMaxRp` читает поля
-//! `+0x3F0/+0x3F2/+0x3F4/+0x3F6`. Ветка сохраняет необычный общий случай
-//! переставленных level-порогов, а occupation вне нуля сразу возвращает `0`.
-//! `GetOptMoneyJin` читает
-//! `fSxfJinMax/fSxfJinMin/fAuctionFactorC` по `+0xC98/+0xCA0/+0xCB0`;
-//! typed accessors ниже лишь накладывают эти PDB-offsets на тот же snapshot.
-//! Соседний one-byte `bAuction` расположен
-//! предыдущего прохода помещает его по `+0xC87`, что согласуется с этими
-//! auction-полями. Accessor ниже использует только `byte != 0`, как exact
-//! условие `OnMSG_S2W_AUCTION::0x60808`, не выдавая Rust layout за MSVC ABI.
+//! Typed loaders/accessors накладываются только на подтверждённые offsets:
+//! create-role limit остаётся signed `i16`, country names/identities и special
+//! string — fixed C-строки, auction/JJC/DbMisc поля читаются из общего snapshot.
+//! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
+//! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`.
 
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
 
@@ -80,7 +53,6 @@ pub(crate) struct GlobeSetupSnapshot {
     country_identity_ids: [Vec<u8>; COUNTRY_IDENTITY_COUNT],
 }
 
-/// Девять occupation-массивов, которые `CPlayer::LoadData` читает из Globe.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GlobePlayerPropertyCoefficients {
     pub(crate) str_to_max_attack: [f32; 3],
@@ -169,7 +141,6 @@ impl GlobeSetupSnapshot {
         })
     }
 
- /// Загружает поставочный `setup/AuctionList.ini` в `long[256]`.
     pub(crate) fn load_auction_goods(
         &mut self,
         source: &[u8],
@@ -210,7 +181,6 @@ impl GlobeSetupSnapshot {
         })
     }
 
- /// Материализует string-table IDs в два fixed `char[64]` массива EXE.
     pub(crate) fn resolve_country_text(
         &mut self,
         mut resolve: impl FnMut(&[u8]) -> Option<Vec<u8>>,
@@ -246,7 +216,6 @@ impl GlobeSetupSnapshot {
         Ok(())
     }
 
- /// Возвращает оригинал signed `short btMaxCharactersNum` ветки create-role.
     pub(crate) fn maximum_characters(&self) -> i16 {
         i16::from_le_bytes(
             self.bytes[MAXIMUM_CHARACTERS_OFFSET..MAXIMUM_CHARACTERS_OFFSET + 2]
@@ -255,12 +224,10 @@ impl GlobeSetupSnapshot {
         )
     }
 
- /// Возвращает bit-оригинал `fPlayerSpeed` по PDB-offset `+0x7F8`.
     pub(crate) fn player_speed(&self) -> f32 {
         self.read_f32(PLAYER_SPEED_OFFSET)
     }
 
- /// Масштаб количества монстров, передаваемый всем region-loader-ам.
     pub(crate) fn monster_number_scale(&self) -> f32 {
         self.read_f32(MONSTER_NUMBER_SCALE_OFFSET)
     }
@@ -319,27 +286,22 @@ impl GlobeSetupSnapshot {
         }
     }
 
- /// Возвращает `m_stSetup.bAuction` из подтверждённого raw snapshot-а.
     pub(crate) const fn auction_enabled(&self) -> bool {
         self.bytes[AUCTION_ENABLED_OFFSET] != 0
     }
 
- /// Возвращает оригинал `fSxfJinMax`, используемый комиссией аукциона.
     pub(crate) fn auction_fee_maximum(&self) -> f32 {
         self.read_f32(AUCTION_FEE_MAXIMUM_OFFSET)
     }
 
- /// Возвращает оригинал `fSxfJinMin`, используемый комиссией аукциона.
     pub(crate) fn auction_fee_minimum(&self) -> f32 {
         self.read_f32(AUCTION_FEE_MINIMUM_OFFSET)
     }
 
- /// Возвращает оригинал `fAuctionFactorC` для выплаты продавцу.
     pub(crate) fn auction_factor_c(&self) -> f32 {
         self.read_f32(AUCTION_FACTOR_C_OFFSET)
     }
 
- /// Повторяет оригинал `GetBaseMaxRp`: RP есть только у occupation `0`.
     pub(crate) fn base_max_rp(&self, occupation: u8, level: u8) -> u16 {
         if occupation != 0 {
             return 0;
@@ -364,7 +326,6 @@ impl GlobeSetupSnapshot {
         read_u16(BASE_MAX_RP_LEVEL_2_OFFSET)
     }
 
- /// Возвращает C-string prefix одного оригинал `szCountryName[5][0x40]`.
     pub(crate) fn country_name(&self, country_id: u8) -> Option<&[u8]> {
         let index = usize::from(country_id);
         if index >= COUNTRY_NAME_COUNT {
@@ -376,7 +337,6 @@ impl GlobeSetupSnapshot {
         Some(&slot[..visible_len])
     }
 
- /// Возвращает C-string prefix оригинал `szCountryIdentity[8][0x40]`.
     pub(crate) fn country_identity_name(&self, identity: u8) -> Option<&[u8]> {
         let index = usize::from(identity);
         if index >= COUNTRY_IDENTITY_COUNT {
@@ -388,7 +348,6 @@ impl GlobeSetupSnapshot {
         Some(&slot[..visible_len])
     }
 
- /// Возвращает C-string prefix оригинал `strSpeStr[0x40]` по PDB `+0x520`.
     pub(crate) fn special_string(&self) -> &[u8] {
         let slot =
             &self.bytes[SPECIAL_STRING_OFFSET..SPECIAL_STRING_OFFSET + SPECIAL_STRING_LENGTH];
@@ -396,7 +355,6 @@ impl GlobeSetupSnapshot {
         &slot[..visible_len]
     }
 
- /// Возвращает оригинал `dwDelDays` перед `strSpeStr` по PDB-offset `+0x51C`.
     pub(crate) fn deletion_days(&self) -> u32 {
         u32::from_le_bytes(
             self.bytes[DELETION_DAYS_OFFSET..DELETION_DAYS_OFFSET + 4]
@@ -405,7 +363,6 @@ impl GlobeSetupSnapshot {
         )
     }
 
- /// Возвращает оригинал `wTotalJingLiDanCnt` по PDB-offset `+0x1110`.
     pub(crate) fn total_jing_li_dan_count(&self) -> u16 {
         u16::from_le_bytes(
             self.bytes[TOTAL_JING_LI_DAN_COUNT_OFFSET..TOTAL_JING_LI_DAN_COUNT_OFFSET + 2]

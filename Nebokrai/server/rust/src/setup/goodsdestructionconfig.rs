@@ -1,22 +1,11 @@
-//! Ограничения уничтожения предметов исторического Miracle.
+//! Уничтожение предметов `CGoodsDestroySetup` из WorldServer, подтверждённое
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `CGoodsDestroySetup::LoadConfig` и
-//! `AddToByteArray`:; singleton, Game decoder
-//! и queries не входят в этот owner и остаются. Точная пара:
-//! Исходный владелец PDB:
-//!
-//! Wire: `u32 enabled`, signed type count, ordered vector `u16 goods_type`,
-//! signed original-name count и ordered vector C-строк. Повторы в обоих
-//! vector значимы. Bool передаётся четырьмя байтами как `0/1`, а не одним
-//! байтом. Owned bytes и `Vec` заменяют MSVC string/vector lifetime, сохраняя
-//! byte-оригинал original names.
-//! `LoadConfig` очищает только оба vector до открытия файла, но сохраняет
-//! прежний enabled flag при ошибке открытия. После `#` игнорируется text label
-//! и читается numeric bool, затем идут `* label u16` и после первого `<end>`
-//! независимые `+ original-name` записи. Открытый файл без `#` остаётся
-//! успешным пустым состоянием с прежним enabled flag. Malformed extraction
-//! раньше могла использовать stack-мусор; Rust останавливает owner на typed
-//! error, не выдумывая такие значения.
+//! Wire пишет `u32 enabled`, signed counts, ordered `u16` goods types и
+//! original-name C-строки; повторы значимы. Loader очищает оба vectors, но при
+//! ошибке открытия сохраняет enabled. После `#` идут `* label u16`, после
+//! первого `<end>` — независимые `+ name` records. Файл без `#` успешен с
+//! пустыми vectors и прежним enabled.
 
 use std::error::Error;
 use std::fmt;
@@ -50,7 +39,6 @@ impl GoodsDestroySetup {
         self.original_names.clear();
     }
 
- /// Загружает оригинал token grammar уже открытого `GoodsDestroyConf.ini`.
     pub(crate) fn load_from_bytes(
         &mut self,
         source: &[u8],
@@ -80,7 +68,6 @@ impl GoodsDestroySetup {
         Ok(report)
     }
 
- /// File-adapter с оригинал clear-before-open переходом owner-а.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -121,14 +108,12 @@ impl GoodsDestroySetup {
     }
 }
 
-/// Число полностью materialized vector entries loader-а.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GoodsDestroyLoadReport {
     pub(crate) goods_types: usize,
     pub(crate) original_names: usize,
 }
 
-/// Safe граница formatted extraction `LoadConfig`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GoodsDestroyFormatError {
     UnexpectedEnd { field: &'static str },

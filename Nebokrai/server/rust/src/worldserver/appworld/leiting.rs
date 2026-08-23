@@ -1,31 +1,14 @@
-//! Владелец суточного обновления `CLeiTing` исторического WorldServer.
+//! Суточное обновление `CLeiTing` из WorldServer, подтверждённое
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! и `Run` — часть контракта owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
+//! `Run` сравнивает только `tm_yday`; при новом дне parameter равен 1 внутри
+//! месяца и 2 при смене месяца. Players обходятся в unsigned map order:
+//! сначала `UpdateLeiTing`, затем serialization в `0x7FA17` и `SendAll`.
 //!
-//! Singleton хранит единственную полную копию MSVC `tm`, полученную через
-//! `_time/_localtime`. Rust получает её от caller-а и выражает singleton
-//! обычным owned значением. `Run` снова снимает local `tm`, вызывает точный
-//! соседний `CThingSetup::SetDailyUpdateStamp` (`23:59:59`) и сравнивает только
-//! `tm_yday`; год намеренно не участвует в gate. При новом дне параметр равен
-//! `(current.tm_mon != saved.tm_mon) + 1`, то есть `1` внутри месяца и `2` при
-//! смене месяца.
-//!
-//! `UpdateLeiTing` обходит `CGame::m_mPlayer` в unsigned map-order, пропускает
-//! null value и для каждого живого player строго выполняет
-//! `CPlayer::UpdateLeiTing`, затем `AddByteArrayLeiTing` в message `0x7FA17`
-//! после inherited player ID и синхронный `SendAll`. После всего player-
-//! прохода идут begin-log, `_mktime` того же mutable `tm`, неблокирующий
-//! `CRsPlayer::ResetAllLeitingInDB`, end-log и только затем замена сохранённой
-//! даты. Возвраты send и DB-spawn исходный caller не читал.
-//!
-//! `CGame`, `CPlayer`, `CThingSetup` и globe snapshot теперь являются
-//! concrete owners этого прохода. `LeiTingContext` оставляет только platform-
-//! time, log, transport и DB worker границы: map keys снимает `CGame`, player
-//! update/serialization выполняет `CPlayer`, message строит `CLeiTing`.
-//! Контекст обязан синхронно скопировать message до возврата. Неизвестные
-//! codec/time границы возвращаются как typed `Block`; старые hash/STL
-//! constructors, allocator, unwind и deleting-destructor blocks удалены как
-//! compiler/library noise.
+//! После всех players идут begin-log, `_mktime`, неблокирующий DB reset,
+//! end-log и только затем замена сохранённой даты. Send/DB-spawn results
+//! оригинал игнорировал. Platform time и transport передаются через контекст;
+//! само игровое состояние остаётся у `CGame`, `CPlayer` и `CThingSetup`.
 
 use std::error::Error;
 use std::fmt;
@@ -39,7 +22,6 @@ use crate::worldserver::appworld::player::{
 };
 use crate::worldserver::worldserver::game::CGame;
 
-/// Safe-граница неизвестного соседнего callback-а.
 #[derive(Debug)]
 pub(crate) enum LeiTingBlock<ContextBlock> {
     Context(ContextBlock),
@@ -68,7 +50,6 @@ impl<ContextBlock: fmt::Display> fmt::Display for LeiTingBlock<ContextBlock> {
 
 impl<ContextBlock: Error + 'static> Error for LeiTingBlock<ContextBlock> {}
 
-/// Выполненный новый день одного `Run`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LeiTingDailyUpdateReport {
     pub(crate) update_kind: u32,
@@ -78,38 +59,30 @@ pub(crate) struct LeiTingDailyUpdateReport {
     pub(crate) database_stamp: i32,
 }
 
-/// Наблюдаемый итог одного `CLeiTing::Run`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LeiTingRunReport {
     pub(crate) current: LeiTingLocalTime,
     pub(crate) daily_update: Option<LeiTingDailyUpdateReport>,
 }
 
-/// Точные соседние вызовы полного `CLeiTing` owner-а.
 pub(crate) trait LeiTingContext {
     type Block;
 
- /// Выполняет отдельный `GetLocalTime` и первый formatted `AddLogText`.
     fn add_update_start_log(&mut self);
 
- /// Platform replacement 32-bit CRT `_localtime` для player stamp.
     fn local_time_from_timestamp(
         &mut self,
         timestamp: u32,
     ) -> Result<LeiTingLocalTime, Self::Block>;
 
- /// Отдельный Win32 `GetLocalTime().wDayOfWeek` внутри weekly item loop.
     fn current_week_day(&mut self) -> u16;
 
- /// Синхронно повторяет `CMessage::SendAll`; старый return игнорируется.
     fn send_all(&mut self, message: &CMessage);
 
     fn add_database_begin_log(&mut self);
 
- /// Повторяет `_mktime`, включая допустимую нормализацию mutable `tm`.
     fn mktime(&mut self, local_time: &mut LeiTingLocalTime) -> Result<i32, Self::Block>;
 
- /// Запускает `CRsPlayer::ResetAllLeitingInDB` без ожидания worker-а.
     fn reset_all_lei_ting_in_database(&mut self, update_kind: u32, stamp: i32);
 
     fn add_update_end_log(&mut self);
@@ -134,20 +107,17 @@ impl<Context: LeiTingContext + ?Sized> PlayerLeiTingClock for Context {
     }
 }
 
-/// Owned замена process-static singleton-а и его `s_date`.
 pub(crate) struct CLeiTing {
     saved_date: LeiTingLocalTime,
 }
 
 impl CLeiTing {
- /// Сохраняет полную constructor-копию одного `_localtime`.
     pub(crate) const fn new(initial_local_time: LeiTingLocalTime) -> Self {
         Self {
             saved_date: initial_local_time,
         }
     }
 
- /// Выполняет один полный daily gate и все действующие side effects.
     pub(crate) fn run<Context: LeiTingContext>(
         &mut self,
         mut current: LeiTingLocalTime,

@@ -1,6 +1,6 @@
 //! Базовый listener обхода контейнера исторического `WorldServer`.
 //!
-//! Callback входит в контракт owner-а. Источник контракта — WorldServer EXE/PDB.
+//! Callback входит в контракт owner-а. Источник контракта — `worldserver.exe` и `worldserver.pdb`.
 //!
 //! безусловно возвращает `1` и не читает ни
 //! `CContainer*`, ни `CBaseObject*`. Rust сохраняет точный `int` callback-а,
@@ -15,15 +15,12 @@
 
 use crate::worldserver::appworld::goods::cgoods::CGoods;
 
-/// Действующее различие типов в общем `CBaseObject*` callback-а.
 pub(crate) enum TraversedContainerObject<'object> {
     Goods(&'object CGoods),
     Other,
 }
 
-/// Safe Rust-форма виртуального контракта `CContainerListener`.
 pub(crate) trait CContainerListener: Send {
- /// Базовый owner всегда разрешает продолжить traversal точным значением `1`.
     fn on_traversing_container(&mut self, _object: TraversedContainerObject<'_>) -> i32 {
         1
     }

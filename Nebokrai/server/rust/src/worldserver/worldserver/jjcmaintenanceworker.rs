@@ -46,7 +46,6 @@ impl WorldJjcWeekClearWorker {
         }
     }
 
- /// Возвращает успех только создания system thread, как `JJcWeekClear`.
     pub(crate) fn dispatch(&self, runtime: Handle) -> Result<(), io::Error> {
         let settings = self.settings.clone();
         let events = self.event_sender.clone();

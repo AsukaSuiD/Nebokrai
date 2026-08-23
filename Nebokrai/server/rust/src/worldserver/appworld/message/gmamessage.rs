@@ -1,8 +1,8 @@
-//! WorldServer dispatcher-owner `OnGMAMessage`.
+//! GMA-dispatcher `OnGMAMessage` WorldServer.
 //!
 //! kick-player `0x4FD01` и transport branches `0x4FD04`, `0x60401`, `0x60402`.
-//! Источник контракта — `WorldServer/Nworldserver.exe` и
-//! `WorldServer/WorldServer.pdb`. Owner
+//! Источник контракта — `worldserver.exe` и
+//! `worldserver.pdb`. Owner
 //! Kick-player сохраняет `_strcmpi` lookup аккаунта, online-list gate, точные
 //! payload-ы ошибок LoginServer, отсутствие Login-ответа на успешном пути и
 //! два `AddLogText` в исходном порядке. Небезопасные `char[256]`, `strcpy` и
@@ -58,7 +58,6 @@ pub(crate) enum WorldGmaKickPlayerDisposition {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGmaMessageOutcome {
- /// Default полного `OnGMAMessage` без side effects.
     NoOp {
         request_type: i32,
     },
@@ -101,7 +100,6 @@ pub(crate) enum WorldGmaMessageDispatch {
     Pending(CMessage),
 }
 
-/// Исполняет полный `OnGMAMessage` и действующий kick-player helper.
 pub(crate) fn on_gma_message(
     game: &CGame,
     mut message: CMessage,

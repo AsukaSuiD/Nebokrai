@@ -1,13 +1,12 @@
 //! Базовая country-identity исторического `WorldServer`.
 //!
-//! — часть контракта owner-а. Источник контракта — точная пара WorldServer EXE/PDB.
+//! — часть контракта owner-а. Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Constructor устанавливает только signed ID `0` и пустое имя. `Vec<u8>`
 //! заменяет MSVC `std::string` и его destructor; Rust layout не объявляется
 //! копией прежнего ABI. Практический C++ reference подтверждает C-string
 //! границу setter-а: embedded NUL завершает значимые bytes имени.
 
-/// Безопасный value-owner исходной identity без vtable/string ABI.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CCountryIdentity {
     id: i32,
@@ -21,7 +20,6 @@ impl Default for CCountryIdentity {
 }
 
 impl CCountryIdentity {
- /// Повторяет подтверждённые нулевые значения constructor-а.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             id: 0,
@@ -41,7 +39,6 @@ impl CCountryIdentity {
         self.id = id;
     }
 
- /// Присваивает C-string prefix имени без неявной перекодировки.
     pub(crate) fn set_name(&mut self, name: &[u8]) {
         let prefix = name.split(|byte| *byte == 0).next().unwrap_or_default();
         self.name.clear();

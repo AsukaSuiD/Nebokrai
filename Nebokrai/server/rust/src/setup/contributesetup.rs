@@ -1,23 +1,12 @@
-//! Настройки country contribution исторического Miracle.
+//! Country contribution `CContributeSetup` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `LoadContributeSetup` и `AddToByteArray`
-//!:; Game decoder ниже остаётся.
-//! Точная пара: `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
-//! Исходный владелец PDB:
+//! Loader очищает только items; одиннадцать scalars при ошибке открытия
+//! сохраняются и обновляются позиционно. Malformed value оставляет уже
+//! прочитанный префикс. `#` record имеет `lo hi name count`.
 //!
-//! Loader очищает только item-vector: одиннадцать process-global signed
-//! параметров сохраняются при ошибке открытия и обновляются позиционно по мере
-//! успешного formatted extraction. Имена параметров читаются, но не
-//! проверяются. Rust сохраняет этот state transition; malformed значение даёт
-//! typed error после уже применённого prefix-а, а не протаскивает дальше
-//! failbit и не добавляет запись с неинициализированными числами.
-//!
-//! После параметров каждая найденная `#`-запись имеет форму
-//! `lo hi name count`. Wire повторяет одиннадцать `i32`, signed item count и
-//! для каждого item `u32 lo, u32 hi, u32 count, name\0`. Пустой item-vector
-//! допустим — очищенный C++ reference ошибочно требовал хотя бы одну запись.
-//! Legacy name хранится byte-exact; `std::fs`, `Vec` и `Drop` заменяют только
-//! CRFile/STL plumbing.
+//! Wire пишет одиннадцать `i32`, signed item count и records
+//! `u32 lo/hi/count + name\0`. Пустой item vector допустим.
 
 use std::error::Error;
 use std::fmt;
@@ -27,7 +16,6 @@ use crate::public::readwrite::read_to;
 
 const PARAMETER_COUNT: usize = 11;
 
-/// Один исходный `tagContributeItem` без STL layout.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ContributeItem {
     pub(crate) low_value: u32,
@@ -36,7 +24,6 @@ pub(crate) struct ContributeItem {
     pub(crate) name: Vec<u8>,
 }
 
-/// Safe owner одиннадцати static long и item-vector-а.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CContributeSetup {
     parameters: [i32; PARAMETER_COUNT],
@@ -44,12 +31,10 @@ pub(crate) struct CContributeSetup {
 }
 
 impl CContributeSetup {
- /// Очищает только item-vector, сохраняя positional scalar prefix.
     pub(crate) fn clear_items(&mut self) {
         self.items.clear();
     }
 
- /// Очищает items до открытия, но не трогает scalar prefix.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -60,7 +45,6 @@ impl CContributeSetup {
             .map_err(ContributeSetupFileLoadError::Format)
     }
 
- /// Применяет оригинал positional scalar updates и затем `#`-items.
     pub(crate) fn load_from_bytes(
         &mut self,
         source: &[u8],
@@ -92,7 +76,6 @@ impl CContributeSetup {
         Ok(applied)
     }
 
- /// Дописывает оригинал positional wire World owner-а.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -120,7 +103,6 @@ impl CContributeSetup {
     }
 }
 
-/// Safe formatted-extraction boundary с сохранённым partial prefix-state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ContributeSetupFormatError {
     UnexpectedEnd { field: &'static str },

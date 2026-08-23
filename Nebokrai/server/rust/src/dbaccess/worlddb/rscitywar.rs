@@ -1,6 +1,6 @@
 //! Пустой DB-адаптер `CRsCityWar` WorldServer.
 //!
-//! Источник контракта — WorldServer EXE/PDB. Concrete-класс содержит только
+//! Источник контракта — `worldserver.exe` и `worldserver.pdb`. Concrete-класс содержит только
 //! lifetime базового `CMyAdoBase`; вызываемых DB-методов и отдельной City War
 //! transaction phase у него нет. Сохранение военных данных принадлежит другим
 //! DB-owner-ам.

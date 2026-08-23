@@ -1,4 +1,4 @@
-//! Инициализация World DB из точной пары WorldServer EXE/PDB.
+//! Инициализация World DB из точной пары `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Owner открывает настроенные TDS-соединения и возвращает typed runtime
 //! handles. Tiberius заменяет ADO/COM; порядок открытия, обязательность баз и
@@ -21,7 +21,6 @@ const LOAD_LEAVE_WORLD_ID_SQL: &str = "SELECT TOP 1 LeaveWordID FROM csl_setup";
 const SAVE_PLAYER_ID_SQL: &str = "UPDATE csl_setup SET playerID=@P1";
 const SAVE_LEAVE_WORLD_ID_SQL: &str = "UPDATE csl_setup SET LeaveWordID=@P1";
 
-/// Четыре исходных connection-поля основной World DB.
 #[derive(Clone)]
 pub(crate) struct WorldDatabaseSettings {
     host: Vec<u8>,
@@ -30,7 +29,6 @@ pub(crate) struct WorldDatabaseSettings {
     password: Vec<u8>,
 }
 
-/// Владеющие части World DB setup snapshot без публикации credentials.
 pub(crate) struct WorldDatabaseSettingsParts {
     pub(crate) host: Vec<u8>,
     pub(crate) database: Vec<u8>,
@@ -39,7 +37,6 @@ pub(crate) struct WorldDatabaseSettingsParts {
 }
 
 impl WorldDatabaseSettings {
- /// Копирует byte-оригинал `SqlServerIP/DBName/SqlUserName/SqlPassWord`.
     pub(crate) fn from_parts(parts: WorldDatabaseSettingsParts) -> Self {
         Self {
             host: parts.host,
@@ -49,7 +46,6 @@ impl WorldDatabaseSettings {
         }
     }
 
- /// Создаёт новый TDS config для отдельного исходного World DB connection.
     pub(crate) fn tds_config(&self) -> Config {
         let mut config = Config::new();
         config.host(decode_ansi_c_string(&self.host));
@@ -62,7 +58,6 @@ impl WorldDatabaseSettings {
         config
     }
 
- /// Открывает отдельное World DB connection вместо старых `CreateCn/OpenCn`.
     pub(crate) async fn connect(
         &self,
     ) -> Result<WorldTdsClient, WorldDatabaseConnectionError> {
@@ -78,7 +73,6 @@ impl WorldDatabaseSettings {
     }
 }
 
-/// Общая ошибка технической границы отдельного World DB connection.
 #[derive(Debug)]
 pub(crate) enum WorldDatabaseConnectionError {
     Connect(io::Error),
@@ -105,14 +99,12 @@ impl Error for WorldDatabaseConnectionError {
     }
 }
 
-/// Два значения, которые исходный constructor записывал прямо в `CGame`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LoadedSetupIds {
     pub(crate) player_id: u32,
     pub(crate) leave_world_id: i32,
 }
 
-/// Структурированная замена исходных `PutLogInfo/PrintErr` DB-ветвей.
 #[derive(Debug)]
 pub(crate) enum RsSetupNotice {
     PlayerLoad {
@@ -131,7 +123,6 @@ pub(crate) enum RsSetupNotice {
     },
 }
 
-/// Ошибка доказанной ADO/TDS-границы без credential values.
 #[derive(Debug)]
 pub(crate) enum RsSetupDatabaseError {
     Connect(io::Error),
@@ -172,34 +163,28 @@ impl From<tiberius::error::Error> for RsSetupDatabaseError {
     }
 }
 
-/// Узкая объектная граница действующей функции исходного `CRsSetup`.
 pub(crate) trait RsSetupOwner {
- /// Выполняет UPDATE внутри уже начатой caller-транзакции.
     async fn save_player_id(
         &mut self,
         active_transaction: &mut WorldTdsClient,
         player_id_snapshot: u32,
     ) -> bool;
 
- /// Выполняет второй UPDATE внутри той же caller-транзакции.
     async fn save_leave_world_id(
         &mut self,
         active_transaction: &mut WorldTdsClient,
         leave_world_id_snapshot: i32,
     ) -> bool;
 
- /// Забирает следующий исходный `PrintErr`-эквивалент.
     fn pop_notice(&mut self) -> Option<RsSetupNotice>;
 }
 
-/// Linux/TDS-замена действующей части исходного `CRsSetup`.
 pub(crate) struct TiberiusRsSetup {
     config: Config,
     notices: VecDeque<RsSetupNotice>,
 }
 
 impl TiberiusRsSetup {
- /// Создаёт независимый save-owner без повторных constructor-load запросов.
     pub(crate) fn new_for_save(settings: WorldDatabaseSettings) -> Self {
         Self {
             config: settings.tds_config(),
@@ -207,7 +192,6 @@ impl TiberiusRsSetup {
         }
     }
 
- /// Создаёт owner и выполняет два constructor-load в исходном порядке.
     pub(crate) async fn initialize(settings: WorldDatabaseSettings) -> (Self, LoadedSetupIds) {
         let mut owner = Self {
             config: settings.tds_config(),

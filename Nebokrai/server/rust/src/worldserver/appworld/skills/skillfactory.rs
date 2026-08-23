@@ -1,31 +1,14 @@
-//! Ordered cache и initial-config serializer навыков WorldServer.
+//! Skill cache `CSkillFactory` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `ClearSkillCache`, `StringToUsage`,
-//! `ClearUsageCache`, `LoadConfigration`,
-//! `LoadUsage`, `LoadSkillCache` и
-//! `LoadUsageCache` — часть контракта owner-а. Resource-owner перечисляет
-//! и открывает файлы снаружи; factory принимает полученный список в его
-//! исходном порядке.
+//! Initial-config пишет ordered composite-key map: signed count и для каждого
+//! slot `u32 length + record`. Null/unknown/zero-ID skill сохраняет slot с
+//! нулевой длиной. Composite key равен `id << 16 | level & 0xffff`.
 //!
-//! EXE пишет signed count map-а, затем в unsigned ascending-key порядке для
-//! каждого slot-а `u32 length + record`. Null skill и skill с unknown type или
-//! нулевым ID не удаляются из framing: им соответствует нулевая длина. Вопреки
-//! сырому оригинал, точные инструкции после освобождения временного record-а
-//! продолжают итерацию, а не выходят из функции.
-//!
-//! `BTreeMap` заменяет MSVC tree и сохраняет порядок. `Option<CSkill>` оставляет
-//! выразимым доказанный null-slot, обычная вставка строит composite key
-//! `id << 16 | level & 0xffff`. Замена duplicate key корректно освобождает
-//! прежний owner вместо внутренней утечки старого `operator[]` call-site.
-//! Отдельная byte-keyed карта usage сохраняет `operator[]`-перезапись в
-//! `LoadUsage`, а `StringToUsage` возвращает `SKILL_USAGE_UNKNOW`
-//! `0x7fff_ffff`.
-//! `LoadConfigration`/`LoadUsage` получают уже прочитанные байты от внешнего
-//! resource-owner-а: это заменяет только `CRFile`, `stringstream` и MessageBox.
-//! Cache loaders очищают карту до загрузки и после первой ошибки. У
-//! `LoadSkillCache` есть подтверждённый EXE-quirk: любой path с byte-substring
-//! `rhg_314` пропускается до открытия. Остальной порядок списка и normal
-//! legacy-result сохранены.
+//! Usage map использует byte-key и last-write-wins; unknown string даёт
+//! `0x7fff_ffff`. Cache loaders очищают карту и прекращают работу после первой
+//! ошибки. Path с byte-substring `rhg_314` пропускается до открытия.
+//! Resource bytes и порядок файлов предоставляет внешний owner.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -41,7 +24,6 @@ use super::skill::{CSkill, SkillSerializeError, SkillTextError, SkillUsage};
 /// в сериализуемой `(usage, cost)`-паре.
 pub(crate) const UNKNOWN_SKILL_USAGE: u32 = 0x7fff_ffff;
 
-/// Safe owner исходного process-global `g_mSkillMap`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CSkillFactory {
     skills: BTreeMap<u32, Option<CSkill>>,
@@ -49,12 +31,10 @@ pub(crate) struct CSkillFactory {
 }
 
 impl CSkillFactory {
- /// Вставляет нормальный skill под composite key.
     pub(crate) fn insert(&mut self, skill: CSkill) -> Option<CSkill> {
         self.skills.insert(skill.cache_key(), Some(skill)).flatten()
     }
 
- /// Сохраняет выразимым legacy null-slot и его позицию в ordered framing.
     pub(crate) fn insert_slot(
         &mut self,
         key: u32,
@@ -95,7 +75,7 @@ impl CSkillFactory {
  ///
  /// Каждая пара whitespace-токенов сразу заменяет существующий key. При
  /// оборванной/переполненной паре старый код мог читать неинициализированные
- /// stack-поля; Rust останавливает именно эту недоказанную UB-границу, не
+ /// stack-поля; Rust останавливает именно эту неопределённую UB-границу, не
  /// придумывая очередное имя либо usage.
     pub(crate) fn load_usage(&mut self, source: &[u8]) -> Result<usize, SkillFactoryLoadError> {
         let mut cursor = 0;
@@ -256,7 +236,6 @@ impl CSkillFactory {
         report
     }
 
- /// Дописывает `count + ordered (length, record)` wire.
     pub(crate) fn serialize(
         &self,
         destination: &mut Vec<u8>,
@@ -374,14 +353,12 @@ impl Error for SkillFactoryCacheLoadError {
     }
 }
 
-/// Наблюдаемый итог одного `.skill` content-loader-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SkillConfigurationLoadReport {
     pub(crate) skill_id: u32,
     pub(crate) loaded_levels: usize,
 }
 
-/// Typed safe boundary для некорректного legacy token stream.
 #[derive(Debug)]
 pub(crate) enum SkillFactoryLoadError {
     MissingMarker { marker: &'static str },
@@ -532,7 +509,6 @@ fn parse_decimal_magnitude(
     })
 }
 
-/// Safe serialization boundary для невозможного legacy registry-state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SkillFactorySerializeError {
     EntryCount {

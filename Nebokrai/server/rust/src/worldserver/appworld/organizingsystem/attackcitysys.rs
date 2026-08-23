@@ -1,82 +1,22 @@
-//! Владелец расписания городских войн `CAttackCitySys` WorldServer.
+//! Расписание городских войн `CAttackCitySys` из `attackcitysys.cpp/.h`,
+//! подтверждённое `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `Initialize`, `GetCityState` и
-//! `GetCityStateByWarNum`, clear/refresh callbacks
-//! и фазовые start/end/declare/mass callbacks
-//! действуют;
-//! countdown и city end/weekly rearm
-//! и result callback `OnFacWinCity`, а также заявка
-//! `OnPlayerDeclareWar`, `Reload` и полный
-//! `AddToByteArray` snapshot действуют. Источник контракта — точная пара WorldServer EXE/PDB.
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`; source
+//! Loader дважды читает weekly `#` и single `*` записи. Он сохраняет rollover,
+//! endpoint-only overlap-проверку и порядок восьми фазовых timers. Event ID до
+//! регистрации хранится как `None`; reload не подставляет случайное значение.
 //!
-//! Layout сохраняет static `map<long,tagAttackCityTime>`, а запись размером `0xBC`:
-//! signed schedule/city IDs, восемь `tagTime`, восемь unsigned event IDs,
-//! `eCityState`, ordered list faction IDs и signed weekly flag. `BTreeMap` и
-//! `Vec` сохраняют наблюдаемый порядок; ещё не назначенные event IDs выражены
-//! через `Option<TimerId>`, потому что старый reload безусловно читал их и мог
-//! достигать неинициализированных значений у уже прошедших фаз.
+//! Callbacks меняют `Duth/Mass/Fight/No` до рассылок `0x7FE1F..0x7FE25`.
+//! Countdown учитывает только минуты и секунды. Weekly end очищает заявки,
+//! закрывает relations и ищет не более пяти следующих недель.
 //!
-//! `Initialize` дважды сканирует один byte-token stream через точный `ReadTo`:
-//! `#` для weekly и после reopen `*` для single schedules. Weekly rollover
-//! проверяет `DeclarWarTime < now`; порядок строго равен `declare < start-info
-//! < mass < clear < refresh < start < end-info < end`. Исходная overlap-
-//! проверка сравнивает лишь два endpoints новой записи с closed interval уже
-//! принятой записи. Поставочный `CityWarSys.ini` содержит восемь `#` и ни
-//! одного `*`, поэтому его видимый раздел `Danci` оригинал не достигает.
+//! Победа и объявление войны сохраняют master/faction/region/level/owner gates,
+//! порядок ownership, country, billboard и war-log эффектов. Reload убивает
+//! timers в историческом порядке и повторно снимает общий tax-event внутри
+//! каждой итерации.
 //!
-//! Rust регистрирует через `CTimer` те же calendar events и получает callback
-//! keys от caller-а. Фазовые callbacks сохраняют `Duth/Mass/Fight/No`, Fight-
-//! gate у end, затем World messages `0x7FE1F/20/21/23/24/25` с signed
-//! war number. MainLoop передаёт callback-ам живые region, localization,
-//! organizing-info, country, top-info и war-log owners через узкий контекст,
-//! сохраняя их исходный порядок. Countdown игнорирует hours/days разности. City
-//! end очищает заявки, закрывает country/enemy relations и пробует до пяти
-//! следующих недель перед восемью ordered registrations. Faction snapshot
-//! имеет формат signed war ID/count/ordered IDs и завершает decode значением
-//! `true`. Active-state duplicate scan
-//! и relation rebuild
-//! сохраняют исходные gates, expansion faction/union и взаимный ordered add.
-//! `OnFacWinCity` всегда пишет входной diagnostic, затем при точном совпадении
-//! schedule/region убивает end events и вызывает оба end-owner-а. Neutral и
-//! faction-result сохраняют порядок `WS0147..WS0153`, ownership refresh,
-//! defence/offense counters, billboard и передачу master-а в country. Owner
-//! region читается только в положительной winner-ветке; четвёртый входной
-//! `long` после diagnostic заменяется вычисленным union ID. При same-owner
-//! исходник безусловно разыменовывал nullable faction на, поэтому
-//! safe Rust блокирует только эту границу, не назначая поведение старому UB.
-//! `OnPlayerDeclareWar` сохраняет master/faction/schedule/region/level/state/
-//! owner/union/owned-city/duplicate gates, затем дописывает virtual GetID,
-//! рассылает `0x7FE35`, пересобирает enemy relations и публикует
-//! `WS0103` либо `WS0145`, а также log `WS0146`. `m_btCountry` читается по
-//! подтверждённому offset `+0x80`; только `0..=4` индексируют старую таблицу
-//! country names. Level-rejection равен `WS0121/WS0144`, третий `long` не
-//! читается. EXE возвращает `true` только после log; отказ —
-//! `false`. Неиспользуемый nullable lookup прежнего owner-faction не имел
-//! эффекта и удалён вместе с STL/string/SEH noise; DB-вызова здесь нет.
-//! `Reload` убивает восемь schedule IDs в исходном нестандартном порядке и
-//! затем внутри каждой итерации повторно убивает глобальный
-//! `m_GetTodayTaxTime.lEventID`. После snapshot-а активные записи проходят
-//! `OnCityWarEnd` и `0x7FE22`, затем `Initialize`; weekly end events, ставшие
-//! промежуточными перед очисткой map, сознательно не отменяются. Отсутствующий
-//! `Option<TimerId>` локально блокирует неизвестный старый оригинал ID.
-//! возвращает `true` независимо от старого Initialize-result;
-//! сам `Initialize` tax-event не регистрирует.
-//! Полный snapshot начинает с 32-битного count, затем для каждой записи в
-//! map-order копирует prefix `0xB0`, отдельный count и ordered faction IDs;
-//! weekly flag за prefix не попадает. Четыре bytes allocator-base `std::list`
-//! и ещё не назначенные event IDs в оригинале могли быть неинициализированы.
-//! Они нормализованы к нулю: парный decoder из
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`,,
-//! пересоздаёт list, отдельно читает count/IDs и event IDs не использует. Это
-//! узкая downstream-compatible замена, не обещание старых residue bytes.
-//! При отсутствии записи расписания старый `operator[]` создавал её по
-//! умолчанию с недоказанными числовыми полями и временем; это остаётся явной
-//! неизвестностью. Некорректное чтение, переполнение ID и недоказанная знаковая
-//! календарная арифметика возвращают локальные ошибки.
-//! STL/ifstream/SEH/allocator noise Rust-кода не имеет. Деструктор
-//! `tagAttackCityTime` очищал только list заявившихся фракций; его заменяет
-//! структурный Drop `declaring_factions: Vec<i32>`.
+//! Snapshot пишет prefix, отдельный count и ordered faction IDs. Padding и
+//! неназначенные event IDs нормализованы нулями: парный Game decoder их не
+//! использует. Отсутствующее расписание не получает выдуманных defaults.
 
 use std::collections::BTreeMap;
 
@@ -112,7 +52,6 @@ pub(crate) enum AttackCityCallbackKind {
 }
 
 impl<Callback: PartialEq> AttackCityCallbacks<Callback> {
- /// Сопоставляет сработавший типизированный идентификатор с исходной фазой таймера.
     pub(crate) fn kind(&self, callback: &Callback) -> Option<AttackCityCallbackKind> {
         [
             (&self.declare, AttackCityCallbackKind::Declare),
@@ -132,7 +71,6 @@ impl<Callback: PartialEq> AttackCityCallbacks<Callback> {
     }
 }
 
-/// Внешние region/localization/organizing/country/log эффекты city phase.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AttackCityPhaseEffect {
     RegionAnnouncement {
@@ -148,11 +86,9 @@ pub(crate) enum AttackCityPhaseEffect {
     },
 }
 
-/// Контракт внешних эффектов фаз городской войны.
 pub(crate) trait AttackCityPhaseContext {
     type Block;
 
- /// Синхронно повторяет `CMessage::SendAll`; старый return игнорировался.
     fn send_all(&mut self, message: &CMessage) -> i32;
 
  /// Region-вариант при живом регионе отправляет organizing-info с
@@ -161,7 +97,6 @@ pub(crate) trait AttackCityPhaseContext {
     fn apply_effect(&mut self, effect: AttackCityPhaseEffect) -> Result<(), Self::Block>;
 }
 
-/// Наблюдаемый результат одного city phase callback-а.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct AttackCityPhaseReport {
     pub(crate) schedule_found: bool,
@@ -170,7 +105,6 @@ pub(crate) struct AttackCityPhaseReport {
     pub(crate) effect_requested: bool,
 }
 
-/// Параметры timer-2 top-info countdown-а городских войн.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AttackCityCountdownRequest {
     pub(crate) war_number: i32,
@@ -205,13 +139,11 @@ pub(crate) struct AttackCityCountdownReport {
     pub(crate) duration_ms: Option<i32>,
 }
 
-/// Граница region/organizing owners для city-war enemy-list rebuild.
 pub(crate) trait AttackCityEnemyRelationContext {
     type Block;
 
     fn clear_all_city_faction_relations(&mut self) -> Result<(), Self::Block>;
 
- /// Возвращает owner faction живого region либо `None` для всех оригинал gates.
     fn city_owner_faction_id(&mut self, city_region_id: i32) -> Result<Option<i32>, Self::Block>;
 
  /// Для свободной faction возвращает её organizing, для faction союза —
@@ -229,16 +161,13 @@ pub(crate) trait AttackCityEnemyRelationContext {
     fn update_all_city_enemy_faction_relations(&mut self) -> Result<(), Self::Block>;
 }
 
-/// Полный результат rebuild-а активных city-war relations.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct AttackCityEnemyRelationReport {
     pub(crate) active_schedules: usize,
     pub(crate) directed_additions: usize,
 }
 
-/// Дополнительная country-граница `OnCityWarEnd`.
 pub(crate) trait AttackCityWarEndContext: AttackCityEnemyRelationContext {
- /// При живом city region и найденной стране ставит `m_bIsWarring=false`.
     fn clear_region_country_warring_if_present(
         &mut self,
         city_region_id: i32,
@@ -274,11 +203,9 @@ pub(crate) enum AttackCityWarResultFormatArgument<'a> {
     Signed(i32),
 }
 
-/// Полная внешняя граница результата городской войны.
 pub(crate) trait AttackCityWarResultContext: AttackCityWarEndContext {
     fn region(&mut self, region_id: i32) -> Result<Option<AttackCityWarResultRegion>, Self::Block>;
 
- /// Читает virtual owner getter только в положительной winner-ветке.
     fn region_owner_faction_id(&mut self, region_id: i32) -> Result<i32, Self::Block>;
 
     fn faction(
@@ -286,7 +213,6 @@ pub(crate) trait AttackCityWarResultContext: AttackCityWarEndContext {
         faction_id: i32,
     ) -> Result<Option<AttackCityWarResultFaction>, Self::Block>;
 
- /// Повторяет nullable `GetFactionOrganizing` без чтения virtual getters.
     fn faction_exists(&mut self, faction_id: i32) -> Result<bool, Self::Block>;
 
     fn union_for_faction(&mut self, faction_id: i32) -> Result<i32, Self::Block>;
@@ -321,7 +247,6 @@ pub(crate) trait AttackCityWarResultContext: AttackCityWarEndContext {
         city_region_id: i32,
     ) -> Result<(), Self::Block>;
 
- /// Форматирует `GetStringByID` в старую 256-byte `_sprintf` границу.
     fn format_world_string(
         &mut self,
         string_id: &'static [u8],
@@ -366,7 +291,6 @@ pub(crate) struct AttackCityWarResultReport {
     pub(crate) result_log_written: bool,
 }
 
-/// Внешние organizing/region/localization owners подачи city-war заявки.
 pub(crate) trait AttackCityApplicationContext: AttackCityEnemyRelationContext {
     fn faction_master_for_player(&mut self, player_id: i32) -> Result<i32, Self::Block>;
 
@@ -424,7 +348,6 @@ pub(crate) trait AttackCityApplicationContext: AttackCityEnemyRelationContext {
     fn send_all(&mut self, message: &CMessage) -> i32;
 }
 
-/// Доказанные gates и уже выполненные эффекты одной city-war заявки.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct AttackCityApplicationReport {
     pub(crate) master_faction_id: Option<i32>,
@@ -603,7 +526,6 @@ impl CAttackCitySys {
         Ok(report)
     }
 
- /// Отменяет старые events, завершает активные копии и заново загружает файл.
     #[allow(
         clippy::too_many_arguments,
         reason = "source/time/timer/callbacks/tax/context/send сохраняют исходные owners"
@@ -672,7 +594,6 @@ impl CAttackCitySys {
         Ok(report)
     }
 
- /// Дописывает полный World->Game snapshot в исходном map/field порядке.
     pub(crate) fn add_to_byte_array(&self, output: &mut Vec<u8>) -> bool {
         append_u32(output, self.attacks.len() as u32);
         for setup in self.attacks.values() {
@@ -710,7 +631,6 @@ impl CAttackCitySys {
         true
     }
 
- /// Возвращает state первой записи в map-order для города и closed периода войны.
     pub(crate) fn get_city_state_at(&self, region_id: i32, now: TagTime) -> ECityState {
         self.attacks
             .values()
@@ -732,7 +652,6 @@ impl CAttackCitySys {
             .map_or(ECityState::No, |setup| setup.region_state)
     }
 
- /// Дописывает один faction-list snapshot для GameServer.
     pub(crate) fn update_apply_war_factions_to_game_server(
         &self,
         war_number: i32,
@@ -750,14 +669,12 @@ impl CAttackCitySys {
         true
     }
 
- /// Проверяет faction во всех не завершённых city-war заявках.
     pub(crate) fn is_already_declared_for_war(&self, faction_id: i32) -> bool {
         self.attacks.values().any(|setup| {
             setup.region_state != ECityState::No && setup.declaring_factions.contains(&faction_id)
         })
     }
 
- /// Принимает city-war заявку только после всей исходной цепочки gates.
     pub(crate) fn on_player_declare_war<Context>(
         &mut self,
         player_id: i32,
@@ -843,7 +760,6 @@ impl CAttackCitySys {
         Ok(report)
     }
 
- /// Строит city-war enemy pairs для всех активных schedules.
     pub(crate) fn initial_city_all_faction_enemy_relation<Context>(
         &self,
         context: &mut Context,
@@ -871,7 +787,6 @@ impl CAttackCitySys {
         Ok(report)
     }
 
- /// Сбрасывает changed flags, пересобирает и публикует все city relations.
     pub(crate) fn update_city_all_faction_enemy_relation<Context>(
         &self,
         context: &mut Context,
@@ -885,7 +800,6 @@ impl CAttackCitySys {
         Ok(report)
     }
 
- /// Рассылает `0x7FE22`; первый legacy parameter не читался.
     pub(crate) fn on_city_war_end_to_game_server<SendAll>(
         &self,
         _legacy_city_region_id: i32,
@@ -948,7 +862,6 @@ impl CAttackCitySys {
         )
     }
 
- /// End действует только из точного `CIS_Fight` состояния.
     pub(crate) fn on_attack_city_end<Context: AttackCityPhaseContext + ?Sized>(
         &mut self,
         war_number: i32,
@@ -1098,7 +1011,6 @@ impl CAttackCitySys {
         })
     }
 
- /// Выполняет полный действующий end/relation/weekly-rearm порядок.
     pub(crate) fn on_city_war_end<Callback, Context>(
         &mut self,
         war_number: i32,
@@ -1111,7 +1023,7 @@ impl CAttackCitySys {
         Context: AttackCityWarEndContext + ?Sized,
     {
  // Старый `operator[]` создавал отсутствующую запись по умолчанию, но
- // начальные значения её числовых полей и времени не доказаны.
+ // начальные значения её числовых полей и времени не определены.
         let (cleared_factions, city_region_id, is_every_week, declare_time, end_time) = {
             let Some(setup) = self.attacks.get_mut(&war_number) else {
                 return Err(AttackCityWarEndBlock::MissingScheduleDefaultUnknown { war_number });
@@ -1173,7 +1085,6 @@ impl CAttackCitySys {
         })
     }
 
- /// Завершает досрочный city-war результат и сохраняет ownership/country order.
     #[allow(
         clippy::too_many_arguments,
         reason = "четыре legacy long и timer/context сохраняют исходную callback-границу"
@@ -1297,7 +1208,7 @@ impl CAttackCitySys {
 
             if owner_faction_id == winner_faction_id {
                 if !old_owner_exists {
- //,: null result
+            // Null-result lookup-а.
  // `GetFactionOrganizing(owner)` разыменовывался без gate.
                     return Err(AttackCityWarResultBlock::MissingCurrentOwnerForDefence {
                         owner_faction_id,
@@ -1404,7 +1315,6 @@ impl CAttackCitySys {
         Ok(report)
     }
 
- /// Добавляет взаимные city-war enemy IDs для одной city/faction заявки.
     pub(crate) fn set_city_war_enemy_factions<Context>(
         city_region_id: i32,
         declaring_factions: &[i32],

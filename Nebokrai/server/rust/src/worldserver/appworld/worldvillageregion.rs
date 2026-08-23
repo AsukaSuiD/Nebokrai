@@ -5,7 +5,7 @@
 //! непосредственно `CWorldRegion::Load`, не читает `.war`, игнорирует его
 //! legacy `0/1` result и всегда возвращает `1`; safe parser-блоки при этом не
 //! превращаются в успех. Serializer наследуется от `CWorldWarRegion` и потому
-//! дописывает `1/1/1`. Источник контракта — точная пара WorldServer EXE/PDB.
+//! дописывает `1/1/1`. Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //! source `worldvillageregion.cpp:22,35`. Destructors/compiler cleanup заменены
 //! обычным `Drop`; Rust layout не объявляется старым ABI.
 

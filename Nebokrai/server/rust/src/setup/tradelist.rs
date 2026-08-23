@@ -1,24 +1,12 @@
-//! Торговые списки NPC исторического Miracle.
+//! Торговые списки `CTradeList` из WorldServer, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `LoadTradeList` и `AddToByteArray`
-//!:; Game lookup/decoder не входят в этот owner и остаются
-//! Точная пара:
-//! Исходный владелец PDB:
+//! Loader очищает map, читает `*` NPC и следующие `#` goods records. StringTable
+//! miss даёт пустое имя, unknown goods — нулевой ID; duplicate NPC заменяет
+//! список. Числовые page/x/y/amount сужаются до byte.
 //!
-//! Loader сначала безусловно очищает map, затем для каждого `*` читает
-//! StringTable ID NPC и signed число товаров. Имя NPC разрешается сразу;
-//! missing ID становится пустой строкой. Каждая найденная `#`-запись содержит
-//! page/x/y, original-name товара и amount: четыре signed `long` сужаются до
-//! младшего байта, а original-name lookup сохраняет исходный нулевой ID при
-//! отсутствии. Если `#` не найден, slot просто пропускается, как в EXE.
-//! Duplicate localized NPC name заменяет прежний список.
-//!
-//! Wire — signed count ordered map-а, затем для каждого NPC C-строка с NUL,
-//! signed goods count и точные восьмибайтные записи
-//! `[page, x, y, amount, goods_id_le]`. Legacy строки хранятся byte-exact, а
-//! не как обязательный UTF-8; `BTreeMap<Vec<u8>, _>` сохраняет unsigned
-//! лексикографический порядок `std::string`. `std::fs`, `Vec` и `Drop`
-//! заменяют CRFile/STL plumbing, не меняя формат.
+//! Wire пишет ordered NPC C-строки, signed counts и восьмибайтные goods records.
+//! `BTreeMap<Vec<u8>, _>` сохраняет byte-лексикографический порядок.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -27,7 +15,6 @@ use std::path::Path;
 
 use crate::public::readwrite::read_to;
 
-/// Точная layout-проекция `tagTrade::tagGoods` без C++ padding-зависимости.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TradeGoods {
     pub(crate) page: u8,
@@ -43,19 +30,16 @@ pub(crate) struct Trade {
     goods: Vec<TradeGoods>,
 }
 
-/// Safe owner исходного process-global `m_mapTradeList`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CTradeList {
     trades: BTreeMap<Vec<u8>, Trade>,
 }
 
 impl CTradeList {
- /// `rfOpen` failure уже оставляет очищенную карту.
     pub(crate) fn clear(&mut self) {
         self.trades.clear();
     }
 
- /// Очищает прежний state до открытия, как исходный loader.
     pub(crate) fn load_from_file<ResolveNpcName, ResolveGoodsId>(
         &mut self,
         path: impl AsRef<Path>,
@@ -72,7 +56,6 @@ impl CTradeList {
             .map_err(TradeListFileLoadError::Format)
     }
 
- /// Загружает formatted token-stream с оригинал merge/replace семантикой.
     pub(crate) fn load_from_bytes<ResolveNpcName, ResolveGoodsId>(
         &mut self,
         source: &[u8],
@@ -126,7 +109,6 @@ impl CTradeList {
         Ok(applied)
     }
 
- /// Дописывает оригинал World `count + ordered trade records` wire.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -164,7 +146,6 @@ impl CTradeList {
     }
 }
 
-/// Ошибка безопасного formatted parser-а после уже применённых полных блоков.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TradeListFormatError {
     UnexpectedEnd { field: &'static str },
@@ -210,7 +191,6 @@ impl Error for TradeListFileLoadError {
     }
 }
 
-/// Невозможный для signed-count wire state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TradeListSerializeError {
     TradeCount { count: usize },

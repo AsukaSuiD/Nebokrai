@@ -23,17 +23,14 @@ use crate::public::timer::{CTimer, TimerId};
 
 static COPY_NUMBER: AtomicI32 = AtomicI32::new(1);
 
-/// Возвращает текущий signed номер без изменения состояния.
 pub(crate) fn get_copy_num() -> i32 {
     COPY_NUMBER.load(Ordering::Relaxed)
 }
 
-/// Увеличивает номер с 32-битным wrapping оригинала.
 pub(crate) fn add_copy_num() -> i32 {
     COPY_NUMBER.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
 }
 
-/// Состояние единственной calendar-цепочки суточного reset-а.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CopyNumberTimerState {
     event_id: Option<TimerId>,
@@ -66,7 +63,6 @@ impl CopyNumberTimerState {
         matches!(self.event_id, Some(current) if current.get() == event_id.get())
     }
 
- /// Ставит первое событие на ближайшую следующую legacy-полночь.
     pub(crate) fn register<Callback: Copy>(
         &mut self,
         current_time: TagTime,
@@ -88,7 +84,6 @@ impl CopyNumberTimerState {
         })
     }
 
- /// Выполняет reset до вычисления следующего события, как `ClearCopyNum`.
     pub(crate) fn prepare_reset(
         &self,
         current_time: TagTime,
@@ -105,7 +100,6 @@ impl CopyNumberTimerState {
         })
     }
 
- /// Фиксирует результат повторного `SetTimeEvent` callback-а.
     pub(crate) fn finish_reset(
         &mut self,
         report: &mut CopyNumberResetReport,

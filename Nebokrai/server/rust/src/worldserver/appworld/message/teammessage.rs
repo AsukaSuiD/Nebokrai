@@ -1,7 +1,7 @@
 //! Входящий Team-owner WorldServer.
 //!
-//! Источник контракта `OnTeamMessage` — `WorldServer/Nworldserver.exe` и
-//! `WorldServer/WorldServer.pdb`.
+//! Источник контракта `OnTeamMessage` — `worldserver.exe` и
+//! `worldserver.pdb`.
 //!
 //! Реализация сохраняет opcodes `0x60001..0x6000C`, условный порядок чтения
 //! payload и все действующие virtual side effects. После отсутствующего
@@ -86,7 +86,6 @@ pub(crate) enum WorldTeamMessageOutcome {
     Malformed { message_type: i32, cursor: usize },
 }
 
-/// Исполняет весь `OnTeamMessage` поверх единого session factory.
 pub(crate) fn on_team_message(
     game: &mut CGame,
     factory: &mut CSessionFactory,

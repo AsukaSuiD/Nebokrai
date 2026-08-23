@@ -37,7 +37,6 @@ pub(crate) enum WorldLeiTingResetWorkerEvent {
     },
 }
 
-/// Владение неизменяемыми входами каждого отдельного LeiTing DB worker-а.
 pub(crate) struct WorldLeiTingResetWorker {
     settings: WorldDatabaseSettings,
     thing_setup: Arc<CThingSetup>,

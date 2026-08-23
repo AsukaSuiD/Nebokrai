@@ -1,60 +1,19 @@
-//! Владелец товара исторического `WorldServer`.
+//! Товар `CGoods` из `cgoods.cpp/.h`, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `CGoods::Serialize/Unserialize`,
-//! byte-array wrappers, `Release`,
-//! scalar `GetAddonPropertyValues`, `GetMaxStackNumber`
-//! `GetWeight`,
-//! `GetAllAddonProperties/GetGoodsName/IsAddonProperyExist`
-//! vector `GetAddonPropertyValues`
-//! wire-based `Clone`,
-//! `SetExID`, base-подобъекта и defaults конструктора
-//! а также непосредственной destructor-цепочки
-//! и сломанный `CanUpgraded`, а также локальный adapter
-//! применения joined addon-строк `CDBGoods::LoadGoods` входят в контракт owner-а.
+//! Constructor создаёт базовый `CShape`, type `700`, amount `1` и оставляет
+//! base-properties index неназначенным. Goods wire дописывает к Shape индекс,
+//! amount, price, NUL-строку description и ordered addon records.
+//! `Unserialize` сначала выполняет `Release`: очищает index, amount, description
+//! и addons, но сохраняет price до чтения нового значения.
 //!
-//! Layout сохраняет размеры старых `CShape/CGoods` `0x6C/0xA4`. Constructor
-//! сначала передаёт неизменённый `this` в `CShape::CShape`, затем задаёт object
-//! type `700` в унаследованном `CBaseObject::m_lType` и повторно обнуляет
-//! inherited `m_lID +0x8`, а не собственное поле.
-//! Собственный `m_dwBasePropertiesIndex +0x6C` этот constructor не назначает,
-//! поэтому Rust хранит его как `Option<u32>` до setter/decode; amount получает
-//! `1`, price `0`, description и addon-vector пусты.
+//! Короткая или слишком длинная description отклоняется вместо переполнения
+//! старого stack-buffer. Addon lookup берёт первое совпадение и использует
+//! signed wrapping; max-stack и weight зависят от base-properties, weight
+//! умножается с 32-битным wrapping.
 //!
-//! Destructor сохраняет порядок
-//! `Release -> vector tidy -> string cleanup -> CShape::~CShape` для обеих
-//! форм строки. Rust-композиция материализует только единственный действующий
-//! `CShape` base-подобъект и type-default. Helper не называется `new`,
-//! собственный cleanup не подменяется пустым `Drop`, а Rust layout не
-//! объявляется копией старого ABI.
-
-//! Goods wire сначала включает готовый `CShape`, затем unsigned base index,
-//! amount и price, NUL-terminated description, unsigned addon count и каждый
-//! `tagAddonProperty`: signed enum, два четырёхбайтовых флага, unsigned count и
-//! тройки `u32/i32/i32`. `Vec` заменяет только последовательный STL storage.
-//! `Unserialize` сначала выполняет точный `Release`: index/amount становятся
-//! нулями, description/addons очищаются, price сохраняется до последующей
-//! записи из wire и при нормальном завершении возвращает `1`.
-//!
-//! Description читался без length в stack buffer `0x404`. Safe slice/cursor
-//! принимает только NUL в этой границе; overflow/overread возвращает локальную
-//! типизированную ошибку. Невозможный для старого 32-битного процесса размер
-//! Rust-vector больше `u32::MAX` и попытка serialize ещё не назначенного base
-//! index возвращаются typed ошибками, а не получают выдуманные wire-байты.
-//!
-//! Scalar addon lookup сохраняет первое property/value совпадение и signed
-//! 32-битное сложение `lBaseValue + lModifier`. Max-stack запрашивает
-//! base-properties index, допускает только `GT_USELESS/GT_CONSUMABLE`, берёт
-//! `lBaseValue` первого stacking-value с `dwId == 1` и иначе возвращает `1`.
-//! Folded-вызов использует `CGoodsBaseProperties::GetGoodsType`, а значение
-//! свойства возвращается как signed DWORD из `tagAddonPropertyValue +4`,
-//! побитово совместимый с исходным `unsigned long`.
-//! Weight запрашивает те же base-properties, возвращает `0` при отсутствии и
-//! умножает unsigned вес одной единицы на amount с точным 32-битным wrapping;
-//! использует `IMUL EAX, ESI`.
-//! `CanUpgraded` в matching EXE после всех lookup/allocation путей безусловно
-//! выполняет `xor eax,eax` по: результат всегда `0`. Rust удаляет
-//! только ненаблюдаемые map lookup и временный vector, но сохраняет этот
-//! внешний запрет upgrade буквально; недостижимая мутация сюда не входит.
+//! `CanUpgraded` в поставленном EXE всегда возвращает false. Rust-владение и
+//! `Vec` заменяют ручной cleanup, не меняя wire или этот запрет.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -73,10 +32,8 @@ use super::cgoodsbaseproperties::{
 };
 use super::cgoodsfactory::{GoodsBasePropertiesRegistry, query_goods_base_properties};
 
-/// PDB enum `CGoodsBaseProperties::GAP_GOODS_PACKAGE_EXTENTION` (`0xEA`).
 pub(crate) const GAP_GOODS_PACKAGE_EXTENTION: i32 = 234;
 
-/// Ошибка безопасной границы `CGoods` wire-owner-а.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GoodsCodecError {
     Shape(ShapeDecodeError),
@@ -140,19 +97,15 @@ impl From<ShapeDecodeError> for GoodsCodecError {
     }
 }
 
-/// Неразрешённая граница материализации frozen `CGoods` для WorldDB.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GoodsDbSnapshotBlock {
- /// Constructor/decode ещё не назначили обязательный base-properties index.
     MissingBasePropertiesIndex,
- /// Исходный `unsigned char` loop не достигает конца слишком длинного values.
     AddonValueCount {
         property_index: usize,
         value_count: usize,
     },
 }
 
-/// Safe-граница применения одной joined addon-строки `CDBGoods::LoadGoods`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GoodsLoadedAddonBlock {
     MissingBaseProperties { index: u32 },
@@ -185,7 +138,6 @@ pub(super) enum FirstAddonModifierAdjustment {
     Adjusted,
 }
 
-/// Действующая base-часть исходного `CGoods`.
 pub(crate) struct CGoods {
     shape_base: CShape,
     base_properties_index: Option<u32>,
@@ -196,7 +148,6 @@ pub(crate) struct CGoods {
 }
 
 impl CGoods {
- /// Создаёт только доказанный base-подобъект с object type `700`.
     pub(crate) const fn with_constructor_base_and_type() -> Self {
         let mut shape_base = CShape::with_constructor_region_default();
         shape_base.set_type(700);
@@ -210,67 +161,54 @@ impl CGoods {
         }
     }
 
- /// Возвращает унаследованный object type без дополнительных эффектов.
     pub(crate) const fn get_type(&self) -> i32 {
         self.shape_base.get_type()
     }
 
- /// Возвращает унаследованный signed object ID.
     pub(crate) const fn get_id(&self) -> i32 {
         self.shape_base.get_id()
     }
 
- /// Присваивает унаследованный signed object ID.
     pub(crate) const fn set_id(&mut self, id: i32) {
         self.shape_base.set_id(id);
     }
 
- /// Заимствует унаследованный GUID товара.
     pub(crate) const fn get_ex_id(&self) -> &crate::public::guid::CGuid {
         self.shape_base.get_ex_id()
     }
 
- /// Копирует унаследованный GUID товара.
     pub(crate) const fn set_ex_id(&mut self, ex_id: &crate::public::guid::CGuid) {
         self.shape_base.set_ex_id(ex_id);
     }
 
- /// Присваивает унаследованное byte- имя до первого NUL.
     pub(crate) fn set_name(&mut self, name: &[u8]) {
         self.shape_base.set_name(name);
     }
 
- /// Заимствует inherited goods-name без завершающего NUL.
     pub(crate) fn get_goods_name(&self) -> &[u8] {
         self.shape_base.get_name()
     }
 
- /// Присваивает унаследованный signed graphics ID.
     pub(crate) const fn set_graphics_id(&mut self, graphics_id: i32) {
         self.shape_base.set_graphics_id(graphics_id);
     }
 
- /// Возвращает назначенный unsigned индекс base-properties.
     pub(crate) const fn get_base_properties_index(&self) -> Option<u32> {
         self.base_properties_index
     }
 
- /// Присваивает unsigned индекс base-properties.
     pub(crate) const fn set_base_properties_index(&mut self, index: u32) {
         self.base_properties_index = Some(index);
     }
 
- /// Присваивает исходное unsigned количество товара.
     pub(crate) const fn set_amount(&mut self, amount: u32) {
         self.amount = amount;
     }
 
- /// Возвращает исходное unsigned количество товара.
     pub(crate) const fn get_amount(&self) -> u32 {
         self.amount
     }
 
- /// Возвращает сумму первого совпавшего addon-value либо signed ноль.
     pub(crate) fn get_addon_property_value(&self, property_type: i32, id: u32) -> i32 {
         self.get_addon_property_values(property_type)
             .iter()
@@ -278,24 +216,20 @@ impl CGoods {
             .map_or(0, |value| value.base_value.wrapping_add(value.modifier))
     }
 
- /// Заимствует все addon-ы в vector-order.
     pub(super) fn get_all_addon_properties(&self) -> &[GoodsAddonProperty] {
         &self.addon_properties
     }
 
- /// Заимствует все addon-ы для mutation в vector-order.
     pub(super) fn get_all_addon_properties_mut(&mut self) -> &mut Vec<GoodsAddonProperty> {
         &mut self.addon_properties
     }
 
- /// Проверяет наличие numeric-типа независимо от enabled-флага и values.
     pub(crate) fn is_addon_property_exist(&self, property_type: i32) -> bool {
         self.addon_properties
             .iter()
             .any(|property| property.property_type == property_type)
     }
 
- /// Применяет одну non-null строку `extend_properties` в row-order.
     pub(crate) fn apply_loaded_addon(
         &mut self,
         property_type: i32,
@@ -358,7 +292,6 @@ impl CGoods {
         Ok(())
     }
 
- /// Возвращает values первого addon-а совпавшего numeric-типа.
     pub(super) fn get_addon_property_values(
         &self,
         property_type: i32,
@@ -406,7 +339,6 @@ impl CGoods {
         FirstAddonModifierAdjustment::Adjusted
     }
 
- /// Возвращает unsigned stacking-limit для текущих base-properties.
     pub(crate) fn get_max_stack_number(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -430,7 +362,6 @@ impl CGoods {
             .map_or(1, |value| value.base_value() as u32))
     }
 
- /// Возвращает unsigned общий вес с 32-битным переполнением.
     pub(crate) fn get_weight(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -445,22 +376,18 @@ impl CGoods {
         )
     }
 
- /// Возвращает сломанный результат matching EXE: upgrade запрещён всегда.
     pub(crate) const fn can_upgraded(&self) -> bool {
         false
     }
 
- /// Присваивает исходную unsigned цену.
     pub(crate) const fn set_price(&mut self, price: u32) {
         self.price = price;
     }
 
- /// Возвращает исходную unsigned цену.
     pub(crate) const fn get_price(&self) -> u32 {
         self.price
     }
 
- /// Материализует точный caller-owned view для `CDBGoods::SaveGoods`.
     pub(crate) fn db_save_snapshot(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -512,7 +439,6 @@ impl CGoods {
         })
     }
 
- /// Сохраняет description bytes как исходный `std::string` owner.
     pub(crate) fn set_goods_description(&mut self, description: &[u8]) {
         let visible = description
             .iter()
@@ -522,7 +448,6 @@ impl CGoods {
         self.description.extend_from_slice(&description[..visible]);
     }
 
- /// Добавляет один factory-rolled addon в исходный vector-order.
     pub(super) fn push_factory_addon_property(
         &mut self,
         property_type: i32,
@@ -544,7 +469,6 @@ impl CGoods {
         });
     }
 
- /// Сбрасывает точные собственные поля `CGoods::Release`.
     pub(crate) fn release(&mut self) {
         self.base_properties_index = Some(0);
         self.amount = 0;
@@ -555,7 +479,6 @@ impl CGoods {
         self.description.clear();
     }
 
- /// Клонирует через virtual wire-путь исходного owner-а.
     pub(crate) fn clone_into(&self, target: &mut CGoods) -> Result<bool, GoodsCodecError> {
         let mut wire = Vec::new();
         let _ = self.serialize(&mut wire, true)?;
@@ -563,7 +486,6 @@ impl CGoods {
         target.unserialize(&wire, &mut cursor, true)
     }
 
- /// Кодирует полный goods snapshot в точном legacy-порядке.
     pub(crate) fn serialize(
         &self,
         destination: &mut Vec<u8>,
@@ -590,7 +512,6 @@ impl CGoods {
         Ok(true)
     }
 
- /// Декодирует полный goods snapshot после точного раннего `Release`.
     pub(crate) fn unserialize(
         &mut self,
         source: &[u8],
@@ -615,7 +536,6 @@ impl CGoods {
         Ok(true)
     }
 
- /// Сохраняет virtual wrapper `CGoods::AddToByteArray`.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -624,7 +544,6 @@ impl CGoods {
         self.serialize(destination, include_child)
     }
 
- /// Сохраняет virtual wrapper `CGoods::DecordFromByteArray`.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],

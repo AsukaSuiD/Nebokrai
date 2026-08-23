@@ -1,47 +1,15 @@
-//! DB-владелец `CRsRegion` WorldServer из `rsregion.cpp`.
+//! World DB-владелец `CRsRegion` из `rsregion.cpp`, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Источник контрактов `CRsRegion::Save` и `LoadRegionParam` — WorldServer
-//! EXE/PDB. Constructor и destructor заменены обычным Rust lifetime.
+//! Save копирует весь `tagRegionParam` до проверки caller connection, затем
+//! обновляет существующий `CSL_Region` либо вставляет новую строку и записывает
+//! ownership/tax поля одним updateable-recordset эквивалентом. Число затронутых
+//! строк не проверяется; caller-транзакция не открывается и не завершается здесь.
 //!
-//! `Save(CWorldRegion*, connection)` сначала проверяет region pointer, затем
-//! byte-copy-ит весь `CWorldRegion::tagRegionParam` и лишь после этого проверяет
-//! caller-connection. Точный PDB задаёт структуру размером `0x24`: девять
-//! последовательных 32-битных полей `lID`, `lMaxTaxRate`, `lCurrentTaxRate`,
-//! `dwTotalTax`, `dwTodayTotalTax`, `lSupRegionID`, `lTurnInTaxRate`,
-//! `lOwnedFactionID`, `lOwnedUnionID`; `dw*` имеют тип `unsigned long`,
-//! остальные — `long`. `RegionSaveSnapshot` сохраняет всю копию, хотя этот
-//! DB-owner читает из неё только шесть значений.
-//!
-//! Исходный updateable ADO recordset выбирал `CSL_Region` по `RegionID`. При
-//! EOF он открывал table-recordset, делал `AddNew` и задавал `RegionID`; затем
-//! в обоих случаях строго записывал `OwnedFactionID`, `OwnedUnionID`,
-//! `CurTaxRate`, `TodayTotalTax`, `TotalTax` и единожды вызывал `Update`.
-//! `SELECT TOP 1`, `UPDATE TOP (1)` либо явный `INSERT` через Tiberius заменяют
-//! только ADO/COM-механику. Число обновлённых строк не проверяется, а
-//! `VT_UI4` tax-поля передаются как неотрицательные TDS `i64`, после чего
-//! исходная MSSQL-схема выполняет то же целевое преобразование.
-//!
-//! `LoadRegionParam` открывает отдельное World DB connection, читает literal
-//! `SELECT * FROM CSL_Region ORDER BY RegionID` и проходит recordset в этом
-//! порядке. Для каждой строки он сперва читает `RegionID`, ищет уже
-//! материализованный `tagRegion::pRegion` и только для найденного non-null
-//! owner-а читает пять остальных DB-полей и сразу вызывает `SetParamFromDB`.
-//! Неизвестная строка либо null owner не читает остальные DB-поля и не даёт
-//! side effect. Ошибка после опубликованного prefix возвращает `false`, не
-//! откатывая уже применённые параметры. `WorldDatabaseSettings`/Tiberius и
-//! typed target заменяют лишь ADO/COM, `std::map` lookup и raw pointers;
-//! staging, row validation и атомарной публикации нет.
-//!
-//! Аргумент `_sprintf` берётся из первой копии структуры, то есть `lID`.
-//! Результат равен `true` только после успешного `Update`; null region, missing
-//! connection и `Save CSL_Region ERROR` возвращают `false`.
-//!
-//! `Option` сохраняет порядок null-проверок: null region возвращает тихий
-//! `false`, а missing connection создаёт исходный log-эквивалент `Save Thread
-//! Sent Connect Not Found.`. DB-ошибка создаёт один structured notice без SQL
-//! и runtime RegionID. Метод использует уже активную caller-транзакцию и сам не
-//! выполняет begin/commit/rollback. `VecDeque`, Tiberius и Rust `Drop` заменяют
-//! только STL/ADO/COM/compiler cleanup.
+//! Load использует отдельное соединение и `ORDER BY RegionID`. Для известного
+//! live region он читает остальные пять полей и сразу публикует их; unknown/null
+//! region пропускает строку без дальнейшего чтения. Поздняя ошибка сохраняет
+//! уже применённый префикс. Tiberius заменяет ADO без staging или rollback.
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -59,7 +27,6 @@ const REGION_UPDATE_SQL: &str = "UPDATE TOP (1) CSL_Region SET OwnedFactionID = 
 const REGION_INSERT_SQL: &str = "INSERT INTO CSL_Region (RegionID, OwnedFactionID, OwnedUnionID, CurTaxRate, TodayTotalTax, TotalTax) VALUES (@P1, @P2, @P3, @P4, @P5, @P6)";
 const LOAD_REGION_PARAMETERS_SQL: &str = "SELECT * FROM CSL_Region ORDER BY RegionID";
 
-/// Полная девятиполевая caller-owned копия `tagRegionParam`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RegionSaveSnapshot {
     pub(crate) region_id: i32,
@@ -73,7 +40,6 @@ pub(crate) struct RegionSaveSnapshot {
     pub(crate) owned_union_id: i32,
 }
 
-/// Одна DB-строка, уже достигшая `tagRegion::pRegion` исходного поиска.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RegionDatabaseParameters {
     pub(crate) region_id: i32,
@@ -107,13 +73,11 @@ pub(crate) enum RegionParametersLoadOutcome {
     },
 }
 
-/// Структурированная замена действующих log-ветвей `CRsRegion`.
 #[derive(Debug)]
 pub(crate) struct RsRegionNotice {
     pub(crate) error: RsRegionError,
 }
 
-/// Унифицированный typed эквивалент двух исходных `PrintErr` ветвей.
 #[derive(Debug)]
 pub(crate) enum RsRegionError {
     Save(RsRegionSaveError),
@@ -126,7 +90,6 @@ pub(crate) enum RsRegionSaveError {
     MissingConnection,
 }
 
-/// Ошибки отдельной ADO-equivalent загрузки region parameters.
 #[derive(Debug)]
 pub(crate) enum RsRegionLoadError {
     MissingSettings,
@@ -200,7 +163,6 @@ impl From<tiberius::error::Error> for RsRegionDatabaseError {
     }
 }
 
-/// Узкая объектная граница действующих DB-владельцев `CRsRegion`.
 pub(crate) trait RsRegionOwner {
  /// Открывает отдельное connection и немедленно применяет recordset-prefix
  /// к уже опубликованным регионам в порядке `RegionID` SQL-result-а.
@@ -209,18 +171,15 @@ pub(crate) trait RsRegionOwner {
         target: &mut dyn RegionParameterLoadTarget,
     ) -> RegionParametersLoadOutcome;
 
- /// Upsert-ит одну region-строку внутри уже активной caller-транзакции.
     async fn save(
         &mut self,
         snapshot: Option<&RegionSaveSnapshot>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<RsRegionNotice>;
 }
 
-/// Linux/TDS-замена действующей части исходного `CRsRegion`.
 #[derive(Default)]
 pub(crate) struct TiberiusRsRegion {
     settings: Option<WorldDatabaseSettings>,
@@ -228,7 +187,6 @@ pub(crate) struct TiberiusRsRegion {
 }
 
 impl TiberiusRsRegion {
- /// Сохраняет immutable setup snapshot для самостоятельного load connection.
     pub(crate) fn new(settings: WorldDatabaseSettings) -> Self {
         Self {
             settings: Some(settings),

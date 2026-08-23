@@ -1,7 +1,7 @@
 //! Входящий JJC-owner WorldServer.
 //!
 //! `OnJJcSystemMessage` и leaf-ветви входят в контракт owner-а из
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`.
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Dispatcher сохраняет numeric gate `bUseJJc`, порядок cursor-чтений и
 //! opcodes `0x60901..0x60907`. В частности, `0x60901` после отсутствующего

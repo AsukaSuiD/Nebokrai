@@ -1,24 +1,12 @@
-//! Участник World-команды `CTeamate`.
+//! Участник команды `CTeamate` из WorldServer, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Источник десяти функций owner-а —
-//! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`: `SetOwnerRegionID`
-//! `OnChangeState`, `PlayerStillExisted`
-//! `IsPlugAvailable`, `GetOwnerName`,
-//! `Serialize`, constructor/destructor,
-//! `SetOwnerName`, `Unserialize`.
+//! Constructor задаёт plug type 5, region/timestamp 0, existence 1 и пустое
+//! byte-name. `SetOwnerRegionID` сначала меняет поле, затем синхронно публикует
+//! state 6. Проверка существования сохраняет минутный unsigned gate.
 //!
-//! Constructor задаёт plug type `5`, region/timestamp `0`, existence `1` и
-//! пустое byte- имя. `SetOwnerRegionID` сначала меняет поле, затем
-//! синхронно публикует state `6`; safe Rust сохраняет это через немедленно
-//! дренируемый factory effect базового `CPlug`. Проверка существования хранит
-//! исходный минутный unsigned gate, повторные вызовы `timeGetTime` и пакет
-//! map/peer validation и требование успешной отправки в EXE отсутствуют.
-//!
-//! Wire suffix — region `long`, имя и NUL после базового plug header. Owned
-//! `Vec<u8>` заменяет `std::string`, не навязывает UTF-8 и обрезает setter по
-//! первому NUL. Старый `_GetStringFromByteArray` писал в `char[256]`; safe
-//! decoder принимает только найденный в этой границе NUL и возвращает `0` при
-//! коротком/переполненном входе, сохраняя уже прочитанные поля и cursor.
+//! Wire suffix — signed region и NUL-имя после base plug. Decoder требует NUL
+//! в пределах прежнего `char[256]`; поздняя ошибка сохраняет поля и cursor.
 
 use crate::nets::networld::message::CMessage;
 use crate::worldserver::appworld::session::cplug::{CPlug, read_i32};
@@ -30,7 +18,6 @@ use crate::worldserver::worldserver::game::{CGame, legacy_tick_ms};
 const TEAMATE_PLUG_TYPE: u32 = 5;
 const EXISTENCE_QUERY_INTERVAL_MS: u32 = 60_000;
 
-/// Конкретный factory-owned участник команды.
 pub(crate) struct CTeamate {
     plug: CPlug,
     owner_region_id: i32,
@@ -80,7 +67,6 @@ impl CTeamate {
         &self.owner_name
     }
 
- /// Выполняет точный минутный availability/probe lifecycle.
     pub(crate) fn is_plug_available(&mut self, game: &CGame) -> i32 {
         let now = legacy_tick_ms();
         if self.last_queried_timestamp_ms == 0 {

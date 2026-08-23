@@ -1,6 +1,6 @@
 //! Управляемый reconnect worker направления WorldServer -> LoginServer.
 //!
-//! Источник контракта — точная пара WorldServer EXE/PDB. Worker выполняет
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`. Worker выполняет
 //! первый reconnect сразу, затем повторяет попытку с исходной cadence, пока
 //! соединение не опубликовано либо owned shutdown не отменит ожидание.
 //! Replacement client передаётся main-loop через typed handoff, поэтому смена
@@ -27,21 +27,18 @@ struct WorldLoginReconnectWorkerSignal {
     exit: AtomicBool,
 }
 
-/// Итог уже остановленного системного reconnect-worker-а.
 #[derive(Debug)]
 pub(crate) enum WorldLoginReconnectWorkerCompletion {
     Returned(WorldLoginReconnectWorkerOutcome),
     Panicked,
 }
 
-/// Owned Linux-замена одного Win32 `hConnectThread`.
 pub(crate) struct WorldLoginReconnectWorker {
     signal: Arc<WorldLoginReconnectWorkerSignal>,
     handle: Option<JoinHandle<WorldLoginReconnectWorkerOutcome>>,
 }
 
 impl WorldLoginReconnectWorker {
- /// Создаёт новый worker после полного join предыдущего owner-а.
     pub(crate) fn start(
         spec: WorldLoginReconnectSpec,
         runtime: Handle,
@@ -57,12 +54,10 @@ impl WorldLoginReconnectWorker {
         })
     }
 
- /// Соответствует записи `bConnectThreadExit = true`.
     pub(crate) fn request_exit(&self) {
         self.signal.exit.store(true, Ordering::Relaxed);
     }
 
- /// Выполняет wait/close-пару в safe форме ownership `JoinHandle`.
     pub(crate) fn join(&mut self) -> Option<WorldLoginReconnectWorkerCompletion> {
         self.handle.take().map(|handle| match handle.join() {
             Ok(outcome) => WorldLoginReconnectWorkerCompletion::Returned(outcome),
@@ -70,7 +65,6 @@ impl WorldLoginReconnectWorker {
         })
     }
 
- /// Выставляет exit и ждёт worker; пауза 8 s намеренно не прерывается.
     pub(crate) fn stop(&mut self) -> Option<WorldLoginReconnectWorkerCompletion> {
         self.request_exit();
         self.join()

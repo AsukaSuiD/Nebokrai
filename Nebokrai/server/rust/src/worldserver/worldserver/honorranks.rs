@@ -1,75 +1,18 @@
-//! Владелец таблиц почётных рангов исторического `WorldServer`.
+//! Почётные ранги `CHonorRanks` из WorldServer, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Owner содержит генерацию DB-снимка, загрузку и wire-сериализацию рангов,
-//! обновления World/GameServer, daily rollover и обработку убийств. Контракт
-//! подтверждён точной парой WorldServer EXE/PDB.
+//! Live и DB snapshots содержат history/current для day, week, month и total по
+//! четырём странам. Generator полностью заменяет каждую DB-копию, не меняя live
+//! списки, и сохраняет полный local `tagTime`.
 //!
-//! Layout сохраняет live `m_HistoryHonorRanks/m_NowHonorRanks` и DB-копии как
-//! два массива `std::list<tagHorRank>[4][4]`. Первый индекс — rank-type
-//! day/week/month/total, второй — country `0..3`; это независимо подтверждают
-//! `GetHistoryHonorRanks/GetNowHonorRanks`. `tagHorRank` занимает `0x24` и
-//! целиком копируется вместе с двумя padding-байтами. Rust использует уже
-//! доказанный `HonorRankDbEntry` и вложенные `Vec`, сохраняя оба порядка без
-//! копирования MSVC list-layout.
+//! Initial-config и updates пишут ordered records; total subtype дополнительно
+//! несёт исходную mask. Rollover копирует current в history, очищает day/week/
+//! month, но сохраняет накопительный total, затем ставит локальное событие и
+//! рассылает GameServer в исходном порядке.
 //!
-//! Generator для каждой из шестнадцати позиций сначала полностью очищает
-//! прежний history DB-list и копирует соответствующий live history-list,
-//! затем делает то же для current. Live-списки не меняются. Выполняются полный
-//! cleanup-loop, list range-insert, ровно шестнадцать итераций и один return
-//! после `GetLocalTime`.
-//!
-//! Полученный `SYSTEMTIME` записывается всеми четырьмя DWORD, то есть сохраняет
-//! восемь `u16` полей `tagTime`. `chrono::Local::now` заменяет только Windows
-//! clock API. `HonorRanksDbDataSnapshot` остаётся отдельной owned DB-копией:
-//! последующий `SaveHonorRanksByType` может дренировать её, не меняя live
-//! таблицы. До первого generator-вызова `Option::None` выражает нулевую, но
-//! календарно невалидную constructor-копию `tagTime`; DB-owner такую дату не
-//! наблюдает.
-//!
-//! Initial-config serializer читает только history-массив. Для выбранного
-//! day/week/month/total type и country `-1` он последовательно пишет четыре
-//! country-секции: signed count и записи `i32 player + u8 level + C-string
-//! name + u8 occupation + u32 appellation + u32 eliminate`. Game decoder
-//! подтверждает те же границы. `Vec` заменяет `std::list`, сохраняя insertion
-//! order; fixed `[u8; 20]` остаётся storage-контрактом, а отсутствие NUL теперь
-//! typed-блокирует сериализацию вместо чтения C++ за пределами массива.
-//!
-//! Rank rollover принимает исходную битовую маску day/week/month/total и идёт
-//! по четырём странам в прежнем порядке. Для day/week/month current-list после
-//! полной копии в history очищается; total history тоже заменяется копией, но
-//! current total намеренно остаётся накопительным. `Vec::clone/clear` заменяют
-//! только MSVC list allocation/cleanup, не меняя порядок записей.
-//!
-//! GameServer update проверяет mask-биты по порядку day/week/month/total и
-//! рассылает `0x7F801` subtype `0x27..0x2A`. Только total subtype сначала
-//! содержит полный исходный mask, затем тот же history payload. Транспорт
-//! использует готовый Rust network-owner; промежуточный MSVC vector для total
-//! не переносится, поскольку framing и порядок bytes сохраняются напрямую.
-//!
-//! Суточный rollover сначала записывает текущий день месяца, вычисляет mask
-//! `day|total`, добавляет month первого числа и week по понедельникам, затем
-//! строго выполняет copy → локальный `0x5FD0C` в receive FIFO → GameServer
-//! broadcasts. В отличие от старого Linux C++ альтернативной реализации, не staging-ит
-//! копии и не переставляет запись sort-day после успешной сериализации; Rust
-//! сохраняет машинный порядок, а отсутствие обязательного net-server выражает
-//! typed-блоком на месте прежнего null-dereference.
-//!
-//! `PushToRanks` обновляет существующую запись без смены
-//! имени либо добавляет новый snapshot игрока, stable-сортирует по убыванию
-//! eliminate count, затем level, и удаляет хвост до десяти записей. Comparator
-//! и цикл обрезки подтверждены диапазонами и
-//! `Vec::sort_by` сохраняет прежний порядок полных
-//! ties. Два несемантических padding-байта новой записи обнуляются вместо
-//! публикации неопределённого stack-содержимого в DB blob.
-//!
-//! `CHonorRanks::getInstance` в EXE лениво выделяет единственный
-//! process-global owner и при первом успехе записывает `SYSTEMTIME.wDay` в
-//! `m_nSortDate`; деструктор освобождает только технические MSVC list-node.
-//! В Rust `CHonorRanks` создаётся внешним lifecycle-owner-ом через
-//! `with_reached_process_state`, а все действующие ingress получают один
-//! `&mut CHonorRanks` через `WorldMainLoopOwners`. Это сохраняет начальный
-//! sort-day и всё последующее наблюдаемое состояние, не перенося singleton,
-//! `operator_new`, утечку process-global объекта и ручной cleanup list-node.
+//! `PushToRanks` обновляет без смены имени либо добавляет запись, stable-сортирует
+//! по eliminate и level и обрезает список до десяти. Padding новых записей
+//! обнулён. Один lifecycle-owned `CHonorRanks` заменяет process singleton.
 
 use std::error::Error;
 use std::fmt;
@@ -92,7 +35,6 @@ pub(crate) struct HonorRanksGameServerUpdate {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-/// Полный наблюдаемый результат одного `CHonorRanks::OnNewDay`.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct HonorRanksNewDayReport {
     pub(crate) sort_day: u32,
@@ -102,7 +44,6 @@ pub(crate) struct HonorRanksNewDayReport {
     pub(crate) legacy_result: bool,
 }
 
-/// Первая безопасная граница уже начатого rollover-прохода.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum HonorRanksNewDayBlock {
     LocalQueue {
@@ -117,7 +58,6 @@ pub(crate) enum HonorRanksNewDayBlock {
     },
 }
 
-/// Изменение одной current top-10 секции.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct HonorRankPushReport {
     pub(crate) rank_type: HonorRanksType,
@@ -129,14 +69,12 @@ pub(crate) struct HonorRankPushReport {
     pub(crate) legacy_result: bool,
 }
 
-/// Полный четыре-типа проход `KilledOnePlayer` для допустимой страны.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct HonorRanksKilledPlayerReport {
     pub(crate) country: u8,
     pub(crate) updates: Vec<HonorRankPushReport>,
 }
 
-/// Safe-граница исходного `strcpy(tagHorRank::name[20], player-name)`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HonorRankPushBlock {
     InvalidCountry {
@@ -148,7 +86,6 @@ pub(crate) enum HonorRankPushBlock {
     },
 }
 
-/// Действующая save-часть process-static `CHonorRanks` state.
 pub(crate) struct CHonorRanks {
     history: HonorRankDbLists,
     current: HonorRankDbLists,
@@ -176,17 +113,14 @@ impl CHonorRanks {
         }
     }
 
- /// Создаёт доказанные пустые live/DB list-массивы, снимая текущий local day.
     pub(crate) fn with_reached_save_state() -> Self {
         Self::default()
     }
 
- /// Возвращает process-static `m_nSortDate`.
     pub(crate) const fn sort_day(&self) -> u32 {
         self.sort_day
     }
 
- /// Делегирует DB-проход `CRsPlayer`, сохраняя последовательную публикацию.
     pub(crate) async fn load_honor_ranks<R: RsPlayerOwner>(
         &mut self,
         database: &mut R,
@@ -197,7 +131,6 @@ impl CHonorRanks {
             .await
     }
 
- /// Заменяет все 32 DB-list полными ordered-копиями и затем снимает время.
     pub(crate) fn generate_save_data(&mut self) {
         let history = self.history.clone();
         let current = self.current.clone();
@@ -220,7 +153,6 @@ impl CHonorRanks {
         ));
     }
 
- /// Возвращает DB-копию для уже действующей Save HonorRanks phase.
     pub(crate) fn db_data_mut(&mut self) -> Option<&mut HonorRanksDbDataSnapshot> {
         self.db_data.as_mut()
     }
@@ -237,7 +169,6 @@ impl CHonorRanks {
         }
     }
 
- /// Даёт loader/runtime-owner-у одну доказанную history-секцию.
     pub(crate) fn history_mut(
         &mut self,
         rank_type: HonorRanksType,
@@ -246,7 +177,6 @@ impl CHonorRanks {
         self.history[rank_type as usize].get_mut(usize::from(country))
     }
 
- /// Даёт loader/runtime-owner-у одну доказанную current-секцию.
     pub(crate) fn current_mut(
         &mut self,
         rank_type: HonorRanksType,
@@ -255,7 +185,6 @@ impl CHonorRanks {
         self.current[rank_type as usize].get_mut(usize::from(country))
     }
 
- /// Полностью очищает все шестнадцать history-list в исходном порядке.
     pub(crate) fn clear_history_honor_ranks(&mut self) {
         for by_country in &mut self.history {
             for ranks in by_country {
@@ -264,7 +193,6 @@ impl CHonorRanks {
         }
     }
 
- /// Полностью очищает все шестнадцать current-list в исходном порядке.
     pub(crate) fn clear_current_honor_ranks(&mut self) {
         for by_country in &mut self.current {
             for ranks in by_country {
@@ -273,7 +201,6 @@ impl CHonorRanks {
         }
     }
 
- /// Копирует выбранные rank-типы current → history перед новым периодом.
     pub(crate) fn copy_honor_ranks(&mut self, rank_mask: u32) -> bool {
         for country in 0..4 {
             if rank_mask & 0x01 != 0 {
@@ -299,7 +226,6 @@ impl CHonorRanks {
         true
     }
 
- /// Ставит точный `0x5FD0C + mask` в World receive FIFO.
     pub(crate) fn update_ranks_on_world_server(
         game: &CGame,
         rank_mask: u32,
@@ -309,7 +235,6 @@ impl CHonorRanks {
         game.queue_local_world_message(message)
     }
 
- /// Выполняет точный суточный rollover; `first_load` исходник не читал.
     pub(crate) fn on_new_day(
         &mut self,
         game: &CGame,
@@ -352,7 +277,6 @@ impl CHonorRanks {
         })
     }
 
- /// Обновляет одну current top-10 секцию по `PushToRanks`.
     pub(crate) fn push_to_ranks(
         &mut self,
         rank_type: HonorRanksType,
@@ -429,7 +353,6 @@ impl CHonorRanks {
         })
     }
 
- /// Последовательно обновляет day/week/month/total для допустимой страны.
     pub(crate) fn killed_one_player(
         &mut self,
         player: &CPlayer,
@@ -465,7 +388,6 @@ impl CHonorRanks {
         }))
     }
 
- /// Рассылает выбранные history-типы всем подключённым GameServer-ам.
     pub(crate) fn update_ranks_on_game_server(
         &self,
         game: &CGame,
@@ -500,7 +422,6 @@ impl CHonorRanks {
         Ok(updates)
     }
 
- /// Повторяет `AddToByteArray(type, country)`; `None` соответствует `-1`.
     pub(crate) fn add_history_to_byte_array(
         &self,
         destination: &mut Vec<u8>,
@@ -546,7 +467,6 @@ impl CHonorRanks {
     }
 }
 
-/// Safe-границы старого count/C-string wire почётных рангов.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HonorRanksSerializationBlock {
     InvalidCountry {

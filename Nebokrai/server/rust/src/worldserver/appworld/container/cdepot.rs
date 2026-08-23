@@ -1,36 +1,13 @@
-//! Владелец depot-container исторического `WorldServer`.
+//! Запираемый `CDepot` из `cdepot.cpp/.h`, подтверждённый
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! `Clear/Release`, lock-gated
-//! `Add/Add(position)/Find/Remove/AddFromDB`
-//! и
-//! унаследованного volume-codec — часть контракта owner-а.
+//! Lock проверяется до Add, Find и Remove. `Clear` и `Release` сначала снимают
+//! его; унаследованный volume decoder поэтому оставляет depot разблокированным
+//! даже при коротком payload. Сам lock в wire не входит.
 //!
-//! Layout сохраняет класс размером `0x78`: base
-//! `CVolumeLimitGoodsContainer` по `+0x0` и единственное собственное поле
-//! `bool m_bIsLocked` по `+0x74`. Constructor создаёт base с volume `0` и
-//! unlocked-флагом. `Clear` и `Release` сначала снимают lock, затем вызывают
-//! различающиеся base-операции. Destructor повторяет `Release`; Rust ownership
-//! и обычный `Drop` заменяют deleting-destructor, vtable/EH и STL cleanup.
-//!
-//! Собственных `CDepot::Serialize/Unserialize` в PDB нет. Wire наследуется от
-//! volume-owner-а: unsigned count, затем cell index и полный `CGoods` для
-//! каждой записи. Virtual `Clear` внутри decoder-а должен видеть override
-//! `CDepot`, поэтому Rust снимает lock перед делегированием готовому base-
-//! decoder-у. Lock в wire не входит; короткий source оставляет depot
-//! разблокированным и очищенным, сохраняя cursor и уже добавленные records до
-//! локальной типизированной ошибки короткого источника.
-//!
-//! Volume `0xA1` не является constructor-состоянием `CDepot`. Его задаёт
-//! точный `CPlayer::DecordFromByteArray` после отдельного virtual `Release` и
-//! до унаследованного decoder-а; связанный композиция player-codec обязана
-//! сохранить этот порядок.
-//!
-//! Lock-гейт проверяется до обоих Add, Find и Remove. `AddFromDB` сначала
-//! вызывает virtual cell-`GetGoods`; только при отсутствии unlocked collision
-//! проверяет lock и делегирует действующему volume DB-path. Это сохраняет
-//! literal `0` при lock/collision и base-result при успехе; старый `debug-DB`
-//! file sink технически не материализуется. Typed `Box<CGoods>` возвращается
-//! вызывающему при false вместо неявного сырого ownership.
+//! `AddFromDB` сначала проверяет collision через virtual `GetGoods`, затем lock
+//! и base-path. Volume `0xA1` назначается player decoder-ом между `Release` и
+//! чтением контейнера, а не конструктором.
 
 use super::super::goods::cgoodsfactory::GoodsBasePropertiesRegistry;
 use super::cvolumelimitgoodscontainer::{CVolumeLimitGoodsContainer, VolumeContainerCodecError};
@@ -38,14 +15,12 @@ use crate::dbaccess::worlddb::goodslistener::TraversedGoods;
 use crate::public::guid::CGuid;
 use crate::worldserver::appworld::goods::cgoods::CGoods;
 
-/// Действующее состояние исходного `CDepot`, не копия его 32-битного ABI.
 pub(crate) struct CDepot {
     volume_state: CVolumeLimitGoodsContainer,
     locked: bool,
 }
 
 impl CDepot {
- /// Создаёт unlocked depot с нулевым volume и inherited owner `0/0`.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             volume_state: CVolumeLimitGoodsContainer::with_constructor_defaults(),
@@ -53,30 +28,25 @@ impl CDepot {
         }
     }
 
- /// Снимает lock, сбрасывает base-state и задаёт точное unsigned число cells.
     pub(crate) fn set_container_volume(&mut self, size: u32) {
         self.locked = false;
         self.volume_state.set_container_volume(size);
     }
 
- /// Делегирует inherited limit для точного `CLargess::AddOneLargess`.
     pub(crate) const fn get_goods_amount_limit(&self) -> u32 {
         self.volume_state.get_goods_amount_limit()
     }
 
- /// Снимает lock и очищает товары, сохраняя текущий volume.
     pub(crate) fn clear(&mut self) {
         self.locked = false;
         self.volume_state.clear();
     }
 
- /// Снимает lock и сбрасывает inherited owner, товары и volume.
     pub(crate) fn release(&mut self) {
         self.locked = false;
         self.volume_state.release();
     }
 
- /// Делегирует automatic Add только для unlocked depot-а.
     pub(crate) fn add(
         &mut self,
         goods: Box<CGoods>,
@@ -88,7 +58,6 @@ impl CDepot {
         self.volume_state.add(goods, registry)
     }
 
- /// Делегирует positional Add только для unlocked depot-а.
     pub(crate) fn add_at(
         &mut self,
         position: u32,
@@ -101,7 +70,6 @@ impl CDepot {
         self.volume_state.add_at(position, goods, registry)
     }
 
- /// Скрывает весь depot при lock, иначе выполняет inherited GUID lookup.
     pub(crate) fn find(&self, ex_id: &CGuid) -> Option<&CGoods> {
         if self.locked {
             return None;
@@ -109,7 +77,6 @@ impl CDepot {
         self.volume_state.find(ex_id)
     }
 
- /// Выражает inherited cell lookup через virtual lock-gated `Find`.
     pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
         if self.locked {
             return None;
@@ -117,7 +84,6 @@ impl CDepot {
         self.volume_state.get_goods(position)
     }
 
- /// Возвращает mutable DB-view только из unlocked depot-а.
     pub(crate) fn get_goods_mut(&mut self, position: u32) -> Option<&mut CGoods> {
         if self.locked {
             return None;
@@ -125,7 +91,6 @@ impl CDepot {
         self.volume_state.get_goods_mut(position)
     }
 
- /// Вынимает товар только из unlocked depot-а.
     pub(crate) fn remove(
         &mut self,
         ex_id: &CGuid,
@@ -137,7 +102,6 @@ impl CDepot {
         self.volume_state.remove(ex_id, registry)
     }
 
- /// Сохраняет collision-before-lock порядок derived DB insertion.
     pub(crate) fn add_from_db(
         &mut self,
         position: u32,
@@ -150,7 +114,6 @@ impl CDepot {
         self.volume_state.add_from_db(position, goods, registry)
     }
 
- /// Проверяет точные amount/cell границы унаследованного container-а.
     pub(crate) fn is_full(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -158,7 +121,6 @@ impl CDepot {
         self.volume_state.is_full(registry)
     }
 
- /// Возвращает число валидных товаров, связанных с cells.
     pub(crate) fn get_goods_amount(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -166,7 +128,6 @@ impl CDepot {
         self.volume_state.get_goods_amount(registry)
     }
 
- /// Замораживает inherited volume traversal без изменения lock-state.
     pub(crate) fn db_save_entries(
         &self,
         registry: &GoodsBasePropertiesRegistry,
@@ -174,7 +135,6 @@ impl CDepot {
         self.volume_state.db_save_entries(registry)
     }
 
- /// Кодирует унаследованный volume-wire без сериализации lock-а.
     pub(crate) fn serialize(
         &self,
         destination: &mut Vec<u8>,
@@ -185,7 +145,6 @@ impl CDepot {
             .serialize(destination, include_child, registry)
     }
 
- /// Снимает lock и декодирует records после virtual `Clear` base-codec-а.
     pub(crate) fn unserialize(
         &mut self,
         source: &[u8],

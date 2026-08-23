@@ -1,7 +1,7 @@
 //! Владелец базового контейнера исторического `WorldServer`.
 //!
 //! Owner реализует listener registration, virtual GUID forwarders и cleanup;
-//! источник контракта — точная пара WorldServer EXE/PDB.
+//! источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Original vector хранит не владеющие `CContainerListener*`, отвергает null
 //! и повторный pointer, а destructor/`Release` освобождает только сам vector.
@@ -19,20 +19,17 @@ use crate::worldserver::appworld::listener::ccontainerlistener::CContainerListen
 
 pub(crate) type SharedContainerListener = Arc<Mutex<dyn CContainerListener>>;
 
-/// Безопасное owning-состояние исходного `CContainer`, не копия его ABI.
 pub(crate) struct CContainerState {
     listeners: Vec<Weak<Mutex<dyn CContainerListener>>>,
 }
 
 impl CContainerState {
- /// Создаёт пустой listener-vector constructor-а.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             listeners: Vec::new(),
         }
     }
 
- /// Регистрирует non-null listener один раз по identity исходного pointer-а.
     pub(crate) fn add_listener(&mut self, listener: Option<&SharedContainerListener>) -> i32 {
         let Some(listener) = listener else {
             return 0;
@@ -45,7 +42,6 @@ impl CContainerState {
         1
     }
 
- /// Освобождает только non-owning registry, как folded base `Release`.
     pub(crate) fn release(&mut self) {
         self.listeners.clear();
     }
@@ -71,7 +67,6 @@ pub(crate) fn find_by_typed_guid<'storage, Storage: ContainerGuidStorage>(
     storage.find_by_guid(ex_id)
 }
 
-/// Повторяет `Remove(long, GUID, void*)`: scalar type не читается.
 pub(crate) fn remove_by_typed_guid<Storage: ContainerGuidStorage>(
     storage: &mut Storage,
     _object_type: i32,

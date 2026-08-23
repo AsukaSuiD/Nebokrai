@@ -1,5 +1,5 @@
 //! DB-владелец и worker подарков `CLargess` WorldServer из `largess.cpp`.
-//! Источник контракта — точная пара WorldServer EXE/PDB.
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Owner сохраняет lifecycle Init/UnInit, очереди transfer/cycle-load, порядок
 //! `AddOneLargess`, календарные поля и обе формы `SaveLoadDetails`. Worker
@@ -38,14 +38,12 @@ const LARGESS_DEPOT_EXTENSION_FIRST_POSITION: u32 = 0x60;
 const LARGESS_DEPOT_EXTENSION_STRIDE: u32 = 0x0D;
 const LARGESS_DEPOT_EXTENSION_END: u32 = 0xA1;
 
-/// Оригинал bool и действующая позиция `CLargess::AddOneLargess`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LargessDepotAddOutcome {
     Added { position: u32 },
     Rejected { position: u32 },
 }
 
-/// Typed запись исходного `goods_largess_log`, ещё до transport/FIFO owner-а.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LargessWriteLog {
     pub(crate) account: Vec<u8>,
@@ -191,7 +189,6 @@ pub(crate) enum LargessWorkerStartOutcome {
     },
 }
 
-/// Делегирует `CLargess::AddGoldCoin` готовому bank-wallet owner-у.
 pub(crate) fn add_gold_coin(
     player: &mut CPlayer,
     goods: Box<CGoods>,
@@ -200,7 +197,6 @@ pub(crate) fn add_gold_coin(
     player.add_largess_gold_coin(goods, gold_coin_limit)
 }
 
-/// Повторяет positional scan и пять package-extension gates depot-а.
 pub(crate) fn add_one_largess(
     player: &mut CPlayer,
     goods: Box<CGoods>,
@@ -232,7 +228,6 @@ pub(crate) fn add_one_largess(
     Ok(LargessDepotAddOutcome::Rejected { position: limit })
 }
 
-/// Пять исходных Cost DB setup-строк без публикации credentials.
 #[derive(Clone)]
 pub(crate) struct CostDatabaseSettings {
     _provider: Vec<u8>,
@@ -242,7 +237,6 @@ pub(crate) struct CostDatabaseSettings {
     password: Vec<u8>,
 }
 
-/// Владеющие части Cost DB setup snapshot.
 pub(crate) struct CostDatabaseSettingsParts {
     pub(crate) provider: Vec<u8>,
     pub(crate) host: Vec<u8>,
@@ -252,7 +246,6 @@ pub(crate) struct CostDatabaseSettingsParts {
 }
 
 impl CostDatabaseSettings {
- /// Сохраняет byte-оригинал `strCostDB*` поля старого `CSetup`.
     pub(crate) fn from_parts(parts: CostDatabaseSettingsParts) -> Self {
         Self {
             _provider: parts.provider,
@@ -276,7 +269,6 @@ impl CostDatabaseSettings {
     }
 }
 
-/// Полный действующий value-layout одного `tagLargess` без MSVC ABI.
 #[derive(Clone)]
 pub(crate) struct LargessSnapshot {
     pub(crate) send_id: i32,
@@ -288,7 +280,6 @@ pub(crate) struct LargessSnapshot {
     pub(crate) failed_reason: Vec<u8>,
 }
 
-/// CD-key нужен внешнему log-owner-у, но не раскрывается обычным `Debug`.
 #[derive(Clone)]
 pub(crate) struct SensitiveCdKey(Vec<u8>);
 
@@ -304,14 +295,12 @@ impl fmt::Debug for SensitiveCdKey {
     }
 }
 
-/// Наблюдаемый bool старого owner-а.
 #[derive(Debug)]
 pub(crate) enum SaveLoadDetailsOutcome {
     ReturnedTrue,
     ReturnedFalse,
 }
 
-/// Структурированные эквиваленты трёх исходных log-ветвей.
 #[derive(Debug)]
 pub(crate) enum LargessNotice {
     AddPresentDetail {
@@ -330,7 +319,6 @@ pub(crate) enum LargessNotice {
     SaveLoadDetails(LargessDatabaseError),
 }
 
-/// Ошибка действующей ADO/TDS-границы без SQL и credentials.
 #[derive(Debug)]
 pub(crate) enum LargessDatabaseError {
     MissingConnection,
@@ -364,9 +352,7 @@ impl From<tiberius::error::Error> for LargessDatabaseError {
     }
 }
 
-/// Узкая граница двух действующих перегрузок `CLargess::SaveLoadDetails`.
 pub(crate) trait LargessOwner {
- /// Сохраняет одну map-запись на caller-owned Cost DB connection.
     async fn save_load_details_with_connection(
         &mut self,
         cd_key: &[u8],
@@ -374,14 +360,11 @@ pub(crate) trait LargessOwner {
         connection: Option<&mut WorldTdsClient>,
     ) -> SaveLoadDetailsOutcome;
 
- /// Открывает отдельное Cost DB connection и сохраняет одну map-запись.
     async fn save_load_details(&mut self, cd_key: &[u8], player_id: i32) -> SaveLoadDetailsOutcome;
 
- /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<LargessNotice>;
 }
 
-/// Linux/TDS-замена действующей части статического `CLargess`.
 pub(crate) struct TiberiusLargess {
     load_largess_time: u32,
     incoming_cost_database: CostDatabaseSettings,
@@ -410,7 +393,6 @@ impl TiberiusLargess {
         }
     }
 
- /// Даёт save-thread отдельный notice/worker owner над тем же live map.
     pub(crate) fn clone_save_owner(&self) -> Self {
         Self {
             load_largess_time: self.load_largess_time,
@@ -422,7 +404,6 @@ impl TiberiusLargess {
         }
     }
 
- /// Текущий размер той же общей map, которую читает `RefeashInfoText`.
     pub(crate) fn entry_count(&self) -> usize {
         self.entries.lock().len()
     }
@@ -476,7 +457,6 @@ impl TiberiusLargess {
         }
     }
 
- /// Эквивалент `UnInit`-ожидания единственного worker handle.
     pub(crate) fn wait_for_worker(&self) -> Option<LargessWorkerCompletion> {
         self.worker.lock().take().map(join_largess_worker)
     }
@@ -485,7 +465,7 @@ impl TiberiusLargess {
  ///
  /// Tiberius-параметры заменяют небезопасные `_sprintf` SQL-буферы, но
  /// сохраняют исходный порядок: target BEGIN/INSERT, source IsProcessed=1,
- /// затем target COMMIT. Поэтому доказанное окно потери при ошибке COMMIT
+ /// затем target COMMIT. Поэтому исходное окно потери при ошибке COMMIT
  /// после успешного source UPDATE намеренно не маскируется новой общей
  /// транзакцией между двумя базами.
     pub(crate) async fn transfer_largess(&self, world_number: u32) -> TransferLargessOutcome {
@@ -593,7 +573,6 @@ impl TiberiusLargess {
         TransferLargessOutcome::ReturnedTrue { row_count }
     }
 
- /// Повторяет global SendID scan и последующий unique player-key insert.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_largess_to_map(
         &self,
@@ -616,7 +595,6 @@ impl TiberiusLargess {
         )
     }
 
- /// Выполняет один оригинал Cost DB polling-проход без staging/swap карты.
     #[allow(
         clippy::await_holding_lock,
         reason = "exact CriticalSectionmapLargess охватывал connect, recordset и весь row-loop"
@@ -726,7 +704,6 @@ impl TiberiusLargess {
             .map_err(LargessDatabaseError::Tds)
     }
 
- /// Выполняет одну синхронную выдачу `CLargess::LoadLargess` под map-lock.
     pub(crate) fn load_largess<Random, Upgrade>(
         &self,
         player: &mut CPlayer,

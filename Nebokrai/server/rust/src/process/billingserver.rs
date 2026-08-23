@@ -1,4 +1,4 @@
-//! Linux process-owner BillingServer.
+//! Владелец процесса BillingServer под Linux.
 //!
 //! Владелец сохраняет исходный runtime-каталог для `Setup.ini` и
 //! `GSInfoSetup.ini`, передаёт `SIGINT/SIGTERM` единственному
@@ -15,7 +15,6 @@ use crate::billingserver::billingserver::game::{
 use crate::nets::servers::{AdmissionOutcome, ServerIoCompletion};
 use super::{process_shutdown, run_process};
 
-/// Запускает полный BillingServer process lifecycle и возвращает код процесса.
 pub fn run_billingserver_process() -> std::process::ExitCode {
     run_process("BillingServer", run_billing_server)
 }

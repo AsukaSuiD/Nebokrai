@@ -1,5 +1,5 @@
 //! DB-владелец стран WorldServer из `dbcountry.cpp`.
-//! Источник контракта — точная пара WorldServer EXE/PDB.
+//! Источник контракта — точная пара `worldserver.exe` и `worldserver.pdb`.
 //!
 //! Save/load сохраняют byte country ID, ordered ministers, technology и exile
 //! records, исходные значения bool и порядок SQL-команд. Tiberius, `BTreeMap`
@@ -26,7 +26,6 @@ const COUNTRY_SELECT_SQL: &str = "SELECT TOP 1 id FROM CSL_Countrys WHERE id = @
 const COUNTRY_LOAD_SQL: &str = "SELECT * FROM CSL_Countrys";
 const COUNTRY_UPDATE_SQL: &str = "UPDATE TOP (1) CSL_Countrys SET treasury = @P1, power = @P2, tech_exp = @P3, tech_lel = @P4, king_id = @P5, king_name = @P6, king_appoint = @P7, king_salary = @P8, control_point = @P9, material_point = @P10, war_point = @P11, war_res = @P12, minister_2_id = @P13, minister_2_name = @P14, minister_2_appoint = @P15, minister_2_salary = @P16, minister_3_id = @P17, minister_3_name = @P18, minister_3_appoint = @P19, minister_3_salary = @P20, minister_4_id = @P21, minister_4_name = @P22, minister_4_appoint = @P23, minister_4_salary = @P24, minister_5_id = @P25, minister_5_name = @P26, minister_5_appoint = @P27, minister_5_salary = @P28, minister_6_id = @P29, minister_6_name = @P30, minister_6_appoint = @P31, minister_6_salary = @P32, minister_7_id = @P33, minister_7_name = @P34, minister_7_appoint = @P35, minister_7_salary = @P36 WHERE id = @P37";
 
-/// Поля king identity/state, которые `CDBCountry::Save` записывал в DB.
 #[derive(Clone, Debug)]
 pub(crate) struct CountryKingSaveSnapshot {
     pub(crate) id: i32,
@@ -38,7 +37,6 @@ pub(crate) struct CountryKingSaveSnapshot {
     pub(crate) war_point: i32,
 }
 
-/// Nullable value одной из шести сохраняемых minister-должностей.
 #[derive(Clone, Debug)]
 pub(crate) struct CountryMinisterSaveSnapshot {
     pub(crate) id: i32,
@@ -47,7 +45,6 @@ pub(crate) struct CountryMinisterSaveSnapshot {
     pub(crate) salary_received: bool,
 }
 
-/// Полный caller-owned read-view одной country save-копии.
 #[derive(Clone, Debug)]
 pub(crate) struct CountrySaveSnapshot {
     pub(crate) country_id: u8,
@@ -57,11 +54,9 @@ pub(crate) struct CountrySaveSnapshot {
     pub(crate) tech_level: i32,
     pub(crate) king: CountryKingSaveSnapshot,
     pub(crate) country_war_result: i32,
- /// Индексы `0..6` буквально соответствуют должностям `2..=7`.
     pub(crate) ministers: [Option<CountryMinisterSaveSnapshot>; 6],
 }
 
-/// Структурированная замена действующих log-ветвей `CDBCountry::Save`.
 #[derive(Debug)]
 pub(crate) enum DbCountryNotice {
     MissingConnection,
@@ -69,7 +64,6 @@ pub(crate) enum DbCountryNotice {
         row_index: Option<usize>,
         failure: DbCountryLoadFailure,
     },
- /// Сохраняет исходную copy-paste категорию `load Country`.
     SaveFailed(DbCountryDatabaseError),
 }
 
@@ -82,7 +76,6 @@ pub(crate) enum DbCountryLoadFailure {
     ParameterUnavailable { field: &'static str },
 }
 
-/// Ошибка действующей ADO/TDS-границы без SQL и runtime country values.
 #[derive(Debug)]
 pub(crate) struct DbCountryDatabaseError(tiberius::error::Error);
 
@@ -104,9 +97,7 @@ impl From<tiberius::error::Error> for DbCountryDatabaseError {
     }
 }
 
-/// Узкая объектная граница действующего `CDBCountry::Save`.
 pub(crate) trait DbCountryOwner {
- /// Загружает все country rows в live handler, сохраняя cursor order.
     async fn load(
         &mut self,
         country_handler: &mut CCountryHandler,
@@ -114,18 +105,15 @@ pub(crate) trait DbCountryOwner {
         active_connection: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Обновляет существующую country-строку внутри caller-транзакции.
     async fn save(
         &mut self,
         snapshot: Option<&CountrySaveSnapshot>,
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> bool;
 
- /// Забирает следующий исходный log-эквивалент.
     fn pop_notice(&mut self) -> Option<DbCountryNotice>;
 }
 
-/// Linux/TDS-замена действующей части исходного `CDBCountry`.
 #[derive(Default)]
 pub(crate) struct TiberiusDbCountry {
     notices: VecDeque<DbCountryNotice>,

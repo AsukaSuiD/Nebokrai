@@ -25,7 +25,6 @@ use crate::worldserver::appworld::country::countryparam::{
 
 use super::officer::COfficer;
 
-/// Safe nominal owner `CKing` без старого vtable/ABI.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CKing {
     officer: COfficer,
@@ -42,7 +41,6 @@ impl Default for CKing {
 }
 
 impl CKing {
- /// Создаёт identity/officer/point prefix и исправленный bool-флаг.
     pub(crate) const fn with_constructor_defaults() -> Self {
         Self {
             officer: COfficer::with_constructor_defaults(),

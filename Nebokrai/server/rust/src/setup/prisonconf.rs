@@ -1,25 +1,12 @@
-//! Конфигурация тюрьмы исторического Miracle.
+//! Тюремная конфигурация `PrisonConf` из WorldServer, подтверждённая
+//! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Контракт World `load_conf` и `AddToByteArray`
-//!:; Game decoder и singleton plumbing не входят в этот owner и остаются
-//! Точная пара:
-//! Исходный владелец PDB:
+//! Loader очищает signed-byte map, но при ошибке открытия сохраняет прежний
+//! PK threshold; до первой загрузки он остаётся `None`. Direction читается как
+//! `char`, поэтому token `-1` даёт ASCII `'-'`, а не `0xFF`.
 //!
-//! Loader сначала очищает signed-char ordered map, но сохраняет прежний
-//! `_pk_val_enter` при ошибке открытия. Конструктор EXE его не инициализировал,
-//! поэтому safe owner выражает ещё не загруженное значение через `Option`, а
-//! serializer возвращает typed boundary вместо выдуманного нуля.
-//!
-//! Каждая `#`-запись читает signed ID, region, два signed short и одно поле
-//! `char`. Реальный `prisonconf.ini` содержит направление `-1`, однако
-//! formatted extraction в `char` берёт только первый символ: observable wire
-//! содержит ASCII `'-'` (`0x2D`), не числовой `0xFF`. Этот quirk сохранён
-//! явно. ID сужается до младшего signed byte; duplicate key заменяется.
-//!
-//! Wire: `i32 pk_threshold`, signed count, затем ordered записи
-//! `i8 country + i32 region + i16 x + i16 y + i8 direction` — десять байт без
-//! трёх padding-байт исходного 12-байтного `PrisonParam`. `BTreeMap<i8, _>`,
-//! `std::fs` и `Drop` заменяют только MSVC tree/CRFile plumbing.
+//! Wire пишет threshold, signed count и десятибайтные records без padding.
+//! Duplicate country заменяет значение; `BTreeMap<i8, _>` сохраняет порядок.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -36,7 +23,6 @@ pub(crate) struct PrisonParam {
     pub(crate) direction: i8,
 }
 
-/// Safe owner исходного singleton state.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PrisonConf {
     pk_value_enter: Option<i32>,
@@ -44,7 +30,6 @@ pub(crate) struct PrisonConf {
 }
 
 impl PrisonConf {
- /// Очищает map до открытия, не назначая отсутствующий constructor scalar.
     pub(crate) fn load_from_file(
         &mut self,
         path: impl AsRef<Path>,
@@ -98,12 +83,10 @@ impl PrisonConf {
         self.prison_params.get(&country)
     }
 
- /// Missing-file ветвь loader-а очищает только map, сохраняя прежний scalar.
     pub(crate) fn clear_prison_params(&mut self) {
         self.prison_params.clear();
     }
 
- /// Дописывает оригинал compact wire без C++ struct padding.
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,

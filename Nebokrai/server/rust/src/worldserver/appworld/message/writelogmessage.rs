@@ -1,49 +1,19 @@
-//! WorldServer dispatcher-owner `OnWriteLogMessage`.
+//! Журналы `OnWriteLogMessage` из `writelogmessage.cpp`, подтверждённые
+//! `worldserver.exe` и `worldserver.pdb`; охвачены opcode `0x60201..0x60218`.
 //!
-//! Источник контракта — `WorldServer/Nworldserver.exe` и
-//! `WorldServer/WorldServer.pdb`; исходный owner —
-//! `appworld/message/writelogmessage.cpp`. Dispatcher реализует все ветки
-//! `0x60201..0x60218`; `0x60211..0x60213` являются обработанными no-op.
-//! Wire-порядок, signed/unsigned расширения, строковые границы и FIFO-позиция
-//! каждой записи входят в совместимость.
+//! Goods, player, team, chat, map, increment, carriage, fairy, auction и sale
+//! ветви сохраняют разные payload-порядки, signedness, C-string limits и FIFO
+//! позиции. `0x60211..0x60213` — обработанные no-op.
 //!
-//! Goods trade/basic (`0x60201..0x60202`) сохраняют порядок money, map,
-//! coordinates, amount, log type и little-endian IPv4. `pk_count` расширяется
-//! из short как `u16`, а отсутствующие seller/purchaser независимо дают
-//! `"NULL"`. Upgrade/craft (`0x60203..0x60205`) читают пары GUID/name с
-//! исходными границами `0x100`, `0x80` и `0x40`; только предусмотренные
-//! goods-name проходят `CheckPoint`.
+//! Исторические особенности сохранены: team пишет последний `pos_y` в обе
+//! координаты; chat типов 2, 3 и вне 0..8 может поставить пустую DB-команду;
+//! carriage/fairy дата использует weekday вместо месяца; increment сначала
+//! ставится в DB FIFO, затем немедленно публикуется live.
 //!
-//! Player progress (`0x60206..0x60208`) имеет три разных payload-порядка;
-//! player ID и long сохраняют signed трактовку, level и log type расширяются
-//! из byte. Team/killer (`0x60209..0x6020A`) независимо ищут обоих игроков.
-//! Team намеренно записывает последний `pos_y` и как `pos_x`, и как `pos_y`:
-//! это наблюдаемый DB-quirk. Chat (`0x6020B`) отбрасывает пустой content,
-//! читает receiver только для private type `5`, но для типов `2`, `3` и вне
-//! `0..8` ставит в очередь пустую DB-команду. Change-map (`0x6020C`) сохраняет
-//! обычный порядок исходных и целевых координат.
-//!
-//! Increment log (`0x6020D`) отклоняет signed amount `>= 1001`. В обычной
-//! ветке запись сначала ставится в `CWriteLogQueue`, затем с тем же caller-time
-//! сразу публикуется в `CIncrementLog`; DB commit не ожидается. Carriage
-//! (`0x6020E`) и fairy (`0x60210`) форматируют дату как
-//! `year-weekday-day`, используя `wDayOfWeek` вместо месяца. Plain log
-//! (`0x6020F`) пишет literal `"null"` для имени и account отсутствующего
-//! игрока. Fairy принимает только subtype `0..4`, сохраняет GUID marker,
-//! строковые границы и grow-rate как `u32 * 0.0001` с четырьмя знаками.
-//!
-//! Auction (`0x60214`) копирует wire-node `0x150`, заменяет только `guidKey`,
-//! ставит INSERT в общий FIFO и сразу публикует тот же node в `CAuctionLog`.
-//! DB получает обычную дату, live node — исходный `SYSTEMTIME`; принудительного
-//! `bNotice=0`, ожидания commit и дополнительной валидации нет. Sale
-//! (`0x60215..0x60217`) сохраняет три разных payload-порядка и unsigned
-//! трактовку long. `0x60218` читает пять signed long и ставит `ciqinglog`
-//! INSERT без других побочных эффектов.
-//!
-//! Rust передаёт значения в Tiberius параметрами вместо `_sprintf`, ручного
-//! quoting и stack buffers. Owned bytes ограничивают чтение повреждённых строк,
-//! а отказ генератора GUID даёт явный безопасный блок. Эти технические замены
-//! не меняют штатные значения, wire, частичные эффекты и порядок публикации.
+//! Auction копирует 0x150-байтный node, заменяет GUID, ставит INSERT и сразу
+//! публикует его без ожидания commit. Fairy допускает subtype 0..4 и вычисляет
+//! grow-rate как `u32 * 0.0001`. Tiberius parameters и owned buffers заменяют
+//! `_sprintf`/ADO, не меняя порядок и частичные эффекты.
 
 use std::net::Ipv4Addr;
 
@@ -81,7 +51,6 @@ const AUCTION_SALE_CANCEL_LOG_MESSAGE: i32 = 0x0006_0216;
 const AUCTION_SALE_RECEIVE_LOG_MESSAGE: i32 = 0x0006_0217;
 const CIQING_LOG_MESSAGE: i32 = 0x0006_0218;
 
-/// Параметры одной исходной INSERT-команды без самодельного SQL quoting.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorldIncrementLogWrite {
     pub(crate) context_id: Vec<u8>,
@@ -96,7 +65,6 @@ pub(crate) struct WorldIncrementLogWrite {
     pub(crate) ip_address: Vec<u8>,
 }
 
-/// Поля `carriage_log`, включая SYSTEMTIME, снятый до enqueue.
 #[derive(Clone, Debug)]
 pub(crate) struct WorldCarriageLogWrite {
     pub(crate) player_id: i32,
@@ -451,7 +419,6 @@ pub(crate) enum WorldFactionLogWrite {
     },
 }
 
-/// Typed очередь сохраняет старый FIFO, но оставляет SQL transport Tiberius-у.
 #[derive(Clone, Debug)]
 pub(crate) enum WorldWriteLogCommand {
     IncrementLog(WorldIncrementLogWrite),
@@ -471,7 +438,6 @@ pub(crate) enum WorldWriteLogCommand {
     GoodsLog(WorldGoodsLogWrite),
     GoodsCraftLog(WorldGoodsCraftLogWrite),
     ChatLog(WorldChatLogWrite),
- /// chat jump-table ставил в FIFO очищенный SQL-buffer.
     LegacyEmptyChatSql { log_type: u8 },
     ChangeMapLog(WorldChangeMapLogWrite),
     PlayerDeleteLog(WorldPlayerDeleteLogWrite),
