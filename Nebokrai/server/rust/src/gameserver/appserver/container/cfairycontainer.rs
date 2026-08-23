@@ -8,9 +8,11 @@
 //! `13/FZ0885`, а remove блокирует фею с ненулевым hatch timer.
 //!
 //! `CVolumeLimitGoodsContainer` и owned `CGoods` заменяют vtable dispatch/raw
-//! pointers, не меняя lock/stack/listener semantics base-owner-а. State change,
-//! hatch/exp traversal, codec-tail и syncretize ниже пока остаются RAW.
+//! pointers, не меняя lock/stack/listener semantics base-owner-а. Пять hatch
+//! timer-ов codec suffix сохранены с partial decode; state change, hatch/exp
+//! traversal и syncretize ниже пока остаются RAW.
 
+use super::camountlimitgoodscontainer::AmountLimitGoodsCleared;
 use super::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeGoodsAddBlock, VolumeGoodsAddOutcome,
     VolumeGoodsRemoveOutcome,
@@ -24,6 +26,7 @@ use crate::public::guid::CGuid;
 
 const FAIRY_SPECIAL_POSITION: u32 = 13;
 const FAIRY_SPECIAL_ORIGINAL_NAME: &[u8] = b"FZ0885";
+const HATCHER_POSITIONS: std::ops::Range<u32> = 5..10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FairyContainerAddBlock {
@@ -50,6 +53,28 @@ pub(crate) enum FairyContainerRemoveOutcome {
         goods_id: CGuid,
     },
     Removed(VolumeGoodsRemoveOutcome),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FairyContainerCodecError {
+    UnexpectedEnd {
+        position: u32,
+        offset: usize,
+        available: usize,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyContainerUnserializeReport {
+    pub(crate) cleared: AmountLimitGoodsCleared,
+    pub(crate) base_result: bool,
+    pub(crate) restored_hatch_positions: Vec<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyContainerUnserializeFailure {
+    pub(crate) error: FairyContainerCodecError,
+    pub(crate) report: FairyContainerUnserializeReport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -153,6 +178,94 @@ impl CFairyContainer {
             .remove_goods(goods_id)
             .map(FairyContainerRemoveOutcome::Removed)
             .unwrap_or(FairyContainerRemoveOutcome::Missing)
+    }
+
+    /// Base payload сохраняет собственного owner-а; fairy suffix всегда
+    /// дописывает пять little-endian hatch значений для ячеек `5..9`, даже
+    /// когда base serializer вернул `false`.
+    pub(crate) fn serialize_with<SerializeBase>(
+        &self,
+        destination: &mut Vec<u8>,
+        include_ex_data: bool,
+        serialize_base: SerializeBase,
+    ) -> bool
+    where
+        SerializeBase: FnOnce(&CVolumeLimitGoodsContainer, &mut Vec<u8>, bool) -> bool,
+    {
+        let result = serialize_base(&self.base, destination, include_ex_data);
+        for position in HATCHER_POSITIONS {
+            let hatch_start_time = self
+                .base
+                .get_goods(position)
+                .and_then(CGoods::fairy_properties)
+                .map_or(0, |fairy| fairy.hatch_start_time);
+            destination.extend_from_slice(&hatch_start_time.to_le_bytes());
+        }
+        result
+    }
+
+    /// Exact owner очищает container до base decoder-а. Suffix применяет
+    /// ненулевые timer-ы по одному и при обрыве сохраняет уже восстановленный
+    /// prefix state.
+    pub(crate) fn unserialize_with<UnserializeBase>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        include_ex_data: bool,
+        unserialize_base: UnserializeBase,
+    ) -> Result<FairyContainerUnserializeReport, FairyContainerUnserializeFailure>
+    where
+        UnserializeBase: FnOnce(&mut CVolumeLimitGoodsContainer, &[u8], &mut usize, bool) -> bool,
+    {
+        let cleared = self.base.clear_goods();
+        let base_result = unserialize_base(&mut self.base, source, cursor, include_ex_data);
+        let mut report = FairyContainerUnserializeReport {
+            cleared,
+            base_result,
+            restored_hatch_positions: Vec::new(),
+        };
+        for position in HATCHER_POSITIONS {
+            let offset = *cursor;
+            let Some(end) = offset.checked_add(4) else {
+                return Err(FairyContainerUnserializeFailure {
+                    error: FairyContainerCodecError::UnexpectedEnd {
+                        position,
+                        offset,
+                        available: source.len().saturating_sub(offset),
+                    },
+                    report,
+                });
+            };
+            *cursor = end;
+            let Some(bytes) = source.get(offset..end) else {
+                return Err(FairyContainerUnserializeFailure {
+                    error: FairyContainerCodecError::UnexpectedEnd {
+                        position,
+                        offset,
+                        available: source.len().saturating_sub(offset),
+                    },
+                    report,
+                });
+            };
+            let hatch_start_time = u32::from_le_bytes(
+                bytes
+                    .try_into()
+                    .expect("fairy hatch suffix содержит четыре байта"),
+            );
+            if hatch_start_time == 0 {
+                continue;
+            }
+            let Some(fairy) = self
+                .base
+                .get_goods_mut(position)
+                .and_then(CGoods::fairy_properties_mut)
+            else {
+                continue;
+            };
+            fairy.hatch_start_time = hatch_start_time;
+            report.restored_hatch_positions.push(position);
+        }
+        Ok(report)
     }
 }
 
