@@ -55,7 +55,8 @@ use crate::public::auctionlog::CAuctionLog;
 use crate::public::date::TagTime;
 use crate::public::timer::CTimer;
 use crate::nets::networld::message::CMessage;
-use crate::nets::networld::mynetclient::{WorldClientIoError, WorldClientIoStep};
+use crate::nets::networld::mynetclient::{CMyNetClient, WorldClientIoError, WorldClientIoStep};
+use crate::nets::networld::mynetserver::CMyNetServer;
 use crate::nets::networld::myserverclient::GameServerReceiveError;
 use crate::nets::servers::{
     AcceptStart, AdmissionOutcome, ServerCommandHandle, ServerIoAction,
@@ -83,7 +84,8 @@ use crate::setup::regionsetup::CRegionSetup;
 use crate::setup::synthesis::CSynthesis;
 use crate::worldserver::appworld::goods::cbattlefairyproperty::CBattleFairyProperty;
 use crate::worldserver::appworld::goods::cgoodsfactory::{
-    upgrade_equipment, GoodsBasePropertiesRegistry, GoodsNameIndex, GoodsOriginalNameIndex,
+    release_goods_registry, upgrade_equipment, GoodsBasePropertiesRegistry, GoodsNameIndex,
+    GoodsOriginalNameIndex,
 };
 use crate::worldserver::appworld::player::{CPlayer, PlayerPropertyCoefficients};
 use crate::worldserver::appworld::message::organsysmessage::WorldUnionApplicationRuntimeOwner;
@@ -105,7 +107,9 @@ use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSy
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::FourNationWarCallbacks;
 use crate::worldserver::appworld::organizingsystem::fournationwarsys::CFourNationWarSys;
 use crate::worldserver::appworld::organizingsystem::organizingctrl::COrganizingCtrl;
-use crate::worldserver::appworld::organizingsystem::organizingparam::COrganizingParam;
+use crate::worldserver::appworld::organizingsystem::organizingparam::{
+    COrganizingParam, OrganizingParamReleaseReport,
+};
 use crate::worldserver::appworld::organizingsystem::villagewarsys::VillageWarCallbacks;
 use crate::worldserver::appworld::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::worldserver::appworld::script::variablelist::CVariableList;
@@ -116,17 +120,19 @@ use crate::worldserver::appworld::worldregion::WorldRegionResourceContext;
 use super::game::{
     CGame, WorldGameDatabaseInitialization, WorldGameDatabaseOwner, WorldGameInitContext,
     WorldGameInitCallbacks, WorldGameInitOperatorNotice, WorldGameInitResult,
-    WorldCollectPlayerDataRequestState, WorldGameInitWorkerKind, WorldJjcRuntimeContext,
+    WorldCollectPlayerDataRequestState, WorldGameInitWorkerKind, WorldGameReleaseContext,
+    WorldGameReleaseDatabaseOwner, WorldGameReleaseOptionalOwner, WorldGameReleaseVoidOwner,
+    WorldJjcRuntimeContext,
     WorldLeiTingRuntimeContext, WorldMainLoopClockState, WorldMainLoopInitializationState,
     WorldMainLoopLargessState, WorldMainLoopLoginReleaseState, WorldMainLoopProfileState,
     WorldMainLoopStateOwners, WorldMainLoopTailClockState, WorldPlayerDataLoadOwner,
     WorldPlayerLoadDataAdapter, WorldPlayerRanksRequestState, WorldProcessMessageStageState,
-    WorldReloadContext, WorldReloadProfileFlags, WorldRunSaveTriggerState,
+    WorldRegionOwner, WorldReloadContext, WorldReloadProfileFlags, WorldRunSaveTriggerState,
     WorldSaveRuntimeContext, WorldSaveThreadHandleState,
     WorldSaveThreadJob, WorldSaveThreadLaunchRequest, WorldSaveThreadReport, save_thread_func,
 };
 use super::honorranks::CHonorRanks;
-use super::playerranks::CPlayerRanks;
+use super::playerranks::{CPlayerRanks, PlayerRanksReleaseReport};
 use super::worldserver::{WorldLogLocalTime, WorldLogTextOwner, WorldRefreshInfoHighWater};
 use super::savedb::{
     SaveDataLifecycleState, SaveDataLocalTime, SaveDataLogPublisher,
@@ -542,9 +548,9 @@ impl WorldProcessNetworkRuntime {
         Ok(turn)
     }
 
-    pub(crate) async fn release(
+    pub(crate) async fn release_server(
         &mut self,
-        game: &mut CGame,
+        server: &mut CMyNetServer,
     ) -> Result<(), WorldProcessNetworkError> {
         if let Some(task) = self.accept_task.take() {
             task.abort();
@@ -555,27 +561,21 @@ impl WorldProcessNetworkRuntime {
             }
         }
 
-        if let Some(server) = game.process_game_server_mut() {
-            let _ = server.command_handle().quit_all();
-        }
-        while game
-            .process_game_server_mut()
-            .is_some_and(|server| server.has_clients())
-        {
-            if let Some(server) = game.process_game_server_mut() {
-                let snapshot = server.process_network_snapshot(super::game::legacy_tick_ms());
-                let commands = server.command_handle();
-                let (actions, _errors) = snapshot.into_parts();
-                self.spawn_io_actions(actions, commands);
-            }
+        let _ = server.command_handle().quit_all();
+        while server.has_clients() {
+            let snapshot = server.process_network_snapshot(super::game::legacy_tick_ms());
+            let commands = server.command_handle();
+            let (actions, _errors) = snapshot.into_parts();
+            self.spawn_io_actions(actions, commands);
             self.drain_io_completions(None)?;
             tokio::task::yield_now().await;
         }
         self.io_tasks.shutdown().await;
-        if let Some(client) = game.process_login_client_mut() {
-            let _ = client.close();
-        }
         Ok(())
+    }
+
+    pub(crate) fn release_client(&mut self, client: &mut CMyNetClient) {
+        let _ = client.close();
     }
 
     async fn drain_completed(
@@ -653,6 +653,186 @@ async fn poll_once<Output>(future: impl Future<Output = Output>) -> Option<Outpu
         })
     })
     .await
+}
+
+/// Concrete platform/domain owner точного `CGame::Release` порядка.
+pub(crate) struct WorldProcessReleaseContext<'a> {
+    runtime: tokio::runtime::Handle,
+    runtime_directory: &'a Path,
+    network: &'a mut WorldProcessNetworkRuntime,
+    domains: &'a mut WorldProcessDomainOwners,
+    init: &'a mut WorldProcessInitContext,
+    resources: &'a mut WorldProcessResources,
+    save: &'a mut WorldProcessSaveRuntime,
+}
+
+impl<'a> WorldProcessReleaseContext<'a> {
+    pub(crate) fn new(
+        runtime: tokio::runtime::Handle,
+        runtime_directory: &'a Path,
+        network: &'a mut WorldProcessNetworkRuntime,
+        domains: &'a mut WorldProcessDomainOwners,
+        init: &'a mut WorldProcessInitContext,
+        resources: &'a mut WorldProcessResources,
+        save: &'a mut WorldProcessSaveRuntime,
+    ) -> Self {
+        Self {
+            runtime,
+            runtime_directory,
+            network,
+            domains,
+            init,
+            resources,
+            save,
+        }
+    }
+}
+
+impl WorldGameReleaseContext for WorldProcessReleaseContext<'_> {
+    fn put_debug_string(&mut self, payload: &'static [u8]) {
+        eprintln!("WorldServer: {}", String::from_utf8_lossy(payload));
+    }
+
+    fn save_city_region(&mut self, region_id: i32, region: &mut WorldRegionOwner) {
+        match region.save_to_resource_directory(self.runtime_directory) {
+            Ok(0) => eprintln!(
+                "WorldServer: файл региона {region_id} не открыт во время shutdown"
+            ),
+            Ok(_) => {}
+            Err(error) => eprintln!(
+                "WorldServer: регион {region_id} не сохранён во время shutdown: {error:?}"
+            ),
+        }
+    }
+
+    fn exit_network_server_worker(&mut self, server: &mut CMyNetServer) {
+        let runtime = self.runtime.clone();
+        let result = tokio::task::block_in_place(|| {
+            runtime.block_on(self.network.release_server(server))
+        });
+        if let Err(error) = result {
+            eprintln!("WorldServer: GameServer network-worker не завершён: {error}");
+        }
+    }
+
+    fn exit_network_client_worker(&mut self, client: &mut CMyNetClient) {
+        self.network.release_client(client);
+    }
+
+    fn release_void_owner(&mut self, owner: WorldGameReleaseVoidOwner) {
+        match owner {
+            WorldGameReleaseVoidOwner::UninitializeTimeToReturn => {
+                self.domains.time_to_return = TimeToReturn::new();
+            }
+            WorldGameReleaseVoidOwner::ReleaseCountryHandler => {
+                let previous = std::mem::take(&mut self.domains.country_handler);
+                let _ = previous.release();
+            }
+            WorldGameReleaseVoidOwner::ReleaseOrganizingController => {
+                let previous = std::mem::replace(
+                    &mut self.domains.organizing,
+                    COrganizingCtrl::with_reached_callback_state(),
+                );
+                let _ = previous.release(&mut self.domains.timer);
+            }
+            WorldGameReleaseVoidOwner::ReleaseAttackCity => {
+                self.domains.attack_city = CAttackCitySys::new();
+            }
+            WorldGameReleaseVoidOwner::ReleaseVillageWar => {
+                self.domains.village_war = CVillageWarSys::new();
+            }
+            WorldGameReleaseVoidOwner::ReleaseFactionWar => {
+                self.domains.faction_war = CFactionWarSys::new(0);
+            }
+            WorldGameReleaseVoidOwner::ReleaseTimer => {
+                self.domains.timer = CTimer::new();
+            }
+            WorldGameReleaseVoidOwner::ReleaseGoodsFactory => {
+                release_goods_registry(
+                    &mut self.resources.goods,
+                    &mut self.resources.goods_by_original_name,
+                    &mut self.resources.goods_by_name,
+                );
+            }
+            WorldGameReleaseVoidOwner::ReleaseNetSessionManager => {
+                let _ = self.domains.net_sessions.release();
+            }
+            WorldGameReleaseVoidOwner::UninitializeLargess => {
+                drop(self.init.largess.take());
+            }
+            WorldGameReleaseVoidOwner::UninitializeDatabaseLayer => {
+                drop(self.init.player_connection.take());
+                drop(self.init.country_connection.take());
+                drop(self.init.goods_war_connection.take());
+                drop(self.init.gods_battle_connection.take());
+                drop(self.init.log_connection.take());
+                drop(self.init.database_settings.take());
+                drop(self.init.log_database_settings.take());
+            }
+            WorldGameReleaseVoidOwner::ReleaseGoodsLinks
+            | WorldGameReleaseVoidOwner::UninitializeIncrementLog
+            | WorldGameReleaseVoidOwner::ReleaseWordsFilter
+            | WorldGameReleaseVoidOwner::ReleaseQuestSystem
+            | WorldGameReleaseVoidOwner::ClearSkillCache
+            | WorldGameReleaseVoidOwner::ClearSkillUsageCache
+            | WorldGameReleaseVoidOwner::CleanupSocket
+            | WorldGameReleaseVoidOwner::ReleaseBaseMessage
+            | WorldGameReleaseVoidOwner::RequestWriteLogWorkerExit => {}
+        }
+    }
+
+    fn release_optional_owner(&mut self, owner: WorldGameReleaseOptionalOwner) -> bool {
+        match owner {
+            WorldGameReleaseOptionalOwner::GeneralVariableList => {
+                self.domains.general_variables.take().is_some()
+            }
+            WorldGameReleaseOptionalOwner::DefaultClientResource => {
+                self.resources.default_client_resource.clear()
+            }
+            WorldGameReleaseOptionalOwner::FunctionListFileData
+            | WorldGameReleaseOptionalOwner::VariableListFileData
+            | WorldGameReleaseOptionalOwner::ScriptFileData
+            | WorldGameReleaseOptionalOwner::DupliRegionSetup => false,
+        }
+    }
+
+    fn release_database_owner(&mut self, owner: WorldGameReleaseDatabaseOwner) -> bool {
+        match owner {
+            WorldGameReleaseDatabaseOwner::RsPlayer => self.init.player.take().is_some(),
+            WorldGameReleaseDatabaseOwner::RsSetup => self.init.setup.take().is_some(),
+            WorldGameReleaseDatabaseOwner::RsGenVar => self.init.gen_var.take().is_some(),
+            WorldGameReleaseDatabaseOwner::RsFaction => self.init.faction.take().is_some(),
+            WorldGameReleaseDatabaseOwner::RsUnion => self.init.union.take().is_some(),
+            WorldGameReleaseDatabaseOwner::RsEnemyFactions => {
+                self.init.enemy_factions.take().is_some()
+            }
+            WorldGameReleaseDatabaseOwner::RsVillageWar => {
+                std::mem::take(&mut self.init.rs_village_war_created)
+            }
+            WorldGameReleaseDatabaseOwner::RsCityWar => {
+                std::mem::take(&mut self.init.rs_city_war_created)
+            }
+            WorldGameReleaseDatabaseOwner::GoodsWarMember => false,
+            WorldGameReleaseDatabaseOwner::RsRegion => self.init.region.take().is_some(),
+            WorldGameReleaseDatabaseOwner::DbCountry => self.init.country.take().is_some(),
+            WorldGameReleaseDatabaseOwner::RsGodsBattle => {
+                self.init.gods_battle.take().is_some()
+            }
+        }
+    }
+
+    fn release_player_ranks(&mut self) -> PlayerRanksReleaseReport {
+        self.domains.player_ranks.release(&mut self.domains.timer)
+    }
+
+    fn release_organizing_parameters(&mut self) -> OrganizingParamReleaseReport {
+        std::mem::take(&mut self.domains.organizing_parameters)
+            .release(&mut self.domains.timer)
+    }
+
+    fn join_save_worker(&mut self) -> WorldSaveThreadHandleState {
+        self.save.join()
+    }
 }
 
 /// Результат одного завершившегося системного save-worker-а.
@@ -1039,6 +1219,8 @@ pub(crate) struct WorldProcessInitContext {
     faction: Option<TiberiusRsFaction>,
     union: Option<TiberiusRsUnion>,
     enemy_factions: Option<TiberiusRsEnemyFactions>,
+    rs_village_war_created: bool,
+    rs_city_war_created: bool,
     region: Option<TiberiusRsRegion>,
     country: Option<TiberiusDbCountry>,
     country_connection: Option<WorldTdsClient>,
@@ -1070,6 +1252,8 @@ impl WorldProcessInitContext {
             faction: None,
             union: None,
             enemy_factions: None,
+            rs_village_war_created: false,
+            rs_city_war_created: false,
             region: None,
             country: None,
             country_connection: None,
@@ -1937,8 +2121,12 @@ impl WorldGameInitContext for WorldProcessInitContext {
             WorldGameDatabaseOwner::GoodsWarMember => {
                 self.goods_war_connection = settings.connect().await.ok();
             }
-            WorldGameDatabaseOwner::RsVillageWar
-            | WorldGameDatabaseOwner::RsCityWar => {}
+            WorldGameDatabaseOwner::RsVillageWar => {
+                self.rs_village_war_created = true;
+            }
+            WorldGameDatabaseOwner::RsCityWar => {
+                self.rs_city_war_created = true;
+            }
         }
         Ok(())
     }

@@ -7043,6 +7043,16 @@ impl WorldRegionOwner {
         }
     }
 
+    /// Выполняет virtual `CRegion::Save` для любого производного World owner-а.
+    pub(crate) fn save_to_resource_directory(
+        &mut self,
+        runtime_directory: &Path,
+    ) -> Result<i32, RegionSerializationBlock> {
+        self.base_mut()
+            .region_base_mut()
+            .save_to_resource_directory(runtime_directory)
+    }
+
     /// Выполняет exact virtual AI всех поставочных World region owner-ов.
     /// Их slot `+0x40` указывает на общий однокомандный `ret` `0x00401000`.
     pub(crate) const fn ai(&mut self) {}
