@@ -1,5 +1,7 @@
-//! Списки монстров новых навыков `CNewSkillMonserConf` из WorldServer,
-//! подтверждённые `worldserver.exe` и `worldserver.pdb`.
+//! Списки монстров новых навыков `CNewSkillMonserConf` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner
+//! `setup/newskillmonsterlist.h/.cpp`.
 //!
 //! Wire пишет ordered skill ID, signed count и localized monster C-строки.
 //! Duplicate skill ID заменяет всю группу, повторы и порядок имён сохраняются.
@@ -7,6 +9,8 @@
 //! Loader очищает map, требует `NewSkillMonsterList/monsterlist/monster` и
 //! атрибуты `index/strorgname`. StringTable miss даёт пустое имя. `quick-xml`
 //! принимает исторические unquoted ASCII attributes после узкой нормализации.
+//! Game decoder собирает группу во временный vector и лишь затем заменяет map
+//! entry. Safe NUL reader не воспроизводит overflow старого char[1024].
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -14,8 +18,8 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct NewSkillMonsterConf {
@@ -33,6 +37,10 @@ impl NewSkillMonsterConf {
 
     pub(crate) fn clear(&mut self) {
         self.groups.clear();
+    }
+
+    pub(crate) fn groups(&self) -> &BTreeMap<u32, Vec<Vec<u8>>> {
+        &self.groups
     }
 
     pub(crate) fn load_from_bytes<ResolveName>(
@@ -115,7 +123,9 @@ impl NewSkillMonsterConf {
                             return Err(NewSkillMonsterLoadError::MissingMonster);
                         }
                         report.cumulative_monster_count += group.names.len();
-                        report.read_monster_counts.push(report.cumulative_monster_count);
+                        report
+                            .read_monster_counts
+                            .push(report.cumulative_monster_count);
                         self.groups.insert(group.skill_id, group.names);
                     }
                 }
@@ -132,7 +142,9 @@ impl NewSkillMonsterConf {
             return Err(NewSkillMonsterLoadError::MissingMonsterList);
         }
         if active_group.is_some() || depth != 0 {
-            return Err(NewSkillMonsterLoadError::Xml("незавершённый XML element".into()));
+            return Err(NewSkillMonsterLoadError::Xml(
+                "незавершённый XML element".into(),
+            ));
         }
         Ok(report)
     }
@@ -171,6 +183,32 @@ impl NewSkillMonsterConf {
             }
         }
         Ok(())
+    }
+
+    /// Воспроизводит `CNewSkillMonserConf::DecordFromByteArray` GameServer.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<NewSkillMonsterDecodeReport, NewSkillMonsterDecodeError> {
+        self.groups.clear();
+        let group_count = read_wire_i32(source, cursor)?;
+        for _ in 0..group_count.max(0) {
+            let skill_id = read_wire_u32(source, cursor)?;
+            let name_count = read_wire_i32(source, cursor)?;
+            let mut names = Vec::new();
+            names
+                .try_reserve(name_count.max(0) as usize)
+                .map_err(|source| NewSkillMonsterDecodeError::Allocation { skill_id, source })?;
+            for _ in 0..name_count.max(0) {
+                names.push(read_wire_c_string(source, cursor)?);
+            }
+            self.groups.insert(skill_id, names);
+        }
+        Ok(NewSkillMonsterDecodeReport {
+            groups: self.groups.len(),
+            monster_names: self.groups.values().map(Vec::len).sum(),
+        })
     }
 }
 
@@ -361,14 +399,8 @@ fn normalize_legacy_attributes(source: &[u8]) -> Vec<u8> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NewSkillMonsterSerializeError {
-    CountOutOfRange {
-        skill_id: Option<u32>,
-        count: usize,
-    },
-    NameContainsNul {
-        skill_id: u32,
-        name_index: usize,
-    },
+    CountOutOfRange { skill_id: Option<u32>, count: usize },
+    NameContainsNul { skill_id: u32, name_index: usize },
 }
 
 impl fmt::Display for NewSkillMonsterSerializeError {
@@ -401,6 +433,60 @@ impl fmt::Display for NewSkillMonsterSerializeError {
 
 impl Error for NewSkillMonsterSerializeError {}
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct NewSkillMonsterDecodeReport {
+    pub(crate) groups: usize,
+    pub(crate) monster_names: usize,
+}
+
+#[derive(Debug)]
+pub(crate) enum NewSkillMonsterDecodeError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    UnterminatedString {
+        offset: usize,
+        available: usize,
+    },
+    Allocation {
+        skill_id: u32,
+        source: std::collections::TryReserveError,
+    },
+}
+
+impl fmt::Display for NewSkillMonsterDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "NewSkillMonster snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::UnterminatedString { offset, available } => write!(
+                formatter,
+                "NewSkillMonster string с позиции {offset} не имеет NUL в {available} доступных байтах"
+            ),
+            Self::Allocation { skill_id, .. } => {
+                write!(formatter, "не удалось выделить имена skill {skill_id}")
+            }
+        }
+    }
+}
+
+impl Error for NewSkillMonsterDecodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
 fn write_count(
     destination: &mut Vec<u8>,
     count: usize,
@@ -412,4 +498,51 @@ fn write_count(
     Ok(())
 }
 
-// и Game decoder-а, а не как Rust-реализация.
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, NewSkillMonsterDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, NewSkillMonsterDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], NewSkillMonsterDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(NewSkillMonsterDecodeError::UnexpectedEnd {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер NewSkillMonster scalar уже проверен"))
+}
+
+fn read_wire_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<Vec<u8>, NewSkillMonsterDecodeError> {
+    let offset = *cursor;
+    let tail = source
+        .get(offset..)
+        .ok_or(NewSkillMonsterDecodeError::UnexpectedEnd {
+            offset,
+            needed: 1,
+            available: 0,
+        })?;
+    let Some(length) = tail.iter().position(|byte| *byte == 0) else {
+        return Err(NewSkillMonsterDecodeError::UnterminatedString {
+            offset,
+            available: tail.len(),
+        });
+    };
+    *cursor = offset + length + 1;
+    Ok(tail[..length].to_vec())
+}

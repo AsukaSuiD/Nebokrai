@@ -41,10 +41,12 @@ use crate::public::dupliregionsetup::DupliRegionDecodeError;
 use crate::setup::cbattlefairyexpconfig::{BattleFairyExpDecodeError, BattleFairyExpDecodeReport};
 use crate::setup::contributesetup::ContributeSetupDecodeError;
 use crate::setup::gmlist::{GmListDecodeError, GmListDecodeReport};
+use crate::setup::goodsdestructionconfig::{GoodsDestroyDecodeError, GoodsDestroyDecodeReport};
 use crate::setup::hitlevelsetup::HitLevelDecodeError;
 use crate::setup::incrementshoplist::IncrementShopDecodeError;
 use crate::setup::leitingsetup::ThingSetupCodecError;
 use crate::setup::logsystem::LogSystemDecodeError;
+use crate::setup::newskillmonsterlist::{NewSkillMonsterDecodeError, NewSkillMonsterDecodeReport};
 use crate::setup::playerlist::{PlayerListDecodeError, PlayerListDecodeReport};
 use crate::setup::preciousboxconf::PreciousBoxDecodeError;
 use crate::setup::prisonconf::PrisonConfDecodeError;
@@ -68,6 +70,8 @@ const PRISON_CONF_SELECTOR: i32 = 0x1d;
 const PRECIOUS_BOX_CONF_SELECTOR: i32 = 0x1e;
 const FAIRY_EXP_SELECTOR: i32 = 0x20;
 const SYNTHESIS_SELECTOR: i32 = 0x21;
+const NEW_SKILL_MONSTER_SELECTOR: i32 = 0x22;
+const GOODS_DESTROY_SELECTOR: i32 = 0x23;
 const THING_SETUP_SELECTOR: i32 = 0x36;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -155,6 +159,8 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     PreciousBoxConf { entries: usize },
     FairyExp(BattleFairyExpDecodeReport),
     Synthesis(SynthesisDecodeReport),
+    NewSkillMonster(NewSkillMonsterDecodeReport),
+    GoodsDestroy(GoodsDestroyDecodeReport),
     ThingSetup { entries: usize },
 }
 
@@ -175,6 +181,8 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     PreciousBoxConf(PreciousBoxDecodeError),
     FairyExp(BattleFairyExpDecodeError),
     Synthesis(SynthesisDecodeError),
+    NewSkillMonster(NewSkillMonsterDecodeError),
+    GoodsDestroy(GoodsDestroyDecodeError),
     ThingSetup(ThingSetupCodecError),
 }
 
@@ -201,6 +209,8 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::PreciousBoxConf(error) => error.fmt(formatter),
             Self::FairyExp(error) => error.fmt(formatter),
             Self::Synthesis(error) => error.fmt(formatter),
+            Self::NewSkillMonster(error) => error.fmt(formatter),
+            Self::GoodsDestroy(error) => error.fmt(formatter),
             Self::ThingSetup(error) => error.fmt(formatter),
         }
     }
@@ -224,6 +234,8 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::PreciousBoxConf(error) => Some(error),
             Self::FairyExp(error) => Some(error),
             Self::Synthesis(error) => Some(error),
+            Self::NewSkillMonster(error) => Some(error),
+            Self::GoodsDestroy(error) => Some(error),
             Self::ThingSetup(error) => Some(error),
         }
     }
@@ -399,6 +411,30 @@ pub(crate) fn dispatch_game_owned_startup_snapshot(
             };
             add_log_text("Initial SI_SYNTHESIS...OK!");
             Some(Ok(GameOwnedStartupSnapshotReport::Synthesis(report)))
+        }
+        NEW_SKILL_MONSTER_SELECTOR => {
+            let report = match game
+                .new_skill_monster_conf_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(report) => report,
+                Err(error) => {
+                    return Some(Err(GameOwnedStartupSnapshotError::NewSkillMonster(error)));
+                }
+            };
+            add_log_text("Initial SI_NEWSKILL_MONSTER_CONF...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::NewSkillMonster(report)))
+        }
+        GOODS_DESTROY_SELECTOR => {
+            let report = match game
+                .goods_destroy_setup_mut()
+                .decord_from_byte_array(source, cursor)
+            {
+                Ok(report) => report,
+                Err(error) => return Some(Err(GameOwnedStartupSnapshotError::GoodsDestroy(error))),
+            };
+            add_log_text("Initial SI_GOODS_DESTROY_CONF...OK!");
+            Some(Ok(GameOwnedStartupSnapshotReport::GoodsDestroy(report)))
         }
         THING_SETUP_SELECTOR => {
             if let Err(error) = game

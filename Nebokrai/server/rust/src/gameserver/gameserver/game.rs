@@ -79,10 +79,12 @@ use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::setup::contributesetup::CContributeSetup;
 use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::gmlist::CGMList;
+use crate::setup::goodsdestructionconfig::GoodsDestroySetup;
 use crate::setup::hitlevelsetup::CHitLevelSetup;
 use crate::setup::incrementshoplist::CIncrementShopList;
 use crate::setup::leitingsetup::CThingSetup;
 use crate::setup::logsystem::CLogSystem;
+use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
 use crate::setup::playerlist::CPlayerList;
 use crate::setup::preciousboxconf::PreciousBoxConf;
 use crate::setup::prisonconf::PrisonConf;
@@ -714,6 +716,8 @@ pub(crate) struct CGame {
     precious_box_conf: PreciousBoxConf,
     fairy_exp_conf: CFairyExpConf,
     synthesis: CSynthesis,
+    new_skill_monster_conf: NewSkillMonsterConf,
+    goods_destroy_setup: GoodsDestroySetup,
     dupli_region_setup: Option<CDupliRegionSetup>,
     move_check_cells: MoveCheckCellRegistry,
     player_ranks: Option<CPlayerRanks>,
@@ -753,6 +757,8 @@ impl CGame {
             precious_box_conf: PreciousBoxConf::default(),
             fairy_exp_conf: CFairyExpConf::default(),
             synthesis: CSynthesis::default(),
+            new_skill_monster_conf: NewSkillMonsterConf::default(),
+            goods_destroy_setup: GoodsDestroySetup::default(),
             dupli_region_setup: None,
             move_check_cells: MoveCheckCellRegistry::new(),
             player_ranks: None,
@@ -1018,6 +1024,14 @@ impl CGame {
 
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {
         &mut self.synthesis
+    }
+
+    pub(crate) const fn new_skill_monster_conf_mut(&mut self) -> &mut NewSkillMonsterConf {
+        &mut self.new_skill_monster_conf
+    }
+
+    pub(crate) const fn goods_destroy_setup_mut(&mut self) -> &mut GoodsDestroySetup {
+        &mut self.goods_destroy_setup
     }
 
     pub(crate) const fn dupli_region_setup(&self) -> Option<&CDupliRegionSetup> {

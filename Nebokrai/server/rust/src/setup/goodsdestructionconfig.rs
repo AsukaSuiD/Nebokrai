@@ -1,11 +1,16 @@
-//! Уничтожение предметов `CGoodsDestroySetup` из WorldServer, подтверждённое
-//! `worldserver.exe` и `worldserver.pdb`.
+//! Уничтожение предметов `CGoodsDestroySetup` из WorldServer/GameServer.
+//! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходный owner
+//! `setup/goodsdestructionconfig.h/.cpp`.
 //!
 //! Wire пишет `u32 enabled`, signed counts, ordered `u16` goods types и
 //! original-name C-строки; повторы значимы. Loader очищает оба vectors, но при
 //! ошибке открытия сохраняет enabled. После `#` идут `* label u16`, после
 //! первого `<end>` — независимые `+ name` records. Файл без `#` успешен с
 //! пустыми vectors и прежним enabled.
+//! Game decoder очищает оба списка, затем публикует enabled и каждый полный
+//! элемент по мере чтения. Safe NUL reader заменяет старый char[256]; gameplay
+//! queries остаются за границей этого snapshot-шага.
 
 use std::error::Error;
 use std::fmt;
@@ -37,6 +42,18 @@ impl GoodsDestroySetup {
     pub(crate) fn clear_lists(&mut self) {
         self.goods_types.clear();
         self.original_names.clear();
+    }
+
+    pub(crate) fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub(crate) fn goods_types(&self) -> &[u16] {
+        &self.goods_types
+    }
+
+    pub(crate) fn original_names(&self) -> &[Vec<u8>] {
+        &self.original_names
     }
 
     pub(crate) fn load_from_bytes(
@@ -105,6 +122,44 @@ impl GoodsDestroySetup {
             destination.push(0);
         }
         Ok(())
+    }
+
+    /// Воспроизводит `CGoodsDestroySetup::DecordFromByteArray` GameServer.
+    pub(crate) fn decord_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<GoodsDestroyDecodeReport, GoodsDestroyDecodeError> {
+        self.clear_lists();
+        self.enabled = read_wire_u32(source, cursor)? != 0;
+
+        let goods_type_count = read_wire_i32(source, cursor)?;
+        self.goods_types
+            .try_reserve(goods_type_count.max(0) as usize)
+            .map_err(|source| GoodsDestroyDecodeError::Allocation {
+                list: GoodsDestroyList::GoodsTypes,
+                source,
+            })?;
+        for _ in 0..goods_type_count.max(0) {
+            self.goods_types.push(read_wire_u16(source, cursor)?);
+        }
+
+        let original_name_count = read_wire_i32(source, cursor)?;
+        self.original_names
+            .try_reserve(original_name_count.max(0) as usize)
+            .map_err(|source| GoodsDestroyDecodeError::Allocation {
+                list: GoodsDestroyList::OriginalNames,
+                source,
+            })?;
+        for _ in 0..original_name_count.max(0) {
+            self.original_names
+                .push(read_wire_c_string(source, cursor)?);
+        }
+        Ok(GoodsDestroyDecodeReport {
+            enabled: self.enabled,
+            goods_types: self.goods_types.len(),
+            original_names: self.original_names.len(),
+        })
     }
 }
 
@@ -193,9 +248,10 @@ fn read_u16<'source>(
     field: &'static str,
 ) -> Result<u16, GoodsDestroyFormatError> {
     let token = next_token(tokens, field)?;
-    let text = std::str::from_utf8(token).map_err(|_| GoodsDestroyFormatError::InvalidGoodsType {
-        token: token.to_vec(),
-    })?;
+    let text =
+        std::str::from_utf8(token).map_err(|_| GoodsDestroyFormatError::InvalidGoodsType {
+            token: token.to_vec(),
+        })?;
     text.parse::<u16>()
         .map_err(|_| GoodsDestroyFormatError::InvalidGoodsType {
             token: token.to_vec(),
@@ -245,6 +301,61 @@ impl fmt::Display for GoodsDestroySerializeError {
 
 impl Error for GoodsDestroySerializeError {}
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GoodsDestroyDecodeReport {
+    pub(crate) enabled: bool,
+    pub(crate) goods_types: usize,
+    pub(crate) original_names: usize,
+}
+
+#[derive(Debug)]
+pub(crate) enum GoodsDestroyDecodeError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    UnterminatedString {
+        offset: usize,
+        available: usize,
+    },
+    Allocation {
+        list: GoodsDestroyList,
+        source: std::collections::TryReserveError,
+    },
+}
+
+impl fmt::Display for GoodsDestroyDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "GoodsDestroy snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
+            ),
+            Self::UnterminatedString { offset, available } => write!(
+                formatter,
+                "GoodsDestroy string с позиции {offset} не имеет NUL в {available} доступных байтах"
+            ),
+            Self::Allocation { list, .. } => {
+                write!(formatter, "не удалось выделить память для {list}")
+            }
+        }
+    }
+}
+
+impl Error for GoodsDestroyDecodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
 fn write_count(
     destination: &mut Vec<u8>,
     count: usize,
@@ -256,4 +367,55 @@ fn write_count(
     Ok(())
 }
 
-// Game decoder-а и queries, а не как Rust-реализация.
+fn read_wire_u16(source: &[u8], cursor: &mut usize) -> Result<u16, GoodsDestroyDecodeError> {
+    Ok(u16::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, GoodsDestroyDecodeError> {
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, GoodsDestroyDecodeError> {
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+}
+
+fn read_wire_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], GoodsDestroyDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+        return Err(GoodsDestroyDecodeError::UnexpectedEnd {
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor += N;
+    Ok(bytes
+        .try_into()
+        .expect("размер GoodsDestroy scalar уже проверен"))
+}
+
+fn read_wire_c_string(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<Vec<u8>, GoodsDestroyDecodeError> {
+    let offset = *cursor;
+    let tail = source
+        .get(offset..)
+        .ok_or(GoodsDestroyDecodeError::UnexpectedEnd {
+            offset,
+            needed: 1,
+            available: 0,
+        })?;
+    let Some(length) = tail.iter().position(|byte| *byte == 0) else {
+        return Err(GoodsDestroyDecodeError::UnterminatedString {
+            offset,
+            available: tail.len(),
+        });
+    };
+    *cursor = offset + length + 1;
+    Ok(tail[..length].to_vec())
+}
