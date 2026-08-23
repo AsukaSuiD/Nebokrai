@@ -106,6 +106,9 @@
 //! registry и ordered `QuitClientByMapID`, исключая requester без дедупликации.
 //! Входящий `0x5FF15` проверяет target player до чтения остатка payload и
 //! публикует каждую list-строку отдельным адресным system message.
+//! Полная GMA family `0x800xx` теперь входит в реальный FIFO message pass:
+//! address kick возвращает World `0x60401`, count — `0x60402`, а unknown
+//! сохраняет исходный warning без фиктивного handler success.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
@@ -144,6 +147,9 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyPrope
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goodswarmember::CGoodsWarMember;
+use crate::gameserver::appserver::message::gmamessage::{
+    GmaMessageError, GmaMessageReport, dispatch_gma_message,
+};
 use crate::gameserver::appserver::message::gmmessage::{
     GmMessageError, GmMessageReport, dispatch_gm_message,
 };
@@ -949,13 +955,14 @@ pub(crate) struct GameAuctionRunReport {
     pub(crate) state_request: Option<Result<i32, SendMessageError>>,
 }
 
-#[must_use = "ProcessMessage report сохраняет auction и GM effects"]
+#[must_use = "ProcessMessage report сохраняет auction, GM и GMA effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameProcessMessagesReport {
     pub(crate) legacy_return: i32,
     pub(crate) auction_states:
         Vec<Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>>,
     pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
+    pub(crate) gma_messages: Vec<Result<GmaMessageReport, GmaMessageError>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2537,6 +2544,11 @@ impl CGame {
         self.players.insert(player.player_id(), player)
     }
 
+    /// Exact `s_mapPlayer.size()` для GMA `0x80002`; x86 `size_type` — DWORD.
+    pub(crate) fn player_count(&self) -> u32 {
+        u32::try_from(self.players.len()).expect("x86 player map не может превысить DWORD")
+    }
+
     pub(crate) fn register_team_session(&mut self, team_id: u32, session_id: i32) -> Option<i32> {
         self.team_session_ids.insert(team_id, session_id)
     }
@@ -3354,13 +3366,20 @@ impl CGame {
     ) -> GameProcessMessagesReport {
         let mut auction_states = Vec::new();
         let mut gm_messages = Vec::new();
+        let mut gma_messages = Vec::new();
         let world_messages = self
             .world_client
             .as_ref()
             .map(CMyNetClient::take_all_messages)
             .unwrap_or_default();
         for mut message in world_messages {
-            self.run_incoming_message(&mut message, runtime, &mut auction_states, &mut gm_messages);
+            self.run_incoming_message(
+                &mut message,
+                runtime,
+                &mut auction_states,
+                &mut gm_messages,
+                &mut gma_messages,
+            );
         }
         let billing_messages = self
             .billing_client
@@ -3368,7 +3387,13 @@ impl CGame {
             .map(CMyNetClient::take_all_messages)
             .unwrap_or_default();
         for mut message in billing_messages {
-            self.run_incoming_message(&mut message, runtime, &mut auction_states, &mut gm_messages);
+            self.run_incoming_message(
+                &mut message,
+                runtime,
+                &mut auction_states,
+                &mut gm_messages,
+                &mut gma_messages,
+            );
         }
         let server_events = self
             .net_server
@@ -3383,6 +3408,7 @@ impl CGame {
                         runtime,
                         &mut auction_states,
                         &mut gm_messages,
+                        &mut gma_messages,
                     );
                 }
                 GameServerEvent::WorldClientReconnected(client) => {
@@ -3397,6 +3423,7 @@ impl CGame {
             legacy_return: 1,
             auction_states,
             gm_messages,
+            gma_messages,
         }
     }
 
@@ -3408,6 +3435,7 @@ impl CGame {
             Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>,
         >,
         gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
+        gma_messages: &mut Vec<Result<GmaMessageReport, GmaMessageError>>,
     ) {
         if let Some(report) =
             dispatch_world_auction_state(message, self, || runtime.wall_time_seconds())
@@ -3415,6 +3443,8 @@ impl CGame {
             auction_states.push(report);
         } else if let Some(report) = dispatch_gm_message(message, self, || runtime.get_tick_ms()) {
             gm_messages.push(report);
+        } else if let Some(report) = dispatch_gma_message(message, self) {
+            gma_messages.push(report);
         } else {
             message.run(self, runtime);
         }
