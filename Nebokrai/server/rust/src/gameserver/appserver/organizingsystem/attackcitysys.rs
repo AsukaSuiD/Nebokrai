@@ -153,15 +153,6 @@ pub(crate) trait AttackCityRegionContext {
     fn reset_war_state(&mut self, region: Self::Region, war_number: i32, state: i32);
 }
 
-pub(crate) trait AttackCityFactionUpdateContext {
-    type Region: Copy;
-
-    /// Ищет только non-null entry в `CGame::s_mapRegion`, без proxy fallback.
-    fn find_server_region(&mut self, region_id: i32) -> Option<Self::Region>;
-
-    fn update_contend_player(&mut self, region: Self::Region);
-}
-
 pub(crate) trait AttackCityPhaseContext {
     type Region: Copy;
 
@@ -237,15 +228,14 @@ impl CAttackCitySys {
     }
 
     /// Заменяет ordered faction list одного schedule и обновляет contenders региона.
-    pub(crate) fn update_apply_war_factions<Context: AttackCityFactionUpdateContext>(
+    pub(crate) fn update_apply_war_factions(
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-        context: &mut Context,
-    ) -> Result<bool, AttackCityDecodeError> {
+    ) -> Result<Option<i32>, AttackCityDecodeError> {
         let war_number = read_i32(source, cursor, "UpdateApplyWarFacs.war_number")?;
         let Some(setup) = self.attacks.get_mut(&war_number) else {
-            return Ok(false);
+            return Ok(None);
         };
 
         setup.declaring_factions.clear();
@@ -257,12 +247,7 @@ impl CAttackCitySys {
                 "UpdateApplyWarFacs.faction_id",
             )?);
         }
-        let city_region_id = setup.city_region_id;
-
-        if let Some(region) = context.find_server_region(city_region_id) {
-            context.update_contend_player(region);
-        }
-        Ok(true)
+        Ok(Some(setup.city_region_id))
     }
 
     /// Проверяет ordered faction-list, сохраняя обязательный weekly gate.

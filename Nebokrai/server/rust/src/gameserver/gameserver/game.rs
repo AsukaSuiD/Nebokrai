@@ -90,6 +90,9 @@
 //! Function/variable/general/script-file resources `0x0A..0x0D` получают
 //! parser callbacks от того же `GameMainLoopRuntime`, который исполняет Script
 //! stage, и публикуются из живого FIFO с duplicate-owner семантикой.
+//! OrganSys war opcodes `0x7FE1F..0x7FE36` тем же FIFO меняют owned
+//! AttackCity/Village schedules, concrete local/proxy region phases и
+//! contender state с сохранением City/Village message/log side effects.
 //! Battle-fairy combine теперь замыкает game player-map с GlobeSetup gate и
 //! maximum fetch power, exact Game RNG, обеими exp-таблицами, goods/skill
 //! registry и явным old-client serializer-ом; он возвращает ordered адресные
@@ -209,6 +212,10 @@ use crate::gameserver::appserver::message::gmmessage::{
 };
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
     WorldAuctionStateMessageError, WorldAuctionStateMessageReport, dispatch_world_auction_state,
+};
+use crate::gameserver::appserver::message::organsysmessage::{
+    GameOrganizingWarMessageError, GameOrganizingWarMessageReport, GameOrganizingWarRuntime,
+    dispatch_game_organizing_war_message,
 };
 use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
@@ -1040,6 +1047,8 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
     pub(crate) gma_messages: Vec<Result<GmaMessageReport, GmaMessageError>>,
     pub(crate) depot_messages: Vec<DepotMessageReport>,
+    pub(crate) organizing_war_messages:
+        Vec<Result<GameOrganizingWarMessageReport, GameOrganizingWarMessageError>>,
     pub(crate) server_messages:
         Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
 }
@@ -1089,7 +1098,10 @@ struct GameMainLoopState {
 /// материализации; message routing уже исполняется самим `CGame`, а region
 /// decoder получает тот же live factory-контекст без отдельного shadow state.
 pub(crate) trait GameMainLoopRuntime:
-    GameMessageHandlers + GameScriptResourceContext + InitialRegionStartupContext
+    GameMessageHandlers
+    + GameScriptResourceContext
+    + InitialRegionStartupContext
+    + GameOrganizingWarRuntime
 {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
@@ -3625,6 +3637,7 @@ impl CGame {
         let mut gm_messages = Vec::new();
         let mut gma_messages = Vec::new();
         let mut depot_messages = Vec::new();
+        let mut organizing_war_messages = Vec::new();
         let mut server_messages = Vec::new();
         let world_messages = self
             .world_client
@@ -3639,6 +3652,7 @@ impl CGame {
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
+                &mut organizing_war_messages,
                 &mut server_messages,
             );
         }
@@ -3655,6 +3669,7 @@ impl CGame {
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
+                &mut organizing_war_messages,
                 &mut server_messages,
             );
         }
@@ -3673,6 +3688,7 @@ impl CGame {
                         &mut gm_messages,
                         &mut gma_messages,
                         &mut depot_messages,
+                        &mut organizing_war_messages,
                         &mut server_messages,
                     );
                 }
@@ -3690,6 +3706,7 @@ impl CGame {
             gm_messages,
             gma_messages,
             depot_messages,
+            organizing_war_messages,
             server_messages,
         }
     }
@@ -3704,6 +3721,9 @@ impl CGame {
         gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
         gma_messages: &mut Vec<Result<GmaMessageReport, GmaMessageError>>,
         depot_messages: &mut Vec<DepotMessageReport>,
+        organizing_war_messages: &mut Vec<
+            Result<GameOrganizingWarMessageReport, GameOrganizingWarMessageError>,
+        >,
         server_messages: &mut Vec<
             Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
         >,
@@ -3722,6 +3742,8 @@ impl CGame {
             gma_messages.push(report);
         } else if let Some(report) = dispatch_depot_message(message, self) {
             depot_messages.push(report);
+        } else if let Some(report) = dispatch_game_organizing_war_message(message, self, runtime) {
+            organizing_war_messages.push(report);
         } else {
             message.run(self, runtime);
         }

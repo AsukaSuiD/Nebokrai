@@ -97,6 +97,33 @@ impl CProxyServerRegion {
         (self.war_number, self.city_state)
     }
 
+    pub(crate) const fn on_war_declare(&mut self, war_number: i32) {
+        self.war_number = war_number;
+        self.city_state = 1;
+    }
+
+    pub(crate) const fn on_war_start(&mut self) {
+        self.city_state = 3;
+    }
+
+    pub(crate) const fn on_war_end(&mut self) {
+        self.war_number = 0;
+        self.city_state = 0;
+    }
+
+    pub(crate) const fn on_war_mass(&mut self) {
+        self.city_state = 2;
+    }
+
+    pub(crate) const fn set_owned_city_org(&mut self, faction_id: i32, union_id: i32) {
+        self.param.owned_faction_id = faction_id;
+        self.param.owned_union_id = union_id;
+    }
+
+    pub(crate) const fn owned_city_org(&self) -> (i32, i32) {
+        (self.param.owned_faction_id, self.param.owned_union_id)
+    }
+
     pub(crate) const fn war_region_type(&self) -> i32 {
         self.war_region_type
     }
