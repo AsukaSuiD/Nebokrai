@@ -651,6 +651,16 @@ pub(crate) enum BattleFairySkillResetEffect {
     GoodsUpdated(BattleFairyDefaultGoodsUpdate),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairySkillResetDelivery {
+    Player(i32),
+    PacketItem(Vec<i32>),
+    SkillRemoved(i32),
+    SkillAdded(i32),
+    SelectedSkillLearned(i32),
+    GoodsUpdated(i32),
+}
+
 #[must_use = "skill reset report содержит packet, skill-state и network effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairySkillResetReport {
@@ -662,6 +672,7 @@ pub(crate) struct BattleFairySkillResetReport {
     pub(crate) detached_skill_ids: Vec<u32>,
     pub(crate) attached_skill_ids: Vec<u32>,
     pub(crate) effects: Vec<BattleFairySkillResetEffect>,
+    pub(crate) deliveries: Vec<BattleFairySkillResetDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2694,6 +2705,7 @@ impl CPlayer {
             detached_skill_ids: Vec::new(),
             attached_skill_ids: Vec::new(),
             effects: Vec::new(),
+            deliveries: Vec::new(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairySkillResetOutcome::FeatureDisabled;

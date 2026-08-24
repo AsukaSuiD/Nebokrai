@@ -309,8 +309,9 @@ use crate::gameserver::appserver::player::{
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationReport,
     BattleFairyFollowReport, BattleFairyPotentialAllocationDelivery,
     BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetDelivery,
-    BattleFairyPotentialResetEffect, BattleFairySkillRequest, BattleFairySkillRequestFacts,
-    BattleFairySkillRequestReport, BattleFairySkillResetReport, BattleFairySummonDelivery,
+    BattleFairyPotentialResetEffect, BattleFairySkillAdded, BattleFairySkillRequest,
+    BattleFairySkillRequestFacts, BattleFairySkillRequestReport, BattleFairySkillResetDelivery,
+    BattleFairySkillResetEffect, BattleFairySkillResetReport, BattleFairySummonDelivery,
     BattleFairySummonEffect, BattleFairySummonReport, BattleFairyWarSoulAction, CPlayer,
     PlayerCombatProperties, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
     PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport,
@@ -1103,6 +1104,13 @@ pub(crate) trait BattleFairyPotentialResetContext: BattleFairyDeathContext {
     fn publish_battle_fairy_packet_consumption(
         &mut self,
         effect: &BattleFairyPotentialResetEffect,
+    ) -> Vec<i32>;
+}
+
+pub(crate) trait BattleFairySkillResetContext {
+    fn publish_battle_fairy_skill_reset_packet_consumption(
+        &mut self,
+        effect: &BattleFairySkillResetEffect,
     ) -> Vec<i32>;
 }
 
@@ -6833,31 +6841,99 @@ impl CGame {
     /// Runtime entry point `CBattleFairyContainer::ResetSkill`, общий для
     /// script-functions распределения обычного/special skill и прямого caller-а
     /// с расходом reset item. RNG принадлежит одному `CGame` sequence.
-    pub(crate) fn reset_battle_fairy_skill(
+    pub(crate) fn reset_battle_fairy_skill<Context: BattleFairySkillResetContext>(
         &mut self,
         player_id: i32,
         position: i32,
         consume_item: bool,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+        context: &mut Context,
     ) -> Option<BattleFairySkillResetReport> {
         let enabled = self.globe_setup.battle_fairy_enabled();
-        let (players, random_state, goods_factory, skill_factory) = (
-            &mut self.players,
-            &mut self.random_state,
-            &self.goods_factory,
-            &self.skill_factory,
-        );
-        let player = players.get_mut(&player_id)?;
-        let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
-        Some(player.reset_battle_fairy_skill(
-            enabled,
-            position,
-            consume_item,
-            goods_factory,
-            skill_factory,
-            &mut random,
-            encode_old_client,
-        ))
+        let mut report = {
+            let (players, random_state, goods_factory, skill_factory) = (
+                &mut self.players,
+                &mut self.random_state,
+                &self.goods_factory,
+                &self.skill_factory,
+            );
+            let player = players.get_mut(&player_id)?;
+            let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+            player.reset_battle_fairy_skill(
+                enabled,
+                position,
+                consume_item,
+                goods_factory,
+                skill_factory,
+                &mut random,
+                encode_old_client,
+            )
+        };
+        for effect in report.effects.clone() {
+            match effect {
+                BattleFairySkillResetEffect::Notification {
+                    player_id,
+                    string_id,
+                    color,
+                } => {
+                    let delivery = colored_player_notice_message(
+                        color,
+                        0,
+                        self.get_string_by_id(string_id.as_bytes()),
+                    )
+                    .send_to_player(self.net_server(), player_id);
+                    report
+                        .deliveries
+                        .push(BattleFairySkillResetDelivery::Player(delivery));
+                }
+                effect @ BattleFairySkillResetEffect::PacketItemConsumed { .. } => {
+                    report
+                        .deliveries
+                        .push(BattleFairySkillResetDelivery::PacketItem(
+                            context.publish_battle_fairy_skill_reset_packet_consumption(&effect),
+                        ));
+                }
+                BattleFairySkillResetEffect::SkillRemoved(skill) => {
+                    let mut message = CMessage::new(skill.message_type as i32);
+                    add_legacy_c_string(message.base_mut(), &skill.skill_name);
+                    report
+                        .deliveries
+                        .push(BattleFairySkillResetDelivery::SkillRemoved(
+                            message.send_to_player(self.net_server(), skill.player_id),
+                        ));
+                }
+                BattleFairySkillResetEffect::SkillAdded(skill) => {
+                    if let Some(message) =
+                        battle_fairy_skill_learned_message(&skill, &self.skill_factory, true)
+                    {
+                        report
+                            .deliveries
+                            .push(BattleFairySkillResetDelivery::SkillAdded(
+                                message.send_to_player(self.net_server(), skill.player_id),
+                            ));
+                    }
+                }
+                BattleFairySkillResetEffect::SelectedSkillLearned(skill) => {
+                    if let Some(message) =
+                        battle_fairy_skill_learned_message(&skill, &self.skill_factory, false)
+                    {
+                        report.deliveries.push(
+                            BattleFairySkillResetDelivery::SelectedSkillLearned(
+                                message.send_to_player(self.net_server(), skill.player_id),
+                            ),
+                        );
+                    }
+                }
+                BattleFairySkillResetEffect::GoodsUpdated(update) => {
+                    report
+                        .deliveries
+                        .push(BattleFairySkillResetDelivery::GoodsUpdated(
+                            self.send_battle_fairy_goods_update(&update),
+                        ));
+                }
+            }
+        }
+        Some(report)
     }
 
     /// Runtime entry point уже декодированного `skillmessage 0x90005`.
@@ -7647,6 +7723,54 @@ fn gods_battle_property_message(player_id: i32, property: &[u8], value: i32) -> 
 
 fn colored_player_notice_message(first_color: u32, second_color: u32, text: &[u8]) -> CMessage {
     nation_colored_text_message(0xbf806, first_color, second_color, text)
+}
+
+/// `TellClient(skill, true)` и отдельный `ResetSkill::SendSkillLearned`
+/// используют один opcode, но первый добавляет delay к restore и масштабирует
+/// MP только для float-skill, а второй передаёт чистый restore и масштабирует
+/// стоимость безусловно.
+fn battle_fairy_skill_learned_message(
+    skill: &BattleFairySkillAdded,
+    factory: &CSkillFactory,
+    player_tell_client: bool,
+) -> Option<CMessage> {
+    const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
+    const SKILL_USAGE_TARGET_MAX_DISTANT: u32 = 5003;
+    const SKILL_USAGE_TARGET_MIN_DISTANT: u32 = 5004;
+    const SKILL_USAGE_DELAY_TIME: u32 = 10001;
+    const SKILL_USAGE_REUSE_SKILL_DELAY_TIME: u32 = 10005;
+
+    let properties = factory.query_skill_base_properties(skill.skill_id, skill.skill_level)?;
+    let range = |usage| {
+        let value = properties.query_property(usage) as i32;
+        if value > 0 { value } else { 1 }
+    };
+    let restore_time = properties.query_property(SKILL_USAGE_REUSE_SKILL_DELAY_TIME);
+    let delay_time = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let raw_cost = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+    let scale_cost = !player_tell_client || CSkillFactory::is_need_float(skill.skill_id);
+    let cost = if scale_cost {
+        (f64::from(raw_cost) * 0.0001_f64).round() as i32
+    } else {
+        raw_cost as i32
+    };
+
+    let mut message = CMessage::new(skill.message_type as i32);
+    add_legacy_c_string(message.base_mut(), &skill.skill_name);
+    message.base_mut().add_short(skill.skill_level as i16);
+    message.add_ulong(if player_tell_client {
+        restore_time.wrapping_add(delay_time)
+    } else {
+        restore_time
+    });
+    message
+        .base_mut()
+        .add_short(range(SKILL_USAGE_TARGET_MIN_DISTANT) as i16);
+    message
+        .base_mut()
+        .add_short(range(SKILL_USAGE_TARGET_MAX_DISTANT) as i16);
+    message.base_mut().add_short(cost as i16);
+    Some(message)
 }
 
 fn gods_battle_team_szl_share(total: u32, teammate_amount: u32) -> u32 {
