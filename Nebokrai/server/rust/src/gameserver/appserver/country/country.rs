@@ -12,12 +12,17 @@
 //! country-information map, заменяет king slot `1`, обнуляет slots `2..7` и
 //! накладывает переданные записи с last-wins семантикой.
 //!
-//! Остальные governance, exile, quest и message методы владельца ниже ещё
-//! сохраняют RAW. `BTreeMap` и owned state заменяют STL nodes/raw pointers.
+//! `SetCountryTreasury` сохраняет local-before-send и exact World
+//! `0x60314(country, selector=1, value)`; фактическую отправку выполняет
+//! dispatcher после освобождения mutable country borrow. Остальные governance,
+//! exile, quest и message методы владельца ниже ещё сохраняют RAW. `BTreeMap` и
+//! owned state заменяют STL nodes/raw pointers.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+
+use crate::nets::netserver::message::CMessage;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CCountry {
@@ -116,6 +121,23 @@ impl CCountry {
         true
     }
 
+    /// Exact `SetCountryTreasury`: сначала публикует новое значение, затем
+    /// формирует World `0x60314(country, attribute=1, value)`. Фактическая
+    /// отправка остаётся у caller-а, чтобы owned `CCountry` не держал ссылку
+    /// на process/network singleton.
+    pub(crate) fn set_country_treasury(&mut self, treasury: i32) -> CMessage {
+        self.treasury = treasury;
+        self.change_attribute_to_world_message(1, treasury)
+    }
+
+    fn change_attribute_to_world_message(&self, attribute: u8, value: i32) -> CMessage {
+        let mut message = CMessage::new(0x60314);
+        message.base_mut().add_byte(self.country_id);
+        message.base_mut().add_byte(attribute);
+        message.base_mut().add_long(value);
+        message
+    }
+
     pub(crate) fn quest_switches(&self) -> &BTreeMap<u8, bool> {
         &self.quest_switches
     }
@@ -181,20 +203,6 @@ fn take_country_bytes<'a>(
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp
 
 // ============================================================================
-// FUNCTION: CCountry::ChangeAttributeToWS
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:134
-// RVA: 0x000AC330
-// ADDRESS: 004ac330
-// PROTOTYPE: void __thiscall ChangeAttributeToWS(uchar param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CCountry::SetCountryPower
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -203,20 +211,6 @@ fn take_country_bytes<'a>(
 // RVA: 0x000AC3C0
 // ADDRESS: 004ac3c0
 // PROTOTYPE: void __thiscall SetCountryPower(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCountry::SetCountryTreasury
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:151
-// RVA: 0x000AC3E0
-// ADDRESS: 004ac3e0
-// PROTOTYPE: void __thiscall SetCountryTreasury(long param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -1,8 +1,9 @@
 //! Владелец GameServer dispatcher-а organizing messages `OnOrgasysMessage`.
 //!
 //! Весь dispatcher RVA `0x000895A0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме фазовых
-//! cases AttackCity `0x7FE1F..0x7FE25`, Village `0x7FE2F..0x7FE33` и faction
-//! update `0x7FE35/0x7FE36` со статусом `IMPLEMENTED`. Точная пара
+//! cases AttackCity `0x7FE1F..0x7FE25`, Village `0x7FE2F..0x7FE33`, faction
+//! update `0x7FE35/0x7FE36` и control tail `0x7FE48..0x7FE4A` со статусом
+//! `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\organsysmessage.cpp`.
 //!
@@ -11,7 +12,10 @@
 //! `UpdateApplyWarFacs` и игнорируют legacy bool, как исходный switch. Известный
 //! opcode считается обработанным даже при отсутствующем schedule; safe
 //! short-buffer возвращается локальной ошибкой без придуманного UB-эффекта.
-//! Другие opcodes helpers не интерпретируют. Достигнутая war family проходит
+//! Control tail ограничивает казну опубликованным CountryParam maximum и
+//! отправляет World `0x60314`, сохраняет FourNation morale либо перепаковывает
+//! входной router response в адресный `0xBFF36`. Другие opcodes helpers не
+//! интерпретируют. Достигнутая war family проходит
 //! живой FIFO `CGame`: расписания остаются owned, local-before-proxy lookup
 //! мутирует concrete City/Village/base owners, а message/player/log effects
 //! исполняет тот же runtime-контекст, который обслуживает MainLoop.
@@ -29,7 +33,7 @@ use super::super::servercityregion::CityRegionContext;
 use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
 use crate::gameserver::gameserver::game::{CGame, GameWarRegionHandle, ServerRegionOwner};
-use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 pub(crate) trait GameOrganizingWarRuntime: CityRegionContext + VillageRegionContext {
     /// Публикует region-localized `0xBF806(..., GS0127(region name))`.
@@ -59,16 +63,50 @@ pub(crate) struct WarPhaseDispatchReport {
     pub(crate) war_number: i32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingControlDispatchReport {
+    CountryTreasury {
+        country_id: u8,
+        requested: i32,
+        country_found: bool,
+        applied: Option<i32>,
+        delivery: Option<Result<i32, SendMessageError>>,
+    },
+    FourNationMorale {
+        morale: i32,
+    },
+    RegionRouter {
+        player_id: i32,
+        player_found: bool,
+        delivery: Option<i32>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameOrganizingWarMessageReport {
     FactionUpdate(WarFactionUpdateDispatchReport),
     Phase(WarPhaseDispatchReport),
+    Control(OrganizingControlDispatchReport),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameOrganizingWarMessageError {
     FactionUpdate(WarFactionUpdateDispatchError),
     Phase(WarPhaseDispatchError),
+    Control(OrganizingControlDispatchError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrganizingControlDispatchError {
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    CountryTreasuryLimitMissing {
+        country_id: u8,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,6 +134,28 @@ impl fmt::Display for WarPhaseDispatchError {
 }
 
 impl Error for WarPhaseDispatchError {}
+
+impl fmt::Display for OrganizingControlDispatchError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd {
+                field,
+                offset,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "OrganSys control {field} с offset {offset} требует {needed} байт, доступно {available}"
+            ),
+            Self::CountryTreasuryLimitMissing { country_id } => write!(
+                formatter,
+                "для country {country_id} не опубликован _max_country_treasury"
+            ),
+        }
+    }
+}
+
+impl Error for OrganizingControlDispatchError {}
 
 impl fmt::Display for WarFactionUpdateDispatchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -206,9 +266,21 @@ pub(crate) fn dispatch_game_organizing_war_message<Runtime: GameOrganizingWarRun
     let opcode = message.message_type() as u32;
     if !matches!(
         opcode,
-        0x7fe1f..=0x7fe25 | 0x7fe2f..=0x7fe33 | 0x7fe35 | 0x7fe36
+        0x7fe1f..=0x7fe25
+            | 0x7fe2f..=0x7fe33
+            | 0x7fe35
+            | 0x7fe36
+            | 0x7fe48..=0x7fe4a
     ) {
         return None;
+    }
+
+    if matches!(opcode, 0x7fe48..=0x7fe4a) {
+        return Some(
+            dispatch_organizing_control_message(opcode, message, game)
+                .map(GameOrganizingWarMessageReport::Control)
+                .map_err(GameOrganizingWarMessageError::Control),
+        );
     }
 
     let mut owners = game.take_war_startup_owners();
@@ -243,6 +315,85 @@ pub(crate) fn dispatch_game_organizing_war_message<Runtime: GameOrganizingWarRun
     };
     game.restore_war_startup_owners(owners);
     Some(result)
+}
+
+fn dispatch_organizing_control_message(
+    opcode: u32,
+    message: &mut CMessage,
+    game: &mut CGame,
+) -> Result<OrganizingControlDispatchReport, OrganizingControlDispatchError> {
+    match opcode {
+        0x7fe48 => {
+            let country_id = read_control_i32(message, "country ID")? as u8;
+            let requested = read_control_i32(message, "country treasury")?;
+            if game.country_handler().country(country_id).is_none() {
+                return Ok(OrganizingControlDispatchReport::CountryTreasury {
+                    country_id,
+                    requested,
+                    country_found: false,
+                    applied: None,
+                    delivery: None,
+                });
+            }
+            let maximum = game.country_param().max_country_treasury().ok_or(
+                OrganizingControlDispatchError::CountryTreasuryLimitMissing { country_id },
+            )?;
+            let applied = if requested < 0 {
+                0
+            } else {
+                requested.min(maximum)
+            };
+            let update = game
+                .country_handler_mut()
+                .country_mut(country_id)
+                .expect("country проверен до exact treasury mutation")
+                .set_country_treasury(applied);
+            let delivery = Some(update.send(game, false));
+            Ok(OrganizingControlDispatchReport::CountryTreasury {
+                country_id,
+                requested,
+                country_found: true,
+                applied: Some(applied),
+                delivery,
+            })
+        }
+        0x7fe49 => {
+            let morale = read_control_i32(message, "FourNation morale")?;
+            game.four_nation_war_sys_mut().set_morale(morale);
+            Ok(OrganizingControlDispatchReport::FourNationMorale { morale })
+        }
+        0x7fe4a => {
+            let player_id = read_control_i32(message, "router player ID")?;
+            let player_found = game.find_player(player_id).is_some();
+            let delivery = player_found.then(|| {
+                message.set_message_type(0xbff36);
+                message.base_mut().update();
+                message.send_to_player(game.net_server(), player_id)
+            });
+            Ok(OrganizingControlDispatchReport::RegionRouter {
+                player_id,
+                player_found,
+                delivery,
+            })
+        }
+        _ => unreachable!("control opcode отфильтрован перед dispatcher-ом"),
+    }
+}
+
+fn read_control_i32(
+    message: &mut CMessage,
+    field: &'static str,
+) -> Result<i32, OrganizingControlDispatchError> {
+    let base = message.base_mut();
+    let offset = base.cursor();
+    let available = base.as_wire_bytes().len().saturating_sub(offset);
+    base.get_long()
+        .ok_or(OrganizingControlDispatchError::UnexpectedEnd {
+            field,
+            offset,
+            needed: 4,
+            available,
+        })
 }
 
 fn read_phase_war_number(payload: &[u8], cursor: &mut usize) -> Result<i32, WarPhaseDispatchError> {

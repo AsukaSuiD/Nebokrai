@@ -16,7 +16,8 @@
 //! `InitWarState` идёт по vector-order, ищет main region с proxy fallback,
 //! принимает только nation region, применяет `(index, region_state)` и копирует
 //! пять relive rectangles. Process singleton заменён owned-полем `CGame`.
-//! Остальные callbacks, morale и player-war-time методы ниже ещё сохраняют RAW.
+//! Direct morale assignment из OrganSys `0x7FE49` также принадлежит owner-у;
+//! callbacks и player-war-time методы ниже ещё сохраняют RAW.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -219,19 +220,25 @@ impl CFourNationWarSys {
     pub(crate) const fn rects(&self) -> &[FourNationRect; FOUR_NATION_RECT_COUNT] {
         &self.rects
     }
+
+    /// Exact direct assignment из OrganSys `0x7FE49`.
+    pub(crate) const fn set_morale(&mut self, morale: i32) {
+        self.morale = morale;
+    }
+
+    pub(crate) const fn morale(&self) -> i32 {
+        self.morale
+    }
 }
 
 fn decode_four_nation_setup(bytes: &[u8]) -> FourNationGameSetup {
     let mut offset = 8;
-    let (sign_up_start_event_id, sign_up_start_time) =
-        decode_four_nation_event(bytes, &mut offset);
-    let (sign_up_end_event_id, sign_up_end_time) =
-        decode_four_nation_event(bytes, &mut offset);
+    let (sign_up_start_event_id, sign_up_start_time) = decode_four_nation_event(bytes, &mut offset);
+    let (sign_up_end_event_id, sign_up_end_time) = decode_four_nation_event(bytes, &mut offset);
     let (start_event_id, start_time) = decode_four_nation_event(bytes, &mut offset);
     let (end_event_id, end_time) = decode_four_nation_event(bytes, &mut offset);
     let (end_info_event_id, end_info_time) = decode_four_nation_event(bytes, &mut offset);
-    let (enter_start_event_id, enter_start_time) =
-        decode_four_nation_event(bytes, &mut offset);
+    let (enter_start_event_id, enter_start_time) = decode_four_nation_event(bytes, &mut offset);
     let (enter_end_event_id, enter_end_time) = decode_four_nation_event(bytes, &mut offset);
     let (refresh_event_id, refresh_region_time) = decode_four_nation_event(bytes, &mut offset);
     let (clear_war_event_id, clear_war_time) = decode_four_nation_event(bytes, &mut offset);
@@ -623,13 +630,5 @@ fn four_nation_u32_at(bytes: &[u8], offset: usize) -> u32 {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
