@@ -1197,6 +1197,13 @@ pub(crate) struct PlayerHonorResetReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerHonorEliminateMutation {
+    pub(crate) player_id: i32,
+    pub(crate) previous: [u32; 4],
+    pub(crate) current: [u32; 4],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerExploitMutationReport {
     pub(crate) player_id: i32,
     pub(crate) previous: u32,
@@ -1930,6 +1937,31 @@ impl CPlayer {
             weeks_eliminate: self.base_properties.weeks_honor_eliminate,
             months_eliminate: self.base_properties.months_honor_eliminate,
             total_eliminate: self.base_properties.total_honor_eliminate,
+        }
+    }
+
+    /// World acknowledgement `0x7FA16` подтверждает уже принятую honor-пару:
+    /// все четыре счётчика увеличиваются независимо с DWORD wrapping.
+    pub(crate) const fn acknowledge_honor_eliminate(&mut self) -> PlayerHonorEliminateMutation {
+        let previous = [
+            self.base_properties.days_honor_eliminate,
+            self.base_properties.weeks_honor_eliminate,
+            self.base_properties.months_honor_eliminate,
+            self.base_properties.total_honor_eliminate,
+        ];
+        self.base_properties.days_honor_eliminate = previous[0].wrapping_add(1);
+        self.base_properties.weeks_honor_eliminate = previous[1].wrapping_add(1);
+        self.base_properties.months_honor_eliminate = previous[2].wrapping_add(1);
+        self.base_properties.total_honor_eliminate = previous[3].wrapping_add(1);
+        PlayerHonorEliminateMutation {
+            player_id: self.player_id(),
+            previous,
+            current: [
+                self.base_properties.days_honor_eliminate,
+                self.base_properties.weeks_honor_eliminate,
+                self.base_properties.months_honor_eliminate,
+                self.base_properties.total_honor_eliminate,
+            ],
         }
     }
 

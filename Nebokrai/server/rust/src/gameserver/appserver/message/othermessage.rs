@@ -25,12 +25,15 @@
 //! reset, публикует client/faction effects и возвращает requester feedback.
 //! Administrative World broadcast `0x7FA0C` обходит canonical player map и
 //! ставит exact `QuitClientByMapID` каждому текущему player owner-у.
+//! Honor acknowledgement `0x7FA16` после World rank update условно увеличивает
+//! четыре persistent eliminate-счётчика найденного player-а.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::{
-    CiQingPacketConsumption, PlayerLeiTingDecodeBlock, PlayerMoneyDecrease, PlayerTalkChannel,
+    CiQingPacketConsumption, PlayerHonorEliminateMutation, PlayerLeiTingDecodeBlock,
+    PlayerMoneyDecrease, PlayerTalkChannel,
 };
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
@@ -63,6 +66,7 @@ const WORLD_CHAT_DELIVERY: u32 = 0x0007_fa0f;
 const COUNTRY_CHAT_DELIVERY: u32 = 0x0007_fa10;
 const COUNTRY_NOTICE_DELIVERY: u32 = 0x0007_fa11;
 const WORLD_LEI_TING_UPDATE: u32 = 0x0007_fa17;
+const WORLD_HONOR_ELIMINATE_ACKNOWLEDGEMENT: u32 = 0x0007_fa16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameOtherMessageOutcome {
@@ -139,6 +143,10 @@ pub(crate) enum GameOtherMessageOutcome {
     },
     AllPlayersKicked {
         kicks: Vec<GameKickPlayerReport>,
+    },
+    HonorEliminateAcknowledged {
+        accepted: bool,
+        mutation: Option<PlayerHonorEliminateMutation>,
     },
     LeiTingUpdated {
         client_delivery: i32,
@@ -999,6 +1007,7 @@ pub(crate) fn dispatch_game_other_message(
             | WORLD_REMOTE_SKILL_OBSERVE
             | WORLD_REMOTE_LEVEL_SET
             | WORLD_KICK_ALL_PLAYERS
+            | WORLD_HONOR_ELIMINATE_ACKNOWLEDGEMENT
             | WORLD_LEI_TING_UPDATE
     ) {
         return None;
@@ -1166,6 +1175,24 @@ pub(crate) fn dispatch_game_other_message(
                 kicks: game.kick_all_players(),
             },
         }));
+    }
+    if message_type == WORLD_HONOR_ELIMINATE_ACKNOWLEDGEMENT {
+        let result = (|| {
+            let player_id = read_long(message, "honor eliminate player id")?;
+            let accepted = read_char(message, "honor eliminate acknowledgement")? != 0;
+            let mutation = accepted
+                .then(|| {
+                    game.find_player_mut(player_id)
+                        .map(|player| player.acknowledge_honor_eliminate())
+                })
+                .flatten();
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::HonorEliminateAcknowledged { accepted, mutation },
+            })
+        })();
+        return Some(result);
     }
     if message_type == WORLD_INCREMENT_SHOP_PAGE {
         let result = (|| {
