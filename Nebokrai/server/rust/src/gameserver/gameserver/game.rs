@@ -137,6 +137,9 @@
 //! Battle-fairy gear add/remove использует тот же properties owner и шлёт
 //! `0xBF918(player, GUID, length, old-client payload)` в effect-order, включая
 //! подтверждённый двойной update успешного remove.
+//! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
+//! ordered notification/property/goods публикацию и безусловный outer
+//! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
 //! GodsBattle runtime продолжает startup owner: player Add/Remove tail
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
@@ -300,7 +303,8 @@ use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSy
 use crate::gameserver::appserver::player::{
     BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationReport,
-    BattleFairyFollowReport, BattleFairySkillRequest, BattleFairySkillRequestFacts,
+    BattleFairyFollowReport, BattleFairyPotentialAllocationDelivery,
+    BattleFairyPotentialAllocationEffect, BattleFairySkillRequest, BattleFairySkillRequestFacts,
     BattleFairySkillRequestReport, BattleFairySkillResetReport, BattleFairySummonDelivery,
     BattleFairySummonEffect, BattleFairySummonReport, BattleFairyWarSoulAction, CPlayer,
     PlayerCombatProperties, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
@@ -6648,12 +6652,7 @@ impl CGame {
                     }
                 }
                 BattleFairyEquipmentMutationEffect::BattleFairyUpdated(update) => {
-                    let mut message = CMessage::new(update.message_type as i32);
-                    message.add_long(update.player_id);
-                    message.base_mut().add_guid(update.goods.ex_id);
-                    message.add_ulong(update.old_client_payload.len() as u32);
-                    message.base_mut().add(&update.old_client_payload);
-                    let delivery = message.send_to_player(self.net_server(), update.player_id);
+                    let delivery = self.send_battle_fairy_goods_update(&update);
                     report
                         .deliveries
                         .push(BattleFairyEquipmentMutationDelivery::GoodsUpdated(delivery));
@@ -6662,17 +6661,30 @@ impl CGame {
         }
     }
 
+    fn send_battle_fairy_goods_update(
+        &self,
+        update: &crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate,
+    ) -> i32 {
+        let mut message = CMessage::new(update.message_type as i32);
+        message.add_long(update.player_id);
+        message.base_mut().add_guid(update.goods.ex_id);
+        message.add_ulong(update.old_client_payload.len() as u32);
+        message.base_mut().add(&update.old_client_payload);
+        message.send_to_player(self.net_server(), update.player_id)
+    }
+
     /// Исполняемый entry point goods-message `0x8FC2A`; decoder передаёт пары
     /// property/client-points без предварительного масштабирования.
-    pub(crate) fn allocate_battle_fairy_potential(
+    pub(crate) fn allocate_battle_fairy_potential<Context: BattleFairyDeathContext>(
         &mut self,
         player_id: i32,
         allocations: &[(i32, i32)],
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+        context: &mut Context,
     ) -> Option<crate::gameserver::appserver::player::BattleFairyPotentialAllocationReport> {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let coefficients = self.globe_setup.player_property_coefficients();
-        self.players.get_mut(&player_id).map(|player| {
+        let mut report = self.players.get_mut(&player_id).map(|player| {
             player.allocate_battle_fairy_potential(
                 enabled,
                 allocations,
@@ -6680,7 +6692,44 @@ impl CGame {
                 coefficients,
                 encode_old_client,
             )
-        })
+        })?;
+        for effect in report.effects.clone() {
+            match effect {
+                BattleFairyPotentialAllocationEffect::Notification {
+                    player_id,
+                    string_id,
+                    color,
+                } => {
+                    let delivery = colored_player_notice_message(
+                        color,
+                        0,
+                        self.get_string_by_id(string_id.as_bytes()),
+                    )
+                    .send_to_player(self.net_server(), player_id);
+                    report
+                        .deliveries
+                        .push(BattleFairyPotentialAllocationDelivery::Player(delivery));
+                }
+                BattleFairyPotentialAllocationEffect::PropertiesChanged { player_id } => {
+                    let external = context.player_properties_external_facts(player_id);
+                    if let Some(player) = self.find_player(player_id) {
+                        report
+                            .deliveries
+                            .push(BattleFairyPotentialAllocationDelivery::Properties(
+                                self.send_player_properties_changed(player, external),
+                            ));
+                    }
+                }
+                BattleFairyPotentialAllocationEffect::GoodsUpdated(update) => {
+                    report
+                        .deliveries
+                        .push(BattleFairyPotentialAllocationDelivery::GoodsUpdated(
+                            self.send_battle_fairy_goods_update(&update),
+                        ));
+                }
+            }
+        }
+        Some(report)
     }
 
     /// Полный runtime entry point goods-message `0x8FC28`: общий Game RNG,

@@ -480,6 +480,13 @@ pub(crate) enum BattleFairyPotentialAllocationEffect {
     GoodsUpdated(BattleFairyDefaultGoodsUpdate),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyPotentialAllocationDelivery {
+    Player(i32),
+    Properties(i32),
+    GoodsUpdated(i32),
+}
+
 #[must_use = "allocation report сохраняет ordered player и network effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyPotentialAllocationReport {
@@ -488,6 +495,7 @@ pub(crate) struct BattleFairyPotentialAllocationReport {
     pub(crate) aggregate_client_points: i32,
     pub(crate) processed_properties: Vec<i32>,
     pub(crate) effects: Vec<BattleFairyPotentialAllocationEffect>,
+    pub(crate) deliveries: Vec<BattleFairyPotentialAllocationDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -2059,6 +2067,7 @@ impl CPlayer {
             aggregate_client_points,
             processed_properties: Vec::new(),
             effects: Vec::new(),
+            deliveries: Vec::new(),
         };
         let Some(goods) = self.equipment.get_goods(10) else {
             return report;
