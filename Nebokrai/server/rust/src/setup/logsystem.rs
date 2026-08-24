@@ -8,8 +8,8 @@
 //! уникальность. Upgrade bytes `7/17/18` доступны battle-fairy audit caller-у;
 //! подтверждённый byte 56 немедленно передаётся
 //! `CDaKongXiangQian::SetLogKey`, остальные неподтверждённые offsets не именуются.
-//! Fairy grow/incubate/implantation/syncretize используют подтверждённый tail
-//! `60..63` того же snapshot-а.
+//! Equipment compose использует подтверждённый byte `57`; Fairy
+//! grow/incubate/implantation/syncretize — tail `60..63` того же snapshot-а.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -75,6 +75,10 @@ impl CLogSystem {
 
     pub(crate) fn goods_upgrade_failure_enabled(&self) -> bool {
         self.setting(18)
+    }
+
+    pub(crate) fn equipment_compose_enabled(&self) -> bool {
+        self.setting(57)
     }
 
     pub(crate) fn faction_create_enabled(&self) -> bool {

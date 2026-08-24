@@ -1091,6 +1091,7 @@ pub(crate) struct CiQingPacketConsumption {
 pub(crate) struct CiQingPacketAddition {
     pub(crate) player_id: i32,
     pub(crate) source: super::shape::ShapeIdentity,
+    pub(crate) position: Option<u32>,
     pub(crate) outcome: VolumeGoodsAddOutcome,
     pub(crate) old_client_payload: Option<Vec<u8>>,
     pub(crate) resulting_amount: Option<u32>,
@@ -1896,9 +1897,20 @@ impl CPlayer {
                 }
                 VolumeGoodsAddOutcome::Rejected(_) => (None, None),
             };
+            let position = match &outcome {
+                VolumeGoodsAddOutcome::Added(added) => added.position,
+                VolumeGoodsAddOutcome::Stack(
+                    super::container::cgoodscontainer::GoodsStackMergeOutcome::Merged {
+                        target,
+                        ..
+                    },
+                ) => self.packet.query_goods_position(target.ex_id),
+                _ => None,
+            };
             additions.push(CiQingPacketAddition {
                 player_id,
                 source,
+                position,
                 outcome,
                 old_client_payload,
                 resulting_amount,

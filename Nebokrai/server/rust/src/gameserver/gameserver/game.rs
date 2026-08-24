@@ -447,7 +447,8 @@ use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::session::cequipmentcompose::{
     CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
     EquipmentComposeAuditLog, EquipmentComposeOutcome, EquipmentComposeReport,
-    EquipmentComposeSourceConsumption, EquipmentComposeSourceSnapshot,
+    EquipmentComposeSourceConsumption, EquipmentComposeSourceRemoval,
+    EquipmentComposeSourceSnapshot,
 };
 use crate::gameserver::appserver::session::cequipmentdakong::{
     CEquipmentDaKong, DA_KONG_USE_SINKER_INDEX, EquipmentDaKongAroundEffect,
@@ -1442,34 +1443,23 @@ pub(crate) struct FairySetupQueryReport {
     pub(crate) delivery: Option<i32>,
 }
 
-pub(crate) trait EquipmentComposeContext: OldClientGoodsCodec {
-    fn publish_equipment_compose_notification(
+pub(crate) trait EquipmentComposeContext: OldClientGoodsCodec + PlayerEquipmentContext {
+    fn equipment_compose_remove_facts(
         &mut self,
-        player_id: i32,
-        string_id: &'static str,
-        format_values: &[i32],
-    ) -> i32;
-    fn record_equipment_compose_log(&mut self, log: &EquipmentComposeAuditLog);
-    fn consume_equipment_compose_source(
+        player: &CPlayer,
+        goods: &CGoods,
+        pack_add_enabled: bool,
+    ) -> PlayerEquipmentRemoveRuntimeFacts;
+    fn recompute_equipment_compose_player_properties(
         &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        consumption: &EquipmentComposeSourceConsumption,
-    ) -> Vec<i32>;
+        player: &CPlayer,
+    ) -> PlayerCombatProperties;
     fn prepare_equipment_compose_result(
         &mut self,
         result: &mut CGoods,
         source: &EquipmentComposeSourceSnapshot,
         required_level: i32,
     ) -> bool;
-    fn publish_equipment_compose_stone_consumption(
-        &mut self,
-        consumption: &CiQingPacketConsumption,
-    ) -> Vec<i32>;
-    fn publish_equipment_compose_packet_addition(
-        &mut self,
-        addition: &CiQingPacketAddition,
-    ) -> Vec<i32>;
     fn run_equipment_compose_script(
         &mut self,
         game: &mut CGame,
@@ -6146,7 +6136,7 @@ impl CGame {
         consumption: &CiQingPacketConsumption,
     ) -> Vec<i32> {
         if consumption.remaining_amount == 0 {
-            return vec![self.send_equipment_upgrade_delete(
+            return vec![self.send_container_object_delete(
                 consumption.player_id,
                 previous,
                 consumption.goods,
@@ -6165,7 +6155,7 @@ impl CGame {
         vec![message.send_to_player(self, consumption.player_id)]
     }
 
-    fn send_equipment_upgrade_delete(
+    fn send_container_object_delete(
         &self,
         player_id: i32,
         previous: &crate::gameserver::appserver::container::ccontainer::PreviousContainer,
@@ -6264,7 +6254,7 @@ impl CGame {
             drop(recompute);
             self.publish_player_equipment_remove_report(&mut removal, context);
             if matches!(removal.outcome, EquipmentRemoveOutcome::Removed(_)) {
-                deliveries.push(self.send_equipment_upgrade_delete(
+                deliveries.push(self.send_container_object_delete(
                     player.player_id(),
                     &previous,
                     identity,
@@ -6362,6 +6352,8 @@ impl CGame {
             rejected_result: None,
             result_shadow: None,
             script_dispatched: false,
+            audit_logs: Vec::new(),
+            world_deliveries: Vec::new(),
         };
         if self.session_factory.query_session(session_id).is_none() {
             return report;
@@ -6408,9 +6400,9 @@ impl CGame {
             .goods_id(ComposeEquipmentCell::BaseEquipment)
         else {
             report.outcome = EquipmentComposeOutcome::MissingBase;
-            report
-                .notifications
-                .push(context.publish_equipment_compose_notification(player_id, "GS1156", &[]));
+            report.notifications.push(
+                self.send_equipment_compose_notification(player_id, "GS1156", &[]),
+            );
             return report;
         };
         let Some(sub_id) = plug
@@ -6418,9 +6410,9 @@ impl CGame {
             .goods_id(ComposeEquipmentCell::SubEquipment)
         else {
             report.outcome = EquipmentComposeOutcome::MissingSub;
-            report
-                .notifications
-                .push(context.publish_equipment_compose_notification(player_id, "GS1157", &[]));
+            report.notifications.push(
+                self.send_equipment_compose_notification(player_id, "GS1157", &[]),
+            );
             return report;
         };
         let Some(base_source) = player
@@ -6439,16 +6431,16 @@ impl CGame {
         };
         if player.check_item_in_packet(COMPOSE_STONE_GOODS_INDEX) == 0 {
             report.outcome = EquipmentComposeOutcome::MissingStone;
-            report
-                .notifications
-                .push(context.publish_equipment_compose_notification(player_id, "GS1158", &[]));
+            report.notifications.push(
+                self.send_equipment_compose_notification(player_id, "GS1158", &[]),
+            );
             return report;
         }
         if base_source.base_index == 0 || base_source.base_index != sub_source.base_index {
             report.outcome = EquipmentComposeOutcome::DifferentEquipment;
-            report
-                .notifications
-                .push(context.publish_equipment_compose_notification(player_id, "GS1159", &[]));
+            report.notifications.push(
+                self.send_equipment_compose_notification(player_id, "GS1159", &[]),
+            );
             return report;
         }
         let first = self
@@ -6466,9 +6458,9 @@ impl CGame {
         report.required_level = required_level;
         if result_index == 0 {
             report.outcome = EquipmentComposeOutcome::MissingRecipe;
-            report
-                .notifications
-                .push(context.publish_equipment_compose_notification(player_id, "GS1160", &[]));
+            report.notifications.push(
+                self.send_equipment_compose_notification(player_id, "GS1160", &[]),
+            );
             return report;
         }
         if base_source.weapon_level < required_level || sub_source.weapon_level < required_level {
@@ -6476,27 +6468,25 @@ impl CGame {
                 step,
                 required: required_level,
             };
-            report
-                .notifications
-                .push(context.publish_equipment_compose_notification(
-                    player_id,
-                    "GS1161",
-                    &[step, required_level],
-                ));
+            report.notifications.push(self.send_equipment_compose_notification(
+                player_id,
+                "GS1161",
+                &[step, required_level],
+            ));
             return report;
         }
         if base_source.anima_bind != 1 || sub_source.anima_bind != 1 {
             report.outcome = EquipmentComposeOutcome::NotBound;
-            report
-                .notifications
-                .push(context.publish_equipment_compose_notification(player_id, "GS1162", &[]));
+            report.notifications.push(
+                self.send_equipment_compose_notification(player_id, "GS1162", &[]),
+            );
             return report;
         }
         if base_source.quality != sub_source.quality {
             report.outcome = EquipmentComposeOutcome::DifferentQuality;
-            report
-                .notifications
-                .push(context.publish_equipment_compose_notification(player_id, "GS1163", &[]));
+            report.notifications.push(
+                self.send_equipment_compose_notification(player_id, "GS1163", &[]),
+            );
             return report;
         }
 
@@ -6530,7 +6520,7 @@ impl CGame {
                 price: source.price,
                 name: source.name.clone(),
             };
-            context.record_equipment_compose_log(&log);
+            self.record_equipment_compose_log(&mut report, &log);
         }
         for (cell, source) in [
             (ComposeEquipmentCell::BaseEquipment, base_source.clone()),
@@ -6544,12 +6534,24 @@ impl CGame {
                 cell,
                 source,
                 previous,
+                removal: EquipmentComposeSourceRemoval::Missing,
                 external_deliveries: Vec::new(),
             };
-            consumption.external_deliveries =
-                context.consume_equipment_compose_source(self, player_id, &consumption);
-            plug.compose_container_mut()
-                .remove_shadow(consumption.source.identity.ex_id);
+            let (removal, deliveries) =
+                self.consume_equipment_compose_source(player_id, &consumption, context);
+            consumption.removal = removal;
+            consumption.external_deliveries = deliveries;
+            let removed = match &consumption.removal {
+                EquipmentComposeSourceRemoval::Packet(_) => true,
+                EquipmentComposeSourceRemoval::Equipment(removal) => {
+                    matches!(removal.outcome, EquipmentRemoveOutcome::Removed(_))
+                }
+                EquipmentComposeSourceRemoval::Missing => false,
+            };
+            if removed {
+                plug.compose_container_mut()
+                    .remove_shadow(consumption.source.identity.ex_id);
+            }
             report.source_consumptions.push(consumption);
         }
         let stone_consumptions = self
@@ -6557,7 +6559,7 @@ impl CGame {
             .expect("compose owner проверен до stone removal")
             .remove_item_in_packet(COMPOSE_STONE_GOODS_INDEX, 1);
         for consumption in stone_consumptions {
-            let deliveries = context.publish_equipment_compose_stone_consumption(&consumption);
+            let deliveries = self.send_player_packet_consumption(&consumption);
             report.stone_consumptions.push(consumption);
             report.stone_deliveries.push(deliveries);
         }
@@ -6580,7 +6582,7 @@ impl CGame {
             price: result.price(),
             name: result.name().to_vec(),
         };
-        context.record_equipment_compose_log(&result_log);
+        self.record_equipment_compose_log(&mut report, &result_log);
         if !context.prepare_equipment_compose_result(&mut result, &base_source, required_level) {
             report.rejected_result = Some(result.identity());
             report.outcome = EquipmentComposeOutcome::FactoryRejected;
@@ -6627,6 +6629,7 @@ impl CGame {
                 CiQingPacketAddition {
                     player_id,
                     source: result_identity,
+                    position: Some(packet_position),
                     outcome,
                     old_client_payload,
                     resulting_amount,
@@ -6640,7 +6643,7 @@ impl CGame {
             report.outcome = EquipmentComposeOutcome::PacketAddRejected;
             return report;
         }
-        let addition_deliveries = context.publish_equipment_compose_packet_addition(&addition);
+        let addition_deliveries = self.send_equipment_compose_packet_addition(&addition);
         report.packet_additions.push(addition);
         report.packet_addition_deliveries.push(addition_deliveries);
 
@@ -6668,6 +6671,136 @@ impl CGame {
         report.script_dispatched = true;
         report.outcome = EquipmentComposeOutcome::Completed;
         report
+    }
+
+    fn send_equipment_compose_notification(
+        &self,
+        player_id: i32,
+        string_id: &str,
+        values: &[i32],
+    ) -> i32 {
+        let template = self.get_string_by_id(string_id.as_bytes());
+        let text = if let [first, second] = values {
+            format_two_legacy_i32(template, *first, *second, 255)
+        } else {
+            legacy_c_string_prefix(template).to_vec()
+        };
+        colored_player_notice_message(0xffff_ffff, 0, &text)
+            .send_to_player(self.net_server(), player_id)
+    }
+
+    fn record_equipment_compose_log(
+        &self,
+        report: &mut EquipmentComposeReport,
+        log: &EquipmentComposeAuditLog,
+    ) {
+        if !self.log_system.equipment_compose_enabled() {
+            return;
+        }
+        let Some(player) = self.find_player(log.player_id) else {
+            return;
+        };
+        let mut message = CMessage::new(0x0006_0202);
+        message.add_byte(log.reason);
+        message.add_long(log.player_id);
+        message.base_mut().add_short(player.pk_count() as i16);
+        message.add_ulong(player.money());
+        message.add_ulong(player.depot_money());
+        message.base_mut().add_guid(log.goods.ex_id);
+        message.add_ulong(log.price);
+        add_legacy_c_string(message.base_mut(), &log.name);
+        message.add_ulong(1);
+        message.add_long(player.server_region_id().unwrap_or_default());
+        message.add_ulong(player.shape().get_tile_x().unwrap_or_default() as u32);
+        message.add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
+        message.add_ulong(player.client_ip());
+        report.world_deliveries.extend(message.send(self, false));
+        report.audit_logs.push(log.clone());
+    }
+
+    fn consume_equipment_compose_source<Context: EquipmentComposeContext>(
+        &mut self,
+        player_id: i32,
+        consumption: &EquipmentComposeSourceConsumption,
+        context: &mut Context,
+    ) -> (EquipmentComposeSourceRemoval, Vec<i32>) {
+        let Some(mut player) = self.players.remove(&player_id) else {
+            return (EquipmentComposeSourceRemoval::Missing, Vec::new());
+        };
+        let goods_id = consumption.source.identity.ex_id;
+        let mut deliveries = Vec::new();
+        let removal = if player.packet().base().find(goods_id).is_some() {
+            match player.remove_packet_goods_by_id(goods_id, consumption.source.amount) {
+                Some(packet) => {
+                    deliveries = self.send_player_packet_consumption(&packet);
+                    EquipmentComposeSourceRemoval::Packet(packet)
+                }
+                None => EquipmentComposeSourceRemoval::Missing,
+            }
+        } else if let Some(goods) = player.equipment().find(goods_id) {
+            let facts = context.equipment_compose_remove_facts(
+                &player,
+                goods,
+                self.globe_setup.pack_add_enabled(),
+            );
+            let mut recompute = |player: &CPlayer| {
+                context.recompute_equipment_compose_player_properties(player)
+            };
+            let mut equipment = player.remove_equipment_goods(
+                goods_id,
+                &self.goods_factory,
+                &self.skill_factory,
+                facts,
+                &mut recompute,
+            );
+            drop(recompute);
+            self.publish_player_equipment_remove_report(&mut equipment, context);
+            if matches!(equipment.outcome, EquipmentRemoveOutcome::Removed(_)) {
+                deliveries.push(self.send_container_object_delete(
+                    player_id,
+                    &consumption.previous,
+                    consumption.source.identity,
+                    consumption.source.amount,
+                ));
+            }
+            EquipmentComposeSourceRemoval::Equipment(equipment)
+        } else {
+            EquipmentComposeSourceRemoval::Missing
+        };
+        self.players.insert(player_id, player);
+        (removal, deliveries)
+    }
+
+    fn send_equipment_compose_packet_addition(
+        &self,
+        addition: &CiQingPacketAddition,
+    ) -> Vec<i32> {
+        let Some(position) = addition.position else {
+            return Vec::new();
+        };
+        match &addition.outcome {
+            VolumeGoodsAddOutcome::Added(added) => {
+                let mut message = CS2CContainerObjectMove::default();
+                message.set_operation(ContainerObjectMoveOperation::NewObject);
+                message.set_destination_container(PLAYER_TYPE, addition.player_id, position);
+                message.set_destination_container_extend_id(1);
+                message.set_destination_object(added.identity.object_type, added.identity.ex_id);
+                message.set_object_stream(addition.old_client_payload.clone().unwrap_or_default());
+                vec![message.send_to_player(self, addition.player_id)]
+            }
+            VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { target, .. }) => {
+                let Some(amount) = addition.resulting_amount else {
+                    return Vec::new();
+                };
+                let mut message = CS2CContainerObjectAmountChange::default();
+                message.set_source_container(PLAYER_TYPE, addition.player_id, position);
+                message.set_source_container_extend_id(1);
+                message.set_object(target.object_type, target.ex_id);
+                message.set_object_amount(amount);
+                vec![message.send_to_player(self, addition.player_id)]
+            }
+            _ => Vec::new(),
+        }
     }
 
     pub(crate) fn close_equipment_da_kong<Runtime: GameGoodsMessageRuntime>(
@@ -6941,7 +7074,7 @@ impl CGame {
                     .next()
                 {
                     report.consumption_deliveries =
-                        self.send_equipment_da_kong_consumption(&consumption);
+                        self.send_player_packet_consumption(&consumption);
                     report.consumption = Some(consumption);
                 }
                 if let (Some(region_id), Ok(tile_x), Ok(tile_y)) = (
@@ -7105,7 +7238,7 @@ impl CGame {
         base_index: u32,
     ) {
         for consumption in player.remove_item_in_packet(base_index, 1) {
-            let deliveries = self.send_equipment_da_kong_consumption(&consumption);
+            let deliveries = self.send_player_packet_consumption(&consumption);
             report.packet_consumptions.push(consumption);
             report.packet_consumption_deliveries.push(deliveries);
         }
@@ -7168,7 +7301,7 @@ impl CGame {
         message.send_to_player(self.net_server(), update.player_id)
     }
 
-    fn send_equipment_da_kong_consumption(
+    fn send_player_packet_consumption(
         &self,
         consumption: &CiQingPacketConsumption,
     ) -> Vec<i32> {
@@ -7504,7 +7637,7 @@ impl CGame {
                 });
             let mut external_deliveries = Vec::new();
             if let Some(consumption) = player.remove_packet_goods_by_id(goods_id, 1) {
-                external_deliveries = self.send_equipment_da_kong_consumption(&consumption);
+                external_deliveries = self.send_player_packet_consumption(&consumption);
                 report.packet_consumptions.push(consumption);
                 report
                     .packet_consumption_deliveries
@@ -14195,6 +14328,30 @@ fn format_single_legacy_i32(template: &[u8], value: i32, maximum_bytes: usize) -
     result.extend_from_slice(&template[marker + 2..]);
     result.truncate(maximum_bytes);
     result
+}
+
+fn format_two_legacy_i32(
+    template: &[u8],
+    first: i32,
+    second: i32,
+    maximum_bytes: usize,
+) -> Vec<u8> {
+    let template = legacy_c_string_prefix(template);
+    let mut output = Vec::with_capacity(template.len().saturating_add(20));
+    let mut remaining = template;
+    for value in [first, second] {
+        let Some(marker) = remaining.windows(2).position(|window| window == b"%d") else {
+            output.extend_from_slice(remaining);
+            output.truncate(maximum_bytes);
+            return output;
+        };
+        output.extend_from_slice(&remaining[..marker]);
+        output.extend_from_slice(value.to_string().as_bytes());
+        remaining = &remaining[marker + 2..];
+    }
+    output.extend_from_slice(remaining);
+    output.truncate(maximum_bytes);
+    output
 }
 
 fn format_single_legacy_u32(template: &[u8], value: u32, maximum_bytes: usize) -> Vec<u8> {

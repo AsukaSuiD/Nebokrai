@@ -7,7 +7,8 @@
 //! Insert/end listener lifecycle связан с packet/equipment и terminal
 //! session-stage. Universal `UpgradeEquipment` остаётся обязательным runtime-
 //! effect; validation, ordering и ownership результата принадлежат `CGame` и
-//! не подменяются этим storage owner-ом.
+//! не подменяются этим storage owner-ом. Notice, source/stone container wire,
+//! packet result и gated World audit исполняются живым `CGame`.
 
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::{
@@ -19,7 +20,9 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_EQUIP_ACTIVE, GAP_ITEM_QUALITY, GAP_PARTICULAR_ATTRIBUTE, GAP_WEAPON_LEVEL,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::gameserver::appserver::player::{CiQingPacketAddition, CiQingPacketConsumption};
+use crate::gameserver::appserver::player::{
+    CiQingPacketAddition, CiQingPacketConsumption, PlayerEquipmentRemoveReport,
+};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 
 pub(crate) const COMPOSE_STONE_GOODS_INDEX: u32 = 0x120f_db24;
@@ -34,6 +37,7 @@ pub(crate) struct EquipmentComposeSourceSnapshot {
     pub(crate) anima_bind: i32,
     pub(crate) quality: i32,
     pub(crate) price: u32,
+    pub(crate) amount: u32,
     pub(crate) name: Vec<u8>,
     pub(crate) transferred_addons: Vec<(i32, u32, i32)>,
 }
@@ -77,6 +81,7 @@ impl EquipmentComposeSourceSnapshot {
             anima_bind: goods.addon_property_value(factory, GAP_ANIMA_BIND, 1),
             quality: goods.addon_property_value(factory, GAP_ITEM_QUALITY, 1),
             price: goods.price(),
+            amount: goods.amount(),
             name: goods.name().to_vec(),
             transferred_addons,
         }
@@ -88,7 +93,15 @@ pub(crate) struct EquipmentComposeSourceConsumption {
     pub(crate) cell: ComposeEquipmentCell,
     pub(crate) source: EquipmentComposeSourceSnapshot,
     pub(crate) previous: PreviousContainer,
+    pub(crate) removal: EquipmentComposeSourceRemoval,
     pub(crate) external_deliveries: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentComposeSourceRemoval {
+    Packet(CiQingPacketConsumption),
+    Equipment(PlayerEquipmentRemoveReport),
+    Missing,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,6 +151,8 @@ pub(crate) struct EquipmentComposeReport {
     pub(crate) rejected_result: Option<ShapeIdentity>,
     pub(crate) result_shadow: Option<ComposeShadowInserted>,
     pub(crate) script_dispatched: bool,
+    pub(crate) audit_logs: Vec<EquipmentComposeAuditLog>,
+    pub(crate) world_deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
