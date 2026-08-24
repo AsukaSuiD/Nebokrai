@@ -90,6 +90,9 @@
 //! headgear с exact `SetWarSoulStaus(0)`, девятью skill detach, пересчётом
 //! свойств при уже отсутствующем slot-е, HP/MP clamp и `0xBF720`. Полный
 //! virtual property owner остаётся injected callback-границей.
+//! GodsBattle player snapshot теперь также хранит persisted faction/SZL;
+//! faction membership появляется только в concrete region AddObject-tail и
+//! удаляется его RemoveObject/DelObj-tail, не при восстановлении snapshot-а.
 //! Симметричный `OnObjectAdded` сохраняет late-block partial mutations, после
 //! commit добавляет девять war-soul skills, пересчитывает свойства, публикует
 //! `0xBF720` с исключением owner-а и отражает даже zero-delta `PackExpand` log.
@@ -754,6 +757,8 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) total_honor_eliminate: u32,
     pub(crate) rank_of_nobility_id: u32,
     pub(crate) exploit: u32,
+    pub(crate) gods_battle_faction: i32,
+    pub(crate) szl: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1014,6 +1019,21 @@ impl CPlayer {
 
     pub(crate) const fn base_properties(&self) -> PlayerBaseProperties {
         self.base_properties
+    }
+
+    pub(crate) const fn gods_battle_faction(&self) -> i32 {
+        self.base_properties.gods_battle_faction
+    }
+
+    pub(crate) const fn set_gods_battle_faction(&mut self, faction: i32) {
+        self.base_properties.gods_battle_faction = faction;
+    }
+
+    /// Assembly/load boundary для persisted player tail; faction membership
+    /// сам region восстанавливает только после фактического `AddObject`.
+    pub(crate) const fn restore_gods_battle_state(&mut self, faction: i32, szl: u32) {
+        self.base_properties.gods_battle_faction = faction;
+        self.base_properties.szl = szl;
     }
 
     /// Exact `SetExploit`: signed CountryParam storage сравнивается как

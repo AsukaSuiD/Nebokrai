@@ -62,7 +62,9 @@
 //! startup log остаются на исходных позициях.
 //! Runtime GodsBattle response `0x7F80F` тем же живым FIFO декодирует оба
 //! faction top-ten списка до terminal marker и адресно публикует `0xBF740`
-//! последнему requester-у manager-а.
+//! последнему requester-у manager-а. Соседний `0x7F80E` применяет оба XYD
+//! slot-а и публикует изменившийся `dwXYD` только участникам соответствующей
+//! faction во всех зарегистрированных GodsBattle regions.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -154,7 +156,7 @@ use crate::gameserver::appserver::skills::skillfactory::{
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameNetworkInitializationError, GameScriptResourceContext, GameSingleFilePublication,
-    MonsterBasePropertyRefreshReport, ServerRegionOwner,
+    GodsBattleXydApplyReport, MonsterBasePropertyRefreshReport, ServerRegionOwner,
 };
 use crate::gameserver::gameserver::honorranks::{HonorRanksDecodeError, HonorRanksDecodeReport};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
@@ -200,6 +202,7 @@ const PLAYER_COUNT_MESSAGE: i32 = 0x0007_F80B;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_RESPONSE: i32 = 0x0005_FA0A;
 const PLAYER_COUNT_RESPONSE: i32 = 0x0005_FA0C;
 const GODS_BATTLE_TOP_TEN_RESPONSE: i32 = 0x0007_F80F;
+const GODS_BATTLE_XYD_RESPONSE: i32 = 0x0007_F80E;
 const GODS_BATTLE_TOP_TEN_CLIENT: i32 = 0x000B_F740;
 const CLIENT_SERVER_START_SELECTOR: i32 = 0x3b;
 const GOODS_LIST_SELECTOR: i32 = 0x00;
@@ -1002,6 +1005,7 @@ pub(crate) enum GameServerMessageReport {
     StringTable(GameStringTableMessageReport),
     PlayerCount(GamePlayerCountResponseReport),
     GodsBattleTopTen(GameGodsBattleTopTenReport),
+    GodsBattleXyd(GameGodsBattleXydReport),
     BattleFairyStartup(GameBattleFairyStartupMessageReport),
     CombatRegistryStartup(GameCombatRegistryStartupMessageReport),
     PlayerEconomyStartup(GamePlayerEconomyStartupMessageReport),
@@ -1029,10 +1033,17 @@ pub(crate) struct GameGodsBattleTopTenReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameGodsBattleXydReport {
+    pub(crate) marker: i8,
+    pub(crate) apply: Option<GodsBattleXydApplyReport>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageError<RegionRuntimeError> {
     StartupSelector(GameClientServerStartPayloadError),
     StringTable(MyStringTableDecodeError),
     GodsBattleTopTen(GodsBattleTopTenDecodeError),
+    GodsBattleXydUnexpectedEnd { field: &'static str },
     BattleFairyStartup(GameBattleFairyStartupError),
     CombatRegistryStartup(GameCombatRegistryStartupError),
     PlayerEconomyStartup(GamePlayerEconomyStartupError),
@@ -1073,6 +1084,31 @@ where
     }
     if let Some(report) = dispatch_player_count_message(message.message_type(), game) {
         return Some(Ok(GameServerMessageReport::PlayerCount(report)));
+    }
+    if message.message_type() == GODS_BATTLE_XYD_RESPONSE {
+        let Some(marker) = message.base_mut().get_char() else {
+            return Some(Err(GameServerMessageError::GodsBattleXydUnexpectedEnd {
+                field: "marker",
+            }));
+        };
+        let apply = if marker == 1 {
+            let Some(faction_a) = message.base_mut().get_long() else {
+                return Some(Err(GameServerMessageError::GodsBattleXydUnexpectedEnd {
+                    field: "faction A XYD",
+                }));
+            };
+            let Some(faction_b) = message.base_mut().get_long() else {
+                return Some(Err(GameServerMessageError::GodsBattleXydUnexpectedEnd {
+                    field: "faction B XYD",
+                }));
+            };
+            Some(game.apply_gods_battle_xyd(faction_a as u32, faction_b as u32))
+        } else {
+            None
+        };
+        return Some(Ok(GameServerMessageReport::GodsBattleXyd(
+            GameGodsBattleXydReport { marker, apply },
+        )));
     }
     if message.message_type() == GODS_BATTLE_TOP_TEN_RESPONSE {
         let entries = {

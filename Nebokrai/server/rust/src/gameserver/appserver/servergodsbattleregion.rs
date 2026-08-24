@@ -14,6 +14,9 @@
 //! и остальные методы manager-а пока остаются RAW ниже. Top-ten SZL exchange
 //! хранит единственный overwrite-able requester, exact World request и
 //! terminal-marker decoder; client publication выполняет dispatcher-owner.
+//! XYD round-trip использует configuration-owned slots, ordered region set и
+//! faction player sets; полные NPC/contend ветви `AddObject/RemoveObject`
+//! остаются RAW, а их player membership tail исполняет `CGame`.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -23,7 +26,7 @@
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.h
 
 use crate::setup::godsbattleconf::{
-    CGodsBattleConf, GodsBattleDecodeError, GodsBattleDecodeReport,
+    CGodsBattleConf, GodsBattleDecodeError, GodsBattleDecodeReport, GodsBattleFactionXydUpdate,
 };
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -96,6 +99,10 @@ impl CGodsBattleMgr {
         self.region_set.contains(&region_id)
     }
 
+    pub(crate) fn region_ids(&self) -> Vec<i32> {
+        self.region_set.iter().copied().collect()
+    }
+
     pub(crate) const fn pending_top_ten_player_id(&self) -> i32 {
         self.pending_top_ten_player_id
     }
@@ -104,6 +111,23 @@ impl CGodsBattleMgr {
     /// перезаписывает единственный legacy requester без sequence ID.
     pub(crate) const fn record_top_ten_request(&mut self, player_id: i32) {
         self.pending_top_ten_player_id = player_id;
+    }
+
+    pub(crate) fn faction_for_country(&self, country: u8) -> Option<i32> {
+        self.configuration
+            .faction_for_country(country)
+            .map(|faction| faction as i32)
+    }
+
+    pub(crate) fn set_xyd(
+        &mut self,
+        faction_a: u32,
+        faction_b: u32,
+    ) -> [GodsBattleFactionXydUpdate; 2] {
+        [
+            self.configuration.set_faction_xyd(1, faction_a),
+            self.configuration.set_faction_xyd(2, faction_b),
+        ]
     }
 
     pub(crate) fn decode_top_ten(
@@ -190,8 +214,8 @@ fn read_top_ten_i32(
 }
 
 /// Startup-часть concrete GodsBattle region. Constructor подтверждает
-/// наследование `CServerWarRegion`; faction/player/NPC gameplay коллекции
-/// остаются owned defaults и будут подключены вместе с lifecycle owner-ом.
+/// наследование `CServerWarRegion`; player faction membership уже связан с
+/// Add/Remove tail, NPC/contend gameplay коллекции сохраняют owned defaults.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CServerGodsBattleRegion {
     pub(crate) war: CServerWarRegion,
@@ -210,6 +234,31 @@ impl CServerGodsBattleRegion {
         self.war
             .decord_from_byte_array(source, cursor, include_child, context)
     }
+
+    pub(crate) fn add_faction_player(&mut self, player_id: i32, faction: i32) -> bool {
+        match faction {
+            5 => self.faction_players[1].insert(player_id),
+            6 => self.faction_players[2].insert(player_id),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn remove_faction_player(&mut self, player_id: i32) -> bool {
+        self.faction_players
+            .iter_mut()
+            .fold(false, |removed, players| {
+                players.remove(&player_id) || removed
+            })
+    }
+
+    pub(crate) fn faction_player_ids(&self, faction: i32) -> Option<Vec<i32>> {
+        let index = match faction {
+            5 => 1,
+            6 => 2,
+            _ => return None,
+        };
+        Some(self.faction_players[index].iter().copied().collect())
+    }
 }
 
 // ============================================================================
@@ -221,34 +270,6 @@ impl CServerGodsBattleRegion {
 // RVA: 0x000A5B50
 // ADDRESS: 004a5b50
 // PROTOTYPE: ulong __thiscall GetFactionXYD(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleMgr::UpdateXYD
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:940
-// RVA: 0x000A5B70
-// ADDRESS: 004a5b70
-// PROTOTYPE: void __thiscall UpdateXYD(uchar param_1, int param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleMgr::SetFactionXYD
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:923
-// RVA: 0x000A5CA0
-// ADDRESS: 004a5ca0
-// PROTOTYPE: bool __thiscall SetFactionXYD(int param_1, ulong param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -277,20 +298,6 @@ impl CServerGodsBattleRegion {
 // RVA: 0x000A5EF0
 // ADDRESS: 004a5ef0
 // PROTOTYPE: bool __thiscall GetPlayerSZLLev(ulong * param_1, ulong * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleMgr::AssignPlayerFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1038
-// RVA: 0x000A5F60
-// ADDRESS: 004a5f60
-// PROTOTYPE: bool __thiscall AssignPlayerFaction(CPlayer * param_1, ulong * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -354,7 +361,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::DelObj
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_MEMBERSHIP
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:183
@@ -424,7 +431,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::RemoveObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_MEMBERSHIP
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:138
@@ -543,34 +550,6 @@ impl CServerGodsBattleRegion {
 // RVA: 0x000A9779
 // ADDRESS: 004a9779
 // PROTOTYPE: undefined Catch@004a9779()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleMgr::BroadCasetToPlayers
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1113
-// RVA: 0x000A9860
-// ADDRESS: 004a9860
-// PROTOTYPE: void __thiscall BroadCasetToPlayers(Fation param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleMgr::SetXYD
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:953
-// RVA: 0x000A9C40
-// ADDRESS: 004a9c40
-// PROTOTYPE: void __thiscall SetXYD(ulong param_1, ulong param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -732,7 +711,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::AddObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_MEMBERSHIP
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:24

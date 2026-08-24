@@ -128,6 +128,10 @@
 //! Equipment add/remove проведены через canonical player registry до war-soul
 //! state/skills, property callbacks, remove vitals clamp и typed around
 //! `0xBF720`; полный virtual property owner остаётся caller adapter-ом.
+//! GodsBattle runtime продолжает startup owner: player Add/Remove tail
+//! назначает persisted faction и поддерживает region membership, script XYD
+//! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
+//! живым игрокам соответствующей faction во всех зарегистрированных regions.
 //! Один `MainLoop` turn сохраняет static DWORD clocks как owned process state,
 //! exact Script→AI→Message→Session→NetSession→Auction order, optional profile
 //! reads, refresh/watch gates и wrapping pacing. Ещё не материализованные
@@ -329,6 +333,7 @@ use crate::setup::emotion::CEmotion;
 use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::gmlist::CGMList;
+use crate::setup::godsbattleconf::GodsBattleFactionXydUpdate;
 use crate::setup::goodsdestructionconfig::GoodsDestroySetup;
 use crate::setup::hitlevelsetup::CHitLevelSetup;
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
@@ -1009,6 +1014,38 @@ pub(crate) struct GameWarStartupOwners {
 pub(crate) struct GodsBattleTopTenRequestReport {
     pub(crate) player_id: i32,
     pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+pub(crate) trait GodsBattlePlayerContext {
+    fn send_gods_battle_player_around(
+        &mut self,
+        region: &CServerRegion,
+        origin: &CShape,
+        message: &CMessage,
+    ) -> Result<i32, ShapeCoordinateBlock>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattlePlayerRegionReport {
+    pub(crate) region_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) assigned_faction: Option<i32>,
+    pub(crate) faction_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) membership_changed: bool,
+    pub(crate) region_state_delivery: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleXydRequestReport {
+    pub(crate) faction: i32,
+    pub(crate) xyd: u32,
+    pub(crate) delivery: Option<Result<i32, SendMessageError>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleXydApplyReport {
+    pub(crate) updates: [GodsBattleFactionXydUpdate; 2],
+    pub(crate) deliveries: Vec<(i32, i32, i32)>,
 }
 
 pub(crate) trait NationCombatContext: ServerRegionNpcContext {
@@ -3870,6 +3907,153 @@ impl CGame {
         }
     }
 
+    /// Script producer at `0x4C3C11/0x4C3C2E`: factions 5/6 преобразуются
+    /// в World indices 1/2; local XYD меняется только обратным `0x7F80E`.
+    pub(crate) fn request_gods_battle_faction_xyd(
+        &self,
+        faction: i32,
+        xyd: u32,
+    ) -> GodsBattleXydRequestReport {
+        let world_faction = match faction {
+            5 => 1,
+            6 => 2,
+            _ => {
+                return GodsBattleXydRequestReport {
+                    faction,
+                    xyd,
+                    delivery: None,
+                };
+            }
+        };
+        let mut request = CMessage::new(0x5fa0f);
+        request.add_byte(1);
+        request.add_long(world_faction);
+        request.add_ulong(xyd);
+        GodsBattleXydRequestReport {
+            faction,
+            xyd,
+            delivery: Some(request.send(self, false)),
+        }
+    }
+
+    /// Точный player-tail после успешного base `CServerRegion::AddObject`.
+    pub(crate) fn enter_gods_battle_player<Context: GodsBattlePlayerContext>(
+        &mut self,
+        region_id: i32,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<GodsBattlePlayerRegionReport> {
+        let (country, previous_faction) = self
+            .find_player(player_id)
+            .map(|player| (player.country(), player.gods_battle_faction()))?;
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::GodsBattle(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let assigned_faction = (previous_faction == 0).then(|| {
+            self.gods_battle_mgr
+                .faction_for_country(country)
+                .unwrap_or(0)
+        });
+        let faction = assigned_faction.unwrap_or(previous_faction);
+        let faction_delivery = if let Some(assigned_faction) = assigned_faction {
+            self.find_player_mut(player_id)
+                .expect("player сохранён после preflight")
+                .set_gods_battle_faction(assigned_faction);
+            let message =
+                gods_battle_property_message(player_id, b"lGodsBattleFaciton", assigned_faction);
+            let player = self
+                .find_player(player_id)
+                .expect("player сохранён после mutation");
+            Some(context.send_gods_battle_player_around(&region.war.base, player.shape(), &message))
+        } else {
+            None
+        };
+        let membership_changed = region.add_faction_player(player_id, faction);
+        let region_state_delivery = gods_battle_property_message(player_id, b"m_lIsInGodRegion", 1)
+            .send_to_player(self.net_server(), player_id);
+        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+        Some(GodsBattlePlayerRegionReport {
+            region_id,
+            player_id,
+            assigned_faction,
+            faction_delivery,
+            membership_changed,
+            region_state_delivery,
+        })
+    }
+
+    /// Общий player-tail `RemoveObject/DelObj` после spatial/base удаления.
+    pub(crate) fn leave_gods_battle_player(
+        &mut self,
+        region_id: i32,
+        player_id: i32,
+    ) -> Option<GodsBattlePlayerRegionReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::GodsBattle(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let membership_changed = region.remove_faction_player(player_id);
+        let region_state_delivery = gods_battle_property_message(player_id, b"m_lIsInGodRegion", 0)
+            .send_to_player(self.net_server(), player_id);
+        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+        Some(GodsBattlePlayerRegionReport {
+            region_id,
+            player_id,
+            assigned_faction: None,
+            faction_delivery: None,
+            membership_changed,
+            region_state_delivery,
+        })
+    }
+
+    pub(crate) fn apply_gods_battle_xyd(
+        &mut self,
+        faction_a: u32,
+        faction_b: u32,
+    ) -> GodsBattleXydApplyReport {
+        let updates = self.gods_battle_mgr.set_xyd(faction_a, faction_b);
+        let region_ids = self.gods_battle_mgr.region_ids();
+        let mut deliveries = Vec::new();
+        for update in updates {
+            let (faction, xyd, changed) = match update {
+                GodsBattleFactionXydUpdate::FactionA { previous, current } => {
+                    (5, current, previous != current)
+                }
+                GodsBattleFactionXydUpdate::FactionB { previous, current } => {
+                    (6, current, previous != current)
+                }
+                GodsBattleFactionXydUpdate::IgnoredFaction { .. } => unreachable!(),
+            };
+            if !changed {
+                continue;
+            }
+            for region_id in &region_ids {
+                let Some(ServerRegionOwner::GodsBattle(region)) = self.find_region(*region_id)
+                else {
+                    continue;
+                };
+                let Some(player_ids) = region.faction_player_ids(faction) else {
+                    continue;
+                };
+                for player_id in player_ids {
+                    if self.find_player(player_id).is_none() {
+                        continue;
+                    }
+                    let delivery = gods_battle_property_message(player_id, b"dwXYD", xyd as i32)
+                        .send_to_player(self.net_server(), player_id);
+                    deliveries.push((*region_id, player_id, delivery));
+                }
+            }
+        }
+        GodsBattleXydApplyReport {
+            updates,
+            deliveries,
+        }
+    }
+
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {
         &mut self.synthesis
     }
@@ -5697,6 +5881,15 @@ fn resolve_billing_bind_ipv4(raw: &[u8]) -> Result<Ipv4Addr, GameClientInitializ
 fn add_legacy_c_string(message: &mut crate::nets::basemessage::CBaseMessage, value: &[u8]) {
     message.add(legacy_c_string_prefix(value));
     message.add_byte(0);
+}
+
+fn gods_battle_property_message(player_id: i32, property: &[u8], value: i32) -> CMessage {
+    let mut message = CMessage::new(0xbf80c);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    add_legacy_c_string(message.base_mut(), property);
+    message.add_long(value);
+    message
 }
 
 fn nation_colored_text_message(

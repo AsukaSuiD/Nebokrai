@@ -112,7 +112,9 @@ impl GodsBattleLoadSection {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GodsBattleLoadError {
-    MissingResource { section: GodsBattleLoadSection },
+    MissingResource {
+        section: GodsBattleLoadSection,
+    },
     UnexpectedEnd {
         section: GodsBattleLoadSection,
         field: &'static str,
@@ -164,7 +166,9 @@ fn gods_battle_token<'a>(
     section: GodsBattleLoadSection,
     field: &'static str,
 ) -> Result<&'a [u8], GodsBattleLoadError> {
-    tokens.next().ok_or(GodsBattleLoadError::UnexpectedEnd { section, field })
+    tokens
+        .next()
+        .ok_or(GodsBattleLoadError::UnexpectedEnd { section, field })
 }
 
 fn gods_battle_u32<'a>(
@@ -561,12 +565,12 @@ impl CGodsBattleConf {
         })
     }
 
- /// Повторяет `LoadFile`, извлекая resource-байты только при достижении
- /// соответствующей секции.
- ///
- /// `resolve_npc_name` — единственная owner-зависимая часть: оригинал World
- /// сразу заменяет string-table ID локализованным именем, а отсутствие ID
- /// превращает имя в пустую C-строку. `m_XYD[1..=2]` этот loader не меняет.
+    /// Повторяет `LoadFile`, извлекая resource-байты только при достижении
+    /// соответствующей секции.
+    ///
+    /// `resolve_npc_name` — единственная owner-зависимая часть: оригинал World
+    /// сразу заменяет string-table ID локализованным именем, а отсутствие ID
+    /// превращает имя в пустую C-строку. `m_XYD[1..=2]` этот loader не меняет.
     pub(crate) fn load_from_resources<ReadResource, ResolveNpcName>(
         &mut self,
         read_resource: &mut ReadResource,
@@ -577,27 +581,21 @@ impl CGodsBattleConf {
         ResolveNpcName: FnMut(&[u8]) -> Option<Vec<u8>>,
     {
         self.npc_names.clear();
-        let source = read_resource(GodsBattleLoadSection::NpcNames)
-            .ok_or(GodsBattleLoadError::MissingResource {
+        let source = read_resource(GodsBattleLoadSection::NpcNames).ok_or(
+            GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::NpcNames,
-            })?;
+            },
+        )?;
         let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
-            let faction = gods_battle_i32(
-                &mut tokens,
-                GodsBattleLoadSection::NpcNames,
-                "faction",
-            )?;
+            let faction = gods_battle_i32(&mut tokens, GodsBattleLoadSection::NpcNames, "faction")?;
             let name_id = gods_battle_token(
                 &mut tokens,
                 GodsBattleLoadSection::NpcNames,
                 "StringTable ID",
             )?;
-            let monsters = gods_battle_token(
-                &mut tokens,
-                GodsBattleLoadSection::NpcNames,
-                "monsters",
-            )?;
+            let monsters =
+                gods_battle_token(&mut tokens, GodsBattleLoadSection::NpcNames, "monsters")?;
             self.npc_names.push(GodsBattleFactionNpcName {
                 faction,
                 name: resolve_npc_name(name_id).unwrap_or_default(),
@@ -606,24 +604,19 @@ impl CGodsBattleConf {
         }
 
         self.base_money.clear();
-        let source = read_resource(GodsBattleLoadSection::BaseMoney)
-            .ok_or(GodsBattleLoadError::MissingResource {
+        let source = read_resource(GodsBattleLoadSection::BaseMoney).ok_or(
+            GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::BaseMoney,
-            })?;
+            },
+        )?;
         let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
-            let money_level = gods_battle_u32(
-                &mut tokens,
-                GodsBattleLoadSection::BaseMoney,
-                "money level",
-            )?;
+            let money_level =
+                gods_battle_u32(&mut tokens, GodsBattleLoadSection::BaseMoney, "money level")?;
             let add = gods_battle_u32(&mut tokens, GodsBattleLoadSection::BaseMoney, "add")?;
-            let subtract = gods_battle_u32(
-                &mut tokens,
-                GodsBattleLoadSection::BaseMoney,
-                "subtract",
-            )?;
- // `std::map::operator[]` оригинал owner-а заменяет duplicate key.
+            let subtract =
+                gods_battle_u32(&mut tokens, GodsBattleLoadSection::BaseMoney, "subtract")?;
+            // `std::map::operator[]` оригинал owner-а заменяет duplicate key.
             self.base_money.insert(
                 money_level,
                 GodsBattleBaseMoney {
@@ -635,10 +628,11 @@ impl CGodsBattleConf {
         }
 
         self.revise_money.clear();
-        let source = read_resource(GodsBattleLoadSection::ReviseMoney)
-            .ok_or(GodsBattleLoadError::MissingResource {
+        let source = read_resource(GodsBattleLoadSection::ReviseMoney).ok_or(
+            GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::ReviseMoney,
-            })?;
+            },
+        )?;
         let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
             self.revise_money.push(GodsBattleReviseMoney {
@@ -666,10 +660,11 @@ impl CGodsBattleConf {
         }
 
         self.szl_levels.clear();
-        let source = read_resource(GodsBattleLoadSection::SzlLevels)
-            .ok_or(GodsBattleLoadError::MissingResource {
+        let source = read_resource(GodsBattleLoadSection::SzlLevels).ok_or(
+            GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::SzlLevels,
-            })?;
+            },
+        )?;
         let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
             self.szl_levels.push(GodsBattleSzlLevel {
@@ -688,10 +683,11 @@ impl CGodsBattleConf {
         }
 
         self.faction_rules.clear();
-        let source = read_resource(GodsBattleLoadSection::FactionRules)
-            .ok_or(GodsBattleLoadError::MissingResource {
+        let source = read_resource(GodsBattleLoadSection::FactionRules).ok_or(
+            GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::FactionRules,
-            })?;
+            },
+        )?;
         let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
             self.faction_rules.push(GodsBattleFactionRule {
@@ -714,10 +710,11 @@ impl CGodsBattleConf {
         }
 
         self.die_back_positions.clear();
-        let source = read_resource(GodsBattleLoadSection::DieBackPositions)
-            .ok_or(GodsBattleLoadError::MissingResource {
+        let source = read_resource(GodsBattleLoadSection::DieBackPositions).ok_or(
+            GodsBattleLoadError::MissingResource {
                 section: GodsBattleLoadSection::DieBackPositions,
-            })?;
+            },
+        )?;
         let mut tokens = gods_battle_tokens(&source);
         while read_to(&mut tokens, b"*") {
             self.die_back_positions.push(GodsBattleDieBackPosition {
@@ -741,11 +738,7 @@ impl CGodsBattleConf {
                     GodsBattleLoadSection::DieBackPositions,
                     "left",
                 )?,
-                top: gods_battle_i32(
-                    &mut tokens,
-                    GodsBattleLoadSection::DieBackPositions,
-                    "top",
-                )?,
+                top: gods_battle_i32(&mut tokens, GodsBattleLoadSection::DieBackPositions, "top")?,
                 right: gods_battle_i32(
                     &mut tokens,
                     GodsBattleLoadSection::DieBackPositions,
@@ -785,6 +778,15 @@ impl CGodsBattleConf {
         self.faction_rules.push(value);
     }
 
+    pub(crate) fn faction_for_country(&self, country: u8) -> Option<u32> {
+        self.faction_rules
+            .iter()
+            .find(|rule| {
+                u32::from(country) == rule.country_a || u32::from(country) == rule.country_b
+            })
+            .map(|rule| rule.faction)
+    }
+
     pub(crate) fn set_xyd_from_db(&mut self, faction_one: u32, faction_two: u32) {
         self.xyd[1] = faction_one;
         self.xyd[2] = faction_two;
@@ -794,11 +796,7 @@ impl CGodsBattleConf {
         (self.xyd[1], self.xyd[2])
     }
 
-    pub(crate) fn set_faction_xyd(
-        &mut self,
-        faction: i32,
-        xyd: u32,
-    ) -> GodsBattleFactionXydUpdate {
+    pub(crate) fn set_faction_xyd(&mut self, faction: i32, xyd: u32) -> GodsBattleFactionXydUpdate {
         match faction {
             1 => {
                 let previous = std::mem::replace(&mut self.xyd[1], xyd);
