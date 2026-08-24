@@ -201,6 +201,24 @@ pub(crate) enum FairyContainerExpEntry {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FairyImplantDelivery {
+    Update(FairyContainerGoodsUpdate),
+    StateChanged(FairyStateChangeOutcome),
+}
+
+#[must_use = "implantation report сохраняет remaining exp и итоговый goods для расхода vigour/crystal"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyImplantReport {
+    pub(crate) old_level: u32,
+    pub(crate) exp: FairyExpReport,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) goods_name: Vec<u8>,
+    pub(crate) resulting_level: u32,
+    pub(crate) old_client_payload: Vec<u8>,
+    pub(crate) delivery: FairyImplantDelivery,
+}
+
 #[must_use = "failure сохраняет уже обработанный prefix позиций"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FairyContainerExpFailure {
@@ -741,6 +759,108 @@ impl CFairyContainer {
             }
         }
         Ok(entries)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn implant_exp(
+        &mut self,
+        experience: u32,
+        grow_log_enabled: bool,
+        egg_max_level: u32,
+        upgrade_rate: f32,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+        fairy_threshold_for_level: &mut dyn FnMut(u32, u32) -> u32,
+        create_goods: &mut dyn FnMut(u32) -> Option<CGoods>,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Result<Option<FairyImplantReport>, FairyExpBlock> {
+        let owner_id = self.base.base().base().owner_id();
+        let (old_level, exp, change_state) = {
+            let Some(goods) = self.base.get_goods_mut(0) else {
+                return Ok(None);
+            };
+            let Some(old_level) = goods.fairy_properties().map(|fairy| fairy.level) else {
+                return Ok(None);
+            };
+            let fairy_guid = goods.identity().ex_id.to_string().into_bytes();
+            let fairy_name = goods.name().to_vec();
+            let mut remaining = experience;
+            let Some(exp) = goods.fairy_exp_up(
+                &mut remaining,
+                FairyExpRuntime {
+                    player_id: owner_id,
+                    fairy_guid: &fairy_guid,
+                    fairy_name: &fairy_name,
+                    log_value: 0,
+                    suppress_grow_log: false,
+                    grow_log_enabled,
+                    egg_max_level,
+                    upgrade_rate,
+                },
+                &mut *fairy_threshold_for_level,
+            )?
+            else {
+                return Ok(None);
+            };
+            if exp.result > FairyExpUpResult::None {
+                goods
+                    .save_fairy_properties(factory)
+                    .expect("stored implantation fairy сохраняет catalog entry");
+            }
+            let change_state =
+                (exp.result == FairyExpUpResult::ChangeState).then_some(goods.identity().ex_id);
+            (old_level, exp, change_state)
+        };
+
+        let delivery = if let Some(goods_id) = change_state {
+            FairyImplantDelivery::StateChanged(self.fairy_change_state(
+                goods_id,
+                FairyState::Young,
+                10,
+                factory,
+                owner_progress_allows,
+                fairy_threshold_for_level,
+                create_goods,
+                encode_old_client,
+            ))
+        } else {
+            let goods = self
+                .base
+                .get_goods(0)
+                .expect("implantation source остаётся в slot 0 без state change");
+            FairyImplantDelivery::Update(FairyContainerGoodsUpdate {
+                message_type: FAIRY_GOODS_UPDATE_MESSAGE_TYPE,
+                player_id: owner_id,
+                goods: goods.identity(),
+                old_client_payload: encode_old_client(goods),
+            })
+        };
+        let resulting_goods = match &delivery {
+            FairyImplantDelivery::Update(_) => self.base.get_goods(0),
+            FairyImplantDelivery::StateChanged(FairyStateChangeOutcome::Changed { .. }) => {
+                self.base.get_goods(10)
+            }
+            FairyImplantDelivery::StateChanged(_) => None,
+        };
+        let Some(resulting_goods) = resulting_goods else {
+            return Ok(None);
+        };
+        let resulting_level = resulting_goods
+            .fairy_properties()
+            .map_or(old_level, |fairy| fairy.level);
+        let old_client_payload = match &delivery {
+            FairyImplantDelivery::Update(update) => update.old_client_payload.clone(),
+            FairyImplantDelivery::StateChanged(_) => encode_old_client(resulting_goods),
+        };
+        Ok(Some(FairyImplantReport {
+            old_level,
+            exp,
+            goods: resulting_goods.identity(),
+            goods_name: resulting_goods.name().to_vec(),
+            resulting_level,
+            old_client_payload,
+            delivery,
+        }))
     }
 
     #[allow(clippy::too_many_arguments)]

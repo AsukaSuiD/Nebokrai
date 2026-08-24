@@ -46,6 +46,9 @@
 //! адресные `0xBF926/0xBF927` проходят одним вертикальным сценарием.
 //! `0x8FC17..0x8FC1B` ведут полный synthesis lifecycle: open-lock, list/search,
 //! formula, payment/RNG/resources/result/broadcast и terminal release.
+//! `0x8FC13..0x8FC16` замыкают ordinary-fairy lifecycle: hatch timer и
+//! periodic completion, implantation с точным расходом vigour/crystal,
+//! syncretize со state/container/player effects и positional setup wire.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -57,6 +60,7 @@
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\goodsmessage.cpp
 
 use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyCombineCheck;
+use crate::gameserver::appserver::container::cfairycontainer::FairySyncreticProperty;
 use crate::gameserver::appserver::player::{
     BattleFairyCombineReport, BattleFairyPotentialAllocationReport,
     BattleFairyPotentialResetReport, BattleFairySummonReport, BattleFairyUpgradeReport,
@@ -72,13 +76,19 @@ use crate::gameserver::gameserver::game::{
     CGame, CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
     CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport,
     CiQingOtherPersonTarget, CiQingSetupQueryReport, EquipmentComposeContext,
-    EquipmentDaKongContext, GoodsDestroyConfirmReport, GoodsDestroyContext, GoodsDestroyOpenReport,
-    SynthesisComposeReport, SynthesisContext, SynthesisOpenReport,
+    EquipmentDaKongContext, FairyContext, FairyHatchReport, FairyImplantResultReport,
+    FairySetupQueryReport, FairySyncretizeResultReport, GoodsDestroyConfirmReport,
+    GoodsDestroyContext, GoodsDestroyOpenReport, SynthesisComposeReport, SynthesisContext,
+    SynthesisOpenReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
 
 const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
+const UPDATE_FAIRY_HATCH: u32 = 0x0008_fc13;
+const IMPLANT_FAIRY_EXPERIENCE: u32 = 0x0008_fc14;
+const SYNCRETIZE_FAIRY: u32 = 0x0008_fc15;
+const QUERY_FAIRY_SETUP: u32 = 0x0008_fc16;
 const OPEN_SYNTHESIS: u32 = 0x0008_fc17;
 const QUERY_SYNTHESIS_LIST: u32 = 0x0008_fc18;
 const QUERY_SYNTHESIS_FORMULA: u32 = 0x0008_fc19;
@@ -121,6 +131,7 @@ pub(crate) trait GameGoodsMessageRuntime:
     + EquipmentComposeContext
     + EquipmentDaKongContext
     + GoodsDestroyContext
+    + FairyContext
     + SynthesisContext
 {
     fn run_battle_fairy_reset_script(
@@ -198,6 +209,11 @@ pub(crate) struct GoodsSessionEndReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameGoodsMessageOutcome {
     MissingPlayer,
+    FairyUnavailable,
+    FairyHatch(FairyHatchReport),
+    FairyImplant(FairyImplantResultReport),
+    FairySyncretize(FairySyncretizeResultReport),
+    FairySetup(FairySetupQueryReport),
     BattleFairyCombineCheck(BattleFairyCombineCheck),
     BattleFairyCombine(BattleFairyCombineReport),
     BattleFairyUpgrade(BattleFairyUpgradeReport),
@@ -254,7 +270,11 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
-        OPEN_SYNTHESIS
+        UPDATE_FAIRY_HATCH
+            | IMPLANT_FAIRY_EXPERIENCE
+            | SYNCRETIZE_FAIRY
+            | QUERY_FAIRY_SETUP
+            | OPEN_SYNTHESIS
             | QUERY_SYNTHESIS_LIST
             | QUERY_SYNTHESIS_FORMULA
             | COMPOSE_SYNTHESIS
@@ -309,6 +329,81 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             .ok_or(GameGoodsMessageError::MissingField(field))
     };
     let outcome = match message_type {
+        UPDATE_FAIRY_HATCH => {
+            if !game
+                .find_player(player_id)
+                .is_some_and(|player| player.fairy_container_enabled())
+            {
+                GameGoodsMessageOutcome::FairyUnavailable
+            } else {
+                let slot = match read_long(message, "fairy hatch slot") {
+                    Ok(value) => value as u32,
+                    Err(error) => return Some(Err(error)),
+                };
+                let action = match message.base_mut().get_char() {
+                    Some(value) => value,
+                    None => {
+                        return Some(Err(GameGoodsMessageError::MissingField(
+                            "fairy hatch action",
+                        )));
+                    }
+                };
+                GameGoodsMessageOutcome::FairyHatch(
+                    game.update_fairy_hatch_state(player_id, slot, action, runtime),
+                )
+            }
+        }
+        IMPLANT_FAIRY_EXPERIENCE => {
+            let Some(player) = game.find_player(player_id) else {
+                unreachable!("resolved player checked before goods dispatch")
+            };
+            if !player.fairy_container_enabled() {
+                GameGoodsMessageOutcome::FairyUnavailable
+            } else {
+                let needs_vigour = player
+                    .fairy_container()
+                    .base()
+                    .get_goods(0)
+                    .and_then(|goods| goods.fairy_properties())
+                    .is_some_and(|fairy| {
+                        !((fairy.fairy_state == 0
+                            && game.globe_setup().fairy_egg_max_level() <= fairy.level)
+                            || fairy.ripe_max_level <= fairy.level)
+                    });
+                let requested_vigour = if needs_vigour {
+                    match read_long(message, "fairy implantation vigour") {
+                        Ok(value) => value as u32,
+                        Err(error) => return Some(Err(error)),
+                    }
+                } else {
+                    0
+                };
+                GameGoodsMessageOutcome::FairyImplant(game.implant_fairy_experience(
+                    player_id,
+                    requested_vigour,
+                    runtime,
+                ))
+            }
+        }
+        SYNCRETIZE_FAIRY => {
+            if !game
+                .find_player(player_id)
+                .is_some_and(|player| player.fairy_container_enabled())
+            {
+                GameGoodsMessageOutcome::FairyUnavailable
+            } else {
+                let property = match read_long(message, "fairy syncretic property") {
+                    Ok(0) => FairySyncreticProperty::FairyAttribute,
+                    Ok(_) => FairySyncreticProperty::GrowingRate,
+                    Err(error) => return Some(Err(error)),
+                };
+                GameGoodsMessageOutcome::FairySyncretize(
+                    game.syncretize_fairy(player_id, property, runtime)
+                        .expect("enabled fairy player remains registered during dispatch"),
+                )
+            }
+        }
+        QUERY_FAIRY_SETUP => GameGoodsMessageOutcome::FairySetup(game.query_fairy_setup(player_id)),
         OPEN_SYNTHESIS => GameGoodsMessageOutcome::SynthesisOpen(
             game.open_synthesis(player_id, runtime)
                 .expect("resolved message player остаётся в CGame"),

@@ -30,8 +30,10 @@
 //! responses, поэтому отдельный scheduler не требуется.
 //! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
 //! изменение самих max не выполняет этот clamp без конкретного caller-а.
-//! Как в связном `RefreshContainerOwners`, достигнутые equipment и
-//! battle-fairy containers принадлежат player type `400` с его numeric ID;
+//! Как в связном `RefreshContainerOwners`, достигнутые equipment,
+//! ordinary-fairy и battle-fairy containers принадлежат player type `400` с
+//! его numeric ID. Ordinary fairy получает exact volume 14 и persisted
+//! enable/vigour/experience; periodic hatcher caller замкнут через `CGame`;
 //! Depot-password vertical дополнительно материализует `m_eProgress`, оба
 //! changing-guard-а, password byte-string и owned `CBank/CDepot`; numeric
 //! значения внутреннего `eProgress` не выходят в wire и потому заменены typed
@@ -151,6 +153,7 @@ use super::container::cequipmentcontainer::{
     EquipmentColumn, EquipmentOwnerPlayerFacts, EquipmentRemoveOutcome,
     EquipmentRemoveRuntimeFacts,
 };
+use super::container::cfairycontainer::CFairyContainer;
 use super::container::cgoodsshadowcontainer::{PlacedShadowGoods, ShadowRecordBlock};
 use super::container::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
@@ -878,6 +881,8 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) occupation: u8,
     pub(crate) pk_count: u16,
     pub(crate) experience: u32,
+    pub(crate) vigour: u32,
+    pub(crate) fairy_container_enabled: bool,
     pub(crate) health: u32,
     pub(crate) mana: u32,
     pub(crate) fetch_power: u32,
@@ -1112,6 +1117,7 @@ pub(crate) struct CPlayer {
     auction_goods: CVolumeLimitGoodsContainer,
     ci_qing: CVolumeLimitGoodsContainer,
     ci_qing_compose: CVolumeLimitGoodsContainer,
+    fairy_container: CFairyContainer,
     battle_fairy_container: CBattleFairyContainer,
 }
 
@@ -1148,6 +1154,8 @@ impl CPlayer {
         let _empty_release = ci_qing.set_container_volume(8);
         let mut ci_qing_compose = CVolumeLimitGoodsContainer::new();
         let _empty_release = ci_qing_compose.set_container_volume(3);
+        let mut fairy_container = CFairyContainer::new();
+        let _empty_release = fairy_container.base_mut().set_container_volume(14);
         let mut player = Self {
             move_shape,
             figure,
@@ -1194,6 +1202,7 @@ impl CPlayer {
             auction_goods: CVolumeLimitGoodsContainer::new(),
             ci_qing,
             ci_qing_compose,
+            fairy_container,
             battle_fairy_container: CBattleFairyContainer::new(),
         };
         player.refresh_reached_container_owners(owner_id);
@@ -2109,6 +2118,14 @@ impl CPlayer {
 
     pub(crate) const fn battle_fairy_container(&self) -> &CBattleFairyContainer {
         &self.battle_fairy_container
+    }
+
+    pub(crate) const fn fairy_container(&self) -> &CFairyContainer {
+        &self.fairy_container
+    }
+
+    pub(crate) const fn fairy_container_mut(&mut self) -> &mut CFairyContainer {
+        &mut self.fairy_container
     }
 
     pub(crate) const fn battle_fairy_container_mut(&mut self) -> &mut CBattleFairyContainer {
@@ -3940,6 +3957,10 @@ impl CPlayer {
         self.ci_qing_compose
             .base_mut()
             .set_owner(PLAYER_TYPE, player_id);
+        self.fairy_container
+            .base_mut()
+            .base_mut()
+            .set_owner(PLAYER_TYPE, player_id);
         self.battle_fairy_container
             .base_mut()
             .base_mut()
@@ -3961,6 +3982,28 @@ impl CPlayer {
 
     pub(crate) const fn set_experience(&mut self, value: u32) {
         self.base_properties.experience = value;
+    }
+
+    pub(crate) const fn experience(&self) -> u32 {
+        self.base_properties.experience
+    }
+
+    pub(crate) const fn vigour(&self) -> u32 {
+        self.base_properties.vigour
+    }
+
+    pub(crate) const fn set_vigour(&mut self, value: u32) {
+        self.base_properties.vigour = value;
+    }
+
+    pub(crate) const fn fairy_container_enabled(&self) -> bool {
+        self.base_properties.fairy_container_enabled
+    }
+
+    /// Граница восстановления `m_BaseProperty.bFairyContainerEnabled` из
+    /// persisted player snapshot; default остаётся выключенным до decode.
+    pub(crate) const fn set_fairy_container_enabled(&mut self, value: bool) {
+        self.base_properties.fairy_container_enabled = value;
     }
 
     pub(crate) const fn health(&self) -> u32 {

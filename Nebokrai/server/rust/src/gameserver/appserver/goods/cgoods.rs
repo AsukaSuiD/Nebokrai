@@ -197,6 +197,28 @@ impl CGoods {
         self.fairy_properties.as_mut()
     }
 
+    /// Exact `CGoods::HatchBegin`: только готовое яйцо без активного timer-а.
+    pub(crate) fn hatch_begin(&mut self, current_tick: u32, egg_max_level: u32) -> bool {
+        let Some(fairy) = self.fairy_properties_mut() else {
+            return false;
+        };
+        if fairy.hatch_start_time != 0 || fairy.fairy_state != 0 || fairy.level < egg_max_level {
+            return false;
+        }
+        fairy.hatch_start_time = current_tick;
+        true
+    }
+
+    /// Exact `CGoods::HatchStop`: наличие fairy property достаточно, поэтому
+    /// повторная остановка также считается успешной.
+    pub(crate) fn hatch_stop(&mut self) -> bool {
+        let Some(fairy) = self.fairy_properties_mut() else {
+            return false;
+        };
+        fairy.hatch_start_time = 0;
+        true
+    }
+
     pub(crate) const fn battle_fairy_property(&self) -> Option<&CBattleFairyProperty> {
         self.battle_fairy_property.as_ref()
     }

@@ -9,7 +9,8 @@
 //! Typed loaders/accessors накладываются только на подтверждённые offsets:
 //! create-role limit остаётся signed `i16`, country names/identities и special
 //! string — fixed C-строки, auction/JJC/DbMisc поля читаются из общего snapshot.
-//! BattleFairy и CiQing feature gates читаются из подтверждённых byte offsets.
+//! BattleFairy и CiQing feature gates, а также полный ordinary-fairy setup
+//! `+0x85C..+0x8A8` читаются из подтверждённых byte offsets.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
 //! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Nation contender damage
 //! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
@@ -61,6 +62,18 @@ const DIED_STATE_TIME_OFFSET: usize = 0x56C;
 const MAX_FETCH_POWER_OFFSET: usize = 0x900;
 const BATTLE_FAIRY_ENABLED_OFFSET: usize = 0x904;
 const CI_QING_ENABLED_OFFSET: usize = 0xD00;
+const FAIRY_EGG_MAX_LEVEL_OFFSET: usize = 0x85C;
+const FAIRY_HATCH_TIME_OFFSET: usize = 0x860;
+const FAIRY_VIGOUR_CRYSTAL_SCALE_OFFSET: usize = 0x864;
+const FAIRY_EXP_VIGOUR_SCALE_OFFSET: usize = 0x868;
+const FAIRY_UPGRADE_RATE_OFFSET: usize = 0x870;
+const FAIRY_SYNCRETIC_SUCCESS_RATE_OFFSET: usize = 0x874;
+const FAIRY_SYNCRETIC_RATE_N_OFFSET: usize = 0x878;
+const FAIRY_SYNCRETIC_RATE_Y_OFFSET: usize = 0x87C;
+const FAIRY_SYNCRETIC_RATE_A_OFFSET: usize = 0x880;
+const FAIRY_SYNCRETIC_NEEDED_GOODS_OFFSET: usize = 0x8A0;
+const FAIRY_SYNCRETIC_NEEDED_EXP_OFFSET: usize = 0x8A4;
+const FAIRY_SYNCRETIC_NEEDED_MONEY_OFFSET: usize = 0x8A8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -354,6 +367,54 @@ impl GlobeSetupSnapshot {
     /// `bCiQing +0xD00` — общий gate клиентских операций татуировок.
     pub(crate) const fn ci_qing_enabled(&self) -> bool {
         self.bytes[CI_QING_ENABLED_OFFSET] != 0
+    }
+
+    pub(crate) fn fairy_egg_max_level(&self) -> u32 {
+        self.read_u32(FAIRY_EGG_MAX_LEVEL_OFFSET)
+    }
+
+    pub(crate) fn fairy_hatch_time(&self) -> u32 {
+        self.read_u32(FAIRY_HATCH_TIME_OFFSET)
+    }
+
+    pub(crate) fn fairy_vigour_crystal_scale(&self) -> f32 {
+        self.read_f32(FAIRY_VIGOUR_CRYSTAL_SCALE_OFFSET)
+    }
+
+    pub(crate) fn fairy_exp_vigour_scale(&self) -> f32 {
+        self.read_f32(FAIRY_EXP_VIGOUR_SCALE_OFFSET)
+    }
+
+    pub(crate) fn fairy_upgrade_rate(&self) -> f32 {
+        self.read_f32(FAIRY_UPGRADE_RATE_OFFSET)
+    }
+
+    pub(crate) fn fairy_syncretic_success_rate(&self) -> f32 {
+        self.read_f32(FAIRY_SYNCRETIC_SUCCESS_RATE_OFFSET)
+    }
+
+    pub(crate) fn fairy_syncretic_rate(&self, index: usize) -> f32 {
+        self.read_f32(FAIRY_SYNCRETIC_RATE_A_OFFSET + index * 4)
+    }
+
+    pub(crate) fn fairy_syncretic_rate_n(&self) -> f32 {
+        self.read_f32(FAIRY_SYNCRETIC_RATE_N_OFFSET)
+    }
+
+    pub(crate) fn fairy_syncretic_rate_y(&self) -> f32 {
+        self.read_f32(FAIRY_SYNCRETIC_RATE_Y_OFFSET)
+    }
+
+    pub(crate) fn fairy_syncretic_needed_goods(&self) -> u32 {
+        self.read_u32(FAIRY_SYNCRETIC_NEEDED_GOODS_OFFSET)
+    }
+
+    pub(crate) fn fairy_syncretic_needed_experience(&self) -> u32 {
+        self.read_u32(FAIRY_SYNCRETIC_NEEDED_EXP_OFFSET)
+    }
+
+    pub(crate) fn fairy_syncretic_needed_money(&self) -> u32 {
+        self.read_u32(FAIRY_SYNCRETIC_NEEDED_MONEY_OFFSET)
     }
 
     pub(crate) const fn da_kong_key(&self) -> bool {

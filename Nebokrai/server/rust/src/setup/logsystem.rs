@@ -8,6 +8,8 @@
 //! уникальность. Upgrade bytes `7/17/18` доступны battle-fairy audit caller-у;
 //! подтверждённый byte 56 немедленно передаётся
 //! `CDaKongXiangQian::SetLogKey`, остальные неподтверждённые offsets не именуются.
+//! Fairy grow/incubate/implantation/syncretize используют подтверждённый tail
+//! `60..63` того же snapshot-а.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -125,6 +127,22 @@ impl CLogSystem {
 
     pub(crate) fn private_chat_enabled(&self) -> bool {
         self.setting(49)
+    }
+
+    pub(crate) fn fairy_grow_enabled(&self) -> bool {
+        self.setting(60)
+    }
+
+    pub(crate) fn fairy_incubate_enabled(&self) -> bool {
+        self.setting(61)
+    }
+
+    pub(crate) fn fairy_implantation_enabled(&self) -> bool {
+        self.setting(62)
+    }
+
+    pub(crate) fn fairy_syncretize_enabled(&self) -> bool {
+        self.setting(63)
     }
 
     /// Читает 64 positional boolean-а и последующий `* original-name` список.
