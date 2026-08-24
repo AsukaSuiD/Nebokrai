@@ -86,7 +86,12 @@
 //! Основной CiQing delete сохраняет partial-amount семантику `DeleteGoods`.
 //! Hand mount читает exact addon `243/244`; hand consumption также сохраняет
 //! partial amount и не выдаёт reached `CGoods` projection за полный Clone.
-//! Other-person snapshot читает те же восемь owned CiQing slots без копий.
+//! CiQing property owner хранит ordered обычные/TaoZhuang map-ы и set ID.
+//! `UpdateCiQingProperty` сопоставляет равные по размеру ordered снимки и
+//! насыщает отрицательную разницу нулём; merge для клиента сохраняет unsigned
+//! wrapping addition. Other-person snapshot читает это состояние и те же
+//! восемь owned CiQing slots без копий. Универсальные equipment/addon формулы
+//! остаются обязательной runtime-границей до materialization всех combat scalar-ов.
 //! `skillmessage 0x90005` доведён до authorization и AI dispatch: feature/HP
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
@@ -1006,6 +1011,9 @@ pub(crate) struct CPlayer {
     combat_properties: PlayerCombatProperties,
     ci_qing_open: bool,
     ci_qing_list: BTreeSet<u32>,
+    ci_qing_add_values: BTreeMap<u32, u32>,
+    ci_qing_tao_zhuang_add_values: BTreeMap<u32, u32>,
+    tao_zhuang_id: u32,
     contend_state: bool,
     city_war_died_state: bool,
     city_war_died_state_time_ms: i32,
@@ -1079,6 +1087,9 @@ impl CPlayer {
             combat_properties: PlayerCombatProperties::default(),
             ci_qing_open: false,
             ci_qing_list: BTreeSet::new(),
+            ci_qing_add_values: BTreeMap::new(),
+            ci_qing_tao_zhuang_add_values: BTreeMap::new(),
+            tao_zhuang_id: 0,
             contend_state: false,
             city_war_died_state: false,
             city_war_died_state_time_ms: 0,
@@ -1352,6 +1363,50 @@ impl CPlayer {
 
     pub(crate) fn restore_ci_qing_entry(&mut self, base_index: u32) -> bool {
         self.ci_qing_list.insert(base_index)
+    }
+
+    pub(crate) fn ci_qing_property_snapshot(
+        &self,
+    ) -> (&BTreeMap<u32, u32>, &BTreeMap<u32, u32>, u32) {
+        (
+            &self.ci_qing_add_values,
+            &self.ci_qing_tao_zhuang_add_values,
+            self.tao_zhuang_id,
+        )
+    }
+
+    pub(crate) fn apply_ci_qing_property_snapshot(
+        &mut self,
+        add_values: BTreeMap<u32, u32>,
+        tao_zhuang_add_values: BTreeMap<u32, u32>,
+        tao_zhuang_id: u32,
+    ) {
+        self.ci_qing_add_values = add_values;
+        self.ci_qing_tao_zhuang_add_values = tao_zhuang_add_values;
+        self.tao_zhuang_id = tao_zhuang_id;
+    }
+
+    pub(crate) fn ci_qing_property_result(&self) -> BTreeMap<u32, u32> {
+        let mut result = self.ci_qing_add_values.clone();
+        for (&property, &value) in &self.ci_qing_tao_zhuang_add_values {
+            let current = result.entry(property).or_default();
+            *current = current.wrapping_add(value);
+        }
+        result
+    }
+
+    pub(crate) fn update_ci_qing_property_difference(
+        previous: &BTreeMap<u32, u32>,
+        current: &BTreeMap<u32, u32>,
+    ) -> Option<BTreeMap<u32, u32>> {
+        if previous.len() != current.len() {
+            return None;
+        }
+        let mut destination = BTreeMap::new();
+        for ((_, &previous), (&property, &current)) in previous.iter().zip(current) {
+            destination.insert(property, current.saturating_sub(previous));
+        }
+        Some(destination)
     }
 
     pub(crate) fn check_item_in_packet(&self, base_index: u32) -> u32 {
@@ -7308,20 +7363,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::UpdateCiQingProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:16110
-// RVA: 0x00046E90
-// ADDRESS: 00446e90
-// PROTOTYPE: void __thiscall UpdateCiQingProperty(map<unsigned_long,unsigned_long,std::less<unsigned_long>,std::allocator<std::pair<unsigned_long_const_,unsigned_long>_>_> param_1, map<unsigned_long,unsigned_long,std::less<unsigned_long>,std::allocator<std::pair<unsigned_long_const_,unsigned_long>_>_> param_2, map<unsigned_long,unsigned_long,struct_std::less<unsigned_long>,class_std::allocator<struct_std::pair<unsigned_long_const_,unsigned_long>_>_> * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::MountCiQingEquip
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -7750,20 +7791,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0004B370
 // ADDRESS: 0044b370
 // PROTOTYPE: void __thiscall SendBackCurBuyNode(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SendResultToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:16137
-// RVA: 0x0004B390
-// ADDRESS: 0044b390
-// PROTOTYPE: void __thiscall SendResultToClient(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

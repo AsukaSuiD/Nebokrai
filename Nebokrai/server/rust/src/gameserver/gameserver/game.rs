@@ -160,7 +160,10 @@
 //! Clone остаётся обязательной runtime-границей, поскольку `CGoods` ещё partial.
 //! Other-person `0x8FC35` объединяет ordered CiQing/TaoZhuang property maps,
 //! сериализует target identity, values-only sequence, owned CiQing goods и
-//! TaoZhuang ID; ещё не owned property maps приходят обязательными facts.
+//! TaoZhuang ID в адресный `0xC010F`. Delete/mount property tail получает от
+//! обязательного runtime-а полные combat snapshots до/после универсальных
+//! equipment/addon формул, а `CPlayer` сам вычисляет и сохраняет CiQing delta,
+//! объединяет TaoZhuang values и при изменении шлёт values-only `0xC0110`.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -1155,12 +1158,11 @@ pub(crate) trait CiQingComposeContext: CiQingMakeContext {
     fn publish_ci_qing_hand_consumption(&mut self, consumption: &CiQingHandConsumption)
     -> Vec<i32>;
     fn clone_ci_qing_hand_goods(&mut self, goods: &CGoods) -> Option<CGoods>;
-    fn ci_qing_other_person_facts(
+    fn mount_ci_qing_equipment(
         &mut self,
-        game: &CGame,
+        game: &mut CGame,
         player_id: i32,
-    ) -> CiQingOtherPersonFacts;
-    fn update_ci_qing_player_property(&mut self, game: &mut CGame, player_id: i32);
+    ) -> CiQingPropertyRuntimeSnapshot;
 }
 
 pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {
@@ -1329,7 +1331,7 @@ pub(crate) enum CiQingDeleteDelivery {
     Player(i32),
     PacketConsumption(Vec<i32>),
     ContainerConsumption(Vec<i32>),
-    PropertyUpdateDispatched,
+    PropertyUpdate(Vec<i32>),
 }
 
 #[must_use = "CiQing delete report хранит reset item, goods и property tail"]
@@ -1356,7 +1358,7 @@ pub(crate) enum CiQingMountDelivery {
     HandConsumption(Vec<i32>),
     PacketConsumption(Vec<i32>),
     ContainerAddition(Vec<i32>),
-    PropertyUpdateDispatched,
+    PropertyUpdate(Vec<i32>),
     Player(i32),
 }
 
@@ -1378,10 +1380,12 @@ pub(crate) struct CiQingMountReport {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CiQingOtherPersonFacts {
-    pub(crate) add_values: BTreeMap<u32, u32>,
+pub(crate) struct CiQingPropertyRuntimeSnapshot {
+    pub(crate) previous_type_values: BTreeMap<u32, u32>,
+    pub(crate) current_type_values: BTreeMap<u32, u32>,
     pub(crate) tao_zhuang_add_values: BTreeMap<u32, u32>,
     pub(crate) tao_zhuang_id: u32,
+    pub(crate) external_deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5079,10 +5083,9 @@ impl CGame {
                 ));
             report.goods_consumption = Some(consumption);
         }
-        context.update_ci_qing_player_property(self, player_id);
-        report
-            .deliveries
-            .push(CiQingDeleteDelivery::PropertyUpdateDispatched);
+        report.deliveries.push(CiQingDeleteDelivery::PropertyUpdate(
+            self.refresh_ci_qing_player_property(player_id, context),
+        ));
         report.outcome = CiQingDeleteOutcome::Deleted;
         Some(report)
     }
@@ -5192,10 +5195,9 @@ impl CGame {
             }
             report.rejected_clone = rejected.as_ref().map(CGoods::identity);
             report.addition = Some(addition);
-            context.update_ci_qing_player_property(self, player_id);
-            report
-                .deliveries
-                .push(CiQingMountDelivery::PropertyUpdateDispatched);
+            report.deliveries.push(CiQingMountDelivery::PropertyUpdate(
+                self.refresh_ci_qing_player_property(player_id, context),
+            ));
         }
 
         let material_log = CiQingLog {
@@ -5258,15 +5260,10 @@ impl CGame {
         let Some(target_player_id) = target_player_id else {
             return report;
         };
-        let facts = context.ci_qing_other_person_facts(self, target_player_id);
         let player = self
             .find_player(target_player_id)
             .expect("target ID разрешён через canonical player map");
-        let mut merged = facts.add_values;
-        for (property, value) in facts.tao_zhuang_add_values {
-            let current = merged.entry(property).or_default();
-            *current = current.wrapping_add(value);
-        }
+        let merged = player.ci_qing_property_result();
         let mut payload = Vec::new();
         payload.extend_from_slice(&player.shape().identity().object_type.to_le_bytes());
         payload.extend_from_slice(&player.player_id().to_le_bytes());
@@ -5283,12 +5280,53 @@ impl CGame {
                 payload.extend_from_slice(&context.encode_goods_for_old_client(goods));
             }
         }
-        payload.extend_from_slice(&facts.tao_zhuang_id.to_le_bytes());
+        payload.extend_from_slice(&player.ci_qing_property_snapshot().2.to_le_bytes());
         let mut message = CMessage::new(0x0c_010f);
         message.base_mut().add(&payload);
         report.delivery = Some(message.send_to_player(self.net_server(), requester_id));
         report.payload = payload;
         report
+    }
+
+    fn refresh_ci_qing_player_property<Context: CiQingComposeContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Vec<i32> {
+        let snapshot = context.mount_ci_qing_equipment(self, player_id);
+        let mut deliveries = snapshot.external_deliveries;
+        let add_values = CPlayer::update_ci_qing_property_difference(
+            &snapshot.previous_type_values,
+            &snapshot.current_type_values,
+        );
+        let (changed, result_values) = {
+            let player = self
+                .players
+                .get_mut(&player_id)
+                .expect("property runtime получает canonical player");
+            let previous_add_values = player.ci_qing_property_snapshot().0;
+            let changed = add_values
+                .as_ref()
+                .is_some_and(|add_values| previous_add_values != add_values);
+            let stored_add_values =
+                add_values.unwrap_or_else(|| player.ci_qing_property_snapshot().0.clone());
+            player.apply_ci_qing_property_snapshot(
+                stored_add_values,
+                snapshot.tao_zhuang_add_values,
+                snapshot.tao_zhuang_id,
+            );
+            (changed, player.ci_qing_property_result())
+        };
+        if changed {
+            let mut message = CMessage::new(0x0c_0110);
+            message.add_long(player_id);
+            message.add_long(player_id);
+            for value in result_values.values() {
+                message.add_ulong(*value);
+            }
+            deliveries.push(message.send_to_player(self.net_server(), player_id));
+        }
+        deliveries
     }
 
     pub(crate) const fn ling_bao_setup(&self) -> &CLingBaoSetup {
