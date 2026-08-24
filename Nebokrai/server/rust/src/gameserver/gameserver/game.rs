@@ -185,8 +185,8 @@
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
 //! Potential reset `0x8FC2B` продолжает тот же route: расход первого
 //! `ZHQLS01` предшествует addon/player rollback, затем идут `0xBF721` и
-//! `0xBF918`; универсальная `DeleteGoods`-публикация вызывается обязательным
-//! context с полным consumption/removal snapshot, без придуманного packet-а.
+//! `0xBF918`; packet stack публикуется concrete `0xC0101` при полном удалении
+//! либо `0xC0102` с итоговым amount при частичном расходе.
 //! GodsBattle runtime продолжает startup owner: player Add/Remove tail
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
@@ -1750,13 +1750,6 @@ pub(crate) trait BattleFairyRuntimeContext: BattleFairyDeathContext {
         origin: &CShape,
         message: &CMessage,
     ) -> Result<i32, ShapeCoordinateBlock>;
-}
-
-pub(crate) trait BattleFairyPotentialResetContext: BattleFairyDeathContext {
-    fn publish_battle_fairy_packet_consumption(
-        &mut self,
-        effect: &BattleFairyPotentialResetEffect,
-    ) -> Vec<i32>;
 }
 
 pub(crate) trait BattleFairySkillResetContext {
@@ -12456,9 +12449,48 @@ impl CGame {
         message.send(self, false).into_iter().collect()
     }
 
+    fn send_battle_fairy_packet_consumption(
+        &self,
+        effect: &BattleFairyPotentialResetEffect,
+    ) -> Vec<i32> {
+        let BattleFairyPotentialResetEffect::PacketItemConsumed {
+            player_id,
+            goods,
+            position,
+            previous_amount,
+            remaining_amount,
+            consumed,
+            ..
+        } = effect
+        else {
+            return Vec::new();
+        };
+        let Some(position) = position else {
+            return Vec::new();
+        };
+        if !consumed {
+            return Vec::new();
+        }
+        if *remaining_amount == 0 {
+            let mut message = CS2CContainerObjectMove::default();
+            message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+            message.set_source_container(PLAYER_TYPE, *player_id, *position);
+            message.set_source_container_extend_id(1);
+            message.set_source_object(goods.object_type, goods.ex_id, *previous_amount);
+            return vec![message.send_to_player(self, *player_id)];
+        }
+
+        let mut message = CS2CContainerObjectAmountChange::default();
+        message.set_source_container(PLAYER_TYPE, *player_id, *position);
+        message.set_source_container_extend_id(1);
+        message.set_object(goods.object_type, goods.ex_id);
+        message.set_object_amount(*remaining_amount);
+        vec![message.send_to_player(self, *player_id)]
+    }
+
     /// Исполняемый entry point goods-message `0x8FC2B`: reset item ищется и
     /// расходуется в owned player packet до potential/player mutations.
-    pub(crate) fn reset_battle_fairy_potential<Context: BattleFairyPotentialResetContext>(
+    pub(crate) fn reset_battle_fairy_potential<Context: BattleFairyDeathContext>(
         &mut self,
         player_id: i32,
         context: &mut Context,
@@ -12494,7 +12526,7 @@ impl CGame {
                     report
                         .deliveries
                         .push(BattleFairyPotentialResetDelivery::PacketItem(
-                            context.publish_battle_fairy_packet_consumption(&effect),
+                            self.send_battle_fairy_packet_consumption(&effect),
                         ));
                 }
                 BattleFairyPotentialResetEffect::PropertiesChanged { player_id } => {

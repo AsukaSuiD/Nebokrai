@@ -86,16 +86,16 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
 };
 use crate::gameserver::appserver::session::csessionfactory::{PlugExitReport, SessionEndReport};
 use crate::gameserver::gameserver::game::{
-    BattleFairyDeathContext, BattleFairyPotentialResetContext, BattleFairyRuntimeContext,
-    BattleFairyScriptSkillAttachReport, CGame, CiQingComposeContext, CiQingComposeReport,
-    CiQingDeleteReport, CiQingGoodsQueryReport, CiQingMakeContext, CiQingMakeReport,
-    CiQingMountReport, CiQingOtherPersonReport, CiQingOtherPersonTarget, CiQingSetupQueryReport,
-    ContainerScriptActionReport, ContainerScriptContext, EquipmentComposeContext,
-    EquipmentDaKongContext, EquipmentUpgradeContext, FairyContext, FairyHatchReport,
-    FairyImplantResultReport, FairySetupQueryReport, FairySyncretizeResultReport,
-    GoodsDestroyConfirmReport, GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport,
-    HotkeyChangeReport, HotkeyContext, HotkeyRemovalReport, PlayerEquipmentInspectionReport,
-    SynthesisComposeReport, SynthesisContext, SynthesisOpenReport,
+    BattleFairyDeathContext, BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, CGame,
+    CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
+    CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport,
+    CiQingOtherPersonTarget, CiQingSetupQueryReport, ContainerScriptActionReport,
+    ContainerScriptContext, EquipmentComposeContext, EquipmentDaKongContext,
+    EquipmentUpgradeContext, FairyContext, FairyHatchReport, FairyImplantResultReport,
+    FairySetupQueryReport, FairySyncretizeResultReport, GoodsDestroyConfirmReport,
+    GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport, HotkeyChangeReport,
+    HotkeyContext, HotkeyRemovalReport, PlayerEquipmentInspectionReport, SynthesisComposeReport,
+    SynthesisContext, SynthesisOpenReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -146,7 +146,6 @@ const END_GOODS_SESSION: u32 = 0x0008_fc25;
 
 pub(crate) trait GameGoodsMessageRuntime:
     BattleFairyDeathContext
-    + BattleFairyPotentialResetContext
     + BattleFairyRuntimeContext
     + CiQingMakeContext
     + CiQingComposeContext
