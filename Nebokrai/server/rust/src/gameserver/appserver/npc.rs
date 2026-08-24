@@ -10,10 +10,13 @@
 //!
 //! Специализированная ветвь `CBaseObject::CreateObject(500,id)` живёт у factory
 //! owner-а в `baseobject.rs`. `Vec<u8>` сохраняет legacy script без UTF-8.
+//! Player interaction использует owned script path и immutable shape-view;
+//! NPC virtual figure для distance остаётся нулевой, как достигнутый base shape.
 //! Полная shape serialization, around-message, deferred delete и Talk остаются
 //! RAW ниже до подключения соответствующих owner-цепочек.
 
 use super::moveshape::CMoveShape;
+use super::shape::{ShapeFigure, ShapeView};
 
 const NPC_TYPE: i32 = 500;
 
@@ -69,6 +72,18 @@ impl CNpc {
         &self.script_file
     }
 
+    pub(crate) fn shape_view(&self) -> Option<ShapeView> {
+        let shape = self.move_shape.shape();
+        Some(ShapeView {
+            identity: shape.identity(),
+            tile_x: shape.get_tile_x().ok()?,
+            tile_y: shape.get_tile_y().ok()?,
+            pos_x_bits: shape.get_pos_x().to_bits(),
+            pos_y_bits: shape.get_pos_y().to_bits(),
+            figure: ShapeFigure::default(),
+        })
+    }
+
     pub(crate) const fn set_show_list(&mut self, show_list: bool) {
         self.show_list = show_list;
     }
@@ -121,20 +136,6 @@ impl CNpc {
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.h
-
-// ============================================================================
-// FUNCTION: CNpc::GetScriptFile
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.h:48
-// RVA: 0x000FAA60
-// ADDRESS: 004faa60
-// PROTOTYPE: char * __thiscall GetScriptFile(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CNpc::AddToByteArray

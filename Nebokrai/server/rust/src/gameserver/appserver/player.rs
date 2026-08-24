@@ -6352,6 +6352,8 @@ impl CPlayer {
             identity,
             tile_x: self.shape().get_tile_x().ok()?,
             tile_y: self.shape().get_tile_y().ok()?,
+            pos_x_bits: self.shape().get_pos_x().to_bits(),
+            pos_y_bits: self.shape().get_pos_y().to_bits(),
             figure: self.figure,
         })
     }

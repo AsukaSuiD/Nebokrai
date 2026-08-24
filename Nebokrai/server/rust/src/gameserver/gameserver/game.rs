@@ -17279,6 +17279,8 @@ fn shape_view(
         identity: shape.identity(),
         tile_x: shape.get_tile_x().ok()?,
         tile_y: shape.get_tile_y().ok()?,
+        pos_x_bits: shape.get_pos_x().to_bits(),
+        pos_y_bits: shape.get_pos_y().to_bits(),
         figure,
     })
 }

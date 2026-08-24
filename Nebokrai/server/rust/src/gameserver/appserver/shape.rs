@@ -30,6 +30,9 @@
 //! существовать, а абсолютная разница X и Y обязана быть меньше двух. Typed
 //! region argument разрешает owned area-index обратно в координаты вместо
 //! сохранения двух сырых `CArea*`.
+//! `Distance(CShape*)` RVA `0x0005B390` выражен через immutable `ShapeView`:
+//! сохраняются round-to-nearest-even positions, virtual figure extents,
+//! wrapping subtraction и signed max без искусственного clamp к нулю.
 //! `InitMoveCheckCellList` RVA `0x0005BE60` материализован как process-owned
 //! registry: точные 96 offsets распределены по трём figure и восьми direction,
 //! insertion-order и повторный append сохранены, `Vec` заменяет MSVC list.
@@ -254,7 +257,31 @@ pub(crate) struct ShapeView {
     pub(crate) identity: ShapeIdentity,
     pub(crate) tile_x: i32,
     pub(crate) tile_y: i32,
+    pub(crate) pos_x_bits: u32,
+    pub(crate) pos_y_bits: u32,
     pub(crate) figure: ShapeFigure,
+}
+
+impl ShapeView {
+    /// Exact Chebyshev-like `CShape::Distance(CShape*)` с вычитанием figure
+    /// half-extents каждой стороны. Отрицательный результат допустим.
+    pub(crate) fn distance(self, other: Self) -> i32 {
+        let self_x = f32::from_bits(self.pos_x_bits).round_ties_even() as i32;
+        let other_x = f32::from_bits(other.pos_x_bits).round_ties_even() as i32;
+        let self_y = f32::from_bits(self.pos_y_bits).round_ties_even() as i32;
+        let other_y = f32::from_bits(other.pos_y_bits).round_ties_even() as i32;
+        let horizontal = (self_x.wrapping_sub(other_x).unsigned_abs() as i32)
+            .wrapping_sub(self.figure.get(2) as i32)
+            .wrapping_sub(other.figure.get(2) as i32);
+        let vertical = (self_y.wrapping_sub(other_y).unsigned_abs() as i32)
+            .wrapping_sub(self.figure.get(0) as i32)
+            .wrapping_sub(other.figure.get(0) as i32);
+        if vertical < horizontal {
+            horizontal
+        } else {
+            vertical
+        }
+    }
 }
 
 pub(crate) trait ShapeResolver {
@@ -877,20 +904,6 @@ fn read_shape_wire<const N: usize>(
 // IMPLEMENTED: `CShape::GetLeftDir` материализован выше; покрытый raw-блок удалён.
 
 // IMPLEMENTED: `CShape::GetRightDir` материализован выше; покрытый raw-блок удалён.
-
-// ============================================================================
-// FUNCTION: CShape::Distance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\shape.cpp:408
-// RVA: 0x0005B390
-// ADDRESS: 0045b390
-// PROTOTYPE: long __thiscall Distance(CShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CShape::Distance

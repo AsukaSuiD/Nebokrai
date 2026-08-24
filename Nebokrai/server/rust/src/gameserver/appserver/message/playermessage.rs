@@ -21,6 +21,10 @@
 //! Stat allocation `0x8FA01` сохраняет no-point/no-read guard, legacy STR gate,
 //! occupation/sex HP/MP increments, virtual property recompute и exact
 //! `0xBF702 = m_Property[0x9c] + base max HP/MP` response.
+//! NPC interaction `0x8FA03` замыкает player/region/death/progress guards,
+//! around-area и figure-aware distance, `GS0057` и контекстный RunScript
+//! request; общий `RunScript/CScript` VM ещё не материализован и остаётся
+//! точно названной runtime-границей этого caller-а.
 //! Equipment-state refresh `0x8FA16` сохраняет packed local-time decode,
 //! strict grace-minute comparison, addon mutation и around `0xBF928`.
 //! Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -39,6 +43,7 @@ use crate::public::guid::CGuid;
 
 const ALLOCATE_STAT_POINT: u32 = 0x0008_fa01;
 const REQUEST_RELIVE: u32 = 0x0008_fa02;
+const INTERACT_WITH_NPC: u32 = 0x0008_fa03;
 const REQUEST_TRADE: u32 = 0x0008_fa06;
 const ANSWER_TRADE: u32 = 0x0008_fa07;
 const TOGGLE_TRADE_READY: u32 = 0x0008_fa0b;
@@ -74,6 +79,17 @@ pub(crate) trait GamePlayerMessageRuntime:
     /// Выполняет concrete `PlayerRunScript` с server-trusted path; VM и
     /// script-data owner ещё не материализованы в `CGame`.
     fn run_player_script(&mut self, game: &mut CGame, player_id: i32, path: &[u8]);
+
+    /// Строит exact `stRunScript { pRegion, pPlayer, pNpc, strFile }` и вызывает
+    /// `RunScript` с `CGame::GetScriptFileData(path)`, включая missing-data call.
+    fn run_npc_player_script(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        region_id: i32,
+        npc_id: i32,
+        path: &[u8],
+    );
 
     /// Возвращает legacy 32-bit `_time` seconds для quest countdown.
     fn player_wall_time_seconds(&mut self) -> i32;
@@ -111,6 +127,12 @@ pub(crate) enum GamePlayerMessageOutcome {
     TargetMissing,
     StatPointUnavailable,
     StatPointAllocated,
+    NpcInteractionRegionMissing,
+    NpcInteractionBlocked,
+    NpcInteractionTargetMissing,
+    NpcInteractionTooFar,
+    NpcInteractionScriptSuppressed,
+    NpcInteractionScriptRequested,
     Relived,
     PlayerScriptRun,
     TradeRequested,
@@ -151,6 +173,10 @@ pub(crate) struct GamePlayerMessageReport {
     pub(crate) message_type: u32,
     pub(crate) player_id: Option<i32>,
     pub(crate) target_player_id: Option<i32>,
+    pub(crate) npc_id: Option<i32>,
+    pub(crate) npc_distance: Option<i32>,
+    pub(crate) npc_script_file: Vec<u8>,
+    pub(crate) npc_script_data_present: Option<bool>,
     pub(crate) friend_name: Vec<u8>,
     pub(crate) lei_ting_reward: Option<u16>,
     pub(crate) equipment_goods_id: Option<CGuid>,
@@ -274,6 +300,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         message_type,
         ALLOCATE_STAT_POINT
             | REQUEST_RELIVE
+            | INTERACT_WITH_NPC
             | REQUEST_TRADE
             | ANSWER_TRADE
             | TOGGLE_TRADE_READY
@@ -299,6 +326,10 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         message_type,
         player_id,
         target_player_id: None,
+        npc_id: None,
+        npc_distance: None,
+        npc_script_file: Vec::new(),
+        npc_script_data_present: None,
         friend_name: Vec::new(),
         lei_ting_reward: None,
         equipment_goods_id: None,
@@ -384,6 +415,60 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         REQUEST_RELIVE => {
             report.relive = Some(game.relive_gods_battle_player(player_id, 0, runtime));
             report.outcome = GamePlayerMessageOutcome::Relived;
+        }
+        INTERACT_WITH_NPC => {
+            let Some(region_id) = message
+                .region_id()
+                .filter(|region_id| game.find_region(*region_id).is_some())
+            else {
+                report.outcome = GamePlayerMessageOutcome::NpcInteractionRegionMissing;
+                return Some(Ok(report));
+            };
+            let Some(player) = game.find_player(player_id) else {
+                return Some(Ok(report));
+            };
+            if player.is_dead() || player.current_progress() != PlayerProgress::None {
+                report.outcome = GamePlayerMessageOutcome::NpcInteractionBlocked;
+                return Some(Ok(report));
+            }
+            let Some(npc_id) = message.base_mut().get_long() else {
+                return Some(Err(GamePlayerMessageError::MissingField("NPC id")));
+            };
+            report.npc_id = Some(npc_id);
+            let target = game.find_region(region_id).and_then(|region| {
+                let player = game.find_player(player_id)?;
+                let npc = region.base().find_npc_by_id(npc_id)?;
+                if !player
+                    .shape()
+                    .is_in_around(npc.move_shape().shape(), region.base())
+                {
+                    return None;
+                }
+                let distance = npc.shape_view()?.distance(player.shape_view()?);
+                Some((distance, npc.script_file().to_vec()))
+            });
+            let Some((distance, script_file)) = target else {
+                report.outcome = GamePlayerMessageOutcome::NpcInteractionTargetMissing;
+                return Some(Ok(report));
+            };
+            report.npc_distance = Some(distance);
+            report.npc_script_file.clone_from(&script_file);
+            if distance >= 9 {
+                let notification =
+                    colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0057"));
+                report.deliveries.push(GamePlayerMessageDelivery::Player(
+                    notification.send_to_player(game.net_server(), player_id),
+                ));
+                report.outcome = GamePlayerMessageOutcome::NpcInteractionTooFar;
+                return Some(Ok(report));
+            }
+            if script_file.first() == Some(&b'0') {
+                report.outcome = GamePlayerMessageOutcome::NpcInteractionScriptSuppressed;
+                return Some(Ok(report));
+            }
+            report.npc_script_data_present = Some(game.script_file_data(&script_file).is_some());
+            runtime.run_npc_player_script(game, player_id, region_id, npc_id, &script_file);
+            report.outcome = GamePlayerMessageOutcome::NpcInteractionScriptRequested;
         }
         RUN_HELP_SCRIPT => {
             runtime.run_player_script(game, player_id, b"scripts/help/help.script");
