@@ -158,6 +158,9 @@
 //! Mount `0x8FC34` сохраняет read-before-gate wire, addon-driven slot/chance,
 //! failure destruction и success Clone→hand delete→CiQing add; полный native
 //! Clone остаётся обязательной runtime-границей, поскольку `CGoods` ещё partial.
+//! Other-person `0x8FC35` объединяет ordered CiQing/TaoZhuang property maps,
+//! сериализует target identity, values-only sequence, owned CiQing goods и
+//! TaoZhuang ID; ещё не owned property maps приходят обязательными facts.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -1152,6 +1155,11 @@ pub(crate) trait CiQingComposeContext: CiQingMakeContext {
     fn publish_ci_qing_hand_consumption(&mut self, consumption: &CiQingHandConsumption)
     -> Vec<i32>;
     fn clone_ci_qing_hand_goods(&mut self, goods: &CGoods) -> Option<CGoods>;
+    fn ci_qing_other_person_facts(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+    ) -> CiQingOtherPersonFacts;
     fn update_ci_qing_player_property(&mut self, game: &mut CGame, player_id: i32);
 }
 
@@ -1367,6 +1375,30 @@ pub(crate) struct CiQingMountReport {
     pub(crate) addition: Option<CiQingContainerAddition>,
     pub(crate) rejected_clone: Option<ShapeIdentity>,
     pub(crate) deliveries: Vec<CiQingMountDelivery>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CiQingOtherPersonFacts {
+    pub(crate) add_values: BTreeMap<u32, u32>,
+    pub(crate) tao_zhuang_add_values: BTreeMap<u32, u32>,
+    pub(crate) tao_zhuang_id: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CiQingOtherPersonTarget {
+    Id(i32),
+    Name(Vec<u8>),
+    UnsupportedMode(i8),
+}
+
+#[must_use = "other-person report хранит target resolution, payload и delivery"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingOtherPersonReport {
+    pub(crate) requester_id: i32,
+    pub(crate) target: CiQingOtherPersonTarget,
+    pub(crate) target_player_id: Option<i32>,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) delivery: Option<i32>,
 }
 
 pub(crate) trait PlayerEquipmentContext {
@@ -5199,6 +5231,64 @@ impl CGame {
             CiQingMountOutcome::Failed
         };
         Some(report)
+    }
+
+    pub(crate) fn query_ci_qing_other_person<Context: CiQingComposeContext>(
+        &mut self,
+        requester_id: i32,
+        target: CiQingOtherPersonTarget,
+        context: &mut Context,
+    ) -> CiQingOtherPersonReport {
+        let target_player_id = match &target {
+            CiQingOtherPersonTarget::Id(player_id) => {
+                self.find_player(*player_id).map(CPlayer::player_id)
+            }
+            CiQingOtherPersonTarget::Name(name) => {
+                self.find_player_by_name(name).map(CPlayer::player_id)
+            }
+            CiQingOtherPersonTarget::UnsupportedMode(_) => None,
+        };
+        let mut report = CiQingOtherPersonReport {
+            requester_id,
+            target,
+            target_player_id,
+            payload: Vec::new(),
+            delivery: None,
+        };
+        let Some(target_player_id) = target_player_id else {
+            return report;
+        };
+        let facts = context.ci_qing_other_person_facts(self, target_player_id);
+        let player = self
+            .find_player(target_player_id)
+            .expect("target ID разрешён через canonical player map");
+        let mut merged = facts.add_values;
+        for (property, value) in facts.tao_zhuang_add_values {
+            let current = merged.entry(property).or_default();
+            *current = current.wrapping_add(value);
+        }
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&player.shape().identity().object_type.to_le_bytes());
+        payload.extend_from_slice(&player.player_id().to_le_bytes());
+        for value in merged.values() {
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+        payload.extend_from_slice(
+            &player
+                .ci_qing_goods_amount(&self.goods_factory)
+                .to_le_bytes(),
+        );
+        for position in 0..8 {
+            if let Some(goods) = player.ci_qing_goods(position) {
+                payload.extend_from_slice(&context.encode_goods_for_old_client(goods));
+            }
+        }
+        payload.extend_from_slice(&facts.tao_zhuang_id.to_le_bytes());
+        let mut message = CMessage::new(0x0c_010f);
+        message.base_mut().add(&payload);
+        report.delivery = Some(message.send_to_player(self.net_server(), requester_id));
+        report.payload = payload;
+        report
     }
 
     pub(crate) const fn ling_bao_setup(&self) -> &CLingBaoSetup {

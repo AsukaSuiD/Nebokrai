@@ -86,6 +86,7 @@
 //! Основной CiQing delete сохраняет partial-amount семантику `DeleteGoods`.
 //! Hand mount читает exact addon `243/244`; hand consumption также сохраняет
 //! partial amount и не выдаёт reached `CGoods` projection за полный Clone.
+//! Other-person snapshot читает те же восемь owned CiQing slots без копий.
 //! `skillmessage 0x90005` доведён до authorization и AI dispatch: feature/HP
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
@@ -1476,6 +1477,10 @@ impl CPlayer {
 
     pub(crate) fn ci_qing_goods(&self, position: u32) -> Option<&CGoods> {
         self.ci_qing.get_goods(position)
+    }
+
+    pub(crate) fn ci_qing_goods_amount(&self, factory: &CGoodsFactory) -> u32 {
+        self.ci_qing.goods_amount(factory)
     }
 
     pub(crate) fn add_goods_to_ci_qing(
@@ -7759,20 +7764,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0004B390
 // ADDRESS: 0044b390
 // PROTOTYPE: void __thiscall SendResultToClient(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddByteToOtherPerson
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:16269
-// RVA: 0x0004B5E0
-// ADDRESS: 0044b5e0
-// PROTOTYPE: void __thiscall AddByteToOtherPerson(long param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -28,6 +28,8 @@
 //! `0x8FC34` читает amount до gate и ведёт hand goods через level/slot/improve
 //! проверки, chance roll, failure destruction либо native clone/mount,
 //! material consumption, property callback и `0xC0111`.
+//! `0x8FC35` разрешает target по ID либо bounded имени и публикует exact
+//! `0xC010F` payload; неизвестный mode и отсутствующий target остаются silent.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -47,7 +49,8 @@ use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
     BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
     CGame, CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
-    CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingSetupQueryReport,
+    CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport,
+    CiQingOtherPersonTarget, CiQingSetupQueryReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -67,6 +70,7 @@ const MAKE_CI_QING_NODE: u32 = 0x0008_fc31;
 const COMPOSE_CI_QING_NODE: u32 = 0x0008_fc32;
 const DELETE_CI_QING_GOODS: u32 = 0x0008_fc33;
 const MOUNT_CI_QING_FROM_HAND: u32 = 0x0008_fc34;
+const QUERY_CI_QING_OTHER_PERSON: u32 = 0x0008_fc35;
 
 pub(crate) trait GameGoodsMessageRuntime:
     BattleFairyCombineContext
@@ -144,6 +148,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     CiQingPositionOutOfRange { position: u32 },
     CiQingDelete(CiQingDeleteReport),
     CiQingMount(CiQingMountReport),
+    CiQingOtherPerson(CiQingOtherPersonReport),
 }
 
 #[must_use = "goods-message report содержит routing и полный gameplay result"]
@@ -179,6 +184,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             | COMPOSE_CI_QING_NODE
             | DELETE_CI_QING_GOODS
             | MOUNT_CI_QING_FROM_HAND
+            | QUERY_CI_QING_OTHER_PERSON
     ) {
         return None;
     }
@@ -397,6 +403,34 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                         ),
                 )
             }
+        }
+        QUERY_CI_QING_OTHER_PERSON => {
+            let mode = match message.base_mut().get_char() {
+                Some(mode) => mode,
+                None => {
+                    return Some(Err(GameGoodsMessageError::MissingField(
+                        "CiQing target mode",
+                    )));
+                }
+            };
+            let target = match mode {
+                0 => match read_long(message, "CiQing target player ID") {
+                    Ok(player_id) => CiQingOtherPersonTarget::Id(player_id),
+                    Err(error) => return Some(Err(error)),
+                },
+                1 => match message.base_mut().get_str_bytes(0x32) {
+                    Some(name) => CiQingOtherPersonTarget::Name(name),
+                    None => {
+                        return Some(Err(GameGoodsMessageError::MissingField(
+                            "CiQing target name",
+                        )));
+                    }
+                },
+                mode => CiQingOtherPersonTarget::UnsupportedMode(mode),
+            };
+            GameGoodsMessageOutcome::CiQingOtherPerson(
+                game.query_ci_qing_other_person(player_id, target, runtime),
+            )
         }
         _ => unreachable!("opcode отфильтрован перед dispatch"),
     };
