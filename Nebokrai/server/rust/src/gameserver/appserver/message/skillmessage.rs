@@ -11,8 +11,9 @@
 //! battle-fairy equipment gates; `0x90006` остаётся подтверждённым no-op.
 //!
 //! Безопасный decoder отклоняет оборванный payload вместо исходного чтения за
-//! границей буфера. Concrete `CSkill::IsEnd/End(true)`, `CPlayerAI` и полный
-//! `RunScript` VM остаются явно названными runtime-границами.
+//! границей буфера. Skill-script path входит в reached `CGame::run_script_file`
+//! с player/region context. Concrete `CSkill::IsEnd/End(true)` и `CPlayerAI`
+//! остаются явно названными runtime-границами.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -24,6 +25,8 @@ use crate::gameserver::appserver::player::{
     BattleFairySkillRequest, BattleFairySkillRequestFacts, BattleFairySkillRequestReport,
     PlayerSkillRequest, PlayerSkillRequestFacts, PlayerSkillRequestReport,
 };
+use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
+use crate::gameserver::appserver::script::script::ScriptExecutionContext;
 use crate::gameserver::gameserver::game::{
     BattleFairySkillRequestContext, CGame, PlayerSkillRequestContext, colored_player_notice_message,
 };
@@ -77,7 +80,7 @@ pub(crate) struct PlayerSkillScriptReport {
 }
 
 pub(crate) trait GameSkillMessageRuntime:
-    BattleFairySkillRequestContext + PlayerSkillRequestContext
+    BattleFairySkillRequestContext + PlayerSkillRequestContext + ScriptFunctionRuntime
 {
     fn end_current_player_skill(
         &mut self,
@@ -85,15 +88,6 @@ pub(crate) trait GameSkillMessageRuntime:
         player_id: i32,
         skill_id: u32,
     ) -> PlayerSkillEndRuntimeOutcome;
-
-    fn run_player_skill_script(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        region_id: Option<i32>,
-        path: &[u8],
-        script_data: Option<&[u8]>,
-    );
 
     fn player_skill_request_facts(
         &mut self,
@@ -282,12 +276,14 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                 };
                 let script_data = game.script_file_data(&path).map(<[u8]>::to_vec);
                 report.path = Some(path.clone());
-                runtime.run_player_skill_script(
-                    game,
-                    player_id,
-                    region_id,
+                let _ = game.run_script_file(
                     &path,
-                    script_data.as_deref(),
+                    ScriptExecutionContext {
+                        player_id: Some(player_id),
+                        region_id,
+                        ..ScriptExecutionContext::default()
+                    },
+                    runtime,
                 );
                 report.outcome = PlayerSkillScriptOutcome::Dispatched {
                     script_present: script_data.is_some(),
