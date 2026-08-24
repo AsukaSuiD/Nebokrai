@@ -56,6 +56,9 @@
 //! preparation, packet-first `DelGoods`, equipment fallback с полным player
 //! tail и обычные add/delete/amount client messages; reached caller — первый
 //! sanitation-блок реально запускаемого `scripts/quest/nodupe.script`.
+//! Следующий sanitation-блок `2002/2316/2317/2500` читает live player
+//! region/country и работает с тем же owned script registry; current-script
+//! removal завершается на command boundary без legacy use-after-free.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -99,6 +102,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_SELECTED_DURABILITY: i32 = 2245;
 pub(crate) const SCRIPT_FUNCTION_SET_SELECTED_DURABILITY: i32 = 2246;
 pub(crate) const SCRIPT_FUNCTION_FAIRY_EXP_UP: i32 = 2249;
 pub(crate) const SCRIPT_FUNCTION_RGB: i32 = 9;
+pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
 pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS: i32 = 2201;
 pub(crate) const SCRIPT_FUNCTION_CHECK_GOODS: i32 = 2202;
@@ -106,6 +110,9 @@ pub(crate) const SCRIPT_FUNCTION_CHECK_SPACE: i32 = 2203;
 pub(crate) const SCRIPT_FUNCTION_ADD_INFO: i32 = 2305;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX: i32 = 2307;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS_LOG: i32 = 2313;
+pub(crate) const SCRIPT_FUNCTION_SCRIPT_IS_RUNNING: i32 = 2316;
+pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
@@ -2312,6 +2319,7 @@ pub(crate) enum ScriptFunctionDispatchOutcome {
     Invalid,
     Handled { legacy_return: i32 },
     Yielded { legacy_return: i32 },
+    Terminated { legacy_return: i32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2330,6 +2338,16 @@ pub(crate) fn script_function_parameter_kind(
 ) -> ScriptFunctionParameterKind {
     use ScriptFunctionParameterKind::{Integer, String, Unused};
     match function_id {
+        SCRIPT_FUNCTION_GET_ME => match index {
+            0 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_SCRIPT_IS_RUNNING | SCRIPT_FUNCTION_REMOVE_SCRIPT => match index {
+            0 => Integer,
+            1 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_COUNTRY => Unused,
         SCRIPT_FUNCTION_ADD_GOODS
         | SCRIPT_FUNCTION_DELETE_GOODS
         | SCRIPT_FUNCTION_CHECK_GOODS
@@ -2763,6 +2781,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
     runtime: &mut Runtime,
     script_player_id: Option<i32>,
     script_id: i32,
+    script_path: &[u8],
     function_id: i32,
     argument_count: usize,
     integer_arguments: [Option<i32>; 4],
@@ -2770,6 +2789,83 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
 ) -> Option<ScriptFunctionDispatchOutcome> {
     let player_id = script_player_id.unwrap_or_default();
     match function_id {
+        SCRIPT_FUNCTION_GET_ME => {
+            if argument_count != 1 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(property) = string_arguments[0] else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if !property.eq_ignore_ascii_case(b"lRegionID") {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let legacy_return = game
+                .find_player(player_id)
+                .and_then(|player| player.server_region_id())
+                .unwrap_or_default();
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_GET_COUNTRY => {
+            if argument_count != 0 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(player) = game.find_player(player_id) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: i32::from(player.country()),
+            })
+        }
+        SCRIPT_FUNCTION_SCRIPT_IS_RUNNING | SCRIPT_FUNCTION_REMOVE_SCRIPT => {
+            if function_id == SCRIPT_FUNCTION_SCRIPT_IS_RUNNING && argument_count != 2 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let requested_player_id = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            if requested_player_id == SCRIPT_INT_PARAMETER_ERROR {
+                return Some(if function_id == SCRIPT_FUNCTION_SCRIPT_IS_RUNNING {
+                    ScriptFunctionDispatchOutcome::Invalid
+                } else {
+                    ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
+                });
+            }
+            let Some(path) = string_arguments[1].filter(|path| !path.is_empty()) else {
+                return Some(if function_id == SCRIPT_FUNCTION_SCRIPT_IS_RUNNING {
+                    ScriptFunctionDispatchOutcome::Invalid
+                } else {
+                    ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
+                });
+            };
+            let target_player_id = if requested_player_id > 0 {
+                requested_player_id
+            } else {
+                player_id
+            };
+            let (current_script_id, current_script_path) = if target_player_id == player_id {
+                (script_id, script_path)
+            } else {
+                (0, &[][..])
+            };
+            if function_id == SCRIPT_FUNCTION_SCRIPT_IS_RUNNING {
+                let legacy_return = i32::from(game.player_script_is_running(
+                    target_player_id,
+                    path,
+                    current_script_id,
+                    current_script_path,
+                ));
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return });
+            }
+            let current_removed = game.remove_player_scripts(
+                target_player_id,
+                path,
+                current_script_id,
+                current_script_path,
+            );
+            return Some(if current_removed {
+                ScriptFunctionDispatchOutcome::Terminated { legacy_return: 0 }
+            } else {
+                ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
+            });
+        }
         SCRIPT_FUNCTION_RGB => {
             let red = integer_arguments[0].unwrap_or_default() as u32 & 0xff;
             let green = integer_arguments[1].unwrap_or_default() as u32 & 0xff;
@@ -2990,6 +3086,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     script_region_id: Option<i32>,
     used_item_id: Option<CGuid>,
     script_id: i32,
+    script_path: &[u8],
     function_id: i32,
     argument_count: usize,
     integer_arguments: [Option<i32>; 4],
@@ -3000,6 +3097,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         runtime,
         script_player_id,
         script_id,
+        script_path,
         function_id,
         argument_count,
         integer_arguments,

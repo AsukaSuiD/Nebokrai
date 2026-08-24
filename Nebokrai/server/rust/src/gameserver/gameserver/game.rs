@@ -8191,6 +8191,39 @@ impl CGame {
             .is_some_and(|script| script.continue_with(value))
     }
 
+    pub(crate) fn player_script_is_running(
+        &self,
+        player_id: i32,
+        path: &[u8],
+        current_script_id: i32,
+        current_script_path: &[u8],
+    ) -> bool {
+        (current_script_id != 0
+            && current_script_path == path
+            && self.find_player(player_id).is_some())
+            || self.active_scripts.values().any(|script| {
+                script.player_id() == Some(player_id) && script.path == path
+            })
+    }
+
+    /// Safe `RemovePlayerScripts`: registry entries удаляются сразу, а
+    /// текущий вынутый scheduler-ом instance сообщает caller-у terminal
+    /// disposition и не возвращается в map после команды.
+    pub(crate) fn remove_player_scripts(
+        &mut self,
+        player_id: i32,
+        path: &[u8],
+        current_script_id: i32,
+        current_script_path: &[u8],
+    ) -> bool {
+        self.active_scripts.retain(|_, script| {
+            script.player_id() != Some(player_id) || script.path != path
+        });
+        current_script_id != 0
+            && current_script_path == path
+            && self.find_player(player_id).is_some()
+    }
+
     pub(crate) fn delete_player_script(
         &mut self,
         script_id: i32,

@@ -6,7 +6,8 @@
 //! заменой lookup/order semantics. Owned `ActiveScript` сохраняет source,
 //! cursor, player/NPC/region context и переменные между стадиями главного
 //! цикла; `call` создаёт отдельный instance, а `TalkBox` возобновляется ответом
-//! клиента через тот же script ID. Неподтверждённые wait/pause families и
+//! клиента через тот же script ID. Path/player lookup и remove поддерживают
+//! также текущий вынутый из map instance. Неподтверждённые wait/pause families и
 //! остальной не достигнутый синтаксис остаются в RAW ниже.
 
 use std::collections::BTreeMap;
@@ -107,6 +108,10 @@ pub(crate) enum ScriptCommandOutcome {
         function_id: i32,
         legacy_return: i32,
     },
+    Terminated {
+        function_id: i32,
+        legacy_return: i32,
+    },
     UnknownFunction,
     InvalidExpression,
 }
@@ -204,6 +209,7 @@ impl ActiveScript {
         }
         let mut script = CScript {
             source: &self.source,
+            path: &self.path,
             point: self.point,
             context: self.context,
             integer_variables: std::mem::take(&mut self.integer_variables),
@@ -229,6 +235,7 @@ impl ActiveScript {
 /// команда завершает instance до side effects следующей строки.
 pub(crate) struct CScript<'a> {
     source: &'a [u8],
+    path: &'a [u8],
     point: usize,
     context: ScriptExecutionContext,
     integer_variables: BTreeMap<Vec<u8>, i32>,
@@ -237,17 +244,6 @@ pub(crate) struct CScript<'a> {
 }
 
 impl<'a> CScript<'a> {
-    pub(crate) const fn new(source: &'a [u8], context: ScriptExecutionContext) -> Self {
-        Self {
-            source,
-            point: 0,
-            context,
-            integer_variables: BTreeMap::new(),
-            string_variables: BTreeMap::new(),
-            script_id: 0,
-        }
-    }
-
     pub(crate) fn run_step<Runtime: ScriptFunctionRuntime>(
         &mut self,
         game: &mut CGame,
@@ -393,6 +389,21 @@ impl<'a> CScript<'a> {
                         disposition: ScriptStepDisposition::WaitingFunction { function_id },
                     };
                 }
+                ScriptCommandOutcome::Terminated {
+                    function_id,
+                    legacy_return,
+                } => {
+                    report.function_calls += 1;
+                    report.last_return = legacy_return;
+                    report.outcomes.push(ScriptCommandOutcome::Terminated {
+                        function_id,
+                        legacy_return,
+                    });
+                    return ScriptStepReport {
+                        execution: report,
+                        disposition: ScriptStepDisposition::Ended,
+                    };
+                }
                 outcome => {
                     report.outcomes.push(outcome);
                     break;
@@ -441,6 +452,7 @@ impl<'a> CScript<'a> {
             self.context.region_id,
             self.context.used_item_id,
             self.script_id,
+            self.path,
             function_id,
             parameters.len(),
             integer_arguments,
@@ -455,6 +467,12 @@ impl<'a> CScript<'a> {
             }
             ScriptFunctionDispatchOutcome::Yielded { legacy_return } => {
                 ScriptCommandOutcome::Yielded {
+                    function_id,
+                    legacy_return,
+                }
+            }
+            ScriptFunctionDispatchOutcome::Terminated { legacy_return } => {
+                ScriptCommandOutcome::Terminated {
                     function_id,
                     legacy_return,
                 }
@@ -594,7 +612,8 @@ impl<'a> CScript<'a> {
             ScriptCommandOutcome::Handled { legacy_return, .. } => Some(legacy_return),
             ScriptCommandOutcome::UnknownFunction
             | ScriptCommandOutcome::InvalidExpression
-            | ScriptCommandOutcome::Yielded { .. } => None,
+            | ScriptCommandOutcome::Yielded { .. }
+            | ScriptCommandOutcome::Terminated { .. } => None,
         }
     }
 
@@ -1309,62 +1328,11 @@ fn is_command_start(value: u8) -> bool {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: DelectPlayerScript
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\script.cpp:162
-// RVA: 0x000261C0
-// ADDRESS: 004261c0
-// PROTOTYPE: long __cdecl DelectPlayerScript(CPlayer * param_1, char * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: ScriptIfExit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\script.cpp:187
-// RVA: 0x00026300
-// ADDRESS: 00426300
-// PROTOTYPE: bool __cdecl ScriptIfExit(CPlayer * param_1, char * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: DelectPlayerScript
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\script.cpp:139
-// RVA: 0x000263A0
-// ADDRESS: 004263a0
-// PROTOTYPE: long __cdecl DelectPlayerScript(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: ScriptContinue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\script.cpp:204
-// RVA: 0x00026480
-// ADDRESS: 00426480
-// PROTOTYPE: long __cdecl ScriptContinue(long param_1, CPlayer * param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: player/path lookup и безопасное удаление текущего/чужих instances
+// принадлежат `CGame::player_script_is_running` / `remove_player_scripts`;
+// ID-based delete/continue замкнуты `delete_player_script` / `continue_player_script`.
+// Function `0x16`, которая перед удалением посылает `0xBF80E`, ещё не
+// материализована и потому не может образовать waiting state в owned scheduler.
 
 // ============================================================================
 // FUNCTION: CScript::~CScript
