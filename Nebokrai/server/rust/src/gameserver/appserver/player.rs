@@ -116,6 +116,8 @@
 //! `0x90301` проверяет packet/equipment position, GUID, amount и stackability,
 //! затем записывает shadow без смены ownership исходного goods и сохраняет
 //! native last-operated source для последующих container-переходов.
+//! Script `2249` использует тот же live owner; ripe replacement добавляется
+//! напрямую в packet даже пока script progress занят.
 //! Двусторонний auction-listing route использует те же owned packet/equipment
 //! containers: обратный ход считает exact equipment+packet+hand burden,
 //! сохраняет last-operated только после успешного destination add и оставляет
@@ -2961,6 +2963,17 @@ impl CPlayer {
     /// исходный `BillOfIncShop` добавляет batch напрямую в packet и не
     /// применяет progress-lock к stack merge.
     pub(crate) fn add_increment_shop_goods_to_packet(
+        &mut self,
+        goods: Vec<CGoods>,
+        factory: &CGoodsFactory,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
+    }
+
+    /// Script `2249` выполняется при занятом script progress, но native owner
+    /// после созревания добавляет replacement напрямую в packet.
+    pub(crate) fn add_script_fairy_goods_to_packet(
         &mut self,
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,

@@ -41,6 +41,9 @@
 //! routing, name/current-player lookup, skill/equipment mutation, reset RNG,
 //! revive, experience/recreate RNG, old-client `0xBF918`, properties wire и
 //! локальные журналы `BattleFairy`.
+//! `2249 / FairyExpUp` разрешает enhancement-shadow обратно в live packet или
+//! equipment goods, сохраняет grow-log, replacement ownership и concrete
+//! delete/new-object wire, включая необратимый late packet-add failure.
 //! Numeric selector получает вычисленные параметры из reached synchronous
 //! `CScript`; остальные function ID и асинхронный dialog/wait lifecycle ниже
 //! пока остаются RAW.
@@ -58,8 +61,8 @@ use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, S
 use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
     EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
-    NationCarriageReturnReport, NationCombatContext, NationContendEnterReport, ServerRegionOwner,
-    colored_player_notice_message,
+    GameContainerMessageRuntime, NationCarriageReturnReport, NationCombatContext,
+    NationContendEnterReport, ServerRegionOwner, colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -68,6 +71,7 @@ pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
 pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_UPGRADE: i32 = 2216;
+pub(crate) const SCRIPT_FUNCTION_FAIRY_EXP_UP: i32 = 2249;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_TECH_LEVEL: i32 = 9002;
@@ -137,6 +141,7 @@ pub(crate) trait ScriptFunctionRuntime:
     + NationCombatContext
     + EquipmentSessionOpenContext
     + EquipmentDaKongContext
+    + GameContainerMessageRuntime
     + BattleFairyDeathContext
     + BattleFairySkillResetContext
 {
@@ -148,6 +153,7 @@ impl<T> ScriptFunctionRuntime for T where
         + NationCombatContext
         + EquipmentSessionOpenContext
         + EquipmentDaKongContext
+        + GameContainerMessageRuntime
         + BattleFairyDeathContext
         + BattleFairySkillResetContext
 {
@@ -2287,6 +2293,10 @@ pub(crate) fn script_function_parameter_kind(
 ) -> ScriptFunctionParameterKind {
     use ScriptFunctionParameterKind::{Integer, String, Unused};
     match function_id {
+        SCRIPT_FUNCTION_FAIRY_EXP_UP => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY => match index {
             0 => String,
             _ => Unused,
@@ -2473,6 +2483,33 @@ fn run_battle_fairy_script_function<Runtime: ScriptFunctionRuntime>(
     Some(game.run_battle_fairy_script_action(script_player_id, action, runtime))
 }
 
+fn run_fairy_script_function<Runtime: ScriptFunctionRuntime>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    script_player_id: Option<i32>,
+    function_id: i32,
+    evaluated_experience: Option<i32>,
+) -> Option<i32> {
+    if function_id != SCRIPT_FUNCTION_FAIRY_EXP_UP {
+        return None;
+    }
+    let Some(player_id) = script_player_id else {
+        return Some(0);
+    };
+    let experience = evaluated_experience.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    if experience == SCRIPT_INT_PARAMETER_ERROR {
+        return Some(-1);
+    }
+    if experience <= 0 {
+        return Some(0);
+    }
+    Some(i32::from(game.fairy_exp_up_selected_goods(
+        player_id,
+        experience as u32,
+        runtime,
+    )))
+}
+
 /// Единый reached tail `CScript::RunFunction`: selector уже разрешён через
 /// загруженный FunctionList, а аргументы вычислены тем же экземпляром CScript.
 /// Порядок family-вызовов не наблюдаем сценарием, потому что каждый owner
@@ -2544,6 +2581,16 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         ),
         CountryWarDeclarationScriptFunctionOutcome::Handled
     );
+
+    if let Some(legacy_return) = run_fairy_script_function(
+        game,
+        runtime,
+        script_player_id,
+        function_id,
+        integer_arguments[0],
+    ) {
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+    }
 
     if let Some(legacy_return) = run_battle_fairy_script_function(
         game,

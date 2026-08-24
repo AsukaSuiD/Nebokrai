@@ -340,6 +340,9 @@
 //! tasks с тем же порядком exit/sleep/retry/join. `SO_SNDBUF=0` и World
 //! reconnect player snapshot остаются локальными границами; nullable раннюю
 //! ветвь `CMessage::SendAll` принимает отдельно как `Option`.
+//! Script `2249 / FairyExpUp` связывает reached dispatcher с enhancement
+//! shadow, live packet/equipment owner, fairy grow-log, replacement factory,
+//! GoodsAI registration и concrete client container wire.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CString;
@@ -395,7 +398,9 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_EQUIP_STATE, GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::gameserver::appserver::goods::fairyproperties::FairyGrowLog;
+use crate::gameserver::appserver::goods::fairyproperties::{
+    FairyExpRuntime, FairyExpUpResult, FairyGrowLog,
+};
 use crate::gameserver::appserver::goodswarmember::{
     CGoodsWarMember, GameGoodsWarMessageError, GameGoodsWarMessageReport,
     dispatch_game_goods_war_message,
@@ -16152,6 +16157,214 @@ impl CGame {
             })
             .collect();
         BattleFairyScriptSkillAttachReport { skills, deliveries }
+    }
+
+    /// Script `2249 / FairyExpUp`: enhancement хранит только shadow, поэтому
+    /// mutation всегда разрешает исходный live goods. При созревании native
+    /// owner сначала окончательно удаляет старый экземпляр из packet/equipment,
+    /// затем пытается положить ripe replacement в packet; поздний отказ не
+    /// откатывает уже выполненное удаление.
+    pub(crate) fn fairy_exp_up_selected_goods<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        experience: u32,
+        context: &mut Context,
+    ) -> bool {
+        let Some((goods_id, source)) = self.players.get(&player_id).and_then(|player| {
+            let goods_id = player.enhancement_selected_goods_id()?;
+            let source = player.enhancement_original_container(0, goods_id)?;
+            player
+                .trade_source_goods(
+                    source.container_extend_id,
+                    source.goods_position,
+                    goods_id,
+                )
+                .map(|_| (goods_id, source))
+        }) else {
+            return false;
+        };
+
+        let grow_log_enabled = self.log_system.fairy_grow_enabled();
+        let egg_max_level = self.globe_setup.fairy_egg_max_level();
+        let upgrade_rate = self.globe_setup.fairy_upgrade_rate();
+        let mut remaining = experience;
+        let (exp, ripe_id, update) = {
+            let (players, factory, exp_config) =
+                (&mut self.players, &self.goods_factory, &self.fairy_exp_conf);
+            let Some(goods) = players
+                .get_mut(&player_id)
+                .and_then(|player| player.get_goods_by_id_mut(goods_id))
+            else {
+                return false;
+            };
+            let fairy_guid = goods.identity().ex_id.to_string().into_bytes();
+            let fairy_name = goods.name().to_vec();
+            let runtime = FairyExpRuntime {
+                player_id,
+                fairy_guid: &fairy_guid,
+                fairy_name: &fairy_name,
+                log_value: 1,
+                suppress_grow_log: false,
+                grow_log_enabled,
+                egg_max_level,
+                upgrade_rate,
+            };
+            let Ok(Some(exp)) = goods.fairy_exp_up(&mut remaining, runtime, |equip_level, level| {
+                exp_config.dw_exp_up(equip_level, level)
+            }) else {
+                return false;
+            };
+            if exp.result <= FairyExpUpResult::None {
+                return true;
+            }
+            if !goods.save_fairy_properties(factory).unwrap_or(false) {
+                return false;
+            }
+            let ripe_id = (exp.result == FairyExpUpResult::ChangeState).then(|| {
+                goods
+                    .fairy_properties()
+                    .expect("successful fairy state change сохраняет property owner")
+                    .ripe_id
+            });
+            let update = ripe_id.is_none().then(|| {
+                (
+                    goods.identity(),
+                    context.encode_goods_for_old_client(goods),
+                )
+            });
+            (exp, ripe_id, update)
+        };
+
+        for log in &exp.grow_logs {
+            let _ = self.send_fairy_grow_log(log);
+        }
+        if let Some((goods, payload)) = update {
+            let mut message = CMessage::new(0x0b_f918);
+            message.add_long(player_id);
+            message.base_mut().add_guid(goods.ex_id);
+            message.add_ulong(payload.len() as u32);
+            message.base_mut().add(&payload);
+            let _ = message.send_to_player(self.net_server(), player_id);
+            return true;
+        }
+
+        let Some(ripe_id) = ripe_id else {
+            return true;
+        };
+        let Some(mut replacement) = self.create_goods_batch(ripe_id, 1).into_iter().next() else {
+            return false;
+        };
+        let copied = self
+            .players
+            .get(&player_id)
+            .and_then(|player| player.get_goods_by_id(goods_id))
+            .is_some_and(|goods| {
+                replacement
+                    .copy_fairy_addon_properties_from(
+                        goods,
+                        &self.goods_factory,
+                        |equip_level, level| {
+                            self.fairy_exp_conf.dw_exp_up(equip_level, level)
+                        },
+                    )
+                    .is_ok_and(|loaded| loaded)
+            });
+        if !copied {
+            return false;
+        }
+        let Some(fairy) = replacement.fairy_properties_mut() else {
+            return false;
+        };
+        fairy.fairy_state = 2;
+        if !replacement
+            .save_fairy_properties(&self.goods_factory)
+            .unwrap_or(false)
+        {
+            return false;
+        }
+
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .expect("selected fairy player остаётся в game map");
+        let old_identity = player
+            .get_goods_by_id(goods_id)
+            .expect("selected fairy проверена до replacement")
+            .identity();
+        let old_amount = player
+            .get_goods_by_id(goods_id)
+            .expect("selected fairy проверена до replacement")
+            .amount();
+        let removed = if source.container_extend_id == 1 {
+            matches!(
+                player.packet_mut().remove_goods(goods_id),
+                Some(VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(_)))
+            )
+        } else if source.container_extend_id == 2 {
+            let facts = {
+                let goods = player
+                    .get_goods_by_id(goods_id)
+                    .expect("equipment fairy проверена до remove facts");
+                context.enhancement_equipment_remove_facts(
+                    &player,
+                    goods,
+                    self.globe_setup.pack_add_enabled(),
+                )
+            };
+            let mut recompute =
+                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut report = player.remove_equipment_goods(
+                goods_id,
+                &self.goods_factory,
+                &self.skill_factory,
+                facts,
+                &mut recompute,
+            );
+            drop(recompute);
+            self.publish_player_equipment_remove_report(&mut report, context);
+            matches!(report.outcome, EquipmentRemoveOutcome::Removed(_))
+        } else {
+            false
+        };
+        if !removed {
+            let update = player.get_goods_by_id(goods_id).map(|goods| {
+                (
+                    goods.identity(),
+                    context.encode_goods_for_old_client(goods),
+                )
+            });
+            self.players.insert(player_id, player);
+            if let Some((goods, payload)) = update {
+                let mut message = CMessage::new(0x0b_f918);
+                message.add_long(player_id);
+                message.base_mut().add_guid(goods.ex_id);
+                message.add_ulong(payload.len() as u32);
+                message.base_mut().add(&payload);
+                let _ = message.send_to_player(self.net_server(), player_id);
+            }
+            return true;
+        }
+
+        let _ = player.enhancement_remove_shadow(goods_id);
+        let _ = self.send_container_object_delete(player_id, &source, old_identity, old_amount);
+        let (additions, _rejected) = player.add_script_fairy_goods_to_packet(
+            vec![replacement],
+            &self.goods_factory,
+            &mut |goods| context.encode_goods_for_old_client(goods),
+        );
+        for addition in &additions {
+            if let Some(position) = addition.position
+                && matches!(addition.outcome, VolumeGoodsAddOutcome::Added(_))
+                && let Some(goods) = player.packet().get_goods(position)
+            {
+                context.register_enhancement_goods_ai(goods);
+            }
+        }
+        self.players.insert(player_id, player);
+        for addition in &additions {
+            let _ = self.send_player_packet_addition(addition);
+        }
+        true
     }
 
     /// Gameplay owner script-family `9400..9411`. Selector и вычисление
