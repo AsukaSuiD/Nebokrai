@@ -26,6 +26,9 @@
 //! Country-war declaration `9100` сохраняет NPC distance gate, фазу объявления,
 //! king-CI, обе duplicate-проверки, idle-region gate, `GS0213..GS0218` и
 //! terminal World request `0x60317 [player, target country]`.
+//! Соседняя read-only family `9101..9104/9106..9109/9111` одним dispatcher-ом
+//! читает phase flags, declaration membership, country-region win symbols,
+//! ordered war region/camp/opponent и сохранённый country result.
 //! Полный expression evaluator и остальные function ID ниже пока остаются RAW.
 
 use crate::gameserver::appserver::country::country::{
@@ -36,7 +39,7 @@ use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlug
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
     colored_player_notice_message, CGame, EquipmentDaKongContext, EquipmentSessionOpenContext,
-    EquipmentSessionOpenReport,
+    EquipmentSessionOpenReport, ServerRegionOwner,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -65,9 +68,282 @@ pub(crate) const SCRIPT_FUNCTION_SET_QUEST_SWITCH: i32 = 9019;
 pub(crate) const SCRIPT_FUNCTION_EXILE_TIME: i32 = 9021;
 pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
 pub(crate) const SCRIPT_FUNCTION_DECLARE_COUNTRY_WAR: i32 = 9100;
+pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_WAR_DECLARE: i32 = 9101;
+pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_DECLARED: i32 = 9102;
+pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_WAR_PREPARE: i32 = 9103;
+pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_WAR: i32 = 9104;
+pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_WIN_SYMBOL: i32 = 9106;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_WAR_REGION: i32 = 9107;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_WAR_CAMP: i32 = 9108;
+pub(crate) const SCRIPT_FUNCTION_GET_OTHER_WAR_COUNTRY: i32 = 9109;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_WAR_RESULT: i32 = 9111;
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
 const SCRIPT_PLAYER_TYPE: i32 = 400;
 const SCRIPT_NPC_TYPE: i32 = 500;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarQueryKind {
+    DeclarationOpen,
+    CountryDeclared,
+    PreparationOpen,
+    WarOpen,
+    WinSymbol,
+    Region,
+    Camp,
+    OtherCountry,
+    Result,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarQueryScriptDisposition {
+    CallerMissing,
+    CallerShapeMissing,
+    TooFar {
+        distance: i32,
+        maximum: i32,
+    },
+    ArgumentMissing {
+        argument: usize,
+    },
+    RegionMissing {
+        region_id: i32,
+    },
+    CountryMissing {
+        country: u8,
+    },
+    Completed {
+        kind: CountryWarQueryKind,
+        country: Option<i32>,
+        value: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarQueryScriptFunctionOutcome {
+    DifferentFunction,
+    Handled {
+        function_id: i32,
+        legacy_return: i32,
+        disposition: CountryWarQueryScriptDisposition,
+    },
+}
+
+pub(crate) fn run_country_war_query_script_function(
+    game: &CGame,
+    script_player_id: Option<i32>,
+    script_npc_id: Option<i32>,
+    function_id: i32,
+    evaluated_arguments: [Option<i32>; 3],
+) -> CountryWarQueryScriptFunctionOutcome {
+    let kind = match function_id {
+        SCRIPT_FUNCTION_IS_COUNTRY_WAR_DECLARE => CountryWarQueryKind::DeclarationOpen,
+        SCRIPT_FUNCTION_IS_COUNTRY_DECLARED => CountryWarQueryKind::CountryDeclared,
+        SCRIPT_FUNCTION_IS_COUNTRY_WAR_PREPARE => CountryWarQueryKind::PreparationOpen,
+        SCRIPT_FUNCTION_IS_COUNTRY_WAR => CountryWarQueryKind::WarOpen,
+        SCRIPT_FUNCTION_IS_COUNTRY_WIN_SYMBOL => CountryWarQueryKind::WinSymbol,
+        SCRIPT_FUNCTION_GET_COUNTRY_WAR_REGION => CountryWarQueryKind::Region,
+        SCRIPT_FUNCTION_GET_COUNTRY_WAR_CAMP => CountryWarQueryKind::Camp,
+        SCRIPT_FUNCTION_GET_OTHER_WAR_COUNTRY => CountryWarQueryKind::OtherCountry,
+        SCRIPT_FUNCTION_GET_COUNTRY_WAR_RESULT => CountryWarQueryKind::Result,
+        _ => return CountryWarQueryScriptFunctionOutcome::DifferentFunction,
+    };
+    if matches!(
+        kind,
+        CountryWarQueryKind::DeclarationOpen
+            | CountryWarQueryKind::CountryDeclared
+            | CountryWarQueryKind::PreparationOpen
+            | CountryWarQueryKind::WarOpen
+    ) {
+        let gate = country_war_script_caller_gate(game, script_player_id, script_npc_id);
+        if let Err(disposition) = gate {
+            return country_war_query_handled(function_id, 0, disposition);
+        }
+    }
+    let default_country = || {
+        script_player_id
+            .and_then(|player_id| game.find_player(player_id))
+            .map(|player| i32::from(player.country()))
+    };
+    let optional_country = || {
+        let raw = evaluated_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+        if raw == SCRIPT_INT_PARAMETER_ERROR {
+            default_country()
+        } else {
+            Some(raw)
+        }
+    };
+    match kind {
+        CountryWarQueryKind::DeclarationOpen => country_war_query_completed(
+            function_id,
+            kind,
+            None,
+            i32::from(game.country_war_sys().state_declare),
+        ),
+        CountryWarQueryKind::CountryDeclared => {
+            let Some(country) = optional_country() else {
+                return country_war_query_handled(
+                    function_id,
+                    0,
+                    CountryWarQueryScriptDisposition::CallerMissing,
+                );
+            };
+            country_war_query_completed(
+                function_id,
+                kind,
+                Some(country),
+                i32::from(game.country_war_sys().is_already_declar(country)),
+            )
+        }
+        CountryWarQueryKind::PreparationOpen => country_war_query_completed(
+            function_id,
+            kind,
+            None,
+            i32::from(game.country_war_sys().state_prepare),
+        ),
+        CountryWarQueryKind::WarOpen => country_war_query_completed(
+            function_id,
+            kind,
+            None,
+            i32::from(game.country_war_sys().state_war),
+        ),
+        CountryWarQueryKind::WinSymbol => {
+            let mut values = [0; 3];
+            for (index, argument) in evaluated_arguments.into_iter().enumerate() {
+                let Some(value) = argument.filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                else {
+                    return country_war_query_handled(
+                        function_id,
+                        0,
+                        CountryWarQueryScriptDisposition::ArgumentMissing { argument: index },
+                    );
+                };
+                values[index] = value;
+            }
+            let Some(ServerRegionOwner::Country(region)) = game.find_region(values[0]) else {
+                return country_war_query_handled(
+                    function_id,
+                    0,
+                    CountryWarQueryScriptDisposition::RegionMissing {
+                        region_id: values[0],
+                    },
+                );
+            };
+            country_war_query_completed(
+                function_id,
+                kind,
+                None,
+                i32::from(region.is_win_symbol(values[1], values[2])),
+            )
+        }
+        CountryWarQueryKind::Region
+        | CountryWarQueryKind::Camp
+        | CountryWarQueryKind::OtherCountry => {
+            let Some(country) = optional_country() else {
+                return country_war_query_handled(
+                    function_id,
+                    0,
+                    CountryWarQueryScriptDisposition::CallerMissing,
+                );
+            };
+            let value = match kind {
+                CountryWarQueryKind::Region => {
+                    game.country_war_sys().get_war_region_for_country(country)
+                }
+                CountryWarQueryKind::Camp => game.country_war_sys().get_war_camp(country),
+                CountryWarQueryKind::OtherCountry => {
+                    game.country_war_sys().get_other_country(country)
+                }
+                _ => unreachable!(),
+            };
+            country_war_query_completed(function_id, kind, Some(country), value)
+        }
+        CountryWarQueryKind::Result => {
+            let Some(country) = optional_country() else {
+                return country_war_query_handled(
+                    function_id,
+                    0,
+                    CountryWarQueryScriptDisposition::CallerMissing,
+                );
+            };
+            let country = country as u8;
+            let Some(owner) = game.country_handler().country(country) else {
+                return country_war_query_handled(
+                    function_id,
+                    0,
+                    CountryWarQueryScriptDisposition::CountryMissing { country },
+                );
+            };
+            country_war_query_completed(
+                function_id,
+                kind,
+                Some(i32::from(country)),
+                owner.country_war_result,
+            )
+        }
+    }
+}
+
+fn country_war_script_caller_gate(
+    game: &CGame,
+    script_player_id: Option<i32>,
+    script_npc_id: Option<i32>,
+) -> Result<(i32, i32), CountryWarQueryScriptDisposition> {
+    let (Some(player_id), Some(npc_id)) = (script_player_id, script_npc_id) else {
+        return Err(CountryWarQueryScriptDisposition::CallerMissing);
+    };
+    let player_shape = game.resolve_shape(ShapeIdentity {
+        object_type: SCRIPT_PLAYER_TYPE,
+        id: player_id,
+        ex_id: CGuid::GUID_INVALID,
+    });
+    let npc_shape = game.resolve_shape(ShapeIdentity {
+        object_type: SCRIPT_NPC_TYPE,
+        id: npc_id,
+        ex_id: CGuid::GUID_INVALID,
+    });
+    let (Some(player_shape), Some(npc_shape)) = (player_shape, npc_shape) else {
+        return Err(CountryWarQueryScriptDisposition::CallerShapeMissing);
+    };
+    let distance = npc_shape.distance(player_shape);
+    let maximum = game
+        .globe_setup()
+        .area_width()
+        .max(game.globe_setup().area_height())
+        / 2;
+    if maximum < distance {
+        return Err(CountryWarQueryScriptDisposition::TooFar { distance, maximum });
+    }
+    Ok((distance, maximum))
+}
+
+fn country_war_query_completed(
+    function_id: i32,
+    kind: CountryWarQueryKind,
+    country: Option<i32>,
+    value: i32,
+) -> CountryWarQueryScriptFunctionOutcome {
+    country_war_query_handled(
+        function_id,
+        value,
+        CountryWarQueryScriptDisposition::Completed {
+            kind,
+            country,
+            value,
+        },
+    )
+}
+
+fn country_war_query_handled(
+    function_id: i32,
+    legacy_return: i32,
+    disposition: CountryWarQueryScriptDisposition,
+) -> CountryWarQueryScriptFunctionOutcome {
+    CountryWarQueryScriptFunctionOutcome::Handled {
+        function_id,
+        legacy_return,
+        disposition,
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryWarDeclarationScriptDisposition {
