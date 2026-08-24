@@ -60,6 +60,9 @@
 //! aggregate guard остаётся в клиентских единицах, отдельные allocation
 //! умножаются на `10000`, одинаковые property keys имеют `std::map` first-win,
 //! а каждый вызов и outer caller публикуют собственный `0xBF918`.
+//! Gear add/remove теперь через `CGame` действительно исполняет ordered
+//! `0xBF721/0xBF918`; remove сохраняет две одинаково обязательные публикации
+//! old-client payload после успешного `BFPropertyAdd(-1)`.
 //! Upgrade `0x8FC28` замыкает validation, wallet snapshot, общий RNG,
 //! factory level/growth mutation, target failure outcome, positional расход
 //! gem-ов и ordered client/audit effects. Конкретный wallet-object codec и
@@ -438,6 +441,12 @@ pub(crate) enum BattleFairyEquipmentMutationEffect {
     BattleFairyUpdated(BattleFairyDefaultGoodsUpdate),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyEquipmentMutationDelivery {
+    Properties(i32),
+    GoodsUpdated(i32),
+}
+
 #[must_use = "equipment report сохраняет container ownership и ранние property effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyEquipmentMutationReport {
@@ -447,6 +456,7 @@ pub(crate) struct BattleFairyEquipmentMutationReport {
     pub(crate) property_applied: bool,
     pub(crate) outcome: BattleFairyEquipmentMutationOutcome,
     pub(crate) effects: Vec<BattleFairyEquipmentMutationEffect>,
+    pub(crate) deliveries: Vec<BattleFairyEquipmentMutationDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1949,6 +1959,7 @@ impl CPlayer {
             property_applied,
             outcome: BattleFairyEquipmentMutationOutcome::Added(outcome),
             effects,
+            deliveries: Vec::new(),
         }
     }
 
@@ -1979,6 +1990,7 @@ impl CPlayer {
                 property_applied: false,
                 outcome: BattleFairyEquipmentMutationOutcome::MissingGoods,
                 effects: Vec::new(),
+                deliveries: Vec::new(),
             };
         };
         let mut report = BattleFairyEquipmentMutationReport {
@@ -1988,6 +2000,7 @@ impl CPlayer {
             property_applied: false,
             outcome: BattleFairyEquipmentMutationOutcome::Removed(outcome),
             effects: Vec::new(),
+            deliveries: Vec::new(),
         };
         if let (Some(cell), Some(addons)) = (cell, addons)
             && let Some(first_update) = self.apply_battle_fairy_property(

@@ -134,6 +134,9 @@
 //! Summon/recall тем же property adapter-ом исполняет ordered notifications,
 //! around `0xBF605/0xBF930/0xBF92E` и terminal `0xBF721`; координаты move wire
 //! кодируются IEEE-754 float bits, как в `TellClientMove`, а не signed DWORD.
+//! Battle-fairy gear add/remove использует тот же properties owner и шлёт
+//! `0xBF918(player, GUID, length, old-client payload)` в effect-order, включая
+//! подтверждённый двойной update успешного remove.
 //! GodsBattle runtime продолжает startup owner: player Add/Remove tail
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
@@ -295,7 +298,8 @@ use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
 };
 use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::gameserver::appserver::player::{
-    BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationReport,
+    BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
+    BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationReport,
     BattleFairyFollowReport, BattleFairySkillRequest, BattleFairySkillRequestFacts,
     BattleFairySkillRequestReport, BattleFairySkillResetReport, BattleFairySummonDelivery,
     BattleFairySummonEffect, BattleFairySummonReport, BattleFairyWarSoulAction, CPlayer,
@@ -6531,16 +6535,17 @@ impl CGame {
     /// Замыкает positional add battle-fairy container-а с player property и
     /// загруженными GlobeSetup coefficients. Old-client codec остаётся
     /// transport boundary и вызывается только на подтверждённом update path.
-    pub(crate) fn add_battle_fairy_goods(
+    pub(crate) fn add_battle_fairy_goods<Context: BattleFairyDeathContext>(
         &mut self,
         player_id: i32,
         cell: BattleFairyCell,
         incoming: &mut Option<CGoods>,
         owner_progress_allows: bool,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+        context: &mut Context,
     ) -> Option<BattleFairyEquipmentMutationReport> {
         let coefficients = self.globe_setup.player_property_coefficients();
-        self.players.get_mut(&player_id).map(|player| {
+        let mut report = self.players.get_mut(&player_id).map(|player| {
             player.add_battle_fairy_goods(
                 cell,
                 incoming,
@@ -6549,7 +6554,9 @@ impl CGame {
                 owner_progress_allows,
                 encode_old_client,
             )
-        })
+        })?;
+        self.deliver_battle_fairy_equipment_effects(&mut report, context);
+        Some(report)
     }
 
     /// Полный player-owned tail `CEquipmentContainer::Remove`: callback
@@ -6603,21 +6610,56 @@ impl CGame {
 
     /// Замыкает remove по GUID с тем же player/equipment state и сохраняет
     /// подтверждённую двойную публикацию `0xBF918` после property removal.
-    pub(crate) fn remove_battle_fairy_goods(
+    pub(crate) fn remove_battle_fairy_goods<Context: BattleFairyDeathContext>(
         &mut self,
         player_id: i32,
         ex_id: CGuid,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+        context: &mut Context,
     ) -> Option<BattleFairyEquipmentMutationReport> {
         let coefficients = self.globe_setup.player_property_coefficients();
-        self.players.get_mut(&player_id).map(|player| {
+        let mut report = self.players.get_mut(&player_id).map(|player| {
             player.remove_battle_fairy_goods(
                 ex_id,
                 &self.goods_factory,
                 coefficients,
                 encode_old_client,
             )
-        })
+        })?;
+        self.deliver_battle_fairy_equipment_effects(&mut report, context);
+        Some(report)
+    }
+
+    fn deliver_battle_fairy_equipment_effects<Context: BattleFairyDeathContext>(
+        &self,
+        report: &mut BattleFairyEquipmentMutationReport,
+        context: &mut Context,
+    ) {
+        for effect in report.effects.clone() {
+            match effect {
+                BattleFairyEquipmentMutationEffect::PropertiesChanged { player_id } => {
+                    let external = context.player_properties_external_facts(player_id);
+                    if let Some(player) = self.find_player(player_id) {
+                        report
+                            .deliveries
+                            .push(BattleFairyEquipmentMutationDelivery::Properties(
+                                self.send_player_properties_changed(player, external),
+                            ));
+                    }
+                }
+                BattleFairyEquipmentMutationEffect::BattleFairyUpdated(update) => {
+                    let mut message = CMessage::new(update.message_type as i32);
+                    message.add_long(update.player_id);
+                    message.base_mut().add_guid(update.goods.ex_id);
+                    message.add_ulong(update.old_client_payload.len() as u32);
+                    message.base_mut().add(&update.old_client_payload);
+                    let delivery = message.send_to_player(self.net_server(), update.player_id);
+                    report
+                        .deliveries
+                        .push(BattleFairyEquipmentMutationDelivery::GoodsUpdated(delivery));
+                }
+            }
+        }
     }
 
     /// Исполняемый entry point goods-message `0x8FC2A`; decoder передаёт пары
