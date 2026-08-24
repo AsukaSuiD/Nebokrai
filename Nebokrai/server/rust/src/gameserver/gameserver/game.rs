@@ -2669,7 +2669,6 @@ pub(crate) trait GameMainLoopRuntime:
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
     fn script_loop(&mut self, game: &mut CGame);
     fn ai(&mut self, game: &mut CGame);
-    fn session_factory_ai(&mut self, game: &mut CGame);
     fn wait(&mut self, duration_ms: u32);
     fn output_debug(&mut self, message: &'static str);
 }
@@ -12762,7 +12761,6 @@ impl CGame {
                 .session_factory
                 .garbage_collect_terminal_equipment_sessions();
             self.detach_terminal_equipment_session_listeners(&terminal_equipment_sessions);
-            runtime.session_factory_ai(self);
             state.profile.session_ms = state
                 .profile
                 .session_ms
@@ -12789,7 +12787,6 @@ impl CGame {
                 .session_factory
                 .garbage_collect_terminal_equipment_sessions();
             self.detach_terminal_equipment_session_listeners(&terminal_equipment_sessions);
-            runtime.session_factory_ai(self);
             stages.push(GameMainLoopStage::Session);
             net_sessions = self.net_session_manager.run();
             stages.push(GameMainLoopStage::NetSession);

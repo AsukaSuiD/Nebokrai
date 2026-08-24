@@ -136,34 +136,10 @@ impl CSession {
 //
 //
 
-// ============================================================================
-// FUNCTION: CSession::IsSessionShouldBeenRemoved
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\csession.cpp:215
-// RVA: 0x0007B340
-// ADDRESS: 0047b340
-// PROTOTYPE: int __thiscall IsSessionShouldBeenRemoved(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSession::IsSessionEnded
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\csession.cpp:278
-// RVA: 0x0007B350
-// ADDRESS: 0047b350
-// PROTOTYPE: int __thiscall IsSessionEnded(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// IMPLEMENTED: `remove_requested` materialизует remove flag для concrete
+// equipment-session sweep; покрытое RAW-тело удалено.
+// IMPLEMENTED: `is_ended` сохраняет exact started && ended predicate;
+// покрытое RAW-тело удалено.
 // ============================================================================
 // FUNCTION: CSession::OnPlugInserted
 // STATUS: UNKNOWN (сохранены только метаданные исследования)

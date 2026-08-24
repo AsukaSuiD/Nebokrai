@@ -636,22 +636,8 @@ impl CSessionFactory {
 
 // IMPLEMENTED: `QuerySession` материализован выше; покрытый raw-блок удалён.
 
-// ============================================================================
-// FUNCTION: CSessionFactory::GarbageCollect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\csessionfactory.cpp:200
-// RVA: 0x000780F0
-// ADDRESS: 004780f0
-// PROTOTYPE: void __cdecl GarbageCollect(OBJECT_TYPE param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `QueryPlug` материализован выше; покрытый raw-блок удалён.
-
+// IMPLEMENTED: owned map removal и ordered concrete plug cleanup выполняет
+// `garbage_collect_session`; MSVC hash/destructor RAW удалён.
 // ============================================================================
 // FUNCTION: CSessionFactory::InsertPlug
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -666,20 +652,9 @@ impl CSessionFactory {
 //
 //
 
-// ============================================================================
-// FUNCTION: CSessionFactory::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\csessionfactory.cpp:119
-// RVA: 0x000785D0
-// ADDRESS: 004785d0
-// PROTOTYPE: void __cdecl AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// MATERIALIZED: live equipment-session registry sweep выполняется на обеих
+// MainLoop session-stage. Неподключённая `CTeam::s_mQuestedTeams` retry-queue
+// (`0x60008`, 60 секунд) остаётся конкретной границей будущего team owner-а.
 // ============================================================================
 // FUNCTION: CSessionFactory::CreateSession
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
