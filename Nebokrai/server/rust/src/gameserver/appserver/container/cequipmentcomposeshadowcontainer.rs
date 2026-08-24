@@ -123,6 +123,17 @@ impl CEquipmentComposeShadowContainer {
         &self.positions
     }
 
+    pub(crate) fn goods_id(&self, cell: ComposeEquipmentCell) -> Option<CGuid> {
+        self.positions.get(&cell).copied()
+    }
+
+    pub(crate) fn original_container_information(
+        &self,
+        goods_id: CGuid,
+    ) -> Option<PreviousContainer> {
+        self.base.base().original_container_information(goods_id)
+    }
+
     pub(crate) fn select_cell<'a, Resolve>(
         &self,
         mut resolve: Resolve,

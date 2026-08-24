@@ -18,6 +18,7 @@
 
 use std::collections::BTreeMap;
 
+use super::cequipmentcompose::CEquipmentCompose;
 use super::cplug::CPlug;
 use super::csession::CSession;
 
@@ -25,6 +26,7 @@ use super::csession::CSession;
 pub(crate) struct CSessionFactory {
     sessions: BTreeMap<i32, CSession>,
     plugs: BTreeMap<i32, CPlug>,
+    equipment_compose_plugs: BTreeMap<i32, CEquipmentCompose>,
 }
 
 impl CSessionFactory {
@@ -64,6 +66,32 @@ impl CSessionFactory {
                     .get(plug_id)
                     .filter(|plug| plug.has_owner(owner_type, owner_id))
             })
+    }
+
+    pub(crate) fn register_equipment_compose_plug(
+        &mut self,
+        plug_id: i32,
+        plug: CEquipmentCompose,
+    ) -> Option<CEquipmentCompose> {
+        self.equipment_compose_plugs.insert(plug_id, plug)
+    }
+
+    pub(crate) fn query_equipment_compose_plug(&self, plug_id: i32) -> Option<&CEquipmentCompose> {
+        self.equipment_compose_plugs.get(&plug_id)
+    }
+
+    pub(crate) fn query_equipment_compose_plug_mut(
+        &mut self,
+        plug_id: i32,
+    ) -> Option<&mut CEquipmentCompose> {
+        self.equipment_compose_plugs.get_mut(&plug_id)
+    }
+
+    pub(crate) fn take_equipment_compose_plug(
+        &mut self,
+        plug_id: i32,
+    ) -> Option<CEquipmentCompose> {
+        self.equipment_compose_plugs.remove(&plug_id)
     }
 }
 

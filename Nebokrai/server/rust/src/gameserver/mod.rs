@@ -79,6 +79,7 @@ pub(crate) mod appserver {
     pub(crate) mod servervillageregion;
     pub(crate) mod serverwarregion;
     pub(crate) mod session {
+        pub(crate) mod cequipmentcompose;
         pub(crate) mod cplug;
         pub(crate) mod csession;
         pub(crate) mod csessionfactory;

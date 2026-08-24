@@ -289,6 +289,10 @@ use rustix::system::uname;
 use crate::gameserver::appserver::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck,
 };
+use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
+use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::ComposeEquipmentCell;
+use crate::gameserver::appserver::container::cgoodscontainer::GoodsStackMergeOutcome;
+use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
 use crate::gameserver::appserver::country::countryhandler::CCountryHandler;
 use crate::gameserver::appserver::country::countryparam::CCountryParam;
 use crate::gameserver::appserver::country::countrywarsys::CountryWarSys;
@@ -383,6 +387,11 @@ use crate::gameserver::appserver::serverregion::{
     ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
+use crate::gameserver::appserver::session::cequipmentcompose::{
+    CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
+    EquipmentComposeAuditLog, EquipmentComposeOutcome, EquipmentComposeReport,
+    EquipmentComposeSourceConsumption, EquipmentComposeSourceSnapshot,
+};
 use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
 use crate::gameserver::appserver::shape::{
     CShape, MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
@@ -1167,6 +1176,42 @@ pub(crate) trait CiQingComposeContext: CiQingMakeContext {
         game: &mut CGame,
         player_id: i32,
     ) -> CiQingPropertyRuntimeSnapshot;
+}
+
+pub(crate) trait EquipmentComposeContext: OldClientGoodsCodec {
+    fn publish_equipment_compose_notification(
+        &mut self,
+        player_id: i32,
+        string_id: &'static str,
+        format_values: &[i32],
+    ) -> i32;
+    fn record_equipment_compose_log(&mut self, log: &EquipmentComposeAuditLog);
+    fn consume_equipment_compose_source(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        consumption: &EquipmentComposeSourceConsumption,
+    ) -> Vec<i32>;
+    fn prepare_equipment_compose_result(
+        &mut self,
+        result: &mut CGoods,
+        source: &EquipmentComposeSourceSnapshot,
+        required_level: i32,
+    ) -> bool;
+    fn publish_equipment_compose_stone_consumption(
+        &mut self,
+        consumption: &CiQingPacketConsumption,
+    ) -> Vec<i32>;
+    fn publish_equipment_compose_packet_addition(
+        &mut self,
+        addition: &CiQingPacketAddition,
+    ) -> Vec<i32>;
+    fn run_equipment_compose_script(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        script_path: &[u8],
+    );
 }
 
 pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {
@@ -4515,6 +4560,337 @@ impl CGame {
 
     pub(crate) const fn equipment_compose_list_mut(&mut self) -> &mut EquipmentComposeList {
         &mut self.equipment_compose_list
+    }
+
+    pub(crate) fn compose_equipment<Context: EquipmentComposeContext>(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        requested_plug_id: i32,
+        context: &mut Context,
+    ) -> EquipmentComposeReport {
+        let mut report = EquipmentComposeReport {
+            session_id,
+            requested_plug_id,
+            actual_plug_id: None,
+            outcome: EquipmentComposeOutcome::MissingSessionOrPlug,
+            result_index: 0,
+            required_level: 0,
+            notifications: Vec::new(),
+            source_consumptions: Vec::new(),
+            stone_consumptions: Vec::new(),
+            stone_deliveries: Vec::new(),
+            packet_additions: Vec::new(),
+            packet_addition_deliveries: Vec::new(),
+            rejected_result: None,
+            result_shadow: None,
+            script_dispatched: false,
+        };
+        if self.session_factory.query_session(session_id).is_none() {
+            return report;
+        }
+        report.actual_plug_id = self
+            .session_factory
+            .query_session_plug_by_owner(session_id, 400, player_id)
+            .map(|plug| plug.id());
+        let Some(actual_plug_id) = report.actual_plug_id else {
+            return report;
+        };
+        if actual_plug_id != requested_plug_id {
+            report.outcome = EquipmentComposeOutcome::PlugIdMismatch;
+            return report;
+        }
+        let Some(mut plug) = self
+            .session_factory
+            .take_equipment_compose_plug(actual_plug_id)
+        else {
+            return report;
+        };
+        report = self.compose_equipment_inner(player_id, &mut plug, report, context);
+        self.session_factory
+            .register_equipment_compose_plug(actual_plug_id, plug);
+        report
+    }
+
+    fn compose_equipment_inner<Context: EquipmentComposeContext>(
+        &mut self,
+        player_id: i32,
+        plug: &mut CEquipmentCompose,
+        mut report: EquipmentComposeReport,
+        context: &mut Context,
+    ) -> EquipmentComposeReport {
+        let Some(player) = self.find_player(player_id) else {
+            return report;
+        };
+        if player.server_region_id().is_none() {
+            report.outcome = EquipmentComposeOutcome::MissingRegion;
+            return report;
+        }
+        let Some(base_id) = plug
+            .compose_container()
+            .goods_id(ComposeEquipmentCell::BaseEquipment)
+        else {
+            report.outcome = EquipmentComposeOutcome::MissingBase;
+            report
+                .notifications
+                .push(context.publish_equipment_compose_notification(player_id, "GS1156", &[]));
+            return report;
+        };
+        let Some(sub_id) = plug
+            .compose_container()
+            .goods_id(ComposeEquipmentCell::SubEquipment)
+        else {
+            report.outcome = EquipmentComposeOutcome::MissingSub;
+            report
+                .notifications
+                .push(context.publish_equipment_compose_notification(player_id, "GS1157", &[]));
+            return report;
+        };
+        let Some(base_source) = player
+            .get_goods_by_id(base_id)
+            .map(|goods| EquipmentComposeSourceSnapshot::capture(goods, &self.goods_factory))
+        else {
+            report.outcome = EquipmentComposeOutcome::MissingBase;
+            return report;
+        };
+        let Some(sub_source) = player
+            .get_goods_by_id(sub_id)
+            .map(|goods| EquipmentComposeSourceSnapshot::capture(goods, &self.goods_factory))
+        else {
+            report.outcome = EquipmentComposeOutcome::MissingSub;
+            return report;
+        };
+        if player.check_item_in_packet(COMPOSE_STONE_GOODS_INDEX) == 0 {
+            report.outcome = EquipmentComposeOutcome::MissingStone;
+            report
+                .notifications
+                .push(context.publish_equipment_compose_notification(player_id, "GS1158", &[]));
+            return report;
+        }
+        if base_source.base_index == 0 || base_source.base_index != sub_source.base_index {
+            report.outcome = EquipmentComposeOutcome::DifferentEquipment;
+            report
+                .notifications
+                .push(context.publish_equipment_compose_notification(player_id, "GS1159", &[]));
+            return report;
+        }
+        let first = self
+            .equipment_compose_list
+            .get_first_compose(base_source.base_index);
+        let second = self
+            .equipment_compose_list
+            .get_second_compose(base_source.base_index);
+        let (result_index, step, required_level) = if second != 0 {
+            (second, 2, 20)
+        } else {
+            (first, 1, 15)
+        };
+        report.result_index = result_index;
+        report.required_level = required_level;
+        if result_index == 0 {
+            report.outcome = EquipmentComposeOutcome::MissingRecipe;
+            report
+                .notifications
+                .push(context.publish_equipment_compose_notification(player_id, "GS1160", &[]));
+            return report;
+        }
+        if base_source.weapon_level < required_level || sub_source.weapon_level < required_level {
+            report.outcome = EquipmentComposeOutcome::InsufficientLevel {
+                step,
+                required: required_level,
+            };
+            report
+                .notifications
+                .push(context.publish_equipment_compose_notification(
+                    player_id,
+                    "GS1161",
+                    &[step, required_level],
+                ));
+            return report;
+        }
+        if base_source.anima_bind != 1 || sub_source.anima_bind != 1 {
+            report.outcome = EquipmentComposeOutcome::NotBound;
+            report
+                .notifications
+                .push(context.publish_equipment_compose_notification(player_id, "GS1162", &[]));
+            return report;
+        }
+        if base_source.quality != sub_source.quality {
+            report.outcome = EquipmentComposeOutcome::DifferentQuality;
+            report
+                .notifications
+                .push(context.publish_equipment_compose_notification(player_id, "GS1163", &[]));
+            return report;
+        }
+
+        let mut created = {
+            let (random_state, goods_factory, fairy_exp_conf, battle_fairy_exp_config) = (
+                &mut self.random_state,
+                &self.goods_factory,
+                &self.fairy_exp_conf,
+                &self.battle_fairy_exp_config,
+            );
+            goods_factory.create_goods_batch(
+                result_index,
+                1,
+                |upper_bound| game_legacy_random(random_state, upper_bound),
+                || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
+                |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
+            )
+        };
+        let Some(mut result) = created.pop() else {
+            report.outcome = EquipmentComposeOutcome::FactoryRejected;
+            return report;
+        };
+
+        for source in [&base_source, &sub_source] {
+            let log = EquipmentComposeAuditLog {
+                player_id,
+                reason: COMPOSE_CONSUME_REASON,
+                goods: source.identity,
+                base_index: source.base_index,
+                price: source.price,
+                name: source.name.clone(),
+            };
+            context.record_equipment_compose_log(&log);
+        }
+        for (cell, source) in [
+            (ComposeEquipmentCell::BaseEquipment, base_source.clone()),
+            (ComposeEquipmentCell::SubEquipment, sub_source.clone()),
+        ] {
+            let previous = plug
+                .compose_container()
+                .original_container_information(source.identity.ex_id)
+                .unwrap_or_default();
+            let mut consumption = EquipmentComposeSourceConsumption {
+                cell,
+                source,
+                previous,
+                external_deliveries: Vec::new(),
+            };
+            consumption.external_deliveries =
+                context.consume_equipment_compose_source(self, player_id, &consumption);
+            plug.compose_container_mut()
+                .remove_shadow(consumption.source.identity.ex_id);
+            report.source_consumptions.push(consumption);
+        }
+        let stone_consumptions = self
+            .find_player_mut(player_id)
+            .expect("compose owner проверен до stone removal")
+            .remove_item_in_packet(COMPOSE_STONE_GOODS_INDEX, 1);
+        for consumption in stone_consumptions {
+            let deliveries = context.publish_equipment_compose_stone_consumption(&consumption);
+            report.stone_consumptions.push(consumption);
+            report.stone_deliveries.push(deliveries);
+        }
+
+        let packet_position = self.find_player(player_id).and_then(|player| {
+            player
+                .packet()
+                .find_position_for_goods(&result, &self.goods_factory)
+        });
+        let Some(packet_position) = packet_position else {
+            report.rejected_result = Some(result.identity());
+            report.outcome = EquipmentComposeOutcome::PacketFullAfterConsumption;
+            return report;
+        };
+        let result_log = EquipmentComposeAuditLog {
+            player_id,
+            reason: COMPOSE_CREATE_REASON,
+            goods: result.identity(),
+            base_index: result.base_properties_index(),
+            price: result.price(),
+            name: result.name().to_vec(),
+        };
+        context.record_equipment_compose_log(&result_log);
+        if !context.prepare_equipment_compose_result(&mut result, &base_source, required_level) {
+            report.rejected_result = Some(result.identity());
+            report.outcome = EquipmentComposeOutcome::FactoryRejected;
+            return report;
+        }
+        let result_identity = result.identity();
+        let (addition, rejected_result) = {
+            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+            let player = players
+                .get_mut(&player_id)
+                .expect("compose owner проверен до packet add");
+            let mut incoming = Some(result);
+            let outcome = player.packet_mut().add_goods_at(
+                packet_position,
+                &mut incoming,
+                goods_factory,
+                true,
+            );
+            let (old_client_payload, resulting_amount) = match &outcome {
+                VolumeGoodsAddOutcome::Added(added) => {
+                    let stored = player
+                        .packet()
+                        .base()
+                        .find(added.identity.ex_id)
+                        .expect("успешный packet add сохранил compose result");
+                    (
+                        Some(context.encode_goods_for_old_client(stored)),
+                        Some(stored.amount()),
+                    )
+                }
+                VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { target, .. }) => (
+                    None,
+                    player
+                        .packet()
+                        .base()
+                        .find(target.ex_id)
+                        .map(CGoods::amount),
+                ),
+                VolumeGoodsAddOutcome::Stack(_) | VolumeGoodsAddOutcome::Rejected(_) => {
+                    (None, None)
+                }
+            };
+            (
+                CiQingPacketAddition {
+                    player_id,
+                    source: result_identity,
+                    outcome,
+                    old_client_payload,
+                    resulting_amount,
+                },
+                incoming.map(|goods| goods.identity()),
+            )
+        };
+        if let Some(rejected_result) = rejected_result {
+            report.rejected_result = Some(rejected_result);
+            report.packet_additions.push(addition);
+            report.outcome = EquipmentComposeOutcome::PacketAddRejected;
+            return report;
+        }
+        let addition_deliveries = context.publish_equipment_compose_packet_addition(&addition);
+        report.packet_additions.push(addition);
+        report.packet_addition_deliveries.push(addition_deliveries);
+
+        if let Some(stored) = self
+            .find_player(player_id)
+            .and_then(|player| player.packet().base().find(result_identity.ex_id))
+        {
+            let previous = PreviousContainer {
+                container_type: 400,
+                container_id: player_id,
+                container_extend_id: 1,
+                goods_position: packet_position,
+            };
+            report.result_shadow = Some(plug.compose_container_mut().insert_shadow(
+                ComposeEquipmentCell::ComposeEquipment,
+                stored,
+                previous,
+            ));
+        }
+        context.run_equipment_compose_script(
+            self,
+            player_id,
+            b"scripts/goods/shenbing_gonggao.script",
+        );
+        report.script_dispatched = true;
+        report.outcome = EquipmentComposeOutcome::Completed;
+        report
     }
 
     pub(crate) const fn words_filter(&self) -> &CWordsFilter {

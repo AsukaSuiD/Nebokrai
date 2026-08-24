@@ -34,6 +34,9 @@
 //! owner lookup и plug-ID guard выполняются ordered session End, player
 //! progress/moveable release и plug Exit. Полиморфные End/Exit остаются
 //! обязательными runtime-effects до materialization concrete session типов.
+//! `0x8FC24` соседним route-ом замыкает equipment compose: session/plug
+//! identity, validation, необратимое удаление двух equipment и камня,
+//! universal upgrade, packet ownership, result-shadow и announcement script.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -50,12 +53,13 @@ use crate::gameserver::appserver::player::{
     BattleFairyPotentialResetReport, BattleFairySummonReport, BattleFairyUpgradeReport,
     GoodsSessionPlayerRelease,
 };
+use crate::gameserver::appserver::session::cequipmentcompose::EquipmentComposeReport;
 use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
     BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
     CGame, CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
     CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport,
-    CiQingOtherPersonTarget, CiQingSetupQueryReport,
+    CiQingOtherPersonTarget, CiQingSetupQueryReport, EquipmentComposeContext,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -76,6 +80,7 @@ const COMPOSE_CI_QING_NODE: u32 = 0x0008_fc32;
 const DELETE_CI_QING_GOODS: u32 = 0x0008_fc33;
 const MOUNT_CI_QING_FROM_HAND: u32 = 0x0008_fc34;
 const QUERY_CI_QING_OTHER_PERSON: u32 = 0x0008_fc35;
+const COMPOSE_EQUIPMENT: u32 = 0x0008_fc24;
 const END_GOODS_SESSION: u32 = 0x0008_fc25;
 
 pub(crate) trait GameGoodsMessageRuntime:
@@ -86,6 +91,7 @@ pub(crate) trait GameGoodsMessageRuntime:
     + BattleFairyRuntimeContext
     + CiQingMakeContext
     + CiQingComposeContext
+    + EquipmentComposeContext
 {
     fn run_battle_fairy_reset_script(
         &mut self,
@@ -179,6 +185,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     CiQingDelete(CiQingDeleteReport),
     CiQingMount(CiQingMountReport),
     CiQingOtherPerson(CiQingOtherPersonReport),
+    EquipmentCompose(EquipmentComposeReport),
     GoodsSessionEnd(GoodsSessionEndReport),
 }
 
@@ -200,7 +207,8 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
-        END_GOODS_SESSION
+        COMPOSE_EQUIPMENT
+            | END_GOODS_SESSION
             | CHECK_BATTLE_FAIRY_COMBINE
             | COMBINE_BATTLE_FAIRY
             | UPGRADE_BATTLE_FAIRY
@@ -241,6 +249,22 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             .ok_or(GameGoodsMessageError::MissingField(field))
     };
     let outcome = match message_type {
+        COMPOSE_EQUIPMENT => {
+            let session_id = match read_long(message, "equipment compose session ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let requested_plug_id = match read_long(message, "equipment compose plug ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            GameGoodsMessageOutcome::EquipmentCompose(game.compose_equipment(
+                player_id,
+                session_id,
+                requested_plug_id,
+                runtime,
+            ))
+        }
         END_GOODS_SESSION => {
             let session_id = match read_long(message, "goods session ID") {
                 Ok(value) => value,
