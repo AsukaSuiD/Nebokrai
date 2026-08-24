@@ -297,6 +297,10 @@ use crate::gameserver::appserver::message::servermessage::{
     GameServerMessageError, GameServerMessageReport, InitialRegionStartupContext,
     WarScheduleSetupContext, dispatch_server_message,
 };
+use crate::gameserver::appserver::message::skillmessage::{
+    GameSkillMessageError, GameSkillMessageReport, GameSkillMessageRuntime,
+    dispatch_game_skill_message,
+};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::organizingsystem::attackcitysys::CAttackCitySys;
@@ -1733,7 +1737,7 @@ pub(crate) struct GameAuctionRunReport {
     pub(crate) state_request: Option<Result<i32, SendMessageError>>,
 }
 
-#[must_use = "ProcessMessage report сохраняет server, auction, GM, GMA и depot effects"]
+#[must_use = "ProcessMessage report сохраняет server и достигнутые gameplay effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) legacy_return: i32,
@@ -1751,6 +1755,7 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
         >,
     >,
     pub(crate) goods_war_messages: Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
+    pub(crate) skill_messages: Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
     pub(crate) server_messages:
         Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
 }
@@ -1805,6 +1810,7 @@ pub(crate) trait GameMainLoopRuntime:
     + InitialRegionStartupContext
     + GameOrganizingWarRuntime
     + GameCountryWarRuntime
+    + GameSkillMessageRuntime
 {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
@@ -7146,6 +7152,7 @@ impl CGame {
     pub(crate) fn request_battle_fairy_skill<Context: BattleFairySkillRequestContext>(
         &self,
         player_id: i32,
+        socket_id: i32,
         request: BattleFairySkillRequest,
         facts: BattleFairySkillRequestFacts,
         context: &mut Context,
@@ -7189,7 +7196,7 @@ impl CGame {
                     report
                         .deliveries
                         .push(BattleFairySkillRequestDelivery::SocketReject(
-                            message.send_to_player(self.net_server(), player_id),
+                            message.send_to_socket(self.net_server(), socket_id),
                         ));
                 }
                 BattleFairySkillRequestEffect::AiDispatch(dispatch) => {
@@ -7580,6 +7587,7 @@ impl CGame {
         let mut organizing_war_messages = Vec::new();
         let mut country_war_messages = Vec::new();
         let mut goods_war_messages = Vec::new();
+        let mut skill_messages = Vec::new();
         let mut server_messages = Vec::new();
         let world_messages = self
             .world_client
@@ -7597,6 +7605,7 @@ impl CGame {
                 &mut organizing_war_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
+                &mut skill_messages,
                 &mut server_messages,
             );
         }
@@ -7616,6 +7625,7 @@ impl CGame {
                 &mut organizing_war_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
+                &mut skill_messages,
                 &mut server_messages,
             );
         }
@@ -7637,6 +7647,7 @@ impl CGame {
                         &mut organizing_war_messages,
                         &mut country_war_messages,
                         &mut goods_war_messages,
+                        &mut skill_messages,
                         &mut server_messages,
                     );
                 }
@@ -7657,6 +7668,7 @@ impl CGame {
             organizing_war_messages,
             country_war_messages,
             goods_war_messages,
+            skill_messages,
             server_messages,
         }
     }
@@ -7681,6 +7693,7 @@ impl CGame {
             >,
         >,
         goods_war_messages: &mut Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
+        skill_messages: &mut Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
         server_messages: &mut Vec<
             Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
         >,
@@ -7705,6 +7718,8 @@ impl CGame {
             country_war_messages.push(report);
         } else if let Some(report) = dispatch_game_goods_war_message(message, self) {
             goods_war_messages.push(report);
+        } else if let Some(report) = dispatch_game_skill_message(message, self, runtime) {
+            skill_messages.push(report);
         } else {
             message.run(self, runtime);
         }
