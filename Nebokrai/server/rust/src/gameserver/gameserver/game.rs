@@ -201,6 +201,8 @@
 //! фактическое хранение AI. Non-player relocation и serializers ещё внешние.
 //! Friend commands `0x8FA0D..0F` проходят main route через canonical player
 //! maps, owned ordered friend state, addressed client wire и WS `0x60501/02`.
+//! Обратные WS presence `0x7F904/905` сохраняют исходный payload и доходят до
+//! клиента как addressed `0xBF404/405`, замыкая online/offline контракт.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -409,6 +411,9 @@ use crate::gameserver::appserver::message::goodsmessage::{
 };
 use crate::gameserver::appserver::message::incrementshopmessage::{
     GameIncrementShopMessageError, GameIncrementShopMessageReport, dispatch_increment_shop_message,
+};
+use crate::gameserver::appserver::message::logmessage::{
+    GameLogMessageError, GameLogMessageReport, dispatch_game_log_message,
 };
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
     WorldAuctionStateMessageError, WorldAuctionStateMessageReport, dispatch_world_auction_state,
@@ -2555,6 +2560,7 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) skill_messages: Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
     pub(crate) shape_messages: Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
     pub(crate) player_messages: Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
+    pub(crate) log_messages: Vec<Result<GameLogMessageReport, GameLogMessageError>>,
     pub(crate) server_messages:
         Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
 }
@@ -14080,6 +14086,7 @@ impl CGame {
         let mut skill_messages = Vec::new();
         let mut shape_messages = Vec::new();
         let mut player_messages = Vec::new();
+        let mut log_messages = Vec::new();
         let mut server_messages = Vec::new();
         let world_messages = self
             .world_client
@@ -14104,6 +14111,7 @@ impl CGame {
                 &mut skill_messages,
                 &mut shape_messages,
                 &mut player_messages,
+                &mut log_messages,
                 &mut server_messages,
             );
         }
@@ -14130,6 +14138,7 @@ impl CGame {
                 &mut skill_messages,
                 &mut shape_messages,
                 &mut player_messages,
+                &mut log_messages,
                 &mut server_messages,
             );
         }
@@ -14158,6 +14167,7 @@ impl CGame {
                         &mut skill_messages,
                         &mut shape_messages,
                         &mut player_messages,
+                        &mut log_messages,
                         &mut server_messages,
                     );
                 }
@@ -14185,6 +14195,7 @@ impl CGame {
             skill_messages,
             shape_messages,
             player_messages,
+            log_messages,
             server_messages,
         }
     }
@@ -14220,6 +14231,7 @@ impl CGame {
         skill_messages: &mut Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
         shape_messages: &mut Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
         player_messages: &mut Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
+        log_messages: &mut Vec<Result<GameLogMessageReport, GameLogMessageError>>,
         server_messages: &mut Vec<
             Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
         >,
@@ -14259,6 +14271,8 @@ impl CGame {
             shape_messages.push(report);
         } else if let Some(report) = dispatch_game_player_message(message, self) {
             player_messages.push(report);
+        } else if let Some(report) = dispatch_game_log_message(message, self) {
+            log_messages.push(report);
         } else {
             message.run(self, runtime);
         }
