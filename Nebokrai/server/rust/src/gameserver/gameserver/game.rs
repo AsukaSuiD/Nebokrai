@@ -100,6 +100,8 @@
 //! Nation combat callback-ы продолжают эту вертикаль: `OnBeenHurted` хранит
 //! first-hit flags и exact World notices, `OnDied` исполняет morale/fail
 //! packets, regional notices и одноразовый YuYingShi через concrete `AddNpc`.
+//! Script-facing carriage return отдельно сохраняет saturating treasure-box
+//! count, wrapping morale bonus и немедленный regional `0xBF818` snapshot.
 //! CountryWar `0x7FF17..0x7FF22` продолжает тот же lifecycle: мутирует
 //! country-region phases/results, выполняет clear через concrete runtime и
 //! переиспользует входной message для all/country-filtered client broadcast.
@@ -267,8 +269,8 @@ use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion,
 };
 use crate::gameserver::appserver::servernationregion::{
-    NationMonsterDamageNotice, NationMoraleMutation, ServerNationRegion,
-    classify_nation_morale_target,
+    NationCarriageReturnOutcome, NationMonsterDamageNotice, NationMoraleMutation,
+    ServerNationRegion, classify_nation_morale_target,
 };
 use crate::gameserver::appserver::serverregion::{
     CServerRegion, RegionMembershipBlock, ServerRegionNpcContext, ServerRegionNpcSetup,
@@ -1016,6 +1018,14 @@ pub(crate) struct NationMonsterDamageReport {
     pub(crate) attacker_player_id: i32,
     pub(crate) outcome: NationMonsterDamageOutcome,
     pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationCarriageReturnReport {
+    pub(crate) region_id: i32,
+    pub(crate) requested_country: i32,
+    pub(crate) outcome: NationCarriageReturnOutcome,
+    pub(crate) morale_delivery: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2126,6 +2136,34 @@ impl CGame {
         region
             .finish_player_timing(player_id, died, now_ms)
             .is_some()
+    }
+
+    /// Script primitive `NationWar_CarriageBackTown` reaches the same typed
+    /// Nation owner that combat callbacks use; non-Nation region keeps the
+    /// original dynamic-cast no-op as `None`.
+    pub(crate) fn script_nation_carriage_back_town(
+        &mut self,
+        region_id: i32,
+        country: i32,
+    ) -> Option<NationCarriageReturnReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Nation(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let outcome = region.carriage_back_town(country);
+        let morale_delivery =
+            matches!(outcome, NationCarriageReturnOutcome::Applied(_)).then(|| {
+                self.four_nation_morale_snapshot(*region.morale(), *region.nation_failed())
+                    .send_to_region(Some(&region.war.base), None, self)
+            });
+        self.restore_region_owner(ServerRegionOwner::Nation(region));
+        Some(NationCarriageReturnReport {
+            region_id,
+            requested_country: country,
+            outcome,
+            morale_delivery,
+        })
     }
 
     /// Reached `CMonster::OnBeenHurted` branch: только player damage (`400`)

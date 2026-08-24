@@ -97,6 +97,20 @@ pub(crate) struct NationMoraleMutation {
     pub(crate) nation_failed: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NationCarriageReturnMutation {
+    pub(crate) country: u8,
+    pub(crate) treasure_boxes: i32,
+    pub(crate) morale: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NationCarriageReturnOutcome {
+    CountryOutsideNation,
+    NationFailed,
+    Applied(NationCarriageReturnMutation),
+}
+
 pub(crate) fn classify_nation_morale_target(
     monster_original_name: &[u8],
     mut string_by_id: impl FnMut(&[u8]) -> Vec<u8>,
@@ -412,6 +426,31 @@ impl ServerNationRegion {
                 || self.morale[attacker] > 2499,
             check_admiral_spawn: target == NationMoraleTarget::Admiral,
             nation_failed,
+        })
+    }
+
+    /// Exact `OnCarriageBackTown`: slot `0` формально допустим, failed nation
+    /// не меняется, а после третьей коробки каждый следующий возврат всё равно
+    /// добавляет 400 morale при сохранении счётчика `3`.
+    pub(crate) fn carriage_back_town(&mut self, country: i32) -> NationCarriageReturnOutcome {
+        let Ok(country) = usize::try_from(country) else {
+            return NationCarriageReturnOutcome::CountryOutsideNation;
+        };
+        if country >= self.treasure_boxes.len() {
+            return NationCarriageReturnOutcome::CountryOutsideNation;
+        }
+        if self.nation_failed[country] {
+            return NationCarriageReturnOutcome::NationFailed;
+        }
+        self.treasure_boxes[country] = self.treasure_boxes[country].wrapping_add(1);
+        self.morale[country] = self.morale[country].wrapping_add(400);
+        if self.treasure_boxes[country] > 3 {
+            self.treasure_boxes[country] = 3;
+        }
+        NationCarriageReturnOutcome::Applied(NationCarriageReturnMutation {
+            country: country as u8,
+            treasure_boxes: self.treasure_boxes[country],
+            morale: self.morale[country],
         })
     }
 
