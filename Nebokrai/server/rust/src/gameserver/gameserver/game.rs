@@ -51,6 +51,10 @@
 //! function/variable setter безопасно материализует исходный freed-owner
 //! контракт как `None`; старый `length + 1` NUL-padding заменён bounded `Vec` и
 //! C-string prefix adapter-ом.
+//! Reached faction `Create/ApplyJoin` sessions хранят exact correlation,
+//! `1000/2000` ms timeout, client prompts и World requests; успешный create
+//! callback списывает обещанные packet goods и деньги через canonical player/
+//! container effects. Общий legacy async manager заменён узкими owned maps.
 //! Reached `SetMe("dwVigour")` пишет поле как generic DWORD без
 //! `SetVigour` clamp, затем проводит обязательный virtual
 //! `UpdateProperty` и публикует полный player `0xBF721` через тот
@@ -3289,6 +3293,27 @@ impl WarScheduleSetupContext for CGame {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PendingFactionCreation {
+    pub(crate) session_id: i64,
+    pub(crate) password: i32,
+    pub(crate) player_id: i32,
+    pub(crate) required_goods: Vec<u8>,
+    pub(crate) required_money: i32,
+    pub(crate) country: u8,
+    pub(crate) world_request_sent: bool,
+    pub(crate) expires_at_ms: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PendingFactionApplication {
+    pub(crate) session_id: i64,
+    pub(crate) password: i32,
+    pub(crate) player_id: i32,
+    pub(crate) page: i32,
+    pub(crate) expires_at_ms: u32,
+}
+
 pub(crate) struct CGame {
     setup: GameSetup,
     setup_ex: GameSetupEx,
@@ -3321,6 +3346,10 @@ pub(crate) struct CGame {
     general_variables: CVariableList,
     active_scripts: BTreeMap<i32, ActiveScript>,
     next_script_id: i32,
+    next_organizing_session_id: i64,
+    next_organizing_password: i32,
+    pending_faction_creations: BTreeMap<i64, PendingFactionCreation>,
+    pending_faction_applications: BTreeMap<i64, PendingFactionApplication>,
     string_table: MyStringTable,
     quest_system: CQuestSystem,
     country_param: CCountryParam,
@@ -3918,6 +3947,10 @@ impl CGame {
             general_variables: CVariableList::default(),
             active_scripts: BTreeMap::new(),
             next_script_id: 0,
+            next_organizing_session_id: 0,
+            next_organizing_password: 0,
+            pending_faction_creations: BTreeMap::new(),
+            pending_faction_applications: BTreeMap::new(),
             string_table: MyStringTable::new(),
             quest_system: CQuestSystem::default(),
             country_param: CCountryParam::default(),
@@ -8193,6 +8226,361 @@ impl CGame {
 
     pub(crate) fn script_function_id(&self, name: &[u8]) -> Option<i32> {
         self.script_functions.query(name)
+    }
+
+    fn next_organizing_correlation(&mut self) -> (i64, i32) {
+        self.next_organizing_session_id = self.next_organizing_session_id.wrapping_add(1);
+        if self.next_organizing_session_id == 0 {
+            self.next_organizing_session_id = 1;
+        }
+        self.next_organizing_password = self.next_organizing_password.wrapping_add(1);
+        if self.next_organizing_password == 0 {
+            self.next_organizing_password = 1;
+        }
+        (
+            self.next_organizing_session_id,
+            self.next_organizing_password,
+        )
+    }
+
+    fn send_faction_script_notice(&self, player_id: i32, text: &[u8]) -> i32 {
+        colored_player_notice_message(0xffff_ffff, 0, text)
+            .send_to_player(self.net_server(), player_id)
+    }
+
+    pub(crate) fn start_script_faction_creation(
+        &mut self,
+        player_id: i32,
+        required_level: i32,
+        required_goods: &[u8],
+        required_money: i32,
+        country: u8,
+        now_ms: u32,
+    ) {
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        if player.faction_id() > 0 {
+            let text = self.get_string_by_id(b"GS0190").to_vec();
+            let _ = self.send_faction_script_notice(player_id, &text);
+            return;
+        }
+        if i32::from(player.level()) < required_level {
+            let text = format_legacy_mixed(
+                self.get_string_by_id(b"GS0191"),
+                &[LegacyFormatArgument::Signed(required_level)],
+                0xff,
+            );
+            let _ = self.send_faction_script_notice(player_id, &text);
+            return;
+        }
+        if player.money() < required_money as u32 {
+            let text = format_legacy_mixed(
+                self.get_string_by_id(b"GS0192"),
+                &[LegacyFormatArgument::Signed(required_money)],
+                0xff,
+            );
+            let _ = self.send_faction_script_notice(player_id, &text);
+            return;
+        }
+        if required_goods != b"0" {
+            let goods_index = self
+                .goods_factory
+                .query_goods_id_by_original_name(Some(required_goods));
+            let goods = self
+                .goods_factory
+                .query_goods_base_properties_by_original_name(Some(required_goods));
+            let Some(goods) = goods else {
+                let text = self.get_string_by_id(b"GS0194").to_vec();
+                let _ = self.send_faction_script_notice(player_id, &text);
+                return;
+            };
+            if player.check_item_in_packet(goods_index) == 0 {
+                let text = format_legacy_mixed(
+                    self.get_string_by_id(b"GS0193"),
+                    &[LegacyFormatArgument::Bytes(goods.name())],
+                    0xff,
+                );
+                let _ = self.send_faction_script_notice(player_id, &text);
+                return;
+            }
+        }
+        if player.create_faction_operator() {
+            return;
+        }
+
+        let (session_id, password) = self.next_organizing_correlation();
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_create_faction_operator(true);
+        }
+        self.pending_faction_creations.insert(
+            session_id,
+            PendingFactionCreation {
+                session_id,
+                password,
+                player_id,
+                required_goods: required_goods.to_vec(),
+                required_money,
+                country,
+                world_request_sent: false,
+                expires_at_ms: now_ms.wrapping_add(1000),
+            },
+        );
+        let mut prompt = CMessage::new(0x000b_ff01);
+        prompt.base_mut().add_long64(session_id);
+        prompt.add_long(password);
+        let _ = prompt.send_to_player(self.net_server(), player_id);
+    }
+
+    pub(crate) fn submit_script_faction_creation<Context: ScriptRegionChangeContext>(
+        &mut self,
+        player_id: i32,
+        session_id: i64,
+        password: i32,
+        faction_name: Option<&[u8]>,
+        context: &mut Context,
+    ) -> bool {
+        let Some(pending) = self.pending_faction_creations.get(&session_id).cloned() else {
+            return false;
+        };
+        if pending.player_id != player_id || pending.password != password {
+            return false;
+        }
+        let Some(faction_name) = faction_name else {
+            self.pending_faction_creations.remove(&session_id);
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_create_faction_operator(false);
+            }
+            return true;
+        };
+        if faction_name.is_empty() || faction_name.len() > 20 || faction_name.contains(&0) {
+            return false;
+        }
+        let Some(player) = self.find_player(player_id) else {
+            self.pending_faction_creations.remove(&session_id);
+            return false;
+        };
+        let mut snapshot = Vec::new();
+        if !context.encode_script_player_game_save(player, &mut snapshot) {
+            return false;
+        }
+        let mut request = CMessage::new(0x0006_0103);
+        request.base_mut().add_long64(session_id);
+        request.add_long(password);
+        request.add_long(player_id);
+        request.add_byte(pending.country);
+        add_legacy_c_string(request.base_mut(), faction_name);
+        request.base_mut().add(&snapshot);
+        let sent = matches!(request.send(self, false), Ok(value) if value != 0);
+        if sent {
+            if let Some(pending) = self.pending_faction_creations.get_mut(&session_id) {
+                pending.world_request_sent = true;
+            }
+        }
+        sent
+    }
+
+    pub(crate) fn finish_script_faction_creation(
+        &mut self,
+        session_id: i64,
+        password: i32,
+        player_id: i32,
+        result: i32,
+    ) -> bool {
+        let Some(pending) = self.pending_faction_creations.remove(&session_id) else {
+            return false;
+        };
+        if pending.password != password
+            || pending.player_id != player_id
+            || !pending.world_request_sent
+        {
+            self.pending_faction_creations.insert(session_id, pending);
+            return false;
+        }
+        if result == 1 {
+            if pending.required_goods != b"0" {
+                let base_index = self
+                    .goods_factory
+                    .query_goods_id_by_original_name(Some(&pending.required_goods));
+                let consumptions = self
+                    .find_player_mut(player_id)
+                    .map(|player| player.remove_item_in_packet(base_index, 1))
+                    .unwrap_or_default();
+                for consumption in consumptions {
+                    let _ = self.send_player_packet_consumption(&consumption);
+                }
+            }
+            if let Some(change) = self.decrease_player_money(player_id, pending.required_money as u32)
+            {
+                let _ = self.send_player_money_decrease(player_id, &change.outcome);
+            }
+        }
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_create_faction_operator(false);
+        }
+        true
+    }
+
+    pub(crate) fn start_script_faction_application(
+        &mut self,
+        player_id: i32,
+        required_level: i32,
+        now_ms: u32,
+    ) {
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        if player.faction_id() > 0 {
+            let text = self.get_string_by_id(b"GS0190").to_vec();
+            let _ = self.send_faction_script_notice(player_id, &text);
+            return;
+        }
+        if i32::from(player.level()) < required_level {
+            let text = format_legacy_mixed(
+                self.get_string_by_id(b"GS0191"),
+                &[LegacyFormatArgument::Signed(required_level)],
+                0xff,
+            );
+            let _ = self.send_faction_script_notice(player_id, &text);
+            return;
+        }
+        if player.apply_join_faction_operator() {
+            return;
+        }
+        let (session_id, password) = self.next_organizing_correlation();
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_apply_join_faction_operator(true);
+        }
+        self.pending_faction_applications.insert(
+            session_id,
+            PendingFactionApplication {
+                session_id,
+                password,
+                player_id,
+                page: 1,
+                expires_at_ms: now_ms.wrapping_add(2000),
+            },
+        );
+        let _ = self.send_script_faction_list_request(session_id);
+    }
+
+    fn send_script_faction_list_request(&self, session_id: i64) -> bool {
+        let Some(pending) = self.pending_faction_applications.get(&session_id) else {
+            return false;
+        };
+        let mut request = CMessage::new(0x0006_0107);
+        request.base_mut().add_long64(pending.session_id);
+        request.add_long(pending.password);
+        request.add_long(pending.player_id);
+        request.add_long(pending.page);
+        matches!(request.send(self, false), Ok(value) if value != 0)
+    }
+
+    pub(crate) fn continue_script_faction_application(
+        &mut self,
+        player_id: i32,
+        session_id: i64,
+    ) -> bool {
+        let Some(pending) = self.pending_faction_applications.get_mut(&session_id) else {
+            return false;
+        };
+        if pending.player_id != player_id {
+            return false;
+        }
+        pending.page = pending.page.wrapping_add(1);
+        self.send_script_faction_list_request(session_id)
+    }
+
+    pub(crate) fn finish_empty_script_faction_application(
+        &mut self,
+        player_id: i32,
+        session_id: i64,
+        password: i32,
+    ) -> bool {
+        let Some(pending) = self.pending_faction_applications.get(&session_id) else {
+            return false;
+        };
+        if pending.player_id != player_id || pending.password != password {
+            return false;
+        }
+        self.pending_faction_applications.remove(&session_id);
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_apply_join_faction_operator(false);
+        }
+        true
+    }
+
+    pub(crate) fn select_script_faction_application(
+        &mut self,
+        player_id: i32,
+        session_id: i64,
+        password: i32,
+        discarded: i32,
+        accepted: i32,
+        faction_name: &[u8],
+    ) -> bool {
+        let Some(pending) = self.pending_faction_applications.get(&session_id) else {
+            return false;
+        };
+        if pending.player_id != player_id
+            || pending.password != password
+            || faction_name.len() > 20
+            || faction_name.contains(&0)
+        {
+            return false;
+        }
+        if accepted != 0 {
+            let mut request = CMessage::new(0x0006_0108);
+            request.add_long(player_id);
+            request.add_long(discarded);
+            add_legacy_c_string(request.base_mut(), faction_name);
+            let _ = request.send(self, false);
+        }
+        self.pending_faction_applications.remove(&session_id);
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_apply_join_faction_operator(false);
+        }
+        true
+    }
+
+    pub(crate) fn script_faction_application_is_active(
+        &self,
+        player_id: i32,
+        session_id: i64,
+        password: i32,
+    ) -> bool {
+        self.pending_faction_applications
+            .get(&session_id)
+            .is_some_and(|pending| {
+                pending.player_id == player_id && pending.password == password
+            })
+    }
+
+    pub(crate) fn expire_script_faction_sessions(&mut self, now_ms: u32) {
+        let expired_creations: Vec<_> = self
+            .pending_faction_creations
+            .values()
+            .filter(|pending| now_ms.wrapping_sub(pending.expires_at_ms) < 0x8000_0000)
+            .map(|pending| (pending.session_id, pending.player_id))
+            .collect();
+        for (session_id, player_id) in expired_creations {
+            self.pending_faction_creations.remove(&session_id);
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_create_faction_operator(false);
+            }
+        }
+        let expired_applications: Vec<_> = self
+            .pending_faction_applications
+            .values()
+            .filter(|pending| now_ms.wrapping_sub(pending.expires_at_ms) < 0x8000_0000)
+            .map(|pending| (pending.session_id, pending.player_id))
+            .collect();
+        for (session_id, player_id) in expired_applications {
+            self.pending_faction_applications.remove(&session_id);
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_apply_join_faction_operator(false);
+            }
+        }
     }
 
     /// Exact `RunScript` owner: загруженный instance получает wrapping ID и
@@ -18649,6 +19037,7 @@ impl CGame {
         }
 
         state.current_tick_ms = runtime.get_tick_ms();
+        self.expire_script_faction_sessions(state.current_tick_ms);
         state.calls_since_runtime_log = state.calls_since_runtime_log.wrapping_add(1);
         let mut stages = Vec::new();
 
