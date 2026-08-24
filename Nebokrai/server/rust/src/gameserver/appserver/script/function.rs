@@ -52,6 +52,10 @@
 //! client open/result/close wire, общий Game RNG, configuration roll,
 //! goods factory/upgrade/packet ownership и optional World announcement;
 //! повторный запуск приходит из живого goods opcode `0x8FC12`.
+//! Item migration `2200..2203` теперь сохраняет optional upgrade/particular
+//! preparation, packet-first `DelGoods`, equipment fallback с полным player
+//! tail и обычные add/delete/amount client messages; reached caller — первый
+//! sanitation-блок реально запускаемого `scripts/quest/nodupe.script`.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -96,6 +100,7 @@ pub(crate) const SCRIPT_FUNCTION_SET_SELECTED_DURABILITY: i32 = 2246;
 pub(crate) const SCRIPT_FUNCTION_FAIRY_EXP_UP: i32 = 2249;
 pub(crate) const SCRIPT_FUNCTION_RGB: i32 = 9;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
+pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS: i32 = 2201;
 pub(crate) const SCRIPT_FUNCTION_CHECK_GOODS: i32 = 2202;
 pub(crate) const SCRIPT_FUNCTION_CHECK_SPACE: i32 = 2203;
 pub(crate) const SCRIPT_FUNCTION_ADD_INFO: i32 = 2305;
@@ -2326,6 +2331,7 @@ pub(crate) fn script_function_parameter_kind(
     use ScriptFunctionParameterKind::{Integer, String, Unused};
     match function_id {
         SCRIPT_FUNCTION_ADD_GOODS
+        | SCRIPT_FUNCTION_DELETE_GOODS
         | SCRIPT_FUNCTION_CHECK_GOODS
         | SCRIPT_FUNCTION_ADD_INFO
         | SCRIPT_FUNCTION_TALK_BOX
@@ -2824,7 +2830,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }
         SCRIPT_FUNCTION_ADD_GOODS => {
-            if argument_count > 2 {
+            if argument_count > 4 {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             }
             let Some(name) = string_arguments[0].filter(|name| !name.is_empty()) else {
@@ -2834,10 +2840,20 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             if amount < 1 || game.find_player(player_id).is_none() {
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             }
+            let mut upgrade_level = integer_arguments[2].unwrap_or_default();
+            if !(0..=100).contains(&upgrade_level) {
+                upgrade_level = 0;
+            }
+            let particular_attribute = integer_arguments[3].unwrap_or_default();
             let goods_index = game
                 .goods_factory()
                 .query_goods_id_by_original_name(Some(name));
-            let created = game.create_goods_batch(goods_index, amount as u32);
+            let created = game.create_script_goods_batch(
+                goods_index,
+                amount as u32,
+                upgrade_level,
+                particular_attribute,
+            );
             let mut encode = |goods: &CGoods| runtime.encode_goods_for_old_client(goods);
             if let Some((additions, _rejected)) =
                 game.add_goods_to_player_packet(player_id, created, &mut encode)
@@ -2847,6 +2863,24 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 }
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
+        }
+        SCRIPT_FUNCTION_DELETE_GOODS => {
+            let Some(name) = string_arguments[0].filter(|name| !name.is_empty()) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let requested = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let Ok(requested) = u32::try_from(requested) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if requested == 0 {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let goods_index = game
+                .goods_factory()
+                .query_goods_id_by_original_name(Some(name));
+            let legacy_return =
+                game.delete_script_goods(player_id, goods_index, requested, runtime) as i32;
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }
         SCRIPT_FUNCTION_ADD_INFO => {
             let Some(text) = string_arguments[0] else {

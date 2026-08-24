@@ -403,7 +403,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE, GAP_BF_CURRENT_MAX_EXP, GAP_BF_DEFUALT_SKLL,
     GAP_BF_HP, GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL,
     GAP_BF_MAX_MP, GAP_BF_MODULE, GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH,
-    GAP_EQUIP_STATE, GOODS_TYPE_EQUIPMENT,
+    GAP_EQUIP_STATE, GAP_PARTICULAR_ATTRIBUTE, GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goods::fairyproperties::{
@@ -5183,6 +5183,36 @@ impl CGame {
             |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
             |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
         )
+    }
+
+    /// Достигнутый `AddGoods(name, amount, upgrade, particular)` готовит весь
+    /// batch до передачи packet owner-у. Upgrade использует тот же Game RNG,
+    /// particular attribute пишет modifier первой instance-пары, как native
+    /// `SetAddonPropertyModifier`.
+    pub(crate) fn create_script_goods_batch(
+        &mut self,
+        goods_index: u32,
+        amount: u32,
+        upgrade_level: i32,
+        particular_attribute: i32,
+    ) -> Vec<CGoods> {
+        let mut goods = self.create_goods_batch(goods_index, amount);
+        let (factory, random_state) = (&self.goods_factory, &mut self.random_state);
+        for item in &mut goods {
+            if upgrade_level != 0 {
+                let _ = factory.upgrade_equipment(item, upgrade_level, |upper_bound| {
+                    game_legacy_random(random_state, upper_bound)
+                });
+            }
+            if particular_attribute != 0 {
+                let _ = item.set_addon_property_modifier_core(
+                    GAP_PARTICULAR_ATTRIBUTE,
+                    1,
+                    particular_attribute,
+                );
+            }
+        }
+        goods
     }
 
     pub(crate) const fn skill_factory(&self) -> &CSkillFactory {
@@ -10048,6 +10078,100 @@ impl CGame {
         message.set_object(consumption.goods.object_type, consumption.goods.ex_id);
         message.set_object_amount(consumption.remaining_amount);
         vec![message.send_to_player(self, consumption.player_id)]
+    }
+
+    /// Exact script `DelGoods(name, amount)` расходует packet stacks в
+    /// insertion order, затем equipment в column order. Каждая мутация сразу
+    /// публикует обычный container wire; equipment также проходит полный
+    /// player property/skill/around tail до перехода к следующему кандидату.
+    pub(crate) fn delete_script_goods<Runtime: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        base_index: u32,
+        requested: u32,
+        runtime: &mut Runtime,
+    ) -> u32 {
+        if base_index == 0 || requested == 0 {
+            return 0;
+        }
+        let Some(mut player) = self.players.remove(&player_id) else {
+            return 0;
+        };
+        let mut removed = 0u32;
+        for consumption in player.remove_item_in_packet(base_index, requested) {
+            removed = removed.wrapping_add(
+                consumption
+                    .previous_amount
+                    .wrapping_sub(consumption.remaining_amount),
+            );
+            let _ = self.send_player_packet_consumption(&consumption);
+        }
+
+        if removed < requested {
+            let candidates: Vec<_> = player
+                .equipment()
+                .traversing_goods()
+                .into_iter()
+                .filter(|(_, goods)| goods.base_properties_index() == base_index)
+                .map(|(column, goods)| (column.position(), goods.identity(), goods.amount()))
+                .collect();
+            for (position, identity, amount) in candidates {
+                if removed >= requested {
+                    break;
+                }
+                let remaining_request = requested.wrapping_sub(removed);
+                if remaining_request < amount {
+                    if let Some(goods) = player.equipment_mut().get_goods_mut(position) {
+                        goods.set_amount(amount.wrapping_sub(remaining_request));
+                        let mut message = CS2CContainerObjectAmountChange::default();
+                        message.set_source_container(PLAYER_TYPE, player_id, position);
+                        message.set_source_container_extend_id(2);
+                        message.set_object(identity.object_type, identity.ex_id);
+                        message.set_object_amount(amount.wrapping_sub(remaining_request));
+                        let _ = message.send_to_player(self, player_id);
+                        removed = requested;
+                    }
+                    break;
+                }
+                let Some(goods) = player.equipment().find(identity.ex_id) else {
+                    continue;
+                };
+                let facts = runtime.enhancement_equipment_remove_facts(
+                    &player,
+                    goods,
+                    self.globe_setup.pack_add_enabled(),
+                );
+                let mut recompute = |player: &CPlayer| {
+                    runtime.recompute_enhancement_player_properties(player)
+                };
+                let mut report = player.remove_equipment_goods(
+                    identity.ex_id,
+                    &self.goods_factory,
+                    &self.skill_factory,
+                    facts,
+                    &mut recompute,
+                );
+                drop(recompute);
+                self.publish_player_equipment_remove_report(&mut report, runtime);
+                if let EquipmentRemoveOutcome::Removed(result) = &report.outcome {
+                    removed = removed.wrapping_add(amount);
+                    let previous = PreviousContainer {
+                        container_type: PLAYER_TYPE,
+                        container_id: player_id,
+                        container_extend_id: 2,
+                        goods_position: position,
+                    };
+                    let _ = self.send_container_object_delete(
+                        player_id,
+                        &previous,
+                        result.goods.identity(),
+                        result.goods.amount(),
+                    );
+                }
+            }
+        }
+        self.players.insert(player_id, player);
+        removed
     }
 
     fn send_ci_qing_log(&self, log: &CiQingLog) -> Vec<i32> {
