@@ -273,6 +273,10 @@ impl CMessage {
         self.base.as_wire_bytes()
     }
 
+    pub(crate) fn unread_bytes(&self) -> &[u8] {
+        self.base.unread_bytes()
+    }
+
     pub(crate) fn base_mut(&mut self) -> &mut CBaseMessage {
         &mut self.base
     }

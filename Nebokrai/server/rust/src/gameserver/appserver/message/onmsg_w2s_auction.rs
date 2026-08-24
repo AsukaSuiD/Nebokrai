@@ -2,10 +2,10 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/onmsg_w2s_auction.cpp` подтверждают
-//! selectors `0x80401..0x80403` и `0x80410`: добавление временного `CGoodsNode` в
-//! Game-specific owner map, reconciliation с World GUID-set и публикацию
-//! stale owner/GUID клиентам, auction-state и полную YuanBao container/client
-//! mutation. GameServer primary map
+//! selectors `0x80401..0x80403`, `0x80409`, `0x8040A`, `0x8040F` и `0x80410`:
+//! добавление временного `CGoodsNode` в Game-specific owner map, reconciliation
+//! с World GUID-set, client relay/broadcast, auction-state и полную YuanBao
+//! container/client mutation. GameServer primary map
 //! хранит `GUID -> owner id`, а не MiscServer-owned node; это исключает
 //! исходный stack-pointer lifetime без изменения наблюдаемого результата.
 //! Обрезанный payload заменяет небезопасное чтение за буфером typed error-ом
@@ -25,8 +25,14 @@ use crate::public::auctionnode::{CGoodsNode, GoodsNodeUnserializeError};
 const WORLD_AUCTION_ADD_ITEM_MESSAGE: i32 = 0x0008_0401;
 const WORLD_AUCTION_UNITY_MESSAGE: i32 = 0x0008_0402;
 const WORLD_AUCTION_STATE_MESSAGE: i32 = 0x0008_0403;
+const WORLD_AUCTION_DIRECT_RELAY_MESSAGE: i32 = 0x0008_0409;
+const WORLD_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x0008_040a;
+const WORLD_AUCTION_BROADCAST_MESSAGE: i32 = 0x0008_040f;
 const WORLD_AUCTION_YUAN_BAO_MESSAGE: i32 = 0x0008_0410;
 const CLIENT_AUCTION_GOODS_REMOVED_MESSAGE: i32 = 0x000c_0702;
+const CLIENT_AUCTION_DIRECT_RELAY_MESSAGE: i32 = 0x000c_0707;
+const CLIENT_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x000c_0708;
+const CLIENT_AUCTION_BROADCAST_MESSAGE: i32 = 0x000c_010b;
 
 pub(crate) trait WorldAuctionRuntime: IncrementShopBillingContext {
     fn auction_wall_time_seconds(&mut self) -> u32;
@@ -42,6 +48,9 @@ pub(crate) enum WorldAuctionMessageError {
         available: usize,
     },
     MissingEnabledLong,
+    MissingRelayPlayerId {
+        selector: i32,
+    },
     MissingYuanBaoPlayerId,
     MissingYuanBaoAmount,
 }
@@ -67,6 +76,15 @@ pub(crate) enum WorldAuctionMessageReport {
         enabled: bool,
         last_check_seconds: u32,
     },
+    ClientRelay {
+        selector: i32,
+        player_id: i32,
+        payload: Vec<u8>,
+        delivery: Option<i32>,
+    },
+    ClientBroadcast {
+        delivery: Result<i32, SendMessageError>,
+    },
     YuanBaoChanged {
         player_id: i32,
         requested: u32,
@@ -75,7 +93,7 @@ pub(crate) enum WorldAuctionMessageReport {
     },
 }
 
-/// Материализует exact `0x80401..0x80403` и `0x80410`-ветви handler-а.
+/// Материализует достигнутые sync/relay/state/YuanBao ветви handler-а.
 /// `None` означает, что сообщение должен идти в оставшийся auction owner.
 pub(crate) fn dispatch_world_auction_message<Runtime: WorldAuctionRuntime>(
     message: &mut CMessage,
@@ -167,6 +185,37 @@ pub(crate) fn dispatch_world_auction_message<Runtime: WorldAuctionRuntime>(
                 enabled,
                 last_check_seconds,
             }))
+        }
+        selector @ (WORLD_AUCTION_DIRECT_RELAY_MESSAGE | WORLD_AUCTION_PLAYER_RELAY_MESSAGE) => {
+            let Some(player_id) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingRelayPlayerId {
+                    selector,
+                }));
+            };
+            let payload = message.unread_bytes().to_vec();
+            let player_found = selector == WORLD_AUCTION_DIRECT_RELAY_MESSAGE
+                || game.find_player(player_id).is_some();
+            let delivery = player_found.then(|| {
+                let client_selector = if selector == WORLD_AUCTION_DIRECT_RELAY_MESSAGE {
+                    CLIENT_AUCTION_DIRECT_RELAY_MESSAGE
+                } else {
+                    CLIENT_AUCTION_PLAYER_RELAY_MESSAGE
+                };
+                let mut response = CMessage::new(client_selector);
+                response.base_mut().add(&payload);
+                response.send_to_player(game.net_server(), player_id)
+            });
+            Some(Ok(WorldAuctionMessageReport::ClientRelay {
+                selector,
+                player_id,
+                payload,
+                delivery,
+            }))
+        }
+        WORLD_AUCTION_BROADCAST_MESSAGE => {
+            message.set_message_type(CLIENT_AUCTION_BROADCAST_MESSAGE);
+            let delivery = message.send_all(game.current_net_server());
+            Some(Ok(WorldAuctionMessageReport::ClientBroadcast { delivery }))
         }
         WORLD_AUCTION_YUAN_BAO_MESSAGE => {
             let Some(player_id) = message.base_mut().get_long() else {

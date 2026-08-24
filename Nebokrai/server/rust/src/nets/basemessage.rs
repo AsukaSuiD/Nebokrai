@@ -273,6 +273,12 @@ impl CBaseMessage {
         self.cursor
     }
 
+    /// Заимствует payload от текущего read cursor до конца, не двигая cursor.
+    /// Это safe-форма старых relay-вызовов `Add(data + read, size - read)`.
+    pub(crate) fn unread_bytes(&self) -> &[u8] {
+        self.remaining()
+    }
+
     /// Даёт владельцу составного legacy-типа общий wire-буфер и его cursor.
     ///
     /// Это безопасная форма старой пары `unsigned char* + long&`: владелец
