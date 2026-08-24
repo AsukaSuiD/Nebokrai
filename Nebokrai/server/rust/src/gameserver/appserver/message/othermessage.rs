@@ -5,12 +5,20 @@
 //! WorldServer: player ID, exact partial-mutation codec и итоговый `0xBF73E`.
 //! Chat delivery `0x7FA01/02/0F/10/11` замыкает private/faction/global/country
 //! WorldServer routes в exact `0xBF801/806/814/815/816` client wire.
+//! Rename round trip `0x8FB05 -> 0x5FD05 -> 0x7FA0E` сохраняет World/DB
+//! решение, меняет canonical player name только при result `0` и публикует
+//! exact `0xBF80F` вокруг игрока либо только самому игроку при отказе.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::PlayerLeiTingDecodeBlock;
+use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
+const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
+const WORLD_PLAYER_RENAME_REQUEST: i32 = 0x0005_fd05;
+const WORLD_PLAYER_RENAME_RESPONSE: u32 = 0x0007_fa0e;
+const PLAYER_RENAME_RESPONSE: i32 = 0x000b_f80f;
 const PRIVATE_CHAT_DELIVERY: u32 = 0x0007_fa01;
 const FACTION_CHAT_DELIVERY: u32 = 0x0007_fa02;
 const WORLD_CHAT_DELIVERY: u32 = 0x0007_fa0f;
@@ -29,6 +37,17 @@ pub(crate) enum GameOtherMessageOutcome {
     },
     ChatBroadcast {
         delivery: Result<i32, SendMessageError>,
+    },
+    RenameForwarded {
+        delivery: Result<i32, SendMessageError>,
+    },
+    RenameAccepted {
+        new_name: Vec<u8>,
+        delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    },
+    RenameRejected {
+        result: i8,
+        delivery: i32,
     },
     LeiTingUpdated {
         client_delivery: i32,
@@ -82,6 +101,15 @@ pub(crate) fn dispatch_game_other_message(
     game: &mut CGame,
 ) -> Option<Result<GameOtherMessageReport, GameOtherMessageError>> {
     let message_type = message.message_type() as u32;
+    if message_type == PLAYER_RENAME_REQUEST {
+        message.set_message_type(WORLD_PLAYER_RENAME_REQUEST);
+        let delivery = message.send(game, false);
+        return Some(Ok(GameOtherMessageReport {
+            message_type,
+            player_id: message.player_id().unwrap_or(0),
+            outcome: GameOtherMessageOutcome::RenameForwarded { delivery },
+        }));
+    }
     if !matches!(
         message_type,
         PRIVATE_CHAT_DELIVERY
@@ -89,6 +117,7 @@ pub(crate) fn dispatch_game_other_message(
             | WORLD_CHAT_DELIVERY
             | COUNTRY_CHAT_DELIVERY
             | COUNTRY_NOTICE_DELIVERY
+            | WORLD_PLAYER_RENAME_RESPONSE
             | WORLD_LEI_TING_UPDATE
     ) {
         return None;
@@ -237,6 +266,43 @@ pub(crate) fn dispatch_game_other_message(
                 player_id,
                 outcome: GameOtherMessageOutcome::ChatDelivered {
                     deliveries: vec![delivery],
+                },
+            })
+        })();
+        return Some(result);
+    }
+    if message_type == WORLD_PLAYER_RENAME_RESPONSE {
+        let result = (|| {
+            let player_id = read_long(message, "rename player id")?;
+            let rename_result = read_char(message, "rename result")?;
+            let new_name = read_string(message, 0x20);
+            let Some(player) = game.find_player_mut(player_id) else {
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerMissing,
+                });
+            };
+            message.set_message_type(PLAYER_RENAME_RESPONSE);
+            if rename_result == 0 {
+                player
+                    .movement_shape_mut()
+                    .base_object_mut()
+                    .set_name(&new_name);
+                let delivery = game.send_player_shape_around(player_id, None, message);
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::RenameAccepted { new_name, delivery },
+                });
+            }
+            let delivery = message.send_to_player(game.net_server(), player_id);
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::RenameRejected {
+                    result: rename_result,
+                    delivery,
                 },
             })
         })();
