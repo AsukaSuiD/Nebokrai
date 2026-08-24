@@ -2,8 +2,8 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x5FF15`, `0x7FC06`, `0x7FC08..0x7FC0F`, `0x7FC11` и `0x7FC13`: requester ID
-//! читается до switch,
+//! ветви `0x5FF15`, `0x7FC01/02/04/05`, `0x7FC06`, `0x7FC08..0x7FC0F`,
+//! `0x7FC11` и `0x7FC13`: requester ID читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
 //! уходят WorldServer. Адресный `0x7FC0F` сохраняет length guards,
@@ -36,18 +36,26 @@
 //! Запрос `0x7FC11` обходит canonical GM map, оставляет только online entries,
 //! форматирует пять подтверждённых level-шаблонов, меняет ID того же пакета на
 //! `0x5FF15`, дописывает count/строки и возвращает его WorldServer.
+//! Script-continuation family читает `(value, script ID)` после requester-а,
+//! вызывает общий runtime `ScriptContinue`; только `0x7FC01` подавляет вызов
+//! при отсутствующем player, остальные три передают исходный null-owner факт.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
 //! расхождение между двумя time-sensitive pass-ами. Непокрытые GM
 //! selectors остаются RAW ниже.
 
+use super::othermessage::{GameOtherMessageRuntime, GameOtherScriptAction};
 use crate::gameserver::gameserver::game::{
     CGame, GameKickAroundOutcome, GameKickAroundReport, GameKickPlayerReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const GM_LIST_RESPONSE_MESSAGE: i32 = 0x0005_FF15;
+const GM_SCRIPT_CONTINUE_IF_PRESENT_MESSAGE: i32 = 0x0007_FC01;
+const GM_SCRIPT_CONTINUE_MESSAGE_1: i32 = 0x0007_FC02;
+const GM_SCRIPT_CONTINUE_MESSAGE_2: i32 = 0x0007_FC04;
+const GM_SCRIPT_CONTINUE_MESSAGE_3: i32 = 0x0007_FC05;
 const GM_KICK_BY_NAME_MESSAGE: i32 = 0x0007_FC06;
 const GM_KICK_AROUND_MESSAGE: i32 = 0x0007_FC07;
 const GM_PRESENCE_FEEDBACK_MESSAGE: i32 = 0x0007_FC08;
@@ -78,6 +86,8 @@ const GM_PRIVATE_NOTICE_SUFFIX: &[u8] = b" By Game Server ";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GmMessageError {
     MissingRequesterId,
+    MissingScriptContinuationValue,
+    MissingScriptContinuationId,
     MissingListTargetPlayerId,
     MissingListReservedField,
     MissingListCount,
@@ -111,6 +121,13 @@ pub(crate) enum GmMessageError {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GmMessageReport {
+    ScriptContinued {
+        requester_id: i32,
+        script_id: i32,
+        value: i32,
+        player_present: bool,
+        requested: bool,
+    },
     ListRequest {
         requester_id: i32,
         entries: Vec<GmListPublishedEntry>,
@@ -225,15 +242,19 @@ pub(crate) struct GmListPublishedEntry {
 
 /// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
 /// `None` оставляет прочие selectors их ещё RAW owner-у.
-pub(crate) fn dispatch_gm_message(
+pub(crate) fn dispatch_gm_message<Runtime: GameOtherMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
-    mut now_milliseconds: impl FnMut() -> u32,
+    runtime: &mut Runtime,
 ) -> Option<Result<GmMessageReport, GmMessageError>> {
     let message_type = message.message_type();
     if !matches!(
         message_type,
         GM_LIST_RESPONSE_MESSAGE
+            | GM_SCRIPT_CONTINUE_IF_PRESENT_MESSAGE
+            | GM_SCRIPT_CONTINUE_MESSAGE_1
+            | GM_SCRIPT_CONTINUE_MESSAGE_2
+            | GM_SCRIPT_CONTINUE_MESSAGE_3
             | GM_KICK_BY_NAME_MESSAGE
             | GM_KICK_AROUND_MESSAGE
             | GM_PRESENCE_FEEDBACK_MESSAGE
@@ -252,6 +273,41 @@ pub(crate) fn dispatch_gm_message(
     let Some(requester_id) = message.base_mut().get_long() else {
         return Some(Err(GmMessageError::MissingRequesterId));
     };
+
+    if matches!(
+        message_type,
+        GM_SCRIPT_CONTINUE_IF_PRESENT_MESSAGE
+            | GM_SCRIPT_CONTINUE_MESSAGE_1
+            | GM_SCRIPT_CONTINUE_MESSAGE_2
+            | GM_SCRIPT_CONTINUE_MESSAGE_3
+    ) {
+        let Some(value) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingScriptContinuationValue));
+        };
+        let Some(script_id) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingScriptContinuationId));
+        };
+        let player_present = game.find_player(requester_id).is_some();
+        let requested = message_type != GM_SCRIPT_CONTINUE_IF_PRESENT_MESSAGE || player_present;
+        if requested {
+            runtime.run_other_script_action(
+                game,
+                GameOtherScriptAction::Continue {
+                    script_id,
+                    player_id: requester_id,
+                    player_present,
+                    value,
+                },
+            );
+        }
+        return Some(Ok(GmMessageReport::ScriptContinued {
+            requester_id,
+            script_id,
+            value,
+            player_present,
+            requested,
+        }));
+    }
 
     if message_type == GM_LIST_REQUEST_MESSAGE {
         let mut entries = Vec::new();
@@ -480,7 +536,8 @@ pub(crate) fn dispatch_gm_message(
         response.add_long(requester_id);
         add_legacy_c_string(&mut response, &player_name);
         response.add_long(minutes);
-        let player_id = game.silence_player_by_name(&player_name, minutes, &mut now_milliseconds);
+        let player_id =
+            game.silence_player_by_name(&player_name, minutes, || runtime.other_now_milliseconds());
         let (success, text_id) = if player_id.is_some() {
             (1, b"GS0031".as_slice())
         } else {
@@ -671,7 +728,7 @@ pub(crate) fn dispatch_gm_message(
         }));
     }
 
-    let first_pass = game.silenced_player_names_pass(&mut now_milliseconds);
+    let first_pass = game.silenced_player_names_pass(|| runtime.other_now_milliseconds());
     if first_pass.is_empty() {
         let localized = game.get_string_by_id(b"GS0028").to_vec();
         let mut response = CMessage::new(GM_QUERY_SILENCE_RESPONSE);
@@ -705,7 +762,7 @@ pub(crate) fn dispatch_gm_message(
         }));
     };
 
-    let published_names = game.silenced_player_names_pass(&mut now_milliseconds);
+    let published_names = game.silenced_player_names_pass(|| runtime.other_now_milliseconds());
     let mut names = Vec::with_capacity(required - GM_SILENCE_RESPONSE_SLACK);
     for name in &published_names {
         names.extend_from_slice(name);

@@ -16519,7 +16519,7 @@ impl CGame {
             player_shop_messages.push(report);
         } else if let Some(report) = dispatch_shop_message(message, self, runtime) {
             shop_messages.push(report);
-        } else if let Some(report) = dispatch_gm_message(message, self, || runtime.get_tick_ms()) {
+        } else if let Some(report) = dispatch_gm_message(message, self, runtime) {
             gm_messages.push(report);
         } else if let Some(report) = dispatch_gma_message(message, self) {
             gma_messages.push(report);
