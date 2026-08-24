@@ -35,6 +35,9 @@
 //! silence clock и king-authorized control-point publication `0xC030E`.
 //! Exile round-trip сохраняет Game guards и relocation, timestamped ordered
 //! country-state, ответ World `0x6030E` и итоговую синхронизацию `0x7FF15`.
+//! Exact World `0x60316` ошибочно шлёт тем же `0x7FF15` два long; уникальный
+//! 8-байтовый retired payload распознаётся отдельно, а исходный undefined
+//! overread/misparsed exile-list безопасно не воспроизводится.
 //! Country/all/private notices `0x7FF11/12/13` сохраняют разные client wire и
 //! маршруты: `0xBF806` по стране/всем и `0xC030D` выбранному player ID.
 //! `0x7FF14` сбрасывает jobs `1..7` всех существующих стран: каждый exact
@@ -57,6 +60,7 @@ use super::super::servercountryregion::{CountryBattleStateBlock, CountryRegionRu
 use super::super::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{CGame, ServerRegionOwner};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use std::mem::size_of;
 
 pub(crate) trait GameCountryWarRuntime:
     CountryRegionRuntimeContext + RegionRandomContext
@@ -222,6 +226,12 @@ pub(crate) struct GameCountryNoticeReport {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameCountryExileOutcome {
+    RetiredExileTimeCollision {
+        remaining_seconds: i32,
+        remaining_seconds_complete: bool,
+        player_id: i32,
+        player_id_complete: bool,
+    },
     CountryMissing,
     PlayerMissing,
     DestinationMissing,
@@ -859,6 +869,29 @@ fn dispatch_country_exile_message<Runtime: GameCountryWarRuntime>(
     runtime: &mut Runtime,
     opcode: u32,
 ) -> GameCountryExileReport {
+    let payload_bytes = message
+        .as_wire_bytes()
+        .len()
+        .saturating_sub(message.base_mut().cursor());
+    if opcode == 0x7ff15 && payload_bytes == 2 * size_of::<i32>() {
+        let decoded_remaining_seconds = message.base_mut().get_long();
+        let remaining_seconds = decoded_remaining_seconds.unwrap_or(0);
+        let decoded_player_id = message.base_mut().get_long();
+        let player_id = decoded_player_id.unwrap_or(0);
+        return GameCountryExileReport {
+            opcode,
+            country: 0,
+            country_complete: false,
+            player_id: Some(player_id),
+            player_id_complete: Some(decoded_player_id.is_some()),
+            outcome: GameCountryExileOutcome::RetiredExileTimeCollision {
+                remaining_seconds,
+                remaining_seconds_complete: decoded_remaining_seconds.is_some(),
+                player_id,
+                player_id_complete: decoded_player_id.is_some(),
+            },
+        };
+    }
     let decoded_country = message.base_mut().get_char();
     let country = decoded_country.unwrap_or(0) as u8;
     if opcode == 0x7ff15 {

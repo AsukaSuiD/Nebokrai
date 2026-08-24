@@ -13,6 +13,9 @@
 //! только сверху.
 //!
 //! Exile time вычисляется wrapping-миллисекундами и ограничивается нулём.
+//! Точный `0x60316` сохраняет ошибочный original writer: `0x7FF15` с двумя
+//! long вместо Game exile-list layout; Game safe boundary распознаёт этот
+//! уникальный 8-байтовый retired payload без undefined overread.
 //! Player lists сохраняют page arithmetic и GM filter. War branches не вводят
 //! source/tail checks. Явный main-loop context и safe codec заменяют singleton
 //! и overread без изменения вызовов.
