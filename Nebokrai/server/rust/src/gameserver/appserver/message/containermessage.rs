@@ -3,7 +3,7 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/message/containermessage.cpp`. Материализован
 //! полные player packet/equipment ↔ enhancement-shadow и equipment-session
-//! upgrade/DaKong/compose проходы `0x90301`:
+//! upgrade/DaKong/compose и входной auction-listing проходы `0x90301`:
 //! одиннадцать wire-полей, outer changing/region/progress/death guards,
 //! Receive-нормализация owner ID, точный source position/GUID/amount,
 //! запрет stackable goods, однослотовый AddShadow, last-operated state и обе
@@ -18,6 +18,9 @@
 //! Equipment-session wire сохраняет настоящий session ID и кодирует plug в
 //! старших 24 битах extend ID; selection/clear публикуют Add/DeleteShadow и
 //! self-move rollback, transfer использует тот же ownership/effects контракт.
+//! Auction-listing принимает полный предмет из packet/equipment/auction-return,
+//! сохраняет equipment callbacks и effects и публикует точный client move;
+//! полный persisted-player snapshot `0x6080E` остаётся у недоступного owner-а.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -36,7 +39,7 @@ use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::player::{
     EnhancementDeselectionBlock, EnhancementDeselectionReport, EnhancementSelectionBlock,
     EnhancementSelectionReport, PlayerEquipmentAddReport, PlayerEquipmentDelivery,
-    PlayerEquipmentRemoveEffect, PlayerProgress,
+    PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerProgress,
 };
 use crate::gameserver::appserver::session::csessionfactory::{
     EquipmentSessionShadowAddBlock, EquipmentSessionShadowAdded, EquipmentSessionShadowRemoved,
@@ -144,6 +147,15 @@ pub(crate) enum GameContainerMessageOutcome {
         transfer: EnhancementTransferReport,
         move_delivery: i32,
     },
+    AuctionListingMoved {
+        transfer: AuctionListingTransferReport,
+        move_delivery: i32,
+        snapshot_refresh_required: bool,
+    },
+    AuctionListingRolledBack {
+        reason: AuctionListingTransferBlock,
+        delivery: i32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -154,6 +166,50 @@ enum EnhancementMessageRoute {
     EquipmentSessionSelect,
     EquipmentSessionClear,
     EquipmentSessionTransfer,
+    AuctionListingMove,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionListingTransferRemoval {
+    Packet {
+        owner_type: i32,
+        owner_id: i32,
+        position: u32,
+        amount: u32,
+        listeners: Vec<ContainerListenerHandle>,
+    },
+    Equipment {
+        event: EquipmentRemovedEvent,
+        effects: Vec<PlayerEquipmentRemoveEffect>,
+        deliveries: Vec<PlayerEquipmentDelivery>,
+    },
+    AuctionGoods {
+        owner_type: i32,
+        owner_id: i32,
+        position: u32,
+        amount: u32,
+        listeners: Vec<ContainerListenerHandle>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuctionListingTransferReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) removal: AuctionListingTransferRemoval,
+    pub(crate) destination: VolumeGoodsAddOutcome,
+    pub(crate) listing_slot_zero_was_empty: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionListingTransferBlock {
+    UnsupportedSourceContainer { extend_id: i32 },
+    InvalidDestinationPosition { position: u32 },
+    MissingSourceGoods,
+    InvalidCurrency,
+    MissingBaseProperties,
+    PacketRemovalFailed,
+    AuctionGoodsRemovalFailed,
+    EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
 }
 
 #[must_use = "container report сохраняет request, mutation и ordered client effects"]
@@ -290,6 +346,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 request.source_position = 0;
             }
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_extend_id == 13
+                && matches!(request.source_container_extend_id, 1 | 2 | 14)
+            {
+                EnhancementMessageRoute::AuctionListingMove
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_extend_id == ENHANCEMENT_EXTEND_ID
             {
@@ -439,6 +501,37 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
             EnhancementMoveReceiveBlock::ForbiddenRoute,
         ))));
+    }
+
+    if route == EnhancementMessageRoute::AuctionListingMove {
+        let transfer = game.move_player_goods_to_auction_listing(
+            player_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_position,
+            context,
+        );
+        let transfer = match transfer {
+            Ok(transfer) => transfer,
+            Err(reason) => {
+                let delivery = send_rollback(game, player_id);
+                return Some(Ok(report(
+                    GameContainerMessageOutcome::AuctionListingRolledBack { reason, delivery },
+                )));
+            }
+        };
+        let move_delivery = send_auction_listing_move_moved(game, player_id, request, &transfer);
+        let snapshot_refresh_required =
+            transfer.listing_slot_zero_was_empty && request.destination_position == 0;
+        return Some(Ok(report(
+            GameContainerMessageOutcome::AuctionListingMoved {
+                transfer,
+                move_delivery,
+                snapshot_refresh_required,
+            },
+        )));
     }
 
     if route == EnhancementMessageRoute::EquipmentSessionClear {
@@ -773,6 +866,31 @@ fn send_enhancement_transfer_moved(
     message.send_to_player(game.net_server(), player_id)
 }
 
+fn send_auction_listing_move_moved(
+    game: &CGame,
+    player_id: i32,
+    request: ContainerObjectMoveRequest,
+    transfer: &AuctionListingTransferReport,
+) -> i32 {
+    let mut message = CMessage::new(CLIENT_CONTAINER_OBJECT_MOVE);
+    message.add_byte(1);
+    message.add_long(request.source_container_type);
+    message.add_long(request.source_container_id);
+    message.add_long(request.source_container_extend_id);
+    message.add_ulong(request.source_position);
+    message.add_long(request.destination_container_type);
+    message.add_long(request.destination_container_id);
+    message.add_long(request.destination_container_extend_id);
+    message.add_ulong(request.destination_position);
+    message.add_long(GOODS_OBJECT_TYPE);
+    message.base_mut().add_guid(transfer.goods.ex_id);
+    message.add_ulong(request.amount);
+    message.add_long(GOODS_OBJECT_TYPE);
+    message.base_mut().add_guid(transfer.goods.ex_id);
+    message.add_ulong(request.amount);
+    message.send_to_player(game.net_server(), player_id)
+}
+
 pub(crate) fn send_enhancement_goods_collected(
     game: &CGame,
     player_id: i32,
@@ -877,7 +995,7 @@ fn send_move_result(
 // ============================================================================
 // FUNCTION: OnContainerMessage
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: полные packet/equipment ↔ enhancement и equipment-session upgrade/DaKong/compose select/clear/transfer `0x90301`; остальные routes RAW ниже
+// MATERIALIZED: полные packet/equipment ↔ enhancement, equipment-session upgrade/DaKong/compose и auction-listing routes `0x90301`; остальные routes RAW ниже
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\containermessage.cpp:14

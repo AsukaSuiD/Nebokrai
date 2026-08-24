@@ -217,6 +217,33 @@ impl CGoods {
         self.addon_properties.push(property);
     }
 
+    /// Exact persisted `CGoods::Serialize` для межсерверного auction-node.
+    /// Derived fairy-проекции не имеют отдельного wire: они восстанавливаются
+    /// decoder-ом из base properties и addon list.
+    pub(crate) fn serialize(&self, destination: &mut Vec<u8>, include_child: bool) -> bool {
+        if !self.shape.encode_to_byte_array(destination, include_child) {
+            return false;
+        }
+        destination.extend_from_slice(&self.base_properties_index.to_le_bytes());
+        destination.extend_from_slice(&self.amount.to_le_bytes());
+        destination.extend_from_slice(&self.price.to_le_bytes());
+        destination.extend_from_slice(&self.description);
+        destination.push(0);
+        destination.extend_from_slice(&(self.addon_properties.len() as u32).to_le_bytes());
+        for property in &self.addon_properties {
+            destination.extend_from_slice(&property.property_type.to_le_bytes());
+            destination.extend_from_slice(&property.is_enabled.to_le_bytes());
+            destination.extend_from_slice(&property.is_implicit_attribute.to_le_bytes());
+            destination.extend_from_slice(&(property.values.len() as u32).to_le_bytes());
+            for value in &property.values {
+                destination.extend_from_slice(&value.id.to_le_bytes());
+                destination.extend_from_slice(&value.base_value.to_le_bytes());
+                destination.extend_from_slice(&value.modifier.to_le_bytes());
+            }
+        }
+        true
+    }
+
     /// Exact `CGoods::Unserialize`: release, shape/scalar/string/addon wire и
     /// обе derived fairy-проекции выполняются в исходном порядке.
     pub(crate) fn unserialize<OrdinaryThreshold, BattleThreshold>(

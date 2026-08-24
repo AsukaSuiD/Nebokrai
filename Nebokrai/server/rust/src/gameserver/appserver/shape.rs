@@ -469,6 +469,37 @@ impl CShape {
         self.action = action;
     }
 
+    /// Exact shape-prefix `AddToByteArray`, необходимый persisted `CGoods`
+    /// внутри auction-node. GUID marker и scalar order зеркальны decoder-у.
+    pub(crate) fn encode_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+        include_child: bool,
+    ) -> bool {
+        if !self
+            .base_object
+            .add_to_byte_array(destination, include_child)
+        {
+            return false;
+        }
+        let ex_id = self.base_object.get_ex_id();
+        if ex_id.is_invalid() {
+            destination.push(0);
+        } else {
+            destination.push(0x10);
+            destination.extend_from_slice(ex_id.as_legacy_bytes());
+        }
+        destination.extend_from_slice(&self.region_id.to_le_bytes());
+        destination.extend_from_slice(&self.pos_x_bits.to_le_bytes());
+        destination.extend_from_slice(&self.pos_y_bits.to_le_bytes());
+        destination.extend_from_slice(&self.direction.to_le_bytes());
+        destination.extend_from_slice(&self.position.to_le_bytes());
+        destination.extend_from_slice(&self.speed_bits.to_le_bytes());
+        destination.extend_from_slice(&self.state.to_le_bytes());
+        destination.extend_from_slice(&self.action.to_le_bytes());
+        true
+    }
+
     /// Exact `DecordFromByteArray + DecordShapeFromByteArray`; wire position
     /// читается, но live `m_lPos` намеренно сбрасывается в ноль.
     pub(crate) fn decode_from_byte_array(

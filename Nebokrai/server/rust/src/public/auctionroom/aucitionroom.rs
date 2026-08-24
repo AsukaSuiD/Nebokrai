@@ -149,6 +149,16 @@ impl CGameAuctionRoom {
         self.auction_goods_list.contains_key(&guid)
     }
 
+    /// Exact `QueryItemNumFromOwerList` projection для listing-limit.
+    pub(crate) fn owner_goods_count(&self, owner_id: i32) -> usize {
+        self.owner_list.get(&owner_id).map_or(0, Vec::len)
+    }
+
+    /// Exact primary map size для глобального listing-limit.
+    pub(crate) fn goods_count(&self) -> usize {
+        self.auction_goods_list.len()
+    }
+
     /// Возвращает следующий stale GUID в primary `std::map`-порядке, не
     /// выполняя мутацию до исходной client-публикации.
     pub(crate) fn next_unity_removal(

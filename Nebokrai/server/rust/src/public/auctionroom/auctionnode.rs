@@ -228,7 +228,7 @@ impl AuctionInfo {
         time_buyer: u32,
         buyer_id: u32,
     ) {
-        copy_legacy_database_string(
+        copy_legacy_database_string::<LEGACY_STRING_CAPACITY>(
             (&mut self.bytes[AUCTION_SELLER_NAME_OFFSET..AUCTION_MONEY_SELLER_OFFSET])
                 .try_into()
                 .expect("PDB seller-name диапазон имеет длину 0x100"),
@@ -240,7 +240,7 @@ impl AuctionInfo {
             .copy_from_slice(&time_seller.to_le_bytes());
         self.bytes[AUCTION_SELLER_ID_OFFSET..AUCTION_SELLER_ID_OFFSET + 4]
             .copy_from_slice(&seller_id.to_le_bytes());
-        copy_legacy_database_string(
+        copy_legacy_database_string::<LEGACY_STRING_CAPACITY>(
             (&mut self.bytes[AUCTION_BUYER_NAME_OFFSET..AUCTION_MONEY_BUYER_OFFSET])
                 .try_into()
                 .expect("PDB buyer-name диапазон имеет длину 0x100"),
@@ -306,6 +306,26 @@ pub(crate) struct AuctionDatabaseNodeFields {
     pub(crate) money_buyer: u32,
     pub(crate) time_buyer: u32,
     pub(crate) buyer_id: u32,
+}
+
+/// Поля одного exact `MakeCurAucNode` после успешного удаления товара из
+/// двухъячеечного player auction-container.
+pub(crate) struct AuctionListingNodeFields<'value> {
+    pub(crate) account: &'value [u8],
+    pub(crate) owner_id: u32,
+    pub(crate) auction_time: u32,
+    pub(crate) goods_type: u8,
+    pub(crate) npc_price: i32,
+    pub(crate) amount: i32,
+    pub(crate) guid: CGuid,
+    pub(crate) level_limit: u32,
+    pub(crate) goods_name: &'value [u8],
+    pub(crate) base_index: u32,
+    pub(crate) seller_money: u32,
+    pub(crate) seller_time: u32,
+    pub(crate) seller_ip: &'value [u8],
+    pub(crate) end_time: u32,
+    pub(crate) goods_bytes: Vec<u8>,
 }
 
 /// Подтверждённые PDB-поля узла, которые нужны четырём SQL write-переходам
@@ -446,6 +466,43 @@ impl CGoodsNode {
         node
     }
 
+    /// Создаёт pending listing-node в точном порядке итоговых полей
+    /// `MakeCurAucNode`; client path всегда выставляет цену в YuanBao.
+    pub(crate) fn from_player_listing(fields: AuctionListingNodeFields<'_>) -> Self {
+        let mut node = Self::new();
+        node.add_ticket = fields.end_time;
+        copy_legacy_database_string(&mut node.account, fields.account);
+        node.owner_id = fields.owner_id;
+        node.auction_time = fields.auction_time;
+        node.money_type = 1;
+        node.goods_type = Some(fields.goods_type);
+        node.npc_price = fields.npc_price;
+        node.amount = fields.amount;
+        node.goods_state = GoodsState::AUCTION;
+        node.guid = fields.guid;
+        node.level_limit = Some(fields.level_limit);
+        copy_legacy_database_string(&mut node.goods_name, fields.goods_name);
+        node.base_index = fields.base_index;
+        node.auction_info.set_database_fields(
+            fields.account,
+            fields.seller_money,
+            fields.seller_time,
+            fields.owner_id,
+            &[],
+            0,
+            0,
+            0,
+        );
+        copy_legacy_database_string::<16>(
+            (&mut node.auction_info.bytes[AUCTION_SELLER_IP_OFFSET..AUCTION_BUYER_NAME_OFFSET])
+                .try_into()
+                .expect("PDB seller-ip диапазон имеет длину 0x10"),
+            fields.seller_ip,
+        );
+        node.goods_bytes = fields.goods_bytes;
+        node
+    }
+
     /// Очищает ровно поля исходного `Clear` и освобождает goods-буфер.
     ///
     /// `goods_type` и `level_limit` сохраняются: старый метод не присваивал им
@@ -569,6 +626,14 @@ impl CGoodsNode {
 
     pub(crate) const fn money_type(&self) -> u8 {
         self.money_type
+    }
+
+    pub(crate) const fn auction_time(&self) -> u32 {
+        self.auction_time
+    }
+
+    pub(crate) const fn npc_price(&self) -> i32 {
+        self.npc_price
     }
 
     pub(crate) fn seller_money(&self) -> u32 {
@@ -748,19 +813,22 @@ fn legacy_c_string<'value>(
     Ok(&value[..=terminator])
 }
 
-/// Безопасная замена `_snprintf(buffer, 0x100, "%s", database_text)`.
+/// Безопасная замена старого копирования C-строки в фиксированный buffer.
 ///
 /// Нормальная строка сохраняется byte-for-byte и с первым NUL. Старый MSVC
 /// мог оставить усечённый buffer без NUL, а последующий `Serialize` читать за
 /// его границей; это внутренний дефект без доказанного контракта, поэтому Rust
 /// всегда ставит terminator в последней ячейке.
-fn copy_legacy_database_string(destination: &mut [u8; LEGACY_STRING_CAPACITY], source: &[u8]) {
+fn copy_legacy_database_string<const CAPACITY: usize>(
+    destination: &mut [u8; CAPACITY],
+    source: &[u8],
+) {
     destination.fill(0);
     let visible = source
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(source.len());
-    let copied = visible.min(LEGACY_STRING_CAPACITY - 1);
+    let copied = visible.min(CAPACITY.saturating_sub(1));
     destination[..copied].copy_from_slice(&source[..copied]);
 }
 

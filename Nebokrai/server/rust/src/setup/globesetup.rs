@@ -48,11 +48,20 @@ const PLAYER_SPEED_OFFSET: usize = 0x7F8;
 const MONSTER_NUMBER_SCALE_OFFSET: usize = 0x508;
 const SAVE_POINT_TIME_OFFSET: usize = 0x510;
 const AUCTION_ENABLED_OFFSET: usize = 0xC87;
+const AUCTION_PLAYER_MAXIMUM_OFFSET: usize = 0xC88;
+const AUCTION_FACTOR_B_OFFSET: usize = 0xC90;
+const AUCTION_BASE_YUAN_BAO_OFFSET: usize = 0xC94;
 const AUCTION_FEE_MAXIMUM_OFFSET: usize = 0xC98;
+const AUCTION_YUAN_FEE_MAXIMUM_OFFSET: usize = 0xC9C;
 const AUCTION_FEE_MINIMUM_OFFSET: usize = 0xCA0;
+const AUCTION_YUAN_FEE_MINIMUM_OFFSET: usize = 0xCA4;
+const AUCTION_GLOBAL_MAXIMUM_OFFSET: usize = 0xCA8;
 const AUCTION_FACTOR_C_OFFSET: usize = 0xCB0;
 const AUCTION_SERVICE_FEE_MAXIMUM_OFFSET: usize = 0xCB4;
 const AUCTION_SERVICE_FEE_MINIMUM_OFFSET: usize = 0xCBC;
+const AUCTION_TIME_OFFSET: usize = 0xCC4;
+const AUCTION_ALLOWED_GOODS_OFFSET: usize = 0xD08;
+const AUCTION_ALLOWED_GOODS_COUNT: usize = 256;
 const AUCTION_OPEN_VALUE_OFFSETS: [usize; 12] = [
     0xC8C, 0xC90, 0xC94, 0xC98, 0xC9C, 0xCA0, 0xCA4, 0xCB0, 0xCB4, 0xCB8, 0xCBC, 0xCC0,
 ];
@@ -523,12 +532,36 @@ impl GlobeSetupSnapshot {
         self.bytes[AUCTION_ENABLED_OFFSET] != 0
     }
 
+    pub(crate) fn auction_player_maximum(&self) -> f32 {
+        self.read_f32(AUCTION_PLAYER_MAXIMUM_OFFSET)
+    }
+
+    pub(crate) fn auction_factor_b(&self) -> f32 {
+        self.read_f32(AUCTION_FACTOR_B_OFFSET)
+    }
+
+    pub(crate) fn auction_base_yuan_bao(&self) -> f32 {
+        self.read_f32(AUCTION_BASE_YUAN_BAO_OFFSET)
+    }
+
     pub(crate) fn auction_fee_maximum(&self) -> f32 {
         self.read_f32(AUCTION_FEE_MAXIMUM_OFFSET)
     }
 
     pub(crate) fn auction_fee_minimum(&self) -> f32 {
         self.read_f32(AUCTION_FEE_MINIMUM_OFFSET)
+    }
+
+    pub(crate) fn auction_yuan_fee_maximum(&self) -> f32 {
+        self.read_f32(AUCTION_YUAN_FEE_MAXIMUM_OFFSET)
+    }
+
+    pub(crate) fn auction_yuan_fee_minimum(&self) -> f32 {
+        self.read_f32(AUCTION_YUAN_FEE_MINIMUM_OFFSET)
+    }
+
+    pub(crate) fn auction_global_maximum(&self) -> f32 {
+        self.read_f32(AUCTION_GLOBAL_MAXIMUM_OFFSET)
     }
 
     pub(crate) fn auction_factor_c(&self) -> f32 {
@@ -541,6 +574,17 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn auction_service_fee_minimum(&self) -> f32 {
         self.read_f32(AUCTION_SERVICE_FEE_MINIMUM_OFFSET)
+    }
+
+    pub(crate) fn auction_time_setting(&self) -> i32 {
+        self.read_i32(AUCTION_TIME_OFFSET)
+    }
+
+    pub(crate) fn auction_goods_allowed(&self, goods_index: u32) -> bool {
+        goods_index != 0
+            && (0..AUCTION_ALLOWED_GOODS_COUNT).any(|index| {
+                self.read_i32(AUCTION_ALLOWED_GOODS_OFFSET + index * 4) as u32 == goods_index
+            })
     }
 
     /// Exact `CPlayer::OpenAuction` projection: float-поля передаются клиенту

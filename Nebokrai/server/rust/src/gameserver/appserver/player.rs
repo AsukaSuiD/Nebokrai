@@ -220,7 +220,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISM,
     GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_POTENTIAL,
     GAP_BF_WEAPON_LEVEL, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2, GAP_GEM_LEVEL, GAP_GOODS_BIND,
-    GAP_ROLE_MINIMUM_LEVEL_LIMIT, GOODS_TYPE_CONSUMABLE,
+    GAP_GOODS_PACKAGE_EXTENTION, GAP_ROLE_MINIMUM_LEVEL_LIMIT, GOODS_TYPE_CONSUMABLE,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::{CMoveShape, MoveShapePositionFacts, MoveShapeSkill};
@@ -1355,6 +1355,18 @@ pub(crate) enum AuctionBuyGate {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionListingGate {
+    Throttled {
+        sampled_tick_ms: u32,
+        previous_tick_ms: u32,
+    },
+    Ready {
+        sampled_tick_ms: u32,
+        recorded_tick_ms: u32,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerYuanBaoChangeOutcome {
     Unchanged,
@@ -1511,6 +1523,7 @@ pub(crate) struct CPlayer {
     wallet: CWallet,
     yuan_bao: CYuanBao,
     equipment: CEquipmentContainer,
+    auction_listing: CVolumeLimitGoodsContainer,
     auction_goods: CVolumeLimitGoodsContainer,
     auction_wallet: CWallet,
     auction_open: bool,
@@ -1521,7 +1534,10 @@ pub(crate) struct CPlayer {
     auction_search_money_type: i32,
     auction_search_weapon_type: i32,
     auction_current_page: i32,
+    last_auction_limit_tick_ms: u32,
     last_auction_option_tick_ms: u32,
+    current_auction_node: Option<CGoodsNode>,
+    auction_listing_fee: u32,
     current_auction_buy_node: Option<CGoodsNode>,
     ci_qing: CVolumeLimitGoodsContainer,
     ci_qing_compose: CVolumeLimitGoodsContainer,
@@ -1566,6 +1582,8 @@ impl CPlayer {
         let _empty_release = fairy_container.base_mut().set_container_volume(14);
         let mut auction_goods = CVolumeLimitGoodsContainer::new();
         let _empty_release = auction_goods.set_container_volume(0x12);
+        let mut auction_listing = CVolumeLimitGoodsContainer::new();
+        let _empty_release = auction_listing.set_container_volume(2);
         let mut player = Self {
             move_shape,
             figure,
@@ -1626,6 +1644,7 @@ impl CPlayer {
             wallet: CWallet::new(),
             yuan_bao: CYuanBao::new(),
             equipment: CEquipmentContainer::new(),
+            auction_listing,
             auction_goods,
             auction_wallet: CWallet::new(),
             auction_open: false,
@@ -1636,7 +1655,10 @@ impl CPlayer {
             auction_search_money_type: 0,
             auction_search_weapon_type: 0,
             auction_current_page: 0,
+            last_auction_limit_tick_ms: 0,
             last_auction_option_tick_ms: 0,
+            current_auction_node: None,
+            auction_listing_fee: 0,
             current_auction_buy_node: None,
             ci_qing,
             ci_qing_compose,
@@ -3259,6 +3281,7 @@ impl CPlayer {
             .find(goods_id)
             .or_else(|| self.packet.base().find(goods_id))
             .or_else(|| self.equipment.find(goods_id))
+            .or_else(|| self.auction_listing.base().find(goods_id))
             .or_else(|| self.auction_goods.base().find(goods_id))
     }
 
@@ -3272,6 +3295,9 @@ impl CPlayer {
         if self.equipment.find(goods_id).is_some() {
             return self.equipment.find_mut(goods_id);
         }
+        if self.auction_listing.base().find(goods_id).is_some() {
+            return self.auction_listing.base_mut().find_mut(goods_id);
+        }
         self.auction_goods.base_mut().find_mut(goods_id)
     }
 
@@ -3281,6 +3307,41 @@ impl CPlayer {
 
     pub(crate) const fn auction_goods_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
         &mut self.auction_goods
+    }
+
+    pub(crate) const fn auction_goods(&self) -> &CVolumeLimitGoodsContainer {
+        &self.auction_goods
+    }
+
+    pub(crate) const fn auction_listing(&self) -> &CVolumeLimitGoodsContainer {
+        &self.auction_listing
+    }
+
+    pub(crate) const fn auction_listing_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
+        &mut self.auction_listing
+    }
+
+    pub(crate) fn auction_listing_extension_bonus(&self, factory: &CGoodsFactory) -> i32 {
+        let Some(goods) = self.auction_listing.get_goods(1) else {
+            return 0;
+        };
+        if goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 1) != 3 {
+            return 0;
+        }
+        goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 2)
+    }
+
+    pub(crate) fn take_auction_listing_goods(&mut self) -> Option<CGoods> {
+        let goods_id = self.auction_listing.get_goods(0)?.identity().ex_id;
+        let outcome = self.auction_listing.remove_goods(goods_id)?;
+        let taken = match outcome {
+            VolumeGoodsRemoveOutcome::Removed(taken)
+            | VolumeGoodsRemoveOutcome::RemovedButCellMissing(taken) => taken,
+        };
+        Some(match taken {
+            crate::gameserver::appserver::container::camountlimitgoodscontainer::AmountLimitGoodsTaken::Removed(removed) => removed.goods,
+            crate::gameserver::appserver::container::camountlimitgoodscontainer::AmountLimitGoodsTaken::Split(split) => split.goods,
+        })
     }
 
     /// Exact state-owner возврата `0x80404`: позиция выбирается до Add,
@@ -3398,6 +3459,70 @@ impl CPlayer {
             sampled_tick_ms,
             recorded_tick_ms,
         }
+    }
+
+    /// Exact `MakeCurAucNode` 5-second gate с отдельным вторым tick sample.
+    pub(crate) fn begin_auction_listing(
+        &mut self,
+        mut tick_ms: impl FnMut() -> u32,
+    ) -> AuctionListingGate {
+        let sampled_tick_ms = tick_ms();
+        let previous_tick_ms = self.last_auction_option_tick_ms;
+        if previous_tick_ms.wrapping_add(5_000) >= sampled_tick_ms {
+            return AuctionListingGate::Throttled {
+                sampled_tick_ms,
+                previous_tick_ms,
+            };
+        }
+        let recorded_tick_ms = tick_ms();
+        self.last_auction_option_tick_ms = recorded_tick_ms;
+        AuctionListingGate::Ready {
+            sampled_tick_ms,
+            recorded_tick_ms,
+        }
+    }
+
+    /// Exact `IsAollowAuction` 1-second gate: timestamp обновляется до limit
+    /// queries, а failed limit также поглощает текущую попытку.
+    pub(crate) fn begin_auction_limit_check(
+        &mut self,
+        tick_ms: u32,
+        owner_goods_count: usize,
+        global_goods_count: usize,
+        player_maximum: f32,
+        global_maximum: f32,
+        extension_bonus: i32,
+    ) -> bool {
+        if tick_ms.wrapping_sub(self.last_auction_limit_tick_ms) <= 1_000 {
+            return false;
+        }
+        self.last_auction_limit_tick_ms = tick_ms;
+        (owner_goods_count as f32) < extension_bonus as f32 + player_maximum
+            && (global_goods_count as f32) < global_maximum
+    }
+
+    pub(crate) fn current_auction_node(&self) -> Option<&CGoodsNode> {
+        self.current_auction_node.as_ref()
+    }
+
+    pub(crate) fn set_current_auction_node(&mut self, node: CGoodsNode) -> bool {
+        if self.current_auction_node.is_some() {
+            return false;
+        }
+        self.current_auction_node = Some(node);
+        true
+    }
+
+    pub(crate) fn take_current_auction_node(&mut self) -> Option<CGoodsNode> {
+        self.current_auction_node.take()
+    }
+
+    pub(crate) const fn auction_listing_fee(&self) -> u32 {
+        self.auction_listing_fee
+    }
+
+    pub(crate) const fn set_auction_listing_fee(&mut self, fee: u32) {
+        self.auction_listing_fee = fee;
     }
 
     pub(crate) fn current_auction_buy_node(&self) -> Option<&CGoodsNode> {
@@ -5395,6 +5520,9 @@ impl CPlayer {
         self.wallet.set_owner(PLAYER_TYPE, player_id);
         self.yuan_bao.set_owner(PLAYER_TYPE, player_id);
         self.equipment.base_mut().set_owner(PLAYER_TYPE, player_id);
+        self.auction_listing
+            .base_mut()
+            .set_owner(PLAYER_TYPE, player_id);
         self.auction_goods
             .base_mut()
             .set_owner(PLAYER_TYPE, player_id);
@@ -7129,62 +7257,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::IsMoney
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13619
-// RVA: 0x0002E8B0
-// ADDRESS: 0042e8b0
-// PROTOTYPE: bool __thiscall IsMoney(long param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::IsGoodAllowedInAuction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13682
-// RVA: 0x0002EA50
-// ADDRESS: 0042ea50
-// PROTOTYPE: bool __thiscall IsGoodAllowedInAuction(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::IsCurAucNodeOK
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13941
-// RVA: 0x0002EA80
-// ADDRESS: 0042ea80
-// PROTOTYPE: bool __thiscall IsCurAucNodeOK(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::CleanCurAucNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13970
-// RVA: 0x0002EBE0
-// ADDRESS: 0042ebe0
-// PROTOTYPE: void __thiscall CleanCurAucNode(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::GetAuctionMoney
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -7207,20 +7279,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0002EF00
 // ADDRESS: 0042ef00
 // PROTOTYPE: bool __thiscall AuctionLimit(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SendSaleLog
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:15094
-// RVA: 0x0002EF60
-// ADDRESS: 0042ef60
-// PROTOTYPE: void __thiscall SendSaleLog(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -7417,20 +7475,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00030430
 // ADDRESS: 00430430
 // PROTOTYPE: void __thiscall WriteGoodsDelLog(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::IsDonePreNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13931
-// RVA: 0x00030CF0
-// ADDRESS: 00430cf0
-// PROTOTYPE: bool __thiscall IsDonePreNode(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -7899,20 +7943,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::IsAollowAuction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13583
-// RVA: 0x00036200
-// ADDRESS: 00436200
-// PROTOTYPE: bool __thiscall IsAollowAuction(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::CheckAuctionMoneyMove
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -8319,34 +8349,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::TellClietAuctionOK
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13520
-// RVA: 0x0003ED50
-// ADDRESS: 0043ed50
-// PROTOTYPE: void __thiscall TellClietAuctionOK(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SendBackAucNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14323
-// RVA: 0x0003F3D0
-// ADDRESS: 0043f3d0
-// PROTOTYPE: void __thiscall SendBackAucNode(CGoodsNode * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::OutputBinaryStream
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -8691,48 +8693,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x000455D0
 // ADDRESS: 004455d0
 // PROTOTYPE: void __thiscall RestoreHpMp(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddItemToAuction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13492
-// RVA: 0x00045910
-// ADDRESS: 00445910
-// PROTOTYPE: bool __thiscall AddItemToAuction(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::MakeCurAucNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13999
-// RVA: 0x00045A50
-// ADDRESS: 00445a50
-// PROTOTYPE: bool __thiscall MakeCurAucNode(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SendAucAbOpt
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14397
-// RVA: 0x00046080
-// ADDRESS: 00446080
-// PROTOTYPE: void __thiscall SendAucAbOpt(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -9139,20 +9099,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0004A480
 // ADDRESS: 0044a480
 // PROTOTYPE: bool __thiscall AddToByteArray_ForClient(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DoneCurAucNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14165
-// RVA: 0x0004B100
-// ADDRESS: 0044b100
-// PROTOTYPE: void __thiscall DoneCurAucNode(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

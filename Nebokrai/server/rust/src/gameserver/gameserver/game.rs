@@ -393,6 +393,7 @@ use crate::gameserver::appserver::goodswarmember::{
     dispatch_game_goods_war_message,
 };
 use crate::gameserver::appserver::message::containermessage::{
+    AuctionListingTransferBlock, AuctionListingTransferRemoval, AuctionListingTransferReport,
     EnhancementTransferAddition, EnhancementTransferBlock, EnhancementTransferOutcome,
     EnhancementTransferRemoval, EnhancementTransferReport, EquipmentSessionClearBlock,
     EquipmentSessionSelectionBlock, EquipmentSessionSelectionReport, GameContainerMessageError,
@@ -3605,6 +3606,207 @@ impl CGame {
         );
         self.players.insert(player_id, player);
         result
+    }
+
+    /// Замыкает direct `0x90301` ownership transfer в двухъячеечный
+    /// `m_cAuctionContainer`. Equipment source проходит тот же полный remove
+    /// callback/effect tail, что и другие достигнутые container transfers.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn move_player_goods_to_auction_listing<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<AuctionListingTransferReport, AuctionListingTransferBlock> {
+        if !matches!(source_extend_id, 1 | 2 | 14) {
+            return Err(AuctionListingTransferBlock::UnsupportedSourceContainer {
+                extend_id: source_extend_id,
+            });
+        }
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .ok_or(AuctionListingTransferBlock::MissingSourceGoods)?;
+        let result = self.move_player_goods_to_auction_listing_inner(
+            &mut player,
+            source_extend_id,
+            source_position,
+            goods_id,
+            amount,
+            destination_position,
+            context,
+        );
+        self.players.insert(player_id, player);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn move_player_goods_to_auction_listing_inner<Context: GameContainerMessageRuntime>(
+        &self,
+        player: &mut CPlayer,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<AuctionListingTransferReport, AuctionListingTransferBlock> {
+        if destination_position >= 2
+            || !player
+                .auction_listing()
+                .is_space_enough(destination_position)
+        {
+            return Err(AuctionListingTransferBlock::InvalidDestinationPosition {
+                position: destination_position,
+            });
+        }
+        let goods = match source_extend_id {
+            1 => player.packet().get_goods(source_position),
+            2 => player.equipment().get_goods(source_position),
+            14 => player.auction_goods().get_goods(source_position),
+            _ => unreachable!("source extend проверен выше"),
+        }
+        .filter(|goods| goods.identity().ex_id == goods_id && goods.amount() == amount)
+        .ok_or(AuctionListingTransferBlock::MissingSourceGoods)?;
+        if matches!(
+            goods.base_properties_index(),
+            index if index == self.goods_factory.get_gold_coin_index()
+                || index == self.goods_factory.get_yuan_bao_index()
+        ) {
+            return Err(AuctionListingTransferBlock::InvalidCurrency);
+        }
+        if self
+            .goods_factory
+            .query_goods_base_properties(goods.base_properties_index())
+            .is_none()
+        {
+            return Err(AuctionListingTransferBlock::MissingBaseProperties);
+        }
+        let goods_identity = goods.identity();
+        let slot_zero_was_empty = player.auction_listing().get_goods(0).is_none();
+        let pack_add_enabled = self.globe_setup.pack_add_enabled();
+
+        let (removal, mut incoming) = match source_extend_id {
+            1 => {
+                let removed = player
+                    .packet_mut()
+                    .remove_goods(goods_id)
+                    .ok_or(AuctionListingTransferBlock::PacketRemovalFailed)?;
+                let removed = match removed {
+                    VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed)) => {
+                        removed
+                    }
+                    _ => return Err(AuctionListingTransferBlock::PacketRemovalFailed),
+                };
+                let crate::gameserver::appserver::container::camountlimitgoodscontainer::AmountLimitGoodsRemoved {
+                    owner_type,
+                    owner_id,
+                    position,
+                    amount,
+                    listeners,
+                    goods,
+                } = removed;
+                (
+                    AuctionListingTransferRemoval::Packet {
+                        owner_type,
+                        owner_id,
+                        position: position.unwrap_or(source_position),
+                        amount,
+                        listeners,
+                    },
+                    Some(goods),
+                )
+            }
+            14 => {
+                let removed = player
+                    .auction_goods_mut()
+                    .remove_goods(goods_id)
+                    .ok_or(AuctionListingTransferBlock::AuctionGoodsRemovalFailed)?;
+                let removed = match removed {
+                    VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed))
+                    | VolumeGoodsRemoveOutcome::RemovedButCellMissing(
+                        AmountLimitGoodsTaken::Removed(removed),
+                    ) => removed,
+                    _ => return Err(AuctionListingTransferBlock::AuctionGoodsRemovalFailed),
+                };
+                let crate::gameserver::appserver::container::camountlimitgoodscontainer::AmountLimitGoodsRemoved {
+                    owner_type,
+                    owner_id,
+                    position,
+                    amount,
+                    listeners,
+                    goods,
+                } = removed;
+                (
+                    AuctionListingTransferRemoval::AuctionGoods {
+                        owner_type,
+                        owner_id,
+                        position: position.unwrap_or(source_position),
+                        amount,
+                        listeners,
+                    },
+                    Some(goods),
+                )
+            }
+            2 => {
+                let remove_facts =
+                    context.enhancement_equipment_remove_facts(player, goods, pack_add_enabled);
+                let mut recompute =
+                    |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+                let mut report = player.remove_equipment_goods(
+                    goods_id,
+                    &self.goods_factory,
+                    &self.skill_factory,
+                    remove_facts,
+                    &mut recompute,
+                );
+                drop(recompute);
+                self.publish_player_equipment_remove_report(&mut report, context);
+                let outcome = std::mem::replace(
+                    &mut report.outcome,
+                    EquipmentRemoveOutcome::Missing {
+                        partial_effects: Default::default(),
+                    },
+                );
+                let removed = match outcome {
+                    EquipmentRemoveOutcome::Removed(removed) => removed,
+                    outcome => {
+                        report.outcome = outcome;
+                        return Err(AuctionListingTransferBlock::EquipmentRemovalFailed(report));
+                    }
+                };
+                (
+                    AuctionListingTransferRemoval::Equipment {
+                        event: removed.event,
+                        effects: report.effects,
+                        deliveries: report.deliveries,
+                    },
+                    Some(removed.goods),
+                )
+            }
+            _ => unreachable!("source extend проверен выше"),
+        };
+        let owner_progress_allows = player.current_progress() == PlayerProgress::None;
+        let destination = player.auction_listing_mut().add_goods_at(
+            destination_position,
+            &mut incoming,
+            &self.goods_factory,
+            owner_progress_allows,
+        );
+        assert!(
+            incoming.is_none() && matches!(destination, VolumeGoodsAddOutcome::Added(_)),
+            "предварительно проверенный пустой auction listing slot обязан принять goods"
+        );
+        Ok(AuctionListingTransferReport {
+            goods: goods_identity,
+            removal,
+            destination,
+            listing_slot_zero_was_empty: slot_zero_was_empty,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
