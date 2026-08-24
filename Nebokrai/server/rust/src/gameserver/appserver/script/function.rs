@@ -21,6 +21,8 @@
 //! Country scalar query family `9000/9002/9008/9010/9012` одним контрактом
 //! сужает explicit country до byte либо использует страну script-player и
 //! возвращает `-1` при недоступном owner-е.
+//! Aliases `2633/9020` разрешают local target и проходят canonical
+//! `CGame::player_country_identity`, который mutating-читает ordered CI `1..8`.
 //! Полный expression evaluator и остальные function ID ниже пока остаются RAW.
 
 use crate::gameserver::appserver::country::country::{
@@ -50,6 +52,8 @@ pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_KING_ID: i32 = 9006;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_TREASURY: i32 = 9008;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_MATERIAL: i32 = 9010;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_TECH: i32 = 9012;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_OCCUPATION: i32 = 2633;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_IDENTITY: i32 = 9020;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_SWITCH: i32 = 9018;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_SWITCH: i32 = 9019;
 pub(crate) const SCRIPT_FUNCTION_EXILE_TIME: i32 = 9021;
@@ -171,6 +175,16 @@ pub(crate) enum CountryIdentityScriptDisposition {
         country: u8,
         king_id: i32,
     },
+    TargetIdRejected {
+        player_id: i32,
+    },
+    PlayerMissing {
+        player_id: Option<i32>,
+    },
+    PlayerIdentityRead {
+        player_id: i32,
+        identity: u8,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -195,8 +209,54 @@ pub(crate) fn run_country_identity_script_function(
         SCRIPT_FUNCTION_GET_COUNTRY_CI
             | SCRIPT_FUNCTION_SET_COUNTRY_CI
             | SCRIPT_FUNCTION_GET_COUNTRY_KING_ID
+            | SCRIPT_FUNCTION_GET_COUNTRY_OCCUPATION
+            | SCRIPT_FUNCTION_GET_COUNTRY_IDENTITY
     ) {
         return CountryIdentityScriptFunctionOutcome::DifferentFunction;
+    }
+    if matches!(
+        function_id,
+        SCRIPT_FUNCTION_GET_COUNTRY_OCCUPATION | SCRIPT_FUNCTION_GET_COUNTRY_IDENTITY
+    ) {
+        let raw_player_id = evaluated_first.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+        let player_id = if raw_player_id == SCRIPT_INT_PARAMETER_ERROR {
+            let Some(player_id) = script_player_id else {
+                return country_identity_handled(
+                    function_id,
+                    -1,
+                    CountryIdentityScriptDisposition::PlayerMissing { player_id: None },
+                );
+            };
+            player_id
+        } else if raw_player_id <= 0 {
+            return country_identity_handled(
+                function_id,
+                -1,
+                CountryIdentityScriptDisposition::TargetIdRejected {
+                    player_id: raw_player_id,
+                },
+            );
+        } else {
+            raw_player_id
+        };
+        if game.find_player(player_id).is_none() {
+            return country_identity_handled(
+                function_id,
+                -1,
+                CountryIdentityScriptDisposition::PlayerMissing {
+                    player_id: Some(player_id),
+                },
+            );
+        }
+        let identity = game.player_country_identity(player_id);
+        return country_identity_handled(
+            function_id,
+            i32::from(identity),
+            CountryIdentityScriptDisposition::PlayerIdentityRead {
+                player_id,
+                identity,
+            },
+        );
     }
     if function_id == SCRIPT_FUNCTION_SET_COUNTRY_CI {
         let identity = evaluated_first.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
