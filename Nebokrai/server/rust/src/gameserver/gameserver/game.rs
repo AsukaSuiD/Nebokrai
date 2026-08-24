@@ -17525,11 +17525,11 @@ impl CGame {
         Some(players.get_mut(&player_id)?.decrease_money(amount, goods_factory))
     }
 
-    /// World `0x7FE34` повторяет старый `GetMoney - signed fee`, затем
+    /// World `0x7FE34/0x7FE37` повторяет старый `GetMoney - signed fee`, затем
     /// `SetMoney(max(signed(result), 0))`. Обычная положительная плата идёт
     /// через тот же wallet/container wire, что остальные gameplay debits;
     /// отрицательный legacy параметр сохраняет историческое пополнение.
-    pub(crate) fn apply_village_war_application_money<Context: OldClientGoodsCodec>(
+    pub(crate) fn apply_war_application_money<Context: OldClientGoodsCodec>(
         &mut self,
         player_id: i32,
         fee: i32,

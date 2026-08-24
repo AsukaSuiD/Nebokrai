@@ -19,9 +19,10 @@
 //! `0x6011F`, а terminal `0x7FE19` публикует клиенту `0xBFF31` после debit.
 //! World city-gate authorization `0x7FE2A` возвращается в concrete city owner,
 //! обновляет gate/build state и отправляет исходные `GS0042/GS0043` notices.
-//! Принятая World заявка деревенской войны `0x7FE34(player, fee)` возвращается
-//! в live player wallet, сохраняет signed wrapping/clamp старого `SetMoney` и
-//! публикует container change клиенту; отклонённая заявка ответа не создаёт.
+//! Принятые World заявки деревенской/городской войны `0x7FE34/0x7FE37`
+//! возвращаются в live player wallet, сохраняют signed wrapping/clamp старого
+//! `SetMoney` и публикуют container change клиенту; отклонённая заявка ответа
+//! не создаёт.
 //! `0x7FE06` декодирует полный organizing wire до owned-region tail, обновляет
 //! faction/master/name/union identity live player и только затем ретегирует
 //! `0xBFF06`; name/union входят в последующий war-contender lifecycle.
@@ -220,7 +221,8 @@ pub(crate) struct FourNationExploitDispatchReport {
 pub(crate) enum GameOrganizingWarMessageReport {
     FactionLifecycle(FactionLifecycleDispatchReport),
     CityGate(CityGateDispatchReport),
-    VillageApplication(VillageWarApplicationResponseReport),
+    VillageApplication(WarApplicationResponseReport),
+    CityApplication(WarApplicationResponseReport),
     FactionUpdate(WarFactionUpdateDispatchReport),
     Phase(WarPhaseDispatchReport),
     FourNationPhase(FourNationPhaseDispatchReport),
@@ -232,6 +234,7 @@ pub(crate) enum GameOrganizingWarMessageError {
     FactionLifecycle(FactionLifecycleDispatchError),
     CityGate(FactionLifecycleDispatchError),
     VillageApplication(FactionLifecycleDispatchError),
+    CityApplication(FactionLifecycleDispatchError),
     FactionUpdate(WarFactionUpdateDispatchError),
     Phase(WarPhaseDispatchError),
     Control(OrganizingControlDispatchError),
@@ -248,7 +251,7 @@ pub(crate) struct CityGateDispatchReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct VillageWarApplicationResponseReport {
+pub(crate) struct WarApplicationResponseReport {
     pub(crate) player_id: i32,
     pub(crate) fee: i32,
     pub(crate) player_found: bool,
@@ -468,6 +471,7 @@ pub(crate) fn dispatch_game_organizing_war_message<
             | 0x7fe34
             | 0x7fe35
             | 0x7fe36
+            | 0x7fe37
             | 0x7fe3c..=0x7fe3f
             | 0x7fe41
             | 0x7fe43..=0x7fe45
@@ -489,6 +493,14 @@ pub(crate) fn dispatch_game_organizing_war_message<
             dispatch_village_war_application_response(message, game, runtime)
                 .map(GameOrganizingWarMessageReport::VillageApplication)
                 .map_err(GameOrganizingWarMessageError::VillageApplication),
+        );
+    }
+
+    if opcode == 0x7fe37 {
+        return Some(
+            dispatch_war_application_response(message, game, runtime)
+                .map(GameOrganizingWarMessageReport::CityApplication)
+                .map_err(GameOrganizingWarMessageError::CityApplication),
         );
     }
 
@@ -570,7 +582,15 @@ fn dispatch_village_war_application_response<Runtime: OldClientGoodsCodec>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Result<VillageWarApplicationResponseReport, FactionLifecycleDispatchError> {
+) -> Result<WarApplicationResponseReport, FactionLifecycleDispatchError> {
+    dispatch_war_application_response(message, game, runtime)
+}
+
+fn dispatch_war_application_response<Runtime: OldClientGoodsCodec>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    runtime: &mut Runtime,
+) -> Result<WarApplicationResponseReport, FactionLifecycleDispatchError> {
     let player_id = message
         .base_mut()
         .get_long()
@@ -585,11 +605,11 @@ fn dispatch_village_war_application_response<Runtime: OldClientGoodsCodec>(
     if !message.base_mut().unread_bytes().is_empty() {
         return Err(FactionLifecycleDispatchError::InvalidPayload);
     }
-    let money = game.apply_village_war_application_money(player_id, fee, runtime);
+    let money = game.apply_war_application_money(player_id, fee, runtime);
     let (previous_money, resulting_money, deliveries) = money
         .map(|(previous, resulting, deliveries)| (Some(previous), Some(resulting), deliveries))
         .unwrap_or((None, None, Vec::new()));
-    Ok(VillageWarApplicationResponseReport {
+    Ok(WarApplicationResponseReport {
         player_id,
         fee,
         player_found: previous_money.is_some(),
