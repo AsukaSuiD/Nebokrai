@@ -19,6 +19,9 @@
 //! `0x6011F`, а terminal `0x7FE19` публикует клиенту `0xBFF31` после debit.
 //! World city-gate authorization `0x7FE2A` возвращается в concrete city owner,
 //! обновляет gate/build state и отправляет исходные `GS0042/GS0043` notices.
+//! Принятая World заявка деревенской войны `0x7FE34(player, fee)` возвращается
+//! в live player wallet, сохраняет signed wrapping/clamp старого `SetMoney` и
+//! публикует container change клиенту; отклонённая заявка ответа не создаёт.
 //! `0x7FE06` декодирует полный organizing wire до owned-region tail, обновляет
 //! faction/master/name/union identity live player и только затем ретегирует
 //! `0xBFF06`; name/union входят в последующий war-contender lifecycle.
@@ -64,7 +67,7 @@ use super::super::serverwarregion::WarRegionContext;
 use super::super::shape::{CShape, ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::player::{CPlayer, PlayerExploitMutationReport};
 use crate::gameserver::gameserver::game::{
-    CGame, GameWarRegionHandle, ScriptRegionChangeContext, ServerRegionOwner,
+    CGame, GameWarRegionHandle, OldClientGoodsCodec, ScriptRegionChangeContext, ServerRegionOwner,
     colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
@@ -217,6 +220,7 @@ pub(crate) struct FourNationExploitDispatchReport {
 pub(crate) enum GameOrganizingWarMessageReport {
     FactionLifecycle(FactionLifecycleDispatchReport),
     CityGate(CityGateDispatchReport),
+    VillageApplication(VillageWarApplicationResponseReport),
     FactionUpdate(WarFactionUpdateDispatchReport),
     Phase(WarPhaseDispatchReport),
     FourNationPhase(FourNationPhaseDispatchReport),
@@ -227,6 +231,7 @@ pub(crate) enum GameOrganizingWarMessageReport {
 pub(crate) enum GameOrganizingWarMessageError {
     FactionLifecycle(FactionLifecycleDispatchError),
     CityGate(FactionLifecycleDispatchError),
+    VillageApplication(FactionLifecycleDispatchError),
     FactionUpdate(WarFactionUpdateDispatchError),
     Phase(WarPhaseDispatchError),
     Control(OrganizingControlDispatchError),
@@ -240,6 +245,16 @@ pub(crate) struct CityGateDispatchReport {
     pub(crate) operation: i32,
     pub(crate) operated: bool,
     pub(crate) notice_delivery: Option<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VillageWarApplicationResponseReport {
+    pub(crate) player_id: i32,
+    pub(crate) fee: i32,
+    pub(crate) player_found: bool,
+    pub(crate) previous_money: Option<u32>,
+    pub(crate) resulting_money: Option<u32>,
+    pub(crate) deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -427,7 +442,7 @@ where
 
 /// Подключает всю достигнутую OrganSys war family к живому `CGame` owner-у.
 pub(crate) fn dispatch_game_organizing_war_message<
-    Runtime: GameOrganizingWarRuntime + ScriptRegionChangeContext,
+    Runtime: GameOrganizingWarRuntime + ScriptRegionChangeContext + OldClientGoodsCodec,
 >(
     message: &mut CMessage,
     game: &mut CGame,
@@ -450,6 +465,7 @@ pub(crate) fn dispatch_game_organizing_war_message<
             | 0x7fe2a
             | 0x7fe1f..=0x7fe25
             | 0x7fe2f..=0x7fe33
+            | 0x7fe34
             | 0x7fe35
             | 0x7fe36
             | 0x7fe3c..=0x7fe3f
@@ -465,6 +481,14 @@ pub(crate) fn dispatch_game_organizing_war_message<
             dispatch_city_gate_response(message, game, runtime)
                 .map(GameOrganizingWarMessageReport::CityGate)
                 .map_err(GameOrganizingWarMessageError::CityGate),
+        );
+    }
+
+    if opcode == 0x7fe34 {
+        return Some(
+            dispatch_village_war_application_response(message, game, runtime)
+                .map(GameOrganizingWarMessageReport::VillageApplication)
+                .map_err(GameOrganizingWarMessageError::VillageApplication),
         );
     }
 
@@ -540,6 +564,39 @@ pub(crate) fn dispatch_game_organizing_war_message<
     };
     game.restore_war_startup_owners(owners);
     Some(result)
+}
+
+fn dispatch_village_war_application_response<Runtime: OldClientGoodsCodec>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    runtime: &mut Runtime,
+) -> Result<VillageWarApplicationResponseReport, FactionLifecycleDispatchError> {
+    let player_id = message
+        .base_mut()
+        .get_long()
+        .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field: "player ID" })?;
+    let fee =
+        message
+            .base_mut()
+            .get_long()
+            .ok_or(FactionLifecycleDispatchError::UnexpectedEnd {
+                field: "village application fee",
+            })?;
+    if !message.base_mut().unread_bytes().is_empty() {
+        return Err(FactionLifecycleDispatchError::InvalidPayload);
+    }
+    let money = game.apply_village_war_application_money(player_id, fee, runtime);
+    let (previous_money, resulting_money, deliveries) = money
+        .map(|(previous, resulting, deliveries)| (Some(previous), Some(resulting), deliveries))
+        .unwrap_or((None, None, Vec::new()));
+    Ok(VillageWarApplicationResponseReport {
+        player_id,
+        fee,
+        player_found: previous_money.is_some(),
+        previous_money,
+        resulting_money,
+        deliveries,
+    })
 }
 
 fn dispatch_city_gate_response<Runtime: GameOrganizingWarRuntime>(

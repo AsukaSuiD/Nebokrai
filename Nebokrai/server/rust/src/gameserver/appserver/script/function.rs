@@ -29,6 +29,12 @@
 //! `0x6020D` owner: limits, defaults, byte-narrowed type и conditional
 //! item-tail сохраняются до DB FIFO/live publication; tail вычисляется только
 //! для полного `type == 0`, как в исходном `CScript`.
+//! Village-war menu `6040/6041/6042/6047/6054..6056` сохраняет ранние
+//! player/NPC/region gates, local-only time query и local-before-proxy
+//! ownership/state/country lookups. Заявка проверяет live faction/union,
+//! business и конкурирующие war schedules, публикует `GS0201..GS0207`, затем
+//! проходит `0x60135` до авторитетного World accept; ответ `0x7FE34` возвращён
+//! в общий OrganSys dispatcher и меняет canonical player wallet/client wire.
 //! Также материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
 //! `9354 / OpenEquipmentCompose` и `2216 / OpenGoodsUpgrade`. Refresh вычисляет первую
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
@@ -129,6 +135,7 @@ use crate::gameserver::appserver::country::country::{
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::organizingsystem::attackcitysys::AttackCityMembershipBlock;
+use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::appserver::servercityregion::CityGateRuntimeContext;
 use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
@@ -196,7 +203,14 @@ pub(crate) const SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME: i32 = 6017;
 pub(crate) const SCRIPT_FUNCTION_GET_CITY_GATE_STATE: i32 = 6019;
 pub(crate) const SCRIPT_FUNCTION_OPERATE_CITY_GATE: i32 = 6020;
 pub(crate) const SCRIPT_FUNCTION_FACTION_DECLARE_WAR: i32 = 6030;
+pub(crate) const SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME: i32 = 6040;
+pub(crate) const SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME: i32 = 6041;
+pub(crate) const SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR: i32 = 6042;
 pub(crate) const SCRIPT_FUNCTION_ENTER_CONTEND_STATE: i32 = 6043;
+pub(crate) const SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID: i32 = 6047;
+pub(crate) const SCRIPT_FUNCTION_GET_WAR_REGION_STATE: i32 = 6054;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_OWNING_REGION: i32 = 6055;
+pub(crate) const SCRIPT_FUNCTION_GET_WAR_START_TIME: i32 = 6056;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_REGION: i32 = 2304;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
 pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS: i32 = 2201;
@@ -1861,6 +1875,26 @@ fn country_war_script_caller_gate(
     Ok((distance, maximum))
 }
 
+/// `CScript::RunFunction` вызывает этот gate до вычисления выражений только
+/// для тех village-menu selectors, где исходный owner сначала проверяет живой
+/// разговор. Dispatcher повторяет проверку перед gameplay side effects.
+pub(crate) fn village_war_script_caller_is_live(
+    game: &CGame,
+    script_player_id: Option<i32>,
+    script_npc_id: Option<i32>,
+) -> bool {
+    country_war_script_caller_gate(game, script_player_id, script_npc_id).is_ok()
+}
+
+pub(crate) fn owned_region_script_caller_is_live(
+    game: &CGame,
+    script_player_id: Option<i32>,
+    script_region_id: Option<i32>,
+) -> bool {
+    script_player_id.is_some_and(|player_id| game.find_player(player_id).is_some())
+        && script_region_id.is_some_and(|region_id| game.find_region(region_id).is_some())
+}
+
 fn country_war_query_completed(
     function_id: i32,
     kind: CountryWarQueryKind,
@@ -2989,6 +3023,19 @@ pub(crate) fn script_function_parameter_kind(
             0..=2 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME
+        | SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME
+        | SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID
+        | SCRIPT_FUNCTION_GET_WAR_REGION_STATE
+        | SCRIPT_FUNCTION_GET_COUNTRY_OWNING_REGION
+        | SCRIPT_FUNCTION_GET_WAR_START_TIME => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR => match index {
+            0..=1 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_ENTER_CONTEND_STATE => match index {
             0 | 1 => Integer,
             2..=5 => String,
@@ -3503,6 +3550,248 @@ fn script_packed_time_component(function_id: i32, packed: i32) -> i32 {
         SCRIPT_FUNCTION_MINUTE => (packed >> 3) & 0x3f,
         SCRIPT_FUNCTION_DAY_OF_WEEK => packed & 0x07,
         _ => unreachable!("calendar component вызывается только для 14..19"),
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ScriptWarRegionSnapshot {
+    name: Vec<u8>,
+    country: u8,
+    war_region_type: i32,
+    war_number: i32,
+    city_state: i32,
+    owned_faction_id: i32,
+    owned_union_id: i32,
+}
+
+fn script_war_region_snapshot(
+    game: &CGame,
+    region_id: i32,
+    proxy_allowed: bool,
+) -> Option<ScriptWarRegionSnapshot> {
+    if let Some(region) = game.find_region(region_id) {
+        let base = region.base();
+        return Some(ScriptWarRegionSnapshot {
+            name: region.name().to_vec(),
+            country: base.country,
+            war_region_type: base.war_region_type,
+            war_number: base.get_war_number(),
+            city_state: base.get_city_state(),
+            owned_faction_id: base.owned_city_faction(),
+            owned_union_id: base.owned_city_union(),
+        });
+    }
+    let region = proxy_allowed
+        .then(|| game.find_proxy_region(region_id))
+        .flatten()?;
+    let (war_number, city_state) = region.war_state();
+    let (owned_faction_id, owned_union_id) = region.owned_city_org();
+    Some(ScriptWarRegionSnapshot {
+        name: region.get_name().to_vec(),
+        country: region.country(),
+        war_region_type: region.war_region_type(),
+        war_number,
+        city_state,
+        owned_faction_id,
+        owned_union_id,
+    })
+}
+
+fn send_village_war_script_notice(
+    game: &CGame,
+    player_id: i32,
+    string_id: &[u8],
+    argument: Option<&[u8]>,
+) -> i32 {
+    let text = argument.map_or_else(
+        || game.get_string_by_id(string_id).to_vec(),
+        |argument| format_legacy_text_fields(game.get_string_by_id(string_id), &[argument], 0xff),
+    );
+    colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
+        .send_to_player(game.net_server(), player_id)
+}
+
+fn run_village_war_menu_script_function(
+    game: &CGame,
+    script_player_id: Option<i32>,
+    script_npc_id: Option<i32>,
+    script_region_id: Option<i32>,
+    function_id: i32,
+    integer_arguments: [Option<i32>; 2],
+) -> Option<ScriptFunctionDispatchOutcome> {
+    let handled = |legacy_return| ScriptFunctionDispatchOutcome::Handled { legacy_return };
+    match function_id {
+        SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME
+        | SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME => {
+            if !village_war_script_caller_is_live(game, script_player_id, script_npc_id) {
+                return Some(handled(0));
+            }
+            let Some(region_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(handled(0));
+            };
+            let state = script_war_region_snapshot(game, region_id, false)
+                .map_or(0, |region| region.city_state);
+            Some(handled(i32::from(
+                if function_id == SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME {
+                    state == 3
+                } else {
+                    state != 0
+                },
+            )))
+        }
+        SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID => {
+            if !owned_region_script_caller_is_live(game, script_player_id, script_region_id) {
+                return Some(handled(0));
+            }
+            let Some(mut region_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(handled(0));
+            };
+            if region_id == 0 {
+                region_id = script_region_id.unwrap_or_default();
+            }
+            Some(handled(
+                script_war_region_snapshot(game, region_id, true)
+                    .map_or(0, |region| region.owned_faction_id),
+            ))
+        }
+        SCRIPT_FUNCTION_GET_WAR_REGION_STATE => {
+            let Some(region_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(handled(-1));
+            };
+            Some(handled(
+                script_war_region_snapshot(game, region_id, true)
+                    .map_or(-1, |region| region.city_state),
+            ))
+        }
+        SCRIPT_FUNCTION_GET_COUNTRY_OWNING_REGION => {
+            let Some(region_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(handled(0));
+            };
+            Some(handled(
+                script_war_region_snapshot(game, region_id, true)
+                    .map_or(0, |region| i32::from(region.country)),
+            ))
+        }
+        SCRIPT_FUNCTION_GET_WAR_START_TIME => {
+            let Some(region_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(handled(0));
+            };
+            let value =
+                script_war_region_snapshot(game, region_id, true).map_or(0, |region| match region
+                    .war_region_type
+                {
+                    1 => game.village_war_sys().get_war_start_time(region_id),
+                    2 => game.attack_city_sys().get_war_start_time(region_id),
+                    _ => 0,
+                });
+            Some(handled(value))
+        }
+        SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR => {
+            if !village_war_script_caller_is_live(game, script_player_id, script_npc_id) {
+                return Some(handled(0));
+            }
+            let (Some(player_id), Some(region_id), Some(money)) = (
+                script_player_id,
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(handled(0));
+            };
+            let Some(player) = game.find_player(player_id) else {
+                return Some(handled(0));
+            };
+            let faction_id = player.faction_id();
+            if faction_id <= 0 {
+                return Some(handled(0));
+            }
+            let union_id = player.union_id();
+            let country = player.country();
+            let current_progress = player.current_progress();
+            let Some(war_region) = script_war_region_snapshot(game, region_id, true) else {
+                return Some(handled(0));
+            };
+            if war_region.city_state == 0 {
+                let _ = send_village_war_script_notice(game, player_id, b"GS0201", None);
+                return Some(handled(0));
+            }
+            let village_region_id = game
+                .village_war_sys()
+                .get_village_region_id_by_time(war_region.war_number);
+            let Some(village_region) = script_war_region_snapshot(game, village_region_id, true)
+            else {
+                return Some(handled(0));
+            };
+            if faction_id == village_region.owned_faction_id {
+                let _ = send_village_war_script_notice(
+                    game,
+                    player_id,
+                    b"GS0202",
+                    Some(&village_region.name),
+                );
+                return Some(handled(0));
+            }
+            if union_id != 0 && union_id == village_region.owned_union_id {
+                let _ = send_village_war_script_notice(game, player_id, b"GS0203", None);
+                return Some(handled(0));
+            }
+            if current_progress != PlayerProgress::None {
+                let _ = send_village_war_script_notice(game, player_id, b"GS0204", None);
+                return Some(handled(0));
+            }
+            let attack_city_region = game.attack_city_sys().attacks.values().find_map(|setup| {
+                (setup.region_state != 0 && setup.declaring_factions.contains(&faction_id))
+                    .then_some(setup.city_region_id)
+            });
+            if attack_city_region.is_some() {
+                let (notice, argument) = if (1..=4).contains(&country) {
+                    (
+                        b"GS0206".as_slice(),
+                        game.globe_setup().country_name(country),
+                    )
+                } else {
+                    (b"GS0205".as_slice(), None)
+                };
+                let _ = send_village_war_script_notice(game, player_id, notice, argument);
+                return Some(handled(0));
+            }
+            let village_war_region =
+                game.village_war_sys()
+                    .village_wars
+                    .values()
+                    .find_map(|setup| {
+                        (setup.region_state != 0 && setup.declaring_factions.contains(&faction_id))
+                            .then_some(setup.war_region_id)
+                    });
+            if let Some(other_region_id) = village_war_region {
+                if let Some(other_region) = script_war_region_snapshot(game, other_region_id, true)
+                {
+                    let _ = send_village_war_script_notice(
+                        game,
+                        player_id,
+                        b"GS0207",
+                        Some(&other_region.name),
+                    );
+                }
+                return Some(handled(0));
+            }
+            let mut request = CMessage::new(0x0006_0135);
+            request.add_long(player_id);
+            request.add_long(war_region.war_number);
+            request.add_long(money);
+            let _ = request.send(game, false);
+            Some(handled(0))
+        }
+        _ => None,
     }
 }
 
@@ -4213,6 +4502,16 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     integer_arguments: [Option<i32>; 7],
     string_arguments: [Option<&[u8]>; 7],
 ) -> ScriptFunctionDispatchOutcome {
+    if let Some(outcome) = run_village_war_menu_script_function(
+        game,
+        script_player_id,
+        script_npc_id,
+        script_region_id,
+        function_id,
+        [integer_arguments[0], integer_arguments[1]],
+    ) {
+        return outcome;
+    }
     if let Some(outcome) = run_core_player_script_function(
         game,
         runtime,

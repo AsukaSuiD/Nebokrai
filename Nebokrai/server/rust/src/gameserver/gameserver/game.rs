@@ -17525,6 +17525,39 @@ impl CGame {
         Some(players.get_mut(&player_id)?.decrease_money(amount, goods_factory))
     }
 
+    /// World `0x7FE34` повторяет старый `GetMoney - signed fee`, затем
+    /// `SetMoney(max(signed(result), 0))`. Обычная положительная плата идёт
+    /// через тот же wallet/container wire, что остальные gameplay debits;
+    /// отрицательный legacy параметр сохраняет историческое пополнение.
+    pub(crate) fn apply_village_war_application_money<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        fee: i32,
+        context: &mut Context,
+    ) -> Option<(u32, u32, Vec<i32>)> {
+        let previous = self.find_player(player_id)?.money();
+        let wrapped = previous.wrapping_sub(fee as u32);
+        let resulting = if (wrapped as i32) < 0 { 0 } else { wrapped };
+        let deliveries = if resulting < previous {
+            let change = self.decrease_player_money(player_id, previous - resulting)?;
+            self.send_player_money_decrease(player_id, &change.outcome)
+        } else if resulting > previous {
+            let amount = resulting - previous;
+            let created = self.create_goods_batch(self.goods_factory.get_gold_coin_index(), amount);
+            let outcome = {
+                let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+                players
+                    .get_mut(&player_id)?
+                    .increase_money(amount, goods_factory, created)
+            };
+            self.send_player_money_increase(player_id, &outcome, context)
+        } else {
+            Vec::new()
+        };
+        let current = self.find_player(player_id)?.money();
+        Some((previous, current, deliveries))
+    }
+
     fn send_battle_fairy_upgrade_container(&self, effect: &BattleFairyUpgradeEffect) -> Vec<i32> {
         match effect {
             BattleFairyUpgradeEffect::GemConsumed {
