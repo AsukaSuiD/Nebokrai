@@ -169,7 +169,9 @@ use super::container::cgoodsshadowcontainer::{PlacedShadowGoods, ShadowRecordBlo
 use super::container::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
 };
-use super::container::cwallet::{CWallet, CurrencyGoodsAddOutcome};
+use super::container::cwallet::{
+    CWallet, CurrencyDecreaseOutcome, CurrencyGoodsAddOutcome, CurrencyIncreaseOutcome,
+};
 use super::container::cyuanbao::CYuanBao;
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
@@ -1050,6 +1052,22 @@ pub(crate) struct CiQingPacketAddition {
     pub(crate) resulting_amount: Option<u32>,
 }
 
+#[must_use = "изменение YuanBao содержит обязательный container/client effect"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerYuanBaoChange {
+    pub(crate) player_id: i32,
+    pub(crate) previous: u32,
+    pub(crate) current: u32,
+    pub(crate) outcome: PlayerYuanBaoChangeOutcome,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerYuanBaoChangeOutcome {
+    Unchanged,
+    Increased(CurrencyIncreaseOutcome),
+    Decreased(CurrencyDecreaseOutcome),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CiQingContainerAddition {
     pub(crate) player_id: i32,
@@ -1761,8 +1779,35 @@ impl CPlayer {
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
-        let player_id = self.player_id();
         let owner_progress_allows = self.current_progress == PlayerProgress::None;
+        self.add_goods_to_packet_with_progress(
+            goods,
+            factory,
+            encode_old_client,
+            owner_progress_allows,
+        )
+    }
+
+    /// Billing Increment response приходит при `PROGRESS_INCREMENT`, но
+    /// исходный `BillOfIncShop` добавляет batch напрямую в packet и не
+    /// применяет progress-lock к stack merge.
+    pub(crate) fn add_increment_shop_goods_to_packet(
+        &mut self,
+        goods: Vec<CGoods>,
+        factory: &CGoodsFactory,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
+    }
+
+    fn add_goods_to_packet_with_progress(
+        &mut self,
+        goods: Vec<CGoods>,
+        factory: &CGoodsFactory,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+        owner_progress_allows: bool,
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        let player_id = self.player_id();
         let mut additions = Vec::new();
         let mut remaining = Vec::new();
         for goods in goods {
@@ -2215,6 +2260,42 @@ impl CPlayer {
 
     pub(crate) const fn money(&self) -> u32 {
         self.money
+    }
+
+    pub(crate) fn yuan_bao(&self) -> u32 {
+        self.yuan_bao.currency_amount()
+    }
+
+    /// State-owner exact `SetYuanBao`: однослотовый currency container
+    /// сохраняет create/increase/decrease/delete outcome для сетевого caller-а.
+    pub(crate) fn set_yuan_bao(
+        &mut self,
+        current: u32,
+        factory: &CGoodsFactory,
+        created_currency: Vec<CGoods>,
+    ) -> PlayerYuanBaoChange {
+        let previous = self.yuan_bao.currency_amount();
+        let outcome = if previous < current {
+            let mut created_currency = Some(created_currency);
+            PlayerYuanBaoChangeOutcome::Increased(self.yuan_bao.increase_currency(
+                current.wrapping_sub(previous),
+                factory,
+                move |_, _| created_currency.take().unwrap_or_default(),
+            ))
+        } else if current < previous {
+            PlayerYuanBaoChangeOutcome::Decreased(
+                self.yuan_bao
+                    .decrease_currency(previous.wrapping_sub(current), factory),
+            )
+        } else {
+            PlayerYuanBaoChangeOutcome::Unchanged
+        };
+        PlayerYuanBaoChange {
+            player_id: self.player_id(),
+            previous,
+            current: self.yuan_bao.currency_amount(),
+            outcome,
+        }
     }
 
     pub(crate) const fn client_ip(&self) -> u32 {

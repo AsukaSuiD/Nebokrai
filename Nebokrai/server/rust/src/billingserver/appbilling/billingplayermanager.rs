@@ -324,7 +324,10 @@ impl CBillingPlayerManager {
                     response.base_mut().add_ulong(trade.yuanbao);
                     response.base_mut().add_long(trade.goods_id);
                     response.base_mut().add_long(trade.goods_number);
-                    response.base_mut().add_long(trade.seller_id);
+                    // Increment Shop использует request `session_id` как
+                    // deduction-goods ID; GameServer читает его пятым полем
+                    // успешного `0xFF002` и удаляет соответствующие stack-и.
+                    response.base_mut().add_long(trade.session_id);
                     add_transaction_code(&mut response, outcome.transaction_code);
                 }
                 let _ = response.send_to_gs(sender, trade.game_server_id);

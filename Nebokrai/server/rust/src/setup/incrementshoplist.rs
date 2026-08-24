@@ -102,6 +102,12 @@ impl CIncrementShopList {
         self.items.get(&page).map(Vec::as_slice).unwrap_or_default()
     }
 
+    pub(crate) fn get_item(&self, goods_id: u32, page: u8) -> Option<&IncrementShopItem> {
+        self.items_on_page(page)
+            .iter()
+            .find(|item| item.goods_id == goods_id)
+    }
+
     pub(crate) fn search_items(&self, needle: &[u8]) -> Vec<&IncrementShopItem> {
         self.items
             .iter()

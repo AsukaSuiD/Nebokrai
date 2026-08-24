@@ -380,6 +380,10 @@ use crate::gameserver::appserver::message::skillmessage::{
     GameSkillMessageError, GameSkillMessageReport, GameSkillMessageRuntime,
     dispatch_game_skill_message,
 };
+use crate::gameserver::appserver::message::unibillmessage::{
+    IncrementShopBillingContext, IncrementShopBillingMessageError, IncrementShopBillingReport,
+    dispatch_increment_shop_billing_message,
+};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::organizingsystem::attackcitysys::CAttackCitySys;
@@ -407,7 +411,7 @@ use crate::gameserver::appserver::player::{
     PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
     PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
     PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerProgress,
-    PlayerReliveMutation,
+    PlayerReliveMutation, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -2604,6 +2608,8 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) depot_messages: Vec<DepotMessageReport>,
     pub(crate) increment_shop_messages:
         Vec<Result<GameIncrementShopMessageReport, GameIncrementShopMessageError>>,
+    pub(crate) increment_shop_billing_messages:
+        Vec<Result<IncrementShopBillingReport, IncrementShopBillingMessageError>>,
     pub(crate) organizing_war_messages:
         Vec<Result<GameOrganizingWarMessageReport, GameOrganizingWarMessageError>>,
     pub(crate) country_war_messages: Vec<
@@ -2673,6 +2679,7 @@ pub(crate) trait GameMainLoopRuntime:
     + GameContainerMessageRuntime
     + GameGoodsMessageRuntime
     + GameSkillMessageRuntime
+    + IncrementShopBillingContext
 {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
@@ -3916,6 +3923,26 @@ impl CGame {
             goods_index,
             |upper_bound| game_legacy_random(random_state, upper_bound),
             || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+        )
+    }
+
+    /// Общий exact overload `CreateGoods(index, amount, vector)` с теми же
+    /// Game RNG, GUID и fairy threshold owner-ами, что и остальные callers.
+    pub(crate) fn create_goods_batch(&mut self, goods_index: u32, amount: u32) -> Vec<CGoods> {
+        let (random_state, goods_factory, fairy_exp_conf, battle_fairy_exp_config) = (
+            &mut self.random_state,
+            &self.goods_factory,
+            &self.fairy_exp_conf,
+            &self.battle_fairy_exp_config,
+        );
+        let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+        goods_factory.create_goods_batch(
+            goods_index,
+            amount,
+            &mut random,
+            || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+            |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
+            |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
         )
     }
 
@@ -5392,6 +5419,10 @@ impl CGame {
 
     pub(crate) const fn log_system_mut(&mut self) -> &mut CLogSystem {
         &mut self.log_system
+    }
+
+    pub(crate) const fn log_system(&self) -> &CLogSystem {
+        &self.log_system
     }
 
     pub(crate) const fn gm_list_mut(&mut self) -> &mut CGMList {
@@ -11412,6 +11443,30 @@ impl CGame {
         self.players.get_mut(&player_id)
     }
 
+    pub(crate) fn set_player_yuan_bao(
+        &mut self,
+        player_id: i32,
+        current: u32,
+        created_currency: Vec<CGoods>,
+    ) -> Option<PlayerYuanBaoChange> {
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        players
+            .get_mut(&player_id)
+            .map(|player| player.set_yuan_bao(current, goods_factory, created_currency))
+    }
+
+    pub(crate) fn add_increment_shop_goods_to_packet(
+        &mut self,
+        player_id: i32,
+        goods: Vec<CGoods>,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<(Vec<CiQingPacketAddition>, Vec<CGoods>)> {
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        players.get_mut(&player_id).map(|player| {
+            player.add_increment_shop_goods_to_packet(goods, goods_factory, encode_old_client)
+        })
+    }
+
     /// Exact `CGame::KickPlayer`: queue side effect сохраняется, публичный
     /// bool исходника всегда остаётся `false`.
     pub(crate) fn kick_player(&self, player_id: i32) -> GameKickPlayerReport {
@@ -12888,6 +12943,7 @@ impl CGame {
         let mut gma_messages = Vec::new();
         let mut depot_messages = Vec::new();
         let mut increment_shop_messages = Vec::new();
+        let mut increment_shop_billing_messages = Vec::new();
         let mut organizing_war_messages = Vec::new();
         let mut country_war_messages = Vec::new();
         let mut goods_war_messages = Vec::new();
@@ -12909,6 +12965,7 @@ impl CGame {
                 &mut gma_messages,
                 &mut depot_messages,
                 &mut increment_shop_messages,
+                &mut increment_shop_billing_messages,
                 &mut organizing_war_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
@@ -12932,6 +12989,7 @@ impl CGame {
                 &mut gma_messages,
                 &mut depot_messages,
                 &mut increment_shop_messages,
+                &mut increment_shop_billing_messages,
                 &mut organizing_war_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
@@ -12957,6 +13015,7 @@ impl CGame {
                         &mut gma_messages,
                         &mut depot_messages,
                         &mut increment_shop_messages,
+                        &mut increment_shop_billing_messages,
                         &mut organizing_war_messages,
                         &mut country_war_messages,
                         &mut goods_war_messages,
@@ -12981,6 +13040,7 @@ impl CGame {
             gma_messages,
             depot_messages,
             increment_shop_messages,
+            increment_shop_billing_messages,
             organizing_war_messages,
             country_war_messages,
             goods_war_messages,
@@ -13003,6 +13063,9 @@ impl CGame {
         depot_messages: &mut Vec<DepotMessageReport>,
         increment_shop_messages: &mut Vec<
             Result<GameIncrementShopMessageReport, GameIncrementShopMessageError>,
+        >,
+        increment_shop_billing_messages: &mut Vec<
+            Result<IncrementShopBillingReport, IncrementShopBillingMessageError>,
         >,
         organizing_war_messages: &mut Vec<
             Result<GameOrganizingWarMessageReport, GameOrganizingWarMessageError>,
@@ -13037,6 +13100,9 @@ impl CGame {
             depot_messages.push(report);
         } else if let Some(report) = dispatch_increment_shop_message(message, self) {
             increment_shop_messages.push(report);
+        } else if let Some(report) = dispatch_increment_shop_billing_message(message, self, runtime)
+        {
+            increment_shop_billing_messages.push(report);
         } else if let Some(report) = dispatch_game_organizing_war_message(message, self, runtime) {
             organizing_war_messages.push(report);
         } else if let Some(report) = dispatch_game_country_war_message(message, self, runtime) {

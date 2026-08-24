@@ -61,6 +61,7 @@ pub(crate) mod appserver {
         pub(crate) mod sequencestring;
         pub(crate) mod servermessage;
         pub(crate) mod skillmessage;
+        pub(crate) mod unibillmessage;
     }
     pub(crate) mod monster;
     pub(crate) mod moveshape;

@@ -61,6 +61,10 @@ impl CLogSystem {
         self.setting(26)
     }
 
+    pub(crate) fn increment_log_enabled(&self) -> bool {
+        self.setting(54)
+    }
+
     pub(crate) fn goods_lost_by_upgrade_enabled(&self) -> bool {
         self.setting(7)
     }
