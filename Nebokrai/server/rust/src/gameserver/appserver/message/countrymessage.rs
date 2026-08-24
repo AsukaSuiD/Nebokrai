@@ -31,6 +31,8 @@
 //! затем для live player публикует job через `0xC0302`; active `2` скрывает job.
 //! Family `0x7FF05/07/08` синхронизирует king ID либо, сохраняя исходный
 //! payload, адресно меняет type на client `0xC0304/0xC0305` и отправляет королю.
+//! Governance effects `0x7FF0C/0D/10` замыкают absolve counters/country notice,
+//! silence clock и king-authorized control-point publication `0xC030E`.
 
 use super::super::country::country::{
     CountryInformationMutationReport, CountryKingIdMutationReport,
@@ -38,7 +40,9 @@ use super::super::country::country::{
 use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,
 };
-use super::super::player::{PlayerCountryMutationReport, PlayerExploitMutationReport};
+use super::super::player::{
+    PlayerCountryMutationReport, PlayerExploitMutationReport, PlayerMurderCountersResetReport,
+};
 use super::super::region::{RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition};
 use super::super::servercountryregion::{CountryBattleStateBlock, CountryRegionRuntimeContext};
 use super::super::shape::ShapeCoordinateBlock;
@@ -60,6 +64,10 @@ pub(crate) trait GameCountryWarRuntime:
         x: i32,
         y: i32,
     ) -> bool;
+
+    /// Единственный `timeGetTime` sample, который `SetSilence` переводит в
+    /// минуты после успешных country/player gates.
+    fn country_governance_now_milliseconds(&mut self) -> u32;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -130,7 +138,46 @@ pub(crate) struct GameCountryWarMessageReport {
     pub(crate) player_country_change: Option<GamePlayerCountryChangeReport>,
     pub(crate) country_information_change: Option<GameCountryInformationChangeReport>,
     pub(crate) direct_response: Option<GameCountryDirectResponseReport>,
+    pub(crate) governance_effect: Option<GameCountryGovernanceEffectReport>,
     pub(crate) broadcast: Option<CountryWarBroadcastOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameCountryGovernanceEffectOutcome {
+    CountryMissing,
+    PlayerMissing,
+    ParameterUnavailable {
+        field: &'static str,
+    },
+    AbsolveApplied {
+        country: u8,
+        reset: PlayerMurderCountersResetReport,
+        country_deliveries: Vec<(i32, i32)>,
+        around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    },
+    SilenceApplied {
+        country: u8,
+        player_id: i32,
+        minutes: i32,
+        sampled_at_ms: u32,
+    },
+    KingRejected {
+        country: u8,
+        player_id: i32,
+        recorded_king_id: i32,
+    },
+    ControlPointPublished {
+        country: u8,
+        player_id: i32,
+        control_point: i32,
+        delivery: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameCountryGovernanceEffectReport {
+    pub(crate) opcode: u32,
+    pub(crate) outcome: GameCountryGovernanceEffectOutcome,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -353,6 +400,20 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
     Result<GameCountryWarMessageReport, CountryWarMessageDispatchError<CountryBattleStateBlock>>,
 > {
     let opcode = message.message_type() as u32;
+    if matches!(opcode, 0x7ff0c | 0x7ff0d | 0x7ff10) {
+        let governance_effect =
+            dispatch_country_governance_effect_message(message, game, runtime, opcode);
+        return Some(Ok(GameCountryWarMessageReport {
+            dispatched: None,
+            governance: None,
+            entry: None,
+            player_country_change: None,
+            country_information_change: None,
+            direct_response: None,
+            governance_effect: Some(governance_effect),
+            broadcast: None,
+        }));
+    }
     if matches!(opcode, 0x7ff05 | 0x7ff07 | 0x7ff08) {
         let direct_response = dispatch_country_direct_response_message(message, game, opcode);
         return Some(Ok(GameCountryWarMessageReport {
@@ -362,6 +423,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             player_country_change: None,
             country_information_change: None,
             direct_response: Some(direct_response),
+            governance_effect: None,
             broadcast: None,
         }));
     }
@@ -374,6 +436,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             player_country_change: None,
             country_information_change: Some(country_information_change),
             direct_response: None,
+            governance_effect: None,
             broadcast: None,
         }));
     }
@@ -386,6 +449,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             player_country_change: Some(player_country_change),
             country_information_change: None,
             direct_response: None,
+            governance_effect: None,
             broadcast: None,
         }));
     }
@@ -398,6 +462,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             player_country_change: None,
             country_information_change: None,
             direct_response: None,
+            governance_effect: None,
             broadcast: None,
         }));
     }
@@ -410,6 +475,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             player_country_change: None,
             country_information_change: None,
             direct_response: None,
+            governance_effect: None,
             broadcast: None,
         }));
     }
@@ -462,8 +528,156 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
         player_country_change: None,
         country_information_change: None,
         direct_response: None,
+        governance_effect: None,
         broadcast,
     }))
+}
+
+fn dispatch_country_governance_effect_message<Runtime: GameCountryWarRuntime>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    opcode: u32,
+) -> GameCountryGovernanceEffectReport {
+    if opcode == 0x7ff0c {
+        let country = message.base_mut().get_char().unwrap_or(0) as u8;
+        let player_id = message.base_mut().get_long().unwrap_or(0);
+        let Some(player) = game.find_player_mut(player_id) else {
+            return GameCountryGovernanceEffectReport {
+                opcode,
+                outcome: GameCountryGovernanceEffectOutcome::PlayerMissing,
+            };
+        };
+        let player_name = player.shape().base_object().get_name().to_vec();
+        let reset = player.reset_murder_counters();
+        let text =
+            format_country_player_name_notice(game.get_string_by_id(b"GS0023"), &player_name);
+        let country_deliveries = game
+            .player_ids_in_country(u32::from(country))
+            .into_iter()
+            .map(|recipient_id| {
+                let mut notice = CMessage::new(0x000b_f815);
+                notice.add_byte(1);
+                notice.add_byte(8);
+                add_country_legacy_c_string(&mut notice, b"");
+                add_country_legacy_c_string(&mut notice, &text);
+                let delivery = notice.send_to_player(game.net_server(), recipient_id);
+                (recipient_id, delivery)
+            })
+            .collect();
+        let mut counters = CMessage::new(0x000b_f70e);
+        counters.add_long(player_id);
+        counters.add_long(0);
+        counters.add_long(0);
+        let around_delivery = game.send_player_shape_around(player_id, None, &counters);
+        return GameCountryGovernanceEffectReport {
+            opcode,
+            outcome: GameCountryGovernanceEffectOutcome::AbsolveApplied {
+                country,
+                reset,
+                country_deliveries,
+                around_delivery,
+            },
+        };
+    }
+
+    if opcode == 0x7ff0d {
+        let country = message.base_mut().get_char().unwrap_or(0) as u8;
+        if game.country_handler().country(country).is_none() {
+            return GameCountryGovernanceEffectReport {
+                opcode,
+                outcome: GameCountryGovernanceEffectOutcome::CountryMissing,
+            };
+        }
+        let player_id = message.base_mut().get_long().unwrap_or(0);
+        if game.find_player(player_id).is_none() {
+            return GameCountryGovernanceEffectReport {
+                opcode,
+                outcome: GameCountryGovernanceEffectOutcome::PlayerMissing,
+            };
+        }
+        let Some(minutes) = game.country_param().silence_time() else {
+            return GameCountryGovernanceEffectReport {
+                opcode,
+                outcome: GameCountryGovernanceEffectOutcome::ParameterUnavailable {
+                    field: "_silence_time",
+                },
+            };
+        };
+        let sampled_at_ms = runtime.country_governance_now_milliseconds();
+        game.find_player_mut(player_id)
+            .expect("0x7FF0D player проверен до clock sample")
+            .set_silence(minutes, sampled_at_ms);
+        return GameCountryGovernanceEffectReport {
+            opcode,
+            outcome: GameCountryGovernanceEffectOutcome::SilenceApplied {
+                country,
+                player_id,
+                minutes,
+                sampled_at_ms,
+            },
+        };
+    }
+
+    let player_id = message.base_mut().get_long().unwrap_or(0);
+    let country = message.base_mut().get_char().unwrap_or(0) as u8;
+    if game.find_player(player_id).is_none() {
+        return GameCountryGovernanceEffectReport {
+            opcode,
+            outcome: GameCountryGovernanceEffectOutcome::PlayerMissing,
+        };
+    }
+    let Some(country_owner) = game.country_handler_mut().country_mut(country) else {
+        return GameCountryGovernanceEffectReport {
+            opcode,
+            outcome: GameCountryGovernanceEffectOutcome::CountryMissing,
+        };
+    };
+    let recorded_king_id = country_owner.country_information(1);
+    if recorded_king_id != player_id {
+        return GameCountryGovernanceEffectReport {
+            opcode,
+            outcome: GameCountryGovernanceEffectOutcome::KingRejected {
+                country,
+                player_id,
+                recorded_king_id,
+            },
+        };
+    }
+    let control_point = message.base_mut().get_long().unwrap_or(0);
+    let mut response = CMessage::new(0x000c_030e);
+    response.add_long(control_point);
+    let delivery = response.send_to_player(game.net_server(), player_id);
+    GameCountryGovernanceEffectReport {
+        opcode,
+        outcome: GameCountryGovernanceEffectOutcome::ControlPointPublished {
+            country,
+            player_id,
+            control_point,
+            delivery,
+        },
+    }
+}
+
+fn format_country_player_name_notice(template: &[u8], player_name: &[u8]) -> Vec<u8> {
+    let template = &template[..template
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(template.len())];
+    let player_name = &player_name[..player_name
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(player_name.len())];
+    let mut text = Vec::with_capacity(template.len().saturating_add(player_name.len()));
+    if let Some(marker) = template.windows(2).position(|window| window == b"%s") {
+        text.extend_from_slice(&template[..marker]);
+        text.extend_from_slice(player_name);
+        text.extend_from_slice(&template[marker + 2..]);
+    } else {
+        text.extend_from_slice(template);
+    }
+    text.truncate(255);
+    text
 }
 
 fn dispatch_country_direct_response_message(

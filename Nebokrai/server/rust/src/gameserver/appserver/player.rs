@@ -1253,6 +1253,13 @@ pub(crate) struct PlayerCountryMutationReport {
     pub(crate) changed: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerMurderCountersResetReport {
+    pub(crate) player_id: i32,
+    pub(crate) previous_pk_count: u16,
+    pub(crate) previous_kill_count: u32,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerCombatProperties {
     pub(crate) maximum_hp: u32,
@@ -3636,6 +3643,17 @@ impl CPlayer {
 
     pub(crate) const fn pk_count(&self) -> u16 {
         self.base_properties.pk_count
+    }
+
+    pub(crate) fn reset_murder_counters(&mut self) -> PlayerMurderCountersResetReport {
+        let report = PlayerMurderCountersResetReport {
+            player_id: self.player_id(),
+            previous_pk_count: self.base_properties.pk_count,
+            previous_kill_count: self.base_properties.kill_count,
+        };
+        self.base_properties.pk_count = 0;
+        self.base_properties.kill_count = 0;
+        report
     }
 
     /// World kill confirmation tail: unsigned saturation, wrapping kill count
