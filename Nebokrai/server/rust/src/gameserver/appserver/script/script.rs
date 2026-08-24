@@ -16,7 +16,8 @@ use std::collections::BTreeMap;
 
 use super::function::{
     ScriptFunctionDispatchOutcome, ScriptFunctionParameterKind, ScriptFunctionRuntime,
-    dispatch_script_function, script_function_parameter_kind,
+    ScriptStringFunctionDispatchOutcome, dispatch_script_function, dispatch_script_string_function,
+    script_function_parameter_kind,
 };
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
@@ -729,6 +730,22 @@ impl<'a> CScript<'a> {
                 .first()
                 .and_then(|parameter| self.evaluate_string(game, runtime, parameter))?;
             return Some(game.get_string_by_id(&key).to_vec());
+        }
+        if let Some((name, parameters)) = split_function(expression) {
+            let function_id = game.script_function_id(name)?;
+            let evaluated_player_id = parameters
+                .first()
+                .map(|parameter| self.evaluate_integer(game, runtime, parameter));
+            match dispatch_script_string_function(
+                game,
+                self.context.player_id,
+                function_id,
+                evaluated_player_id.flatten(),
+            ) {
+                ScriptStringFunctionDispatchOutcome::Handled(value) => return Some(value),
+                ScriptStringFunctionDispatchOutcome::Invalid => return None,
+                ScriptStringFunctionDispatchOutcome::DifferentFunction => {}
+            }
         }
         self.evaluate_integer(game, runtime, expression)
             .map(|value| value.to_string().into_bytes())

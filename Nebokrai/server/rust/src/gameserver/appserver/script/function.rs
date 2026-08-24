@@ -85,6 +85,14 @@
 //! reload owners и для IncrementShopList рассылает обновлённый GameServer
 //! snapshot. Недостижимый normal-script-ом null-player dereference исходника
 //! безопасно заменён no-op без сетевой публикации.
+//! Восстановительная ветвь `nodupe.script` достигает строкового `2998 /
+//! GetName`, `3002 / SetPlayerLevel` и skill pair `3102/3103`. String result
+//! возвращается непосредственно expression evaluator-у; level/experience и
+//! skill mutations проходят live `CPlayer/CMoveShape`, адресные client packets
+//! и существующие World relay `5FC01/5FC02/5FC04` для удалённого target-а.
+//! `GetMe/SetMe` той же ветви читают level/occupation/experience, а DWORD write
+//! сохраняет pre-mutation `BF80C`, `UpdateProperty`, `BF721` и reached
+//! `CheckLevel` terminal result.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -140,6 +148,10 @@ pub(crate) const SCRIPT_FUNCTION_DAY_OF_WEEK: i32 = 19;
 pub(crate) const SCRIPT_FUNCTION_SECOND: i32 = 23;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
+pub(crate) const SCRIPT_FUNCTION_GET_NAME: i32 = 2998;
+pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
+pub(crate) const SCRIPT_FUNCTION_DELETE_SKILL: i32 = 3102;
+pub(crate) const SCRIPT_FUNCTION_SET_SKILL_LEVEL: i32 = 3103;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_REGION: i32 = 2304;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
 pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS: i32 = 2201;
@@ -2365,6 +2377,42 @@ pub(crate) enum ScriptFunctionDispatchOutcome {
     Terminated { legacy_return: i32 },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ScriptStringFunctionDispatchOutcome {
+    DifferentFunction,
+    Invalid,
+    Handled(Vec<u8>),
+}
+
+/// Строковая половина `CScript::RunFunction`. Исторический `GetName` возвращал
+/// borrowed `char *`; owned Rust runtime копирует те же байты до следующего
+/// шага script evaluator-а, не превращая адрес в числовой result.
+pub(crate) fn dispatch_script_string_function(
+    game: &CGame,
+    script_player_id: Option<i32>,
+    function_id: i32,
+    evaluated_player_id: Option<i32>,
+) -> ScriptStringFunctionDispatchOutcome {
+    if function_id != SCRIPT_FUNCTION_GET_NAME {
+        return ScriptStringFunctionDispatchOutcome::DifferentFunction;
+    }
+    let requested = evaluated_player_id.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    let player_id = if requested == SCRIPT_INT_PARAMETER_ERROR {
+        let Some(player_id) = script_player_id else {
+            return ScriptStringFunctionDispatchOutcome::Invalid;
+        };
+        player_id
+    } else {
+        requested
+    };
+    game.find_player(player_id)
+        .map_or(ScriptStringFunctionDispatchOutcome::Invalid, |player| {
+            ScriptStringFunctionDispatchOutcome::Handled(
+                player.shape().base_object().get_name().to_vec(),
+            )
+        })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ScriptFunctionParameterKind {
     Integer,
@@ -2388,6 +2436,24 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_SET_ME => match index {
             0 => String,
             1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_NAME => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_SET_PLAYER_LEVEL => match index {
+            0 => String,
+            1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_DELETE_SKILL => match index {
+            0 | 1 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_SET_SKILL_LEVEL => match index {
+            0 | 1 => String,
+            2 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_CHANGE_REGION => match index {
@@ -2938,6 +3004,12 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 player.server_region_id().unwrap_or_default()
             } else if property.eq_ignore_ascii_case(b"dwVigour") {
                 player.vigour() as i32
+            } else if property.eq_ignore_ascii_case(b"lLevel") {
+                i32::from(player.level())
+            } else if property.eq_ignore_ascii_case(b"dwExp") {
+                player.experience() as i32
+            } else if property.eq_ignore_ascii_case(b"lOccupation") {
+                i32::from(player.occupation())
             } else {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             };
@@ -2950,15 +3022,52 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let (Some(property), Some(value)) = (string_arguments[0], integer_arguments[1]) else {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             };
-            if !property.eq_ignore_ascii_case(b"dwVigour") {
+            if !property.eq_ignore_ascii_case(b"dwVigour")
+                && !property.eq_ignore_ascii_case(b"dwExp")
+            {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             }
             Some(
-                game.set_script_player_vigour(player_id, value, runtime)
+                game.set_script_player_property(player_id, property, value, runtime)
                     .map_or(ScriptFunctionDispatchOutcome::Invalid, |legacy_return| {
                         ScriptFunctionDispatchOutcome::Handled { legacy_return }
                     }),
             )
+        }
+        SCRIPT_FUNCTION_SET_PLAYER_LEVEL => {
+            let (Some(target_name), Some(level)) = (string_arguments[0], integer_arguments[1])
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.set_script_player_level(player_id, target_name, level as u8),
+            })
+        }
+        SCRIPT_FUNCTION_DELETE_SKILL => {
+            let (Some(target_name), Some(skill_name)) = (string_arguments[0], string_arguments[1])
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.delete_script_player_skill(player_id, target_name, skill_name),
+            })
+        }
+        SCRIPT_FUNCTION_SET_SKILL_LEVEL => {
+            let (Some(target_name), Some(skill_name), Some(level)) = (
+                string_arguments[0],
+                string_arguments[1],
+                integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.set_script_player_skill_level(
+                    player_id,
+                    target_name,
+                    skill_name,
+                    level,
+                ),
+            })
         }
         SCRIPT_FUNCTION_CHANGE_REGION => {
             let Some(target_region_id) =

@@ -8367,22 +8367,48 @@ impl CGame {
         self.general_variables.set_string(name, value)
     }
 
-    /// Exact reached `SetMe("dwVigour", value)` tail: generic property storage
-    /// пишет DWORD без `SetVigour` clamp, затем virtual `UpdateProperty`
-    /// пересчитывает derived state и `OnChangeProperties` публикует
-    /// адресный `0xBF721`.
-    pub(crate) fn set_script_player_vigour<Context>(
+    /// Reached `SetMe` для DWORD-полей восстановительного script-а. До записи
+    /// публикуется общий property packet `0xBF80C`, затем direct storage,
+    /// `UpdateProperty` и адресный `0xBF721`. `dwExp` завершает наблюдаемый
+    /// no-level tail `CheckLevel` сообщением `0xBF704`.
+    pub(crate) fn set_script_player_property<Context>(
         &mut self,
         player_id: i32,
+        property: &[u8],
         value: i32,
         context: &mut Context,
     ) -> Option<i32>
     where
-        Context: GameContainerMessageRuntime + BattleFairyDeathContext,
+        Context: GameContainerMessageRuntime + BattleFairyDeathContext + NationCombatContext,
     {
+        let (region_id, identity) = self
+            .find_player(player_id)
+            .map(|player| (player.server_region_id(), player.shape().identity()))?;
+        if let Some(region_id) = region_id
+            && let Some(region) = self.find_region(region_id)
+            && let Some(player) = self.find_player(player_id)
+        {
+            let mut changed = CMessage::new(0x000b_f80c);
+            changed.add_long(identity.object_type);
+            changed.add_long(identity.id);
+            add_legacy_c_string(changed.base_mut(), property);
+            changed.add_long(value);
+            let _ = context.send_nation_player_around(
+                region.base(),
+                player.shape(),
+                None,
+                &changed,
+            );
+        }
         let recomputed = {
             let player = self.players.get_mut(&player_id)?;
-            let _ = player.set_script_vigour(value);
+            if property.eq_ignore_ascii_case(b"dwVigour") {
+                let _ = player.set_script_vigour(value);
+            } else if property.eq_ignore_ascii_case(b"dwExp") {
+                let _ = player.set_script_experience(value);
+            } else {
+                return None;
+            }
             context.recompute_enhancement_player_properties(player)
         };
         self.players
@@ -8397,7 +8423,128 @@ impl CGame {
             .expect("script-player сохранён до OnChangeProperties");
         external.vigour = player.vigour();
         let _ = self.send_player_properties_changed(player, external);
+        if property.eq_ignore_ascii_case(b"dwExp") {
+            let mut result = CMessage::new(0x000b_f704);
+            result.add_ulong(player.experience());
+            result.add_ulong(player.vigour());
+            result.add_ulong(player.fetch_power());
+            let _ = result.send_to_player(self.net_server(), player_id);
+        }
         Some(value)
+    }
+
+    /// `SetPlayerLevel`: local `SetLevel + SetExp(0)` и его faction/client
+    /// publications либо exact World relay для игрока другого GameServer-а.
+    pub(crate) fn set_script_player_level(
+        &mut self,
+        script_player_id: i32,
+        target_name: &[u8],
+        level: u8,
+    ) -> i32 {
+        let target_id = if target_name.is_empty() {
+            self.find_player(script_player_id).map(CPlayer::player_id)
+        } else {
+            self.find_player_by_name(target_name).map(CPlayer::player_id)
+        };
+        let Some(target_id) = target_id else {
+            let mut request = CMessage::new(0x0005_fc04);
+            add_legacy_c_string(request.base_mut(), target_name);
+            request.add_byte(level);
+            let _ = request.send(self, false);
+            return 0;
+        };
+        let mutation = self
+            .find_player_mut(target_id)
+            .expect("script level target проверен до mutation")
+            .apply_remote_level(level);
+        if mutation.previous_level != level && mutation.faction_id > 0 {
+            let mut faction = CMessage::new(0x0006_012a);
+            faction.add_long(mutation.faction_id);
+            faction.add_long(mutation.player_id);
+            faction.add_long(1);
+            faction.add_ulong(u32::from(level));
+            let _ = faction.send(self, false);
+        }
+        let mut response = CMessage::new(0x000b_f708);
+        response.add_byte(level);
+        response.add_ulong(0);
+        response.add_ulong(self.player_list.level_experience(level));
+        let _ = response.send_to_player(self.net_server(), target_id);
+        0
+    }
+
+    /// `DelSkill`/`SetSkillLevel` используют общий local/World routing, но
+    /// local client result исторически адресован запускающему script игроку.
+    pub(crate) fn delete_script_player_skill(
+        &mut self,
+        script_player_id: i32,
+        target_name: &[u8],
+        skill_name: &[u8],
+    ) -> i32 {
+        let target_id = if target_name.is_empty() {
+            self.find_player(script_player_id).map(CPlayer::player_id)
+        } else {
+            self.find_player_by_name(target_name).map(CPlayer::player_id)
+        };
+        let Some(target_id) = target_id else {
+            let mut request = CMessage::new(0x0005_fc02);
+            add_legacy_c_string(request.base_mut(), target_name);
+            add_legacy_c_string(request.base_mut(), skill_name);
+            let _ = request.send(self, false);
+            return -1;
+        };
+        let mutation = self
+            .delete_remote_player_skill(target_id, skill_name)
+            .expect("script skill target проверен до mutation");
+        let mut response = CMessage::new(0x000b_f71e);
+        add_legacy_c_string(response.base_mut(), skill_name);
+        let _ = response.send_to_player(self.net_server(), script_player_id);
+        i32::from(mutation.legacy_result)
+    }
+
+    pub(crate) fn set_script_player_skill_level(
+        &mut self,
+        script_player_id: i32,
+        target_name: &[u8],
+        skill_name: &[u8],
+        level: i32,
+    ) -> i32 {
+        let target_id = if target_name.is_empty() {
+            self.find_player(script_player_id).map(CPlayer::player_id)
+        } else {
+            self.find_player_by_name(target_name).map(CPlayer::player_id)
+        };
+        let Some(target_id) = target_id else {
+            let mut request = CMessage::new(0x0005_fc01);
+            add_legacy_c_string(request.base_mut(), target_name);
+            add_legacy_c_string(request.base_mut(), skill_name);
+            request.base_mut().add_short(level as i16);
+            request.add_long(script_player_id);
+            let _ = request.send(self, false);
+            return -1;
+        };
+        let mutation = {
+            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+            players
+                .get_mut(&target_id)
+                .and_then(|player| player.set_script_skill_level(skill_name, level, skill_factory))
+        };
+        if let Some(mutation) = mutation {
+            if let Some(response) = player_skill_learned_message(
+                0x000b_f71d,
+                mutation.skill_id,
+                mutation.skill_level,
+                level,
+                skill_name,
+                &self.skill_factory,
+                false,
+            ) {
+                let _ = response.send_to_player(self.net_server(), script_player_id);
+            }
+            i32::from(mutation.legacy_result)
+        } else {
+            0
+        }
     }
 
     /// Reached `ChangeRegion` gameplay path used by `nodupe.script`. The

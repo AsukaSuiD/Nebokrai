@@ -2275,6 +2275,10 @@ impl CPlayer {
         self.base_properties.level
     }
 
+    pub(crate) const fn occupation(&self) -> u8 {
+        self.base_properties.occupation
+    }
+
     /// Cross-Game level relay сохраняет `SetLevel` mutation и отдельный
     /// caller-side faction publication; experience сбрасывается после неё.
     pub(crate) fn apply_remote_level(&mut self, level: u8) -> PlayerRemoteLevelMutation {
@@ -2302,6 +2306,25 @@ impl CPlayer {
         let legacy_result = self
             .move_shape
             .add_skill(skill_id, i32::from(level), factory);
+        let skill = self.move_shape.skill(skill_id)?;
+        Some(PlayerRemoteSkillMutation {
+            skill_id,
+            skill_level: skill.level(),
+            legacy_result,
+        })
+    }
+
+    pub(crate) fn set_script_skill_level(
+        &mut self,
+        name: &[u8],
+        level: i32,
+        factory: &CSkillFactory,
+    ) -> Option<PlayerRemoteSkillMutation> {
+        let skill_id = factory.query_skill_id(Some(name));
+        if skill_id == UNKNOWN_SKILL_ID {
+            return None;
+        }
+        let legacy_result = self.move_shape.add_skill(skill_id, level, factory);
         let skill = self.move_shape.skill(skill_id)?;
         Some(PlayerRemoteSkillMutation {
             skill_id,
@@ -6369,6 +6392,11 @@ impl CPlayer {
 
     pub(crate) const fn set_script_vigour(&mut self, value: i32) -> i32 {
         self.base_properties.vigour = value as u32;
+        value
+    }
+
+    pub(crate) const fn set_script_experience(&mut self, value: i32) -> i32 {
+        self.base_properties.experience = value as u32;
         value
     }
 
