@@ -214,6 +214,13 @@ impl CCiQingSetup {
         &self.improve
     }
 
+    pub(crate) fn improve_node(&self, level: u32) -> Option<CiQingImproveNode> {
+        self.improve
+            .iter()
+            .find(|node| node.level == level)
+            .copied()
+    }
+
     pub(crate) fn add_byte_to_array(
         &self,
         destination: &mut Vec<u8>,

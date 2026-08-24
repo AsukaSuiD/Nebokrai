@@ -84,6 +84,8 @@
 //! new-object/stack ownership для caller network adapter-а. Owned CiQing
 //! containers имеют exact volumes `8/3`; compose slots удаляются по позиции.
 //! Основной CiQing delete сохраняет partial-amount семантику `DeleteGoods`.
+//! Hand mount читает exact addon `243/244`; hand consumption также сохраняет
+//! partial amount и не выдаёт reached `CGoods` projection за полный Clone.
 //! `skillmessage 0x90005` доведён до authorization и AI dispatch: feature/HP
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
@@ -116,7 +118,9 @@
 //! `0xBF720` с исключением owner-а и отражает даже zero-delta `PackExpand` log.
 
 use super::area::WarSoulPoint;
-use super::container::camountlimitgoodscontainer::CAmountLimitGoodsContainer;
+use super::container::camountlimitgoodscontainer::{
+    AmountLimitGoodsRemoved, CAmountLimitGoodsContainer,
+};
 use super::container::cbank::CBank;
 use super::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck, BattleFairyCombineRemovedInput,
@@ -144,7 +148,8 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BF_MP_ADDON, GAP_BF_POTENTIAL, GAP_BF_SKY, GAP_BF_SKY_SKILL, GAP_BF_SPRITE,
     GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISM,
     GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_POTENTIAL,
-    GAP_BF_WEAPON_LEVEL, GAP_GEM_LEVEL,
+    GAP_BF_WEAPON_LEVEL, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2, GAP_GEM_LEVEL,
+    GAP_ROLE_MINIMUM_LEVEL_LIMIT,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::{CMoveShape, MoveShapePositionFacts, MoveShapeSkill};
@@ -969,6 +974,15 @@ pub(crate) struct CiQingContainerConsumption {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingHandConsumption {
+    pub(crate) player_id: i32,
+    pub(crate) goods: super::shape::ShapeIdentity,
+    pub(crate) previous_amount: u32,
+    pub(crate) remaining_amount: u32,
+    pub(crate) removal: Option<AmountLimitGoodsRemoved>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
     figure: ShapeFigure,
@@ -1474,7 +1488,7 @@ impl CPlayer {
     ) -> (CiQingContainerAddition, Option<CGoods>) {
         let player_id = self.player_id();
         let source = goods.identity();
-        let container_extend_id = if compose_container { 2 } else { 1 };
+        let container_extend_id = if compose_container { 17 } else { 16 };
         let container = if compose_container {
             &mut self.ci_qing_compose
         } else {
@@ -1531,7 +1545,7 @@ impl CPlayer {
         let removal = self.ci_qing_compose.remove_goods(identity.ex_id)?;
         Some(CiQingContainerConsumption {
             player_id: self.player_id(),
-            container_extend_id: 2,
+            container_extend_id: 17,
             position,
             goods: identity,
             previous_amount: amount,
@@ -1563,13 +1577,56 @@ impl CPlayer {
         };
         Some(CiQingContainerConsumption {
             player_id: self.player_id(),
-            container_extend_id: 1,
+            container_extend_id: 16,
             position,
             goods: identity,
             previous_amount,
             remaining_amount,
             removal,
         })
+    }
+
+    pub(crate) fn ci_qing_hand_goods(&self) -> Option<&CGoods> {
+        self.hand.get_goods(0)
+    }
+
+    pub(crate) fn remove_ci_qing_hand_goods(&mut self) -> Option<CiQingHandConsumption> {
+        let goods = self.hand.get_goods(0)?;
+        let identity = goods.identity();
+        let previous_amount = goods.amount();
+        if previous_amount == 0 {
+            return None;
+        }
+        let remaining_amount = previous_amount.wrapping_sub(1);
+        let removal = if remaining_amount == 0 {
+            self.hand.remove_goods(identity.ex_id)
+        } else {
+            self.hand.find_mut(identity.ex_id).map(|goods| {
+                goods.set_amount(remaining_amount);
+            });
+            None
+        };
+        Some(CiQingHandConsumption {
+            player_id: self.player_id(),
+            goods: identity,
+            previous_amount,
+            remaining_amount,
+            removal,
+        })
+    }
+
+    pub(crate) fn ci_qing_mount_facts(&self, factory: &CGoodsFactory) -> Option<(u32, u32, u32)> {
+        let goods = self.ci_qing_hand_goods()?;
+        if goods.addon_property_value(factory, GAP_ROLE_MINIMUM_LEVEL_LIMIT, 1)
+            > i32::from(self.level())
+        {
+            return None;
+        }
+        Some((
+            goods.addon_property_value(factory, GAP_CIQING_PROPERTY1, 1) as u32,
+            goods.addon_property_value(factory, GAP_CIQING_PROPERTY1, 2) as u32,
+            goods.addon_property_value(factory, GAP_CIQING_PROPERTY2, 1) as u32,
+        ))
     }
 
     pub(crate) const fn contend_state(&self) -> bool {
@@ -6078,20 +6135,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00033840
 // ADDRESS: 00433840
 // PROTOTYPE: void __thiscall AddByteCiQing(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::MountCiQingFromHand
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:16180
-// RVA: 0x000338D0
-// ADDRESS: 004338d0
-// PROTOTYPE: bool __thiscall MountCiQingFromHand(ulong param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -25,6 +25,9 @@
 //! recipe payment/RNG, source deletion, unlock/query и `0xBF81B` tail.
 //! `0x8FC33` расходует `CQ0008`, удаляет одну единицу из основного CiQing
 //! container и вызывает обязательный property runtime либо шлёт отказ.
+//! `0x8FC34` читает amount до gate и ведёт hand goods через level/slot/improve
+//! проверки, chance roll, failure destruction либо native clone/mount,
+//! material consumption, property callback и `0xC0111`.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -44,7 +47,7 @@ use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
     BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
     CGame, CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
-    CiQingMakeContext, CiQingMakeReport, CiQingSetupQueryReport,
+    CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingSetupQueryReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -63,6 +66,7 @@ const QUERY_CI_QING_SETUP: u32 = 0x0008_fc30;
 const MAKE_CI_QING_NODE: u32 = 0x0008_fc31;
 const COMPOSE_CI_QING_NODE: u32 = 0x0008_fc32;
 const DELETE_CI_QING_GOODS: u32 = 0x0008_fc33;
+const MOUNT_CI_QING_FROM_HAND: u32 = 0x0008_fc34;
 
 pub(crate) trait GameGoodsMessageRuntime:
     BattleFairyCombineContext
@@ -139,6 +143,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     CiQingCompose(CiQingComposeReport),
     CiQingPositionOutOfRange { position: u32 },
     CiQingDelete(CiQingDeleteReport),
+    CiQingMount(CiQingMountReport),
 }
 
 #[must_use = "goods-message report содержит routing и полный gameplay result"]
@@ -173,6 +178,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             | MAKE_CI_QING_NODE
             | COMPOSE_CI_QING_NODE
             | DELETE_CI_QING_GOODS
+            | MOUNT_CI_QING_FROM_HAND
     ) {
         return None;
     }
@@ -374,6 +380,22 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                             ),
                     )
                 }
+            }
+        }
+        MOUNT_CI_QING_FROM_HAND => {
+            let amount = match read_long(message, "CiQing mount amount") {
+                Ok(value) => value as u32,
+                Err(error) => return Some(Err(error)),
+            };
+            if !game.ci_qing_message_enabled(player_id) {
+                GameGoodsMessageOutcome::CiQingUnavailable
+            } else {
+                GameGoodsMessageOutcome::CiQingMount(
+                    game.mount_ci_qing_from_hand(player_id, amount, runtime)
+                        .expect(
+                            "resolved message player остаётся в CGame во время synchronous dispatch",
+                        ),
+                )
             }
         }
         _ => unreachable!("opcode отфильтрован перед dispatch"),

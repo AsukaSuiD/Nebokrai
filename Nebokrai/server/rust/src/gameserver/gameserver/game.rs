@@ -155,6 +155,9 @@
 //! Delete `0x8FC33` продолжает container owner с reset-item audit/removal,
 //! удалением одной единицы, обязательным `UpdateProperty` и отказом
 //! `PLAYER001004`; position gate остаётся во входном message owner-е.
+//! Mount `0x8FC34` сохраняет read-before-gate wire, addon-driven slot/chance,
+//! failure destruction и success Clone→hand delete→CiQing add; полный native
+//! Clone остаётся обязательной runtime-границей, поскольку `CGoods` ещё partial.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -343,11 +346,11 @@ use crate::gameserver::appserver::player::{
     BattleFairySkillResetEffect, BattleFairySkillResetReport, BattleFairySummonDelivery,
     BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeDelivery,
     BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, CiQingContainerAddition,
-    CiQingContainerConsumption, CiQingPacketAddition, CiQingPacketConsumption,
-    PlayerCombatProperties, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
-    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
-    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport,
-    PlayerReliveMutation,
+    CiQingContainerConsumption, CiQingHandConsumption, CiQingPacketAddition,
+    CiQingPacketConsumption, PlayerCombatProperties, PlayerEquipmentAddEffect,
+    PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery,
+    PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
+    PlayerHonorResetReport, PlayerReliveMutation,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1146,6 +1149,9 @@ pub(crate) trait CiQingComposeContext: CiQingMakeContext {
         &mut self,
         addition: &CiQingContainerAddition,
     ) -> Vec<i32>;
+    fn publish_ci_qing_hand_consumption(&mut self, consumption: &CiQingHandConsumption)
+    -> Vec<i32>;
+    fn clone_ci_qing_hand_goods(&mut self, goods: &CGoods) -> Option<CGoods>;
     fn update_ci_qing_player_property(&mut self, game: &mut CGame, player_id: i32);
 }
 
@@ -1328,6 +1334,39 @@ pub(crate) struct CiQingDeleteReport {
     pub(crate) reset_consumptions: Vec<CiQingPacketConsumption>,
     pub(crate) goods_consumption: Option<CiQingContainerConsumption>,
     pub(crate) deliveries: Vec<CiQingDeleteDelivery>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CiQingMountOutcome {
+    Rejected,
+    Failed,
+    Mounted,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CiQingMountDelivery {
+    HandConsumption(Vec<i32>),
+    PacketConsumption(Vec<i32>),
+    ContainerAddition(Vec<i32>),
+    PropertyUpdateDispatched,
+    Player(i32),
+}
+
+#[must_use = "CiQing mount report хранит hand clone, payment, RNG и result"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingMountReport {
+    pub(crate) player_id: i32,
+    pub(crate) amount: u32,
+    pub(crate) position: Option<u32>,
+    pub(crate) chance: Option<u32>,
+    pub(crate) roll: Option<u32>,
+    pub(crate) outcome: CiQingMountOutcome,
+    pub(crate) logs: Vec<CiQingLog>,
+    pub(crate) hand_consumption: Option<CiQingHandConsumption>,
+    pub(crate) material_consumptions: Vec<CiQingPacketConsumption>,
+    pub(crate) addition: Option<CiQingContainerAddition>,
+    pub(crate) rejected_clone: Option<ShapeIdentity>,
+    pub(crate) deliveries: Vec<CiQingMountDelivery>,
 }
 
 pub(crate) trait PlayerEquipmentContext {
@@ -5013,6 +5052,152 @@ impl CGame {
             .deliveries
             .push(CiQingDeleteDelivery::PropertyUpdateDispatched);
         report.outcome = CiQingDeleteOutcome::Deleted;
+        Some(report)
+    }
+
+    pub(crate) fn mount_ci_qing_from_hand<Context: CiQingComposeContext>(
+        &mut self,
+        player_id: i32,
+        amount: u32,
+        context: &mut Context,
+    ) -> Option<CiQingMountReport> {
+        let mut report = CiQingMountReport {
+            player_id,
+            amount,
+            position: None,
+            chance: None,
+            roll: None,
+            outcome: CiQingMountOutcome::Rejected,
+            logs: Vec::new(),
+            hand_consumption: None,
+            material_consumptions: Vec::new(),
+            addition: None,
+            rejected_clone: None,
+            deliveries: Vec::new(),
+        };
+        let player = self.find_player(player_id)?;
+        let Some((position, improve_level, base_chance)) =
+            player.ci_qing_mount_facts(&self.goods_factory)
+        else {
+            return Some(report);
+        };
+        report.position = Some(position);
+        if player.ci_qing_goods(position).is_some() {
+            return Some(report);
+        }
+        let Some(node) = self.ci_qing_setup.improve_node(improve_level) else {
+            return Some(report);
+        };
+        if player.check_item_in_packet(node.base_index) < amount {
+            return Some(report);
+        }
+        let chance = base_chance
+            .wrapping_add(node.probability.wrapping_mul(amount))
+            .min(10_000);
+        let roll = game_legacy_random(&mut self.random_state, 0x2711) as u32;
+        report.chance = Some(chance);
+        report.roll = Some(roll);
+        let succeeded = roll < chance;
+        let hand_goods = self
+            .find_player(player_id)
+            .and_then(CPlayer::ci_qing_hand_goods)
+            .expect("mount facts подтверждают hand goods");
+        let hand_base_index = hand_goods.base_properties_index();
+        let cloned_hand_goods = if succeeded {
+            let Some(cloned) = context.clone_ci_qing_hand_goods(hand_goods) else {
+                return Some(report);
+            };
+            Some(cloned)
+        } else {
+            None
+        };
+
+        if !succeeded {
+            let log = CiQingLog {
+                player_id,
+                delta: -1,
+                operation: 3,
+                base_index: hand_base_index,
+                amount: 1,
+            };
+            context.record_ci_qing_log(&log);
+            report.logs.push(log);
+        }
+        if let Some(consumption) = self
+            .players
+            .get_mut(&player_id)
+            .expect("player проверен до CiQing hand removal")
+            .remove_ci_qing_hand_goods()
+        {
+            report.deliveries.push(CiQingMountDelivery::HandConsumption(
+                context.publish_ci_qing_hand_consumption(&consumption),
+            ));
+            report.hand_consumption = Some(consumption);
+        }
+
+        if succeeded {
+            let (addition, rejected) = {
+                let goods_factory = &self.goods_factory;
+                let player = self
+                    .players
+                    .get_mut(&player_id)
+                    .expect("player проверен до CiQing mounted clone add");
+                let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+                player.add_goods_to_ci_qing(
+                    cloned_hand_goods.expect("успешная ветвь проверила native Clone"),
+                    position,
+                    false,
+                    goods_factory,
+                    &mut encode,
+                )
+            };
+            if addition.resulting_amount.is_some() {
+                report
+                    .deliveries
+                    .push(CiQingMountDelivery::ContainerAddition(
+                        context.publish_ci_qing_container_addition(&addition),
+                    ));
+            }
+            report.rejected_clone = rejected.as_ref().map(CGoods::identity);
+            report.addition = Some(addition);
+            context.update_ci_qing_player_property(self, player_id);
+            report
+                .deliveries
+                .push(CiQingMountDelivery::PropertyUpdateDispatched);
+        }
+
+        let material_log = CiQingLog {
+            player_id,
+            delta: -1,
+            operation: 3,
+            base_index: node.base_index,
+            amount,
+        };
+        context.record_ci_qing_log(&material_log);
+        report.logs.push(material_log);
+        let consumptions = self
+            .players
+            .get_mut(&player_id)
+            .expect("player проверен до CiQing mount material removal")
+            .remove_item_in_packet(node.base_index, amount);
+        for consumption in consumptions {
+            report
+                .deliveries
+                .push(CiQingMountDelivery::PacketConsumption(
+                    context.publish_ci_qing_packet_consumption(&consumption),
+                ));
+            report.material_consumptions.push(consumption);
+        }
+        let mut message = CMessage::new(0x0c_0111);
+        message.add_ulong(u32::from(succeeded));
+        report.deliveries.push(CiQingMountDelivery::Player(
+            message.send_to_player(self.net_server(), player_id),
+        ));
+        report.outcome = if succeeded {
+            CiQingMountOutcome::Mounted
+        } else {
+            CiQingMountOutcome::Failed
+        };
         Some(report)
     }
 
