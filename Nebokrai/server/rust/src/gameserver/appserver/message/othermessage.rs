@@ -35,12 +35,16 @@
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
 //! Failed GameServer change `0x8FB04` условно пишет player error-log и всегда
 //! ставит concrete `QuitBySocketId`; GUI/file logger остаётся platform runtime.
+//! Script-dialog answer `0x8FB02` сохраняет player/region no-read guard,
+//! exact mode `1/-1/0`, bounded string + CRT-like `atoi` и continue/delete
+//! request к ещё не материализованному общему script-instance owner-у.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::{
     CiQingPacketConsumption, PlayerHonorEliminateMutation, PlayerLeiTingDecodeBlock,
     PlayerMoneyDecrease, PlayerTalkChannel,
 };
+use crate::gameserver::appserver::script::script::legacy_atoi;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
     CGame, GameKickPlayerReport, GameRegionClearStarted, colored_player_notice_message,
@@ -50,6 +54,7 @@ use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
 const PLAYER_CHAT_REQUEST: u32 = 0x0008_fb01;
+const PLAYER_SCRIPT_DIALOG_RESPONSE: u32 = 0x0008_fb02;
 const PLAYER_GOODS_LINK_REQUEST: u32 = 0x0008_fb03;
 const CHANGE_GAME_SERVER_FAILED: u32 = 0x0008_fb04;
 const WORLD_GOODS_LINK_RESPONSE: u32 = 0x0007_fa07;
@@ -87,6 +92,7 @@ pub(crate) enum GameOtherMessageOutcome {
         error_logged: bool,
         quit_result: i32,
     },
+    ScriptDialog(GameScriptDialogOutcome),
     ChatIgnored {
         status: i8,
     },
@@ -178,6 +184,37 @@ pub(crate) enum GameOtherMessageOutcome {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameScriptDialogOutcome {
+    MissingContext,
+    Continued {
+        script_id: i32,
+        mode: i32,
+        value: i32,
+        text: Vec<u8>,
+    },
+    Deleted {
+        script_id: i32,
+    },
+    IgnoredMode {
+        script_id: i32,
+        mode: i32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameOtherScriptAction {
+    Continue {
+        script_id: i32,
+        player_id: i32,
+        value: i32,
+    },
+    Delete {
+        script_id: i32,
+        player_id: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameOtherErrorLog {
     ChangeGameServerFailed {
         player_id: i32,
@@ -188,6 +225,7 @@ pub(crate) enum GameOtherErrorLog {
 pub(crate) trait GameOtherMessageRuntime {
     fn other_now_milliseconds(&mut self) -> u32;
     fn add_other_error_log(&mut self, event: GameOtherErrorLog);
+    fn run_other_script_action(&mut self, game: &mut CGame, action: GameOtherScriptAction);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -945,6 +983,83 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
     runtime: &mut Runtime,
 ) -> Option<Result<GameOtherMessageReport, GameOtherMessageError>> {
     let message_type = message.message_type() as u32;
+    if message_type == PLAYER_SCRIPT_DIALOG_RESPONSE {
+        message.resolve_player_context(game);
+        let player_id = message.player_id();
+        let context_present =
+            player_id
+                .zip(message.region_id())
+                .is_some_and(|(player_id, region_id)| {
+                    game.find_player(player_id).is_some() && game.find_region(region_id).is_some()
+                });
+        let Some(player_id) = player_id.filter(|_| context_present) else {
+            return Some(Ok(GameOtherMessageReport {
+                message_type,
+                player_id: player_id.unwrap_or(0),
+                outcome: GameOtherMessageOutcome::ScriptDialog(
+                    GameScriptDialogOutcome::MissingContext,
+                ),
+            }));
+        };
+        let result = (|| {
+            let script_id = read_long(message, "script dialog id")?;
+            let mode = read_long(message, "script dialog mode")?;
+            let outcome = match mode {
+                1 => {
+                    let text = message.base_mut().get_str_bytes(0x32).unwrap_or_default();
+                    let value = legacy_atoi(&text);
+                    runtime.run_other_script_action(
+                        game,
+                        GameOtherScriptAction::Continue {
+                            script_id,
+                            player_id,
+                            value,
+                        },
+                    );
+                    GameScriptDialogOutcome::Continued {
+                        script_id,
+                        mode,
+                        value,
+                        text,
+                    }
+                }
+                -1 => {
+                    runtime.run_other_script_action(
+                        game,
+                        GameOtherScriptAction::Delete {
+                            script_id,
+                            player_id,
+                        },
+                    );
+                    GameScriptDialogOutcome::Deleted { script_id }
+                }
+                0 => {
+                    let value = read_long(message, "script dialog numeric response")?;
+                    runtime.run_other_script_action(
+                        game,
+                        GameOtherScriptAction::Continue {
+                            script_id,
+                            player_id,
+                            value,
+                        },
+                    );
+                    GameScriptDialogOutcome::Continued {
+                        script_id,
+                        mode,
+                        value,
+                        text: Vec::new(),
+                    }
+                }
+                _ => GameScriptDialogOutcome::IgnoredMode { script_id, mode },
+            };
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::ScriptDialog(outcome),
+            })
+        })();
+        return Some(result);
+    }
     if message_type == CHANGE_GAME_SERVER_FAILED {
         message.resolve_player_context(game);
         let player = message.player_id().and_then(|player_id| {

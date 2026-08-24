@@ -50,7 +50,7 @@ fn visible_c_string(value: &[u8]) -> &[u8] {
     value.split(|byte| *byte == 0).next().unwrap_or_default()
 }
 
-fn legacy_atoi(value: &[u8]) -> i32 {
+pub(crate) fn legacy_atoi(value: &[u8]) -> i32 {
     let value = visible_c_string(value);
     let value = value
         .get(
