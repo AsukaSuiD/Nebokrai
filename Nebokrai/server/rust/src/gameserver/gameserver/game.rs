@@ -55,6 +55,8 @@
 //! `1000/2000` ms timeout, client prompts и World requests; успешный create
 //! callback списывает обещанные packet goods и деньги через canonical player/
 //! container effects. Общий legacy async manager заменён узкими owned maps.
+//! Script city-gate path использует существующий owned `CServerCityRegion` и
+//! `CityGateRuntimeContext`; отдельное shadow-состояние ворот не вводится.
 //! Reached `SetMe("dwVigour")` пишет поле как generic DWORD без
 //! `SetVigour` clamp, затем проводит обязательный virtual
 //! `UpdateProperty` и публикует полный player `0xBF721` через тот
@@ -545,7 +547,7 @@ use crate::gameserver::appserver::script::variablelist::{
     GameVariableSnapshotReport,
 };
 use crate::gameserver::appserver::servercityregion::{
-    CServerCityRegion, CityReturnPointContext, CityReturnPointError,
+    CServerCityRegion, CityGateRuntimeContext, CityReturnPointContext, CityReturnPointError,
 };
 use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryBattleStateBlock, CountryReturnPointContext,
@@ -8790,6 +8792,43 @@ impl CGame {
             let _ = self.send_player_packet_consumption(&consumption);
         }
         true
+    }
+
+    pub(crate) fn script_city_gate_state(&self, region_id: i32, gate_id: i32) -> i32 {
+        match self.find_region(region_id) {
+            Some(ServerRegionOwner::City(region)) => region.get_city_gate_state(gate_id),
+            _ => -1,
+        }
+    }
+
+    pub(crate) fn script_city_gate_can_close<Context: CityGateRuntimeContext>(
+        &self,
+        region_id: i32,
+        gate_id: i32,
+        context: &Context,
+    ) -> bool {
+        match self.find_region(region_id) {
+            Some(ServerRegionOwner::City(region)) => region.city_gate_is_close(gate_id, context),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn operate_script_city_gate<Context: CityGateRuntimeContext>(
+        &mut self,
+        region_id: i32,
+        gate_id: i32,
+        operation: i32,
+        context: &mut Context,
+    ) -> bool {
+        let Some(ServerRegionOwner::City(mut region)) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let operated = region.operator_city_gate(gate_id, operation, context);
+        if operated {
+            region.update_city_gate_to_client(gate_id, context);
+        }
+        self.restore_region_owner(ServerRegionOwner::City(region));
+        operated
     }
 
     /// Exact `RunScript` owner: загруженный instance получает wrapping ID и

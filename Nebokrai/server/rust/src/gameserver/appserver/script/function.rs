@@ -10,6 +10,9 @@
 //! World charge `0x7FE1E` возвращается через тот же organizing dispatcher.
 //! Declare-war `6030` держит `2000` ms operator session между World page,
 //! client selection и авторитетным result/debit, включая player GameSave.
+//! City-gate `6004/6019/6020` использует только local `CServerCityRegion`:
+//! state/footprint guards и `GS0197..GS0200` предшествуют direct mutation либо
+//! World-authorized `0x6012F`; каждый mutation публикует build update.
 //! Также материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
 //! `9354 / OpenEquipmentCompose` и `2216 / OpenGoodsUpgrade`. Refresh вычисляет первую
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
@@ -109,6 +112,7 @@ use crate::gameserver::appserver::country::country::{
     CountryExileRestTimeReport, CountryScalarMutationReport,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::servercityregion::CityGateRuntimeContext;
 use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
 };
@@ -164,8 +168,11 @@ pub(crate) const SCRIPT_FUNCTION_SET_SKILL_LEVEL: i32 = 3103;
 pub(crate) const SCRIPT_FUNCTION_CREATE_FACTION: i32 = 6001;
 pub(crate) const SCRIPT_FUNCTION_APPLY_JOIN_FACTION: i32 = 6002;
 pub(crate) const SCRIPT_FUNCTION_QUIT_JOIN_FACTION: i32 = 6003;
+pub(crate) const SCRIPT_FUNCTION_OPERATOR_CITY_GATE: i32 = 6004;
 pub(crate) const SCRIPT_FUNCTION_UPGRADE_FACTION: i32 = 6011;
 pub(crate) const SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME: i32 = 6015;
+pub(crate) const SCRIPT_FUNCTION_GET_CITY_GATE_STATE: i32 = 6019;
+pub(crate) const SCRIPT_FUNCTION_OPERATE_CITY_GATE: i32 = 6020;
 pub(crate) const SCRIPT_FUNCTION_FACTION_DECLARE_WAR: i32 = 6030;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_REGION: i32 = 2304;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
@@ -255,6 +262,7 @@ pub(crate) trait ScriptFunctionRuntime:
     + BattleFairyDeathContext
     + BattleFairySkillResetContext
     + ScriptRegionChangeContext
+    + CityGateRuntimeContext
 {
 }
 
@@ -268,6 +276,7 @@ impl<T> ScriptFunctionRuntime for T where
         + BattleFairyDeathContext
         + BattleFairySkillResetContext
         + ScriptRegionChangeContext
+        + CityGateRuntimeContext
 {
 }
 
@@ -2477,6 +2486,14 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_OPERATOR_CITY_GATE | SCRIPT_FUNCTION_OPERATE_CITY_GATE => match index {
+            0..=2 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_CITY_GATE_STATE => match index {
+            0..=1 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_DELETE_SKILL => match index {
             0 | 1 => String,
             _ => Unused,
@@ -3143,6 +3160,62 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                         let _ = request.send(game, false);
                     }
                 }
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GET_CITY_GATE_STATE => {
+            let (Some(region_id), Some(gate_id)) = (
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.script_city_gate_state(region_id, gate_id),
+            })
+        }
+        SCRIPT_FUNCTION_OPERATOR_CITY_GATE | SCRIPT_FUNCTION_OPERATE_CITY_GATE => {
+            let (Some(region_id), Some(gate_id), Some(operation)) = (
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let current_state = game.script_city_gate_state(region_id, gate_id);
+            if current_state < 0 {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let notice_id =
+                if function_id == SCRIPT_FUNCTION_OPERATOR_CITY_GATE && current_state == 2 {
+                    Some(b"GS0197".as_slice())
+                } else if operation == 1 && current_state == 1 {
+                    Some(b"GS0198".as_slice())
+                } else if operation == 0 && current_state == 0 {
+                    Some(b"GS0199".as_slice())
+                } else if operation == 1
+                    && !game.script_city_gate_can_close(region_id, gate_id, runtime)
+                {
+                    Some(b"GS0200".as_slice())
+                } else {
+                    None
+                };
+            if let Some(notice_id) = notice_id {
+                let text = game.get_string_by_id(notice_id);
+                let _ = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                    .send_to_player(game.net_server(), player_id);
+            } else if function_id == SCRIPT_FUNCTION_OPERATE_CITY_GATE {
+                let _ = game.operate_script_city_gate(region_id, gate_id, operation, runtime);
+            } else {
+                let mut request = CMessage::new(0x0006_012f);
+                request.add_long(player_id);
+                request.add_long(region_id);
+                request.add_long(gate_id);
+                request.add_long(operation);
+                let _ = request.send(game, false);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }

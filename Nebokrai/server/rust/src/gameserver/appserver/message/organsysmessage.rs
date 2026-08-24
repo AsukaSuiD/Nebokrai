@@ -17,6 +17,8 @@
 //! canonical wallet и packet-container effects живого игрока.
 //! Declare-war pages ретегируются в `0xBFF19`, selection несёт snapshot в
 //! `0x6011F`, а terminal `0x7FE19` публикует клиенту `0xBFF31` после debit.
+//! World city-gate authorization `0x7FE2A` возвращается в concrete city owner,
+//! обновляет gate/build state и отправляет исходные `GS0042/GS0043` notices.
 //!
 //! Каждый фазовый case читает ровно один signed war ID и передаёт его своему
 //! owner-у. Faction-update cases передают текущие payload/cursor соответствующему
@@ -60,6 +62,7 @@ use super::super::shape::{CShape, ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::player::{CPlayer, PlayerExploitMutationReport};
 use crate::gameserver::gameserver::game::{
     CGame, GameWarRegionHandle, ScriptRegionChangeContext, ServerRegionOwner,
+    colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
@@ -210,6 +213,7 @@ pub(crate) struct FourNationExploitDispatchReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameOrganizingWarMessageReport {
     FactionLifecycle(FactionLifecycleDispatchReport),
+    CityGate(CityGateDispatchReport),
     FactionUpdate(WarFactionUpdateDispatchReport),
     Phase(WarPhaseDispatchReport),
     FourNationPhase(FourNationPhaseDispatchReport),
@@ -219,9 +223,20 @@ pub(crate) enum GameOrganizingWarMessageReport {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameOrganizingWarMessageError {
     FactionLifecycle(FactionLifecycleDispatchError),
+    CityGate(FactionLifecycleDispatchError),
     FactionUpdate(WarFactionUpdateDispatchError),
     Phase(WarPhaseDispatchError),
     Control(OrganizingControlDispatchError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CityGateDispatchReport {
+    pub(crate) player_id: i32,
+    pub(crate) region_id: i32,
+    pub(crate) gate_id: i32,
+    pub(crate) operation: i32,
+    pub(crate) operated: bool,
+    pub(crate) notice_delivery: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -428,6 +443,7 @@ pub(crate) fn dispatch_game_organizing_war_message<
             | 0x7fe18
             | 0x7fe19
             | 0x7fe1e
+            | 0x7fe2a
             | 0x7fe1f..=0x7fe25
             | 0x7fe2f..=0x7fe33
             | 0x7fe35
@@ -438,6 +454,14 @@ pub(crate) fn dispatch_game_organizing_war_message<
             | 0x7fe46..=0x7fe4a
     ) {
         return None;
+    }
+
+    if opcode == 0x7fe2a {
+        return Some(
+            dispatch_city_gate_response(message, game, runtime)
+                .map(GameOrganizingWarMessageReport::CityGate)
+                .map_err(GameOrganizingWarMessageError::CityGate),
+        );
     }
 
     if matches!(
@@ -511,6 +535,51 @@ pub(crate) fn dispatch_game_organizing_war_message<
     };
     game.restore_war_startup_owners(owners);
     Some(result)
+}
+
+fn dispatch_city_gate_response<Runtime: GameOrganizingWarRuntime>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    runtime: &mut Runtime,
+) -> Result<CityGateDispatchReport, FactionLifecycleDispatchError> {
+    let player_id = message
+        .base_mut()
+        .get_long()
+        .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field: "player ID" })?;
+    let region_id = message
+        .base_mut()
+        .get_long()
+        .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field: "region ID" })?;
+    let gate_id = message
+        .base_mut()
+        .get_long()
+        .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field: "gate ID" })?;
+    let operation = message
+        .base_mut()
+        .get_long()
+        .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field: "operation" })?;
+    if !message.base_mut().unread_bytes().is_empty() {
+        return Err(FactionLifecycleDispatchError::InvalidPayload);
+    }
+    let operated = game.operate_script_city_gate(region_id, gate_id, operation, runtime);
+    let state = game.script_city_gate_state(region_id, gate_id);
+    let notice_id = match (operation, state) {
+        (0, 0) => Some(b"GS0042".as_slice()),
+        (1, 1) => Some(b"GS0043".as_slice()),
+        _ => None,
+    };
+    let notice_delivery = notice_id.map(|notice_id| {
+        colored_player_notice_message(0xffff_ffff, 0xffff_0000, game.get_string_by_id(notice_id))
+            .send_to_player(game.net_server(), player_id)
+    });
+    Ok(CityGateDispatchReport {
+        player_id,
+        region_id,
+        gate_id,
+        operation,
+        operated,
+        notice_delivery,
+    })
 }
 
 fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
