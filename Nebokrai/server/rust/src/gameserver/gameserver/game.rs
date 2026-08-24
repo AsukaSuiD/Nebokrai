@@ -102,6 +102,9 @@
 //! packets, regional notices и одноразовый YuYingShi через concrete `AddNpc`.
 //! Script-facing carriage return отдельно сохраняет saturating treasure-box
 //! count, wrapping morale bonus и немедленный regional `0xBF818` snapshot.
+//! Nation contend проходит через те же canonical player/region owners: enter,
+//! cancel, damage и AI timeout исполняют `0xBFF29`, localized notices, захват
+//! с morale/top-info и три concrete treasure-box `AddNpc` в исходном порядке.
 //! CountryWar `0x7FF17..0x7FF22` продолжает тот же lifecycle: мутирует
 //! country-region phases/results, выполняет clear через concrete runtime и
 //! переиспользует входной message для all/country-filtered client broadcast.
@@ -269,8 +272,10 @@ use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion,
 };
 use crate::gameserver::appserver::servernationregion::{
-    NationCarriageReturnOutcome, NationMonsterDamageNotice, NationMoraleMutation,
-    ServerNationRegion, classify_nation_morale_target,
+    NationCarriageReturnOutcome, NationContend, NationContendArithmeticBlock,
+    NationContendCancelOutcome, NationContendCaptureMutation, NationContendDamageMutation,
+    NationMonsterDamageNotice, NationMoraleMutation, ServerNationRegion,
+    classify_nation_morale_target,
 };
 use crate::gameserver::appserver::serverregion::{
     CServerRegion, RegionMembershipBlock, ServerRegionNpcContext, ServerRegionNpcSetup,
@@ -998,6 +1003,10 @@ pub(crate) trait NationCombatContext: ServerRegionNpcContext {
     fn put_debug_string(&mut self, text: &[u8]);
 }
 
+pub(crate) trait NationContendContext: NationCombatContext {
+    fn run_base_region_ai(&mut self, region: &mut CServerRegion);
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NationMonsterDamageOutcome {
     AttackerMissing,
@@ -1026,6 +1035,58 @@ pub(crate) struct NationCarriageReturnReport {
     pub(crate) requested_country: i32,
     pub(crate) outcome: NationCarriageReturnOutcome,
     pub(crate) morale_delivery: Option<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NationContendEnterOutcome {
+    PlayerMissing,
+    PlayerUnavailable,
+    CountryAlreadyOwnsSymbol,
+    CountryContenderExists { contender_player_id: i32 },
+    Entered { first_for_country: bool },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationContendEnterReport {
+    pub(crate) region_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) outcome: NationContendEnterOutcome,
+    pub(crate) deliveries: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationContendCancelReport {
+    pub(crate) region_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) outcome: Option<NationContendCancelOutcome>,
+    pub(crate) delivery: Option<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationContendDamageReport {
+    pub(crate) region_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) mutation: Result<Option<NationContendDamageMutation>, NationContendArithmeticBlock>,
+    pub(crate) delivery: Option<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NationContendCompletionOutcome {
+    PlayerMissing,
+    PlayerUnavailable,
+    CountryOutsideNation,
+    Captured(NationContendCaptureMutation),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationContendAiReport {
+    pub(crate) region_id: i32,
+    pub(crate) progress_deliveries: Vec<(i32, i32, i32)>,
+    pub(crate) completed: Option<NationContend>,
+    pub(crate) completion_outcome: Option<NationContendCompletionOutcome>,
+    pub(crate) completion_deliveries: Vec<i32>,
+    pub(crate) top_info_delivery: Option<Result<i32, SendMessageError>>,
+    pub(crate) treasure_spawns: Vec<Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2164,6 +2225,384 @@ impl CGame {
             outcome,
             morale_delivery,
         })
+    }
+
+    pub(crate) fn nation_enter_contend<Context: NationCombatContext>(
+        &mut self,
+        region_id: i32,
+        player_id: i32,
+        max_time: u32,
+        context: &mut Context,
+    ) -> Option<NationContendEnterReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Nation(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let mut deliveries = Vec::new();
+        let outcome = match self.find_player(player_id) {
+            None => NationContendEnterOutcome::PlayerMissing,
+            Some(player) if !player.can_attack_nation_monster() => {
+                NationContendEnterOutcome::PlayerUnavailable
+            }
+            Some(player) => {
+                let country = player.country();
+                if region.flag_belong_to_id() == i32::from(country) {
+                    deliveries.push(
+                        self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS1130")),
+                    );
+                    NationContendEnterOutcome::CountryAlreadyOwnsSymbol
+                } else if let Some(contender_player_id) =
+                    region.contender_for_country(i32::from(country))
+                {
+                    if let Some(contender) = self.find_player(contender_player_id) {
+                        let text = format_legacy_text_fields(
+                            self.get_string_by_id(b"GS1131"),
+                            &[contender.shape().base_object().get_name()],
+                            0xff,
+                        );
+                        deliveries.push(self.send_nation_player_notice(player_id, &text));
+                        NationContendEnterOutcome::CountryContenderExists {
+                            contender_player_id,
+                        }
+                    } else {
+                        self.finish_nation_contend_entry(
+                            &mut region,
+                            player_id,
+                            country,
+                            max_time,
+                            context,
+                            &mut deliveries,
+                        )
+                    }
+                } else {
+                    self.finish_nation_contend_entry(
+                        &mut region,
+                        player_id,
+                        country,
+                        max_time,
+                        context,
+                        &mut deliveries,
+                    )
+                }
+            }
+        };
+        self.restore_region_owner(ServerRegionOwner::Nation(region));
+        Some(NationContendEnterReport {
+            region_id,
+            player_id,
+            outcome,
+            deliveries,
+        })
+    }
+
+    pub(crate) fn nation_cancel_contend_by_player_id(
+        &mut self,
+        region_id: i32,
+        player_id: i32,
+    ) -> Option<NationContendCancelReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Nation(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let (outcome, delivery) = if self.find_player(player_id).is_none() {
+            (None, None)
+        } else {
+            let outcome = region.cancel_contend_by_player_id(player_id);
+            let delivery = matches!(outcome, NationContendCancelOutcome::MissingReset).then(|| {
+                if let Some(player) = self.find_player_mut(player_id) {
+                    player.set_contend_state_snapshot(false);
+                }
+                self.send_nation_contend_time(player_id, 0)
+            });
+            (Some(outcome), delivery)
+        };
+        self.restore_region_owner(ServerRegionOwner::Nation(region));
+        Some(NationContendCancelReport {
+            region_id,
+            player_id,
+            outcome,
+            delivery,
+        })
+    }
+
+    pub(crate) fn nation_cancel_all_contenders(&mut self, region_id: i32) -> Option<Vec<i32>> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Nation(region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let mut deliveries = Vec::new();
+        for player_id in region.contender_player_ids() {
+            deliveries.push(self.send_nation_contend_time(player_id, 0));
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_contend_state_snapshot(false);
+            }
+        }
+        self.restore_region_owner(ServerRegionOwner::Nation(region));
+        Some(deliveries)
+    }
+
+    fn finish_nation_contend_entry<Context: NationCombatContext>(
+        &mut self,
+        region: &mut ServerNationRegion,
+        player_id: i32,
+        country: u8,
+        max_time: u32,
+        context: &mut Context,
+        deliveries: &mut Vec<i32>,
+    ) -> NationContendEnterOutcome {
+        if matches!(
+            region.cancel_contend_by_player_id(player_id),
+            NationContendCancelOutcome::MissingReset
+        ) {
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_contend_state_snapshot(false);
+            }
+            deliveries.push(self.send_nation_contend_time(player_id, 0));
+        }
+        let first_for_country = region.add_contend(
+            player_id,
+            i32::from(country),
+            max_time as i32,
+            context.now_milliseconds(),
+        );
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_contend_state_snapshot(true);
+        }
+        deliveries.push(self.send_nation_contend_time(player_id, 0));
+        if first_for_country && (1..=4).contains(&country) {
+            let text = format_legacy_text_fields(
+                self.get_string_by_id(b"GS1133"),
+                &[region.country_name(country)],
+                0xff,
+            );
+            deliveries.push(
+                nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
+                    .send_to_region(Some(&region.war.base), None, self),
+            );
+        }
+        deliveries
+            .push(self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS1132")));
+        NationContendEnterOutcome::Entered { first_for_country }
+    }
+
+    pub(crate) fn nation_contender_damaged(
+        &mut self,
+        region_id: i32,
+        player_id: i32,
+        damage: i32,
+    ) -> Option<NationContendDamageReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Nation(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let mutation = match self.find_player(player_id) {
+            Some(player) if player.can_attack_nation_monster() => region.damage_contender(
+                player_id,
+                damage,
+                player.maximum_health(),
+                self.globe_setup.contend_damage_time_factor(),
+            ),
+            _ => Ok(None),
+        };
+        let delivery = mutation.as_ref().ok().and_then(|mutation| {
+            mutation.map(|mutation| self.send_nation_contend_time(player_id, mutation.percentage))
+        });
+        self.restore_region_owner(ServerRegionOwner::Nation(region));
+        Some(NationContendDamageReport {
+            region_id,
+            player_id,
+            mutation,
+            delivery,
+        })
+    }
+
+    pub(crate) fn nation_contend_ai<Context: NationContendContext>(
+        &mut self,
+        region_id: i32,
+        context: &mut Context,
+    ) -> Option<Result<NationContendAiReport, NationContendArithmeticBlock>> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Nation(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        context.run_base_region_ai(&mut region.war.base);
+        let advance = match region.advance_contenders(context.now_milliseconds()) {
+            Ok(advance) => advance.unwrap_or_default(),
+            Err(error) => {
+                self.restore_region_owner(ServerRegionOwner::Nation(region));
+                return Some(Err(error));
+            }
+        };
+        let mut progress_deliveries = Vec::with_capacity(advance.progress.len());
+        for (player_id, percentage) in advance.progress {
+            let delivery = self.send_nation_contend_time(player_id, percentage);
+            progress_deliveries.push((player_id, percentage, delivery));
+        }
+
+        let completed = advance.completed;
+        let mut completion_outcome = None;
+        let mut completion_deliveries = Vec::new();
+        let mut top_info_delivery = None;
+        let mut treasure_spawns = Vec::new();
+        if let Some(contender) = completed {
+            completion_deliveries.push(self.send_nation_contend_time(contender.player_id, 100));
+            context.add_log_text(self.get_string_by_id(b"GS1072"));
+            completion_outcome = Some(match self.find_player(contender.player_id) {
+                None => NationContendCompletionOutcome::PlayerMissing,
+                Some(player) if !player.can_attack_nation_monster() => {
+                    NationContendCompletionOutcome::PlayerUnavailable
+                }
+                Some(player) => {
+                    let country = player.country();
+                    match region.capture_contend_symbol(country) {
+                        None => NationContendCompletionOutcome::CountryOutsideNation,
+                        Some(capture) => {
+                            for cancelled_player_id in &capture.cancelled_player_ids {
+                                completion_deliveries
+                                    .push(self.send_nation_contend_time(*cancelled_player_id, 0));
+                                if let Some(player) = self.find_player_mut(*cancelled_player_id) {
+                                    player.set_contend_state_snapshot(false);
+                                }
+                            }
+                            context.add_log_text(self.get_string_by_id(b"GS1073"));
+                            completion_deliveries.push(
+                                self.four_nation_morale_snapshot(
+                                    *region.morale(),
+                                    *region.nation_failed(),
+                                )
+                                .send_to_region(
+                                    Some(&region.war.base),
+                                    None,
+                                    self,
+                                ),
+                            );
+                            completion_deliveries.push(
+                                nation_colored_text_message(
+                                    0xbf806,
+                                    0xffff_ffff,
+                                    0xffff_0000,
+                                    &format_legacy_text_fields(
+                                        self.get_string_by_id(b"GS1082"),
+                                        &[region.country_name(country)],
+                                        0xff,
+                                    ),
+                                )
+                                .send_to_region(
+                                    Some(&region.war.base),
+                                    None,
+                                    self,
+                                ),
+                            );
+                            let mut top = CMessage::new(0xbf804);
+                            top.add_long(0);
+                            top.add_long(-1);
+                            top.add_long(1);
+                            top.add_long(1);
+                            add_legacy_c_string(
+                                top.base_mut(),
+                                &format_legacy_text_fields(
+                                    self.get_string_by_id(b"GS1083"),
+                                    &[region.country_name(country)],
+                                    0xff,
+                                ),
+                            );
+                            top_info_delivery = Some(top.send_all(self.current_net_server()));
+                            for (name_id, script, x, y) in [
+                                (
+                                    b"GS1025".as_slice(),
+                                    b"scripts/npc/npc_siguobaoxiang_01.script".as_slice(),
+                                    0xfb,
+                                    0x102,
+                                ),
+                                (
+                                    b"GS1190".as_slice(),
+                                    b"scripts/npc/npc_siguobaoxiang_02.script".as_slice(),
+                                    0xf6,
+                                    0xfd,
+                                ),
+                                (
+                                    b"GS1189".as_slice(),
+                                    b"scripts/npc/npc_siguobaoxiang_03.script".as_slice(),
+                                    0xfb,
+                                    0xf9,
+                                ),
+                            ] {
+                                treasure_spawns.push(self.spawn_nation_treasure_box(
+                                    &mut region,
+                                    name_id,
+                                    script,
+                                    x,
+                                    y,
+                                    context,
+                                ));
+                            }
+                            NationContendCompletionOutcome::Captured(capture)
+                        }
+                    }
+                }
+            });
+            region.clear_contenders();
+        }
+        self.restore_region_owner(ServerRegionOwner::Nation(region));
+        Some(Ok(NationContendAiReport {
+            region_id,
+            progress_deliveries,
+            completed,
+            completion_outcome,
+            completion_deliveries,
+            top_info_delivery,
+            treasure_spawns,
+        }))
+    }
+
+    fn spawn_nation_treasure_box<Context: NationCombatContext>(
+        &self,
+        region: &mut ServerNationRegion,
+        name_id: &[u8],
+        script: &[u8],
+        x: i32,
+        y: i32,
+        context: &mut Context,
+    ) -> Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock> {
+        let setup = ServerRegionNpcSetup {
+            show_list: true,
+            picture_id: 0x104,
+            left: x,
+            top: y,
+            right: x,
+            bottom: y,
+            count: 1,
+            direction: -1,
+            time: 3_600_000,
+            name: self.get_string_by_id(name_id).to_vec(),
+            script: script.to_vec(),
+        };
+        let (area_width, area_height) = self.area_dimensions();
+        region.war.base.add_npc(
+            &setup,
+            true,
+            true,
+            context.now_milliseconds(),
+            area_width,
+            area_height,
+            context,
+        )
+    }
+
+    fn send_nation_contend_time(&self, player_id: i32, percentage: i32) -> i32 {
+        let mut message = CMessage::new(0xbff29);
+        message.add_long(percentage);
+        message.send_to_player(self.net_server(), player_id)
+    }
+
+    fn send_nation_player_notice(&self, player_id: i32, text: &[u8]) -> i32 {
+        nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, text)
+            .send_to_player(self.net_server(), player_id)
     }
 
     /// Reached `CMonster::OnBeenHurted` branch: только player damage (`400`)

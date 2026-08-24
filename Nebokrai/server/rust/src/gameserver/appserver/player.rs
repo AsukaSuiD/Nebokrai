@@ -2885,6 +2885,10 @@ impl CPlayer {
         self.base_properties.health
     }
 
+    pub(crate) const fn maximum_health(&self) -> u32 {
+        self.combat_properties.maximum_hp
+    }
+
     pub(crate) const fn mana(&self) -> u32 {
         self.base_properties.mana
     }

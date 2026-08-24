@@ -12,7 +12,9 @@
 //! lookup-семантика совпадает, а недоказанный bucket-order не выдаётся
 //! за gameplay-контракт. First-hit guard state, morale mutation и одноразовый
 //! YuYingShi gate также принадлежат этому owner-у; создание NPC и сетевые
-//! side effects выполняет достигнутый `CGame` caller.
+//! side effects выполняет достигнутый `CGame` caller. Собственный ordered
+//! contend-list сохраняет early-remove quirk, damage/AI timer arithmetic и
+//! захват Алтаря; player flags, сообщения и treasure NPC остаются у caller-а.
 
 use super::organizingsystem::fournationwarsys::FourNationRect;
 use super::serverregion::ServerRegionDecodeError;
@@ -22,6 +24,8 @@ use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegion
 pub(crate) struct ServerNationRegion {
     pub(crate) war: CServerWarRegion,
     country_names: [Vec<u8>; 5],
+    flag_belong_to_id: i32,
+    contenders: Vec<NationContend>,
     relive_rects: [FourNationRect; 5],
     morale: [i32; 5],
     lost_morale: [i32; 5],
@@ -42,6 +46,8 @@ impl Default for ServerNationRegion {
         Self {
             war: CServerWarRegion::default(),
             country_names: std::array::from_fn(|_| Vec::new()),
+            flag_belong_to_id: 0,
+            contenders: Vec::new(),
             relive_rects: [FourNationRect::default(); 5],
             morale: [1000; 5],
             lost_morale: [0; 5],
@@ -109,6 +115,47 @@ pub(crate) enum NationCarriageReturnOutcome {
     CountryOutsideNation,
     NationFailed,
     Applied(NationCarriageReturnMutation),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct NationContend {
+    pub(crate) player_id: i32,
+    pub(crate) country_id: i32,
+    pub(crate) current_time: i32,
+    pub(crate) max_time: i32,
+    pub(crate) start_time_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NationContendCancelOutcome {
+    Removed { legacy_return: Option<bool> },
+    MissingReset,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NationContendDamageMutation {
+    pub(crate) player_id: i32,
+    pub(crate) current_time: i32,
+    pub(crate) percentage: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NationContendArithmeticBlock {
+    pub(crate) current_time: i32,
+    pub(crate) max_time: i32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct NationContendAdvance {
+    pub(crate) progress: Vec<(i32, i32)>,
+    pub(crate) completed: Option<NationContend>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationContendCaptureMutation {
+    pub(crate) country: u8,
+    pub(crate) morale: i32,
+    pub(crate) cancelled_player_ids: Vec<i32>,
 }
 
 pub(crate) fn classify_nation_morale_target(
@@ -228,6 +275,7 @@ impl ServerNationRegion {
     /// Exact materialized subset `OnWarDeclare`: regional timing and combat
     /// counters start empty; signup counts сам owner в этой функции не читает.
     pub(crate) fn reset_for_war_declare(&mut self) {
+        self.flag_belong_to_id = 0;
         self.player_war_times.clear();
         self.lost_morale.fill(0);
         self.nation_failed.fill(false);
@@ -244,6 +292,7 @@ impl ServerNationRegion {
     /// Exact materialized prefix `OnRefreshRegion`: morale всех five slots
     /// становится 1000, failed flags и regional timing очищаются.
     pub(crate) fn reset_for_region_refresh(&mut self) {
+        self.flag_belong_to_id = 0;
         self.player_war_times.clear();
         self.morale.fill(1000);
         self.lost_morale.fill(0);
@@ -350,6 +399,7 @@ impl ServerNationRegion {
     /// Materialized subset final reset-loop `OnWarEnd`: все пять slots,
     /// включая unused index 0, обнуляются после award pass.
     pub(crate) fn reset_materialized_war_state(&mut self) {
+        self.flag_belong_to_id = 0;
         self.lost_morale.fill(0);
         self.nation_failed.fill(false);
         self.magic_stone_attacked.fill(false);
@@ -454,6 +504,143 @@ impl ServerNationRegion {
         })
     }
 
+    pub(crate) const fn flag_belong_to_id(&self) -> i32 {
+        self.flag_belong_to_id
+    }
+
+    pub(crate) fn contender_for_country(&self, country: i32) -> Option<i32> {
+        self.contenders
+            .iter()
+            .find(|contender| contender.country_id == country)
+            .map(|contender| contender.player_id)
+    }
+
+    pub(crate) fn contender_player_ids(&self) -> Vec<i32> {
+        self.contenders
+            .iter()
+            .map(|contender| contender.player_id)
+            .collect()
+    }
+
+    /// Найденная запись в EXE удаляется ранним return до player flag и
+    /// `0xBFF29(0)`; возвращаемый машинный `AL` в этой ветви не определён.
+    pub(crate) fn cancel_contend_by_player_id(
+        &mut self,
+        player_id: i32,
+    ) -> NationContendCancelOutcome {
+        if let Some(index) = self
+            .contenders
+            .iter()
+            .position(|contender| contender.player_id == player_id)
+        {
+            self.contenders.remove(index);
+            NationContendCancelOutcome::Removed {
+                legacy_return: None,
+            }
+        } else {
+            NationContendCancelOutcome::MissingReset
+        }
+    }
+
+    pub(crate) fn add_contend(
+        &mut self,
+        player_id: i32,
+        country_id: i32,
+        max_time: i32,
+        start_time_ms: u32,
+    ) -> bool {
+        let first_for_country = self.contender_for_country(country_id).is_none();
+        self.contenders.push(NationContend {
+            player_id,
+            country_id,
+            current_time: 0,
+            max_time,
+            start_time_ms,
+        });
+        first_for_country
+    }
+
+    pub(crate) fn damage_contender(
+        &mut self,
+        player_id: i32,
+        damage: i32,
+        maximum_health: u32,
+        damage_time_factor: f32,
+    ) -> Result<Option<NationContendDamageMutation>, NationContendArithmeticBlock> {
+        if damage <= 0 || maximum_health == 0 {
+            return Ok(None);
+        }
+        let Some(contender) = self
+            .contenders
+            .iter_mut()
+            .find(|contender| contender.player_id == player_id)
+        else {
+            return Ok(None);
+        };
+        // EXE сначала сохраняет `damage / maxHP * factor` в binary32, затем
+        // умножает exact signed maxTime в x87 и `fistp` с RC=11 (truncate).
+        let scaled_ratio = ((f64::from(damage) / f64::from(maximum_health))
+            * f64::from(damage_time_factor)) as f32;
+        let decrease = x87_i32_times_f32_truncating(contender.max_time, scaled_ratio);
+        contender.current_time = contender.current_time.wrapping_sub(decrease).max(0);
+        let percentage = contend_percentage(contender.current_time, contender.max_time)?;
+        Ok(Some(NationContendDamageMutation {
+            player_id,
+            current_time: contender.current_time,
+            percentage,
+        }))
+    }
+
+    pub(crate) fn advance_contenders(
+        &mut self,
+        now_ms: u32,
+    ) -> Result<Option<NationContendAdvance>, NationContendArithmeticBlock> {
+        if self.contenders.is_empty() {
+            return Ok(None);
+        }
+        let mut advance = NationContendAdvance::default();
+        for contender in &mut self.contenders {
+            let elapsed = now_ms.wrapping_sub(contender.start_time_ms);
+            let candidate = (contender.current_time as u32).wrapping_add(elapsed);
+            if candidate >= contender.max_time as u32 {
+                advance.completed = Some(*contender);
+                return Ok(Some(advance));
+            }
+            if elapsed > 999 {
+                contender.current_time = contender.current_time.wrapping_add(elapsed as i32);
+                contender.start_time_ms = now_ms;
+                let percentage = contend_percentage(contender.current_time, contender.max_time)?;
+                advance.progress.push((contender.player_id, percentage));
+            }
+        }
+        Ok(Some(advance))
+    }
+
+    pub(crate) fn capture_contend_symbol(
+        &mut self,
+        country: u8,
+    ) -> Option<NationContendCaptureMutation> {
+        let country_index = usize::from(country);
+        if !(1..=4).contains(&country_index) {
+            return None;
+        }
+        self.flag_belong_to_id = i32::from(country);
+        self.morale[country_index] = self.morale[country_index].wrapping_add(200);
+        Some(NationContendCaptureMutation {
+            country,
+            morale: self.morale[country_index],
+            cancelled_player_ids: self
+                .contenders
+                .iter()
+                .map(|contender| contender.player_id)
+                .collect(),
+        })
+    }
+
+    pub(crate) fn clear_contenders(&mut self) {
+        self.contenders.clear();
+    }
+
     /// Exact `OnMonsterDamage` first-hit pass. Проверка четырёх stone needles
     /// сохраняет исходный порядок и странность EXE: gate выбирается по needle,
     /// а установленный флаг — по race атакованного monster-а.
@@ -541,6 +728,74 @@ impl ServerNationRegion {
         }
         self.yu_ying_shi_added[country] = true;
         true
+    }
+}
+
+fn contend_percentage(
+    current_time: i32,
+    max_time: i32,
+) -> Result<i32, NationContendArithmeticBlock> {
+    if max_time == 0 {
+        return Ok(0);
+    }
+    current_time
+        .wrapping_mul(100)
+        .checked_div(max_time)
+        .ok_or(NationContendArithmeticBlock {
+            current_time,
+            max_time,
+        })
+}
+
+fn x87_i32_times_f32_truncating(value: i32, coefficient: f32) -> i32 {
+    let bits = coefficient.to_bits();
+    let exponent = (bits >> 23) & 0xff;
+    let fraction = bits & 0x7f_ffff;
+    if exponent == 0xff {
+        return i32::MIN;
+    }
+    if exponent == 0 && fraction == 0 || value == 0 {
+        return 0;
+    }
+    let significand = if exponent == 0 {
+        u128::from(fraction)
+    } else {
+        u128::from((1 << 23) | fraction)
+    };
+    let binary_exponent = if exponent == 0 {
+        -149
+    } else {
+        exponent as i32 - 150
+    };
+    let product = u128::from(value.unsigned_abs()) * significand;
+    let magnitude = if binary_exponent >= 0 {
+        let shift = binary_exponent as u32;
+        if shift >= u128::BITS || product > (u128::MAX >> shift) {
+            u128::MAX
+        } else {
+            product << shift
+        }
+    } else {
+        let shift = -binary_exponent as u32;
+        if shift >= u128::BITS {
+            0
+        } else {
+            product >> shift
+        }
+    };
+    let negative = value.is_negative() ^ (bits >> 31 != 0);
+    let limit = if negative {
+        1_u128 << 31
+    } else {
+        i32::MAX as u128
+    };
+    if magnitude > limit {
+        return i32::MIN;
+    }
+    if negative {
+        (-(magnitude as i64)) as i32
+    } else {
+        magnitude as i32
     }
 }
 

@@ -10,7 +10,8 @@
 //! create-role limit остаётся signed `i16`, country names/identities и special
 //! string — fixed C-строки, auction/JJC/DbMisc поля читаются из общего snapshot.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
-//! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`.
+//! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Nation contender damage
+//! читает подтверждённый `fDecTimeParam +0x568` из того же snapshot.
 
 use crate::setup::regionrouter::{
     RegionRouter, RegionRouterDecodeError, RegionRouterDecodeReport, RegionRouterSerializeError,
@@ -52,6 +53,7 @@ const GOODS_AI_OFFSET: usize = 0xC4C;
 const DA_KONG_KEY_OFFSET: usize = 0xC85;
 const AREA_WIDTH_OFFSET: usize = 0x514;
 const AREA_HEIGHT_OFFSET: usize = 0x518;
+const CONTEND_DAMAGE_TIME_FACTOR_OFFSET: usize = 0x568;
 const MAX_FETCH_POWER_OFFSET: usize = 0x900;
 const BATTLE_FAIRY_ENABLED_OFFSET: usize = 0x904;
 
@@ -322,6 +324,10 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn area_height(&self) -> i32 {
         self.read_i32(AREA_HEIGHT_OFFSET)
+    }
+
+    pub(crate) fn contend_damage_time_factor(&self) -> f32 {
+        self.read_f32(CONTEND_DAMAGE_TIME_FACTOR_OFFSET)
     }
 
     /// `lMaxFetchPower +0x900`: `CPlayer::SetFetchPower` сравнивает его
