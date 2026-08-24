@@ -9,6 +9,10 @@
 //! до server-trusted change-appellation script boundary. Client timing
 //! `0x8FA12/13/1A` замыкает quest countdown, heartbeat acknowledgement и exact
 //! 16-byte Windows `SYSTEMTIME`; wall/local clocks остаются runtime owner-ом.
+//! Player item-use `0x8FA04` замыкает outer progress/death guard, packet slot,
+//! region forbidden goods и `CanUseItem`, mount/change-body ветви, полный
+//! consumable-addon loop, skill/player combat mutations, recall/script/state
+//! runtime boundaries и terminal `0xBF709/0xC0101/0xC0102` расход.
 //! Общий outer guard сохраняет исходный запрет player-message во время смены
 //! сервера/региона; `0x8FA02` вызывает полный reached `CPlayer::OnRelive(0)`
 //! через concrete `CGame` relive owner со всеми state/region/wire effects.
@@ -31,15 +35,23 @@
 //! strict grace-minute comparison, addon mutation и around `0xBF928`.
 //! Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_EQUIP_STATE;
+use crate::gameserver::appserver::cs2ccontainerobjectamountchange::CS2CContainerObjectAmountChange;
+use crate::gameserver::appserver::cs2ccontainerobjectmove::{
+    CS2CContainerObjectMove, ContainerObjectMoveOperation,
+};
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+    GAP_CHANGEBODY_TYPE, GAP_EQUIP_STATE, GAP_MOUNT_LEVEL, GAP_MOUNT_PLAYER_ROLE_LIMIT,
+    GAP_MOUNT_TYPE, GAP_SKILL_ID, GAP_SKILL_LEVEL, GAP_UNLIMITED_ACCESS, GOODS_TYPE_CONSUMABLE,
+};
 use crate::gameserver::appserver::player::{
-    PlayerFriendAddOutcome, PlayerPkPermissionMutation, PlayerProgress,
+    CiQingPacketConsumption, PlayerFriendAddOutcome, PlayerPkPermissionMutation, PlayerProgress,
     PlayerStatAllocationMutation,
 };
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, PlayerReliveContext, PlayerReliveReport,
     PlayerTradeAbortReport, PlayerTradeReadyReport, colored_player_notice_message,
+    format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -47,6 +59,7 @@ use crate::public::guid::CGuid;
 const ALLOCATE_STAT_POINT: u32 = 0x0008_fa01;
 const REQUEST_RELIVE: u32 = 0x0008_fa02;
 const INTERACT_WITH_NPC: u32 = 0x0008_fa03;
+const USE_PACKET_ITEM: u32 = 0x0008_fa04;
 const SET_PK_PERMISSION: u32 = 0x0008_fa05;
 const REQUEST_TRADE: u32 = 0x0008_fa06;
 const ANSWER_TRADE: u32 = 0x0008_fa07;
@@ -64,6 +77,8 @@ const QUERY_HONOR_IDENTITY: u32 = 0x0008_fa17;
 const REQUEST_CHANGE_APPELLATION: u32 = 0x0008_fa18;
 const QUERY_LOCAL_TIME: u32 = 0x0008_fa1a;
 const CLAIM_LEI_TING_REWARD: u32 = 0x0008_fa19;
+
+pub(crate) const PLAYER_ITEM_BLOCKING_SKILL_IDS: [u32; 7] = [103, 115, 124, 221, 118, 402, 504];
 
 const LEI_TING_REWARD_SCRIPTS: [&[u8]; 9] = [
     b"scripts/goods/leilifengxing_lingqu_20.script",
@@ -107,6 +122,95 @@ pub(crate) trait GamePlayerMessageRuntime:
         &mut self,
         local: PlayerPackedLocalTime,
     ) -> Option<f64>;
+
+    /// Snapshot отсутствующего `CState`/timer/setup owner-а до item mutation;
+    /// blocking state проверяет ordered `PLAYER_ITEM_BLOCKING_SKILL_IDS`.
+    fn player_item_use_facts(&mut self, game: &CGame, player_id: i32) -> PlayerItemUseFacts;
+
+    /// Точный `CChangeBodyConf` lookup для уже разрешённого packet goods.
+    fn player_item_body_change_conflict(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+        goods_base_index: u32,
+    ) -> bool;
+
+    /// Исполняет только ещё не owned concrete state/skill/script/relocation
+    /// owner; container/player scalars и wire хвост остаются у dispatcher-а.
+    fn apply_player_item_runtime_effect(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        effect: PlayerItemRuntimeEffect,
+    ) -> PlayerItemRuntimeResult;
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerItemUseFacts {
+    pub(crate) blocking_skill_state: bool,
+    pub(crate) state_110000_exists: bool,
+    pub(crate) change_body_state_exists: bool,
+    pub(crate) change_body_check_passed: bool,
+    pub(crate) fight_state_count: i32,
+    pub(crate) mount_state_exists: bool,
+    pub(crate) contend_use_forbidden: bool,
+    pub(crate) forbid_return_level: i32,
+    pub(crate) tick_ms: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerItemRuntimeEffect {
+    EndState(u32),
+    RestoreHp {
+        amount: u32,
+        delay_ms: u32,
+        step_ms: u32,
+    },
+    RestoreMp {
+        amount: u32,
+        delay_ms: u32,
+        step_ms: u32,
+    },
+    Mount {
+        mount_type: u32,
+        level: u32,
+        role_limit: u32,
+        goods_name: Vec<u8>,
+    },
+    RecallToReturnPoint,
+    RecallInsideRegion,
+    RunGoodsScript {
+        path: Vec<u8>,
+        goods_id: CGuid,
+        goods_name: Vec<u8>,
+    },
+    SkillWire {
+        skill_id: u32,
+    },
+    CheckReuseSkillItem {
+        goods_id: CGuid,
+        skill_id: u32,
+    },
+    PrepareReuseSkillItem {
+        slot: u8,
+        goods_id: CGuid,
+        skill_id: u32,
+        skill_level: i32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerItemSkillWire {
+    pub(crate) value_84: u32,
+    pub(crate) value_70: u16,
+    pub(crate) value_74: u16,
+    pub(crate) value_78: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerItemRuntimeResult {
+    pub(crate) applied: bool,
+    pub(crate) skill_wire: Option<PlayerItemSkillWire>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,6 +241,9 @@ pub(crate) enum GamePlayerMessageOutcome {
     NpcInteractionTooFar,
     NpcInteractionScriptSuppressed,
     NpcInteractionScriptRequested,
+    ItemUseBlocked,
+    ItemUseRejected,
+    ItemUsed,
     PkPermissionSet,
     Relived,
     PlayerScriptRun,
@@ -182,6 +289,11 @@ pub(crate) struct GamePlayerMessageReport {
     pub(crate) npc_distance: Option<i32>,
     pub(crate) npc_script_file: Vec<u8>,
     pub(crate) npc_script_data_present: Option<bool>,
+    pub(crate) item_slot: Option<u8>,
+    pub(crate) item_goods_id: Option<CGuid>,
+    pub(crate) item_can_use_result: Option<i32>,
+    pub(crate) item_consumption: Option<CiQingPacketConsumption>,
+    pub(crate) item_effects: Vec<i32>,
     pub(crate) pk_permission: Option<PlayerPkPermissionMutation>,
     pub(crate) friend_name: Vec<u8>,
     pub(crate) lei_ting_reward: Option<u16>,
@@ -208,6 +320,89 @@ fn add_c_string(message: &mut CMessage, value: &[u8]) {
 fn send_trade_notice(game: &CGame, player_id: i32, string_id: &[u8]) -> i32 {
     colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(string_id))
         .send_to_player(game.net_server(), player_id)
+}
+
+fn send_item_notice(
+    game: &CGame,
+    player_id: i32,
+    string_id: &[u8],
+    arguments: &[&[u8]],
+    secondary_color: u32,
+) -> i32 {
+    let text = format_legacy_text_fields(game.get_string_by_id(string_id), arguments, 0xff);
+    colored_player_notice_message(0xffff_ffff, secondary_color, &text)
+        .send_to_player(game.net_server(), player_id)
+}
+
+fn send_item_skill_wire(
+    game: &CGame,
+    player_id: i32,
+    message_type: i32,
+    prefix: Option<u8>,
+    skill_id: u32,
+    skill_level: i32,
+    wire: PlayerItemSkillWire,
+) -> i32 {
+    let mut message = CMessage::new(message_type);
+    if let Some(prefix) = prefix {
+        message.add_byte(prefix);
+        message.add_ulong(skill_id);
+        message.add_ulong(skill_level as u32);
+    } else {
+        add_c_string(
+            &mut message,
+            game.skill_factory()
+                .query_skill_name(skill_id as i32)
+                .unwrap_or_default(),
+        );
+        message.base_mut().add(&(skill_level as i16).to_le_bytes());
+    }
+    message.add_ulong(wire.value_84);
+    message.base_mut().add(&wire.value_70.to_le_bytes());
+    message.base_mut().add(&wire.value_74.to_le_bytes());
+    message.base_mut().add(&wire.value_78.to_le_bytes());
+    message.send_to_player(game.net_server(), player_id)
+}
+
+fn publish_packet_item_consumption(
+    game: &mut CGame,
+    player_id: i32,
+    slot: u8,
+    goods_id: CGuid,
+    identity_type: i32,
+    base_index: u32,
+    deliveries: &mut Vec<GamePlayerMessageDelivery>,
+) -> Option<CiQingPacketConsumption> {
+    let mut used = CMessage::new(0x000b_f709);
+    used.add_byte(b'3');
+    used.add_long(player_id);
+    used.add_ulong(base_index);
+    deliveries.push(GamePlayerMessageDelivery::Around(
+        game.send_player_shape_around(player_id, None, &used),
+    ));
+    let consumption = game
+        .find_player_mut(player_id)?
+        .remove_packet_goods_by_id(goods_id, 1)?;
+    if consumption.remaining_amount == 0 {
+        let mut deleted = CS2CContainerObjectMove::default();
+        deleted.set_operation(ContainerObjectMoveOperation::DeleteObject);
+        deleted.set_source_container(400, player_id, u32::from(slot));
+        deleted.set_source_container_extend_id(1);
+        deleted.set_source_object(identity_type, goods_id, 0);
+        deliveries.push(GamePlayerMessageDelivery::Player(
+            deleted.send_to_player(game, player_id),
+        ));
+    } else {
+        let mut changed = CS2CContainerObjectAmountChange::default();
+        changed.set_source_container(400, player_id, u32::from(slot));
+        changed.set_source_container_extend_id(1);
+        changed.set_object(identity_type, goods_id);
+        changed.set_object_amount(consumption.remaining_amount);
+        deliveries.push(GamePlayerMessageDelivery::Player(
+            changed.send_to_player(game, player_id),
+        ));
+    }
+    Some(consumption)
 }
 
 fn publish_friend_add(
@@ -307,6 +502,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         ALLOCATE_STAT_POINT
             | REQUEST_RELIVE
             | INTERACT_WITH_NPC
+            | USE_PACKET_ITEM
             | SET_PK_PERMISSION
             | REQUEST_TRADE
             | ANSWER_TRADE
@@ -337,6 +533,11 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         npc_distance: None,
         npc_script_file: Vec::new(),
         npc_script_data_present: None,
+        item_slot: None,
+        item_goods_id: None,
+        item_can_use_result: None,
+        item_consumption: None,
+        item_effects: Vec::new(),
         pk_permission: None,
         friend_name: Vec::new(),
         lei_ting_reward: None,
@@ -477,6 +678,527 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             report.npc_script_data_present = Some(game.script_file_data(&script_file).is_some());
             runtime.run_npc_player_script(game, player_id, region_id, npc_id, &script_file);
             report.outcome = GamePlayerMessageOutcome::NpcInteractionScriptRequested;
+        }
+        USE_PACKET_ITEM => {
+            let Some(player) = game.find_player(player_id) else {
+                return Some(Ok(report));
+            };
+            if player.is_dead()
+                || matches!(
+                    player.current_progress(),
+                    PlayerProgress::Trading
+                        | PlayerProgress::Shopping
+                        | PlayerProgress::OpenStall
+                        | PlayerProgress::Increment
+                        | PlayerProgress::Synthesis
+                )
+            {
+                report.outcome = GamePlayerMessageOutcome::ItemUseBlocked;
+                return Some(Ok(report));
+            }
+            let facts = runtime.player_item_use_facts(game, player_id);
+            if facts.blocking_skill_state {
+                report
+                    .deliveries
+                    .push(GamePlayerMessageDelivery::Player(send_item_notice(
+                        game,
+                        player_id,
+                        b"GS0146",
+                        &[],
+                        0,
+                    )));
+                report.outcome = GamePlayerMessageOutcome::ItemUseBlocked;
+                return Some(Ok(report));
+            }
+            if facts.state_110000_exists {
+                let _ended = runtime.apply_player_item_runtime_effect(
+                    game,
+                    player_id,
+                    PlayerItemRuntimeEffect::EndState(110000),
+                );
+            }
+            let Some(slot) = message.base_mut().get_char() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "packet item slot",
+                )));
+            };
+            let slot = slot as u8;
+            report.item_slot = Some(slot);
+            let Some(goods) = game
+                .find_player(player_id)
+                .and_then(|player| player.packet().get_goods(u32::from(slot)))
+                .cloned()
+            else {
+                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
+                return Some(Ok(report));
+            };
+            let goods_id = goods.identity().ex_id;
+            let identity_type = goods.identity().object_type;
+            let base_index = goods.base_properties_index();
+            report.item_goods_id = Some(goods_id);
+            if facts.change_body_state_exists
+                && runtime.player_item_body_change_conflict(game, player_id, base_index)
+            {
+                report
+                    .deliveries
+                    .push(GamePlayerMessageDelivery::Player(send_item_notice(
+                        game,
+                        player_id,
+                        b"GSN0337",
+                        &[goods.name()],
+                        0,
+                    )));
+                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
+                return Some(Ok(report));
+            }
+            let Some(region_id) = game
+                .find_player(player_id)
+                .and_then(|player| player.server_region_id())
+            else {
+                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
+                return Some(Ok(report));
+            };
+            let Some(base_properties) =
+                game.goods_factory().query_goods_base_properties(base_index)
+            else {
+                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
+                return Some(Ok(report));
+            };
+            if base_properties.goods_type() != GOODS_TYPE_CONSUMABLE {
+                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
+                return Some(Ok(report));
+            }
+            let original_name = base_properties.original_name().to_vec();
+            let Some(region) = game.find_region(region_id) else {
+                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
+                return Some(Ok(report));
+            };
+            let region_country = region.base().country;
+            let forbidden = region.base().find_forbid_good(&original_name);
+            let can_use = if forbidden {
+                8
+            } else {
+                game.find_player(player_id)
+                    .expect("item-use player сохранён")
+                    .can_use_item(&goods, game.goods_factory())
+            };
+            report.item_can_use_result = Some(can_use);
+            if can_use != 9 {
+                let mut failure = CMessage::new(0x000b_f709);
+                failure.add_byte(b'4');
+                failure.add_byte(can_use as u8);
+                report.deliveries.push(GamePlayerMessageDelivery::Player(
+                    failure.send_to_player(game.net_server(), player_id),
+                ));
+                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
+                return Some(Ok(report));
+            }
+            if goods.amount() == 0 {
+                report.item_consumption = game
+                    .find_player_mut(player_id)
+                    .and_then(|player| player.remove_packet_goods_by_id(goods_id, 1));
+                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
+                return Some(Ok(report));
+            }
+            if game
+                .find_player(player_id)
+                .is_some_and(|player| player.contend_state())
+                && facts.contend_use_forbidden
+            {
+                report
+                    .deliveries
+                    .push(GamePlayerMessageDelivery::Player(send_item_notice(
+                        game,
+                        player_id,
+                        b"GS0147",
+                        &[],
+                        0xffff_0000,
+                    )));
+            }
+
+            let mut consume = true;
+            let mut return_after_use = false;
+            let change_body_type =
+                goods.addon_property_value(game.goods_factory(), GAP_CHANGEBODY_TYPE, 1);
+            if change_body_type != 0 && !facts.change_body_check_passed {
+                report
+                    .deliveries
+                    .push(GamePlayerMessageDelivery::Player(send_item_notice(
+                        game,
+                        player_id,
+                        b"GSN1063",
+                        &[],
+                        0,
+                    )));
+                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
+                return Some(Ok(report));
+            }
+
+            let mount_type = goods.addon_property_value(game.goods_factory(), GAP_MOUNT_TYPE, 1);
+            if mount_type != 0 {
+                consume = false;
+                if facts.mount_state_exists {
+                    let _ended = runtime.apply_player_item_runtime_effect(
+                        game,
+                        player_id,
+                        PlayerItemRuntimeEffect::EndState(0x0001_86a4),
+                    );
+                    let properties = runtime.recompute_enhancement_player_properties(
+                        game.find_player(player_id).expect("mount player сохранён"),
+                    );
+                    game.find_player_mut(player_id)
+                        .expect("mount player сохранён для recompute")
+                        .apply_recomputed_combat_properties(properties);
+                } else if game.find_player(player_id).is_some_and(|player| {
+                    player.current_progress() != PlayerProgress::OpenStall
+                        && facts.fight_state_count == 0
+                        && player.appearance_and_mode().2 == 0
+                }) {
+                    let result = runtime.apply_player_item_runtime_effect(
+                        game,
+                        player_id,
+                        PlayerItemRuntimeEffect::Mount {
+                            mount_type: mount_type as u32,
+                            level: goods.addon_property_value(
+                                game.goods_factory(),
+                                GAP_MOUNT_LEVEL,
+                                1,
+                            ) as u32,
+                            role_limit: goods.addon_property_value(
+                                game.goods_factory(),
+                                GAP_MOUNT_PLAYER_ROLE_LIMIT,
+                                1,
+                            ) as u32,
+                            goods_name: original_name.clone(),
+                        },
+                    );
+                    if result.applied {
+                        let properties = runtime.recompute_enhancement_player_properties(
+                            game.find_player(player_id)
+                                .expect("mounted player сохранён"),
+                        );
+                        game.find_player_mut(player_id)
+                            .expect("mounted player сохранён для recompute")
+                            .apply_recomputed_combat_properties(properties);
+                        consume = goods.addon_property_value(
+                            game.goods_factory(),
+                            GAP_UNLIMITED_ACCESS,
+                            1,
+                        ) != 1;
+                    }
+                }
+            } else {
+                let goods_factory = game.goods_factory().clone();
+                for property in goods.enabled_addon_properties(&goods_factory) {
+                    report.item_effects.push(property);
+                    let value =
+                        |value_id| goods.addon_property_value(&goods_factory, property, value_id);
+                    match property {
+                        0x21 | 0x43 => {
+                            let result = runtime.apply_player_item_runtime_effect(
+                                game,
+                                player_id,
+                                PlayerItemRuntimeEffect::RestoreHp {
+                                    amount: value(1) as u32,
+                                    delay_ms: (value(2) as u32).wrapping_mul(400),
+                                    step_ms: 400,
+                                },
+                            );
+                            consume = result.applied;
+                        }
+                        0x22 => {
+                            let maximum = game
+                                .find_player(player_id)
+                                .expect("restore-hp player сохранён")
+                                .maximum_health();
+                            let amount =
+                                (f64::from(maximum) * f64::from(value(1)) * 0.01).round() as u32;
+                            consume = runtime
+                                .apply_player_item_runtime_effect(
+                                    game,
+                                    player_id,
+                                    PlayerItemRuntimeEffect::RestoreHp {
+                                        amount,
+                                        delay_ms: 0,
+                                        step_ms: 400,
+                                    },
+                                )
+                                .applied;
+                        }
+                        0x23 => {
+                            let delay_ms = if value(2) == 0 {
+                                0
+                            } else {
+                                (value(2) as u32).wrapping_sub(1).wrapping_mul(400)
+                            };
+                            consume = runtime
+                                .apply_player_item_runtime_effect(
+                                    game,
+                                    player_id,
+                                    PlayerItemRuntimeEffect::RestoreMp {
+                                        amount: value(1) as u32,
+                                        delay_ms,
+                                        step_ms: 400,
+                                    },
+                                )
+                                .applied;
+                        }
+                        0x24 => {
+                            let maximum = game
+                                .find_player(player_id)
+                                .expect("restore-mp player сохранён")
+                                .maximum_mana();
+                            let amount =
+                                (f64::from(maximum) * f64::from(value(1)) * 0.01).round() as u32;
+                            consume = runtime
+                                .apply_player_item_runtime_effect(
+                                    game,
+                                    player_id,
+                                    PlayerItemRuntimeEffect::RestoreMp {
+                                        amount,
+                                        delay_ms: 0,
+                                        step_ms: 400,
+                                    },
+                                )
+                                .applied;
+                        }
+                        0x27 if 0 <= value(2) => {
+                            let skill_id = value(1) as u32;
+                            let requested_level = value(2);
+                            let current_level = game
+                                .find_player(player_id)
+                                .expect("skill-book player сохранён")
+                                .item_skill_level(skill_id);
+                            if requested_level <= current_level {
+                                consume = false;
+                                report.deliveries.push(GamePlayerMessageDelivery::Player(
+                                    send_item_notice(game, player_id, b"GS0148", &[], 0),
+                                ));
+                            } else if requested_level.wrapping_sub(current_level) != 1 {
+                                consume = false;
+                                report.deliveries.push(GamePlayerMessageDelivery::Player(
+                                    send_item_notice(game, player_id, b"GS0149", &[], 0),
+                                ));
+                            } else {
+                                let skill_factory = game.skill_factory().clone();
+                                let added = game
+                                    .find_player_mut(player_id)
+                                    .expect("skill-book player сохранён для add")
+                                    .learn_item_skill(skill_id, requested_level, &skill_factory);
+                                if added {
+                                    let result = runtime.apply_player_item_runtime_effect(
+                                        game,
+                                        player_id,
+                                        PlayerItemRuntimeEffect::SkillWire { skill_id },
+                                    );
+                                    if let Some(wire) = result.skill_wire {
+                                        report.deliveries.push(GamePlayerMessageDelivery::Player(
+                                            send_item_skill_wire(
+                                                game,
+                                                player_id,
+                                                0x000b_f71d,
+                                                None,
+                                                skill_id,
+                                                requested_level,
+                                                wire,
+                                            ),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        0x2d => {
+                            if region_country != 0
+                                && region_country
+                                    != game
+                                        .find_player(player_id)
+                                        .expect("return player")
+                                        .country()
+                            {
+                                consume = false;
+                                report.deliveries.push(GamePlayerMessageDelivery::Player(
+                                    send_item_notice(game, player_id, b"GS0150", &[], 0),
+                                ));
+                            } else if game.find_player(player_id).is_some_and(|player| {
+                                player.current_progress() == PlayerProgress::Synthesis
+                            }) {
+                                // EXE указывает только неразрешённый literal pointer;
+                                // consume-guard подтверждён, текст не выдумывается.
+                                consume = false;
+                            } else if i32::from(
+                                game.find_player(player_id).expect("return player").level(),
+                            ) < facts.forbid_return_level
+                                || facts.fight_state_count < 1
+                            {
+                                return_after_use = true;
+                            } else {
+                                consume = false;
+                                report.deliveries.push(GamePlayerMessageDelivery::Player(
+                                    send_item_notice(game, player_id, b"GS0151", &[], 0),
+                                ));
+                            }
+                        }
+                        0x2e => {
+                            if region_country
+                                != game
+                                    .find_player(player_id)
+                                    .expect("random recall player")
+                                    .country()
+                            {
+                                consume = false;
+                                report.deliveries.push(GamePlayerMessageDelivery::Player(
+                                    send_item_notice(game, player_id, b"GS0152", &[], 0),
+                                ));
+                            } else if game.find_player(player_id).is_some_and(|player| {
+                                player.current_progress() == PlayerProgress::Synthesis
+                            }) {
+                                consume = false;
+                                report.deliveries.push(GamePlayerMessageDelivery::Player(
+                                    send_item_notice(game, player_id, b"GS1041", &[], 0),
+                                ));
+                            } else if i32::from(
+                                game.find_player(player_id)
+                                    .expect("random recall player")
+                                    .level(),
+                            ) >= facts.forbid_return_level
+                                && 0 < facts.fight_state_count
+                            {
+                                consume = false;
+                                report.deliveries.push(GamePlayerMessageDelivery::Player(
+                                    send_item_notice(game, player_id, b"GS0153", &[], 0),
+                                ));
+                            } else {
+                                let _recalled = runtime.apply_player_item_runtime_effect(
+                                    game,
+                                    player_id,
+                                    PlayerItemRuntimeEffect::RecallInsideRegion,
+                                );
+                            }
+                        }
+                        0x2f => {
+                            let result = runtime.apply_player_item_runtime_effect(
+                                game,
+                                player_id,
+                                PlayerItemRuntimeEffect::RunGoodsScript {
+                                    path: format!("scripts/goods/{}.script", value(1)).into_bytes(),
+                                    goods_id,
+                                    goods_name: original_name.clone(),
+                                },
+                            );
+                            if !result.applied {
+                                consume = false;
+                            } else if goods.addon_property_value(
+                                game.goods_factory(),
+                                GAP_UNLIMITED_ACCESS,
+                                1,
+                            ) == 1
+                            {
+                                consume = false;
+                            }
+                        }
+                        0x4a..=0x4d => {
+                            let resulting = game
+                                .find_player_mut(player_id)
+                                .expect("expendable-effect player сохранён")
+                                .apply_expendable_item_effect(
+                                    property,
+                                    value(1),
+                                    facts.tick_ms,
+                                    value(2) as u32,
+                                );
+                            let mut update = CMessage::new(0x000b_f70a);
+                            if property == 0x4b {
+                                update.base_mut().add(&(resulting as i16).to_le_bytes());
+                            } else {
+                                update.add_long(resulting);
+                            }
+                            report.deliveries.push(GamePlayerMessageDelivery::Player(
+                                update.send_to_player(game.net_server(), player_id),
+                            ));
+                        }
+                        0x85 => {
+                            consume = false;
+                            let skill_id =
+                                goods.addon_property_value(game.goods_factory(), GAP_SKILL_ID, 1)
+                                    as u32;
+                            let skill_level = goods.addon_property_value(
+                                game.goods_factory(),
+                                GAP_SKILL_LEVEL,
+                                1,
+                            );
+                            let reusable = runtime.apply_player_item_runtime_effect(
+                                game,
+                                player_id,
+                                PlayerItemRuntimeEffect::CheckReuseSkillItem { goods_id, skill_id },
+                            );
+                            if reusable.applied {
+                                let skill_factory = game.skill_factory().clone();
+                                let replaced = game
+                                    .find_player_mut(player_id)
+                                    .expect("reuse-item player сохранён для skill replacement")
+                                    .replace_item_skill(skill_id, skill_level, &skill_factory);
+                                let result = replaced.then(|| {
+                                    runtime.apply_player_item_runtime_effect(
+                                        game,
+                                        player_id,
+                                        PlayerItemRuntimeEffect::PrepareReuseSkillItem {
+                                            slot,
+                                            goods_id,
+                                            skill_id,
+                                            skill_level,
+                                        },
+                                    )
+                                });
+                                if let Some(result) = result {
+                                    if let Some(wire) = result.skill_wire {
+                                        report.deliveries.push(GamePlayerMessageDelivery::Player(
+                                            send_item_skill_wire(
+                                                game,
+                                                player_id,
+                                                0x000b_fe07,
+                                                Some(0x55),
+                                                skill_id,
+                                                skill_level,
+                                                wire,
+                                            ),
+                                        ));
+                                    }
+                                }
+                            } else {
+                                report.deliveries.push(GamePlayerMessageDelivery::Player(
+                                    send_item_notice(
+                                        game,
+                                        player_id,
+                                        b"GS1178",
+                                        &[goods.name()],
+                                        0,
+                                    ),
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if consume {
+                report.item_consumption = publish_packet_item_consumption(
+                    game,
+                    player_id,
+                    slot,
+                    goods_id,
+                    identity_type,
+                    base_index,
+                    &mut report.deliveries,
+                );
+            }
+            if return_after_use {
+                let _returned = runtime.apply_player_item_runtime_effect(
+                    game,
+                    player_id,
+                    PlayerItemRuntimeEffect::RecallToReturnPoint,
+                );
+            }
+            report.outcome = GamePlayerMessageOutcome::ItemUsed;
         }
         SET_PK_PERMISSION => {
             if game.find_player(player_id).is_none() {

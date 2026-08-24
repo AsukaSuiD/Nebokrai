@@ -10,6 +10,8 @@
 //! проверяет catalog equipment type и instance-only level marker.
 //! `Vec` и owned bytes заменяют MSVC storage, не меняя порядка и signed 32-bit
 //! arithmetic.
+//! `GetEnabledAddonProperties` сохраняет instance storage order и consumable
+//! catalog fallback для полного player item-use addon loop.
 //! Единственный legacy null-deref в `CanStacked` при потерянном registry key
 //! выражен typed block-ом, а не тихим `false`.
 //!
@@ -749,6 +751,26 @@ impl CGoods {
                     .find(|value| value.id == value_id)
             })
             .map_or(0, |value| value.base_value)
+    }
+
+    /// Exact `GetEnabledAddonProperties`: instance-addon-ы идут в storage
+    /// order; catalog fallback используется только когда среди них нет ни
+    /// одного enabled property и товар остаётся consumable.
+    pub(crate) fn enabled_addon_properties(&self, factory: &CGoodsFactory) -> Vec<i32> {
+        let enabled: Vec<_> = self
+            .addon_properties
+            .iter()
+            .filter(|property| property.is_enabled == 1)
+            .map(|property| property.property_type)
+            .collect();
+        if !enabled.is_empty() {
+            return enabled;
+        }
+        factory
+            .query_goods_base_properties(self.base_properties_index)
+            .filter(|properties| properties.goods_type() == GOODS_TYPE_CONSUMABLE)
+            .map(|properties| properties.valid_addon_properties().collect())
+            .unwrap_or_default()
     }
 
     /// Storage-prefix `SetAddonPropertyValue` меняет modifier первого
@@ -1543,20 +1565,6 @@ fn read_goods_wire<const N: usize>(
 // RVA: 0x000CBA80
 // ADDRESS: 004cba80
 // PROTOTYPE: int __thiscall CanReparied(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::GetEnabledAddonProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:206
-// RVA: 0x000CBAC0
-// ADDRESS: 004cbac0
-// PROTOTYPE: void __thiscall GetEnabledAddonProperties(vector<CGoodsBaseProperties::GOODS_ADDON_PROPERTIES,std::allocator<CGoodsBaseProperties::GOODS_ADDON_PROPERTIES>_> * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

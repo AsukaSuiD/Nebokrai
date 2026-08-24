@@ -45,6 +45,9 @@
 //! wrapping cooldown обновляется до проверки и списания channel-cost.
 //! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
 //! изменение самих max не выполняет этот clamp без конкретного caller-а.
+//! `UseItem` материализует exact requirement-коды, owned skill learning,
+//! packet consumption и четыре replaceable `tagExpendableEffect` combat
+//! mutation; timed `CState`, mount/recall и script VM остаются у caller runtime.
 //! Как в связном `RefreshContainerOwners`, достигнутые equipment,
 //! ordinary-fairy и battle-fairy containers принадлежат player type `400` с
 //! его numeric ID. Ordinary fairy получает exact volume 14 и persisted
@@ -232,7 +235,10 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISM,
     GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_POTENTIAL,
     GAP_BF_WEAPON_LEVEL, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2, GAP_GEM_LEVEL, GAP_GOODS_BIND,
-    GAP_GOODS_PACKAGE_EXTENTION, GAP_ROLE_MINIMUM_LEVEL_LIMIT, GOODS_TYPE_CONSUMABLE,
+    GAP_GOODS_PACKAGE_EXTENTION, GAP_REQUIRE_GENDER, GAP_REQUIRE_OCCUPATION,
+    GAP_ROLE_MINIMUM_AGILITY_LIMIT, GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT,
+    GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_ROLE_MINIMUM_STRENGTH_LIMIT, GAP_ROLE_MINIMUM_WAKAN_LIMIT,
+    GOODS_TYPE_CONSUMABLE,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::{CMoveShape, MoveShapePositionFacts, MoveShapeSkill};
@@ -1248,6 +1254,7 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) intelligence: u32,
     pub(crate) minimum_attack: u32,
     pub(crate) maximum_attack: u32,
+    pub(crate) attack_speed: u16,
     pub(crate) defense: u32,
     pub(crate) element_resistance: u32,
     pub(crate) burden: u16,
@@ -1256,6 +1263,14 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) blast_defense_scale_bits: u32,
     pub(crate) full_miss_scale_bits: u32,
     pub(crate) critical_rate_bits: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerExpendableEffect {
+    pub(crate) property_type: i32,
+    pub(crate) value: i32,
+    pub(crate) start_time_ms: u32,
+    pub(crate) effect_time_ms: u32,
 }
 
 pub(crate) const PLAYER_COMBAT_PROPERTY_WIRE_SIZE: usize = 0x9c;
@@ -1557,6 +1572,7 @@ pub(crate) struct CPlayer {
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
     combat_property_wire: [u8; PLAYER_COMBAT_PROPERTY_WIRE_SIZE],
+    expendable_effects: BTreeMap<i32, PlayerExpendableEffect>,
     ci_qing_open: bool,
     ci_qing_list: BTreeSet<u32>,
     ci_qing_add_values: BTreeMap<u32, u32>,
@@ -1679,6 +1695,7 @@ impl CPlayer {
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
             combat_property_wire: [0; PLAYER_COMBAT_PROPERTY_WIRE_SIZE],
+            expendable_effects: BTreeMap::new(),
             ci_qing_open: false,
             ci_qing_list: BTreeSet::new(),
             ci_qing_add_values: BTreeMap::new(),
@@ -2322,6 +2339,152 @@ impl CPlayer {
         self.combat_properties
     }
 
+    /// Exact scalar checks `CanUseItem`; catalog/instance addon fallback
+    /// остаётся у `CGoods`, а result-коды являются частью `0xBF709` wire.
+    pub(crate) fn can_use_item(&self, goods: &CGoods, factory: &CGoodsFactory) -> i32 {
+        let required = |property| goods.addon_property_value(factory, property, 1) as u32;
+        let level = required(GAP_ROLE_MINIMUM_LEVEL_LIMIT);
+        if level != 0 && u32::from(self.level()) < level {
+            return 1;
+        }
+        for (property, actual, result) in [
+            (
+                GAP_ROLE_MINIMUM_STRENGTH_LIMIT,
+                self.combat_properties.strength,
+                2,
+            ),
+            (
+                GAP_ROLE_MINIMUM_AGILITY_LIMIT,
+                self.combat_properties.dexterity,
+                3,
+            ),
+            (
+                GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT,
+                self.combat_properties.constitution,
+                4,
+            ),
+            (
+                GAP_ROLE_MINIMUM_WAKAN_LIMIT,
+                self.combat_properties.intelligence,
+                5,
+            ),
+        ] {
+            let minimum = required(property);
+            if minimum != 0 && actual < minimum {
+                return result;
+            }
+        }
+        let occupation = required(GAP_REQUIRE_OCCUPATION);
+        if occupation != 0 && occupation != u32::from(self.base_properties.occupation) + 1 {
+            return 6;
+        }
+        let gender = required(GAP_REQUIRE_GENDER);
+        if gender != 0 && gender != u32::from(self.base_properties.sex) {
+            return 7;
+        }
+        9
+    }
+
+    pub(crate) fn item_skill_level(&self, skill_id: u32) -> i32 {
+        self.move_shape
+            .skill(skill_id)
+            .map_or(0, MoveShapeSkill::level)
+    }
+
+    pub(crate) fn learn_item_skill(
+        &mut self,
+        skill_id: u32,
+        level: i32,
+        factory: &CSkillFactory,
+    ) -> bool {
+        self.move_shape.add_skill(skill_id, level, factory)
+    }
+
+    /// `ReUseSkillItem` success tail всегда пересоздаёт concrete skill перед
+    /// `CItemSkill_2::SetItemPos`, даже когда уровень совпадает с текущим.
+    pub(crate) fn replace_item_skill(
+        &mut self,
+        skill_id: u32,
+        level: i32,
+        factory: &CSkillFactory,
+    ) -> bool {
+        let _deleted = self.move_shape.delete_skill(skill_id, factory);
+        self.move_shape.add_skill(skill_id, level, factory)
+    }
+
+    /// Owned tail четырёх `tagExpendableEffect` case-ов. Повторное применение
+    /// сначала снимает прежнее значение, затем заменяет timer/value entry.
+    pub(crate) fn apply_expendable_item_effect(
+        &mut self,
+        property_type: i32,
+        value: i32,
+        start_time_ms: u32,
+        effect_time_ms: u32,
+    ) -> i32 {
+        let previous = self
+            .expendable_effects
+            .get(&property_type)
+            .map_or(0, |effect| effect.value);
+        match property_type {
+            0x4a => {
+                self.combat_properties.maximum_attack = self
+                    .combat_properties
+                    .maximum_attack
+                    .wrapping_sub(previous as u32)
+                    .wrapping_add(value as u32);
+            }
+            0x4b => {
+                self.combat_properties.attack_speed = self
+                    .combat_properties
+                    .attack_speed
+                    .wrapping_sub(previous as u16)
+                    .wrapping_add(value as u16);
+            }
+            0x4c => {
+                self.combat_properties.defense = self
+                    .combat_properties
+                    .defense
+                    .wrapping_sub(previous as u32)
+                    .wrapping_add(value as u32);
+            }
+            0x4d => {
+                self.combat_properties.element_modify = self
+                    .combat_properties
+                    .element_modify
+                    .wrapping_sub(previous)
+                    .wrapping_add(value);
+            }
+            _ => return 0,
+        }
+        self.expendable_effects.insert(
+            property_type,
+            PlayerExpendableEffect {
+                property_type,
+                value,
+                start_time_ms,
+                effect_time_ms,
+            },
+        );
+        match property_type {
+            0x4a => self.combat_property_wire[0x20..0x24]
+                .copy_from_slice(&self.combat_properties.maximum_attack.to_le_bytes()),
+            0x4b => self.combat_property_wire[0x24..0x26]
+                .copy_from_slice(&self.combat_properties.attack_speed.to_le_bytes()),
+            0x4c => self.combat_property_wire[0x2c..0x30]
+                .copy_from_slice(&self.combat_properties.defense.to_le_bytes()),
+            0x4d => self.combat_property_wire[0x48..0x4c]
+                .copy_from_slice(&self.combat_properties.element_modify.to_le_bytes()),
+            _ => {}
+        }
+        match property_type {
+            0x4a => self.combat_properties.maximum_attack as i32,
+            0x4b => i32::from(self.combat_properties.attack_speed),
+            0x4c => self.combat_properties.defense as i32,
+            0x4d => self.combat_properties.element_modify,
+            _ => 0,
+        }
+    }
+
     pub(crate) const fn combat_property_wire(&self) -> &[u8; PLAYER_COMBAT_PROPERTY_WIRE_SIZE] {
         &self.combat_property_wire
     }
@@ -2371,6 +2534,11 @@ impl CPlayer {
             &mut self.combat_property_wire,
             0x20,
             properties.maximum_attack,
+        );
+        write_u16(
+            &mut self.combat_property_wire,
+            0x24,
+            properties.attack_speed,
         );
         write_u16(&mut self.combat_property_wire, 0x26, properties.burden);
         write_u32(&mut self.combat_property_wire, 0x2c, properties.defense);
@@ -7031,20 +7199,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::CanUseItem
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:8650
-// RVA: 0x0002C490
-// ADDRESS: 0042c490
-// PROTOTYPE: long __thiscall CanUseItem(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::DecodeSkillsFromByteArray
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -9605,20 +9759,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x000535EE
 // ADDRESS: 004535ee
 // PROTOTYPE: undefined Catch@004535ee()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::UseItem
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:7833
-// RVA: 0x00053840
-// ADDRESS: 00453840
-// PROTOTYPE: void __thiscall UseItem(uchar param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
