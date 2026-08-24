@@ -38,6 +38,8 @@
 //! Script-dialog answer `0x8FB02` сохраняет player/region no-read guard,
 //! exact mode `1/-1/0`, bounded string + CRT-like `atoi` и continue/delete
 //! request к ещё не материализованному общему script-instance owner-у.
+//! World continuation `0x7FA15` читает player/script/value и вызывает тот же
+//! `ScriptContinue` даже после null player lookup.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::{
@@ -82,6 +84,7 @@ const COUNTRY_CHAT_DELIVERY: u32 = 0x0007_fa10;
 const COUNTRY_NOTICE_DELIVERY: u32 = 0x0007_fa11;
 const WORLD_LEI_TING_UPDATE: u32 = 0x0007_fa17;
 const WORLD_HONOR_ELIMINATE_ACKNOWLEDGEMENT: u32 = 0x0007_fa16;
+const WORLD_SCRIPT_CONTINUE: u32 = 0x0007_fa15;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameOtherMessageOutcome {
@@ -93,6 +96,12 @@ pub(crate) enum GameOtherMessageOutcome {
         quit_result: i32,
     },
     ScriptDialog(GameScriptDialogOutcome),
+    WorldScriptContinued {
+        requested_player_id: i32,
+        player_present: bool,
+        script_id: i32,
+        value: i32,
+    },
     ChatIgnored {
         status: i8,
     },
@@ -206,6 +215,7 @@ pub(crate) enum GameOtherScriptAction {
     Continue {
         script_id: i32,
         player_id: i32,
+        player_present: bool,
         value: i32,
     },
     Delete {
@@ -1013,6 +1023,7 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
                         GameOtherScriptAction::Continue {
                             script_id,
                             player_id,
+                            player_present: true,
                             value,
                         },
                     );
@@ -1040,6 +1051,7 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
                         GameOtherScriptAction::Continue {
                             script_id,
                             player_id,
+                            player_present: true,
                             value,
                         },
                     );
@@ -1089,6 +1101,34 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
                 quit_result,
             },
         }));
+    }
+    if message_type == WORLD_SCRIPT_CONTINUE {
+        let result = (|| {
+            let requested_player_id = read_long(message, "script player id")?;
+            let script_id = read_long(message, "script id")?;
+            let value = read_long(message, "script continuation value")?;
+            let player_present = game.find_player(requested_player_id).is_some();
+            runtime.run_other_script_action(
+                game,
+                GameOtherScriptAction::Continue {
+                    script_id,
+                    player_id: requested_player_id,
+                    player_present,
+                    value,
+                },
+            );
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id: requested_player_id,
+                outcome: GameOtherMessageOutcome::WorldScriptContinued {
+                    requested_player_id,
+                    player_present,
+                    script_id,
+                    value,
+                },
+            })
+        })();
+        return Some(result);
     }
     if message_type == PLAYER_CHAT_REQUEST {
         let channel = peek_long(message)?;
