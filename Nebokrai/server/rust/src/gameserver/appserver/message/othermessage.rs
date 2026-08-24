@@ -19,6 +19,8 @@
 //! клиенту как count + exact concatenated name records `0xBF813`.
 //! GM around-kick feedback `0x7FA05` замыкает World-routed `0x5FD02`:
 //! target map prefix отбрасывается, requester получает exact `0xBF806`.
+//! Increment Shop page `0x7FA12` замыкает `0x90605 -> 0x5FD0A` и сохраняет
+//! World-serialized page tail в exact client wire `0xC0405`.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -35,6 +37,7 @@ const PLAYER_CHAT_REQUEST: u32 = 0x0008_fb01;
 const PLAYER_GOODS_LINK_REQUEST: u32 = 0x0008_fb03;
 const WORLD_GOODS_LINK_RESPONSE: u32 = 0x0007_fa07;
 const WORLD_GM_FEEDBACK: u32 = 0x0007_fa05;
+const WORLD_INCREMENT_SHOP_PAGE: u32 = 0x0007_fa12;
 const PLAYER_NPC_NAME_LIST_REQUEST: u32 = 0x0008_fb06;
 const WORLD_PLAYER_RENAME_REQUEST: i32 = 0x0005_fd05;
 const WORLD_PLAYER_RENAME_RESPONSE: u32 = 0x0007_fa0e;
@@ -96,6 +99,9 @@ pub(crate) enum GameOtherMessageOutcome {
         color: u32,
         notice_type: u32,
         text: Vec<u8>,
+        delivery: i32,
+    },
+    IncrementShopPageDelivered {
         delivery: i32,
     },
     LeiTingUpdated {
@@ -916,9 +922,30 @@ pub(crate) fn dispatch_game_other_message(
             | WORLD_TOP_INFO_DELIVERY
             | WORLD_GM_FEEDBACK
             | WORLD_GOODS_LINK_RESPONSE
+            | WORLD_INCREMENT_SHOP_PAGE
             | WORLD_LEI_TING_UPDATE
     ) {
         return None;
+    }
+    if message_type == WORLD_INCREMENT_SHOP_PAGE {
+        let result = (|| {
+            let player_id = read_long(message, "increment-shop page player id")?;
+            if game.find_player(player_id).is_none() {
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerMissing,
+                });
+            }
+            message.set_message_type(0x000c_0405);
+            let delivery = message.send_to_player(game.net_server(), player_id);
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::IncrementShopPageDelivered { delivery },
+            })
+        })();
+        return Some(result);
     }
     if message_type == WORLD_GM_FEEDBACK {
         let result = (|| {
