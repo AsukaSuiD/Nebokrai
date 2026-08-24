@@ -82,6 +82,7 @@ pub(crate) mod appserver {
     pub(crate) mod session {
         pub(crate) mod cequipmentcompose;
         pub(crate) mod cequipmentdakong;
+        pub(crate) mod cequipmentupgrade;
         pub(crate) mod cplug;
         pub(crate) mod csession;
         pub(crate) mod csessionfactory;

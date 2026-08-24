@@ -1150,6 +1150,7 @@ pub(crate) struct CPlayer {
     silence_minutes: i32,
     silence_timestamp_minutes: u32,
     money: u32,
+    client_ip: u32,
     account: Vec<u8>,
     depot_password: Vec<u8>,
     last_container_script: Vec<u8>,
@@ -1238,6 +1239,7 @@ impl CPlayer {
             silence_minutes: 0,
             silence_timestamp_minutes: 0,
             money: 0,
+            client_ip: 0,
             account: Vec::new(),
             depot_password: Vec::new(),
             last_container_script: Vec::new(),
@@ -2144,6 +2146,18 @@ impl CPlayer {
 
     pub(crate) const fn money(&self) -> u32 {
         self.money
+    }
+
+    pub(crate) const fn client_ip(&self) -> u32 {
+        self.client_ip
+    }
+
+    pub(crate) const fn set_client_ip_snapshot(&mut self, client_ip: u32) {
+        self.client_ip = client_ip;
+    }
+
+    pub(crate) fn depot_money(&self) -> u32 {
+        self.bank.gold_coins_amount()
     }
 
     pub(crate) const fn pk_count(&self) -> u16 {

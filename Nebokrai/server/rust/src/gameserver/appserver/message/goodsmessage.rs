@@ -57,9 +57,12 @@
 //! enhancement shadow, precious-box tail повторяет тот же script dispatch.
 //! `0x8FC0B` замыкает просмотр чужой экипировки: target/mode guards, appearance
 //! snapshot, exact 17-slot iteration, old-client payload и отказ `GSN0336`.
+//! `0x8FC0F/0x8FC10` завершают ordinary equipment-upgrade: session/plug guard,
+//! цена и gem validation, RNG/addon mutation, расход, player/equipment effects,
+//! `0xBF918`, audit и terminal End/progress/`0xBF913`/registry GC.
 //!
-//! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
-//! прежнюю общую handler-границу.
+//! Все подтверждённые cases этого owner-а теперь имеют live Rust routes;
+//! полностью замещённое switch-тело удалено ниже.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -78,17 +81,21 @@ use crate::gameserver::appserver::session::cequipmentcompose::EquipmentComposeRe
 use crate::gameserver::appserver::session::cequipmentdakong::{
     EquipmentDaKongCloseReport, EquipmentDaKongOperation, EquipmentDaKongReport,
 };
+use crate::gameserver::appserver::session::cequipmentupgrade::{
+    EquipmentUpgradeCloseReport, EquipmentUpgradeReport,
+};
 use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
     BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
     CGame, CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
     CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport,
     CiQingOtherPersonTarget, CiQingSetupQueryReport, ContainerScriptActionReport,
-    ContainerScriptContext, EquipmentComposeContext, EquipmentDaKongContext, FairyContext,
-    FairyHatchReport, FairyImplantResultReport, FairySetupQueryReport, FairySyncretizeResultReport,
-    GoodsDestroyConfirmReport, GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport,
-    HotkeyChangeReport, HotkeyContext, HotkeyRemovalReport, PlayerEquipmentInspectionReport,
-    SynthesisComposeReport, SynthesisContext, SynthesisOpenReport,
+    ContainerScriptContext, EquipmentComposeContext, EquipmentDaKongContext,
+    EquipmentUpgradeContext, FairyContext, FairyHatchReport, FairyImplantResultReport,
+    FairySetupQueryReport, FairySyncretizeResultReport, GoodsDestroyConfirmReport,
+    GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport, HotkeyChangeReport,
+    HotkeyContext, HotkeyRemovalReport, PlayerEquipmentInspectionReport, SynthesisComposeReport,
+    SynthesisContext, SynthesisOpenReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -98,6 +105,8 @@ const ASSIGN_HOTKEY: u32 = 0x0008_fc08;
 const REMOVE_HOTKEY: u32 = 0x0008_fc09;
 const CHANGE_HOTKEY: u32 = 0x0008_fc0a;
 const QUERY_PLAYER_EQUIPMENT: u32 = 0x0008_fc0b;
+const UPGRADE_EQUIPMENT: u32 = 0x0008_fc0f;
+const CLOSE_EQUIPMENT_UPGRADE: u32 = 0x0008_fc10;
 const HANDLE_CONTAINER_SCRIPT_ACTION: u32 = 0x0008_fc11;
 const RUN_PRECIOUS_BOX_ITEM_SCRIPT: u32 = 0x0008_fc12;
 const UPDATE_FAIRY_HATCH: u32 = 0x0008_fc13;
@@ -145,6 +154,7 @@ pub(crate) trait GameGoodsMessageRuntime:
     + CiQingComposeContext
     + EquipmentComposeContext
     + EquipmentDaKongContext
+    + EquipmentUpgradeContext
     + GoodsDestroyContext
     + FairyContext
     + HotkeyContext
@@ -258,6 +268,8 @@ pub(crate) enum GameGoodsMessageOutcome {
     EquipmentCompose(EquipmentComposeReport),
     EquipmentDaKongClose(EquipmentDaKongCloseReport),
     EquipmentDaKong(EquipmentDaKongReport),
+    EquipmentUpgrade(EquipmentUpgradeReport),
+    EquipmentUpgradeClose(EquipmentUpgradeCloseReport),
     GoodsDestroyOpen(GoodsDestroyOpenReport),
     GoodsDestroyConfirm(GoodsDestroyConfirmReport),
     SynthesisOpen(SynthesisOpenReport),
@@ -296,6 +308,8 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             | REMOVE_HOTKEY
             | CHANGE_HOTKEY
             | QUERY_PLAYER_EQUIPMENT
+            | UPGRADE_EQUIPMENT
+            | CLOSE_EQUIPMENT_UPGRADE
             | HANDLE_CONTAINER_SCRIPT_ACTION
             | RUN_PRECIOUS_BOX_ITEM_SCRIPT
             | UPDATE_FAIRY_HATCH
@@ -402,6 +416,31 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             };
             GameGoodsMessageOutcome::PlayerEquipmentInspection(
                 game.query_player_equipment(player_id, target_id, runtime),
+            )
+        }
+        UPGRADE_EQUIPMENT => {
+            let session_id = match read_long(message, "equipment upgrade session ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let requested_plug_id = match read_long(message, "equipment upgrade plug ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            GameGoodsMessageOutcome::EquipmentUpgrade(game.upgrade_equipment(
+                player_id,
+                session_id,
+                requested_plug_id,
+                runtime,
+            ))
+        }
+        CLOSE_EQUIPMENT_UPGRADE => {
+            let session_id = match read_long(message, "equipment upgrade close session ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            GameGoodsMessageOutcome::EquipmentUpgradeClose(
+                game.close_equipment_upgrade(player_id, session_id, runtime),
             )
         }
         HANDLE_CONTAINER_SCRIPT_ACTION => {
@@ -1011,18 +1050,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     }))
 }
 
-// ============================================================================
-// FUNCTION: OnGoodsMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\goodsmessage.cpp:35
-// RVA: 0x00093BF0
-// ADDRESS: 00493bf0
-// PROTOTYPE: void __cdecl OnGoodsMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: оставшиеся cases `0x8FC0F/0x8FC10` материализованы выше;
+// полностью замещённое RAW-тело `OnGoodsMessage` удалено.
 
 // COMPONENT_VARIANT_END: GameServer

@@ -12,7 +12,8 @@
 //! уже фактически placed GUID/position. При stack merge slot привязывается
 //! к живому target GUID вместо legacy dangling incoming GUID. `Clear`
 //! восстанавливает limit `5`, `Release` оставляет его равным `0`. Реальная
-//! source-player move-транзакция остаётся границей будущего session caller-а.
+//! source-player move/delete-транзакция замкнута equipment-upgrade caller-ом;
+//! сам shadow хранит только исходную позицию и listener metadata.
 
 use std::collections::BTreeMap;
 

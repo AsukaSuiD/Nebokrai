@@ -21,12 +21,30 @@ use std::fmt;
 
 use super::cgoods::{CGoods, GoodsAddonProperty, GoodsAddonPropertyValue};
 use super::cgoodsbaseproperties::{
-    CGoodsBaseProperties, GAP_BF_ABRAVE_ADDON, GAP_BF_ABRAVE_GROW, GAP_BF_AGILITY_ADDON,
+    CGoodsBaseProperties, GAP_ARMOR_CORRECTION, GAP_ARMOR_UPGRADE, GAP_ATTACK_SPEED_CORRECTION,
+    GAP_ATTACK_SPEED_UPGRADE, GAP_BF_ABRAVE_ADDON, GAP_BF_ABRAVE_GROW, GAP_BF_AGILITY_ADDON,
     GAP_BF_AGILITY_GROW, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_GROW, GAP_BF_LIFE_ADDON,
     GAP_BF_LIFE_GROW, GAP_BF_MP_ADDON, GAP_BF_MP_GROW, GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_GROW,
     GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISE_GROW, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_GROW,
-    GAP_BF_WEAPON_LEVEL, GAP_GOODS_STACKING_LIMIT, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_USELESS,
-    GoodsBasePropertiesDecodeError, ICON_TYPE_GROUND,
+    GAP_BF_WEAPON_LEVEL, GAP_BURDEN_UPPER_LIMIT_CORRECTION,
+    GAP_BURDEN_UPPER_LIMIT_CORRECTION_UPGRADE, GAP_DODGE_CORRECTION, GAP_DODGE_UPGRADE,
+    GAP_ELEMENT_ATTACK_CORRECTION, GAP_ELEMENT_ATTACK_UPGRADE, GAP_ELEMENT_RESISTANCE_CORRECTION,
+    GAP_ELEMENT_RESISTANCE_CORRECTION_UPGRADE, GAP_FATAL_BLOW_RATE_CORRECTION,
+    GAP_FATAL_BLOW_RATE_UPGRADE, GAP_GOODS_MAXIMUM_DURABILITY,
+    GAP_GOODS_MAXIMUM_DURABILITY_UPGRADE, GAP_GOODS_STACKING_LIMIT, GAP_HIT_RATE_CORRECTION,
+    GAP_HIT_RATE_UPGRADE, GAP_HP_UPPER_LIMIT_CORRECTION, GAP_HP_UPPER_LIMIT_CORRECTION_UPGRADE,
+    GAP_MAXIMUM_ATTACK_CORRECTION, GAP_MAXIMUM_ATTACK_UPGRADE, GAP_MINIMUM_ATTACK_CORRECTION,
+    GAP_MINIMUM_ATTACK_UPGRADE, GAP_MP_UPPER_LIMIT_CORRECTION,
+    GAP_MP_UPPER_LIMIT_CORRECTION_UPGRADE, GAP_ROLE_MINIMUM_AGILITY_LIMIT,
+    GAP_ROLE_MINIMUM_AGILITY_LIMIT_UPGRADE, GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT,
+    GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT_UPGRADE, GAP_ROLE_MINIMUM_LEVEL_LIMIT,
+    GAP_ROLE_MINIMUM_LEVEL_LIMIT_UPGRADE, GAP_ROLE_MINIMUM_STRENGTH_LIMIT,
+    GAP_ROLE_MINIMUM_STRENGTH_LIMIT_UPGRADE, GAP_ROLE_MINIMUM_WAKAN_LIMIT,
+    GAP_ROLE_MINIMUM_WAKAN_LIMIT_UPGRADE, GAP_SKILL_REUSE_TIME_CORRECTION,
+    GAP_SKILL_REUSE_TIME_CORRECTION_UPGRADE, GAP_STIFFEN_PROBABILITY_CORRECTION,
+    GAP_STIFFEN_PROBABILITY_CORRECTION_UPGRADE, GAP_WEAPON_DAMAGE_LEVEL, GAP_WEAPON_DAMAGE_UPGRADE,
+    GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_USELESS, GoodsBasePropertiesDecodeError,
+    ICON_TYPE_GROUND,
 };
 use crate::public::guid::CGuid;
 
@@ -81,6 +99,89 @@ pub(crate) struct CGoodsFactory {
 }
 
 impl CGoodsFactory {
+    /// Exact ordinary `UpgradeEquipment`: каждый level step обходит instance
+    /// addon-ы в insertion order. Upgrade-range выбирает increment общим RNG,
+    /// correction modifier clamp-ится к `0..=65535`, а отсутствие level value
+    /// завершает уже применённый prefix отказом.
+    pub(crate) fn upgrade_equipment<Random>(
+        &self,
+        goods: &mut CGoods,
+        target_level: i32,
+        mut random: Random,
+    ) -> bool
+    where
+        Random: FnMut(i32) -> i32,
+    {
+        if !goods.can_upgraded(self) {
+            return false;
+        }
+        let initial_level = goods.addon_property_value(self, GAP_WEAPON_LEVEL, 1);
+        if initial_level < 0 {
+            return false;
+        }
+        if initial_level == target_level {
+            return true;
+        }
+        let increase = initial_level <= target_level;
+        loop {
+            let property_types = goods
+                .addon_properties()
+                .iter()
+                .map(|property| property.property_type)
+                .collect::<Vec<_>>();
+            let mut level_stepped = false;
+            for property_type in property_types {
+                if property_type == GAP_WEAPON_LEVEL {
+                    let Some(value) = goods
+                        .addon_properties_mut()
+                        .iter_mut()
+                        .find(|property| property.property_type == GAP_WEAPON_LEVEL)
+                        .and_then(|property| {
+                            property.values.iter_mut().find(|value| value.id == 1)
+                        })
+                    else {
+                        continue;
+                    };
+                    value.modifier = value.modifier.wrapping_add(if increase { 1 } else { -1 });
+                    level_stepped = true;
+                    continue;
+                }
+                let Some(target_property) = ordinary_upgrade_pair(property_type) else {
+                    continue;
+                };
+                let minimum = goods.addon_property_value(self, property_type, 1);
+                let maximum = goods.addon_property_value(self, property_type, 2);
+                if minimum < 1 {
+                    continue;
+                }
+                let delta = if maximum > 0 {
+                    minimum.wrapping_add(random(maximum.wrapping_sub(minimum)))
+                } else {
+                    minimum
+                };
+                let Some(value) = goods
+                    .addon_properties_mut()
+                    .iter_mut()
+                    .find(|property| property.property_type == target_property)
+                    .and_then(|property| property.values.first_mut())
+                else {
+                    continue;
+                };
+                value.modifier = if increase {
+                    value.modifier.wrapping_add(delta).min(0xffff)
+                } else {
+                    value.modifier.wrapping_sub(delta).max(0)
+                };
+            }
+            if !level_stepped {
+                return false;
+            }
+            if goods.addon_property_value(self, GAP_WEAPON_LEVEL, 1) == target_level {
+                return true;
+            }
+        }
+    }
+
     /// Переходит к target level по одному шагу. На каждом шаге growth-addon-ы
     /// применяются в instance insertion order, а level меняется через modifier
     /// value-id 1; отсутствие такого value завершает уже применённый prefix.
@@ -379,6 +480,33 @@ impl CGoodsFactory {
     }
 }
 
+const fn ordinary_upgrade_pair(property: i32) -> Option<i32> {
+    Some(match property {
+        GAP_MINIMUM_ATTACK_UPGRADE => GAP_MINIMUM_ATTACK_CORRECTION,
+        GAP_MAXIMUM_ATTACK_UPGRADE => GAP_MAXIMUM_ATTACK_CORRECTION,
+        GAP_ELEMENT_ATTACK_UPGRADE => GAP_ELEMENT_ATTACK_CORRECTION,
+        GAP_ARMOR_UPGRADE => GAP_ARMOR_CORRECTION,
+        GAP_ATTACK_SPEED_UPGRADE => GAP_ATTACK_SPEED_CORRECTION,
+        GAP_HIT_RATE_UPGRADE => GAP_HIT_RATE_CORRECTION,
+        GAP_FATAL_BLOW_RATE_UPGRADE => GAP_FATAL_BLOW_RATE_CORRECTION,
+        GAP_DODGE_UPGRADE => GAP_DODGE_CORRECTION,
+        GAP_ROLE_MINIMUM_LEVEL_LIMIT_UPGRADE => GAP_ROLE_MINIMUM_LEVEL_LIMIT,
+        GAP_ROLE_MINIMUM_STRENGTH_LIMIT_UPGRADE => GAP_ROLE_MINIMUM_STRENGTH_LIMIT,
+        GAP_ROLE_MINIMUM_AGILITY_LIMIT_UPGRADE => GAP_ROLE_MINIMUM_AGILITY_LIMIT,
+        GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT_UPGRADE => GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT,
+        GAP_ROLE_MINIMUM_WAKAN_LIMIT_UPGRADE => GAP_ROLE_MINIMUM_WAKAN_LIMIT,
+        GAP_GOODS_MAXIMUM_DURABILITY_UPGRADE => GAP_GOODS_MAXIMUM_DURABILITY,
+        GAP_HP_UPPER_LIMIT_CORRECTION_UPGRADE => GAP_HP_UPPER_LIMIT_CORRECTION,
+        GAP_MP_UPPER_LIMIT_CORRECTION_UPGRADE => GAP_MP_UPPER_LIMIT_CORRECTION,
+        GAP_SKILL_REUSE_TIME_CORRECTION_UPGRADE => GAP_SKILL_REUSE_TIME_CORRECTION,
+        GAP_STIFFEN_PROBABILITY_CORRECTION_UPGRADE => GAP_STIFFEN_PROBABILITY_CORRECTION,
+        GAP_BURDEN_UPPER_LIMIT_CORRECTION_UPGRADE => GAP_BURDEN_UPPER_LIMIT_CORRECTION,
+        GAP_ELEMENT_RESISTANCE_CORRECTION_UPGRADE => GAP_ELEMENT_RESISTANCE_CORRECTION,
+        GAP_WEAPON_DAMAGE_UPGRADE => GAP_WEAPON_DAMAGE_LEVEL,
+        _ => return None,
+    })
+}
+
 const fn battle_fairy_growth_pair(property_type: i32) -> Option<(i32, i32)> {
     Some(match property_type {
         GAP_BF_LIFE_ADDON => (GAP_BF_LIFE_ADDON, GAP_BF_LIFE_GROW),
@@ -526,33 +654,8 @@ fn read_factory_u32(
 //
 //
 
-// ============================================================================
-// FUNCTION: CGoodsFactory::Upgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:794
-// RVA: 0x000642E0
-// ADDRESS: 004642e0
-// PROTOTYPE: int __cdecl Upgrade(CGoods * param_1, GOODS_ADDON_PROPERTIES param_2, GOODS_ADDON_PROPERTIES param_3, int param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::UpgradeEquipment
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:652
-// RVA: 0x00064850
-// ADDRESS: 00464850
-// PROTOTYPE: int __cdecl UpgradeEquipment(CGoods * param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `Upgrade` и `UpgradeEquipment` материализованы выше;
+// полностью замещённые RAW-тела удалены.
 
 // ============================================================================
 // FUNCTION: CGoodsFactory::QueryGoodsMaxStackNumber

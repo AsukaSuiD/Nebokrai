@@ -12,14 +12,16 @@
 //! является deterministic replacement: hash iteration этими функциями не
 //! наблюдается, только exact-key lookup. `register_*`
 //! материализует достигнутый registry storage; `goodsmessage 0x8FC25`
-//! выполняет ordered session plug lookup по owner type/ID. Но это не
-//! объявляет реализованными RAW `CreateSession/CreatePlug/InsertPlug`, их
-//! lifecycle и garbage collection ниже.
+//! выполняет ordered session plug lookup по owner type/ID. Equipment-upgrade
+//! close материализует конкретный session GC: удаляет session и её plug IDs
+//! из base/concrete registries. Остальные `CreateSession/CreatePlug/InsertPlug`
+//! и общий polymorphic lifecycle ниже этим не объявляются реализованными.
 
 use std::collections::BTreeMap;
 
 use super::cequipmentcompose::CEquipmentCompose;
 use super::cequipmentdakong::CEquipmentDaKong;
+use super::cequipmentupgrade::CEquipmentUpgrade;
 use super::cplug::CPlug;
 use super::csession::CSession;
 
@@ -29,6 +31,7 @@ pub(crate) struct CSessionFactory {
     plugs: BTreeMap<i32, CPlug>,
     equipment_compose_plugs: BTreeMap<i32, CEquipmentCompose>,
     equipment_da_kong_plugs: BTreeMap<i32, CEquipmentDaKong>,
+    equipment_upgrade_plugs: BTreeMap<i32, CEquipmentUpgrade>,
 }
 
 impl CSessionFactory {
@@ -117,6 +120,41 @@ impl CSessionFactory {
 
     pub(crate) fn take_equipment_da_kong_plug(&mut self, plug_id: i32) -> Option<CEquipmentDaKong> {
         self.equipment_da_kong_plugs.remove(&plug_id)
+    }
+
+    pub(crate) fn register_equipment_upgrade_plug(
+        &mut self,
+        plug_id: i32,
+        plug: CEquipmentUpgrade,
+    ) -> Option<CEquipmentUpgrade> {
+        self.equipment_upgrade_plugs.insert(plug_id, plug)
+    }
+
+    pub(crate) fn query_equipment_upgrade_plug(&self, plug_id: i32) -> Option<&CEquipmentUpgrade> {
+        self.equipment_upgrade_plugs.get(&plug_id)
+    }
+
+    pub(crate) fn take_equipment_upgrade_plug(
+        &mut self,
+        plug_id: i32,
+    ) -> Option<CEquipmentUpgrade> {
+        self.equipment_upgrade_plugs.remove(&plug_id)
+    }
+
+    /// Session-GC удаляет саму session и все её plug identities из base и
+    /// concrete registries. Возвращаемый порядок совпадает с `m_lPlugs`.
+    pub(crate) fn garbage_collect_session(&mut self, session_id: i32) -> Vec<i32> {
+        let Some(session) = self.sessions.remove(&session_id) else {
+            return Vec::new();
+        };
+        let plug_ids = session.plug_ids_storage().to_vec();
+        for plug_id in &plug_ids {
+            self.plugs.remove(plug_id);
+            self.equipment_compose_plugs.remove(plug_id);
+            self.equipment_da_kong_plugs.remove(plug_id);
+            self.equipment_upgrade_plugs.remove(plug_id);
+        }
+        plug_ids
     }
 }
 

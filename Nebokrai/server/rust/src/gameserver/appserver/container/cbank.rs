@@ -54,6 +54,11 @@ impl CBank {
         self.locked
     }
 
+    /// `GetDepotMoney` читает amount owned gold stack независимо от UI lock.
+    pub(crate) fn gold_coins_amount(&self) -> u32 {
+        self.wallet.currency_amount()
+    }
+
     pub(crate) fn find(&self, ex_id: CGuid) -> Option<&CGoods> {
         if self.locked {
             return None;

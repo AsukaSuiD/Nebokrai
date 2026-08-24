@@ -1,166 +1,288 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Equipment-upgrade plug GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `server/gameserver/appserver/session/cequipmentupgrade.cpp`. Plug хранит
+//! пятислотовый shadow: equipment, обязательный base gem и до трёх
+//! дополнительных gems. Живой `goodsmessage 0x8FC0F` выполняет validation,
+//! оплату, общий MSVCRT RNG, ordinary-equipment mutation, расход shadow-goods,
+//! player/equipment callbacks, `0xBF918` и World audit. `0x8FC10` завершает
+//! session, очищает progress/shadow, отправляет `0xBF913` и освобождает
+//! session/plug registry.
+//!
+//! MSVC listener/vtable plumbing заменён owned container-ом и явными
+//! effect-report-ами. Полный property recompute, локализованные notification,
+//! World log и публикация container-removal остаются обязательной runtime-
+//! границей своих ещё не восстановленных владельцев.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp
+use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
+use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::{
+    CEquipmentUpgradeShadowContainer, UpgradeEquipmentCell,
+};
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+    GAP_GEM_PROBABILITY, GAP_GEM_UPGRADE_FAILED_RESULT, GAP_GEM_UPGRADE_SUCCEED_RESULT,
+    GAP_GOODS_UPGRADE_PRICE,
+};
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::player::{
+    CiQingPacketConsumption, PlayerEquipmentRemoveReport, PlayerProgress,
+};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::public::guid::CGuid;
 
-// ============================================================================
-// FUNCTION: CEquipmentUpgrade::CEquipmentUpgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp:19
-// RVA: 0x001B5D70
-// ADDRESS: 005b5d70
-// PROTOTYPE: undefined __thiscall CEquipmentUpgrade(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON: u8 = 1;
+pub(crate) const EQUIPMENT_UPGRADE_FAILURE_LOG_REASON: u8 = 2;
+pub(crate) const EQUIPMENT_UPGRADE_LOST_LOG_REASON: u8 = 5;
 
-// ============================================================================
-// FUNCTION: CEquipmentUpgrade::OnPlugEnded
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp:103
-// RVA: 0x001B5DC0
-// ADDRESS: 005b5dc0
-// PROTOTYPE: int __thiscall OnPlugEnded(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentUpgradeGoodsSnapshot {
+    pub(crate) identity: ShapeIdentity,
+    pub(crate) base_index: u32,
+    pub(crate) price: u32,
+    pub(crate) name: Vec<u8>,
+}
 
-// ============================================================================
-// FUNCTION: CEquipmentUpgrade::GetSucceedResult
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp:152
-// RVA: 0x001B5E90
-// ADDRESS: 005b5e90
-// PROTOTYPE: ulong __thiscall GetSucceedResult(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl EquipmentUpgradeGoodsSnapshot {
+    pub(crate) fn capture(goods: &CGoods) -> Self {
+        Self {
+            identity: goods.identity(),
+            base_index: goods.base_properties_index(),
+            price: goods.price(),
+            name: goods.name().to_vec(),
+        }
+    }
+}
 
-// ============================================================================
-// FUNCTION: CEquipmentUpgrade::GetFailedResult
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp:220
-// RVA: 0x001B5F80
-// ADDRESS: 005b5f80
-// PROTOTYPE: ulong __thiscall GetFailedResult(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentUpgradeAuditLog {
+    pub(crate) reason: u8,
+    pub(crate) player_id: i32,
+    pub(crate) equipment: EquipmentUpgradeGoodsSnapshot,
+    pub(crate) gems: [Option<EquipmentUpgradeGoodsSnapshot>; 4],
+    pub(crate) region_id: i32,
+    pub(crate) tile_x: i32,
+    pub(crate) tile_y: i32,
+}
 
-// ============================================================================
-// FUNCTION: CEquipmentUpgrade::GetProbability
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp:273
-// RVA: 0x001B6020
-// ADDRESS: 005b6020
-// PROTOTYPE: ulong __thiscall GetProbability(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentUpgradeLostAuditLog {
+    pub(crate) reason: u8,
+    pub(crate) player_id: i32,
+    pub(crate) pk_count: u16,
+    pub(crate) money: u32,
+    pub(crate) depot_money: u32,
+    pub(crate) equipment: EquipmentUpgradeGoodsSnapshot,
+    pub(crate) amount: u32,
+    pub(crate) region_id: i32,
+    pub(crate) tile_x: i32,
+    pub(crate) tile_y: i32,
+    pub(crate) client_ip: u32,
+}
 
-// ============================================================================
-// FUNCTION: CEquipmentUpgrade::GetUpgradePrice
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp:320
-// RVA: 0x001B60D0
-// ADDRESS: 005b60d0
-// PROTOTYPE: ulong __thiscall GetUpgradePrice(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentUpgradeConsumptionRemoval {
+    Packet(CiQingPacketConsumption),
+    Equipment(PlayerEquipmentRemoveReport),
+    Missing,
+}
 
-// ============================================================================
-// FUNCTION: CEquipmentUpgrade::~CEquipmentUpgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp:31
-// RVA: 0x001B6140
-// ADDRESS: 005b6140
-// PROTOTYPE: void __thiscall ~CEquipmentUpgrade(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentUpgradeConsumption {
+    pub(crate) cell: UpgradeEquipmentCell,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) previous: PreviousContainer,
+    pub(crate) removal: EquipmentUpgradeConsumptionRemoval,
+    pub(crate) deliveries: Vec<i32>,
+}
 
-// ============================================================================
-// FUNCTION: CEquipmentUpgrade::IsPlugAvailable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp:38
-// RVA: 0x001B61B0
-// ADDRESS: 005b61b0
-// PROTOTYPE: int __thiscall IsPlugAvailable(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentUpgradeClientUpdate {
+    pub(crate) player_id: i32,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) old_client_payload: Vec<u8>,
+}
 
-// ============================================================================
-// FUNCTION: CEquipmentUpgrade::DeleteGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp:654
-// RVA: 0x001B6230
-// ADDRESS: 005b6230
-// PROTOTYPE: int __thiscall DeleteGoods(UPGRADING_EQUIPMENT_PLACE_CELL param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentUpgradeOutcome {
+    MissingSessionOrPlug,
+    PlugIdMismatch,
+    MissingPlayerOrRegion,
+    InsufficientMoneyForValidation,
+    MissingOrInvalidEquipment,
+    MissingBaseGem,
+    EquipmentLevelOutsideGemRange,
+    MaximumLevel,
+    InsufficientMoneyAtExecution,
+    Succeeded,
+    FailedUnchanged,
+    FailedLevelLost,
+    FailedReset,
+    FailedEquipmentLost,
+}
 
-// ============================================================================
-// FUNCTION: CEquipmentUpgrade::DoesUpgradeValid
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp:330
-// RVA: 0x001B63A0
-// ADDRESS: 005b63a0
-// PROTOTYPE: int __thiscall DoesUpgradeValid(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[must_use = "upgrade report хранит оплату, RNG, mutation, расход и публикации"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentUpgradeReport {
+    pub(crate) session_id: i32,
+    pub(crate) requested_plug_id: i32,
+    pub(crate) actual_plug_id: Option<i32>,
+    pub(crate) outcome: EquipmentUpgradeOutcome,
+    pub(crate) price: u32,
+    pub(crate) probability: u32,
+    pub(crate) roll: Option<u32>,
+    pub(crate) previous_money: Option<u32>,
+    pub(crate) current_money: Option<u32>,
+    pub(crate) previous_level: Option<u32>,
+    pub(crate) resulting_level: Option<u32>,
+    pub(crate) notifications: Vec<i32>,
+    pub(crate) money_deliveries: Vec<i32>,
+    pub(crate) consumptions: Vec<EquipmentUpgradeConsumption>,
+    pub(crate) client_update: Option<EquipmentUpgradeClientUpdate>,
+    pub(crate) client_update_delivery: Option<i32>,
+    pub(crate) audit: Option<EquipmentUpgradeAuditLog>,
+    pub(crate) lost_audit: Option<EquipmentUpgradeLostAuditLog>,
+}
 
-// ============================================================================
-// FUNCTION: CEquipmentUpgrade::Upgrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentupgrade.cpp:399
-// RVA: 0x001B6610
-// ADDRESS: 005b6610
-// PROTOTYPE: int __thiscall Upgrade(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentUpgradeCloseOutcome {
+    MissingSessionOrPlug,
+    Closed,
+}
 
+#[must_use = "close report хранит End/progress/shadow/wire/registry lifecycle"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentUpgradeCloseReport {
+    pub(crate) session_id: i32,
+    pub(crate) actual_plug_id: Option<i32>,
+    pub(crate) outcome: EquipmentUpgradeCloseOutcome,
+    pub(crate) session_end_dispatched: bool,
+    pub(crate) previous_progress: Option<PlayerProgress>,
+    pub(crate) cleared_shadows: usize,
+    pub(crate) close_delivery: Option<i32>,
+    pub(crate) collected_plug_ids: Vec<i32>,
+}
 
-// COMPONENT_VARIANT_END: GameServer
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CEquipmentUpgrade {
+    upgrade_container: CEquipmentUpgradeShadowContainer,
+    closed: bool,
+}
+
+impl Default for CEquipmentUpgrade {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CEquipmentUpgrade {
+    pub(crate) const fn new() -> Self {
+        Self {
+            upgrade_container: CEquipmentUpgradeShadowContainer::new(),
+            closed: false,
+        }
+    }
+
+    pub(crate) const fn upgrade_container(&self) -> &CEquipmentUpgradeShadowContainer {
+        &self.upgrade_container
+    }
+
+    pub(crate) const fn upgrade_container_mut(&mut self) -> &mut CEquipmentUpgradeShadowContainer {
+        &mut self.upgrade_container
+    }
+
+    pub(crate) fn close(&mut self) -> usize {
+        if self.closed {
+            return 0;
+        }
+        self.closed = true;
+        self.upgrade_container.clear()
+    }
+
+    pub(crate) fn goods_id(&self, cell: UpgradeEquipmentCell) -> Option<CGuid> {
+        self.upgrade_container.positions().get(&cell).copied()
+    }
+
+    pub(crate) fn upgrade_price<Resolve>(&self, mut resolve: Resolve) -> u32
+    where
+        Resolve: FnMut(CGuid) -> i32,
+    {
+        self.upgrade_container
+            .positions()
+            .values()
+            .fold(0u32, |price, goods_id| {
+                price.wrapping_add(resolve(*goods_id) as u32)
+            })
+    }
+
+    pub(crate) fn probability<Resolve>(&self, mut resolve: Resolve) -> u32
+    where
+        Resolve: FnMut(CGuid, i32, u32) -> i32,
+    {
+        let total = [
+            UpgradeEquipmentCell::BaseGem,
+            UpgradeEquipmentCell::GemOne,
+            UpgradeEquipmentCell::GemTwo,
+            UpgradeEquipmentCell::GemThree,
+            UpgradeEquipmentCell::Equipment,
+        ]
+        .into_iter()
+        .filter_map(|cell| self.goods_id(cell))
+        .fold(0i32, |total, goods_id| {
+            total.wrapping_add(resolve(goods_id, GAP_GEM_PROBABILITY, 1))
+        });
+        total.clamp(0, 100) as u32
+    }
+
+    pub(crate) fn failed_result<Resolve>(&self, mut resolve: Resolve) -> u32
+    where
+        Resolve: FnMut(CGuid, i32, u32) -> i32,
+    {
+        [
+            UpgradeEquipmentCell::BaseGem,
+            UpgradeEquipmentCell::GemOne,
+            UpgradeEquipmentCell::GemTwo,
+            UpgradeEquipmentCell::GemThree,
+        ]
+        .into_iter()
+        .filter_map(|cell| self.goods_id(cell))
+        .map(|goods_id| resolve(goods_id, GAP_GEM_UPGRADE_FAILED_RESULT, 1) as u32)
+        .filter(|&candidate| candidate != 0)
+        .fold(4, u32::min)
+    }
+
+    pub(crate) fn succeed_result<Resolve, Random>(
+        &self,
+        mut resolve: Resolve,
+        mut random: Random,
+    ) -> u32
+    where
+        Resolve: FnMut(CGuid, i32, u32) -> i32,
+        Random: FnMut(i32) -> i32,
+    {
+        let mut result = self
+            .goods_id(UpgradeEquipmentCell::BaseGem)
+            .map_or(0, |goods_id| {
+                resolve(goods_id, GAP_GEM_UPGRADE_SUCCEED_RESULT, 1) as u32
+            });
+        for cell in [
+            UpgradeEquipmentCell::GemOne,
+            UpgradeEquipmentCell::GemTwo,
+            UpgradeEquipmentCell::GemThree,
+        ] {
+            let Some(goods_id) = self.goods_id(cell) else {
+                continue;
+            };
+            let candidate = resolve(goods_id, GAP_GEM_UPGRADE_SUCCEED_RESULT, 1) as u32;
+            if result < candidate
+                && random(100) <= resolve(goods_id, GAP_GEM_UPGRADE_SUCCEED_RESULT, 2)
+            {
+                result = candidate;
+            }
+        }
+        result
+    }
+
+    pub(crate) fn price_property(goods: &CGoods, factory: &CGoodsFactory) -> i32 {
+        goods.addon_property_value(factory, GAP_GOODS_UPGRADE_PRICE, 1)
+    }
+}
