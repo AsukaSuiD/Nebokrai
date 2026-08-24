@@ -10,8 +10,8 @@
 use std::collections::BTreeMap;
 
 use super::function::{
-    dispatch_script_function, ScriptFunctionDispatchOutcome, ScriptFunctionRuntime,
-    SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY,
+    ScriptFunctionDispatchOutcome, ScriptFunctionParameterKind, ScriptFunctionRuntime,
+    dispatch_script_function, script_function_parameter_kind,
 };
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
@@ -285,18 +285,20 @@ impl<'a> CScript<'a> {
         let Some(function_id) = game.script_function_id(name) else {
             return ScriptCommandOutcome::UnknownFunction;
         };
-        let mut integer_arguments = [None; 3];
-        let mut first_string = None;
-        if function_id == SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY {
-            first_string = parameters
-                .first()
-                .and_then(|parameter| self.evaluate_string(game, runtime, parameter));
-        } else {
-            for (index, parameter) in parameters.iter().take(3).enumerate() {
-                integer_arguments[index] = Some(
-                    self.evaluate_integer(game, runtime, parameter)
-                        .unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
-                );
+        let mut integer_arguments = [None; 4];
+        let mut string_arguments: [Option<Vec<u8>>; 2] = [None, None];
+        for (index, parameter) in parameters.iter().take(4).enumerate() {
+            match script_function_parameter_kind(function_id, index) {
+                ScriptFunctionParameterKind::Integer => {
+                    integer_arguments[index] = Some(
+                        self.evaluate_integer(game, runtime, parameter)
+                            .unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+                    );
+                }
+                ScriptFunctionParameterKind::String if index < string_arguments.len() => {
+                    string_arguments[index] = self.evaluate_string(game, runtime, parameter);
+                }
+                ScriptFunctionParameterKind::String | ScriptFunctionParameterKind::Unused => {}
             }
         }
         match dispatch_script_function(
@@ -307,7 +309,10 @@ impl<'a> CScript<'a> {
             self.context.region_id,
             function_id,
             integer_arguments,
-            first_string.as_deref(),
+            [
+                string_arguments[0].as_deref(),
+                string_arguments[1].as_deref(),
+            ],
         ) {
             ScriptFunctionDispatchOutcome::DifferentFunction => {
                 ScriptCommandOutcome::UnknownFunction

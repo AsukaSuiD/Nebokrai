@@ -13,7 +13,8 @@
 //! Парные `0x8FC2C/0x8FC2D` ведут summon/recall через один WarSoul lifecycle,
 //! region spatial map, around packets и пересчёт player properties. `0x8FC29`
 //! сохраняет два `long`, detach → live script → attach и World ack; сам script
-//! остаётся явной runtime-границей, а не подменяется упрощённым reset helper-ом.
+//! входит в concrete `CGame::run_script_file` с player/region context и
+//! возвращается к attach только после synchronous `CScript::RunFunction`.
 //! `0x8FC2E` читает два GUID, выполняет exact four-container lookup и только
 //! для найденного goods вызывает обязательный virtual property runtime.
 //! Парные `0x8FC2F/0x8FC30` публикуют ordered CiQing goods preview и global
@@ -77,6 +78,8 @@ use crate::gameserver::appserver::player::{
     BattleFairyPotentialResetReport, BattleFairySummonReport, BattleFairyUpgradeReport,
     GoodsSessionPlayerRelease,
 };
+use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
+use crate::gameserver::appserver::script::script::ScriptExecutionContext;
 use crate::gameserver::appserver::session::cequipmentcompose::EquipmentComposeReport;
 use crate::gameserver::appserver::session::cequipmentdakong::{
     EquipmentDaKongCloseReport, EquipmentDaKongOperation, EquipmentDaKongReport,
@@ -144,7 +147,8 @@ const COMPOSE_EQUIPMENT: u32 = 0x0008_fc24;
 const END_GOODS_SESSION: u32 = 0x0008_fc25;
 
 pub(crate) trait GameGoodsMessageRuntime:
-    BattleFairyDeathContext
+    ScriptFunctionRuntime
+    + BattleFairyDeathContext
     + CiQingComposeContext
     + EquipmentComposeContext
     + EquipmentDaKongContext
@@ -154,14 +158,6 @@ pub(crate) trait GameGoodsMessageRuntime:
     + ContainerScriptContext
     + SynthesisContext
 {
-    fn run_battle_fairy_reset_script(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        region_id: Option<i32>,
-        script_path: &[u8],
-    );
-
     fn update_battle_fairy_player_property(&mut self, game: &mut CGame, player_id: i32);
 }
 
@@ -847,7 +843,15 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     ),
                 }));
             };
-            runtime.run_battle_fairy_reset_script(game, player_id, region_id, &script_path);
+            let _ = game.run_script_file(
+                &script_path,
+                ScriptExecutionContext {
+                    player_id: Some(player_id),
+                    npc_id: None,
+                    region_id,
+                },
+                runtime,
+            );
             let attached = game.attach_battle_fairy_script_skills(player_id);
             let world_ack = CMessage::new(0x0b_f931).send(game, player_id != 0);
             GameGoodsMessageOutcome::BattleFairyScriptReset(BattleFairyScriptResetReport {

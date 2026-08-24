@@ -37,6 +37,10 @@
 //! timing/carriage/contender player-effects, FourNation seconds/time/morale,
 //! weak-state и World signup `0x6031B`; debug `GS1053..GS1056` остаётся в
 //! точном порядке вокруг соответствующих concrete вызовов.
+//! Battle-fairy family `9400..9411` сохраняет mixed string/integer parameter
+//! routing, name/current-player lookup, skill/equipment mutation, reset RNG,
+//! revive, experience/recreate RNG, old-client `0xBF918`, properties wire и
+//! локальные журналы `BattleFairy`.
 //! Numeric selector получает вычисленные параметры из reached synchronous
 //! `CScript`; остальные function ID и асинхронный dialog/wait lifecycle ниже
 //! пока остаются RAW.
@@ -52,9 +56,10 @@ use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongExte
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
-    colored_player_notice_message, CGame, EquipmentDaKongContext, EquipmentSessionOpenContext,
-    EquipmentSessionOpenReport, NationCarriageReturnReport, NationCombatContext,
-    NationContendEnterReport, ServerRegionOwner,
+    BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
+    EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
+    NationCarriageReturnReport, NationCombatContext, NationContendEnterReport, ServerRegionOwner,
+    colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -106,6 +111,17 @@ pub(crate) const SCRIPT_FUNCTION_NATION_WAR_SET_PLAYER_TIME: i32 = 9312;
 pub(crate) const SCRIPT_FUNCTION_NATION_WAR_IS_PLAYER_WEAK: i32 = 9313;
 pub(crate) const SCRIPT_FUNCTION_NATION_WAR_GET_MORALE: i32 = 9315;
 pub(crate) const SCRIPT_FUNCTION_NATION_WAR_CLEAR_MORALE: i32 = 9316;
+pub(crate) const SCRIPT_FUNCTION_ADD_BATTLE_FAIRY_SKILL: i32 = 9400;
+pub(crate) const SCRIPT_FUNCTION_GET_FETCH_POWER: i32 = 9401;
+pub(crate) const SCRIPT_FUNCTION_SET_BATTLE_FAIRY_ATTRIBUTE: i32 = 9402;
+pub(crate) const SCRIPT_FUNCTION_ALLOCATE_BATTLE_FAIRY_SKILL: i32 = 9403;
+pub(crate) const SCRIPT_FUNCTION_ALLOCATE_BATTLE_FAIRY_SPECIAL_SKILL: i32 = 9404;
+pub(crate) const SCRIPT_FUNCTION_REVIVE_BATTLE_FAIRY: i32 = 9406;
+pub(crate) const SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_ID: i32 = 9407;
+pub(crate) const SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_LEVEL: i32 = 9408;
+pub(crate) const SCRIPT_FUNCTION_ADD_BATTLE_FAIRY_EXPERIENCE: i32 = 9409;
+pub(crate) const SCRIPT_FUNCTION_GET_BATTLE_FAIRY_ATTRIBUTE: i32 = 9410;
+pub(crate) const SCRIPT_FUNCTION_RECREATE_BATTLE_FAIRY_ATTRIBUTES: i32 = 9411;
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
 const SCRIPT_PLAYER_TYPE: i32 = 400;
 const SCRIPT_NPC_TYPE: i32 = 500;
@@ -121,6 +137,8 @@ pub(crate) trait ScriptFunctionRuntime:
     + NationCombatContext
     + EquipmentSessionOpenContext
     + EquipmentDaKongContext
+    + BattleFairyDeathContext
+    + BattleFairySkillResetContext
 {
 }
 
@@ -130,6 +148,8 @@ impl<T> ScriptFunctionRuntime for T where
         + NationCombatContext
         + EquipmentSessionOpenContext
         + EquipmentDaKongContext
+        + BattleFairyDeathContext
+        + BattleFairySkillResetContext
 {
 }
 
@@ -581,7 +601,7 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
             let target_player_id = match argument(0) {
                 Ok(value) => value,
                 Err(disposition) => {
-                    return nation_war_script_handled(function_id, kind, 0, disposition)
+                    return nation_war_script_handled(function_id, kind, 0, disposition);
                 }
             };
             let Some(script_player_id) = script_player_id else {
@@ -706,7 +726,7 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
             let seconds = match argument(0) {
                 Ok(value) => value,
                 Err(disposition) => {
-                    return nation_war_script_handled(function_id, kind, 0, disposition)
+                    return nation_war_script_handled(function_id, kind, 0, disposition);
                 }
             };
             let Some(player_id) = script_player_id else {
@@ -745,7 +765,7 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
             let operation = match argument(0) {
                 Ok(value) => value,
                 Err(disposition) => {
-                    return nation_war_script_handled(function_id, kind, 0, disposition)
+                    return nation_war_script_handled(function_id, kind, 0, disposition);
                 }
             };
             if operation == 0 {
@@ -785,7 +805,7 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
             let player_id = match argument(0) {
                 Ok(value) => value,
                 Err(disposition) => {
-                    return nation_war_script_handled(function_id, kind, 0, disposition)
+                    return nation_war_script_handled(function_id, kind, 0, disposition);
                 }
             };
             let previous_ms = game
@@ -2251,6 +2271,208 @@ pub(crate) enum ScriptFunctionDispatchOutcome {
     Handled { legacy_return: i32 },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScriptFunctionParameterKind {
+    Integer,
+    String,
+    Unused,
+}
+
+/// `GetStringParam`/`GetIntParam` routing исторического dense owner-а.
+/// CScript использует таблицу до вычисления выражения, сохраняя positional
+/// string arguments вместо прежнего special-case только для 9351.
+pub(crate) fn script_function_parameter_kind(
+    function_id: i32,
+    index: usize,
+) -> ScriptFunctionParameterKind {
+    use ScriptFunctionParameterKind::{Integer, String, Unused};
+    match function_id {
+        SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY => match index {
+            0 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_ADD_BATTLE_FAIRY_SKILL => match index {
+            0 | 1 => String,
+            2 | 3 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_FETCH_POWER
+        | SCRIPT_FUNCTION_ALLOCATE_BATTLE_FAIRY_SPECIAL_SKILL
+        | SCRIPT_FUNCTION_REVIVE_BATTLE_FAIRY => match index {
+            0 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_SET_BATTLE_FAIRY_ATTRIBUTE => match index {
+            0 => String,
+            1 | 2 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_ALLOCATE_BATTLE_FAIRY_SKILL
+        | SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_ID
+        | SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_LEVEL
+        | SCRIPT_FUNCTION_ADD_BATTLE_FAIRY_EXPERIENCE
+        | SCRIPT_FUNCTION_GET_BATTLE_FAIRY_ATTRIBUTE => match index {
+            0 => String,
+            1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_RECREATE_BATTLE_FAIRY_ATTRIBUTES => match index {
+            0 => String,
+            1..=3 => Integer,
+            _ => Unused,
+        },
+        _ if index < 3 => Integer,
+        _ => Unused,
+    }
+}
+
+fn run_battle_fairy_script_function<Runtime: ScriptFunctionRuntime>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    script_player_id: Option<i32>,
+    function_id: i32,
+    integer_arguments: [Option<i32>; 4],
+    string_arguments: [Option<&[u8]>; 2],
+) -> Option<i32> {
+    let string = |index: usize| string_arguments[index].map(<[u8]>::to_vec);
+    let integer = |index: usize| integer_arguments[index].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    let action = match function_id {
+        SCRIPT_FUNCTION_ADD_BATTLE_FAIRY_SKILL => {
+            let (Some(player_name), Some(skill_name)) = (string(0), string(1)) else {
+                return Some(-1);
+            };
+            BattleFairyScriptAction::AddSkill {
+                player_name,
+                skill_name,
+                skill_level: integer(2),
+                position: integer_arguments[3],
+            }
+        }
+        SCRIPT_FUNCTION_GET_FETCH_POWER => {
+            let Some(player_name) = string(0) else {
+                return Some(0);
+            };
+            BattleFairyScriptAction::GetFetchPower { player_name }
+        }
+        SCRIPT_FUNCTION_SET_BATTLE_FAIRY_ATTRIBUTE => {
+            let Some(player_name) = string(0) else {
+                return Some(0);
+            };
+            let (attribute, value) = (integer(1), integer(2));
+            if attribute == SCRIPT_INT_PARAMETER_ERROR || value == SCRIPT_INT_PARAMETER_ERROR {
+                return Some(0);
+            }
+            BattleFairyScriptAction::SetAttribute {
+                player_name,
+                attribute,
+                value,
+            }
+        }
+        SCRIPT_FUNCTION_ALLOCATE_BATTLE_FAIRY_SKILL => {
+            let Some(player_name) = string(0) else {
+                return Some(0);
+            };
+            let position = integer(1);
+            if !(3..=5).contains(&position) {
+                return Some(0);
+            }
+            BattleFairyScriptAction::ResetSkill {
+                player_name,
+                position,
+            }
+        }
+        SCRIPT_FUNCTION_ALLOCATE_BATTLE_FAIRY_SPECIAL_SKILL => {
+            let Some(player_name) = string(0) else {
+                return Some(0);
+            };
+            BattleFairyScriptAction::ResetSkill {
+                player_name,
+                position: 6,
+            }
+        }
+        SCRIPT_FUNCTION_REVIVE_BATTLE_FAIRY => {
+            let Some(player_name) = string(0) else {
+                return Some(0);
+            };
+            if script_player_id.is_none() {
+                return Some(0);
+            }
+            BattleFairyScriptAction::Revive { player_name }
+        }
+        SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_ID
+        | SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_LEVEL => {
+            let Some(player_name) = string(0) else {
+                return Some(0);
+            };
+            let position = integer(1);
+            let valid = if function_id == SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_ID {
+                (3..=6).contains(&position)
+            } else {
+                (0..=6).contains(&position)
+            };
+            if !valid {
+                return Some(0);
+            }
+            BattleFairyScriptAction::GetSkillValue {
+                player_name,
+                position,
+                value_id: if function_id == SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_ID {
+                    2
+                } else {
+                    1
+                },
+            }
+        }
+        SCRIPT_FUNCTION_ADD_BATTLE_FAIRY_EXPERIENCE => {
+            let Some(player_name) = string(0) else {
+                return Some(0);
+            };
+            let experience = integer(1);
+            if experience <= 0 || experience == SCRIPT_INT_PARAMETER_ERROR {
+                return Some(0);
+            }
+            BattleFairyScriptAction::AddExperience {
+                player_name,
+                experience,
+            }
+        }
+        SCRIPT_FUNCTION_GET_BATTLE_FAIRY_ATTRIBUTE => {
+            let Some(player_name) = string(0) else {
+                return Some(0);
+            };
+            let attribute = integer(1);
+            if attribute == SCRIPT_INT_PARAMETER_ERROR {
+                return Some(0);
+            }
+            BattleFairyScriptAction::GetAttribute {
+                player_name,
+                attribute,
+            }
+        }
+        SCRIPT_FUNCTION_RECREATE_BATTLE_FAIRY_ATTRIBUTES => {
+            let Some(player_name) = string(0) else {
+                return Some(0);
+            };
+            let (mode, minimum, maximum) = (integer(1), integer(2), integer(3));
+            if script_player_id.is_none()
+                || !matches!(mode, 0 | 1)
+                || minimum == SCRIPT_INT_PARAMETER_ERROR
+                || maximum == SCRIPT_INT_PARAMETER_ERROR
+            {
+                return Some(0);
+            }
+            BattleFairyScriptAction::RecreateAttributes {
+                player_name,
+                mode,
+                minimum,
+                maximum,
+            }
+        }
+        _ => return None,
+    };
+    Some(game.run_battle_fairy_script_action(script_player_id, action, runtime))
+}
+
 /// Единый reached tail `CScript::RunFunction`: selector уже разрешён через
 /// загруженный FunctionList, а аргументы вычислены тем же экземпляром CScript.
 /// Порядок family-вызовов не наблюдаем сценарием, потому что каждый owner
@@ -2262,8 +2484,8 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     script_npc_id: Option<i32>,
     script_region_id: Option<i32>,
     function_id: i32,
-    integer_arguments: [Option<i32>; 3],
-    first_string_argument: Option<&[u8]>,
+    integer_arguments: [Option<i32>; 4],
+    string_arguments: [Option<&[u8]>; 2],
 ) -> ScriptFunctionDispatchOutcome {
     macro_rules! handled {
         ($outcome:expr, $pattern:path) => {
@@ -2304,7 +2526,11 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             script_player_id,
             script_npc_id,
             function_id,
-            integer_arguments,
+            [
+                integer_arguments[0],
+                integer_arguments[1],
+                integer_arguments[2]
+            ],
         ),
         CountryWarQueryScriptFunctionOutcome::Handled
     );
@@ -2318,6 +2544,17 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         ),
         CountryWarDeclarationScriptFunctionOutcome::Handled
     );
+
+    if let Some(legacy_return) = run_battle_fairy_script_function(
+        game,
+        runtime,
+        script_player_id,
+        function_id,
+        integer_arguments,
+        string_arguments,
+    ) {
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+    }
     handled!(
         run_country_scalar_query_script_function(
             game,
@@ -2389,7 +2626,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         game,
         script_player_id.unwrap_or_default(),
         function_id,
-        first_string_argument,
+        string_arguments[0],
         runtime,
     ) {
         EquipmentDaKongScriptFunctionOutcome::DifferentFunction => {

@@ -15,6 +15,9 @@
 //! limit и поштучное создание остальных типов; ordinary upgrade mutation ниже
 //! остаётся RAW. NPC shop замыкает repair/vend formulas с setup-факторами;
 //! integer durability ratio продажи сохранён как наблюдаемая x86-семантика.
+//! `ReCreateBattleFairyAttributes` сохраняет странный повтор полного набора
+//! RNG-бросков по числу instance-addon-ов; оптимизация донора в один pass не
+//! переносится, потому что меняла итоговое игровое состояние RNG.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -24,9 +27,11 @@ use super::cgoods::{CGoods, GoodsAddonProperty, GoodsAddonPropertyValue};
 use super::cgoodsbaseproperties::{
     CGoodsBaseProperties, GAP_ARMOR_CORRECTION, GAP_ARMOR_UPGRADE, GAP_ATTACK_SPEED_CORRECTION,
     GAP_ATTACK_SPEED_UPGRADE, GAP_BF_ABRAVE_ADDON, GAP_BF_ABRAVE_GROW, GAP_BF_AGILITY_ADDON,
-    GAP_BF_AGILITY_GROW, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_GROW, GAP_BF_LIFE_ADDON,
-    GAP_BF_LIFE_GROW, GAP_BF_MP_ADDON, GAP_BF_MP_GROW, GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_GROW,
-    GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISE_GROW, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_GROW,
+    GAP_BF_AGILITY_BASE, GAP_BF_AGILITY_GROW, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_BASE,
+    GAP_BF_ATTACK_GROW, GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE_BASE, GAP_BF_LIFE_ADDON,
+    GAP_BF_LIFE_GROW, GAP_BF_MP_ADDON, GAP_BF_MP_GROW, GAP_BF_PULLULATERATE, GAP_BF_SPRITE_ADDON,
+    GAP_BF_SPRITE_BASE, GAP_BF_SPRITE_GROW, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISE_GROW,
+    GAP_BF_SPRITUALISM_BASE, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_BASE, GAP_BF_STRENGH_GROW,
     GAP_BF_WEAPON_LEVEL, GAP_BURDEN_UPPER_LIMIT_CORRECTION,
     GAP_BURDEN_UPPER_LIMIT_CORRECTION_UPGRADE, GAP_DODGE_CORRECTION, GAP_DODGE_UPGRADE,
     GAP_ELEMENT_ATTACK_CORRECTION, GAP_ELEMENT_ATTACK_UPGRADE, GAP_ELEMENT_RESISTANCE_CORRECTION,
@@ -92,6 +97,46 @@ impl Error for GoodsFactoryDecodeError {
     }
 }
 
+fn recreate_battle_fairy_property<Random>(
+    goods: &mut CGoods,
+    base: &CGoodsBaseProperties,
+    property: i32,
+    requested_minimum: i32,
+    requested_maximum: i32,
+    scaled_modifier_range: bool,
+    random: &mut Random,
+) where
+    Random: FnMut(i32) -> i32,
+{
+    if !goods.query_attribute(property) {
+        return;
+    }
+    let Some(value) = base.get_addon_property_values(property).first() else {
+        return;
+    };
+    let (minimum, maximum, scale) = if scaled_modifier_range {
+        let Some(modifier) = value.modifiers.first() else {
+            return;
+        };
+        (
+            (f64::from(modifier.lower_limit) * 0.0001_f64) as i32,
+            (f64::from(modifier.upper_limit) * 0.0001_f64) as i32,
+            10_000_i64,
+        )
+    } else {
+        (requested_minimum, requested_maximum, 1_i64)
+    };
+    let width = i64::from(maximum) - i64::from(minimum) + 1;
+    if width <= 0 || width > i64::from(i32::MAX) {
+        return;
+    }
+    let rolled = minimum.wrapping_add(random(width as i32));
+    let stored =
+        i64::from(value.base_value).wrapping_add(i64::from(rolled).wrapping_mul(scale)) as i32;
+    let _ = goods.set_addon_property_value_core(property, 1, 0);
+    let _ = goods.set_addon_property_value_core(property, 1, stored);
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CGoodsFactory {
     goods: BTreeMap<u32, CGoodsBaseProperties>,
@@ -144,6 +189,60 @@ impl CGoodsFactory {
 
     pub(crate) fn repair_equipment(&self, goods: &mut CGoods) -> bool {
         goods.repair_durability(self)
+    }
+
+    /// Exact `ReCreateBattleFairyAttributes`: исходный owner повторяет весь
+    /// набор бросков для каждого instance-addon-а и тем самым оставляет в
+    /// товаре последний RNG-pass. Это намеренно не свёрнуто в один бросок.
+    pub(crate) fn recreate_battle_fairy_attributes<Random>(
+        &self,
+        goods: &mut CGoods,
+        mode: i32,
+        minimum: i32,
+        maximum: i32,
+        mut random: Random,
+    ) -> bool
+    where
+        Random: FnMut(i32) -> i32,
+    {
+        if goods.addon_property_value(self, GAP_BF_BATTLE_FAIRY, 1) != 1 || !matches!(mode, 0 | 1) {
+            return false;
+        }
+        let width = i64::from(maximum) - i64::from(minimum) + 1;
+        if width <= 0 || width > i64::from(i32::MAX) {
+            return false;
+        }
+        let Some(base) = self
+            .query_goods_base_properties(goods.base_properties_index())
+            .cloned()
+        else {
+            return false;
+        };
+        let pass_count = goods.addon_properties().len();
+        for _ in 0..pass_count {
+            recreate_battle_fairy_property(
+                goods,
+                &base,
+                GAP_BF_PULLULATERATE,
+                minimum,
+                maximum,
+                false,
+                &mut random,
+            );
+            if mode == 0 {
+                for property in [
+                    GAP_BF_BRAVE_BASE,
+                    GAP_BF_AGILITY_BASE,
+                    GAP_BF_SPRITUALISM_BASE,
+                    GAP_BF_STRENGH_BASE,
+                    GAP_BF_SPRITE_BASE,
+                    GAP_BF_ATTACK_BASE,
+                ] {
+                    recreate_battle_fairy_property(goods, &base, property, 0, 0, true, &mut random);
+                }
+            }
+        }
+        true
     }
     pub(crate) fn query_goods_max_stack_number(&self, goods_index: u32) -> u32 {
         let Some(properties) = self.query_goods_base_properties(goods_index) else {

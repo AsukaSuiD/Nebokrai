@@ -51,6 +51,9 @@
 //! function/variable setter безопасно материализует исходный freed-owner
 //! контракт как `None`; старый `length + 1` NUL-padding заменён bounded `Vec` и
 //! C-string prefix adapter-ом.
+//! Тот же owner доводит battle-fairy script `9400..9411` до canonical players,
+//! enhancement/equipment goods, общего RNG, skill/property mutation, client
+//! wire и file audit; goods reset `0x8FC29` вызывает его напрямую.
 //! `MyStringTable` также принадлежит `CGame`: reload сначала очищает map,
 //! публикует decoded prefix и сохраняет пустой fallback `GetStringByID`.
 //! `CHonorRanks` хранит четыре rank-type × четыре country snapshots; поля
@@ -381,9 +384,14 @@ use crate::gameserver::appserver::cs2ccontainerobjectamountchange::CS2CContainer
 use crate::gameserver::appserver::cs2ccontainerobjectmove::{
     CS2CContainerObjectMove, ContainerObjectMoveOperation,
 };
-use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyProperty;
+use crate::gameserver::appserver::goods::cbattlefairyproperty::{
+    BattleFairyExpUpResult, BattleFairyPlayerFacts, CBattleFairyProperty,
+};
 use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+    GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE, GAP_BF_CURRENT_MAX_EXP, GAP_BF_DEFUALT_SKLL,
+    GAP_BF_HP, GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL,
+    GAP_BF_MAX_MP, GAP_BF_MODULE, GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH,
     GAP_EQUIP_STATE, GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
@@ -1839,6 +1847,37 @@ pub(crate) trait BattleFairySkillResetContext {
         &mut self,
         effect: &BattleFairySkillResetEffect,
     ) -> Vec<i32>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyScriptAction {
+    AddSkill {
+        player_name: Vec<u8>,
+        skill_name: Vec<u8>,
+        skill_level: i32,
+        position: Option<i32>,
+    },
+    GetFetchPower { player_name: Vec<u8> },
+    SetAttribute {
+        player_name: Vec<u8>,
+        attribute: i32,
+        value: i32,
+    },
+    ResetSkill { player_name: Vec<u8>, position: i32 },
+    Revive { player_name: Vec<u8> },
+    GetSkillValue {
+        player_name: Vec<u8>,
+        position: i32,
+        value_id: u32,
+    },
+    AddExperience { player_name: Vec<u8>, experience: i32 },
+    GetAttribute { player_name: Vec<u8>, attribute: i32 },
+    RecreateAttributes {
+        player_name: Vec<u8>,
+        mode: i32,
+        minimum: i32,
+        maximum: i32,
+    },
 }
 
 pub(crate) trait BattleFairySkillRequestContext {
@@ -15950,14 +15989,16 @@ impl CGame {
     /// Runtime entry point `CBattleFairyContainer::ResetSkill`, общий для
     /// script-functions распределения обычного/special skill и прямого caller-а
     /// с расходом reset item. RNG принадлежит одному `CGame` sequence.
-    pub(crate) fn reset_battle_fairy_skill<Context: BattleFairySkillResetContext>(
+    pub(crate) fn reset_battle_fairy_skill<Context>(
         &mut self,
         player_id: i32,
         position: i32,
         consume_item: bool,
-        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
         context: &mut Context,
-    ) -> Option<BattleFairySkillResetReport> {
+    ) -> Option<BattleFairySkillResetReport>
+    where
+        Context: BattleFairySkillResetContext + OldClientGoodsCodec,
+    {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let mut report = {
             let (players, random_state, goods_factory, skill_factory) = (
@@ -15968,6 +16009,7 @@ impl CGame {
             );
             let player = players.get_mut(&player_id)?;
             let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+            let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.reset_battle_fairy_skill(
                 enabled,
                 position,
@@ -15975,7 +16017,7 @@ impl CGame {
                 goods_factory,
                 skill_factory,
                 &mut random,
-                encode_old_client,
+                &mut encode_old_client,
             )
         };
         for effect in report.effects.clone() {
@@ -16110,6 +16152,409 @@ impl CGame {
             })
             .collect();
         BattleFairyScriptSkillAttachReport { skills, deliveries }
+    }
+
+    /// Gameplay owner script-family `9400..9411`. Selector и вычисление
+    /// аргументов остаются в `CScript::RunFunction`; здесь замкнуты canonical
+    /// player/equipment mutation, RNG, client wire и локальный audit.
+    pub(crate) fn run_battle_fairy_script_action<Context>(
+        &mut self,
+        script_player_id: Option<i32>,
+        action: BattleFairyScriptAction,
+        context: &mut Context,
+    ) -> i32
+    where
+        Context: BattleFairyDeathContext + BattleFairySkillResetContext,
+    {
+        let target_id = |game: &Self, player_name: &[u8]| {
+            if player_name.is_empty() {
+                script_player_id.filter(|player_id| game.find_player(*player_id).is_some())
+            } else {
+                game.find_player_by_name(player_name).map(CPlayer::player_id)
+            }
+        };
+        match action {
+            BattleFairyScriptAction::GetFetchPower { player_name } => target_id(self, &player_name)
+                .and_then(|player_id| self.find_player(player_id))
+                .map_or(0, |player| player.fetch_power() as i32),
+            BattleFairyScriptAction::GetSkillValue {
+                player_name,
+                position,
+                value_id,
+            } => target_id(self, &player_name)
+                .and_then(|player_id| self.find_player(player_id))
+                .and_then(|player| player.equipment().get_goods(10))
+                .map_or(0, |goods| {
+                    goods.addon_property_value(&self.goods_factory, GAP_BF_SKY + position, value_id)
+                }),
+            BattleFairyScriptAction::GetAttribute {
+                player_name,
+                attribute,
+            } => {
+                if !is_battle_fairy_script_attribute(attribute) {
+                    return 0;
+                }
+                let stored = target_id(self, &player_name)
+                    .and_then(|player_id| self.find_player(player_id))
+                    .and_then(|player| player.equipment().get_goods(10))
+                    .map_or(0, |goods| {
+                        goods.addon_property_value(&self.goods_factory, attribute, 1)
+                    });
+                if matches!(attribute, GAP_BF_LEVEL..=GAP_BF_CURRENT_MAX_EXP)
+                    || attribute == GAP_BF_PULLULATERATE
+                {
+                    stored
+                } else {
+                    (f64::from(stored) * 0.0001_f64) as i32
+                }
+            }
+            BattleFairyScriptAction::AddSkill {
+                player_name,
+                skill_name,
+                skill_level,
+                position,
+            } => {
+                let Some(player_id) = target_id(self, &player_name) else {
+                    return -1;
+                };
+                let skill_level = if skill_level == 0x09ff_fff9 { 1 } else { skill_level };
+                let skill_id = self.skill_factory.query_skill_id(Some(&skill_name));
+                if skill_id == 0
+                    || !self.find_player(player_id).is_some_and(|player| {
+                        player.equipment().get_goods(10).is_some_and(|goods| {
+                            goods.addon_property_value(&self.goods_factory, GAP_BF_HP, 1) != 0
+                        })
+                    })
+                {
+                    return -1;
+                }
+                let Some(mutation) = self.add_remote_player_skill(
+                    player_id,
+                    &skill_name,
+                    skill_level as u16,
+                ) else {
+                    return -1;
+                };
+                let legacy_return = i32::from(mutation.legacy_result);
+                if legacy_return == 0 {
+                    return 0;
+                }
+                let Some(position) = position.filter(|position| (0..=6).contains(position)) else {
+                    return legacy_return;
+                };
+                let update = {
+                    let player = self
+                        .find_player_mut(player_id)
+                        .expect("resolved battle-fairy script player остаётся в map");
+                    let goods = player
+                        .equipment_mut()
+                        .get_goods_mut(10)
+                        .expect("AddSkill guard сохранил slot 10");
+                    let property = GAP_BF_SKY + position;
+                    if position >= 3 {
+                        let _ = goods.set_addon_property_value_core(property, 1, 0);
+                        let _ = goods.set_addon_property_value_core(property, 2, 0);
+                    }
+                    let _ = goods.set_addon_property_value_core(property, 1, skill_level);
+                    if position >= 3 {
+                        let _ = goods.set_addon_property_value_core(property, 2, skill_id as i32);
+                    }
+                    crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
+                        message_type: 0x0b_f918,
+                        player_id,
+                        goods: goods.identity(),
+                        old_client_payload: context.encode_goods_for_old_client(goods),
+                    }
+                };
+                let _ = self.send_battle_fairy_goods_update(&update);
+                if let Some(initiator_id) = script_player_id {
+                    if let Some(message) = player_skill_learned_message(
+                        0x0b_f71d,
+                        skill_id,
+                        mutation.skill_level,
+                        mutation.skill_level,
+                        &skill_name,
+                        &self.skill_factory,
+                        true,
+                    ) {
+                        let _ = message.send_to_player(self.net_server(), initiator_id);
+                    }
+                    if let Some(player) = self.find_player(initiator_id) {
+                        let account = player.account();
+                        let skill_id_text = skill_id.to_string();
+                        let skill_level_text = skill_level.to_string();
+                        let text = format_legacy_text_fields(
+                            self.get_string_by_id(b"ZHGS0039"),
+                            &[account, skill_id_text.as_bytes(), skill_level_text.as_bytes()],
+                            0xff,
+                        );
+                        put_string_to_file("BattleFairy", &text);
+                    }
+                }
+                legacy_return
+            }
+            BattleFairyScriptAction::SetAttribute {
+                player_name,
+                attribute,
+                value,
+            } => {
+                if !is_battle_fairy_script_attribute(attribute) {
+                    return 0;
+                }
+                let resolved = target_id(self, &player_name);
+                if let Some(player_id) = resolved {
+                    let update = {
+                        let (players, factory) = (&mut self.players, &self.goods_factory);
+                        let Some(player) = players.get_mut(&player_id) else {
+                            return 0;
+                        };
+                        let Some(goods) = player.equipment_mut().get_goods_mut(10) else {
+                            return 0;
+                        };
+                        if matches!(attribute, GAP_BF_LEVEL..=GAP_BF_CURRENT_MAX_EXP) {
+                            let _ = goods.set_addon_property_value_core(attribute, 1, value);
+                        } else {
+                            let scaled = i64::from(value).wrapping_mul(10_000);
+                            if (GAP_BF_BRAVE..=GAP_BF_STRENGH).contains(&attribute) {
+                                let balanced = i64::from(goods.addon_property_value(
+                                    factory,
+                                    attribute,
+                                    1,
+                                ))
+                                .wrapping_add(scaled)
+                                .wrapping_sub(i64::from(goods.addon_property_value(
+                                    factory,
+                                    attribute,
+                                    2,
+                                )));
+                                let _ = goods.set_addon_property_value_core(attribute, 1, 0);
+                                let _ = goods.set_addon_property_value_core(attribute, 2, 0);
+                                let _ = goods.set_addon_property_value_core(
+                                    attribute,
+                                    1,
+                                    clamp_battle_fairy_script_value(balanced),
+                                );
+                                let _ = goods.set_addon_property_value_core(
+                                    attribute,
+                                    2,
+                                    scaled as i32,
+                                );
+                            } else {
+                                let changed = i64::from(goods.addon_property_value(
+                                    factory,
+                                    attribute,
+                                    1,
+                                ))
+                                .wrapping_add(scaled);
+                                let _ = goods.set_addon_property_value_core(
+                                    attribute,
+                                    1,
+                                    clamp_battle_fairy_script_value(changed),
+                                );
+                            }
+                        }
+                        crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
+                            message_type: 0x0b_f918,
+                            player_id,
+                            goods: goods.identity(),
+                            old_client_payload: context.encode_goods_for_old_client(goods),
+                        }
+                    };
+                    let _ = self.send_battle_fairy_goods_update(&update);
+                }
+                if let Some(initiator_id) = script_player_id {
+                    if let Some(player) = self.find_player(initiator_id) {
+                        let attribute_text = attribute.to_string();
+                        let value_text = value.to_string();
+                        let text = format_legacy_text_fields(
+                            self.get_string_by_id(b"ZHGS0040"),
+                            &[player.account(), attribute_text.as_bytes(), value_text.as_bytes()],
+                            0xff,
+                        );
+                        put_string_to_file("BattleFairy", &text);
+                    }
+                }
+                0
+            }
+            BattleFairyScriptAction::ResetSkill { player_name, position } => {
+                let Some(player_id) = target_id(self, &player_name) else {
+                    return 0;
+                };
+                if self
+                    .find_player(player_id)
+                    .and_then(|player| player.equipment().get_goods(10))
+                    .is_none()
+                {
+                    return 0;
+                }
+                let _ = self.reset_battle_fairy_skill(
+                    player_id,
+                    position,
+                    false,
+                    context,
+                );
+                0
+            }
+            BattleFairyScriptAction::Revive { player_name } => {
+                let Some(player_id) = target_id(self, &player_name) else {
+                    return 0;
+                };
+                let alive = self.find_player(player_id).is_some_and(|player| {
+                    player.equipment().get_goods(10).is_some_and(|goods| {
+                        goods.addon_property_value(&self.goods_factory, GAP_BF_HP, 1) > 0
+                    })
+                });
+                if alive {
+                    let text = self.get_string_by_id(b"ZHGS0041");
+                    let _ = colored_player_notice_message(0xffff_ffff, 0, text)
+                        .send_to_player(self.net_server(), player_id);
+                    return 0;
+                }
+                let revived = {
+                    let (players, factory) = (&mut self.players, &self.goods_factory);
+                    players
+                        .get_mut(&player_id)
+                        .is_some_and(|player| player.revive_battle_fairy(factory))
+                };
+                if !revived {
+                    return 0;
+                }
+                let update = self.find_player(player_id).and_then(|player| {
+                    player.equipment().get_goods(10).map(|goods| {
+                        crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
+                            message_type: 0x0b_f918,
+                            player_id,
+                            goods: goods.identity(),
+                            old_client_payload: context.encode_goods_for_old_client(goods),
+                        }
+                    })
+                });
+                if let Some(update) = update {
+                    let _ = self.send_battle_fairy_goods_update(&update);
+                }
+                let external = context.player_properties_external_facts(player_id);
+                if let Some(player) = self.find_player(player_id) {
+                    let _ = self.send_player_properties_changed(player, external);
+                }
+                1
+            }
+            BattleFairyScriptAction::AddExperience {
+                player_name,
+                experience,
+            } => {
+                if experience <= 0 {
+                    return 0;
+                }
+                let Some(target_player_id) = target_id(self, &player_name) else {
+                    return 0;
+                };
+                let account = self
+                    .find_player(target_player_id)
+                    .map(|player| player.account().to_vec())
+                    .unwrap_or_default();
+                let Some(source_player_id) = script_player_id else {
+                    return 0;
+                };
+                let mut remaining = experience as u32;
+                let report_and_update = {
+                    let (players, factory, exp_config) = (
+                        &mut self.players,
+                        &self.goods_factory,
+                        &self.battle_fairy_exp_config,
+                    );
+                    let Some(goods) = players
+                        .get_mut(&source_player_id)
+                        .and_then(CPlayer::enhancement_selected_goods_mut)
+                    else {
+                        return 0;
+                    };
+                    if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
+                        return 0;
+                    }
+                    let facts = BattleFairyPlayerFacts {
+                        player_id: target_player_id,
+                        account: &account,
+                    };
+                    let Ok(Some(report)) = goods.battle_fairy_exp_up(
+                        factory,
+                        Some(facts),
+                        &mut remaining,
+                        |equip_level, level| exp_config.dw_exp_up(equip_level, level),
+                    ) else {
+                        return 0;
+                    };
+                    if report.result <= BattleFairyExpUpResult::None {
+                        return 0;
+                    }
+                    let _ = goods.save_battle_fairy_property(factory);
+                    let update = crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
+                        message_type: 0x0b_f918,
+                        player_id: target_player_id,
+                        goods: goods.identity(),
+                        old_client_payload: context.encode_goods_for_old_client(goods),
+                    };
+                    (report, update)
+                };
+                for log in report_and_update.0.level_logs {
+                    let level = log.level.to_string();
+                    let text = format_legacy_text_fields(
+                        self.get_string_by_id(b"ZHGS0017"),
+                        &[&log.account, &log.goods_name, level.as_bytes()],
+                        0xff,
+                    );
+                    put_string_to_file("BattleFairy", &text);
+                }
+                let _ = self.send_battle_fairy_goods_update(&report_and_update.1);
+                0
+            }
+            BattleFairyScriptAction::RecreateAttributes {
+                player_name,
+                mode,
+                minimum,
+                maximum,
+            } => {
+                let Some(target_player_id) = target_id(self, &player_name) else {
+                    return 0;
+                };
+                let Some(source_player_id) = script_player_id else {
+                    return 0;
+                };
+                let update = {
+                    let (players, factory, random_state) = (
+                        &mut self.players,
+                        &self.goods_factory,
+                        &mut self.random_state,
+                    );
+                    let Some(goods) = players
+                        .get_mut(&source_player_id)
+                        .and_then(CPlayer::enhancement_selected_goods_mut)
+                    else {
+                        return 0;
+                    };
+                    if !factory.recreate_battle_fairy_attributes(
+                        goods,
+                        mode,
+                        minimum,
+                        maximum,
+                        |upper_bound| game_legacy_random(random_state, upper_bound),
+                    ) {
+                        return 0;
+                    }
+                    crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
+                        message_type: 0x0b_f918,
+                        player_id: target_player_id,
+                        goods: goods.identity(),
+                        old_client_payload: context.encode_goods_for_old_client(goods),
+                    }
+                };
+                let external = context.player_properties_external_facts(target_player_id);
+                if let Some(player) = self.find_player(target_player_id) {
+                    let _ = self.send_player_properties_changed(player, external);
+                }
+                let _ = self.send_battle_fairy_goods_update(&update);
+                0
+            }
+        }
     }
 
     /// Runtime entry point уже декодированного `skillmessage 0x90001`.
@@ -17730,6 +18175,20 @@ fn synthesis_broadcast_message(
 /// используют один opcode, но первый добавляет delay к restore и масштабирует
 /// MP только для float-skill, а второй передаёт чистый restore и масштабирует
 /// стоимость безусловно.
+fn is_battle_fairy_script_attribute(attribute: i32) -> bool {
+    (GAP_BF_LEVEL..=GAP_BF_MODULE).contains(&attribute)
+        || (GAP_BF_SKY..=GAP_BF_MAX_MP).contains(&attribute)
+        || matches!(
+            attribute,
+            GAP_BF_HUOXIESHU_SKILL | GAP_BF_LINGZHISHU_SKILL | GAP_BF_DEFUALT_SKLL
+        )
+}
+
+fn clamp_battle_fairy_script_value(value: i64) -> i32 {
+    let low = value as i32;
+    if low <= 0 { 0 } else { low.min(2_000_000_000) }
+}
+
 pub(crate) fn player_skill_learned_message(
     message_type: u32,
     skill_id: u32,

@@ -75,6 +75,8 @@
 //! `BFPropertyAdd`, equipment mutation или `PropertiesChanged`. Account для
 //! audit принадлежит player snapshot и пока заполняется отдельным caller-ом
 //! при восстановлении player identity.
+//! Script revive боевой феи восстанавливает HP/MP из maxima и атомарно меняет
+//! recall/died/summon/WarSoul state; goods и properties wire публикует CGame.
 //! Поэтому `from_send_state` остаётся явной assembly-границей уже
 //! восстановленного runtime. Figure передаётся как доказанный derived virtual
 //! fact; владение spatial state остаётся у `CMoveShape`.
@@ -3746,6 +3748,13 @@ impl CPlayer {
         self.enhancement.base().goods_id_at(0)
     }
 
+    /// Enhancement container хранит только shadow metadata; script 9409/9411
+    /// каждый раз разрешает выбранный товар обратно в его live owner.
+    pub(crate) fn enhancement_selected_goods_mut(&mut self) -> Option<&mut CGoods> {
+        let goods_id = self.enhancement_selected_goods_id()?;
+        self.get_goods_by_id_mut(goods_id)
+    }
+
     /// Script-function owner пишет server-trusted path; client `0x8FC11/12`
     /// никогда не передаёт имя исполняемого файла.
     pub(crate) fn set_last_container_script(&mut self, script: impl AsRef<[u8]>) {
@@ -6395,6 +6404,30 @@ impl CPlayer {
     pub(crate) const fn set_fetch_power(&mut self, value: u32, setup_maximum: i32) {
         let maximum = setup_maximum as u32;
         self.base_properties.fetch_power = if maximum < value { maximum } else { value };
+    }
+
+    pub(crate) const fn fetch_power(&self) -> u32 {
+        self.base_properties.fetch_power
+    }
+
+    /// Player-owned mutation `ReviveBattleFairy`; client goods/state wire
+    /// остаётся у вызывающего `CGame`, уже после изменения всех полей.
+    pub(crate) fn revive_battle_fairy(&mut self, factory: &CGoodsFactory) -> bool {
+        let Some(goods) = self.equipment.get_goods_mut(10) else {
+            return false;
+        };
+        if goods.addon_property_value(factory, GAP_BF_HP, 1) > 0 {
+            return false;
+        }
+        let maximum_hp = goods.addon_property_value(factory, GAP_BF_MAX_HP, 1);
+        let maximum_mp = goods.addon_property_value(factory, GAP_BF_MAX_MP, 1);
+        let _ = goods.set_addon_property_value_core(GAP_BF_HP, 1, maximum_hp);
+        let _ = goods.set_addon_property_value_core(GAP_BF_MP, 1, maximum_mp);
+        self.base_properties.battle_fairy_recall = true;
+        self.base_properties.battle_fairy_died = false;
+        self.battle_fairy_summoned = false;
+        self.war_soul_state = 0;
+        true
     }
 
     pub(crate) const fn set_battle_fairy_recall(&mut self, value: bool) {
