@@ -23,17 +23,33 @@
 //! `0x60306..0x6030D`. Ветка `0x9050A` также сохраняет исходную проверку
 //! target changing-state и wire `[target, caller, country]`; подтверждённый
 //! WorldServer `0x6030F` принимает пакет как намеренный no-op без ответа.
+//! `0x9050B` замыкает вход в country-war: ordered camp-area и region RNG,
+//! `ChangeRegion`, wrapping/clamped exploit и client `0xBF72E/0xBF816`.
 
 use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,
 };
+use super::super::player::PlayerExploitMutationReport;
+use super::super::region::{RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition};
 use super::super::servercountryregion::{CountryBattleStateBlock, CountryRegionRuntimeContext};
 use crate::gameserver::gameserver::game::{CGame, ServerRegionOwner};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
-pub(crate) trait GameCountryWarRuntime: CountryRegionRuntimeContext {
+pub(crate) trait GameCountryWarRuntime:
+    CountryRegionRuntimeContext + RegionRandomContext
+{
     /// Материализует virtual `UpdateContendPlayer` country-region owner-а.
     fn update_country_contend_player(&mut self, region_id: i32);
+
+    /// Исполняет `CPlayer::ChangeRegion(region, x, y, -1, 0, 0, 0)`; legacy
+    /// bool наблюдается в отчёте, но не gate-ит последующую exploit-награду.
+    fn change_country_war_player_region(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        x: i32,
+        y: i32,
+    ) -> bool;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,7 +116,49 @@ pub(crate) enum CountryWarBroadcastOutcome {
 pub(crate) struct GameCountryWarMessageReport {
     pub(crate) dispatched: Option<CountryWarMessageDispatchReport>,
     pub(crate) governance: Option<CountryGovernanceReport>,
+    pub(crate) entry: Option<CountryWarEntryReport>,
     pub(crate) broadcast: Option<CountryWarBroadcastOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarEntryOutcome {
+    MissingPlayer,
+    MissingRegion {
+        region_id: i32,
+    },
+    WrongRegionKind {
+        region_id: i32,
+    },
+    MissingCamp {
+        country: u8,
+        camp: i32,
+    },
+    MissingEntryArea {
+        region_id: i32,
+        camp: i32,
+    },
+    PositionBlocked(RegionCellAccessBlock),
+    CountryParametersUnavailable {
+        increment: Option<i32>,
+        maximum: Option<i32>,
+    },
+    Completed {
+        region_id: i32,
+        camp: i32,
+        position: RegionRandomPosition,
+        change_region_result: bool,
+        exploit: PlayerExploitMutationReport,
+        exploit_delivery: i32,
+        notice_delivery: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountryWarEntryReport {
+    pub(crate) opcode: u32,
+    pub(crate) player_id: i32,
+    pub(crate) player_id_complete: bool,
+    pub(crate) outcome: CountryWarEntryOutcome,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -214,11 +272,21 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
     Result<GameCountryWarMessageReport, CountryWarMessageDispatchError<CountryBattleStateBlock>>,
 > {
     let opcode = message.message_type() as u32;
+    if opcode == 0x9050b {
+        let entry = dispatch_country_war_entry_message(message, game, runtime);
+        return Some(Ok(GameCountryWarMessageReport {
+            dispatched: None,
+            governance: None,
+            entry: Some(entry),
+            broadcast: None,
+        }));
+    }
     if matches!(opcode, 0x90502..=0x9050a) {
         let governance = dispatch_country_governance_message(message, game, opcode);
         return Some(Ok(GameCountryWarMessageReport {
             dispatched: None,
             governance: Some(governance),
+            entry: None,
             broadcast: None,
         }));
     }
@@ -267,8 +335,155 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
     Some(Ok(GameCountryWarMessageReport {
         dispatched: Some(dispatched),
         governance: None,
+        entry: None,
         broadcast,
     }))
+}
+
+fn dispatch_country_war_entry_message<Runtime: GameCountryWarRuntime>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    runtime: &mut Runtime,
+) -> CountryWarEntryReport {
+    let decoded_player_id = message.base_mut().get_long();
+    let player_id = decoded_player_id.unwrap_or(0);
+    let missing_player = || CountryWarEntryReport {
+        opcode: 0x9050b,
+        player_id,
+        player_id_complete: decoded_player_id.is_some(),
+        outcome: CountryWarEntryOutcome::MissingPlayer,
+    };
+    let Some(player) = game.find_player(player_id) else {
+        return missing_player();
+    };
+    let country = player.country();
+    let war_region_id = game
+        .country_war_sys()
+        .get_war_region_for_country(i32::from(country));
+    let camp = game.country_war_sys().get_war_camp(i32::from(country));
+    if !matches!(camp, 0 | 1) {
+        return CountryWarEntryReport {
+            opcode: 0x9050b,
+            player_id,
+            player_id_complete: decoded_player_id.is_some(),
+            outcome: CountryWarEntryOutcome::MissingCamp { country, camp },
+        };
+    }
+    let Some(owner) = game.take_region_owner(war_region_id) else {
+        return CountryWarEntryReport {
+            opcode: 0x9050b,
+            player_id,
+            player_id_complete: decoded_player_id.is_some(),
+            outcome: CountryWarEntryOutcome::MissingRegion {
+                region_id: war_region_id,
+            },
+        };
+    };
+    let ServerRegionOwner::Country(region) = &owner else {
+        game.restore_region_owner(owner);
+        return CountryWarEntryReport {
+            opcode: 0x9050b,
+            player_id,
+            player_id_complete: decoded_player_id.is_some(),
+            outcome: CountryWarEntryOutcome::WrongRegionKind {
+                region_id: war_region_id,
+            },
+        };
+    };
+    let position = region.country_war_entry_position(camp, runtime);
+    game.restore_region_owner(owner);
+    let position = match position {
+        Ok(Some(position)) => position,
+        Ok(None) => {
+            return CountryWarEntryReport {
+                opcode: 0x9050b,
+                player_id,
+                player_id_complete: decoded_player_id.is_some(),
+                outcome: CountryWarEntryOutcome::MissingEntryArea {
+                    region_id: war_region_id,
+                    camp,
+                },
+            };
+        }
+        Err(block) => {
+            return CountryWarEntryReport {
+                opcode: 0x9050b,
+                player_id,
+                player_id_complete: decoded_player_id.is_some(),
+                outcome: CountryWarEntryOutcome::PositionBlocked(block),
+            };
+        }
+    };
+
+    let increment = game.country_param().exploit_increment();
+    let maximum = game.country_param().max_exploit();
+    let (Some(increment), Some(maximum)) = (increment, maximum) else {
+        return CountryWarEntryReport {
+            opcode: 0x9050b,
+            player_id,
+            player_id_complete: decoded_player_id.is_some(),
+            outcome: CountryWarEntryOutcome::CountryParametersUnavailable { increment, maximum },
+        };
+    };
+    let change_region_result =
+        runtime.change_country_war_player_region(player_id, war_region_id, position.x, position.y);
+    let exploit = {
+        let player = game
+            .find_player_mut(player_id)
+            .expect("0x9050B сохраняет live player до ChangeRegion boundary");
+        player.set_exploit(player.exploit().wrapping_add(increment as u32), maximum)
+    };
+    let mut exploit_message = CMessage::new(0x000b_f72e);
+    exploit_message.add_ulong(exploit.applied);
+    let exploit_delivery = exploit_message.send_to_player(game.net_server(), player_id);
+
+    let notice = format_country_war_exploit_notice(game.get_string_by_id(b"GS0024"), increment);
+    let mut notice_message = CMessage::new(0x000b_f816);
+    notice_message.add_byte(0);
+    add_country_legacy_c_string(&mut notice_message, &notice);
+    let notice_delivery = notice_message.send_to_player(game.net_server(), player_id);
+
+    CountryWarEntryReport {
+        opcode: 0x9050b,
+        player_id,
+        player_id_complete: decoded_player_id.is_some(),
+        outcome: CountryWarEntryOutcome::Completed {
+            region_id: war_region_id,
+            camp,
+            position,
+            change_region_result,
+            exploit,
+            exploit_delivery,
+            notice_delivery,
+        },
+    }
+}
+
+fn format_country_war_exploit_notice(template: &[u8], increment: i32) -> Vec<u8> {
+    let template = &template[..template
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(template.len())];
+    let value = increment.to_string();
+    let mut text = Vec::with_capacity(template.len().saturating_add(value.len()));
+    if let Some(marker) = template.windows(2).position(|window| window == b"%d") {
+        text.extend_from_slice(&template[..marker]);
+        text.extend_from_slice(value.as_bytes());
+        text.extend_from_slice(&template[marker + 2..]);
+    } else {
+        text.extend_from_slice(template);
+    }
+    text.truncate(255);
+    text
+}
+
+fn add_country_legacy_c_string(message: &mut CMessage, value: &[u8]) {
+    let value = &value[..value
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(value.len())];
+    message.base_mut().add(value);
+    message.add_byte(0);
 }
 
 fn dispatch_country_governance_message(

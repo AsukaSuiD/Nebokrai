@@ -2264,6 +2264,10 @@ impl CPlayer {
 
     /// Exact `SetExploit`: signed CountryParam storage сравнивается как
     /// `unsigned long`, затем значение зажимается только сверху.
+    pub(crate) const fn exploit(&self) -> u32 {
+        self.base_properties.exploit
+    }
+
     pub(crate) fn set_exploit(
         &mut self,
         requested: u32,

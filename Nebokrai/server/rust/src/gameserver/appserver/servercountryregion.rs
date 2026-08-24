@@ -476,6 +476,38 @@ impl CServerCountryRegion {
         Ok(Some(position))
     }
 
+    /// Entry path клиентского `0x9050B`: camp выбирает ordered area-map,
+    /// `random(size)` является порядковым индексом iterator-а, а не map key.
+    /// Пустая карта и недостигнутый индекс сохраняют исходный silent no-op.
+    pub(crate) fn country_war_entry_position<Context: RegionRandomContext>(
+        &self,
+        camp: i32,
+        context: &mut Context,
+    ) -> Result<Option<RegionRandomPosition>, RegionCellAccessBlock> {
+        let areas = match camp {
+            WC_DEFEND => &self.defend_areas,
+            WC_ATTACK => &self.attack_areas,
+            _ => return Ok(None),
+        };
+        let index = context.random_below(areas.len() as i32);
+        let Some(area) = usize::try_from(index)
+            .ok()
+            .and_then(|index| areas.values().nth(index))
+        else {
+            return Ok(None);
+        };
+        self.base
+            .region
+            .get_random_pos_in_range(
+                area.left,
+                area.top,
+                area.right.wrapping_sub(area.left),
+                area.bottom.wrapping_sub(area.top),
+                context,
+            )
+            .map(Some)
+    }
+
     pub(crate) fn get_security(
         &self,
         x: i32,
