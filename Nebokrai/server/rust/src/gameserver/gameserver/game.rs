@@ -489,9 +489,9 @@ use crate::gameserver::appserver::player::{
     PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
     PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
     PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerProgress,
-    PlayerReliveMutation, PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery,
-    PlayerSkillRequestEffect, PlayerSkillRequestFacts, PlayerSkillRequestReport,
-    PlayerYuanBaoChange,
+    PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange, PlayerReliveMutation, PlayerSkillDispatch,
+    PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
+    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -12308,6 +12308,30 @@ impl CGame {
         players
             .get_mut(&player_id)
             .map(|player| player.set_yuan_bao(current, goods_factory, created_currency))
+    }
+
+    pub(crate) fn increase_player_auction_money(
+        &mut self,
+        player_id: i32,
+        requested: u32,
+        created_currency: Vec<CGoods>,
+    ) -> Option<PlayerAuctionMoneyChange> {
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        players.get_mut(&player_id).map(|player| {
+            player.increase_auction_money(requested, goods_factory, created_currency)
+        })
+    }
+
+    pub(crate) fn return_player_auction_goods(
+        &mut self,
+        player_id: i32,
+        goods: CGoods,
+        bind_type: i32,
+    ) -> Option<PlayerAuctionGoodsReturn> {
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        players
+            .get_mut(&player_id)?
+            .return_auction_goods(goods, bind_type, goods_factory)
     }
 
     pub(crate) fn add_increment_shop_goods_to_packet(

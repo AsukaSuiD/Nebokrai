@@ -198,6 +198,7 @@ use super::container::cequipmentcontainer::{
     EquipmentRemoveRuntimeFacts,
 };
 use super::container::cfairycontainer::CFairyContainer;
+use super::container::cgoodscontainer::GoodsStackMergeOutcome;
 use super::container::cgoodsshadowcontainer::{PlacedShadowGoods, ShadowRecordBlock};
 use super::container::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
@@ -218,7 +219,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BF_MP_ADDON, GAP_BF_POTENTIAL, GAP_BF_SKY, GAP_BF_SKY_SKILL, GAP_BF_SPRITE,
     GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISM,
     GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_POTENTIAL,
-    GAP_BF_WEAPON_LEVEL, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2, GAP_GEM_LEVEL,
+    GAP_BF_WEAPON_LEVEL, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2, GAP_GEM_LEVEL, GAP_GOODS_BIND,
     GAP_ROLE_MINIMUM_LEVEL_LIMIT, GOODS_TYPE_CONSUMABLE,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
@@ -1318,6 +1319,27 @@ pub(crate) struct PlayerMoneyDecrease {
     pub(crate) previous: u32,
     pub(crate) current: u32,
     pub(crate) outcome: CurrencyDecreaseOutcome,
+}
+
+#[must_use = "изменение аукционных денег содержит wallet outcome для client effect"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerAuctionMoneyChange {
+    pub(crate) player_id: i32,
+    pub(crate) previous: u32,
+    pub(crate) current: u32,
+    pub(crate) outcome: CurrencyIncreaseOutcome,
+}
+
+#[must_use = "возврат с аукциона содержит container, bind и ownership outcome"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerAuctionGoodsReturn {
+    pub(crate) player_id: i32,
+    pub(crate) position: u32,
+    pub(crate) source: ShapeIdentity,
+    pub(crate) outcome: VolumeGoodsAddOutcome,
+    pub(crate) resulting_goods: Option<ShapeIdentity>,
+    pub(crate) resulting_amount: Option<u32>,
+    pub(crate) bind_stored: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3244,6 +3266,84 @@ impl CPlayer {
 
     pub(crate) const fn auction_goods_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
         &mut self.auction_goods
+    }
+
+    /// Exact state-owner возврата `0x80404`: позиция выбирается до Add,
+    /// stack merge использует обычный player-progress gate, а bind value-id 2
+    /// записывается уже в итоговый stored goods.
+    pub(crate) fn return_auction_goods(
+        &mut self,
+        goods: CGoods,
+        bind_type: i32,
+        factory: &CGoodsFactory,
+    ) -> Option<PlayerAuctionGoodsReturn> {
+        let position = self
+            .auction_goods
+            .find_position_for_goods(&goods, factory)?;
+        let source = goods.identity();
+        let owner_progress_allows = self.current_progress == PlayerProgress::None;
+        let mut incoming = Some(goods);
+        let outcome = self.auction_goods.add_goods_at(
+            position,
+            &mut incoming,
+            factory,
+            owner_progress_allows,
+        );
+        let successful = matches!(
+            &outcome,
+            VolumeGoodsAddOutcome::Added(_)
+                | VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { .. })
+        );
+        let (resulting_goods, resulting_amount, bind_stored) = if successful {
+            let stored = self
+                .auction_goods
+                .get_goods_mut(position)
+                .expect("успешный auction Add обязан оставить stored goods");
+            let bind_stored = stored.set_addon_property_value_core(GAP_GOODS_BIND, 2, bind_type);
+            (Some(stored.identity()), Some(stored.amount()), bind_stored)
+        } else {
+            (None, None, false)
+        };
+        Some(PlayerAuctionGoodsReturn {
+            player_id: self.player_id(),
+            position,
+            source,
+            outcome,
+            resulting_goods,
+            resulting_amount,
+            bind_stored,
+        })
+    }
+
+    pub(crate) fn auction_money(&self) -> u32 {
+        self.auction_wallet.currency_amount()
+    }
+
+    pub(crate) fn auction_money_goods(&self) -> Option<&CGoods> {
+        self.auction_wallet.get_goods(0)
+    }
+
+    /// State-часть exact `SetAuctionMoney`; caller создаёт недостающий MONEY
+    /// через общий factory и публикует extend-id 15.
+    pub(crate) fn increase_auction_money(
+        &mut self,
+        requested: u32,
+        factory: &CGoodsFactory,
+        created_currency: Vec<CGoods>,
+    ) -> PlayerAuctionMoneyChange {
+        let previous = self.auction_wallet.currency_amount();
+        let mut created_currency = Some(created_currency);
+        let outcome = self
+            .auction_wallet
+            .increase_currency(requested, factory, move |_, _| {
+                created_currency.take().unwrap_or_default()
+            });
+        PlayerAuctionMoneyChange {
+            player_id: self.player_id(),
+            previous,
+            current: self.auction_wallet.currency_amount(),
+            outcome,
+        }
     }
 
     pub(crate) const fn set_auction_open(&mut self, open: bool) {

@@ -40,6 +40,7 @@ pub(crate) const GAP_HP_UPPER_LIMIT_CORRECTION: i32 = 31;
 pub(crate) const GAP_MP_UPPER_LIMIT_CORRECTION: i32 = 32;
 pub(crate) const GAP_GOODS_MAXIMUM_DURABILITY: i32 = 37;
 pub(crate) const GAP_GOODS_STACKING_LIMIT: i32 = 0x26;
+pub(crate) const GAP_GOODS_BIND: i32 = 236;
 pub(crate) const GAP_YUANBAO_DIKOU: i32 = 101;
 pub(crate) const GAP_WEAPON_LEVEL: i32 = 0x30;
 pub(crate) const GAP_STIFFEN_PROBABILITY_CORRECTION: i32 = 51;

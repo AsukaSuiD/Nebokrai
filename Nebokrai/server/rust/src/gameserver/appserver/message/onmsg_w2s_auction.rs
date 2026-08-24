@@ -2,13 +2,18 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/onmsg_w2s_auction.cpp` подтверждают
-//! selectors `0x80401..0x80403`, `0x80405`, `0x80407..0x80410`:
+//! selectors `0x80401..0x80405`, `0x80407..0x80410`:
 //! добавление временного `CGoodsNode` в Game-specific owner map, reconciliation
 //! с World GUID-set, catalog/log/client relay, auction-state и полную YuanBao
 //! container/client mutation, а stall-result либо сообщает отказ, либо
 //! публикует `0x90201` в реальный локальный Game FIFO. Self/all lists сохраняют
 //! signed count/marker quirks, переводят nested goods в old-client wire и
-//! после self-list публикуют открытый player-container scale. GameServer primary map
+//! после self-list публикуют открытый player-container scale. Return `0x80404`
+//! декодирует сохранённый goods, исключает duplicate GUID, логирует `0x60217`,
+//! пополняет auction wallet либо new/stack auction goods, применяет bind и
+//! публикует container/update/notice/scale effects. Полный `AddByteGS2WS`
+//! остаётся локальной границей persisted player snapshot, поэтому частичный
+//! `0x6080E` не создаётся. GameServer primary map
 //! хранит `GUID -> owner id`, а не MiscServer-owned node; это исключает
 //! исходный stack-pointer lifetime без изменения наблюдаемого результата.
 //! Обрезанный payload заменяет небезопасное чтение за буфером typed error-ом
@@ -17,9 +22,19 @@
 
 use std::collections::BTreeMap;
 
+use crate::gameserver::appserver::container::cgoodscontainer::GoodsStackMergeOutcome;
+use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
+use crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome;
+use crate::gameserver::appserver::cs2ccontainerobjectamountchange::CS2CContainerObjectAmountChange;
+use crate::gameserver::appserver::cs2ccontainerobjectmove::{
+    CS2CContainerObjectMove, ContainerObjectMoveOperation,
+};
 use crate::gameserver::appserver::goods::cgoods::GoodsDecodeError;
 use crate::gameserver::appserver::message::unibillmessage::IncrementShopBillingContext;
-use crate::gameserver::appserver::player::{AuctionSelfGoodsRefresh, PlayerYuanBaoChange};
+use crate::gameserver::appserver::player::{
+    AuctionSelfGoodsRefresh, PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange,
+    PlayerYuanBaoChange,
+};
 use crate::gameserver::gameserver::game::{
     CGame, PersonalShopRecollection, colored_player_notice_message,
 };
@@ -32,6 +47,7 @@ use crate::public::auctionnode::{CGoodsNode, GoodsNodeUnserializeError};
 const WORLD_AUCTION_ADD_ITEM_MESSAGE: i32 = 0x0008_0401;
 const WORLD_AUCTION_UNITY_MESSAGE: i32 = 0x0008_0402;
 const WORLD_AUCTION_STATE_MESSAGE: i32 = 0x0008_0403;
+const WORLD_AUCTION_RETURN_GOODS_MESSAGE: i32 = 0x0008_0404;
 const WORLD_AUCTION_REFRESH_SELF_GOODS_MESSAGE: i32 = 0x0008_0405;
 const WORLD_AUCTION_SELF_LIST_MESSAGE: i32 = 0x0008_0407;
 const WORLD_AUCTION_ALL_LIST_MESSAGE: i32 = 0x0008_0408;
@@ -53,6 +69,11 @@ const CLIENT_AUCTION_SCALE_MESSAGE: i32 = 0x000c_0709;
 const CLIENT_AUCTION_BROADCAST_MESSAGE: i32 = 0x000c_010b;
 const LOCAL_PLAYER_SHOP_OPEN_MESSAGE: i32 = 0x0009_0201;
 const GAME_AUCTION_REFRESH_SELF_GOODS_MESSAGE: i32 = 0x0006_080a;
+const WORLD_AUCTION_RETURN_LOG_MESSAGE: i32 = 0x0006_0217;
+const CLIENT_GOODS_UPDATE_MESSAGE: i32 = 0x000b_f918;
+const PLAYER_TYPE: i32 = 400;
+const AUCTION_GOODS_EXTEND_ID: i32 = 14;
+const AUCTION_MONEY_EXTEND_ID: i32 = 15;
 
 pub(crate) trait WorldAuctionRuntime: IncrementShopBillingContext {
     fn auction_wall_time_seconds(&mut self) -> u32;
@@ -68,6 +89,12 @@ pub(crate) enum WorldAuctionMessageError {
         available: usize,
     },
     MissingEnabledLong,
+    MissingReturnField(&'static str),
+    TruncatedReturnGoods {
+        declared: usize,
+        available: usize,
+    },
+    ReturnGoodsDecode(GoodsDecodeError),
     MissingRelayPlayerId {
         selector: i32,
     },
@@ -125,6 +152,19 @@ pub(crate) enum WorldAuctionMessageReport {
     StateChanged {
         enabled: bool,
         last_check_seconds: u32,
+    },
+    GoodsReturned {
+        player_id: i32,
+        goods_id: crate::public::guid::CGuid,
+        bind_type: i32,
+        declared_size: i32,
+        player_found: bool,
+        duplicate: bool,
+        log_delivery: Option<Result<i32, SendMessageError>>,
+        money_change: Option<PlayerAuctionMoneyChange>,
+        goods_return: Option<PlayerAuctionGoodsReturn>,
+        deliveries: Vec<i32>,
+        snapshot_refresh_required: bool,
     },
     ClientRelay {
         selector: i32,
@@ -276,6 +316,281 @@ where
             Some(Ok(WorldAuctionMessageReport::StateChanged {
                 enabled,
                 last_check_seconds,
+            }))
+        }
+        WORLD_AUCTION_RETURN_GOODS_MESSAGE => {
+            let Some(player_id) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingReturnField(
+                    "player id",
+                )));
+            };
+            let goods_id = match message.base_mut().get_guid() {
+                Some(value) => value,
+                None => {
+                    return Some(Err(WorldAuctionMessageError::MissingReturnField(
+                        "goods guid",
+                    )));
+                }
+            };
+            if message.base_mut().get_long().is_none() {
+                return Some(Err(WorldAuctionMessageError::MissingReturnField(
+                    "goods base index",
+                )));
+            }
+            let Some(bind_type) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingReturnField(
+                    "bind type",
+                )));
+            };
+            let Some(declared_size) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingReturnField(
+                    "goods size",
+                )));
+            };
+            let Some(player) = game.find_player(player_id) else {
+                return Some(Ok(WorldAuctionMessageReport::GoodsReturned {
+                    player_id,
+                    goods_id,
+                    bind_type,
+                    declared_size,
+                    player_found: false,
+                    duplicate: false,
+                    log_delivery: None,
+                    money_change: None,
+                    goods_return: None,
+                    deliveries: Vec::new(),
+                    snapshot_refresh_required: false,
+                }));
+            };
+            if player.get_goods_by_id(goods_id).is_some() {
+                return Some(Ok(WorldAuctionMessageReport::GoodsReturned {
+                    player_id,
+                    goods_id,
+                    bind_type,
+                    declared_size,
+                    player_found: true,
+                    duplicate: true,
+                    log_delivery: None,
+                    money_change: None,
+                    goods_return: None,
+                    deliveries: Vec::new(),
+                    snapshot_refresh_required: false,
+                }));
+            }
+            if declared_size <= 1 {
+                return Some(Ok(WorldAuctionMessageReport::GoodsReturned {
+                    player_id,
+                    goods_id,
+                    bind_type,
+                    declared_size,
+                    player_found: true,
+                    duplicate: false,
+                    log_delivery: None,
+                    money_change: None,
+                    goods_return: None,
+                    deliveries: Vec::new(),
+                    snapshot_refresh_required: false,
+                }));
+            }
+
+            let declared = declared_size as usize;
+            let payload = {
+                let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                let available = source.len().saturating_sub(*cursor);
+                if available < declared {
+                    return Some(Err(WorldAuctionMessageError::TruncatedReturnGoods {
+                        declared,
+                        available,
+                    }));
+                }
+                let end = *cursor + declared;
+                let payload = source[*cursor..end].to_vec();
+                *cursor = end;
+                payload
+            };
+            let incoming = match game.decode_auction_goods(&payload) {
+                Ok(goods) => goods,
+                Err(error) => {
+                    return Some(Err(WorldAuctionMessageError::ReturnGoodsDecode(error)));
+                }
+            };
+            let incoming_amount = incoming.amount();
+            let incoming_index = incoming.base_properties_index();
+            let pre_bind_payload = runtime.encode_goods_for_old_client(&incoming);
+            let mut audit = CMessage::new(WORLD_AUCTION_RETURN_LOG_MESSAGE);
+            audit.base_mut().add_long(player_id);
+            audit.base_mut().add_ulong(incoming_amount);
+            audit.base_mut().add_guid(goods_id);
+            let log_delivery = Some(audit.send(game, false));
+            let mut deliveries = Vec::new();
+
+            if incoming_index == game.goods_factory().get_gold_coin_index() {
+                let previous = game
+                    .find_player(player_id)
+                    .expect("auction return player проверен")
+                    .auction_money();
+                let created_currency = if previous == 0 {
+                    game.create_goods_batch(incoming_index, incoming_amount)
+                } else {
+                    Vec::new()
+                };
+                let money_change = game
+                    .increase_player_auction_money(player_id, incoming_amount, created_currency)
+                    .expect("auction return player проверен перед wallet mutation");
+                match &money_change.outcome {
+                    CurrencyIncreaseOutcome::Created(added) => {
+                        let stored = game
+                            .find_player(player_id)
+                            .and_then(|player| player.auction_money_goods())
+                            .expect("created auction currency хранится в player wallet");
+                        let mut move_message = CS2CContainerObjectMove::default();
+                        move_message.set_operation(ContainerObjectMoveOperation::NewObject);
+                        move_message.set_destination_container(
+                            added.owner_type,
+                            added.owner_id,
+                            added.position,
+                        );
+                        move_message.set_destination_container_extend_id(AUCTION_MONEY_EXTEND_ID);
+                        move_message.set_destination_object(
+                            added.identity.object_type,
+                            added.identity.ex_id,
+                        );
+                        move_message.set_destination_object_amount(added.amount);
+                        move_message.set_object_stream(runtime.encode_goods_for_old_client(stored));
+                        deliveries.push(move_message.send_to_player(game, player_id));
+                    }
+                    CurrencyIncreaseOutcome::Increased(change) => {
+                        let mut amount = CS2CContainerObjectAmountChange::default();
+                        amount.set_source_container(
+                            change.owner_type,
+                            change.owner_id,
+                            change.position,
+                        );
+                        amount.set_source_container_extend_id(AUCTION_MONEY_EXTEND_ID);
+                        amount.set_object(change.identity.object_type, change.identity.ex_id);
+                        amount.set_object_amount(change.new_amount);
+                        deliveries.push(amount.send_to_player(game, player_id));
+                    }
+                    CurrencyIncreaseOutcome::NoChange
+                    | CurrencyIncreaseOutcome::InvalidStoredCurrency { .. }
+                    | CurrencyIncreaseOutcome::CapacityExceeded { .. }
+                    | CurrencyIncreaseOutcome::CreationFailed => {}
+                }
+                deliveries.push(
+                    colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GPM002"))
+                        .send_to_player(game.net_server(), player_id),
+                );
+                return Some(Ok(WorldAuctionMessageReport::GoodsReturned {
+                    player_id,
+                    goods_id,
+                    bind_type,
+                    declared_size,
+                    player_found: true,
+                    duplicate: false,
+                    log_delivery,
+                    money_change: Some(money_change),
+                    goods_return: None,
+                    deliveries,
+                    snapshot_refresh_required: false,
+                }));
+            }
+
+            let goods_return = game.return_player_auction_goods(player_id, incoming, bind_type);
+            let snapshot_refresh_required = goods_return.is_some();
+            if let Some(returned) = &goods_return {
+                match &returned.outcome {
+                    VolumeGoodsAddOutcome::Added(added) => {
+                        let mut move_message = CS2CContainerObjectMove::default();
+                        move_message.set_operation(ContainerObjectMoveOperation::NewObject);
+                        move_message.set_destination_container(
+                            added.owner_type,
+                            added.owner_id,
+                            returned.position,
+                        );
+                        move_message.set_destination_container_extend_id(AUCTION_GOODS_EXTEND_ID);
+                        move_message.set_destination_object(
+                            added.identity.object_type,
+                            added.identity.ex_id,
+                        );
+                        move_message.set_destination_object_amount(added.amount);
+                        move_message.set_object_stream(pre_bind_payload);
+                        deliveries.push(move_message.send_to_player(game, player_id));
+                    }
+                    VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
+                        target, ..
+                    }) => {
+                        let mut amount = CS2CContainerObjectAmountChange::default();
+                        amount.set_source_container(PLAYER_TYPE, player_id, returned.position);
+                        amount.set_source_container_extend_id(AUCTION_GOODS_EXTEND_ID);
+                        amount.set_object(target.object_type, target.ex_id);
+                        amount.set_object_amount(
+                            returned
+                                .resulting_amount
+                                .expect("merged auction goods имеют итоговое amount"),
+                        );
+                        deliveries.push(amount.send_to_player(game, player_id));
+                    }
+                    VolumeGoodsAddOutcome::Stack(_) | VolumeGoodsAddOutcome::Rejected(_) => {}
+                }
+
+                if let Some(identity) = returned.resulting_goods {
+                    let stored = game
+                        .find_player(player_id)
+                        .and_then(|player| player.get_goods_by_id(identity.ex_id))
+                        .expect("успешно возвращённый goods хранится в auction container");
+                    let payload = runtime.encode_goods_for_old_client(stored);
+                    let mut update = CMessage::new(CLIENT_GOODS_UPDATE_MESSAGE);
+                    update.base_mut().add_long(player_id);
+                    update.base_mut().add_guid(identity.ex_id);
+                    update.base_mut().add_ulong(payload.len() as u32);
+                    update.base_mut().add(&payload);
+                    deliveries.push(update.send_to_player(game.net_server(), player_id));
+
+                    let notice_id = match bind_type {
+                        3 => Some(b"GPM003".as_slice()),
+                        2 => Some(b"GPM004".as_slice()),
+                        4 => Some(b"GPM005".as_slice()),
+                        _ => None,
+                    };
+                    if let Some(notice_id) = notice_id {
+                        deliveries.push(
+                            colored_player_notice_message(
+                                0xffff_ffff,
+                                0,
+                                game.get_string_by_id(notice_id),
+                            )
+                            .send_to_player(game.net_server(), player_id),
+                        );
+                    }
+                }
+
+                if let Some(goods_ids) = game
+                    .find_player(player_id)
+                    .and_then(|player| player.auction_scale_goods_ids())
+                {
+                    let mut scale = CMessage::new(CLIENT_AUCTION_SCALE_MESSAGE);
+                    scale.base_mut().add_ulong(goods_ids.len() as u32);
+                    for goods_id in goods_ids {
+                        scale.base_mut().add_guid(goods_id);
+                    }
+                    deliveries.push(scale.send_to_player(game.net_server(), player_id));
+                }
+                // `AddByteGS2WS` требует полный persisted player snapshot.
+                // Его RAW owner сохранён в player.rs; посылать частичный
+                // `0x6080E` здесь было бы wire-несовместимой заглушкой.
+            }
+            Some(Ok(WorldAuctionMessageReport::GoodsReturned {
+                player_id,
+                goods_id,
+                bind_type,
+                declared_size,
+                player_found: true,
+                duplicate: false,
+                log_delivery,
+                money_change: None,
+                goods_return,
+                deliveries,
+                snapshot_refresh_required,
             }))
         }
         WORLD_AUCTION_REFRESH_SELF_GOODS_MESSAGE => {

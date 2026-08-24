@@ -2,8 +2,10 @@
 //!
 //! Точная пара GameServer EXE/PDB и исходный owner
 //! `server/gameserver/appserver/message/onmsg_c2s_auction.cpp` подтверждают
-//! close `0x90A01` и auction controls `0x90A05..0C`: поиск сохраняет player
-//! criteria и сбрасывает page, browse/self запросы уходят в World,
+//! close `0x90A01`, cut `0x90A03` и auction controls `0x90A05..0C`: cut
+//! сначала посылает exact `0x60216`, затем переписывает исходный wire в
+//! `0x60809`; поиск сохраняет player criteria и сбрасывает page, browse/self
+//! запросы уходят в World,
 //! клиент открытия получает `0xC0706`, player-open меняется до World `0x60810`,
 //! extension batch оплачивается `FZ0965`, логируется и добавляется в packet,
 //! а выключенный аукцион возвращает `GPM013` до чтения payload.
@@ -20,6 +22,7 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const CLIENT_AUCTION_CLOSE_MESSAGE: i32 = 0x0009_0A01;
+const CLIENT_AUCTION_CUT_MESSAGE: i32 = 0x0009_0A03;
 const CLIENT_AUCTION_REFRESH_MESSAGE: i32 = 0x0009_0A05;
 const CLIENT_AUCTION_SEARCH_MESSAGE: i32 = 0x0009_0A06;
 const CLIENT_AUCTION_PAGE_MESSAGE: i32 = 0x0009_0A07;
@@ -36,6 +39,8 @@ const WORLD_AUCTION_SEARCH_MESSAGE: i32 = 0x0006_080F;
 const WORLD_AUCTION_RELAY_MESSAGE: i32 = 0x0006_080B;
 const WORLD_AUCTION_CELL_MESSAGE: i32 = 0x0006_080C;
 const WORLD_AUCTION_OPEN_MESSAGE: i32 = 0x0006_0810;
+const WORLD_AUCTION_CUT_MESSAGE: i32 = 0x0006_0809;
+const WORLD_AUCTION_CUT_LOG_MESSAGE: i32 = 0x0006_0216;
 const WORLD_GOODS_AUDIT_MESSAGE: i32 = 0x0006_0202;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,6 +92,12 @@ pub(crate) enum ClientAuctionMessageReport {
         world_selector: i32,
         world_delivery: Result<i32, SendMessageError>,
     },
+    CutForwarded {
+        player_id: i32,
+        goods_id: crate::public::guid::CGuid,
+        cut_log_delivery: Option<Result<i32, SendMessageError>>,
+        world_delivery: Result<i32, SendMessageError>,
+    },
     Truncated {
         selector: i32,
         field: &'static str,
@@ -117,6 +128,7 @@ where
     if !matches!(
         selector,
         CLIENT_AUCTION_CLOSE_MESSAGE
+            | CLIENT_AUCTION_CUT_MESSAGE
             | CLIENT_AUCTION_REFRESH_MESSAGE
             | CLIENT_AUCTION_SEARCH_MESSAGE
             | CLIENT_AUCTION_PAGE_MESSAGE
@@ -148,6 +160,24 @@ where
             .expect("player проверен до close")
             .set_auction_open(false);
         return Some(ClientAuctionMessageReport::Closed { player_id });
+    }
+    if selector == CLIENT_AUCTION_CUT_MESSAGE {
+        let goods_id = message.base_mut().get_guid().unwrap_or_default();
+        let cut_log_delivery = (goods_id != crate::public::guid::CGuid::GUID_INVALID).then(|| {
+            let mut audit = CMessage::new(WORLD_AUCTION_CUT_LOG_MESSAGE);
+            audit.base_mut().add_long(player_id);
+            audit.base_mut().add_guid(goods_id);
+            audit.send(game, false)
+        });
+        message.set_message_type(WORLD_AUCTION_CUT_MESSAGE);
+        message.base_mut().update();
+        let world_delivery = message.send(game, false);
+        return Some(ClientAuctionMessageReport::CutForwarded {
+            player_id,
+            goods_id,
+            cut_log_delivery,
+            world_delivery,
+        });
     }
     if selector == CLIENT_AUCTION_REFRESH_MESSAGE {
         let refresh = game
