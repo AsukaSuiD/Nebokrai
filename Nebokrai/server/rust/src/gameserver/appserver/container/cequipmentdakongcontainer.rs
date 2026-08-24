@@ -13,10 +13,11 @@
 //! limit `8`, но сохраняет ledger. `Release` сбрасывает base и
 //! projection, но сохраняет ledger/last GUID и limit `0`.
 //!
-//! Exact source move остаётся caller-boundary. Живой placed GUID заменяет
-//! legacy dangling incoming GUID после stack merge. Typed effects фиксируют
-//! overwrite и то, что при отказе base add ledger/last не откатываются.
-//! Реальная source-player move-транзакция остаётся границей session caller-а.
+//! Живой placed GUID заменяет legacy dangling incoming GUID после stack
+//! merge. Typed effects фиксируют overwrite и то, что при отказе base add
+//! ledger/last не откатываются. Container-message caller материализует полный
+//! player packet/equipment ↔ session shadow ownership-проход, включая
+//! delete-shadow, equipment effects, rollback и double-failure collection.
 
 use std::collections::BTreeMap;
 
@@ -25,7 +26,8 @@ use super::camountlimitgoodsshadowcontainer::{
 };
 use super::ccontainer::PreviousContainer;
 use super::cgoodsshadowcontainer::{
-    GoodsShadow, PlacedShadowGoods, ShadowRecordBlock, ShadowSourceChangeOutcome,
+    GoodsShadow, PlacedShadowGoods, ShadowRecordBlock, ShadowRemovedReport,
+    ShadowSourceChangeOutcome,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{GAP_BAOSHI_COLOR, GAP_DAKONG_1};
@@ -184,15 +186,11 @@ impl CEquipmentDaKongContainer {
         self.last_goods = goods_id;
     }
 
-    pub(crate) fn select_cell<'a, Resolve>(
+    pub(crate) fn select_cell(
         &self,
         goods: &CGoods,
         factory: &CGoodsFactory,
-        mut resolve: Resolve,
-    ) -> Result<DaKongCell, DaKongAddBlock>
-    where
-        Resolve: FnMut(&GoodsShadow) -> Option<&'a CGoods>,
-    {
+    ) -> Result<DaKongCell, DaKongAddBlock> {
         if goods.query_attribute(GAP_DAKONG_1) {
             return Ok(DaKongCell::Equipment);
         }
@@ -203,7 +201,7 @@ impl CEquipmentDaKongContainer {
         DaKongCell::GEMS
             .into_iter()
             .take(maximum as usize)
-            .find(|cell| self.get_goods(*cell, &mut resolve).is_none())
+            .find(|cell| !self.positions.contains_key(cell))
             .ok_or(DaKongAddBlock::NoResolvableGemCell)
     }
 
@@ -333,6 +331,20 @@ impl CEquipmentDaKongContainer {
             shadow,
             erased_cell,
         }
+    }
+
+    pub(crate) fn remove_shadow(&mut self, goods_id: CGuid) -> Option<ShadowRemovedReport> {
+        let cell = self.cell_for_goods(goods_id)?;
+        let removed = self.base.base_mut().remove_shadow(goods_id)?;
+        self.positions.remove(&cell);
+        if cell == DaKongCell::Equipment {
+            if self.last_goods == goods_id {
+                self.last_goods = CGuid::GUID_INVALID;
+            }
+        } else if self.equipment_goods.get(&cell.position()) == Some(&goods_id) {
+            self.equipment_goods.remove(&cell.position());
+        }
+        Some(removed)
     }
 
     pub(crate) fn clear(&mut self) -> usize {

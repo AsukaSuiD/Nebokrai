@@ -15,11 +15,25 @@
 //! выполняет ordered session plug lookup по owner type/ID. Equipment-upgrade
 //! close материализует concrete session GC. Script-входы трёх equipment
 //! механик также создают normal session и typed plug, связывают owner/session,
-//! shadow owner/extend ID и insert-order. Общие team/trader/shop варианты
+//! shadow owner/extend ID и insert-order. Container-message проход разрешает
+//! wire `(session, plug << 8)`, записывает и снимает typed upgrade/DaKong/
+//! compose shadows с исходным player slot. Общие team/trader/shop варианты
 //! `CreateSession/CreatePlug/InsertPlug` и их polymorphic lifecycle ниже этим
 //! не объявляются реализованными.
 
 use std::collections::BTreeMap;
+
+use crate::gameserver::appserver::container::camountlimitgoodsshadowcontainer::AmountShadowAdded;
+use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
+use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::ComposeShadowAddBlock;
+use crate::gameserver::appserver::container::cequipmentdakongcontainer::{
+    DaKongAddBlock, DaKongAddOutcome,
+};
+use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::UpgradeShadowAddBlock;
+use crate::gameserver::appserver::container::cgoodsshadowcontainer::ShadowRemovedReport;
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::public::guid::CGuid;
 
 use super::cequipmentcompose::CEquipmentCompose;
 use super::cequipmentdakong::CEquipmentDaKong;
@@ -32,6 +46,34 @@ pub(crate) enum EquipmentSessionPlugKind {
     Upgrade,
     DaKong,
     Compose,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentSessionShadowAddBlock {
+    MissingSessionOrPlug,
+    OwnerMismatch,
+    InvalidContainerIndex,
+    Upgrade(UpgradeShadowAddBlock),
+    DaKong(DaKongAddBlock),
+    Compose(ComposeShadowAddBlock),
+}
+
+#[must_use = "shadow add содержит actual cell и AddShadow publication data"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentSessionShadowAdded {
+    pub(crate) kind: EquipmentSessionPlugKind,
+    pub(crate) plug_id: i32,
+    pub(crate) position: u32,
+    pub(crate) shadow: AmountShadowAdded,
+}
+
+#[must_use = "shadow remove сохраняет original source и delete publication"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentSessionShadowRemoved {
+    pub(crate) kind: EquipmentSessionPlugKind,
+    pub(crate) plug_id: i32,
+    pub(crate) original: PreviousContainer,
+    pub(crate) removed: ShadowRemovedReport,
 }
 
 #[derive(Debug)]
@@ -60,6 +102,229 @@ impl Default for CSessionFactory {
 }
 
 impl CSessionFactory {
+    fn resolve_equipment_plug(
+        &self,
+        session_id: i32,
+        extend_id: i32,
+        player_id: i32,
+    ) -> Result<(EquipmentSessionPlugKind, i32), EquipmentSessionShadowAddBlock> {
+        if extend_id & 0xff != 0 {
+            return Err(EquipmentSessionShadowAddBlock::InvalidContainerIndex);
+        }
+        let plug_id = extend_id >> 8;
+        let plug = self
+            .query_session_plug_by_owner(session_id, 400, player_id)
+            .ok_or(EquipmentSessionShadowAddBlock::MissingSessionOrPlug)?;
+        if plug.id() != plug_id {
+            return Err(EquipmentSessionShadowAddBlock::OwnerMismatch);
+        }
+        let kind = if self.equipment_upgrade_plugs.contains_key(&plug_id) {
+            EquipmentSessionPlugKind::Upgrade
+        } else if self.equipment_da_kong_plugs.contains_key(&plug_id) {
+            EquipmentSessionPlugKind::DaKong
+        } else if self.equipment_compose_plugs.contains_key(&plug_id) {
+            EquipmentSessionPlugKind::Compose
+        } else {
+            return Err(EquipmentSessionShadowAddBlock::MissingSessionOrPlug);
+        };
+        Ok((kind, plug_id))
+    }
+
+    pub(crate) fn record_equipment_session_shadow(
+        &mut self,
+        session_id: i32,
+        extend_id: i32,
+        player_id: i32,
+        requested_position: u32,
+        goods: &CGoods,
+        previous: PreviousContainer,
+        factory: &CGoodsFactory,
+    ) -> Result<EquipmentSessionShadowAdded, EquipmentSessionShadowAddBlock> {
+        let (kind, plug_id) = self.resolve_equipment_plug(session_id, extend_id, player_id)?;
+        let goods_id = goods.identity().ex_id;
+        let placed_position = previous.goods_position;
+        let (position, shadow) = match kind {
+            EquipmentSessionPlugKind::Upgrade => {
+                let plug = self
+                    .equipment_upgrade_plugs
+                    .get_mut(&plug_id)
+                    .expect("kind проверен по concrete registry");
+                let cell = if requested_position == u32::MAX {
+                    plug.upgrade_container()
+                        .select_cell(goods, factory)
+                        .map_err(EquipmentSessionShadowAddBlock::Upgrade)?
+                } else {
+                    crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::UpgradeEquipmentCell::from_position(requested_position)
+                        .ok_or(EquipmentSessionShadowAddBlock::Upgrade(
+                            UpgradeShadowAddBlock::InvalidPosition { position: requested_position },
+                        ))?
+                };
+                let added = plug
+                    .upgrade_container_mut()
+                    .record_placed_goods(cell, goods, previous, goods_id, placed_position, factory)
+                    .map_err(EquipmentSessionShadowAddBlock::Upgrade)?;
+                (added.cell.position(), added.shadow)
+            }
+            EquipmentSessionPlugKind::DaKong => {
+                let plug = self
+                    .equipment_da_kong_plugs
+                    .get_mut(&plug_id)
+                    .expect("kind проверен по concrete registry");
+                let cell = if requested_position == u32::MAX {
+                    plug.upgrade_container()
+                        .select_cell(goods, factory)
+                        .map_err(EquipmentSessionShadowAddBlock::DaKong)?
+                } else {
+                    crate::gameserver::appserver::container::cequipmentdakongcontainer::DaKongCell::from_position(requested_position)
+                        .ok_or(EquipmentSessionShadowAddBlock::DaKong(
+                            DaKongAddBlock::InvalidPosition { position: requested_position },
+                        ))?
+                };
+                match plug.upgrade_container_mut().record_placed_goods(
+                    cell,
+                    goods,
+                    previous,
+                    goods_id,
+                    placed_position,
+                ) {
+                    DaKongAddOutcome::Added { effects, shadow } => {
+                        (effects.cell.position(), shadow)
+                    }
+                    DaKongAddOutcome::Rejected { block, .. } => {
+                        return Err(EquipmentSessionShadowAddBlock::DaKong(block));
+                    }
+                }
+            }
+            EquipmentSessionPlugKind::Compose => {
+                let plug = self
+                    .equipment_compose_plugs
+                    .get_mut(&plug_id)
+                    .expect("kind проверен по concrete registry");
+                let cell = if requested_position == u32::MAX {
+                    plug.compose_container()
+                        .select_cell()
+                        .map_err(EquipmentSessionShadowAddBlock::Compose)?
+                } else {
+                    crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::ComposeEquipmentCell::from_position(requested_position)
+                        .ok_or(EquipmentSessionShadowAddBlock::Compose(
+                            ComposeShadowAddBlock::InvalidPosition { position: requested_position },
+                        ))?
+                };
+                let added = plug
+                    .compose_container_mut()
+                    .record_placed_goods(cell, goods, previous, goods_id, placed_position)
+                    .map_err(EquipmentSessionShadowAddBlock::Compose)?;
+                (added.cell.position(), added.shadow)
+            }
+        };
+        Ok(EquipmentSessionShadowAdded {
+            kind,
+            plug_id,
+            position,
+            shadow,
+        })
+    }
+
+    pub(crate) fn equipment_session_shadow_original(
+        &self,
+        session_id: i32,
+        extend_id: i32,
+        player_id: i32,
+        goods_id: CGuid,
+    ) -> Option<PreviousContainer> {
+        let (kind, plug_id) = self
+            .resolve_equipment_plug(session_id, extend_id, player_id)
+            .ok()?;
+        match kind {
+            EquipmentSessionPlugKind::Upgrade => self
+                .equipment_upgrade_plugs
+                .get(&plug_id)?
+                .upgrade_container()
+                .base()
+                .base()
+                .original_container_information(goods_id),
+            EquipmentSessionPlugKind::DaKong => self
+                .equipment_da_kong_plugs
+                .get(&plug_id)?
+                .upgrade_container()
+                .original_container_information(goods_id),
+            EquipmentSessionPlugKind::Compose => self
+                .equipment_compose_plugs
+                .get(&plug_id)?
+                .compose_container()
+                .original_container_information(goods_id),
+        }
+    }
+
+    pub(crate) fn equipment_session_shadow_position(
+        &self,
+        session_id: i32,
+        extend_id: i32,
+        player_id: i32,
+        goods_id: CGuid,
+    ) -> Option<u32> {
+        let (kind, plug_id) = self
+            .resolve_equipment_plug(session_id, extend_id, player_id)
+            .ok()?;
+        match kind {
+            EquipmentSessionPlugKind::Upgrade => self
+                .equipment_upgrade_plugs
+                .get(&plug_id)?
+                .upgrade_container()
+                .positions()
+                .iter()
+                .find_map(|(cell, id)| (*id == goods_id).then_some(cell.position())),
+            EquipmentSessionPlugKind::DaKong => self
+                .equipment_da_kong_plugs
+                .get(&plug_id)?
+                .upgrade_container()
+                .positions()
+                .iter()
+                .find_map(|(cell, id)| (*id == goods_id).then_some(cell.position())),
+            EquipmentSessionPlugKind::Compose => self
+                .equipment_compose_plugs
+                .get(&plug_id)?
+                .compose_container()
+                .query_goods_position(goods_id),
+        }
+    }
+
+    pub(crate) fn remove_equipment_session_shadow(
+        &mut self,
+        session_id: i32,
+        extend_id: i32,
+        player_id: i32,
+        goods_id: CGuid,
+    ) -> Option<EquipmentSessionShadowRemoved> {
+        let (kind, plug_id) = self
+            .resolve_equipment_plug(session_id, extend_id, player_id)
+            .ok()?;
+        let original =
+            self.equipment_session_shadow_original(session_id, extend_id, player_id, goods_id)?;
+        let removed = match kind {
+            EquipmentSessionPlugKind::Upgrade => self
+                .equipment_upgrade_plugs
+                .get_mut(&plug_id)?
+                .upgrade_container_mut()
+                .remove_shadow(goods_id)?,
+            EquipmentSessionPlugKind::DaKong => self
+                .equipment_da_kong_plugs
+                .get_mut(&plug_id)?
+                .upgrade_container_mut()
+                .remove_shadow(goods_id)?,
+            EquipmentSessionPlugKind::Compose => self
+                .equipment_compose_plugs
+                .get_mut(&plug_id)?
+                .compose_container_mut()
+                .remove_shadow(goods_id)?,
+        };
+        Some(EquipmentSessionShadowRemoved {
+            kind,
+            plug_id,
+            original,
+            removed,
+        })
+    }
     pub(crate) fn create_equipment_session(
         &mut self,
         kind: EquipmentSessionPlugKind,

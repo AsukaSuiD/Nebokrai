@@ -2,7 +2,8 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/message/containermessage.cpp`. Материализован
-//! полные player packet/equipment ↔ enhancement-shadow проходы `0x90301`:
+//! полные player packet/equipment ↔ enhancement-shadow и equipment-session
+//! upgrade/DaKong/compose проходы `0x90301`:
 //! одиннадцать wire-полей, outer changing/region/progress/death guards,
 //! Receive-нормализация owner ID, точный source position/GUID/amount,
 //! запрет stackable goods, однослотовый AddShadow, last-operated state и обе
@@ -14,13 +15,19 @@
 //! packet/equipment slot выполняет полный ownership pass: source remove,
 //! player/equipment callbacks, `OT_DELETE_OBJECT`, destination add, rollback
 //! в исходный slot и `GPM019` перед garbage collection при двойном отказе.
+//! Equipment-session wire сохраняет настоящий session ID и кодирует plug в
+//! старших 24 битах extend ID; selection/clear публикуют Add/DeleteShadow и
+//! self-move rollback, transfer использует тот же ownership/effects контракт.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
 
 use crate::gameserver::appserver::container::ccontainer::ContainerListenerHandle;
+use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentcontainer::EquipmentRemovedEvent;
-use crate::gameserver::appserver::container::cgoodsshadowcontainer::ShadowRemovedReport;
+use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
+    ShadowPresenceReport, ShadowRemovedReport,
+};
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
 use crate::gameserver::appserver::message::containermessage::EnhancementMoveReceiveBlock::{
     InvalidExtendId, InvalidObjectType, SameContainer, ZeroAmount,
@@ -30,6 +37,9 @@ use crate::gameserver::appserver::player::{
     EnhancementDeselectionBlock, EnhancementDeselectionReport, EnhancementSelectionBlock,
     EnhancementSelectionReport, PlayerEquipmentAddReport, PlayerEquipmentDelivery,
     PlayerEquipmentRemoveEffect, PlayerProgress,
+};
+use crate::gameserver::appserver::session::csessionfactory::{
+    EquipmentSessionShadowAddBlock, EquipmentSessionShadowAdded, EquipmentSessionShadowRemoved,
 };
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{CGame, GameContainerMessageRuntime};
@@ -111,13 +121,39 @@ pub(crate) enum GameContainerMessageOutcome {
         transfer: EnhancementTransferReport,
         move_delivery: i32,
     },
+    EquipmentSessionSelectRolledBack {
+        reason: EquipmentSessionSelectionBlock,
+        delivery: i32,
+    },
+    EquipmentSessionSelected {
+        selection: EquipmentSessionSelectionReport,
+        old_client_payload: Vec<u8>,
+        add_shadow_delivery: i32,
+        move_delivery: i32,
+    },
+    EquipmentSessionClearRolledBack {
+        reason: EquipmentSessionClearBlock,
+        delivery: i32,
+    },
+    EquipmentSessionCleared {
+        removed: EquipmentSessionShadowRemoved,
+        delete_shadow_delivery: i32,
+        move_delivery: i32,
+    },
+    EquipmentSessionTransferred {
+        transfer: EnhancementTransferReport,
+        move_delivery: i32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EnhancementMessageRoute {
-    Select,
-    Clear,
-    Transfer,
+    EnhancementSelect,
+    EnhancementClear,
+    EnhancementTransfer,
+    EquipmentSessionSelect,
+    EquipmentSessionClear,
+    EquipmentSessionTransfer,
 }
 
 #[must_use = "container report сохраняет request, mutation и ordered client effects"]
@@ -191,6 +227,29 @@ pub(crate) enum EnhancementTransferBlock {
     EquipmentRemovalFailed(crate::gameserver::appserver::player::PlayerEquipmentRemoveReport),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentSessionSelectionReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) source: PreviousContainer,
+    pub(crate) added: EquipmentSessionShadowAdded,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentSessionSelectionBlock {
+    MissingPlayer,
+    MissingGoods,
+    UnsupportedSourceContainer { extend_id: i32 },
+    SourceMismatch,
+    Shadow(EquipmentSessionShadowAddBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentSessionClearBlock {
+    MissingPlayer,
+    MissingShadow,
+    SourceMismatch,
+}
+
 pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
@@ -219,21 +278,26 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
     let start_cursor = message.base_mut().cursor();
     let (request, route) = match decode_container_object_move(message) {
         Ok(mut request) => {
-            if request.source_container_type != PLAYER_CONTAINER_TYPE
-                || request.destination_container_type != PLAYER_CONTAINER_TYPE
-            {
-                let (_, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-                *cursor = start_cursor;
-                return None;
+            if request.source_container_type == PLAYER_CONTAINER_TYPE {
+                request.source_container_id = player_id;
             }
-            request.source_container_id = player_id;
-            request.destination_container_id = player_id;
-            if matches!(request.source_container_extend_id, 3 | 4 | 5) {
+            if request.destination_container_type == PLAYER_CONTAINER_TYPE {
+                request.destination_container_id = player_id;
+            }
+            if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && matches!(request.source_container_extend_id, 3 | 4 | 5)
+            {
                 request.source_position = 0;
             }
-            let route = if request.destination_container_extend_id == ENHANCEMENT_EXTEND_ID {
-                EnhancementMessageRoute::Select
-            } else if request.source_container_extend_id == ENHANCEMENT_EXTEND_ID {
+            let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_extend_id == ENHANCEMENT_EXTEND_ID
+            {
+                EnhancementMessageRoute::EnhancementSelect
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && request.source_container_extend_id == ENHANCEMENT_EXTEND_ID
+            {
                 let original = game.find_player(player_id).and_then(|player| {
                     player
                         .enhancement_original_container(request.source_position, request.object_id)
@@ -245,14 +309,47 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         && original.container_extend_id == request.destination_container_extend_id
                         && original.goods_position == request.destination_position
                 }) {
-                    EnhancementMessageRoute::Clear
+                    EnhancementMessageRoute::EnhancementClear
                 } else if original.is_some_and(|original| {
                     matches!(original.container_extend_id, 1 | 2)
                         && original.container_type == PLAYER_CONTAINER_TYPE
                         && original.container_id == player_id
                 }) && matches!(request.destination_container_extend_id, 1 | 2)
                 {
-                    EnhancementMessageRoute::Transfer
+                    EnhancementMessageRoute::EnhancementTransfer
+                } else {
+                    let (_, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                    *cursor = start_cursor;
+                    return None;
+                }
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == 10
+                && matches!(request.source_container_extend_id, 1 | 2)
+            {
+                EnhancementMessageRoute::EquipmentSessionSelect
+            } else if request.source_container_type == 10
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+            {
+                let original = game.session_factory().equipment_session_shadow_original(
+                    request.source_container_id,
+                    request.source_container_extend_id,
+                    player_id,
+                    request.object_id,
+                );
+                if original.is_some_and(|original| {
+                    original.container_type == PLAYER_CONTAINER_TYPE
+                        && original.container_id == player_id
+                        && original.container_extend_id == request.destination_container_extend_id
+                        && original.goods_position == request.destination_position
+                }) {
+                    EnhancementMessageRoute::EquipmentSessionClear
+                } else if original.is_some_and(|original| {
+                    original.container_type == PLAYER_CONTAINER_TYPE
+                        && original.container_id == player_id
+                        && matches!(original.container_extend_id, 1 | 2)
+                }) && matches!(request.destination_container_extend_id, 1 | 2)
+                {
+                    EnhancementMessageRoute::EquipmentSessionTransfer
                 } else {
                     let (_, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
                     *cursor = start_cursor;
@@ -317,19 +414,24 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             ZeroAmount,
         ))));
     }
-    if !(0..=17).contains(&request.source_container_extend_id)
-        || !(0..=17).contains(&request.destination_container_extend_id)
+    if (request.source_container_type == PLAYER_CONTAINER_TYPE
+        && !(0..=17).contains(&request.source_container_extend_id))
+        || (request.destination_container_type == PLAYER_CONTAINER_TYPE
+            && !(0..=17).contains(&request.destination_container_extend_id))
     {
         return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
             InvalidExtendId,
         ))));
     }
-    if request.source_container_extend_id == request.destination_container_extend_id {
+    if request.source_container_type == request.destination_container_type
+        && request.source_container_id == request.destination_container_id
+        && request.source_container_extend_id == request.destination_container_extend_id
+    {
         return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
             SameContainer,
         ))));
     }
-    if route == EnhancementMessageRoute::Select
+    if route == EnhancementMessageRoute::EnhancementSelect
         && (request.source_container_extend_id == 4
             || request.source_container_extend_id == 5
             || matches!(request.source_container_extend_id, 8 | 15))
@@ -339,7 +441,86 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         ))));
     }
 
-    if route == EnhancementMessageRoute::Clear {
+    if route == EnhancementMessageRoute::EquipmentSessionClear {
+        let goods_identity = game
+            .find_player(player_id)
+            .and_then(|player| player.get_goods_by_id(request.object_id))
+            .map(|goods| goods.identity());
+        let removed = game.clear_player_equipment_session_selection(
+            player_id,
+            request.source_container_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_container_extend_id,
+            request.destination_position,
+        );
+        let removed = match removed {
+            Ok(removed) => removed,
+            Err(reason) => {
+                let delivery = send_rollback(game, player_id);
+                return Some(Ok(report(
+                    GameContainerMessageOutcome::EquipmentSessionClearRolledBack {
+                        reason,
+                        delivery,
+                    },
+                )));
+            }
+        };
+        let delete_shadow_delivery = send_enhancement_shadow_deleted(
+            game,
+            player_id,
+            goods_identity.expect("clear validation сохраняет live source goods"),
+            &removed.removed,
+        );
+        let move_delivery = send_rollback(game, player_id);
+        return Some(Ok(report(
+            GameContainerMessageOutcome::EquipmentSessionCleared {
+                removed,
+                delete_shadow_delivery,
+                move_delivery,
+            },
+        )));
+    }
+
+    if route == EnhancementMessageRoute::EquipmentSessionTransfer {
+        let transfer = game.transfer_player_equipment_session_goods(
+            player_id,
+            request.source_container_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_container_extend_id,
+            request.destination_position,
+            context,
+        );
+        let transfer = match transfer {
+            Ok(transfer) => transfer,
+            Err(reason) => {
+                let delivery = send_rollback(game, player_id);
+                return Some(Ok(report(
+                    GameContainerMessageOutcome::TransferRolledBack { reason, delivery },
+                )));
+            }
+        };
+        let move_delivery = match &transfer.outcome {
+            EnhancementTransferOutcome::Moved(_) => {
+                send_enhancement_transfer_moved(game, player_id, request, &transfer)
+            }
+            EnhancementTransferOutcome::RolledBack { .. }
+            | EnhancementTransferOutcome::GoodsCollected { .. } => send_rollback(game, player_id),
+        };
+        return Some(Ok(report(
+            GameContainerMessageOutcome::EquipmentSessionTransferred {
+                transfer,
+                move_delivery,
+            },
+        )));
+    }
+
+    if route == EnhancementMessageRoute::EnhancementClear {
         let deselection = game.clear_player_enhancement_selection(
             player_id,
             request.source_position,
@@ -372,7 +553,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         )));
     }
 
-    if route == EnhancementMessageRoute::Transfer {
+    if route == EnhancementMessageRoute::EnhancementTransfer {
         let transfer = game.transfer_player_enhancement_goods(
             player_id,
             request.source_position,
@@ -401,6 +582,52 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         return Some(Ok(report(
             GameContainerMessageOutcome::EnhancementTransferred {
                 transfer,
+                move_delivery,
+            },
+        )));
+    }
+
+    if route == EnhancementMessageRoute::EquipmentSessionSelect {
+        let selection = game.select_player_equipment_session_goods(
+            player_id,
+            request.destination_container_id,
+            request.destination_container_extend_id,
+            request.destination_position,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+        );
+        let selection = match selection {
+            Ok(selection) => selection,
+            Err(reason) => {
+                let delivery = send_rollback(game, player_id);
+                return Some(Ok(report(
+                    GameContainerMessageOutcome::EquipmentSessionSelectRolledBack {
+                        reason,
+                        delivery,
+                    },
+                )));
+            }
+        };
+        let goods = game
+            .find_player(player_id)
+            .and_then(|player| player.get_goods_by_id(selection.goods.ex_id))
+            .expect("equipment-session shadow сохраняет live source goods");
+        let old_client_payload = context.encode_goods_for_old_client(goods);
+        let add_shadow_delivery = send_shadow_presence(
+            game,
+            player_id,
+            selection.goods,
+            &selection.added.shadow.presence,
+            &old_client_payload,
+        );
+        let move_delivery = send_rollback(game, player_id);
+        return Some(Ok(report(
+            GameContainerMessageOutcome::EquipmentSessionSelected {
+                selection,
+                old_client_payload,
+                add_shadow_delivery,
                 move_delivery,
             },
         )));
@@ -594,7 +821,22 @@ fn send_add_shadow(
     selection: &EnhancementSelectionReport,
     payload: &[u8],
 ) -> i32 {
-    let presence = &selection.shadow.presence;
+    send_shadow_presence(
+        game,
+        player_id,
+        selection.goods,
+        &selection.shadow.presence,
+        payload,
+    )
+}
+
+fn send_shadow_presence(
+    game: &CGame,
+    player_id: i32,
+    goods: ShapeIdentity,
+    presence: &ShadowPresenceReport,
+    payload: &[u8],
+) -> i32 {
     let mut message = CMessage::new(CLIENT_CONTAINER_OBJECT_MOVE);
     message.add_byte(2);
     message.add_long(0);
@@ -608,7 +850,7 @@ fn send_add_shadow(
     message.add_long(0);
     message.base_mut().add_guid(CGuid::GUID_INVALID);
     message.add_long(GOODS_OBJECT_TYPE);
-    message.base_mut().add_guid(selection.goods.ex_id);
+    message.base_mut().add_guid(goods.ex_id);
     message.add_ulong(payload.len() as u32);
     message.base_mut().add(payload);
     message.send_to_player(game.net_server(), player_id)
@@ -635,7 +877,7 @@ fn send_move_result(
 // ============================================================================
 // FUNCTION: OnContainerMessage
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: полные packet/equipment ↔ enhancement select/clear/transfer `0x90301`; остальные routes RAW ниже
+// MATERIALIZED: полные packet/equipment ↔ enhancement и equipment-session upgrade/DaKong/compose select/clear/transfer `0x90301`; остальные routes RAW ниже
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\containermessage.cpp:14

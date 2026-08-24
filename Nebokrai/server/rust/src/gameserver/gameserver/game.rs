@@ -323,7 +323,8 @@ use crate::gameserver::appserver::goodswarmember::{
 };
 use crate::gameserver::appserver::message::containermessage::{
     EnhancementTransferAddition, EnhancementTransferBlock, EnhancementTransferOutcome,
-    EnhancementTransferRemoval, EnhancementTransferReport, GameContainerMessageError,
+    EnhancementTransferRemoval, EnhancementTransferReport, EquipmentSessionClearBlock,
+    EquipmentSessionSelectionBlock, EquipmentSessionSelectionReport, GameContainerMessageError,
     GameContainerMessageReport, dispatch_game_container_message, send_enhancement_goods_collected,
     send_enhancement_shadow_deleted,
 };
@@ -435,7 +436,7 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
     EquipmentUpgradeLostAuditLog, EquipmentUpgradeOutcome, EquipmentUpgradeReport,
 };
 use crate::gameserver::appserver::session::csessionfactory::{
-    CSessionFactory, EquipmentSessionPlugKind,
+    CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved,
 };
 use crate::gameserver::appserver::shape::{
     CShape, MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
@@ -3383,6 +3384,107 @@ impl CGame {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub(crate) fn select_player_equipment_session_goods(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        session_extend_id: i32,
+        requested_position: u32,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+    ) -> Result<EquipmentSessionSelectionReport, EquipmentSessionSelectionBlock> {
+        if !matches!(source_extend_id, 1 | 2) {
+            return Err(EquipmentSessionSelectionBlock::UnsupportedSourceContainer {
+                extend_id: source_extend_id,
+            });
+        }
+        let player = self
+            .players
+            .get(&player_id)
+            .ok_or(EquipmentSessionSelectionBlock::MissingPlayer)?;
+        let goods = match source_extend_id {
+            1 => player.packet().get_goods(source_position),
+            2 => player.equipment().get_goods(source_position),
+            _ => unreachable!("source extend проверен выше"),
+        }
+        .ok_or(EquipmentSessionSelectionBlock::MissingGoods)?;
+        if goods.identity().ex_id != goods_id || goods.amount() != amount {
+            return Err(EquipmentSessionSelectionBlock::SourceMismatch);
+        }
+        let goods = goods.clone();
+        let source = crate::gameserver::appserver::container::ccontainer::PreviousContainer {
+            container_type: 400,
+            container_id: player_id,
+            container_extend_id: source_extend_id,
+            goods_position: source_position,
+        };
+        let added = self
+            .session_factory
+            .record_equipment_session_shadow(
+                session_id,
+                session_extend_id,
+                player_id,
+                requested_position,
+                &goods,
+                source,
+                &self.goods_factory,
+            )
+            .map_err(EquipmentSessionSelectionBlock::Shadow)?;
+        Ok(EquipmentSessionSelectionReport {
+            goods: goods.identity(),
+            source,
+            added,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn clear_player_equipment_session_selection(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        session_extend_id: i32,
+        shadow_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+    ) -> Result<EquipmentSessionShadowRemoved, EquipmentSessionClearBlock> {
+        let original = self
+            .session_factory
+            .equipment_session_shadow_original(session_id, session_extend_id, player_id, goods_id)
+            .ok_or(EquipmentSessionClearBlock::MissingShadow)?;
+        let recorded_position = self
+            .session_factory
+            .equipment_session_shadow_position(session_id, session_extend_id, player_id, goods_id)
+            .ok_or(EquipmentSessionClearBlock::MissingShadow)?;
+        if recorded_position != shadow_position
+            || original.container_type != 400
+            || original.container_id != player_id
+            || original.container_extend_id != destination_extend_id
+            || original.goods_position != destination_position
+        {
+            return Err(EquipmentSessionClearBlock::SourceMismatch);
+        }
+        let player = self
+            .players
+            .get(&player_id)
+            .ok_or(EquipmentSessionClearBlock::MissingPlayer)?;
+        let goods = match original.container_extend_id {
+            1 => player.packet().get_goods(original.goods_position),
+            2 => player.equipment().get_goods(original.goods_position),
+            _ => None,
+        }
+        .filter(|goods| goods.identity().ex_id == goods_id && goods.amount() == amount)
+        .ok_or(EquipmentSessionClearBlock::SourceMismatch)?;
+        let _ = goods;
+        self.session_factory
+            .remove_equipment_session_shadow(session_id, session_extend_id, player_id, goods_id)
+            .ok_or(EquipmentSessionClearBlock::MissingShadow)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn transfer_player_enhancement_goods<Context: GameContainerMessageRuntime>(
         &mut self,
         player_id: i32,
@@ -3558,6 +3660,183 @@ impl CGame {
             delete_shadow_delivery,
             outcome,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn transfer_player_equipment_session_goods<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        session_extend_id: i32,
+        shadow_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<EnhancementTransferReport, EnhancementTransferBlock> {
+        if !matches!(destination_extend_id, 1 | 2) {
+            return Err(EnhancementTransferBlock::UnsupportedDestinationContainer {
+                extend_id: destination_extend_id,
+            });
+        }
+        let source = self
+            .session_factory
+            .equipment_session_shadow_original(session_id, session_extend_id, player_id, goods_id)
+            .ok_or(EnhancementTransferBlock::MissingShadow)?;
+        let recorded_position = self
+            .session_factory
+            .equipment_session_shadow_position(session_id, session_extend_id, player_id, goods_id)
+            .ok_or(EnhancementTransferBlock::MissingShadow)?;
+        if recorded_position != shadow_position
+            || source.container_type != 400
+            || source.container_id != player_id
+        {
+            return Err(EnhancementTransferBlock::MissingShadow);
+        }
+        if !matches!(source.container_extend_id, 1 | 2) {
+            return Err(EnhancementTransferBlock::UnsupportedSourceContainer {
+                extend_id: source.container_extend_id,
+            });
+        }
+
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .ok_or(EnhancementTransferBlock::MissingPlayer)?;
+        let result = (|| {
+            let goods = match source.container_extend_id {
+                1 => player.packet().get_goods(source.goods_position),
+                2 => player.equipment().get_goods(source.goods_position),
+                _ => unreachable!("source extend проверен выше"),
+            }
+            .filter(|goods| goods.identity().ex_id == goods_id && goods.amount() == amount)
+            .ok_or(EnhancementTransferBlock::MissingSourceGoods)?;
+            let goods_identity = goods.identity();
+            let pack_add_enabled = self.globe_setup.pack_add_enabled();
+
+            let (removal, mut incoming) = if source.container_extend_id == 1 {
+                let removed = player
+                    .packet_mut()
+                    .remove_goods(goods_id)
+                    .ok_or(EnhancementTransferBlock::PacketRemovalFailed)?;
+                let removed = match removed {
+                    VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed)) => {
+                        removed
+                    }
+                    VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Split(_))
+                    | VolumeGoodsRemoveOutcome::RemovedButCellMissing(_) => {
+                        return Err(EnhancementTransferBlock::PacketRemovalFailed);
+                    }
+                };
+                (
+                    EnhancementTransferRemoval::Packet {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source.goods_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                    },
+                    Some(removed.goods),
+                )
+            } else {
+                let remove_facts =
+                    context.enhancement_equipment_remove_facts(&player, goods, pack_add_enabled);
+                let mut recompute =
+                    |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+                let mut report = player.remove_equipment_goods(
+                    goods_id,
+                    &self.goods_factory,
+                    &self.skill_factory,
+                    remove_facts,
+                    &mut recompute,
+                );
+                drop(recompute);
+                self.publish_player_equipment_remove_report(&mut report, context);
+                let outcome = std::mem::replace(
+                    &mut report.outcome,
+                    EquipmentRemoveOutcome::Missing {
+                        partial_effects: Default::default(),
+                    },
+                );
+                let removed = match outcome {
+                    EquipmentRemoveOutcome::Removed(removed) => removed,
+                    outcome => {
+                        report.outcome = outcome;
+                        return Err(EnhancementTransferBlock::EquipmentRemovalFailed(report));
+                    }
+                };
+                (
+                    EnhancementTransferRemoval::Equipment {
+                        event: removed.event,
+                        effects: report.effects,
+                        deliveries: report.deliveries,
+                    },
+                    Some(removed.goods),
+                )
+            };
+
+            let shadow = self
+                .session_factory
+                .remove_equipment_session_shadow(session_id, session_extend_id, player_id, goods_id)
+                .expect("session shadow проверен до удаления source goods")
+                .removed;
+            let delete_shadow_delivery =
+                send_enhancement_shadow_deleted(self, player_id, goods_identity, &shadow);
+            let destination = self.add_enhancement_transfer_goods(
+                &mut player,
+                destination_extend_id,
+                destination_position,
+                &mut incoming,
+                pack_add_enabled,
+                context,
+            );
+            let outcome = if incoming.is_none() {
+                EnhancementTransferOutcome::Moved(destination)
+            } else {
+                let rejected = destination;
+                let rollback = self.add_enhancement_transfer_goods(
+                    &mut player,
+                    source.container_extend_id,
+                    source.goods_position,
+                    &mut incoming,
+                    pack_add_enabled,
+                    context,
+                );
+                if incoming.is_none() {
+                    EnhancementTransferOutcome::RolledBack {
+                        rejected,
+                        restored: rollback,
+                    }
+                } else {
+                    let goods = incoming
+                        .take()
+                        .expect("неуспешный rollback сохраняет detached goods");
+                    let notification_delivery = send_enhancement_goods_collected(
+                        self,
+                        player_id,
+                        goods.name(),
+                        goods.amount(),
+                    );
+                    EnhancementTransferOutcome::GoodsCollected {
+                        rejected,
+                        rollback,
+                        goods: goods.identity(),
+                        notification_delivery,
+                    }
+                }
+            };
+            Ok(EnhancementTransferReport {
+                goods: goods_identity,
+                source,
+                removal,
+                shadow,
+                delete_shadow_delivery,
+                outcome,
+            })
+        })();
+        self.players.insert(player_id, player);
+        result
     }
 
     fn add_enhancement_transfer_goods<Context: GameContainerMessageRuntime>(

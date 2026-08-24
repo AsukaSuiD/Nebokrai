@@ -134,16 +134,10 @@ impl CEquipmentComposeShadowContainer {
         self.base.base().original_container_information(goods_id)
     }
 
-    pub(crate) fn select_cell<'a, Resolve>(
-        &self,
-        mut resolve: Resolve,
-    ) -> Result<ComposeEquipmentCell, ComposeShadowAddBlock>
-    where
-        Resolve: FnMut(&GoodsShadow) -> Option<&'a CGoods>,
-    {
+    pub(crate) fn select_cell(&self) -> Result<ComposeEquipmentCell, ComposeShadowAddBlock> {
         ComposeEquipmentCell::ALL
             .into_iter()
-            .find(|cell| self.get_goods(*cell, &mut resolve).is_none())
+            .find(|cell| !self.positions.contains_key(cell))
             .ok_or(ComposeShadowAddBlock::NoResolvableCell)
     }
 
