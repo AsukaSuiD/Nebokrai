@@ -21,6 +21,10 @@
 //! contender replacement, player `0xBFF28/29`, `GS0229/43..46` и сохраняет
 //! village goods для последующего victory cleanup. Faction name/union для
 //! contender snapshot берутся из того же авторитетного World `0x7FE06`.
+//! Достигнутые GodsBattle scripts связывают `5413 / GetAreaID` с настоящим
+//! login-server ID, а `11124/11128` — с persisted player SZL и уже существующим
+//! `CGame::UpdateSZL` effect-проходом: property/notice, merit-level downgrade
+//! и appellation callback выполняются одним owner-ом.
 //! Также материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
 //! `9354 / OpenEquipmentCompose` и `2216 / OpenGoodsUpgrade`. Refresh вычисляет первую
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
@@ -135,9 +139,10 @@ use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, S
 use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
     EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
-    GameContainerMessageRuntime, NationCarriageReturnReport, NationCombatContext,
-    NationContendEnterReport, ScriptRegionChangeContext, ServerRegionOwner,
-    colored_player_notice_message, format_legacy_text_fields,
+    GameContainerMessageRuntime, GodsBattleDeathContext, GodsBattleSzlPlayerUpdate,
+    NationCarriageReturnReport, NationCombatContext, NationContendEnterReport,
+    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
+    format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
@@ -200,6 +205,7 @@ pub(crate) const SCRIPT_FUNCTION_SCRIPT_IS_RUNNING: i32 = 2316;
 pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
+pub(crate) const SCRIPT_FUNCTION_GET_AREA_ID: i32 = 5413;
 pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
 pub(crate) const SCRIPT_FUNCTION_POST_WORLD_INFO: i32 = 5202;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
@@ -222,6 +228,8 @@ pub(crate) const SCRIPT_FUNCTION_GET_QUEST_SWITCH: i32 = 9018;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_SWITCH: i32 = 9019;
 pub(crate) const SCRIPT_FUNCTION_EXILE_TIME: i32 = 9021;
 pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
+pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_SZL: i32 = 11124;
+pub(crate) const SCRIPT_FUNCTION_CHANGE_PLAYER_SZL: i32 = 11128;
 pub(crate) const SCRIPT_FUNCTION_DECLARE_COUNTRY_WAR: i32 = 9100;
 pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_WAR_DECLARE: i32 = 9101;
 pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_DECLARED: i32 = 9102;
@@ -277,6 +285,7 @@ pub(crate) trait ScriptFunctionRuntime:
     + BattleFairySkillResetContext
     + ScriptRegionChangeContext
     + CityGateRuntimeContext
+    + GodsBattleDeathContext
 {
 }
 
@@ -291,6 +300,7 @@ impl<T> ScriptFunctionRuntime for T where
         + BattleFairySkillResetContext
         + ScriptRegionChangeContext
         + CityGateRuntimeContext
+        + GodsBattleDeathContext
 {
 }
 
@@ -670,6 +680,98 @@ pub(crate) fn run_war_contend_script_function<Runtime: CountryWarActionScriptRun
         result,
         effects,
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleScalarScriptKind {
+    AreaId,
+    PlayerSzl,
+    ChangePlayerSzl,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleScalarScriptDisposition {
+    Scalar {
+        player_id: Option<i32>,
+        value: i32,
+    },
+    ArgumentMissing,
+    Changed {
+        player_id: Option<i32>,
+        requested: i32,
+        update: Option<GodsBattleSzlPlayerUpdate>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleScalarScriptFunctionOutcome {
+    DifferentFunction,
+    Handled {
+        kind: GodsBattleScalarScriptKind,
+        legacy_return: i32,
+        disposition: GodsBattleScalarScriptDisposition,
+    },
+}
+
+pub(crate) fn run_gods_battle_scalar_script_function<Runtime: GodsBattleDeathContext>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    script_player_id: Option<i32>,
+    function_id: i32,
+    evaluated_argument: Option<i32>,
+) -> GodsBattleScalarScriptFunctionOutcome {
+    let kind = match function_id {
+        SCRIPT_FUNCTION_GET_AREA_ID => GodsBattleScalarScriptKind::AreaId,
+        SCRIPT_FUNCTION_GET_PLAYER_SZL => GodsBattleScalarScriptKind::PlayerSzl,
+        SCRIPT_FUNCTION_CHANGE_PLAYER_SZL => GodsBattleScalarScriptKind::ChangePlayerSzl,
+        _ => return GodsBattleScalarScriptFunctionOutcome::DifferentFunction,
+    };
+    let handled = |legacy_return, disposition| GodsBattleScalarScriptFunctionOutcome::Handled {
+        kind,
+        legacy_return,
+        disposition,
+    };
+    match kind {
+        GodsBattleScalarScriptKind::AreaId => {
+            let value = game.area_id();
+            handled(
+                value,
+                GodsBattleScalarScriptDisposition::Scalar {
+                    player_id: script_player_id,
+                    value,
+                },
+            )
+        }
+        GodsBattleScalarScriptKind::PlayerSzl => {
+            let value = script_player_id
+                .and_then(|player_id| game.find_player(player_id))
+                .map_or(0, |player| player.szl() as i32);
+            handled(
+                value,
+                GodsBattleScalarScriptDisposition::Scalar {
+                    player_id: script_player_id,
+                    value,
+                },
+            )
+        }
+        GodsBattleScalarScriptKind::ChangePlayerSzl => {
+            let Some(requested) =
+                evaluated_argument.filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return handled(0, GodsBattleScalarScriptDisposition::ArgumentMissing);
+            };
+            let update = script_player_id
+                .and_then(|player_id| game.script_change_player_szl(player_id, requested, runtime));
+            handled(
+                0,
+                GodsBattleScalarScriptDisposition::Changed {
+                    player_id: script_player_id,
+                    requested,
+                    update,
+                },
+            )
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2921,7 +3023,13 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_TIME
         | SCRIPT_FUNCTION_SECOND
         | SCRIPT_FUNCTION_GET_COUNTRY
-        | SCRIPT_FUNCTION_GET_ONLINE_PLAYERS => Unused,
+        | SCRIPT_FUNCTION_GET_ONLINE_PLAYERS
+        | SCRIPT_FUNCTION_GET_AREA_ID
+        | SCRIPT_FUNCTION_GET_PLAYER_SZL => Unused,
+        SCRIPT_FUNCTION_CHANGE_PLAYER_SZL => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_RELOAD => match index {
             0 => String,
             _ => Unused,
@@ -4114,6 +4222,16 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         GoodsItemScriptFunctionOutcome::DifferentFunction => {}
     }
 
+    handled!(
+        run_gods_battle_scalar_script_function(
+            game,
+            runtime,
+            script_player_id,
+            function_id,
+            integer_arguments[0],
+        ),
+        GodsBattleScalarScriptFunctionOutcome::Handled
+    );
     handled!(
         run_war_contend_script_function(
             game,

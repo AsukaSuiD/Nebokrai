@@ -4211,6 +4211,12 @@ impl CGame {
         (self.login_server_id, self.world_server_id)
     }
 
+    /// Исторический `CGame::GetAreaID` возвращает именно login-server ID,
+    /// а не ID текущего региона игрока.
+    pub(crate) const fn area_id(&self) -> i32 {
+        self.login_server_id
+    }
+
     pub(crate) const fn set_id_index(&mut self, id_index: u8) {
         self.id_index = id_index;
     }
