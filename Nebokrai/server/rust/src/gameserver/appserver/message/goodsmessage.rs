@@ -31,9 +31,9 @@
 //! `0x8FC35` разрешает target по ID либо bounded имени и публикует exact
 //! `0xC010F` payload; неизвестный mode и отсутствующий target остаются silent.
 //! `0x8FC25` подключает process-owned session/plug registry: после exact
-//! owner lookup и plug-ID guard выполняются ordered session End, player
-//! progress/moveable release и plug Exit. Полиморфные End/Exit остаются
-//! обязательными runtime-effects до materialization concrete session типов.
+//! owner lookup и plug-ID guard выполняются concrete ordered session End,
+//! player progress/moveable release и plug Exit; terminal equipment sessions
+//! снимают container listeners и собираются на штатной MainLoop session-stage.
 //! `0x8FC24` соседним route-ом замыкает equipment compose: session/plug
 //! identity, validation, необратимое удаление двух equipment и камня,
 //! universal upgrade, packet ownership, result-shadow и announcement script.
@@ -84,6 +84,7 @@ use crate::gameserver::appserver::session::cequipmentdakong::{
 use crate::gameserver::appserver::session::cequipmentupgrade::{
     EquipmentUpgradeCloseReport, EquipmentUpgradeReport,
 };
+use crate::gameserver::appserver::session::csessionfactory::{PlugExitReport, SessionEndReport};
 use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
     BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
@@ -170,10 +171,6 @@ pub(crate) trait GameGoodsMessageRuntime:
     );
 
     fn update_battle_fairy_player_property(&mut self, game: &mut CGame, player_id: i32);
-
-    fn end_goods_session(&mut self, game: &mut CGame, session_id: i32, plug_id: i32);
-
-    fn exit_goods_session_plug(&mut self, game: &mut CGame, session_id: i32, plug_id: i32);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -222,15 +219,15 @@ pub(crate) enum GoodsSessionEndOutcome {
 }
 
 #[must_use = "session end report сохраняет lookup, player release и ordered lifecycle effects"]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsSessionEndReport {
     pub(crate) session_id: i32,
     pub(crate) requested_plug_id: i32,
     pub(crate) actual_plug_id: Option<i32>,
     pub(crate) outcome: GoodsSessionEndOutcome,
     pub(crate) player_release: Option<GoodsSessionPlayerRelease>,
-    pub(crate) session_end_dispatched: bool,
-    pub(crate) plug_exit_dispatched: bool,
+    pub(crate) session_end: Option<SessionEndReport>,
+    pub(crate) plug_exit: Option<PlugExitReport>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -440,7 +437,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Err(error) => return Some(Err(error)),
             };
             GameGoodsMessageOutcome::EquipmentUpgradeClose(
-                game.close_equipment_upgrade(player_id, session_id, runtime),
+                game.close_equipment_upgrade(player_id, session_id),
             )
         }
         HANDLE_CONTAINER_SCRIPT_ACTION => {
@@ -790,8 +787,8 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 actual_plug_id: None,
                 outcome: GoodsSessionEndOutcome::MissingSession,
                 player_release: None,
-                session_end_dispatched: false,
-                plug_exit_dispatched: false,
+                session_end: None,
+                plug_exit: None,
             };
             if game.session_factory().query_session(session_id).is_some() {
                 report.outcome = GoodsSessionEndOutcome::MissingPlayerPlug;
@@ -801,13 +798,14 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     .map(|plug| plug.id());
                 if let Some(actual_plug_id) = report.actual_plug_id {
                     if actual_plug_id == requested_plug_id {
-                        runtime.end_goods_session(game, session_id, actual_plug_id);
-                        report.session_end_dispatched = true;
+                        report.session_end = game.session_factory_mut().end_session(session_id);
                         report.player_release = game
                             .find_player_mut(player_id)
                             .map(|player| player.release_goods_session_state());
-                        runtime.exit_goods_session_plug(game, session_id, actual_plug_id);
-                        report.plug_exit_dispatched = true;
+                        report.plug_exit = Some(
+                            game.session_factory_mut()
+                                .exit_plug(session_id, actual_plug_id),
+                        );
                         report.outcome = GoodsSessionEndOutcome::Ended;
                     } else {
                         report.outcome = GoodsSessionEndOutcome::PlugIdMismatch;

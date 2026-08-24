@@ -4,9 +4,10 @@
 //! `server/gameserver/appserver/session/cequipmentcompose.cpp`. Process-owned
 //! plug хранит трёхслотовый shadow container; gameplay `Compose` вызывается
 //! живым `goodsmessage 0x8FC24` через проверенные session/plug identity.
-//! Полиморфный listener lifecycle и universal `UpgradeEquipment` остаются
-//! обязательными runtime-effects; validation, ordering и ownership результата
-//! принадлежат `CGame` и не подменяются этим storage owner-ом.
+//! Insert/end listener lifecycle связан с packet/equipment и terminal
+//! session-stage. Universal `UpgradeEquipment` остаётся обязательным runtime-
+//! effect; validation, ordering и ownership результата принадлежат `CGame` и
+//! не подменяются этим storage owner-ом.
 
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::{
@@ -166,20 +167,8 @@ impl CEquipmentCompose {
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentcompose.cpp
 
-// ============================================================================
-// FUNCTION: CEquipmentCompose::OnSessionEnded
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentcompose.cpp:49
-// RVA: 0x001045B0
-// ADDRESS: 005045b0
-// PROTOTYPE: int __thiscall OnSessionEnded(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// VERIFIED: `OnSessionEnded` только проверяет наличие player/region и возвращает
+// bool, который `CSession::End` не использует; отдельной mutation/publication нет.
 // ============================================================================
 // FUNCTION: CEquipmentCompose::GetContainer
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -194,20 +183,8 @@ impl CEquipmentCompose {
 //
 //
 
-// ============================================================================
-// FUNCTION: CEquipmentCompose::OnPlugInserted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentcompose.cpp:65
-// RVA: 0x0010B960
-// ADDRESS: 0050b960
-// PROTOTYPE: int __thiscall OnPlugInserted(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// IMPLEMENTED: `OnPlugInserted` owner/extend setup и packet/equipment listener attach
+// выполняются equipment-session factory/caller-ом; покрытое RAW-тело удалено.
 // ============================================================================
 // FUNCTION: CEquipmentCompose::CEquipmentCompose
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -222,20 +199,8 @@ impl CEquipmentCompose {
 //
 //
 
-// ============================================================================
-// FUNCTION: CEquipmentCompose::OnPlugEnded
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cequipmentcompose.cpp:92
-// RVA: 0x001B4C90
-// ADDRESS: 005b4c90
-// PROTOTYPE: int __thiscall OnPlugEnded(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// IMPLEMENTED: terminal session-stage снимает packet/equipment listener перед
+// registry GC; покрытое RAW-тело `OnPlugEnded` удалено.
 // ============================================================================
 // FUNCTION: CEquipmentCompose::~CEquipmentCompose
 // STATUS: UNKNOWN (сохранены только метаданные исследования)

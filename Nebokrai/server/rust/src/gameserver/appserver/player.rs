@@ -1361,6 +1361,38 @@ impl CPlayer {
         }
     }
 
+    pub(crate) fn attach_equipment_session_listener(&mut self, plug_id: i32) -> [bool; 2] {
+        let listener = usize::try_from(plug_id)
+            .ok()
+            .and_then(ContainerListenerHandle::from_legacy_identity);
+        let packet = self
+            .packet
+            .base_mut()
+            .base_mut()
+            .base_mut()
+            .add_listener(listener);
+        let equipment = self.equipment.base_mut().base_mut().add_listener(listener);
+        [packet, equipment]
+    }
+
+    pub(crate) fn detach_equipment_session_listener(&mut self, plug_id: i32) -> [bool; 2] {
+        let listener = usize::try_from(plug_id)
+            .ok()
+            .and_then(ContainerListenerHandle::from_legacy_identity);
+        let packet = self
+            .packet
+            .base_mut()
+            .base_mut()
+            .base_mut()
+            .remove_listener(listener);
+        let equipment = self
+            .equipment
+            .base_mut()
+            .base_mut()
+            .remove_listener(listener);
+        [packet, equipment]
+    }
+
     pub(crate) const fn is_dead(&self) -> bool {
         CMoveShape::is_died(self.base_properties.health)
     }

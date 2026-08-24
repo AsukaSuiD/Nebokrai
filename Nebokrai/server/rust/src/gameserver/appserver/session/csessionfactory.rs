@@ -17,7 +17,9 @@
 //! механик также создают normal session и typed plug, связывают owner/session,
 //! shadow owner/extend ID и insert-order. Container-message проход разрешает
 //! wire `(session, plug << 8)`, записывает и снимает typed upgrade/DaKong/
-//! compose shadows с исходным player slot. Общие team/trader/shop варианты
+//! compose shadows с исходным player slot. Terminal `End/Exit` хранится здесь,
+//! а ended equipment-session GC сохраняет session/plug order и owner identity
+//! для listener detach на MainLoop session-stage. Общие team/trader/shop варианты
 //! `CreateSession/CreatePlug/InsertPlug` и их polymorphic lifecycle ниже этим
 //! не объявляются реализованными.
 
@@ -74,6 +76,37 @@ pub(crate) struct EquipmentSessionShadowRemoved {
     pub(crate) plug_id: i32,
     pub(crate) original: PreviousContainer,
     pub(crate) removed: ShadowRemovedReport,
+}
+
+#[must_use = "session end сохраняет ordered callback targets и terminal state"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SessionEndReport {
+    pub(crate) session_id: i32,
+    pub(crate) ended: bool,
+    pub(crate) remove_requested: bool,
+    pub(crate) callback_plug_ids: Vec<i32>,
+}
+
+#[must_use = "plug exit фиксирует session dispatch и ended state"]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlugExitReport {
+    pub(crate) session_id: i32,
+    pub(crate) plug_id: i32,
+    pub(crate) session_found: bool,
+    pub(crate) exited: bool,
+}
+
+#[must_use = "terminal GC report сохраняет session и ordered plug identities"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TerminalEquipmentSessionCollected {
+    pub(crate) session_id: i32,
+    pub(crate) plugs: Vec<TerminalEquipmentPlugCollected>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TerminalEquipmentPlugCollected {
+    pub(crate) plug_id: i32,
+    pub(crate) owner_id: i32,
 }
 
 #[derive(Debug)]
@@ -417,6 +450,46 @@ impl CSessionFactory {
             })
     }
 
+    pub(crate) fn end_session(&mut self, session_id: i32) -> Option<SessionEndReport> {
+        let callback_plug_ids = self.sessions.get_mut(&session_id)?.end();
+        let callback_plug_ids = callback_plug_ids
+            .into_iter()
+            .filter(|plug_id| self.plugs.contains_key(plug_id))
+            .collect();
+        let session = self
+            .sessions
+            .get(&session_id)
+            .expect("ended session остаётся в registry до factory GC");
+        Some(SessionEndReport {
+            session_id,
+            ended: session.is_ended(),
+            remove_requested: session.remove_requested(),
+            callback_plug_ids,
+        })
+    }
+
+    pub(crate) fn exit_plug(&mut self, session_id: i32, plug_id: i32) -> PlugExitReport {
+        let session_found = self.sessions.contains_key(&session_id);
+        let exited = if session_found {
+            self.plugs
+                .get_mut(&plug_id)
+                .filter(|plug| plug.session_id() == session_id)
+                .map(|plug| {
+                    plug.mark_ended();
+                    true
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        PlugExitReport {
+            session_id,
+            plug_id,
+            session_found,
+            exited,
+        }
+    }
+
     pub(crate) fn register_equipment_compose_plug(
         &mut self,
         plug_id: i32,
@@ -499,6 +572,45 @@ impl CSessionFactory {
             self.equipment_upgrade_plugs.remove(plug_id);
         }
         plug_ids
+    }
+
+    pub(crate) fn garbage_collect_terminal_equipment_sessions(
+        &mut self,
+    ) -> Vec<TerminalEquipmentSessionCollected> {
+        let session_ids: Vec<i32> = self
+            .sessions
+            .iter()
+            .filter_map(|(session_id, session)| {
+                let has_equipment_plug = session.plug_ids_storage().iter().any(|plug_id| {
+                    self.equipment_compose_plugs.contains_key(plug_id)
+                        || self.equipment_da_kong_plugs.contains_key(plug_id)
+                        || self.equipment_upgrade_plugs.contains_key(plug_id)
+                });
+                (session.remove_requested() && has_equipment_plug).then_some(*session_id)
+            })
+            .collect();
+        session_ids
+            .into_iter()
+            .map(|session_id| {
+                let plugs = self
+                    .sessions
+                    .get(&session_id)
+                    .expect("terminal session выбрана из registry")
+                    .plug_ids_storage()
+                    .iter()
+                    .filter_map(|plug_id| {
+                        self.plugs
+                            .get(plug_id)
+                            .map(|plug| TerminalEquipmentPlugCollected {
+                                plug_id: *plug_id,
+                                owner_id: plug.owner_id(),
+                            })
+                    })
+                    .collect();
+                let _plug_ids = self.garbage_collect_session(session_id);
+                TerminalEquipmentSessionCollected { session_id, plugs }
+            })
+            .collect()
     }
 }
 

@@ -437,6 +437,7 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
 };
 use crate::gameserver::appserver::session::csessionfactory::{
     CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved,
+    TerminalEquipmentSessionCollected,
 };
 use crate::gameserver::appserver::shape::{
     CShape, MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
@@ -1536,6 +1537,7 @@ pub(crate) struct EquipmentSessionOpenReport {
     pub(crate) notification_delivery: Option<i32>,
     pub(crate) player_transition:
         Option<crate::gameserver::appserver::player::GoodsSessionPlayerRelease>,
+    pub(crate) listener_attach: Option<[bool; 2]>,
     pub(crate) open_delivery: Option<i32>,
     pub(crate) collected_plug_ids: Vec<i32>,
 }
@@ -5436,6 +5438,17 @@ impl CGame {
         &mut self.session_factory
     }
 
+    fn detach_terminal_equipment_session_listeners(
+        &mut self,
+        sessions: &[TerminalEquipmentSessionCollected],
+    ) {
+        for plug in sessions.iter().flat_map(|session| &session.plugs) {
+            if let Some(player) = self.players.get_mut(&plug.owner_id) {
+                let _listener_detach = player.detach_equipment_session_listener(plug.plug_id);
+            }
+        }
+    }
+
     /// Exact `CGame::SetAuctionState`: false не меняет saved wall-clock,
     /// true публикует полученный caller-ом `_time` sample.
     pub(crate) const fn set_auction_state(&mut self, enabled: bool, wall_time_seconds: u32) {
@@ -5651,6 +5664,7 @@ impl CGame {
             plug_id: None,
             notification_delivery: None,
             player_transition: None,
+            listener_attach: None,
             open_delivery: None,
             collected_plug_ids: Vec::new(),
         };
@@ -5702,9 +5716,11 @@ impl CGame {
             EquipmentSessionPlugKind::DaKong => (PlayerProgress::DaKong, false, 0x0b_f929),
             EquipmentSessionPlugKind::Compose => (PlayerProgress::Compose, true, 0x0b_f92a),
         };
-        report.player_transition = self
-            .find_player_mut(player_id)
-            .map(|player| player.begin_equipment_session(progress, lock_movement));
+        if let Some(player) = self.find_player_mut(player_id) {
+            report.listener_attach = Some(player.attach_equipment_session_listener(plug_id));
+            report.player_transition =
+                Some(player.begin_equipment_session(progress, lock_movement));
+        }
         let mut message = CMessage::new(message_type);
         message.add_long(session_id);
         message.add_long(plug_id);
@@ -5717,6 +5733,7 @@ impl CGame {
             report.outcome = EquipmentSessionOpenOutcome::SendFailed;
             report.collected_plug_ids = self.session_factory.garbage_collect_session(session_id);
             if let Some(player) = self.find_player_mut(player_id) {
+                let _listener_detach = player.detach_equipment_session_listener(plug_id);
                 let _ = player.release_goods_session_state();
             }
             return report;
@@ -6155,17 +6172,17 @@ impl CGame {
         });
     }
 
-    pub(crate) fn close_equipment_upgrade<Runtime: GameGoodsMessageRuntime>(
+    pub(crate) fn close_equipment_upgrade(
         &mut self,
         player_id: i32,
         session_id: i32,
-        runtime: &mut Runtime,
     ) -> EquipmentUpgradeCloseReport {
         let mut report = EquipmentUpgradeCloseReport {
             session_id,
             actual_plug_id: None,
             outcome: EquipmentUpgradeCloseOutcome::MissingSessionOrPlug,
-            session_end_dispatched: false,
+            session_end: None,
+            listener_detach: None,
             previous_progress: None,
             cleared_shadows: 0,
             close_delivery: None,
@@ -6184,13 +6201,13 @@ impl CGame {
         let Some(mut plug) = self.session_factory.take_equipment_upgrade_plug(plug_id) else {
             return report;
         };
-        runtime.end_goods_session(self, session_id, plug_id);
-        report.session_end_dispatched = true;
-        report.previous_progress = self.find_player_mut(player_id).map(|player| {
+        report.session_end = self.session_factory.end_session(session_id);
+        if let Some(player) = self.find_player_mut(player_id) {
+            report.listener_detach = Some(player.detach_equipment_session_listener(plug_id));
             let previous = player.current_progress();
             player.set_current_progress_snapshot(PlayerProgress::None);
-            previous
-        });
+            report.previous_progress = Some(previous);
+        }
         report.cleared_shadows = plug.close();
         let message = CMessage::new(0x0b_f913);
         report.close_delivery = Some(message.send_to_player(self.net_server(), player_id));
@@ -6543,9 +6560,9 @@ impl CGame {
             actual_plug_id: None,
             last_equipment_id: None,
             outcome: EquipmentDaKongCloseOutcome::MissingSessionOrPlug,
-            session_end_dispatched: false,
+            session_end: None,
             previous_progress: None,
-            plug_exit_dispatched: false,
+            plug_exit: None,
             client_update: None,
             client_update_delivery: None,
         };
@@ -6572,15 +6589,13 @@ impl CGame {
         };
         report.last_equipment_id = Some(last_equipment_id);
 
-        runtime.end_goods_session(self, session_id, actual_plug_id);
-        report.session_end_dispatched = true;
+        report.session_end = self.session_factory.end_session(session_id);
         report.previous_progress = self.find_player_mut(player_id).map(|player| {
             let previous = player.current_progress();
             player.set_current_progress_snapshot(PlayerProgress::None);
             previous
         });
-        runtime.exit_goods_session_plug(self, session_id, actual_plug_id);
-        report.plug_exit_dispatched = true;
+        report.plug_exit = Some(self.session_factory.exit_plug(session_id, actual_plug_id));
 
         let Some(goods) = self
             .find_player(player_id)
@@ -12743,6 +12758,10 @@ impl CGame {
             stages.push(GameMainLoopStage::Message);
 
             let started = runtime.get_tick_ms();
+            let terminal_equipment_sessions = self
+                .session_factory
+                .garbage_collect_terminal_equipment_sessions();
+            self.detach_terminal_equipment_session_listeners(&terminal_equipment_sessions);
             runtime.session_factory_ai(self);
             state.profile.session_ms = state
                 .profile
@@ -12766,6 +12785,10 @@ impl CGame {
             stages.push(GameMainLoopStage::FairyHatcher);
             messages = self.process_messages(runtime);
             stages.push(GameMainLoopStage::Message);
+            let terminal_equipment_sessions = self
+                .session_factory
+                .garbage_collect_terminal_equipment_sessions();
+            self.detach_terminal_equipment_session_listeners(&terminal_equipment_sessions);
             runtime.session_factory_ai(self);
             stages.push(GameMainLoopStage::Session);
             net_sessions = self.net_session_manager.run();

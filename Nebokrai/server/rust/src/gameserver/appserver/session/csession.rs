@@ -5,8 +5,10 @@
 //! source-owner `server/gameserver/appserver/area.cpp` и материализован там.
 //! `Vec<i32>` сохраняет порядок обхода. Normal equipment-session materializes
 //! constructor defaults, Start gate и InsertPlug capacity/state prefix;
-//! team и общий polymorphic lifecycle ниже остаются RAW. `from_plug_ids`
-//! является assembly-границей уже восстановленного registry state.
+//! team lifecycle ниже остаётся RAW. `from_plug_ids` является assembly-
+//! границей уже восстановленного registry state. Для normal equipment-session
+//! материализован terminal `End`: ended/remove state и ordered обход plug IDs;
+//! concrete plug callback/registry lookup выполняет `CSessionFactory`.
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CSession {
@@ -17,6 +19,7 @@ pub(crate) struct CSession {
     started: bool,
     ended: bool,
     aborted: bool,
+    remove_requested: bool,
 }
 
 impl CSession {
@@ -29,6 +32,7 @@ impl CSession {
             started: true,
             ended: false,
             aborted: false,
+            remove_requested: false,
         }
     }
 
@@ -41,6 +45,7 @@ impl CSession {
             started: false,
             ended: false,
             aborted: false,
+            remove_requested: false,
         }
     }
 
@@ -66,6 +71,20 @@ impl CSession {
 
     pub(crate) fn plug_ids_storage(&self) -> &[i32] {
         &self.plug_ids
+    }
+
+    pub(crate) fn end(&mut self) -> Vec<i32> {
+        self.ended = true;
+        self.remove_requested = true;
+        self.plug_ids.clone()
+    }
+
+    pub(crate) const fn is_ended(&self) -> bool {
+        self.started && self.ended
+    }
+
+    pub(crate) const fn remove_requested(&self) -> bool {
+        self.remove_requested
     }
 }
 
@@ -201,19 +220,8 @@ impl CSession {
 //
 //
 
-// ============================================================================
-// FUNCTION: CSession::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\csession.cpp:117
-// RVA: 0x0007B4D0
-// ADDRESS: 0047b4d0
-// PROTOTYPE: int __thiscall End(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: terminal `End` state и ordered plug traversal материализованы
+// выше; concrete virtual callback остаётся у соответствующего plug owner-а.
 
 // ============================================================================
 // FUNCTION: CSession::Abort

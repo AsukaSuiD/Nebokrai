@@ -9,8 +9,8 @@
 //! session, очищает progress/shadow, отправляет `0xBF913` и освобождает
 //! session/plug registry.
 //!
-//! MSVC listener/vtable plumbing заменён owned container-ом и явными
-//! effect-report-ами. Полный property recompute, локализованные notification,
+//! MSVC listener/vtable plumbing заменён owned listener handle, concrete
+//! terminal session state и явными effect-report-ами. Полный property recompute, локализованные notification,
 //! World log и публикация container-removal остаются обязательной runtime-
 //! границей своих ещё не восстановленных владельцев.
 
@@ -29,6 +29,8 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
+
+use super::csessionfactory::SessionEndReport;
 
 pub(crate) const EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON: u8 = 1;
 pub(crate) const EQUIPMENT_UPGRADE_FAILURE_LOG_REASON: u8 = 2;
@@ -155,7 +157,8 @@ pub(crate) struct EquipmentUpgradeCloseReport {
     pub(crate) session_id: i32,
     pub(crate) actual_plug_id: Option<i32>,
     pub(crate) outcome: EquipmentUpgradeCloseOutcome,
-    pub(crate) session_end_dispatched: bool,
+    pub(crate) session_end: Option<SessionEndReport>,
+    pub(crate) listener_detach: Option<[bool; 2]>,
     pub(crate) previous_progress: Option<PlayerProgress>,
     pub(crate) cleared_shadows: usize,
     pub(crate) close_delivery: Option<i32>,

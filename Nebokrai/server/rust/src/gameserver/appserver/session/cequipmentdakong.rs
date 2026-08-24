@@ -4,8 +4,8 @@
 //! `server/gameserver/appserver/session/cequipmentdakong.cpp`. Owned plug
 //! хранит восьмислотовый shadow и достигается из goods opcodes
 //! `0x8FC1E..0x8FC23`; gameplay и terminal close выполняются через canonical `CGame`, player,
-//! goods factory и общий MSVCRT RNG. Listener/session lifecycle и script-only
-//! external-refresh caller `9351` использует тот же external-attribute
+//! goods factory и общий MSVCRT RNG. Listener/session lifecycle связан через
+//! equipment-session factory и MainLoop; script-only external-refresh caller `9351` использует тот же external-attribute
 //! алгоритм, обязательный reason `4`, расход, area effect `11` и item update.
 
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
@@ -20,6 +20,8 @@ use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::player::CiQingPacketConsumption;
 use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+
+use super::csessionfactory::{PlugExitReport, SessionEndReport};
 
 pub(crate) const DA_KONG_USE_SINKER_INDEX: u32 = 0x120f_daa7;
 
@@ -181,9 +183,9 @@ pub(crate) struct EquipmentDaKongCloseReport {
     pub(crate) actual_plug_id: Option<i32>,
     pub(crate) last_equipment_id: Option<crate::public::guid::CGuid>,
     pub(crate) outcome: EquipmentDaKongCloseOutcome,
-    pub(crate) session_end_dispatched: bool,
+    pub(crate) session_end: Option<SessionEndReport>,
     pub(crate) previous_progress: Option<PlayerProgress>,
-    pub(crate) plug_exit_dispatched: bool,
+    pub(crate) plug_exit: Option<PlugExitReport>,
     pub(crate) client_update: Option<EquipmentDaKongClientUpdate>,
     pub(crate) client_update_delivery: Option<i32>,
 }

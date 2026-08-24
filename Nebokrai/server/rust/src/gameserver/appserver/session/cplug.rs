@@ -9,9 +9,10 @@
 //! `+0x50/+0x54`; `GetOwner` принимает только type `400` и ищет player по
 //! signed owner ID.
 //!
-//! Полный polymorphic plug/session lifecycle ниже остаётся RAW. Base object и
-//! пять достигнутых scalar-полей выражены safe Rust storage; `Option<&CPlayer>`
-//! заменяет исходный nullable `CMoveShape*`, сохраняя успешный RTTI-контракт.
+//! Base object и пять достигнутых scalar-полей выражены safe Rust storage;
+//! `Option<&CPlayer>` заменяет исходный nullable `CMoveShape*`, сохраняя
+//! успешный RTTI-контракт. Terminal `Exit` проверяет живую session через
+//! factory-owner и только после session state dispatch фиксирует ended.
 
 use crate::gameserver::appserver::baseobject::CBaseObject;
 use crate::gameserver::appserver::player::CPlayer;
@@ -66,6 +67,22 @@ impl CPlug {
         self.owner_type == owner_type && self.owner_id == owner_id
     }
 
+    pub(crate) const fn owner_id(&self) -> i32 {
+        self.owner_id
+    }
+
+    pub(crate) const fn session_id(&self) -> i32 {
+        self.session_id
+    }
+
+    pub(crate) const fn is_ended(&self) -> bool {
+        self.ended
+    }
+
+    pub(crate) const fn mark_ended(&mut self) {
+        self.ended = true;
+    }
+
     pub(crate) fn get_owner<'a>(&self, game: &'a CGame) -> Option<&'a CPlayer> {
         if self.owner_type != PLAYER_TYPE {
             return None;
@@ -83,19 +100,7 @@ impl CPlug {
 // IMPLEMENTED: constructor, base-only destructor и `SetOwner` материализованы
 // выше; покрытые raw-блоки удалены.
 
-// ============================================================================
-// FUNCTION: CPlug::SetSession
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cplug.cpp:189
-// RVA: 0x0007B160
-// ADDRESS: 0047b160
-// PROTOTYPE: void __thiscall SetSession(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `SetSession` и terminal scalar state материализованы выше.
 
 // ============================================================================
 // FUNCTION: CPlug::GetSession
@@ -139,19 +144,8 @@ impl CPlug {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlug::Exit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cplug.cpp:104
-// RVA: 0x0007B220
-// ADDRESS: 0047b220
-// PROTOTYPE: int __thiscall Exit(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `Exit` session lookup, state dispatch boundary и ended mutation
+// выполняются `CSessionFactory::exit_plug`; покрытое RAW-тело удалено.
 
 // ============================================================================
 // FUNCTION: CPlug::Unserialize
