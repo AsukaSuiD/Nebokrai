@@ -196,8 +196,9 @@
 //! Shape commands `0x8F901..05` подключены к main message route: exact payload
 //! lengths, direction/emotion state, `0xBF601/03/502/611/738`, region lookup и
 //! effect ordering принадлежат `CGame`; player relocation уже замыкает
-//! region/area/block state и `GS0163`, а non-player polymorphic relocation,
-//! quest AI и полные shape serializers остаются runtime owners.
+//! region/area/block state и `GS0163`; quest route замыкает `BF605/BF738` и
+//! destination FIFO, оставляя runtime-у только current action/skill facts и
+//! фактическое хранение AI. Non-player relocation и serializers ещё внешние.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.

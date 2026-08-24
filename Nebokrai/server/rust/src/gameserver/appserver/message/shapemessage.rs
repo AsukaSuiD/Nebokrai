@@ -5,11 +5,12 @@
 //! `0x8F901..0x8F905`: exact fixed-width decode, direction/emotion player
 //! state, region lookup, around/addressed wire и ordering внешних AI/spatial/
 //! serialization owners. Player `SetTileXY` проходит concrete region/area/
-//! block mutation и post-move `GS0163`; `CMoveShape::OnQuestMoveStep`,
-//! `OnCannotMove`, non-player polymorphic `SetTileXY` и полные player/goods/
-//! shape serializers остаются обязательными runtime-границами, поскольку их
-//! concrete owners ещё RAW.
+//! block mutation и post-move `GS0163`. Quest movement замыкает attack guard,
+//! rotation correction, addressed `OnCannotMove`, emotion reset и concrete
+//! `CPlayerAI` destination FIFO. Non-player polymorphic `SetTileXY` и полные
+//! player/goods/shape serializers остаются runtime-границами.
 
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeView};
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
@@ -65,15 +66,7 @@ pub(crate) trait GameShapeMessageRuntime {
         player_id: i32,
         region_id: i32,
     ) -> ShapeQuestMoveFacts;
-    fn shape_on_cannot_move(&mut self, game: &mut CGame, player_id: i32);
-    fn shape_on_quest_move_step(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        region_id: i32,
-        move_mode: i8,
-        direction: i8,
-    );
+    fn shape_player_ai_mut(&mut self, game: &CGame, player_id: i32) -> Option<&mut CPlayerAI>;
     fn serialize_shape_snapshot(
         &mut self,
         game: &CGame,
@@ -99,6 +92,7 @@ pub(crate) trait GameShapeMessageRuntime {
 pub(crate) enum GameShapeMessageError {
     MissingField(&'static str),
     InvalidPayloadSize { expected: usize, actual: usize },
+    Coordinate(ShapeCoordinateBlock),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,6 +104,7 @@ pub(crate) enum GameShapeMessageOutcome {
     PositionMutationBlocked,
     PositionChanged,
     QuestMoveBlocked,
+    QuestMoveIgnoredDead,
     QuestMoveQueued,
     SnapshotTargetMissing,
     SnapshotSerializationFailed,
@@ -135,6 +130,26 @@ pub(crate) struct GameShapeMessageReport {
     pub(crate) outcome: GameShapeMessageOutcome,
     pub(crate) target: Option<ShapeIdentity>,
     pub(crate) deliveries: Vec<GameShapeMessageDelivery>,
+}
+
+fn send_player_cannot_move(game: &CGame, player_id: i32) -> Result<i32, GameShapeMessageError> {
+    let Some(player) = game.find_player(player_id) else {
+        return Ok(0);
+    };
+    let tile_x = player
+        .shape()
+        .get_tile_x()
+        .map_err(GameShapeMessageError::Coordinate)?;
+    let tile_y = player
+        .shape()
+        .get_tile_y()
+        .map_err(GameShapeMessageError::Coordinate)?;
+    let mut response = CMessage::new(0x000b_f605);
+    response.add_long(0);
+    response.add_long(0);
+    response.add_long(tile_x);
+    response.add_long(tile_y);
+    Ok(response.send_to_player(game.net_server(), player_id))
 }
 
 pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
@@ -324,7 +339,13 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             };
             let facts = runtime.shape_quest_move_facts(game, player_id, region_id);
             if facts.blocked_by_breakable_attack {
-                runtime.shape_on_cannot_move(game, player_id);
+                let delivery = match send_player_cannot_move(game, player_id) {
+                    Ok(delivery) => delivery,
+                    Err(error) => return Some(Err(error)),
+                };
+                report
+                    .deliveries
+                    .push(GameShapeMessageDelivery::Player(delivery));
                 report.outcome = GameShapeMessageOutcome::QuestMoveBlocked;
                 return Some(Ok(report));
             }
@@ -335,7 +356,28 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                     response.send_to_player(game.net_server(), player_id),
                 ));
             }
-            runtime.shape_on_quest_move_step(game, player_id, region_id, move_mode, direction);
+            if game
+                .find_player(player_id)
+                .is_some_and(|player| player.is_dead())
+            {
+                report.outcome = GameShapeMessageOutcome::QuestMoveIgnoredDead;
+                return Some(Ok(report));
+            }
+            let Some(player_ai) = runtime.shape_player_ai_mut(game, player_id) else {
+                let delivery = match send_player_cannot_move(game, player_id) {
+                    Ok(delivery) => delivery,
+                    Err(error) => return Some(Err(error)),
+                };
+                report
+                    .deliveries
+                    .push(GameShapeMessageDelivery::Player(delivery));
+                report.outcome = GameShapeMessageOutcome::QuestMoveBlocked;
+                return Some(Ok(report));
+            };
+            game.find_player_mut(player_id)
+                .expect("quest-move player сохранён после dead guard")
+                .clear_emotion_state();
+            player_ai.queue_client_destination(i32::from(direction), move_mode != 2);
             report.outcome = GameShapeMessageOutcome::QuestMoveQueued;
         }
         QUERY_SHAPE_SNAPSHOT => {

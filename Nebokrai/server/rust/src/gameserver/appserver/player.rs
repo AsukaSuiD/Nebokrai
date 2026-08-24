@@ -127,6 +127,8 @@
 //! Client relocation использует общие movement facts и `CShape` owner через
 //! `CServerRegion`; caller сохраняет исходный `BF603 -> SetTileXY -> GS0163`
 //! порядок и contend/symbol predicate, поэтому замещённый RAW удалён.
+//! Quest movement также использует concrete `OnCannotMove` wire с текущими
+//! tile coordinates; player-AI caller очищает emotion перед постановкой шага.
 //! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
 //! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
 //! полиморфные session End/plug Exit принадлежат caller runtime-у.
@@ -6053,20 +6055,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0002CE80
 // ADDRESS: 0042ce80
 // PROTOTYPE: int __thiscall CanMove(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::OnCannotMove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9651
-// RVA: 0x0002CEA0
-// ADDRESS: 0042cea0
-// PROTOTYPE: void __thiscall OnCannotMove(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

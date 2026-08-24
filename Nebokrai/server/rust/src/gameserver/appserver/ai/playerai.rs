@@ -1,6 +1,40 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутая client-destination часть `CPlayerAI` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/ai/playerai.cpp`. Трёхаргументный virtual `MoveTo` RVA
+//! `0x0010A480` для живого player owner-а очищает emotion, удаляет старейшие
+//! destination до длины не более трёх и затем добавляет `(direction, is_run)`;
+//! так очередь после вызова содержит не более четырёх элементов. Owner/health
+//! и ClearEmotion остаются у caller-а, чтобы не хранить raw pointers внутри AI.
+//! Четырёхаргументный pathfinding `MoveTo`, AI tick, target/skill execution и
+//! остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+
+use std::collections::VecDeque;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerAiDestination {
+    pub(crate) direction: i32,
+    pub(crate) is_run: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CPlayerAI {
+    destinations: VecDeque<PlayerAiDestination>,
+}
+
+impl CPlayerAI {
+    pub(crate) fn destinations(&self) -> &VecDeque<PlayerAiDestination> {
+        &self.destinations
+    }
+
+    pub(crate) fn queue_client_destination(&mut self, direction: i32, is_run: bool) {
+        while 3 < self.destinations.len() {
+            self.destinations.pop_front();
+        }
+        self.destinations
+            .push_back(PlayerAiDestination { direction, is_run });
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -245,20 +279,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CPlayerAI::MoveTo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:1027
-// RVA: 0x0010A480
-// ADDRESS: 0050a480
-// PROTOTYPE: void __thiscall MoveTo(CRegion * param_1, long param_2, int param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 
 // COMPONENT_VARIANT_END: GameServer
