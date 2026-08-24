@@ -19,9 +19,10 @@
 //! wire `(session, plug << 8)`, записывает и снимает typed upgrade/DaKong/
 //! compose shadows с исходным player slot. Terminal `End/Exit` хранится здесь,
 //! а ended equipment-session GC сохраняет session/plug order и owner identity
-//! для listener detach на MainLoop session-stage. Общие team/trader/shop варианты
-//! `CreateSession/CreatePlug/InsertPlug` и их polymorphic lifecycle ниже этим
-//! не объявляются реализованными.
+//! для listener detach на MainLoop session-stage. Достигнутый personal-shop
+//! open создаёт normal `(1, 20, 0)` session и typed seller plug с exact owner,
+//! shadow metadata и insertion. Team/trader/buyer варианты и дальнейший
+//! polymorphic shop lifecycle ниже этим не объявляются реализованными.
 
 use std::collections::BTreeMap;
 
@@ -40,6 +41,7 @@ use crate::public::guid::CGuid;
 use super::cequipmentcompose::CEquipmentCompose;
 use super::cequipmentdakong::CEquipmentDaKong;
 use super::cequipmentupgrade::CEquipmentUpgrade;
+use super::cpersonalshopseller::CPersonalShopSeller;
 use super::cplug::CPlug;
 use super::csession::CSession;
 
@@ -116,6 +118,7 @@ pub(crate) struct CSessionFactory {
     equipment_compose_plugs: BTreeMap<i32, CEquipmentCompose>,
     equipment_da_kong_plugs: BTreeMap<i32, CEquipmentDaKong>,
     equipment_upgrade_plugs: BTreeMap<i32, CEquipmentUpgrade>,
+    personal_shop_seller_plugs: BTreeMap<i32, CPersonalShopSeller>,
     next_session_id: i32,
     next_plug_id: i32,
 }
@@ -128,6 +131,7 @@ impl Default for CSessionFactory {
             equipment_compose_plugs: BTreeMap::new(),
             equipment_da_kong_plugs: BTreeMap::new(),
             equipment_upgrade_plugs: BTreeMap::new(),
+            personal_shop_seller_plugs: BTreeMap::new(),
             next_session_id: 1,
             next_plug_id: 1,
         }
@@ -135,6 +139,42 @@ impl Default for CSessionFactory {
 }
 
 impl CSessionFactory {
+    /// Exact normal `(1, 20, 0)` session + personal-shop seller plug `(400,
+    /// player)`. Свежая session всегда проходит `Start(0)` и первый insertion;
+    /// поэтому safe atomic publication не меняет достижимый legacy outcome.
+    pub(crate) fn create_personal_shop_seller_session(
+        &mut self,
+        player_id: i32,
+    ) -> Option<(i32, i32)> {
+        let session_id = self.next_session_id;
+        self.next_session_id = self.next_session_id.wrapping_add(1);
+        let mut session = CSession::normal(1, 20, 0);
+        if !session.start() {
+            return None;
+        }
+
+        let plug_id = self.next_plug_id;
+        self.next_plug_id = self.next_plug_id.wrapping_add(1);
+        let mut base = CPlug::new();
+        base.set_id(plug_id);
+        base.set_owner(400, player_id);
+        base.set_session(session_id);
+        base.set_plug_type(2);
+        if !session.insert_plug(plug_id) {
+            return None;
+        }
+
+        self.sessions.insert(session_id, session);
+        self.plugs.insert(plug_id, base);
+        self.personal_shop_seller_plugs
+            .insert(plug_id, CPersonalShopSeller::inserted(plug_id));
+        Some((session_id, plug_id))
+    }
+
+    pub(crate) fn personal_shop_seller(&self, plug_id: i32) -> Option<&CPersonalShopSeller> {
+        self.personal_shop_seller_plugs.get(&plug_id)
+    }
+
     fn resolve_equipment_plug(
         &self,
         session_id: i32,
@@ -570,6 +610,7 @@ impl CSessionFactory {
             self.equipment_compose_plugs.remove(plug_id);
             self.equipment_da_kong_plugs.remove(plug_id);
             self.equipment_upgrade_plugs.remove(plug_id);
+            self.personal_shop_seller_plugs.remove(plug_id);
         }
         plug_ids
     }

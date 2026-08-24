@@ -2,10 +2,11 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/onmsg_w2s_auction.cpp` подтверждают
-//! selectors `0x80401..0x80403`, `0x80409..0x8040C`, `0x8040F` и `0x80410`:
+//! selectors `0x80401..0x80403`, `0x80409..0x8040D`, `0x8040F` и `0x80410`:
 //! добавление временного `CGoodsNode` в Game-specific owner map, reconciliation
 //! с World GUID-set, catalog/log/client relay, auction-state и полную YuanBao
-//! container/client mutation. GameServer primary map
+//! container/client mutation, а stall-result либо сообщает отказ, либо
+//! публикует `0x90201` в реальный локальный Game FIFO. GameServer primary map
 //! хранит `GUID -> owner id`, а не MiscServer-owned node; это исключает
 //! исходный stack-pointer lifetime без изменения наблюдаемого результата.
 //! Обрезанный payload заменяет небезопасное чтение за буфером typed error-ом
@@ -30,6 +31,7 @@ const WORLD_AUCTION_DIRECT_RELAY_MESSAGE: i32 = 0x0008_0409;
 const WORLD_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x0008_040a;
 const WORLD_AUCTION_LOG_NOTICE_MESSAGE: i32 = 0x0008_040b;
 const WORLD_AUCTION_CONDITION_MESSAGE: i32 = 0x0008_040c;
+const WORLD_AUCTION_STALL_RESULT_MESSAGE: i32 = 0x0008_040d;
 const WORLD_AUCTION_BROADCAST_MESSAGE: i32 = 0x0008_040f;
 const WORLD_AUCTION_YUAN_BAO_MESSAGE: i32 = 0x0008_0410;
 const CLIENT_AUCTION_GOODS_REMOVED_MESSAGE: i32 = 0x000c_0702;
@@ -37,6 +39,7 @@ const CLIENT_AUCTION_DIRECT_RELAY_MESSAGE: i32 = 0x000c_0707;
 const CLIENT_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x000c_0708;
 const CLIENT_AUCTION_CONDITION_MESSAGE: i32 = 0x000c_070a;
 const CLIENT_AUCTION_BROADCAST_MESSAGE: i32 = 0x000c_010b;
+const LOCAL_PLAYER_SHOP_OPEN_MESSAGE: i32 = 0x0009_0201;
 
 pub(crate) trait WorldAuctionRuntime: IncrementShopBillingContext {
     fn auction_wall_time_seconds(&mut self) -> u32;
@@ -73,6 +76,8 @@ pub(crate) enum WorldAuctionMessageError {
     },
     MissingYuanBaoPlayerId,
     MissingYuanBaoAmount,
+    MissingStallPlayerId,
+    MissingStallResult,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -123,6 +128,13 @@ pub(crate) enum WorldAuctionMessageReport {
         requested: u32,
         change: Option<PlayerYuanBaoChange>,
         deliveries: Vec<i32>,
+    },
+    StallResult {
+        player_id: i32,
+        result: i32,
+        player_found: bool,
+        notice_delivery: Option<i32>,
+        local_open_queued: bool,
     },
 }
 
@@ -362,6 +374,49 @@ pub(crate) fn dispatch_world_auction_message<Runtime: WorldAuctionRuntime>(
             message.set_message_type(CLIENT_AUCTION_BROADCAST_MESSAGE);
             let delivery = message.send_all(game.current_net_server());
             Some(Ok(WorldAuctionMessageReport::ClientBroadcast { delivery }))
+        }
+        WORLD_AUCTION_STALL_RESULT_MESSAGE => {
+            let Some(player_id) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingStallPlayerId));
+            };
+            let Some(result) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingStallResult));
+            };
+            if game.find_player(player_id).is_none() {
+                return Some(Ok(WorldAuctionMessageReport::StallResult {
+                    player_id,
+                    result,
+                    player_found: false,
+                    notice_delivery: None,
+                    local_open_queued: false,
+                }));
+            }
+
+            let mut notice_delivery = None;
+            let mut local_open_queued = false;
+            if result == 0 {
+                notice_delivery = Some(
+                    colored_player_notice_message(
+                        0xffff_ff00,
+                        0xffff_0000,
+                        game.get_string_by_id(b"GPM009"),
+                    )
+                    .send_to_player(game.net_server(), player_id),
+                );
+            } else if let Some(net_server) = game.current_net_server() {
+                let mut open = CMessage::new(LOCAL_PLAYER_SHOP_OPEN_MESSAGE);
+                open.base_mut().add_long(game.server_ids().1);
+                open.apply_player_context(player_id, None);
+                net_server.publish_local_message(open);
+                local_open_queued = true;
+            }
+            Some(Ok(WorldAuctionMessageReport::StallResult {
+                player_id,
+                result,
+                player_found: true,
+                notice_delivery,
+                local_open_queued,
+            }))
         }
         WORLD_AUCTION_YUAN_BAO_MESSAGE => {
             let Some(player_id) = message.base_mut().get_long() else {

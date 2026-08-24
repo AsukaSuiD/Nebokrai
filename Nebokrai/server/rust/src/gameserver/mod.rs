@@ -59,6 +59,7 @@ pub(crate) mod appserver {
         pub(crate) mod incrementshopmessage;
         pub(crate) mod logmessage;
         pub(crate) mod onmsg_w2s_auction;
+        pub(crate) mod playershopmessage;
         pub(crate) mod organsysmessage;
         pub(crate) mod othermessage;
         pub(crate) mod playermessage;
@@ -95,6 +96,7 @@ pub(crate) mod appserver {
         pub(crate) mod cequipmentdakong;
         pub(crate) mod cequipmentupgrade;
         pub(crate) mod cplug;
+        pub(crate) mod cpersonalshopseller;
         pub(crate) mod csession;
         pub(crate) mod csessionfactory;
     }

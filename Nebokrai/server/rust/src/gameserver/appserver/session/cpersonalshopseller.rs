@@ -1,6 +1,65 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутая session-state часть GameServer `CPersonalShopSeller`.
+//!
+//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и owner
+//! `server/gameserver/appserver/session/cpersonalshopseller.cpp` подтверждают
+//! constructor и `OnPlugInserted`: seller владеет пустым именем, закрытым
+//! shop-флагом и shadow-контейнером 8×6, который получает owner `(10, plug)` и
+//! extend ID `plug << 8`. Его listener identity — сам plug; player packet и
+//! equipment подписываются тем же identity при insertion. Safe Rust storage
+//! заменяет указатели/RTTI, не меняя этих наблюдаемых связей. Торговые операции
+//! и terminal lifecycle остаются RAW ниже до своих message-сценариев.
+
+use crate::gameserver::appserver::container::ccontainer::ContainerListenerHandle;
+use crate::gameserver::appserver::container::cvolumelimitgoodsshadowcontainer::CVolumeLimitGoodsShadowContainer;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CPersonalShopSeller {
+    shop_name: Vec<u8>,
+    goods: CVolumeLimitGoodsShadowContainer,
+    shop_opened: bool,
+}
+
+impl CPersonalShopSeller {
+    pub(crate) fn inserted(plug_id: i32) -> Self {
+        let mut goods = CVolumeLimitGoodsShadowContainer::new();
+        goods.set_container_dimensions(8, 6);
+        goods
+            .base_mut()
+            .base_mut()
+            .base_mut()
+            .set_owner(10, plug_id);
+        goods
+            .base_mut()
+            .base_mut()
+            .set_container_extend_id(plug_id.wrapping_shl(8));
+        let listener = usize::try_from(plug_id)
+            .ok()
+            .and_then(ContainerListenerHandle::from_legacy_identity);
+        let _self_listener = goods
+            .base_mut()
+            .base_mut()
+            .base_mut()
+            .base_mut()
+            .add_listener(listener);
+        Self {
+            shop_name: Vec::new(),
+            goods,
+            shop_opened: false,
+        }
+    }
+
+    pub(crate) const fn goods(&self) -> &CVolumeLimitGoodsShadowContainer {
+        &self.goods
+    }
+
+    pub(crate) fn shop_name(&self) -> &[u8] {
+        &self.shop_name
+    }
+
+    pub(crate) const fn shop_opened(&self) -> bool {
+        self.shop_opened
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -59,20 +118,6 @@
 // RVA: 0x00104780
 // ADDRESS: 00504780
 // PROTOTYPE: int __thiscall IsPlugAvailable(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPersonalShopSeller::OnPlugInserted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cpersonalshopseller.cpp:88
-// RVA: 0x00104800
-// ADDRESS: 00504800
-// PROTOTYPE: int __thiscall OnPlugInserted(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -227,20 +272,6 @@
 // RVA: 0x00106410
 // ADDRESS: 00506410
 // PROTOTYPE: void __thiscall ~CPersonalShopSeller(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPersonalShopSeller::CPersonalShopSeller
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\cpersonalshopseller.cpp:25
-// RVA: 0x001065A0
-// ADDRESS: 005065a0
-// PROTOTYPE: undefined __thiscall CPersonalShopSeller(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

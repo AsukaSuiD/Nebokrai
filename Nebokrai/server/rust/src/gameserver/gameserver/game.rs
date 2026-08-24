@@ -426,6 +426,9 @@ use crate::gameserver::appserver::message::onmsg_w2s_auction::{
     WorldAuctionMessageError, WorldAuctionMessageReport, WorldAuctionRuntime,
     dispatch_world_auction_message,
 };
+use crate::gameserver::appserver::message::playershopmessage::{
+    PlayerShopMessageError, PlayerShopMessageReport, dispatch_player_shop_message,
+};
 use crate::gameserver::appserver::message::organsysmessage::{
     GameOrganizingWarMessageError, GameOrganizingWarMessageReport, GameOrganizingWarRuntime,
     dispatch_game_organizing_war_message,
@@ -2625,6 +2628,7 @@ pub(crate) struct GameAuctionRunReport {
 pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) legacy_return: i32,
     pub(crate) auction_messages: Vec<Result<WorldAuctionMessageReport, WorldAuctionMessageError>>,
+    pub(crate) player_shop_messages: Vec<Result<PlayerShopMessageReport, PlayerShopMessageError>>,
     pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
     pub(crate) gma_messages: Vec<Result<GmaMessageReport, GmaMessageError>>,
     pub(crate) depot_messages: Vec<DepotMessageReport>,
@@ -14480,6 +14484,7 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> GameProcessMessagesReport<Runtime::RuntimeError> {
         let mut auction_messages = Vec::new();
+        let mut player_shop_messages = Vec::new();
         let mut gm_messages = Vec::new();
         let mut gma_messages = Vec::new();
         let mut depot_messages = Vec::new();
@@ -14506,6 +14511,7 @@ impl CGame {
                 &mut message,
                 runtime,
                 &mut auction_messages,
+                &mut player_shop_messages,
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
@@ -14534,6 +14540,7 @@ impl CGame {
                 &mut message,
                 runtime,
                 &mut auction_messages,
+                &mut player_shop_messages,
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
@@ -14564,6 +14571,7 @@ impl CGame {
                         &mut message,
                         runtime,
                         &mut auction_messages,
+                        &mut player_shop_messages,
                         &mut gm_messages,
                         &mut gma_messages,
                         &mut depot_messages,
@@ -14593,6 +14601,7 @@ impl CGame {
         GameProcessMessagesReport {
             legacy_return: 1,
             auction_messages,
+            player_shop_messages,
             gm_messages,
             gma_messages,
             depot_messages,
@@ -14617,6 +14626,7 @@ impl CGame {
         message: &mut CMessage,
         runtime: &mut Runtime,
         auction_messages: &mut Vec<Result<WorldAuctionMessageReport, WorldAuctionMessageError>>,
+        player_shop_messages: &mut Vec<Result<PlayerShopMessageReport, PlayerShopMessageError>>,
         gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
         gma_messages: &mut Vec<Result<GmaMessageReport, GmaMessageError>>,
         depot_messages: &mut Vec<DepotMessageReport>,
@@ -14655,6 +14665,8 @@ impl CGame {
             dispatch_world_auction_message(message, self, runtime)
         {
             auction_messages.push(report);
+        } else if let Some(report) = dispatch_player_shop_message(message, self) {
+            player_shop_messages.push(report);
         } else if let Some(report) = dispatch_gm_message(message, self, || runtime.get_tick_ms()) {
             gm_messages.push(report);
         } else if let Some(report) = dispatch_gma_message(message, self) {

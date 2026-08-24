@@ -217,6 +217,12 @@ impl CMyNetServer {
         self.received_events.push(GameServerEvent::Message(message));
     }
 
+    /// Публикует локально созданное Game-message в тот же FIFO, что и
+    /// network callbacks. Используется legacy intra-process message routes.
+    pub(crate) fn publish_local_message(&self, message: CMessage) {
+        self.received_events.push(GameServerEvent::Message(message));
+    }
+
     /// Передаёт весь текущий FIFO доменному snapshot-владельцу `CGame`.
     pub(crate) fn take_all_events(&self) -> VecDeque<GameServerEvent> {
         self.received_events.take_all()
