@@ -131,6 +131,9 @@
 //! Periodic battle-fairy death prefix теперь также доведён через equipment
 //! addon lookup и четыре player state mutation до адресного `0xBF721` в
 //! точном field order; ещё не owned RP/vigour/mode/exalt приходят typed facts.
+//! Summon/recall тем же property adapter-ом исполняет ordered notifications,
+//! around `0xBF605/0xBF930/0xBF92E` и terminal `0xBF721`; координаты move wire
+//! кодируются IEEE-754 float bits, как в `TellClientMove`, а не signed DWORD.
 //! GodsBattle runtime продолжает startup owner: player Add/Remove tail
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
@@ -294,10 +297,11 @@ use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSy
 use crate::gameserver::appserver::player::{
     BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationReport,
     BattleFairyFollowReport, BattleFairySkillRequest, BattleFairySkillRequestFacts,
-    BattleFairySkillRequestReport, BattleFairySkillResetReport, BattleFairySummonReport,
-    BattleFairyWarSoulAction, CPlayer, PlayerCombatProperties, PlayerEquipmentAddReport,
-    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
-    PlayerHonorResetReport, PlayerReliveMutation,
+    BattleFairySkillRequestReport, BattleFairySkillResetReport, BattleFairySummonDelivery,
+    BattleFairySummonEffect, BattleFairySummonReport, BattleFairyWarSoulAction, CPlayer,
+    PlayerCombatProperties, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
+    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport,
+    PlayerReliveMutation,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1071,6 +1075,15 @@ pub(crate) struct PlayerPropertiesExternalFacts {
 pub(crate) trait BattleFairyDeathContext {
     fn player_properties_external_facts(&mut self, player_id: i32)
     -> PlayerPropertiesExternalFacts;
+}
+
+pub(crate) trait BattleFairyRuntimeContext: BattleFairyDeathContext {
+    fn send_battle_fairy_around(
+        &mut self,
+        region: &CServerRegion,
+        origin: &CShape,
+        message: &CMessage,
+    ) -> Result<i32, ShapeCoordinateBlock>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6413,37 +6426,106 @@ impl CGame {
     /// Player сохраняет порядок guards и broadcast effects, а region map
     /// меняется здесь, потому что `CGame` — первый живой owner обоих runtime
     /// объектов. Transport остаётся explicit consumer ordered report-а.
-    pub(crate) fn summon_battle_fairy(
+    pub(crate) fn summon_battle_fairy<Context: BattleFairyRuntimeContext>(
         &mut self,
         player_id: i32,
         mode: i32,
+        context: &mut Context,
     ) -> Option<BattleFairySummonReport> {
         let battle_fairy_enabled = self.globe_setup.battle_fairy_enabled();
         let mut report = {
             let player = self.players.get_mut(&player_id)?;
             player.summon_battle_fairy(battle_fairy_enabled, mode, &self.goods_factory)
         };
-        let Some(action) = report.spatial_action else {
-            return Some(report);
-        };
-        let spatial_applied = report.region_id.is_some_and(|region_id| {
-            let Some(region) = self.regions.get_mut(&region_id) else {
-                return false;
-            };
-            match action {
-                BattleFairyWarSoulAction::SetPosition { previous, target } => region
-                    .base_mut()
-                    .set_war_soul_position(player_id as u32, previous, target),
-                BattleFairyWarSoulAction::Delete { previous, .. } => region
-                    .base_mut()
-                    .delete_war_soul(player_id as u32, previous),
+        if let Some(action) = report.spatial_action {
+            let spatial_applied = report.region_id.is_some_and(|region_id| {
+                let Some(region) = self.regions.get_mut(&region_id) else {
+                    return false;
+                };
+                match action {
+                    BattleFairyWarSoulAction::SetPosition { previous, target } => region
+                        .base_mut()
+                        .set_war_soul_position(player_id as u32, previous, target),
+                    BattleFairyWarSoulAction::Delete { previous, .. } => region
+                        .base_mut()
+                        .delete_war_soul(player_id as u32, previous),
+                }
+            });
+            report.spatial_applied = spatial_applied;
+            if let Some(player) = self.players.get_mut(&player_id) {
+                player.apply_war_soul_action(action, spatial_applied);
             }
-        });
-        report.spatial_applied = spatial_applied;
-        if let Some(player) = self.players.get_mut(&player_id) {
-            player.apply_war_soul_action(action, spatial_applied);
         }
+        self.deliver_battle_fairy_summon_effects(&mut report, context);
         Some(report)
+    }
+
+    fn deliver_battle_fairy_summon_effects<Context: BattleFairyRuntimeContext>(
+        &mut self,
+        report: &mut BattleFairySummonReport,
+        context: &mut Context,
+    ) {
+        for effect in report.effects.clone() {
+            match effect {
+                BattleFairySummonEffect::Notification {
+                    player_id,
+                    string_id,
+                    color,
+                } => {
+                    let text = self.get_string_by_id(string_id.as_bytes());
+                    let delivery = colored_player_notice_message(color, 0, text)
+                        .send_to_player(self.net_server(), player_id);
+                    report
+                        .deliveries
+                        .push(BattleFairySummonDelivery::Player(delivery));
+                }
+                BattleFairySummonEffect::AroundMessage {
+                    message_type,
+                    player_id,
+                    values,
+                } => {
+                    let mut message = CMessage::new(message_type as i32);
+                    if message_type == 0x0b_f605 && values.len() == 4 {
+                        message.add_long(values[0]);
+                        message.add_ulong(values[1] as u32);
+                        message.add_ulong((values[2] as f32).to_bits());
+                        message.add_ulong((values[3] as f32).to_bits());
+                    } else {
+                        for value in values {
+                            message.add_long(value);
+                        }
+                    }
+                    let delivery = report
+                        .region_id
+                        .and_then(|region_id| self.take_region_owner(region_id))
+                        .map(|owner| {
+                            let player = self.find_player(player_id);
+                            let delivery = player.map(|player| {
+                                context.send_battle_fairy_around(
+                                    owner.base(),
+                                    player.shape(),
+                                    &message,
+                                )
+                            });
+                            self.restore_region_owner(owner);
+                            delivery
+                        })
+                        .flatten();
+                    report
+                        .deliveries
+                        .push(BattleFairySummonDelivery::Around(delivery));
+                }
+                BattleFairySummonEffect::PropertiesChanged { player_id } => {
+                    let external = context.player_properties_external_facts(player_id);
+                    if let Some(player) = self.find_player(player_id) {
+                        let delivery = self.send_player_properties_changed(player, external);
+                        report
+                            .deliveries
+                            .push(BattleFairySummonDelivery::Properties(delivery));
+                    }
+                }
+            }
+        }
     }
 
     /// Замыкает positional add battle-fairy container-а с player property и

@@ -277,6 +277,13 @@ pub(crate) enum BattleFairySummonEffect {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairySummonDelivery {
+    Player(i32),
+    Around(Option<Result<i32, ShapeCoordinateBlock>>),
+    Properties(i32),
+}
+
 #[must_use = "summon report хранит точный порядок адресных broadcast и property effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairySummonReport {
@@ -286,6 +293,7 @@ pub(crate) struct BattleFairySummonReport {
     pub(crate) spatial_action: Option<BattleFairyWarSoulAction>,
     pub(crate) spatial_applied: bool,
     pub(crate) effects: Vec<BattleFairySummonEffect>,
+    pub(crate) deliveries: Vec<BattleFairySummonDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1343,8 +1351,8 @@ impl CPlayer {
 
     /// Исполняет player-часть `CBattleFairyContainer::SummonBF`. Spatial map
     /// принадлежит `CServerRegion`, поэтому действие возвращается явным
-    /// tail-ом для `CGame`; ordered notify/broadcast/property effects не
-    /// сериализуются выдуманным transport-ом.
+    /// tail-ом для `CGame`; ordered notify/broadcast/property effects там
+    /// сериализуются concrete wire после spatial mutation.
     pub(crate) fn summon_battle_fairy(
         &mut self,
         battle_fairy_enabled: bool,
@@ -1359,6 +1367,7 @@ impl CPlayer {
             spatial_action: None,
             spatial_applied: false,
             effects: Vec::new(),
+            deliveries: Vec::new(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairySummonOutcome::FeatureDisabled;
