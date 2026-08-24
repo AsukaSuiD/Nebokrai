@@ -100,6 +100,9 @@
 //! Соседний World notice `0x7F804` переиспользует bounded `%s` formatter и
 //! concrete net server до адресного client `0xBF806`; unsafe `sprintf` не
 //! воспроизводится, visible `0xFF/0x3FF` wire limits сохраняются.
+//! Kill confirmation `0x7F806` продолжает World runtime path через owned Globe
+//! PK coefficient и player counters/timestamp до concrete around `0xBF70E`;
+//! отсутствующий player получает exact reused-message `0x5FA06` ответ.
 //! OrganSys war opcodes `0x7FE1F..0x7FE36` тем же FIFO меняют owned
 //! AttackCity/Village schedules, concrete local/proxy region phases и
 //! contender state с сохранением City/Village message/log side effects.

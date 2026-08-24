@@ -72,6 +72,9 @@
 //! Player notice response `0x7F804` сохраняет World offline/online wire,
 //! локализует exact `"GS0332 "` либо формирует `source:text`, bounded заменяет
 //! небезопасный `sprintf` и адресно шлёт client `0xBF806` с исходными colors.
+//! Kill confirmation `0x7F806` сохраняет три ignored long и player ID; missing
+//! player переиспользует вход как World `0x5FA06`, success мутирует murderer
+//! state и публикует around `0xBF70E` через concrete region/session owners.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -142,7 +145,7 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyCompos
 use crate::gameserver::appserver::goods::cgoodsfactory::{
     GoodsFactoryDecodeError, GoodsFactoryDecodeReport,
 };
-use crate::gameserver::appserver::player::PlayerHonorResetReport;
+use crate::gameserver::appserver::player::{PlayerConfirmedKillReport, PlayerHonorResetReport};
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
 use crate::gameserver::appserver::script::variablelist::{
     GameVariableMutationOutcome, GameVariableSnapshotError, GameVariableSnapshotReport,
@@ -161,6 +164,7 @@ use crate::gameserver::appserver::serverregion::ServerRegionSetupDecodeError;
 use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionDecodeError};
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
+use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::appserver::skills::skillfactory::{
     SkillFactoryDecodeError, SkillFactoryDecodeReport,
 };
@@ -171,7 +175,7 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::gameserver::gameserver::honorranks::{HonorRanksDecodeError, HonorRanksDecodeReport};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
-use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime, SendMessageError};
 use crate::nets::netserver::mynetclient::CMyNetClient;
 use crate::public::ciqing::{CiQingDecodeError, CiQingDecodeReport, CiQingSerializationBlock};
 use crate::public::dakongxiangqian::{DaKongDecodeError, DaKongDecodeReport};
@@ -210,6 +214,7 @@ const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const SERVER_STARTUP_MESSAGE: i32 = 0x0007_F801;
 const WORLD_PLAYER_NOTICE_RESPONSE: i32 = 0x0007_F804;
 const GENERAL_VARIABLE_UPDATE_RESPONSE: i32 = 0x0007_F805;
+const MURDERER_UPDATE_RESPONSE: i32 = 0x0007_F806;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_MESSAGE: i32 = 0x0007_F809;
 const PLAYER_COUNT_MESSAGE: i32 = 0x0007_F80B;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_RESPONSE: i32 = 0x0005_FA0A;
@@ -1025,6 +1030,7 @@ pub(crate) enum GameServerMessageReport {
     GodsBattleXyd(GameGodsBattleXydReport),
     GeneralVariableUpdate(GameGeneralVariableUpdateReport),
     WorldPlayerNotice(GameWorldPlayerNoticeReport),
+    MurdererUpdate(GameMurdererUpdateReport),
     BattleFairyStartup(GameBattleFairyStartupMessageReport),
     CombatRegistryStartup(GameCombatRegistryStartupMessageReport),
     PlayerEconomyStartup(GamePlayerEconomyStartupMessageReport),
@@ -1084,6 +1090,24 @@ pub(crate) enum GameWorldPlayerNoticeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameMurdererUpdateOutcome {
+    MissingPlayer {
+        world_delivery: Result<i32, SendMessageError>,
+    },
+    Updated {
+        mutation: PlayerConfirmedKillReport,
+        around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameMurdererUpdateReport {
+    pub(crate) ignored_prefix: [i32; 3],
+    pub(crate) player_id: i32,
+    pub(crate) outcome: GameMurdererUpdateOutcome,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameGodsBattleTopTenReport {
     pub(crate) player_id: i32,
     pub(crate) entries: Vec<GodsBattleTopTenEntry>,
@@ -1104,6 +1128,7 @@ pub(crate) enum GameServerMessageError<RegionRuntimeError> {
     GodsBattleXydUnexpectedEnd { field: &'static str },
     GeneralVariableUpdateUnexpectedEnd { field: &'static str },
     WorldPlayerNoticeUnexpectedEnd { field: &'static str },
+    MurdererUpdateUnexpectedEnd { field: &'static str },
     BattleFairyStartup(GameBattleFairyStartupError),
     CombatRegistryStartup(GameCombatRegistryStartupError),
     PlayerEconomyStartup(GamePlayerEconomyStartupError),
@@ -1135,6 +1160,65 @@ pub(crate) fn dispatch_server_message<Context>(
 where
     Context: InitialRegionStartupContext,
 {
+    if message.message_type() == MURDERER_UPDATE_RESPONSE {
+        let mut ignored_prefix = [0_i32; 3];
+        for (index, field) in ignored_prefix.iter_mut().enumerate() {
+            let Some(value) = message.base_mut().get_long() else {
+                const FIELDS: [&str; 3] =
+                    ["ignored prefix 0", "ignored prefix 1", "ignored prefix 2"];
+                return Some(Err(GameServerMessageError::MurdererUpdateUnexpectedEnd {
+                    field: FIELDS[index],
+                }));
+            };
+            *field = value;
+        }
+        let Some(player_id) = message.base_mut().get_long() else {
+            return Some(Err(GameServerMessageError::MurdererUpdateUnexpectedEnd {
+                field: "player id",
+            }));
+        };
+        let outcome = if game.find_player(player_id).is_none() {
+            message.set_message_type(0x0005_FA06);
+            GameMurdererUpdateOutcome::MissingPlayer {
+                world_delivery: message.send(game, false),
+            }
+        } else {
+            let pk_count_per_kill = game.globe_setup().pk_count_per_kill();
+            let mutation = game
+                .find_player_mut(player_id)
+                .expect("player existence проверен перед synchronous mutation")
+                .apply_confirmed_kill(pk_count_per_kill, || now_ms(script_context));
+            let mut around = CMessage::new(0x000B_F70E);
+            around.add_long(player_id);
+            around.base_mut().add_word(mutation.pk_count);
+            around.add_ulong(mutation.kill_count);
+            let around_runtime = GameServerAroundRuntime::new(
+                game,
+                game.session_factory(),
+                game.globe_setup().area_width(),
+                game.globe_setup().area_height(),
+            );
+            let around_delivery = around_runtime.and_then(|around_runtime| {
+                let player = game.find_player(player_id)?;
+                let region = player
+                    .server_region_id()
+                    .and_then(|region_id| game.find_region(region_id))
+                    .map(ServerRegionOwner::base);
+                Some(around.send_to_around(region, player.shape(), None, &around_runtime))
+            });
+            GameMurdererUpdateOutcome::Updated {
+                mutation,
+                around_delivery,
+            }
+        };
+        return Some(Ok(GameServerMessageReport::MurdererUpdate(
+            GameMurdererUpdateReport {
+                ignored_prefix,
+                player_id,
+                outcome,
+            },
+        )));
+    }
     if message.message_type() == WORLD_PLAYER_NOTICE_RESPONSE {
         let Some(target_or_mode) = message.base_mut().get_long() else {
             return Some(Err(

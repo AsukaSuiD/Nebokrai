@@ -11,6 +11,8 @@
 //! string — fixed C-строки, auction/JJC/DbMisc поля читаются из общего snapshot.
 //! BattleFairy и CiQing feature gates, а также полный ordinary-fairy setup
 //! `+0x85C..+0x8A8` читаются из подтверждённых byte offsets.
+//! `dwPkCountPerKill +0x4F4` обслуживает GameServer kill-confirmation path;
+//! raw snapshot остаётся единым wire owner-ом без дублирующей config-модели.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
 //! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Nation contender damage
 //! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
@@ -74,6 +76,7 @@ const FAIRY_SYNCRETIC_RATE_A_OFFSET: usize = 0x880;
 const FAIRY_SYNCRETIC_NEEDED_GOODS_OFFSET: usize = 0x8A0;
 const FAIRY_SYNCRETIC_NEEDED_EXP_OFFSET: usize = 0x8A4;
 const FAIRY_SYNCRETIC_NEEDED_MONEY_OFFSET: usize = 0x8A8;
+const PK_COUNT_PER_KILL_OFFSET: usize = 0x4F4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -443,6 +446,11 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn gold_coin_limit(&self) -> u32 {
         self.read_u32(0x4fc)
+    }
+
+    /// Exact `dwPkCountPerKill` по подтверждённому ABI offset `+0x4F4`.
+    pub(crate) fn pk_count_per_kill(&self) -> u32 {
+        self.read_u32(PK_COUNT_PER_KILL_OFFSET)
     }
 
     pub(crate) fn increment_log_days(&self) -> u32 {

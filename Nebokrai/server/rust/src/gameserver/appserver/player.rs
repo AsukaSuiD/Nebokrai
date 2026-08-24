@@ -17,6 +17,9 @@
 //! сравнивается с unsigned-представлением setup limit. Это минимальный owned
 //! player state для будущих equipment/battle-fairy side effects, но не замена
 //! полного constructor-а, property recalc или runtime player lifecycle.
+//! World kill confirmation `0x7F806` materializes `wPkCount`, `dwKillCount` и
+//! murderer timestamp: PK насыщается до `0xFFFF`, kills wrapping-инкрементятся,
+//! а clock читается только при первом ненулевом murderer state.
 //! FourNation reward `0x7FE46` добавляет owned `dwExploit`: advertised client
 //! value сохраняет wrapping addition, `SetExploit` отдельно применяет exact
 //! unsigned CountryParam maximum, а virtual `UpdateProperty` остаётся
@@ -890,6 +893,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) level: u8,
     pub(crate) occupation: u8,
     pub(crate) pk_count: u16,
+    pub(crate) kill_count: u32,
     pub(crate) experience: u32,
     pub(crate) vigour: u32,
     pub(crate) fairy_container_enabled: bool,
@@ -910,6 +914,14 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) exploit: u32,
     pub(crate) gods_battle_faction: i32,
     pub(crate) szl: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerConfirmedKillReport {
+    pub(crate) player_id: i32,
+    pub(crate) pk_count: u16,
+    pub(crate) kill_count: u32,
+    pub(crate) murderer_timestamp_started: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1146,6 +1158,7 @@ pub(crate) struct CPlayer {
     city_war_died_state: bool,
     city_war_died_state_time_ms: i32,
     died_state_start_time_ms: u32,
+    murderer_time_stamp_ms: u32,
     contribution: i32,
     silence_minutes: i32,
     silence_timestamp_minutes: u32,
@@ -1235,6 +1248,7 @@ impl CPlayer {
             city_war_died_state: false,
             city_war_died_state_time_ms: 0,
             died_state_start_time_ms: 0,
+            murderer_time_stamp_ms: 0,
             contribution: 0,
             silence_minutes: 0,
             silence_timestamp_minutes: 0,
@@ -2217,6 +2231,32 @@ impl CPlayer {
 
     pub(crate) const fn pk_count(&self) -> u16 {
         self.base_properties.pk_count
+    }
+
+    /// World kill confirmation tail: unsigned saturation, wrapping kill count
+    /// и `OnUpdateMurdererSign` с единственным clock sample при старте timer-а.
+    pub(crate) fn apply_confirmed_kill(
+        &mut self,
+        pk_count_per_kill: u32,
+        now_ms: impl FnOnce() -> u32,
+    ) -> PlayerConfirmedKillReport {
+        self.base_properties.pk_count = u32::from(self.base_properties.pk_count)
+            .saturating_add(pk_count_per_kill)
+            .min(u32::from(u16::MAX)) as u16;
+        self.base_properties.kill_count = self.base_properties.kill_count.wrapping_add(1);
+        let murderer_timestamp_started =
+            self.base_properties.pk_count != 0 && self.murderer_time_stamp_ms == 0;
+        if self.base_properties.pk_count == 0 {
+            self.murderer_time_stamp_ms = 0;
+        } else if murderer_timestamp_started {
+            self.murderer_time_stamp_ms = now_ms();
+        }
+        PlayerConfirmedKillReport {
+            player_id: self.player_id(),
+            pk_count: self.base_properties.pk_count,
+            kill_count: self.base_properties.kill_count,
+            murderer_timestamp_started,
+        }
     }
 
     pub(crate) const fn set_money_snapshot(&mut self, money: u32) {
@@ -5232,19 +5272,7 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::OnUpdateMurdererSign
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:3037
-// RVA: 0x0002B130
-// ADDRESS: 0042b130
-// PROTOTYPE: void __thiscall OnUpdateMurdererSign(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CPlayer::OnUpdateMurdererSign` входит в `apply_confirmed_kill` выше.
 
 // ============================================================================
 // FUNCTION: CPlayer::IsBadman
