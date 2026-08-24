@@ -76,6 +76,15 @@
 //! region state, `BF603/BF601/BF505`, faction/team wire, полный GameSave
 //! `5FA02`, World `7F802` и client `BF506`; локальная ветвь завершается через
 //! `CS_CHANGEREGION` AI queue и реальный `8F801` destination-enter caller.
+//! Следующая календарная ветвь того же script-а достигает `13..19/23` и
+//! `5001 / Reload`. Временные selectors сохраняют exact packed layout
+//! `year:9/month:4/day:5/hour:5/minute:6/weekday:3`; `Year..DayOfWeek`
+//! принимают optional packed value, а `Second` всегда читает local clock.
+//! `Reload` публикует `0x5FF06 + player ID + profile C-string`; реальный World
+//! GM-dispatcher выполняет достигнутые `JJcConfig` и `IncrementShopList`
+//! reload owners и для IncrementShopList рассылает обновлённый GameServer
+//! snapshot. Недостижимый normal-script-ом null-player dereference исходника
+//! безопасно заменён no-op без сетевой публикации.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -121,9 +130,14 @@ pub(crate) const SCRIPT_FUNCTION_GET_SELECTED_DURABILITY: i32 = 2245;
 pub(crate) const SCRIPT_FUNCTION_SET_SELECTED_DURABILITY: i32 = 2246;
 pub(crate) const SCRIPT_FUNCTION_FAIRY_EXP_UP: i32 = 2249;
 pub(crate) const SCRIPT_FUNCTION_RGB: i32 = 9;
+pub(crate) const SCRIPT_FUNCTION_TIME: i32 = 13;
+pub(crate) const SCRIPT_FUNCTION_YEAR: i32 = 14;
+pub(crate) const SCRIPT_FUNCTION_MONTH: i32 = 15;
+pub(crate) const SCRIPT_FUNCTION_DAY: i32 = 16;
 pub(crate) const SCRIPT_FUNCTION_HOUR: i32 = 17;
 pub(crate) const SCRIPT_FUNCTION_MINUTE: i32 = 18;
 pub(crate) const SCRIPT_FUNCTION_DAY_OF_WEEK: i32 = 19;
+pub(crate) const SCRIPT_FUNCTION_SECOND: i32 = 23;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_REGION: i32 = 2304;
@@ -138,6 +152,7 @@ pub(crate) const SCRIPT_FUNCTION_SCRIPT_IS_RUNNING: i32 = 2316;
 pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
+pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
 pub(crate) const SCRIPT_FUNCTION_POST_WORLD_INFO: i32 = 5202;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
@@ -2384,11 +2399,23 @@ pub(crate) fn script_function_parameter_kind(
             1 => String,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_HOUR
+        SCRIPT_FUNCTION_YEAR
+        | SCRIPT_FUNCTION_MONTH
+        | SCRIPT_FUNCTION_DAY
+        | SCRIPT_FUNCTION_HOUR
         | SCRIPT_FUNCTION_MINUTE
-        | SCRIPT_FUNCTION_DAY_OF_WEEK
+        | SCRIPT_FUNCTION_DAY_OF_WEEK => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_TIME
+        | SCRIPT_FUNCTION_SECOND
         | SCRIPT_FUNCTION_GET_COUNTRY
         | SCRIPT_FUNCTION_GET_ONLINE_PLAYERS => Unused,
+        SCRIPT_FUNCTION_RELOAD => match index {
+            0 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_POST_WORLD_INFO => match index {
             0 => String,
             1 | 2 => Integer,
@@ -2822,6 +2849,35 @@ fn send_script_goods_update(game: &CGame, player_id: i32, goods: ShapeIdentity, 
     let _ = message.send_to_player(game.net_server(), player_id);
 }
 
+/// Packed `time()` result of script selector 13. This is not Unix time: the
+/// original stores CRT `tm_year/tm_mon` and ends with the three weekday bits.
+fn pack_script_local_time(time: TagTime) -> i32 {
+    i32::from(time.year)
+        .wrapping_sub(1900)
+        .wrapping_shl(4)
+        .wrapping_add(i32::from(time.month).wrapping_sub(1))
+        .wrapping_shl(5)
+        .wrapping_add(i32::from(time.day))
+        .wrapping_shl(5)
+        .wrapping_add(i32::from(time.hour))
+        .wrapping_shl(6)
+        .wrapping_add(i32::from(time.minute))
+        .wrapping_shl(3)
+        .wrapping_add(i32::from(time.day_of_week))
+}
+
+fn script_packed_time_component(function_id: i32, packed: i32) -> i32 {
+    match function_id {
+        SCRIPT_FUNCTION_YEAR => (packed >> 23).wrapping_add(1900),
+        SCRIPT_FUNCTION_MONTH => ((packed >> 19) & 0x0f).wrapping_add(1),
+        SCRIPT_FUNCTION_DAY => (packed >> 14) & 0x1f,
+        SCRIPT_FUNCTION_HOUR => (packed >> 9) & 0x1f,
+        SCRIPT_FUNCTION_MINUTE => (packed >> 3) & 0x3f,
+        SCRIPT_FUNCTION_DAY_OF_WEEK => packed & 0x07,
+        _ => unreachable!("calendar component вызывается только для 14..19"),
+    }
+}
+
 fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -2835,17 +2891,38 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
 ) -> Option<ScriptFunctionDispatchOutcome> {
     let player_id = script_player_id.unwrap_or_default();
     match function_id {
-        SCRIPT_FUNCTION_HOUR | SCRIPT_FUNCTION_MINUTE | SCRIPT_FUNCTION_DAY_OF_WEEK => {
-            if argument_count != 0 {
-                return Some(ScriptFunctionDispatchOutcome::Invalid);
-            }
-            let now = TagTime::local_now();
-            let legacy_return = match function_id {
-                SCRIPT_FUNCTION_HOUR => i32::from(now.hour),
-                SCRIPT_FUNCTION_MINUTE => i32::from(now.minute),
-                _ => i32::from(now.day_of_week),
-            };
+        SCRIPT_FUNCTION_TIME => {
+            let legacy_return = pack_script_local_time(TagTime::local_now());
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_YEAR
+        | SCRIPT_FUNCTION_MONTH
+        | SCRIPT_FUNCTION_DAY
+        | SCRIPT_FUNCTION_HOUR
+        | SCRIPT_FUNCTION_MINUTE
+        | SCRIPT_FUNCTION_DAY_OF_WEEK => {
+            let packed = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .unwrap_or_else(|| pack_script_local_time(TagTime::local_now()));
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: script_packed_time_component(function_id, packed),
+            })
+        }
+        SCRIPT_FUNCTION_SECOND => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: i32::from(TagTime::local_now().second),
+        }),
+        SCRIPT_FUNCTION_RELOAD => {
+            let Some(profile) = string_arguments[0] else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if game.find_player(player_id).is_some() {
+                let mut request = CMessage::new(0x0005_ff06);
+                request.add_long(player_id);
+                request.base_mut().add(profile);
+                request.add_byte(0);
+                let _ = request.send(game, false);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_GET_ME => {
             if argument_count != 1 {

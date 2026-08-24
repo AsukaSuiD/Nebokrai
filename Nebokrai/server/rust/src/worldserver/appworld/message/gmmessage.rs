@@ -4,6 +4,9 @@
 //! Dispatcher безусловно читает request ID, затем обслуживает queries, relays,
 //! region broadcast, reload, map kick, silence и ban для `0x5FF01..0x5FF16`.
 //! Неизвестный opcode завершается после request ID без эффектов.
+//! `0x5FF06` имеет достигнутого GameServer caller-а: script selector
+//! `5001 / Reload` передаёт player ID как request ID и profile C-string;
+//! dispatcher запускает тот же concrete reload owner, что и GM route.
 //!
 //! Online count/name queries отвечают исходному socket. Region query рассылает
 //! `0x7FC04` всем; kick-map проходит регионы по фактическому ID. Silence меняет
