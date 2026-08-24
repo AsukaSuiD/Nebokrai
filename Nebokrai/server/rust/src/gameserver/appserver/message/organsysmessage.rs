@@ -638,6 +638,52 @@ fn format_four_nation_exploit_notice(template: &[u8], increment: i32) -> Vec<u8>
     result
 }
 
+fn format_legacy_integer_fields(
+    template: &[u8],
+    values: &[String],
+    maximum_bytes: usize,
+) -> Vec<u8> {
+    let template = legacy_c_string_prefix(template);
+    let mut result = Vec::with_capacity(template.len());
+    let mut offset = 0;
+    let mut value_index = 0;
+    while offset < template.len() {
+        if template[offset] != b'%' || offset + 1 >= template.len() {
+            result.push(template[offset]);
+            offset += 1;
+            continue;
+        }
+        if template[offset + 1] == b'%' {
+            result.push(b'%');
+            offset += 2;
+            continue;
+        }
+        let conversion_length = if template[offset + 1] == b'l'
+            && template
+                .get(offset + 2)
+                .is_some_and(|byte| matches!(byte, b'd' | b'i' | b'u'))
+        {
+            3
+        } else if matches!(template[offset + 1], b'd' | b'i' | b'u') {
+            2
+        } else {
+            result.push(template[offset]);
+            offset += 1;
+            continue;
+        };
+        let Some(value) = values.get(value_index) else {
+            result.extend_from_slice(&template[offset..offset + conversion_length]);
+            offset += conversion_length;
+            continue;
+        };
+        result.extend_from_slice(value.as_bytes());
+        value_index += 1;
+        offset += conversion_length;
+    }
+    result.truncate(maximum_bytes);
+    result
+}
+
 fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
     let length = value
         .iter()
@@ -925,6 +971,7 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
         };
         if let Some(ServerRegionOwner::Nation(region)) = self.game.find_region_mut(region_id) {
             region.war.on_war_declare(war_number);
+            region.reset_for_war_declare();
             self.runtime
                 .on_four_nation_declare(region, war_number, sign_up_counts);
         }
@@ -954,6 +1001,7 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
         };
         match region {
             ServerRegionOwner::Nation(region) => {
+                region.reset_for_region_refresh();
                 self.runtime.on_four_nation_refresh(region, war_number)
             }
             region => region.base_mut().on_refresh_region(war_number),
@@ -962,10 +1010,95 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
 
     fn on_war_end(&mut self, region: Self::Region, war_number: i32) {
         if let GameWarRegionHandle::Local(region_id) = region
-            && let Some(ServerRegionOwner::Nation(region)) = self.game.find_region_mut(region_id)
+            && let Some(owner) = self.game.take_region_owner(region_id)
         {
+            let ServerRegionOwner::Nation(mut region) = owner else {
+                self.game.restore_region_owner(owner);
+                GameOrganizingWarContext::on_war_end(
+                    self,
+                    GameWarRegionHandle::Local(region_id),
+                    war_number,
+                );
+                return;
+            };
+
+            self.runtime
+                .add_four_nation_region_log(b"ServerNationRegion::OnWarEnd");
             region.war.on_war_end(war_number);
-            self.runtime.on_four_nation_end(region, war_number);
+
+            let end = CMessage::new(0xbf819);
+            let _end_delivery = end.send_to_region(Some(&region.war.base), None, self.game);
+            self.runtime
+                .kick_out_four_nation_players_to_return_point(&mut region);
+
+            let awards = region.take_player_war_awards(|| self.runtime.four_nation_now_millis());
+            for award in awards {
+                let mut elapsed = CMessage::new(0x6031c);
+                elapsed.base_mut().add_long(award.player_id);
+                elapsed.base_mut().add_ulong(award.elapsed_time_ms);
+                elapsed.base_mut().add_long(award.country);
+                let _elapsed_delivery = elapsed.send(self.game, false);
+
+                let log = format_legacy_integer_fields(
+                    self.game.get_string_by_id(b"GS1134"),
+                    &[
+                        award.player_id.to_string(),
+                        (award.elapsed_time_ms / 1000).to_string(),
+                        award.exploit.to_string(),
+                    ],
+                    0x7f,
+                );
+                self.runtime.add_four_nation_region_log(&log);
+
+                let Some(previous_exploit) = self
+                    .game
+                    .find_player(award.player_id)
+                    .map(|player| player.base_properties().exploit)
+                else {
+                    let mut offline = CMessage::new(0x6031a);
+                    offline.base_mut().add_long(award.player_id);
+                    offline.base_mut().add_ulong(award.exploit);
+                    let _offline_delivery = offline.send(self.game, false);
+                    continue;
+                };
+
+                let advertised_exploit = previous_exploit.wrapping_add(award.exploit);
+                let mut property = CMessage::new(0xbf80c);
+                property.base_mut().add_long(award.player_id);
+                property.base_mut().add_long(award.player_id);
+                property.base_mut().add_str(Some(c"dwExploit"));
+                property.base_mut().add_ulong(advertised_exploit);
+                let _property_delivery =
+                    property.send_to_player(self.game.net_server(), award.player_id);
+                {
+                    let player = self
+                        .game
+                        .find_player_mut(award.player_id)
+                        .expect("online award player проверен до mutation");
+                    let _mutation = player.set_exploit_property_value(advertised_exploit);
+                    self.runtime.update_player_property(player);
+                }
+
+                let notice = format_legacy_integer_fields(
+                    self.game.get_string_by_id(b"GS1135"),
+                    &[award.exploit.to_string()],
+                    0xff,
+                );
+                let notice = CString::new(notice)
+                    .expect("localized FourNation exploit notice обрезан до NUL");
+                let mut message = CMessage::new(0xbf806);
+                message.base_mut().add_ulong(u32::MAX);
+                message.base_mut().add_ulong(0xffff_0000);
+                message.base_mut().add_str(Some(&notice));
+                let _notice_delivery =
+                    message.send_to_player(self.game.net_server(), award.player_id);
+            }
+
+            self.runtime
+                .reset_four_nation_region_combat_state(&mut region, war_number);
+            region.reset_materialized_war_state();
+            self.game
+                .restore_region_owner(ServerRegionOwner::Nation(region));
             return;
         }
         GameOrganizingWarContext::on_war_end(self, region, war_number);

@@ -172,6 +172,8 @@ pub(crate) trait FourNationPhaseContext {
 
 pub(crate) trait FourNationRegionRuntime {
     fn add_four_nation_war_end_log(&mut self, war_number: i32);
+    fn add_four_nation_region_log(&mut self, text: &[u8]);
+    fn four_nation_now_millis(&mut self) -> u32;
     fn on_four_nation_declare(
         &mut self,
         region: &mut ServerNationRegion,
@@ -180,7 +182,12 @@ pub(crate) trait FourNationRegionRuntime {
     );
     fn on_four_nation_mass(&mut self, region: &mut ServerNationRegion, war_number: i32);
     fn on_four_nation_refresh(&mut self, region: &mut ServerNationRegion, war_number: i32);
-    fn on_four_nation_end(&mut self, region: &mut ServerNationRegion, war_number: i32);
+    fn kick_out_four_nation_players_to_return_point(&mut self, region: &mut ServerNationRegion);
+    fn reset_four_nation_region_combat_state(
+        &mut self,
+        region: &mut ServerNationRegion,
+        war_number: i32,
+    );
     fn on_four_nation_clear(&mut self, region: &mut ServerNationRegion, war_number: i32);
     fn take_four_nation_results(&mut self, region: &mut ServerNationRegion) -> [u32; 5];
 }

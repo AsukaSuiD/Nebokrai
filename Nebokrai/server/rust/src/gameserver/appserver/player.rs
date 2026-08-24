@@ -1022,6 +1022,28 @@ impl CPlayer {
         }
     }
 
+    /// Exact `SetValue("dwExploit", value)` из region reward path:
+    /// generic property map пишет `DWORD` напрямую и не вызывает `SetExploit` clamp.
+    pub(crate) fn set_exploit_property_value(
+        &mut self,
+        requested: u32,
+    ) -> PlayerExploitMutationReport {
+        let previous = self.base_properties.exploit;
+        self.base_properties.exploit = requested;
+        PlayerExploitMutationReport {
+            player_id: self.player_id(),
+            previous,
+            requested,
+            applied: requested,
+        }
+    }
+
+    /// `OnPlayerTimgingStart` отсеивает action `ACT_DIED == 6`
+    /// отдельно от health-based `CMoveShape::IsDied`.
+    pub(crate) fn can_start_nation_war_timing(&self) -> bool {
+        self.shape().get_action() != 6 && !CMoveShape::is_died(self.base_properties.health)
+    }
+
     pub(crate) const fn combat_properties(&self) -> PlayerCombatProperties {
         self.combat_properties
     }

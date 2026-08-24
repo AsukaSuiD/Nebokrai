@@ -111,6 +111,17 @@ impl CCountry {
         *self.country_information.entry(job).or_insert(0)
     }
 
+    /// Exact `CPlayer::get_country_identity` inner pass: `operator[]` создаёт
+    /// отсутствующие slots, а первое совпадение `1..=8` побеждает.
+    pub(crate) fn identity_for_player(&mut self, player_id: i32) -> u8 {
+        for job in 1..=8 {
+            if self.country_information(job) == player_id {
+                return job;
+            }
+        }
+        0
+    }
+
     pub(crate) fn set_country_information(&mut self, job: u8, player_id: i32, active: u8) -> bool {
         if active == 1 {
             self.country_information.insert(job, player_id);

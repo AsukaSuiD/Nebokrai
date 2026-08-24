@@ -6,8 +6,11 @@
 //! начинается с `CServerWarRegion` и не имеет собственного wire decoder-а.
 //! Поэтому typed startup owner делегирует exact War -> ServerRegion chain.
 //! FourNation startup дополнительно материализует подтверждённый
-//! `GetReliveRect`: пять прямоугольников копируются в nation owner; остальное
-//! nation gameplay state ниже остаётся RAW до отдельных проходов.
+//! `GetReliveRect`, а timing-chain владеет exact 16-byte
+//! `_tagPlayerWarTime`, wrapping `timeGetTime` arithmetic и x87-truncated
+//! morale→exploit. Линейный owned `Vec` заменяет MSVC `stdext::hash_map`:
+//! lookup-семантика совпадает, а недоказанный bucket-order не выдаётся
+//! за gameplay-контракт. Остальное nation combat state ниже остаётся RAW.
 
 use super::organizingsystem::fournationwarsys::FourNationRect;
 use super::serverregion::ServerRegionDecodeError;
@@ -17,6 +20,26 @@ use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegion
 pub(crate) struct ServerNationRegion {
     pub(crate) war: CServerWarRegion,
     relive_rects: [FourNationRect; 5],
+    morale: [i32; 5],
+    nation_failed: [bool; 5],
+    player_war_times: Vec<NationPlayerWarTime>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct NationPlayerWarTime {
+    pub(crate) player_id: i32,
+    pub(crate) country: i32,
+    pub(crate) country_figure: i32,
+    pub(crate) start_time_ms: u32,
+    pub(crate) elapsed_time_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NationPlayerWarAward {
+    pub(crate) player_id: i32,
+    pub(crate) country: i32,
+    pub(crate) elapsed_time_ms: u32,
+    pub(crate) exploit: u32,
 }
 
 impl ServerNationRegion {
@@ -39,6 +62,170 @@ impl ServerNationRegion {
     pub(crate) const fn relive_rects(&self) -> &[FourNationRect; 5] {
         &self.relive_rects
     }
+
+    pub(crate) const fn morale(&self) -> &[i32; 5] {
+        &self.morale
+    }
+
+    pub(crate) const fn nation_failed(&self) -> &[bool; 5] {
+        &self.nation_failed
+    }
+
+    /// Region battle owner публикует текущую morale без clamp:
+    /// исходные combat callbacks пишут signed `long` напрямую.
+    pub(crate) const fn set_country_morale(&mut self, country: usize, morale: i32) -> bool {
+        if country >= self.morale.len() {
+            return false;
+        }
+        self.morale[country] = morale;
+        true
+    }
+
+    pub(crate) const fn set_nation_failed(&mut self, country: usize, failed: bool) -> bool {
+        if country >= self.nation_failed.len() {
+            return false;
+        }
+        self.nation_failed[country] = failed;
+        true
+    }
+
+    /// Exact materialized subset `OnWarDeclare`: regional timing and combat
+    /// counters start empty; signup counts сам owner в этой функции не читает.
+    pub(crate) fn reset_for_war_declare(&mut self) {
+        self.player_war_times.clear();
+        self.morale.fill(0);
+        self.nation_failed.fill(false);
+    }
+
+    /// Exact materialized prefix `OnRefreshRegion`: morale всех five slots
+    /// становится 1000, failed flags и regional timing очищаются.
+    pub(crate) fn reset_for_region_refresh(&mut self) {
+        self.player_war_times.clear();
+        self.morale.fill(1000);
+        self.nation_failed.fill(false);
+    }
+
+    /// Exact `OnPlayerTimgingStart`: repeated start меняет только clock,
+    /// не переснимая country/identity и не обнуляя elapsed.
+    pub(crate) fn start_player_timing(
+        &mut self,
+        player_id: i32,
+        country: i32,
+        country_figure: i32,
+        now_ms: u32,
+    ) {
+        if let Some(record) = self
+            .player_war_times
+            .iter_mut()
+            .find(|record| record.player_id == player_id)
+        {
+            record.start_time_ms = now_ms;
+            return;
+        }
+        self.player_war_times.push(NationPlayerWarTime {
+            player_id,
+            country,
+            country_figure,
+            start_time_ms: now_ms,
+            elapsed_time_ms: 0,
+        });
+    }
+
+    pub(crate) fn has_player_timing(&self, player_id: i32) -> bool {
+        self.player_war_times
+            .iter()
+            .any(|record| record.player_id == player_id)
+    }
+
+    /// Exact `OnPlayerTimeingFinish`: missing/inactive records не меняются;
+    /// death penalty добавляется после elapsed с `DWORD` wrapping.
+    pub(crate) fn finish_player_timing(
+        &mut self,
+        player_id: i32,
+        died: bool,
+        now_ms: impl FnOnce() -> u32,
+    ) -> Option<NationPlayerWarTime> {
+        let record = self
+            .player_war_times
+            .iter_mut()
+            .find(|record| record.player_id == player_id && record.start_time_ms != 0)?;
+        let now_ms = now_ms();
+        record.elapsed_time_ms = record
+            .elapsed_time_ms
+            .wrapping_add(now_ms.wrapping_sub(record.start_time_ms));
+        record.start_time_ms = 0;
+        if died {
+            record.elapsed_time_ms = record.elapsed_time_ms.wrapping_add(30_000);
+        }
+        Some(*record)
+    }
+
+    /// Exact `ConvertMoraleToExploitForEachPlayer` state pass: каждый active
+    /// record сам читает `timeGetTime`, затем owner-map очищается.
+    pub(crate) fn take_player_war_awards(
+        &mut self,
+        mut now_ms: impl FnMut() -> u32,
+    ) -> Vec<NationPlayerWarAward> {
+        let mut awards = Vec::with_capacity(self.player_war_times.len());
+        for mut record in self.player_war_times.drain(..) {
+            if record.start_time_ms != 0 {
+                let now_ms = now_ms();
+                record.elapsed_time_ms = record
+                    .elapsed_time_ms
+                    .wrapping_add(now_ms.wrapping_sub(record.start_time_ms));
+                record.start_time_ms = 0;
+            }
+            let morale = self
+                .morale
+                .get(record.country as usize)
+                .copied()
+                .unwrap_or_default();
+            awards.push(NationPlayerWarAward {
+                player_id: record.player_id,
+                country: record.country,
+                elapsed_time_ms: record.elapsed_time_ms,
+                exploit: convert_morale_to_exploit(
+                    record.elapsed_time_ms,
+                    morale,
+                    record.country_figure,
+                ),
+            });
+        }
+        awards
+    }
+
+    /// Materialized subset final reset-loop `OnWarEnd`: все пять slots,
+    /// включая unused index 0, обнуляются после award pass.
+    pub(crate) fn reset_materialized_war_state(&mut self) {
+        self.morale.fill(0);
+        self.nation_failed.fill(false);
+    }
+}
+
+/// Exact `ConvertMoraleToExploit` RVA `0xF1230`. EXE ставит x87 RC=11
+/// перед `fistp`, поэтому для положительной morale нужно truncation,
+/// а не Rust `round()`.
+pub(crate) fn convert_morale_to_exploit(
+    elapsed_time_ms: u32,
+    morale: i32,
+    country_figure: i32,
+) -> u32 {
+    if elapsed_time_ms == 0 {
+        return 0;
+    }
+    let band = match elapsed_time_ms {
+        0..600_000 => 0,
+        600_000..1_800_000 => 1,
+        1_800_000..2_700_000 => 2,
+        2_700_000..3_600_000 => 3,
+        _ => 4,
+    };
+    let multiplier = match country_figure {
+        1 => [0.3, 0.75, 1.05, 1.35, 1.5][band],
+        2..=8 => [0.24, 0.6, 0.84, 1.08, 1.2][band],
+        _ => [0.2, 0.5, 0.7, 0.9, 1.0][band],
+    };
+    (f64::from(morale) * multiplier).trunc() as i64 as u32
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

@@ -188,6 +188,7 @@
 //! ветвь `CMessage::SendAll` принимает отдельно как `Option`.
 
 use std::collections::BTreeMap;
+use std::ffi::CString;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -1915,6 +1916,157 @@ impl CGame {
 
     pub(crate) fn find_region_mut(&mut self, region_id: i32) -> Option<&mut ServerRegionOwner> {
         self.regions.get_mut(&region_id)
+    }
+
+    pub(crate) fn take_region_owner(&mut self, region_id: i32) -> Option<ServerRegionOwner> {
+        self.regions.remove(&region_id)
+    }
+
+    pub(crate) fn restore_region_owner(&mut self, region: ServerRegionOwner) {
+        let replaced = self.regions.insert(region.region_id(), region);
+        debug_assert!(
+            replaced.is_none(),
+            "scoped region owner не заменяет live owner"
+        );
+    }
+
+    /// Script function `9304 / kScriptFunctionNationWarSendPlayerId`:
+    /// father-region берётся у current script player, а timing запускается
+    /// для переданного player ID только в concrete local Nation owner.
+    pub(crate) fn script_nation_war_send_player_id(
+        &mut self,
+        script_player_id: i32,
+        player_id: i32,
+        now_ms: impl FnOnce() -> u32,
+    ) -> bool {
+        let Some(region_id) = self
+            .find_player(script_player_id)
+            .and_then(CPlayer::server_region_id)
+        else {
+            return false;
+        };
+        self.start_nation_war_player_timing(region_id, player_id, now_ms)
+    }
+
+    /// Exact `ServerNationRegion::OnPlayerTimgingStart`, включая
+    /// morale snapshot `0xBF818` до мутации timing record.
+    pub(crate) fn start_nation_war_player_timing(
+        &mut self,
+        region_id: i32,
+        player_id: i32,
+        now_ms: impl FnOnce() -> u32,
+    ) -> bool {
+        let Some((country, can_start)) = self
+            .find_player(player_id)
+            .map(|player| (player.country(), player.can_start_nation_war_timing()))
+        else {
+            return false;
+        };
+        if !can_start {
+            return false;
+        }
+        let Some((morale, failed)) = self.find_region(region_id).and_then(|region| match region {
+            ServerRegionOwner::Nation(region) => Some((*region.morale(), *region.nation_failed())),
+            _ => None,
+        }) else {
+            return false;
+        };
+
+        let colors = [0xfffc_0000, 0xffd1_eefe, 0xffe2_bf18, 0xff78_fcdb];
+        let string_ids: [[&[u8]; 2]; 4] = [
+            [b"GS1075", b"GS1074"],
+            [b"GS1077", b"GS1076"],
+            [b"GS1079", b"GS1078"],
+            [b"GS1081", b"GS1080"],
+        ];
+        let mut snapshot = CMessage::new(0xbf818);
+        for index in 0..4 {
+            snapshot.base_mut().add_ulong(colors[index]);
+            let text = format_single_legacy_i32(
+                self.get_string_by_id(string_ids[index][usize::from(failed[index + 1])]),
+                morale[index + 1],
+                0xff,
+            );
+            let text = CString::new(text).expect("localized morale text обрезан до NUL");
+            snapshot.base_mut().add_str(Some(&text));
+        }
+        let _delivery = snapshot.send_to_player(self.net_server(), player_id);
+
+        let timing_exists = self
+            .find_region(region_id)
+            .and_then(|region| match region {
+                ServerRegionOwner::Nation(region) => Some(region.has_player_timing(player_id)),
+                _ => None,
+            })
+            .unwrap_or(false);
+        let now_ms = now_ms();
+        let country_figure = if timing_exists {
+            0
+        } else {
+            self.country_handler_mut()
+                .country_mut(country)
+                .map(|country| country.identity_for_player(player_id))
+                .unwrap_or_default()
+        };
+        let Some(ServerRegionOwner::Nation(region)) = self.find_region_mut(region_id) else {
+            return false;
+        };
+        region.start_player_timing(
+            player_id,
+            i32::from(country),
+            i32::from(country_figure),
+            now_ms,
+        );
+        true
+    }
+
+    /// Caller-side `CPlayer::OnLost`: changing-server ветвь не закрывает
+    /// nation clock; ordinary loss передаёт `died=false`.
+    pub(crate) fn finish_nation_war_timing_on_player_lost(
+        &mut self,
+        player_id: i32,
+        now_ms: impl FnOnce() -> u32,
+    ) -> bool {
+        let Some((region_id, changing_server)) = self
+            .find_player(player_id)
+            .and_then(|player| Some((player.server_region_id()?, player.in_changing_server())))
+        else {
+            return false;
+        };
+        if changing_server {
+            return false;
+        }
+        self.finish_nation_war_player_timing(region_id, player_id, false, now_ms)
+    }
+
+    /// Caller-side `CPlayer::OnDied` RVA `0x4D850`; exact call-site `0x4D8C6`.
+    pub(crate) fn finish_nation_war_timing_on_player_death(
+        &mut self,
+        player_id: i32,
+        now_ms: impl FnOnce() -> u32,
+    ) -> bool {
+        let Some(region_id) = self
+            .find_player(player_id)
+            .and_then(CPlayer::server_region_id)
+        else {
+            return false;
+        };
+        self.finish_nation_war_player_timing(region_id, player_id, true, now_ms)
+    }
+
+    fn finish_nation_war_player_timing(
+        &mut self,
+        region_id: i32,
+        player_id: i32,
+        died: bool,
+        now_ms: impl FnOnce() -> u32,
+    ) -> bool {
+        let Some(ServerRegionOwner::Nation(region)) = self.find_region_mut(region_id) else {
+            return false;
+        };
+        region
+            .finish_player_timing(player_id, died, now_ms)
+            .is_some()
     }
 
     pub(crate) fn find_region_by_name(&self, name: &[u8]) -> Option<&ServerRegionOwner> {
@@ -4129,6 +4281,20 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
         .position(|byte| *byte == 0)
         .unwrap_or(value.len());
     &value[..end]
+}
+
+fn format_single_legacy_i32(template: &[u8], value: i32, maximum_bytes: usize) -> Vec<u8> {
+    let template = legacy_c_string_prefix(template);
+    let Some(marker) = template.windows(2).position(|window| window == b"%d") else {
+        return template[..template.len().min(maximum_bytes)].to_vec();
+    };
+    let value = value.to_string();
+    let mut result = Vec::with_capacity(template.len().saturating_add(value.len()));
+    result.extend_from_slice(&template[..marker]);
+    result.extend_from_slice(value.as_bytes());
+    result.extend_from_slice(&template[marker + 2..]);
+    result.truncate(maximum_bytes);
+    result
 }
 
 fn resolve_first_local_ipv4() -> Option<Ipv4Addr> {
