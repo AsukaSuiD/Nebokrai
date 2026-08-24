@@ -15,14 +15,19 @@
 //! LeiTing claim `0x8FA19` сохраняет packet-space gate, exact thresholds,
 //! `BF73E -> 5FD10 -> reward script` ordering; `0x8FA10` использует тот же
 //! server-trusted script runtime для help script.
+//! Equipment-state refresh `0x8FA16` сохраняет packed local-time decode,
+//! strict grace-minute comparison, addon mutation и around `0xBF928`.
 //! Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_EQUIP_STATE;
 use crate::gameserver::appserver::player::PlayerFriendAddOutcome;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, PlayerReliveContext, PlayerReliveReport, colored_player_notice_message,
+    CGame, OldClientGoodsCodec, PlayerReliveContext, PlayerReliveReport,
+    colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::public::guid::CGuid;
 
 const REQUEST_RELIVE: u32 = 0x0008_fa02;
 const RUN_HELP_SCRIPT: u32 = 0x0008_fa10;
@@ -32,6 +37,7 @@ const DELETE_FRIEND: u32 = 0x0008_fa0f;
 const SET_DISPLAY_HEAD_PIECE: u32 = 0x0008_fa11;
 const QUERY_QUEST_TIME: u32 = 0x0008_fa12;
 const ACKNOWLEDGE_HEARTBEAT: u32 = 0x0008_fa13;
+const REFRESH_EXPIRED_EQUIPMENT_STATE: u32 = 0x0008_fa16;
 const QUERY_HONOR_IDENTITY: u32 = 0x0008_fa17;
 const REQUEST_CHANGE_APPELLATION: u32 = 0x0008_fa18;
 const QUERY_LOCAL_TIME: u32 = 0x0008_fa1a;
@@ -49,7 +55,9 @@ const LEI_TING_REWARD_SCRIPTS: [&[u8]; 9] = [
     b"scripts/goods/leilifengxing_lingqu_28.script",
 ];
 
-pub(crate) trait GamePlayerMessageRuntime: PlayerReliveContext {
+pub(crate) trait GamePlayerMessageRuntime:
+    PlayerReliveContext + OldClientGoodsCodec
+{
     /// Выполняет concrete `PlayerRunScript` с server-trusted path; VM и
     /// script-data owner ещё не материализованы в `CGame`.
     fn run_player_script(&mut self, game: &mut CGame, player_id: i32, path: &[u8]);
@@ -59,6 +67,23 @@ pub(crate) trait GamePlayerMessageRuntime: PlayerReliveContext {
 
     /// Возвращает поля Windows `SYSTEMTIME` в native field order.
     fn player_local_system_time(&mut self) -> [u16; 8];
+
+    /// Выполняет exact local `mktime`/`time`/`difftime` для packed equipment
+    /// timestamp. `None` соответствует `_mktime == -1`; DST выбирает CRT.
+    fn player_elapsed_seconds_from_local_time(
+        &mut self,
+        local: PlayerPackedLocalTime,
+    ) -> Option<f64>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerPackedLocalTime {
+    pub(crate) year_since_1900: i32,
+    pub(crate) zero_based_month: i32,
+    pub(crate) day: i32,
+    pub(crate) hour: i32,
+    pub(crate) minute: i32,
+    pub(crate) second: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,6 +107,11 @@ pub(crate) enum GamePlayerMessageOutcome {
     HeartbeatAcknowledged,
     HonorIdentitySent,
     AppellationChangeRequested,
+    ExpiredEquipmentMissing,
+    ExpiredEquipmentStateIgnored,
+    ExpiredEquipmentTimeInvalid,
+    ExpiredEquipmentStillActive,
+    ExpiredEquipmentPublished,
     LocalTimeSent,
     LeiTingInvalidReward,
     LeiTingPacketFull,
@@ -104,6 +134,11 @@ pub(crate) struct GamePlayerMessageReport {
     pub(crate) target_player_id: Option<i32>,
     pub(crate) friend_name: Vec<u8>,
     pub(crate) lei_ting_reward: Option<u16>,
+    pub(crate) equipment_goods_id: Option<CGuid>,
+    pub(crate) equipment_source: Option<i8>,
+    pub(crate) equipment_source_position: Option<i32>,
+    pub(crate) equipment_elapsed_seconds: Option<i32>,
+    pub(crate) equipment_state_mutated: Option<bool>,
     pub(crate) outcome: GamePlayerMessageOutcome,
     pub(crate) relive: Option<PlayerReliveReport>,
     pub(crate) deliveries: Vec<GamePlayerMessageDelivery>,
@@ -159,6 +194,17 @@ fn publish_lei_ting_update(
     deliveries.push(GamePlayerMessageDelivery::World(world.send(game, false)));
 }
 
+fn decode_equipment_state_local_time(packed: i32) -> PlayerPackedLocalTime {
+    PlayerPackedLocalTime {
+        year_since_1900: packed >> 23,
+        zero_based_month: (packed >> 19) & 0x0f,
+        day: (packed >> 14) & 0x1f,
+        hour: (packed >> 9) & 0x1f,
+        minute: (packed >> 3) & 0x3f,
+        second: 0,
+    }
+}
+
 fn apply_friend_add(
     game: &mut CGame,
     owner_id: i32,
@@ -206,6 +252,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             | SET_DISPLAY_HEAD_PIECE
             | QUERY_QUEST_TIME
             | ACKNOWLEDGE_HEARTBEAT
+            | REFRESH_EXPIRED_EQUIPMENT_STATE
             | QUERY_HONOR_IDENTITY
             | REQUEST_CHANGE_APPELLATION
             | QUERY_LOCAL_TIME
@@ -221,6 +268,11 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         target_player_id: None,
         friend_name: Vec::new(),
         lei_ting_reward: None,
+        equipment_goods_id: None,
+        equipment_source: None,
+        equipment_source_position: None,
+        equipment_elapsed_seconds: None,
+        equipment_state_mutated: None,
         outcome: GamePlayerMessageOutcome::MissingContext,
         relive: None,
         deliveries: Vec::new(),
@@ -392,6 +444,87 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 .expect("heartbeat player сохранён после context lookup")
                 .acknowledge_heartbeat();
             report.outcome = GamePlayerMessageOutcome::HeartbeatAcknowledged;
+        }
+        REFRESH_EXPIRED_EQUIPMENT_STATE => {
+            let Some(goods_id) = message.base_mut().get_guid() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "expired equipment guid",
+                )));
+            };
+            report.equipment_goods_id = Some(goods_id);
+            let Some((state, packed_time)) = game.find_player(player_id).and_then(|player| {
+                player.get_goods_by_id(goods_id).map(|goods| {
+                    (
+                        goods.addon_property_value(game.goods_factory(), GAP_EQUIP_STATE, 1),
+                        goods.addon_property_value(game.goods_factory(), GAP_EQUIP_STATE, 2),
+                    )
+                })
+            }) else {
+                report.outcome = GamePlayerMessageOutcome::ExpiredEquipmentMissing;
+                return Some(Ok(report));
+            };
+            if state != 2 || packed_time == 0 {
+                report.outcome = GamePlayerMessageOutcome::ExpiredEquipmentStateIgnored;
+                return Some(Ok(report));
+            }
+            let Some(source) = message.base_mut().get_char() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "expired equipment source",
+                )));
+            };
+            report.equipment_source = Some(source);
+            report.equipment_source_position = game.find_player(player_id).map(|player| {
+                if source != 0 {
+                    return -1;
+                }
+                player
+                    .packet()
+                    .query_goods_position(goods_id)
+                    .map(|position| position as i32)
+                    .unwrap_or_else(|| {
+                        player
+                            .equipment()
+                            .query_goods_position_by_id(goods_id)
+                            .map(|position| position.position())
+                            .unwrap_or(u32::MAX)
+                            .wrapping_add(2) as i32
+                    })
+            });
+            let Some(elapsed_seconds) = runtime.player_elapsed_seconds_from_local_time(
+                decode_equipment_state_local_time(packed_time),
+            ) else {
+                report.outcome = GamePlayerMessageOutcome::ExpiredEquipmentTimeInvalid;
+                return Some(Ok(report));
+            };
+            let elapsed_seconds = elapsed_seconds.round() as i32;
+            report.equipment_elapsed_seconds = Some(elapsed_seconds);
+            if elapsed_seconds / 60 <= 0x275f {
+                report.outcome = GamePlayerMessageOutcome::ExpiredEquipmentStillActive;
+                return Some(Ok(report));
+            }
+            let (identity, payload, mutated) = {
+                let goods = game
+                    .find_player_mut(player_id)
+                    .expect("expired-equipment player сохранён после context lookup")
+                    .get_goods_by_id_mut(goods_id)
+                    .expect("expired equipment сохранён после addon validation");
+                let mutated = goods.set_addon_property_modifier_core(GAP_EQUIP_STATE, 1, 3);
+                (
+                    goods.identity(),
+                    runtime.encode_goods_for_old_client(goods),
+                    mutated,
+                )
+            };
+            report.equipment_state_mutated = Some(mutated);
+            let mut response = CMessage::new(0x000b_f928);
+            response.add_long(player_id);
+            response.base_mut().add_guid(identity.ex_id);
+            response.base_mut().add_ulong(payload.len() as u32);
+            response.base_mut().add(&payload);
+            report.deliveries.push(GamePlayerMessageDelivery::Around(
+                game.send_player_shape_around(player_id, None, &response),
+            ));
+            report.outcome = GamePlayerMessageOutcome::ExpiredEquipmentPublished;
         }
         QUERY_HONOR_IDENTITY => {
             let country_identity = game.player_country_identity(player_id);
