@@ -26,7 +26,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::Receive
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: player→enhancement decode/normalization в message/containermessage.rs
+// MATERIALIZED: player↔enhancement same-source decode/normalization в message/containermessage.rs
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:44
@@ -69,7 +69,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::GetGoods
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: packet/equipment enhancement source lookup в CPlayer
+// MATERIALIZED: packet/equipment enhancement select и same-source clear lookup в CPlayer
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:374
@@ -127,7 +127,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::Move
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: player→enhancement operation и обе client publications
+// MATERIALIZED: select/clear enhancement operations и ordered client publications
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:1225

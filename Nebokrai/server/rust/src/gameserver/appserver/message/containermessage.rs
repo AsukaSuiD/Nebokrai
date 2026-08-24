@@ -2,7 +2,7 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/message/containermessage.cpp`. Материализован
-//! полный player packet/equipment → enhancement-shadow проход `0x90301`:
+//! полные player packet/equipment ↔ enhancement-shadow проходы `0x90301`:
 //! одиннадцать wire-полей, outer changing/region/progress/death guards,
 //! Receive-нормализация owner ID, точный source position/GUID/amount,
 //! запрет stackable goods, однослотовый AddShadow, last-operated state и обе
@@ -10,7 +10,11 @@
 //! `OT_ROLL_BACK`, сохраняя исходный goods в его source slot. Shadow не
 //! забирает ownership исходного goods;
 //! native remove→re-add свёрнут в атомарную metadata-запись, поэтому отказ
-//! эквивалентен успешному rollback без промежуточной потери предмета.
+//! эквивалентен успешному rollback без промежуточной потери предмета. Обратный
+//! same-original-slot путь удаляет shadow, публикует `OT_DELETE_OBJECT` и
+//! сохраняет underlying goods на исходной позиции; перенос shadow в другой
+//! slot остаётся у общего handler-а до materialization реальных add/remove
+//! effects соответствующего destination container-а.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -20,7 +24,8 @@ use crate::gameserver::appserver::message::containermessage::EnhancementMoveRece
 };
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::player::{
-    EnhancementSelectionBlock, EnhancementSelectionReport, PlayerProgress,
+    EnhancementDeselectionBlock, EnhancementDeselectionReport, EnhancementSelectionBlock,
+    EnhancementSelectionReport, PlayerProgress,
 };
 use crate::gameserver::gameserver::game::{CGame, OldClientGoodsCodec};
 use crate::nets::netserver::message::CMessage;
@@ -84,6 +89,21 @@ pub(crate) enum GameContainerMessageOutcome {
         add_shadow_delivery: i32,
         move_delivery: i32,
     },
+    ClearRolledBack {
+        reason: EnhancementDeselectionBlock,
+        delivery: i32,
+    },
+    EnhancementCleared {
+        deselection: EnhancementDeselectionReport,
+        delete_shadow_delivery: i32,
+        move_delivery: i32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EnhancementMessageRoute {
+    Select,
+    Clear,
 }
 
 #[must_use = "container report сохраняет request, mutation и ordered client effects"]
@@ -123,11 +143,10 @@ pub(crate) fn dispatch_game_container_message<Context: OldClientGoodsCodec>(
     };
 
     let start_cursor = message.base_mut().cursor();
-    let request = match decode_container_object_move(message) {
+    let (request, route) = match decode_container_object_move(message) {
         Ok(mut request) => {
             if request.source_container_type != PLAYER_CONTAINER_TYPE
                 || request.destination_container_type != PLAYER_CONTAINER_TYPE
-                || request.destination_container_extend_id != ENHANCEMENT_EXTEND_ID
             {
                 let (_, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
                 *cursor = start_cursor;
@@ -138,7 +157,30 @@ pub(crate) fn dispatch_game_container_message<Context: OldClientGoodsCodec>(
             if matches!(request.source_container_extend_id, 3 | 4 | 5) {
                 request.source_position = 0;
             }
-            request
+            let route = if request.destination_container_extend_id == ENHANCEMENT_EXTEND_ID {
+                EnhancementMessageRoute::Select
+            } else if request.source_container_extend_id == ENHANCEMENT_EXTEND_ID {
+                let original = game.find_player(player_id).and_then(|player| {
+                    player
+                        .enhancement_original_container(request.source_position, request.object_id)
+                });
+                if !original.is_some_and(|original| {
+                    original.container_type == PLAYER_CONTAINER_TYPE
+                        && original.container_id == player_id
+                        && original.container_extend_id == request.destination_container_extend_id
+                        && original.goods_position == request.destination_position
+                }) {
+                    let (_, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                    *cursor = start_cursor;
+                    return None;
+                }
+                EnhancementMessageRoute::Clear
+            } else {
+                let (_, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                *cursor = start_cursor;
+                return None;
+            };
+            (request, route)
         }
         Err(error) => return Some(Err(error)),
     };
@@ -204,13 +246,42 @@ pub(crate) fn dispatch_game_container_message<Context: OldClientGoodsCodec>(
             SameContainer,
         ))));
     }
-    if request.source_container_extend_id == 4
-        || request.source_container_extend_id == 5
-        || matches!(request.source_container_extend_id, 8 | 15)
+    if route == EnhancementMessageRoute::Select
+        && (request.source_container_extend_id == 4
+            || request.source_container_extend_id == 5
+            || matches!(request.source_container_extend_id, 8 | 15))
     {
         return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
             EnhancementMoveReceiveBlock::ForbiddenRoute,
         ))));
+    }
+
+    if route == EnhancementMessageRoute::Clear {
+        let deselection = game.clear_player_enhancement_selection(
+            player_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+        );
+        let deselection = match deselection {
+            Ok(deselection) => deselection,
+            Err(reason) => {
+                let delivery = send_rollback(game, player_id);
+                return Some(Ok(report(GameContainerMessageOutcome::ClearRolledBack {
+                    reason,
+                    delivery,
+                })));
+            }
+        };
+        let delete_shadow_delivery = send_delete_shadow(game, player_id, &deselection);
+        let move_delivery = send_rollback(game, player_id);
+        return Some(Ok(report(
+            GameContainerMessageOutcome::EnhancementCleared {
+                deselection,
+                delete_shadow_delivery,
+                move_delivery,
+            },
+        )));
     }
 
     let selection = game.select_player_enhancement_goods(
@@ -303,6 +374,30 @@ fn send_rollback(game: &CGame, player_id: i32) -> i32 {
     message.send_to_player(game.net_server(), player_id)
 }
 
+fn send_delete_shadow(
+    game: &CGame,
+    player_id: i32,
+    deselection: &EnhancementDeselectionReport,
+) -> i32 {
+    let presence = &deselection.removed.presence;
+    let mut message = CMessage::new(CLIENT_CONTAINER_OBJECT_MOVE);
+    message.add_byte(3);
+    message.add_long(presence.owner_type);
+    message.add_long(presence.owner_id);
+    message.add_long(presence.container_extend_id);
+    message.add_ulong(presence.position);
+    message.add_long(0);
+    message.add_long(0);
+    message.add_long(0);
+    message.add_ulong(0);
+    message.add_long(GOODS_OBJECT_TYPE);
+    message.base_mut().add_guid(deselection.goods.ex_id);
+    message.add_long(0);
+    message.base_mut().add_guid(CGuid::GUID_INVALID);
+    message.add_ulong(0);
+    message.send_to_player(game.net_server(), player_id)
+}
+
 fn send_add_shadow(
     game: &CGame,
     player_id: i32,
@@ -350,7 +445,7 @@ fn send_move_result(
 // ============================================================================
 // FUNCTION: OnContainerMessage
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: enhancement-shadow route `0x90301`; остальные container routes RAW ниже
+// MATERIALIZED: enhancement select/same-original clear `0x90301`; остальные routes RAW ниже
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\containermessage.cpp:14

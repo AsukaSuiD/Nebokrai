@@ -1038,6 +1038,22 @@ pub(crate) struct EnhancementSelectionReport {
     pub(crate) previous_last_operated: (u32, u32),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EnhancementDeselectionBlock {
+    MissingShadow,
+    GoodsIdentityMismatch,
+    GoodsAmountMismatch,
+    MissingSourceGoods,
+}
+
+#[must_use = "deselection report сохраняет original source и RemoveShadow effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EnhancementDeselectionReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) source: PreviousContainer,
+    pub(crate) removed: super::container::cgoodsshadowcontainer::ShadowRemovedReport,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
@@ -1952,6 +1968,65 @@ impl CPlayer {
             source,
             shadow,
             previous_last_operated,
+        })
+    }
+
+    pub(crate) fn enhancement_original_container(
+        &self,
+        shadow_position: u32,
+        goods_id: CGuid,
+    ) -> Option<PreviousContainer> {
+        (self.enhancement.base().goods_id_at(shadow_position) == Some(goods_id))
+            .then(|| {
+                self.enhancement
+                    .base()
+                    .original_container_information(goods_id)
+            })
+            .flatten()
+    }
+
+    /// Same-original-slot ветвь native shadow Remove: underlying goods после
+    /// remove→add остаётся у прежнего owner-а, а здесь удаляется только shadow
+    /// metadata и формируется обязательный `OT_DELETE_OBJECT` report.
+    pub(crate) fn clear_enhancement_selection(
+        &mut self,
+        shadow_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+    ) -> Result<EnhancementDeselectionReport, EnhancementDeselectionBlock> {
+        let actual_id = self
+            .enhancement
+            .base()
+            .goods_id_at(shadow_position)
+            .ok_or(EnhancementDeselectionBlock::MissingShadow)?;
+        if actual_id != goods_id {
+            return Err(EnhancementDeselectionBlock::GoodsIdentityMismatch);
+        }
+        let source = self
+            .enhancement
+            .base()
+            .original_container_information(goods_id)
+            .ok_or(EnhancementDeselectionBlock::MissingShadow)?;
+        let goods = match source.container_extend_id {
+            1 => self.packet.get_goods(source.goods_position),
+            2 => self.equipment.get_goods(source.goods_position),
+            _ => None,
+        }
+        .filter(|goods| goods.identity().ex_id == goods_id)
+        .ok_or(EnhancementDeselectionBlock::MissingSourceGoods)?;
+        if goods.amount() != amount {
+            return Err(EnhancementDeselectionBlock::GoodsAmountMismatch);
+        }
+        let goods = goods.identity();
+        let removed = self
+            .enhancement
+            .base_mut()
+            .remove_shadow(goods_id)
+            .ok_or(EnhancementDeselectionBlock::MissingShadow)?;
+        Ok(EnhancementDeselectionReport {
+            goods,
+            source,
+            removed,
         })
     }
 

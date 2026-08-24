@@ -363,11 +363,11 @@ use crate::gameserver::appserver::player::{
     BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeDelivery,
     BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, CiQingContainerAddition,
     CiQingContainerConsumption, CiQingHandConsumption, CiQingPacketAddition,
-    CiQingPacketConsumption, EnhancementSelectionBlock, EnhancementSelectionReport,
-    PlayerCombatProperties, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
-    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
-    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport,
-    PlayerReliveMutation,
+    CiQingPacketConsumption, EnhancementDeselectionBlock, EnhancementDeselectionReport,
+    EnhancementSelectionBlock, EnhancementSelectionReport, PlayerCombatProperties,
+    PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
+    PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
+    PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerReliveMutation,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -2875,6 +2875,19 @@ impl CGame {
                 amount,
                 goods_factory,
             )
+    }
+
+    pub(crate) fn clear_player_enhancement_selection(
+        &mut self,
+        player_id: i32,
+        shadow_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+    ) -> Result<EnhancementDeselectionReport, EnhancementDeselectionBlock> {
+        self.players
+            .get_mut(&player_id)
+            .ok_or(EnhancementDeselectionBlock::MissingShadow)?
+            .clear_enhancement_selection(shadow_position, goods_id, amount)
     }
 
     /// Создаёт достигнутый GameServer goods core; исходный код игнорировал

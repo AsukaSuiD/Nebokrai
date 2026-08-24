@@ -624,20 +624,6 @@ impl CGoodsShadowContainer {
 //
 
 // ============================================================================
-// FUNCTION: CGoodsShadowContainer::RemoveShadow
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodsshadowcontainer.cpp:449
-// RVA: 0x000E09B0
-// ADDRESS: 004e09b0
-// PROTOTYPE: int __thiscall RemoveShadow(CGUID * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CGoodsShadowContainer::~CGoodsShadowContainer
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -737,7 +723,8 @@ impl CGoodsShadowContainer {
 
 // ============================================================================
 // FUNCTION: CGoodsShadowContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIAL_IMPLEMENTATION
+// MATERIALIZED: same-original-slot enhancement clear; cross-container ownership transfer RAW
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodsshadowcontainer.cpp:666
