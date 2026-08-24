@@ -86,7 +86,7 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
 };
 use crate::gameserver::appserver::session::csessionfactory::{PlugExitReport, SessionEndReport};
 use crate::gameserver::gameserver::game::{
-    BattleFairyDeathContext, BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, CGame,
+    BattleFairyDeathContext, BattleFairyScriptSkillAttachReport, CGame,
     CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
     CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport,
     CiQingOtherPersonTarget, CiQingSetupQueryReport, ContainerScriptActionReport,
@@ -146,7 +146,6 @@ const END_GOODS_SESSION: u32 = 0x0008_fc25;
 
 pub(crate) trait GameGoodsMessageRuntime:
     BattleFairyDeathContext
-    + BattleFairyRuntimeContext
     + CiQingMakeContext
     + CiQingComposeContext
     + EquipmentComposeContext

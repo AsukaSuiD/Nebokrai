@@ -477,7 +477,9 @@ use crate::gameserver::gameserver::honorranks::CHonorRanks;
 use crate::gameserver::gameserver::playerranks::CPlayerRanks;
 use crate::nets::clients::ClientConnectError;
 use crate::nets::mysocket::legacy_ipv4_word;
-use crate::nets::netserver::message::{CMessage, GameMessageHandlers, SendMessageError};
+use crate::nets::netserver::message::{
+    CMessage, GameMessageHandlers, GameServerAroundRuntime, SendMessageError,
+};
 use crate::nets::netserver::mynetclient::{
     CMyNetClient, GameClientIoError, GameClientIoStep, ServerType,
 };
@@ -1723,15 +1725,6 @@ pub(crate) struct GoodsDestroyConfirmReport {
 pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {
     fn player_properties_external_facts(&mut self, player_id: i32)
     -> PlayerPropertiesExternalFacts;
-}
-
-pub(crate) trait BattleFairyRuntimeContext: BattleFairyDeathContext {
-    fn send_battle_fairy_around(
-        &mut self,
-        region: &CServerRegion,
-        origin: &CShape,
-        message: &CMessage,
-    ) -> Result<i32, ShapeCoordinateBlock>;
 }
 
 pub(crate) trait BattleFairySkillResetContext {
@@ -11964,8 +11957,8 @@ impl CGame {
     /// Исполняемый entry point для `goodsmessage` opcode `0x8FC2C/0x8FC2D`.
     /// Player сохраняет порядок guards и broadcast effects, а region map
     /// меняется здесь, потому что `CGame` — первый живой owner обоих runtime
-    /// объектов. Transport остаётся explicit consumer ordered report-а.
-    pub(crate) fn summon_battle_fairy<Context: BattleFairyRuntimeContext>(
+    /// объектов. Around transport использует те же owned session и area maps.
+    pub(crate) fn summon_battle_fairy<Context: BattleFairyDeathContext>(
         &mut self,
         player_id: i32,
         mode: i32,
@@ -11999,7 +11992,7 @@ impl CGame {
         Some(report)
     }
 
-    fn deliver_battle_fairy_summon_effects<Context: BattleFairyRuntimeContext>(
+    fn deliver_battle_fairy_summon_effects<Context: BattleFairyDeathContext>(
         &mut self,
         report: &mut BattleFairySummonReport,
         context: &mut Context,
@@ -12040,7 +12033,7 @@ impl CGame {
                         .map(|owner| {
                             let player = self.find_player(player_id);
                             let delivery = player.map(|player| {
-                                context.send_battle_fairy_around(
+                                self.send_battle_fairy_around(
                                     owner.base(),
                                     player.shape(),
                                     &message,
@@ -12851,11 +12844,10 @@ impl CGame {
     /// Завершает periodic `ComputeWarSoulXY` tick через тот же region area-map,
     /// который обслуживает summon/recall. Skill restored-state остаётся exact
     /// fact ещё не перенесённого concrete `CSkill`.
-    pub(crate) fn compute_war_soul_xy<Context: BattleFairyRuntimeContext>(
+    pub(crate) fn compute_war_soul_xy(
         &mut self,
         player_id: i32,
         current_war_soul_skill_restored: Option<bool>,
-        context: &mut Context,
     ) -> Option<BattleFairyFollowReport> {
         let mut report = self
             .players
@@ -12899,7 +12891,7 @@ impl CGame {
                         .map(|owner| {
                             let player = self.find_player(player_id);
                             let delivery = player.map(|player| {
-                                context.send_battle_fairy_around(
+                                self.send_battle_fairy_around(
                                     owner.base(),
                                     player.shape(),
                                     &message,
@@ -12916,6 +12908,23 @@ impl CGame {
             }
         }
         Some(report)
+    }
+
+    fn send_battle_fairy_around(
+        &self,
+        region: &CServerRegion,
+        origin: &CShape,
+        message: &CMessage,
+    ) -> Result<i32, ShapeCoordinateBlock> {
+        let Some(runtime) = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        ) else {
+            return Ok(0);
+        };
+        message.send_to_around(Some(region), origin, None, &runtime)
     }
 
     /// Выполняет periodic HP-death prefix `CPlayer::AI` и немедленно замыкает
