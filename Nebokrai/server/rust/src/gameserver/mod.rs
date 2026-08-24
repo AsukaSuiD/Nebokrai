@@ -46,6 +46,7 @@ pub(crate) mod appserver {
         pub(crate) mod fairyproperties;
     }
     pub(crate) mod skills {
+        pub(crate) mod realmappellation;
         pub(crate) mod skillbaseproperties;
         pub(crate) mod skillfactory;
     }
@@ -106,6 +107,7 @@ pub(crate) mod appserver {
         pub(crate) mod ctrader;
     }
     pub(crate) mod script {
+        pub(crate) mod buffskillfunc;
         pub(crate) mod function;
         pub(crate) mod script;
         pub(crate) mod variablelist;

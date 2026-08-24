@@ -11,9 +11,15 @@
 //! сохраняет cursor и единожды потребляет continuation result при replay.
 //! Неподтверждённые wait/pause families и остальной не достигнутый синтаксис
 //! остаются в RAW ниже.
+//! Поздний `RegisterBuffSkillFunctions` программно дополняет загруженный RU
+//! FunctionList потерянным `AddJingJieBuff = 11131`; тот же registry lookup
+//! затем ведёт в общий `CScript::RunFunction`, а не в обходной parser path.
 
 use std::collections::BTreeMap;
 
+use super::buffskillfunc::{
+    SCRIPT_FUNCTION_ADD_JING_JIE_BUFF, SCRIPT_FUNCTION_ADD_JING_JIE_BUFF_NAME,
+};
 use super::function::{
     SCRIPT_FUNCTION_ADD_APPELLATION_STATE, SCRIPT_FUNCTION_ADD_INCREMENT_LOG,
     SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR, SCRIPT_FUNCTION_CITY_WAR_DECLARE,
@@ -52,6 +58,16 @@ impl CScriptFunctionRegistry {
                 report.replaced_names += 1;
             }
             report.declared_functions += 1;
+        }
+        if self
+            .functions
+            .insert(
+                SCRIPT_FUNCTION_ADD_JING_JIE_BUFF_NAME.to_vec(),
+                SCRIPT_FUNCTION_ADD_JING_JIE_BUFF,
+            )
+            .is_some()
+        {
+            report.replaced_names += 1;
         }
         report
     }
@@ -541,6 +557,14 @@ impl<'a> CScript<'a> {
                 self.context.player_id,
                 self.context.region_id,
             )
+        {
+            return ScriptCommandOutcome::InvalidExpression;
+        }
+        if function_id == SCRIPT_FUNCTION_ADD_JING_JIE_BUFF
+            && !self
+                .context
+                .player_id
+                .is_some_and(|player_id| game.find_player(player_id).is_some())
         {
             return ScriptCommandOutcome::InvalidExpression;
         }

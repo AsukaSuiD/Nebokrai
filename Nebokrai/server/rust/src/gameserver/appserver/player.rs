@@ -1601,6 +1601,8 @@ pub(crate) struct CPlayer {
     faction_declare_operator: bool,
     active_pet_count: u32,
     attempt_appellation_id: u32,
+    realm_appellation_skill_id: u32,
+    realm_appellation_skill_level: i32,
     heart_request_sent: i32,
     heart_received: bool,
     friends: Vec<PlayerFriend>,
@@ -1693,6 +1695,14 @@ impl CPlayer {
             return None;
         }
         let owner_id = move_shape.shape().identity().id;
+        let realm_appellation_bonus = move_shape
+            .skills()
+            .values()
+            .find(|skill| {
+                super::skills::realmappellation::is_bonus_skill(skill.id())
+                    && (1..=4).contains(&skill.level())
+            })
+            .map(|skill| (skill.id(), skill.level()));
         let mut packet = CVolumeLimitGoodsContainer::new();
         let _empty_release = packet.set_container_dimensions(8, 12);
         let mut enhancement = CAmountLimitGoodsShadowContainer::new();
@@ -1735,6 +1745,9 @@ impl CPlayer {
             faction_declare_operator: false,
             active_pet_count: 0,
             attempt_appellation_id: 0,
+            realm_appellation_skill_id: realm_appellation_bonus
+                .map_or(UNKNOWN_SKILL_ID, |identity| identity.0),
+            realm_appellation_skill_level: realm_appellation_bonus.map_or(0, |identity| identity.1),
             heart_request_sent: 0,
             heart_received: false,
             friends: Vec::new(),
@@ -2360,6 +2373,47 @@ impl CPlayer {
 
     pub(crate) fn get_appellation_state(&self, state_id: u32) -> u32 {
         self.move_shape.get_undead_state(state_id)
+    }
+
+    pub(crate) fn realm_appellation_bonus_identity(
+        &self,
+    ) -> Option<super::skills::realmappellation::RealmBonusIdentity> {
+        (self.realm_appellation_skill_id != UNKNOWN_SKILL_ID
+            && (1..=4).contains(&self.realm_appellation_skill_level))
+        .then_some(super::skills::realmappellation::RealmBonusIdentity {
+            skill_id: self.realm_appellation_skill_id,
+            level: self.realm_appellation_skill_level,
+        })
+    }
+
+    pub(crate) const fn set_realm_appellation_bonus_identity(&mut self, skill_id: u32, level: i32) {
+        self.realm_appellation_skill_id = skill_id;
+        self.realm_appellation_skill_level = level;
+    }
+
+    pub(crate) fn realm_appellation_entitled(&self, appellation_id: u32) -> bool {
+        super::skills::realmappellation::is_title(appellation_id)
+            && self
+                .move_shape
+                .skill(appellation_id)
+                .is_some_and(|skill| skill.level() > 0)
+    }
+
+    pub(crate) fn delete_realm_appellation_skill(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> bool {
+        self.move_shape.delete_skill(skill_id, factory)
+    }
+
+    pub(crate) fn add_realm_appellation_skill(
+        &mut self,
+        skill_id: u32,
+        level: i32,
+        factory: &CSkillFactory,
+    ) -> bool {
+        self.move_shape.add_skill(skill_id, level, factory)
     }
 
     pub(crate) const fn gods_battle_faction(&self) -> i32 {

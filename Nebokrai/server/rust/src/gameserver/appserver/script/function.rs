@@ -145,6 +145,10 @@
 //! attempt-appellation с настоящим `CNotDisappearAfterDead` lifecycle:
 //! skill-registry lookup, replacement по type/ID, around `0xBFE03/04` и
 //! адресный player state `0xBFE02` выполняются из того же script caller-а.
+//! Продолжение `changeappellation.script` регистрирует отсутствующий в RU
+//! function.ini `11131 / AddJingJieBuff`, снимает прежнюю hidden-skill family,
+//! проверяет progression entitlement, ставит новый realm bonus и завершает
+//! полный virtual property recompute адресным `0xBF721`.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -155,6 +159,10 @@ use crate::gameserver::appserver::country::country::{
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::organizingsystem::attackcitysys::AttackCityMembershipBlock;
 use crate::gameserver::appserver::player::PlayerProgress;
+use crate::gameserver::appserver::script::buffskillfunc::{
+    BuffSkillScriptFunctionOutcome, SCRIPT_FUNCTION_ADD_JING_JIE_BUFF,
+    run_buff_skill_script_function,
+};
 use crate::gameserver::appserver::servercityregion::CityGateRuntimeContext;
 use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
@@ -171,8 +179,8 @@ use crate::gameserver::gameserver::game::{
     EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
     GameContainerMessageRuntime, GodsBattleDeathContext, GodsBattleSzlPlayerUpdate,
     NationCarriageReturnReport, NationCombatContext, NationContendEnterReport,
-    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
-    format_legacy_text_fields,
+    RealmAppellationScriptContext, ScriptRegionChangeContext, ServerRegionOwner,
+    colored_player_notice_message, format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
@@ -340,6 +348,7 @@ pub(crate) trait ScriptFunctionRuntime:
     + ScriptRegionChangeContext
     + CityGateRuntimeContext
     + GodsBattleDeathContext
+    + RealmAppellationScriptContext
 {
 }
 
@@ -355,6 +364,7 @@ impl<T> ScriptFunctionRuntime for T where
         + ScriptRegionChangeContext
         + CityGateRuntimeContext
         + GodsBattleDeathContext
+        + RealmAppellationScriptContext
 {
 }
 
@@ -3167,6 +3177,10 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_ADD_JING_JIE_BUFF => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_RELOAD => match index {
             0 => String,
             _ => Unused,
@@ -4749,6 +4763,20 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     integer_arguments: [Option<i32>; 7],
     string_arguments: [Option<&[u8]>; 7],
 ) -> ScriptFunctionDispatchOutcome {
+    match run_buff_skill_script_function(
+        game,
+        runtime,
+        script_player_id,
+        function_id,
+        argument_count,
+        integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+    ) {
+        BuffSkillScriptFunctionOutcome::Handled { legacy_return } => {
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+        }
+        BuffSkillScriptFunctionOutcome::Invalid => return ScriptFunctionDispatchOutcome::Invalid,
+        BuffSkillScriptFunctionOutcome::DifferentFunction => {}
+    }
     if matches!(
         function_id,
         SCRIPT_FUNCTION_GET_DAYS_HONOR_RANK

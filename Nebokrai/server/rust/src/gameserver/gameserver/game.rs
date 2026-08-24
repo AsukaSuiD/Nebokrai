@@ -1846,6 +1846,16 @@ pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {
     -> PlayerPropertiesExternalFacts;
 }
 
+/// Exact virtual `CPlayer::UpdateProperty` после realm hidden-skill mutation.
+/// Runtime владеет ещё не сведёнными equipment/state/GlobeSetup источниками;
+/// CGame применяет возвращённый полный snapshot и сам публикует `0xBF721`.
+pub(crate) trait RealmAppellationScriptContext: BattleFairyDeathContext {
+    fn recompute_realm_appellation_player_properties(
+        &mut self,
+        player: &CPlayer,
+    ) -> PlayerCombatProperties;
+}
+
 pub(crate) trait BattleFairySkillResetContext {
     fn publish_battle_fairy_skill_reset_packet_consumption(
         &mut self,
@@ -16066,6 +16076,42 @@ impl CGame {
     ) -> Option<u32> {
         self.find_player(player_id)
             .map(|player| player.get_appellation_state(state_id))
+    }
+
+    /// Reached `AddJingJieBuff` tail: hidden skill и max-HP/max-MP mutation
+    /// принадлежат realm owner-у, а изменившийся property snapshot публикуется
+    /// тем же адресным `CPlayer::OnChangeProperties` wire `0xBF721`.
+    pub(crate) fn set_script_realm_appellation_bonus<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        appellation_id: u32,
+        context: &mut Context,
+    ) -> Option<i32> {
+        let mutation = {
+            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+            let player = players.get_mut(&player_id)?;
+            crate::gameserver::appserver::skills::realmappellation::set_bonus(
+                player,
+                appellation_id,
+                skill_factory,
+            )
+        };
+        let current_properties = {
+            let player = self
+                .find_player(player_id)
+                .expect("realm mutation сохраняет canonical player");
+            context.recompute_realm_appellation_player_properties(player)
+        };
+        self.find_player_mut(player_id)
+            .expect("realm recompute сохраняет canonical player")
+            .apply_recomputed_combat_properties(current_properties);
+        if mutation.previous_properties != current_properties {
+            let external = context.player_properties_external_facts(player_id);
+            if let Some(player) = self.find_player(player_id) {
+                let _ = self.send_player_properties_changed(player, external);
+            }
+        }
+        Some(i32::from(mutation.succeeded))
     }
 
     fn send_appellation_visual(&self, player_id: i32, state: &UndeadState, begin: bool) {
