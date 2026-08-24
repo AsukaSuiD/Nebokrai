@@ -13,8 +13,10 @@
 //! странность writer-а: второй аргумент влияет только на country fallback, а
 //! применяемое значение всегда `true`; `0x60315` уходит до local map write.
 //! Exile-time `9021` остаётся полностью локальным: страна script-player, один
-//! runtime clock sample и wrapping `CCountry` calculation. Полный expression
-//! evaluator и остальные function ID ниже пока остаются RAW.
+//! runtime clock sample и wrapping `CCountry` calculation. `9317 / AddKingPoint`
+//! складывает delta как DWORD, меняет local control point и публикует selector
+//! `5`, сохраняя нулевой script result. Полный expression evaluator и остальные
+//! function ID ниже пока остаются RAW.
 
 use crate::gameserver::appserver::country::country::{
     CountryExileRestTimeReport, CountryScalarMutationReport,
@@ -38,7 +40,81 @@ pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH: i32 = 9013;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_SWITCH: i32 = 9018;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_SWITCH: i32 = 9019;
 pub(crate) const SCRIPT_FUNCTION_EXILE_TIME: i32 = 9021;
+pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryControlPointScriptDisposition {
+    ArgumentMissing {
+        argument: usize,
+    },
+    CountryMissing {
+        country: u8,
+    },
+    Applied {
+        country: u8,
+        delta: i32,
+        mutation: CountryScalarMutationReport,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryControlPointScriptFunctionOutcome {
+    DifferentFunction,
+    Handled {
+        legacy_return: i32,
+        disposition: CountryControlPointScriptDisposition,
+    },
+}
+
+pub(crate) fn run_country_control_point_script_function(
+    game: &mut CGame,
+    function_id: i32,
+    evaluated_delta: Option<i32>,
+    evaluated_country: Option<i32>,
+) -> CountryControlPointScriptFunctionOutcome {
+    if function_id != SCRIPT_FUNCTION_ADD_KING_POINT {
+        return CountryControlPointScriptFunctionOutcome::DifferentFunction;
+    }
+    let delta = evaluated_delta.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    if delta == SCRIPT_INT_PARAMETER_ERROR {
+        return CountryControlPointScriptFunctionOutcome::Handled {
+            legacy_return: 0,
+            disposition: CountryControlPointScriptDisposition::ArgumentMissing { argument: 0 },
+        };
+    }
+    let raw_country = evaluated_country.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    if raw_country == SCRIPT_INT_PARAMETER_ERROR {
+        return CountryControlPointScriptFunctionOutcome::Handled {
+            legacy_return: 0,
+            disposition: CountryControlPointScriptDisposition::ArgumentMissing { argument: 1 },
+        };
+    }
+    let country = raw_country as u8;
+    let Some(country_owner) = game.country_handler().country(country) else {
+        return CountryControlPointScriptFunctionOutcome::Handled {
+            legacy_return: 0,
+            disposition: CountryControlPointScriptDisposition::CountryMissing { country },
+        };
+    };
+    let applied = country_owner.control_point.wrapping_add(delta);
+    let (mutation, message) = game
+        .country_handler_mut()
+        .country_mut(country)
+        .expect("country owner жив до control-point mutation")
+        .set_script_scalar(5, applied);
+    let delivery = message.send(game, false);
+    CountryControlPointScriptFunctionOutcome::Handled {
+        legacy_return: 0,
+        disposition: CountryControlPointScriptDisposition::Applied {
+            country,
+            delta,
+            mutation,
+            delivery,
+        },
+    }
+}
 
 pub(crate) trait CountryExileTimeScriptContext {
     fn country_exile_time_now_milliseconds(&mut self) -> u32;
