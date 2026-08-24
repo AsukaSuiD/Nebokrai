@@ -18,6 +18,9 @@
 //! `5`, сохраняя нулевой script result. Government identity `9004/9005/9006`
 //! читает mutating CI, отправляет назначение `0x60304` без преждевременной
 //! local mutation и читает отдельный краткоживущий king-ID response state.
+//! Country scalar query family `9000/9002/9008/9010/9012` одним контрактом
+//! сужает explicit country до byte либо использует страну script-player и
+//! возвращает `-1` при недоступном owner-е.
 //! Полный expression evaluator и остальные function ID ниже пока остаются RAW.
 
 use crate::gameserver::appserver::country::country::{
@@ -35,6 +38,8 @@ pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_UPGRADE: i32 = 2216;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_TECH_LEVEL: i32 = 9002;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH_LEVEL: i32 = 9003;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TREASURY: i32 = 9009;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_MATERIAL: i32 = 9011;
@@ -42,11 +47,99 @@ pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH: i32 = 9013;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_CI: i32 = 9004;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_CI: i32 = 9005;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_KING_ID: i32 = 9006;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_TREASURY: i32 = 9008;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_MATERIAL: i32 = 9010;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_TECH: i32 = 9012;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_SWITCH: i32 = 9018;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_SWITCH: i32 = 9019;
 pub(crate) const SCRIPT_FUNCTION_EXILE_TIME: i32 = 9021;
 pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryScalarQueryField {
+    Power,
+    TechnologyLevel,
+    Treasury,
+    Material,
+    TechnologyExperience,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryScalarQueryDisposition {
+    ScriptPlayerMissing,
+    CountryMissing {
+        country: u8,
+    },
+    Completed {
+        country: u8,
+        field: CountryScalarQueryField,
+        value: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryScalarQueryScriptFunctionOutcome {
+    DifferentFunction,
+    Handled {
+        function_id: i32,
+        legacy_return: i32,
+        disposition: CountryScalarQueryDisposition,
+    },
+}
+
+pub(crate) fn run_country_scalar_query_script_function(
+    game: &CGame,
+    script_player_id: Option<i32>,
+    function_id: i32,
+    evaluated_country: Option<i32>,
+) -> CountryScalarQueryScriptFunctionOutcome {
+    let field = match function_id {
+        SCRIPT_FUNCTION_GET_COUNTRY_POWER => CountryScalarQueryField::Power,
+        SCRIPT_FUNCTION_GET_COUNTRY_TECH_LEVEL => CountryScalarQueryField::TechnologyLevel,
+        SCRIPT_FUNCTION_GET_COUNTRY_TREASURY => CountryScalarQueryField::Treasury,
+        SCRIPT_FUNCTION_GET_COUNTRY_MATERIAL => CountryScalarQueryField::Material,
+        SCRIPT_FUNCTION_GET_COUNTRY_TECH => CountryScalarQueryField::TechnologyExperience,
+        _ => return CountryScalarQueryScriptFunctionOutcome::DifferentFunction,
+    };
+    let raw_country = evaluated_country.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    let country = if raw_country == SCRIPT_INT_PARAMETER_ERROR {
+        let Some(player) = script_player_id.and_then(|player_id| game.find_player(player_id))
+        else {
+            return CountryScalarQueryScriptFunctionOutcome::Handled {
+                function_id,
+                legacy_return: -1,
+                disposition: CountryScalarQueryDisposition::ScriptPlayerMissing,
+            };
+        };
+        player.country()
+    } else {
+        raw_country as u8
+    };
+    let Some(country_owner) = game.country_handler().country(country) else {
+        return CountryScalarQueryScriptFunctionOutcome::Handled {
+            function_id,
+            legacy_return: -1,
+            disposition: CountryScalarQueryDisposition::CountryMissing { country },
+        };
+    };
+    let value = match field {
+        CountryScalarQueryField::Power => country_owner.power,
+        CountryScalarQueryField::TechnologyLevel => country_owner.tech_level,
+        CountryScalarQueryField::Treasury => country_owner.treasury,
+        CountryScalarQueryField::Material => country_owner.material_point,
+        CountryScalarQueryField::TechnologyExperience => country_owner.tech_current_exp,
+    };
+    CountryScalarQueryScriptFunctionOutcome::Handled {
+        function_id,
+        legacy_return: value,
+        disposition: CountryScalarQueryDisposition::Completed {
+            country,
+            field,
+            value,
+        },
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryIdentityScriptDisposition {
