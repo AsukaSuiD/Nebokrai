@@ -126,15 +126,11 @@ pub(crate) trait WarRegionContext {
     fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool);
 }
 
-pub(crate) trait WarContendContext: WarRegionContext {
-    /// Выполняет исходный `CServerRegion::AI` до contender-tick.
-    fn run_base_region_ai(&mut self, region: &mut CServerRegion);
-
+/// Узкий context входа в захват. Script caller не обязан подменять заглушками
+/// AI/victory effects, которые `OnEnterContend` никогда не вызывает.
+pub(crate) trait WarContendEntryContext: WarRegionContext {
     /// Возвращает младшие 32 бита монотонного миллисекундного счётчика.
     fn now_millis(&mut self) -> u32;
-
-    /// Имитирует lookup в глобальном `s_mapPlayer`, возвращая стабильный снимок.
-    fn find_global_player(&mut self, player_id: i32) -> Option<ContendPlayerState>;
 
     /// Вызывает concrete City/Village `IsOwner` для текущего региона.
     fn is_owner(&mut self, faction_id: i32) -> bool;
@@ -157,6 +153,14 @@ pub(crate) trait WarContendContext: WarRegionContext {
         faction_name: &str,
         symbol_name: &str,
     );
+}
+
+pub(crate) trait WarContendContext: WarContendEntryContext {
+    /// Выполняет исходный `CServerRegion::AI` до contender-tick.
+    fn run_base_region_ai(&mut self, region: &mut CServerRegion);
+
+    /// Имитирует lookup в глобальном `s_mapPlayer`, возвращая стабильный снимок.
+    fn find_global_player(&mut self, player_id: i32) -> Option<ContendPlayerState>;
 
     fn on_faction_win_one_symbol(&mut self, faction_id: i32, symbol_id: i32);
     /// Выполняет concrete victory callback и возвращает owner-state после него.
@@ -215,7 +219,7 @@ impl CServerWarRegion {
         Ok(true)
     }
 
-    pub(crate) fn on_enter_contend<Context: WarContendContext>(
+    pub(crate) fn on_enter_contend<Context: WarContendEntryContext>(
         &mut self,
         player: Option<&ContendPlayerState>,
         symbol_id: i32,
@@ -263,7 +267,7 @@ impl CServerWarRegion {
         Ok(())
     }
 
-    pub(crate) fn cancel_contend_by_player_id<Context: WarContendContext>(
+    pub(crate) fn cancel_contend_by_player_id<Context: WarContendEntryContext>(
         &mut self,
         player: Option<&ContendPlayerState>,
         context: &mut Context,
@@ -278,7 +282,7 @@ impl CServerWarRegion {
         true
     }
 
-    pub(crate) fn add_contend<Context: WarContendContext>(
+    pub(crate) fn add_contend<Context: WarContendEntryContext>(
         &mut self,
         player: &ContendPlayerState,
         symbol_id: i32,
@@ -779,7 +783,5 @@ fn read_region_i32(
 //
 // IMPLEMENTED выше: global player/membership guards, cancel, symbol/victory
 // callbacks, `GS0241`, `GS0227` и exact war-log tuple сохраняют side-effect order.
-
-
 
 // COMPONENT_VARIANT_END: GameServer

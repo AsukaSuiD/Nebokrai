@@ -498,7 +498,7 @@ impl<'a> CScript<'a> {
             };
         }
         let mut integer_arguments = [None; 7];
-        let mut string_arguments: [Option<Vec<u8>>; 2] = [None, None];
+        let mut string_arguments: [Option<Vec<u8>>; 7] = std::array::from_fn(|_| None);
         for (index, parameter) in parameters.iter().take(7).enumerate() {
             match script_function_parameter_kind(function_id, index) {
                 ScriptFunctionParameterKind::Integer => {
@@ -525,10 +525,7 @@ impl<'a> CScript<'a> {
             function_id,
             parameters.len(),
             integer_arguments,
-            [
-                string_arguments[0].as_deref(),
-                string_arguments[1].as_deref(),
-            ],
+            std::array::from_fn(|index| string_arguments[index].as_deref()),
         ) {
             ScriptFunctionDispatchOutcome::Invalid => ScriptCommandOutcome::InvalidExpression,
             ScriptFunctionDispatchOutcome::DifferentFunction => {

@@ -15,6 +15,12 @@
 //! World-authorized `0x6012F`; каждый mutation публикует build update.
 //! Master query `6017` читает identity, обновляемую World `0x7FE06`, а не
 //! отдельный script shadow или всегда ложный placeholder.
+//! `6043 / EnterContendState` сохраняет разговорный distance gate, вычисляет
+//! два числа и четыре строки до faction/region checks и входит в concrete
+//! City/Village `CServerWarRegion`; общий owner выполняет membership/goods,
+//! contender replacement, player `0xBFF28/29`, `GS0229/43..46` и сохраняет
+//! village goods для последующего victory cleanup. Faction name/union для
+//! contender snapshot берутся из того же авторитетного World `0x7FE06`.
 //! Также материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
 //! `9354 / OpenEquipmentCompose` и `2216 / OpenGoodsUpgrade`. Refresh вычисляет первую
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
@@ -114,11 +120,15 @@ use crate::gameserver::appserver::country::country::{
     CountryExileRestTimeReport, CountryScalarMutationReport,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::organizingsystem::attackcitysys::AttackCityMembershipBlock;
 use crate::gameserver::appserver::servercityregion::CityGateRuntimeContext;
 use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
 };
 use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::serverwarregion::{
+    ContendPlayerState, WarContendEntryContext, WarRegionContext,
+};
 use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongExternalRefreshReport;
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeResolver};
@@ -127,7 +137,7 @@ use crate::gameserver::gameserver::game::{
     EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
     GameContainerMessageRuntime, NationCarriageReturnReport, NationCombatContext,
     NationContendEnterReport, ScriptRegionChangeContext, ServerRegionOwner,
-    colored_player_notice_message,
+    colored_player_notice_message, format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
@@ -177,6 +187,7 @@ pub(crate) const SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME: i32 = 6017;
 pub(crate) const SCRIPT_FUNCTION_GET_CITY_GATE_STATE: i32 = 6019;
 pub(crate) const SCRIPT_FUNCTION_OPERATE_CITY_GATE: i32 = 6020;
 pub(crate) const SCRIPT_FUNCTION_FACTION_DECLARE_WAR: i32 = 6030;
+pub(crate) const SCRIPT_FUNCTION_ENTER_CONTEND_STATE: i32 = 6043;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_REGION: i32 = 2304;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
 pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS: i32 = 2201;
@@ -281,6 +292,384 @@ impl<T> ScriptFunctionRuntime for T where
         + ScriptRegionChangeContext
         + CityGateRuntimeContext
 {
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WarContendEffect {
+    PlayerState {
+        player_id: i32,
+        state: bool,
+        changed: bool,
+    },
+    Time {
+        player_id: i32,
+        percentage: i32,
+        delivery: i32,
+    },
+    Notice {
+        player_id: Option<i32>,
+        string_id: &'static str,
+        delivery: i32,
+    },
+    FirstFactionNotice {
+        country: u8,
+        faction_name: String,
+        symbol_name: String,
+        delivery: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WarContendScriptDisposition {
+    CallerMissing,
+    CallerShapeMissing,
+    TooFar {
+        distance: i32,
+        maximum: i32,
+        delivery: i32,
+    },
+    ArgumentMissing {
+        argument: usize,
+    },
+    RegionMissing {
+        region_id: Option<i32>,
+    },
+    RegionNotWar {
+        region_id: i32,
+    },
+    NpcMissing {
+        region_id: i32,
+        npc_id: i32,
+    },
+    PlayerWithoutFaction,
+    ContendInvoked {
+        region_id: i32,
+        player_id: i32,
+        symbol_id: i32,
+        duration_ms: i32,
+        required_goods: [String; 4],
+        result: Result<(), AttackCityMembershipBlock>,
+        effects: Vec<WarContendEffect>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WarContendScriptFunctionOutcome {
+    DifferentFunction,
+    Handled {
+        legacy_return: i32,
+        disposition: WarContendScriptDisposition,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum ContendEntrySchedule {
+    City,
+    Village,
+}
+
+struct GameWarContendEntryContext<'a, Runtime> {
+    game: &'a mut CGame,
+    runtime: &'a mut Runtime,
+    region: CServerRegion,
+    war_number: i32,
+    owner_faction_id: i32,
+    schedule: ContendEntrySchedule,
+    needed_goods: Vec<String>,
+    effects: Vec<WarContendEffect>,
+}
+
+impl<Runtime> WarRegionContext for GameWarContendEntryContext<'_, Runtime> {
+    type MembershipError = AttackCityMembershipBlock;
+
+    fn player_faction_id(&mut self, player_id: i32) -> Option<i32> {
+        self.game
+            .find_player(player_id)
+            .map(|player| player.faction_id())
+    }
+
+    fn is_apply_war_faction(&mut self, faction_id: i32) -> Result<bool, Self::MembershipError> {
+        match self.schedule {
+            ContendEntrySchedule::City => self
+                .game
+                .attack_city_sys()
+                .is_already_declar_for_war(self.war_number, faction_id),
+            ContendEntrySchedule::Village => Ok(self
+                .game
+                .village_war_sys()
+                .is_already_declar_for_war(self.war_number, faction_id)),
+        }
+    }
+
+    fn send_contend_time(&mut self, player_id: i32, time: i32) {
+        let mut message = CMessage::new(0x000b_ff29);
+        message.base_mut().add_long(time);
+        let delivery = message.send_to_player(self.game.net_server(), player_id);
+        self.effects.push(WarContendEffect::Time {
+            player_id,
+            percentage: time,
+            delivery,
+        });
+    }
+
+    fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
+        let changed = self
+            .game
+            .publish_war_player_contend_state(&self.region, player_id, state)
+            .is_some();
+        self.effects.push(WarContendEffect::PlayerState {
+            player_id,
+            state,
+            changed,
+        });
+    }
+
+    fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool) {
+        if self
+            .game
+            .find_player(player_id)
+            .is_some_and(|player| player.server_region_id() == Some(region_id))
+        {
+            self.set_global_player_contend_state(player_id, state);
+        }
+    }
+}
+
+impl<Runtime: CountryWarActionScriptRuntime> WarContendEntryContext
+    for GameWarContendEntryContext<'_, Runtime>
+{
+    fn now_millis(&mut self) -> u32 {
+        self.runtime.country_contend_now_milliseconds()
+    }
+
+    fn is_owner(&mut self, faction_id: i32) -> bool {
+        faction_id != 0 && faction_id == self.owner_faction_id
+    }
+
+    fn player_has_good(&mut self, player_id: i32, good_name: &str) -> bool {
+        let goods_index = self
+            .game
+            .goods_factory()
+            .query_goods_id_by_original_name(Some(good_name.as_bytes()));
+        self.game.find_player(player_id).is_some_and(|player| {
+            player.check_item_in_packet(goods_index) != 0
+                || player
+                    .equipment()
+                    .traversing_goods()
+                    .into_iter()
+                    .any(|(_, goods)| goods.base_properties_index() == goods_index)
+        })
+    }
+
+    fn set_known_player_contend_state(&mut self, player_id: i32, state: bool) {
+        self.set_global_player_contend_state(player_id, state);
+    }
+
+    fn notify_player(&mut self, player_id: i32, string_id: &'static str) {
+        let delivery = send_country_war_script_notice(self.game, player_id, string_id.as_bytes());
+        self.effects.push(WarContendEffect::Notice {
+            player_id: Some(player_id),
+            string_id,
+            delivery,
+        });
+    }
+
+    fn register_needed_good(&mut self, good_name: &str) {
+        if !good_name.is_empty() {
+            self.needed_goods.push(good_name.to_owned());
+        }
+    }
+
+    fn send_first_faction_contender_notice(
+        &mut self,
+        country: u8,
+        faction_name: &str,
+        symbol_name: &str,
+    ) {
+        let country_name = self
+            .game
+            .globe_setup()
+            .country_name(country)
+            .unwrap_or_default();
+        let text = format_legacy_text_fields(
+            self.game.get_string_by_id(b"GS0246"),
+            &[
+                country_name,
+                faction_name.as_bytes(),
+                symbol_name.as_bytes(),
+            ],
+            0xff,
+        );
+        let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
+            .send_to_region(Some(&self.region), None, self.game);
+        self.effects.push(WarContendEffect::FirstFactionNotice {
+            country,
+            faction_name: faction_name.to_owned(),
+            symbol_name: symbol_name.to_owned(),
+            delivery,
+        });
+    }
+}
+
+pub(crate) fn run_war_contend_script_function<Runtime: CountryWarActionScriptRuntime>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    script_player_id: Option<i32>,
+    script_npc_id: Option<i32>,
+    script_region_id: Option<i32>,
+    function_id: i32,
+    integer_arguments: [Option<i32>; 2],
+    string_arguments: [Option<&[u8]>; 4],
+) -> WarContendScriptFunctionOutcome {
+    if function_id != SCRIPT_FUNCTION_ENTER_CONTEND_STATE {
+        return WarContendScriptFunctionOutcome::DifferentFunction;
+    }
+    let handled = |disposition| WarContendScriptFunctionOutcome::Handled {
+        legacy_return: 0,
+        disposition,
+    };
+    let (Some(player_id), Some(npc_id)) = (script_player_id, script_npc_id) else {
+        return handled(WarContendScriptDisposition::CallerMissing);
+    };
+    let player_shape = game.resolve_shape(ShapeIdentity {
+        object_type: SCRIPT_PLAYER_TYPE,
+        id: player_id,
+        ex_id: CGuid::GUID_INVALID,
+    });
+    let npc_shape = game.resolve_shape(ShapeIdentity {
+        object_type: SCRIPT_NPC_TYPE,
+        id: npc_id,
+        ex_id: CGuid::GUID_INVALID,
+    });
+    let (Some(player_shape), Some(npc_shape)) = (player_shape, npc_shape) else {
+        return handled(WarContendScriptDisposition::CallerShapeMissing);
+    };
+    let distance = npc_shape.distance(player_shape);
+    if distance > 2 {
+        let delivery = send_country_war_script_notice(game, player_id, b"GS0208");
+        return handled(WarContendScriptDisposition::TooFar {
+            distance,
+            maximum: 2,
+            delivery,
+        });
+    }
+    let mut values = [0; 2];
+    for (index, argument) in integer_arguments.into_iter().enumerate() {
+        let Some(value) = argument.filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR) else {
+            return handled(WarContendScriptDisposition::ArgumentMissing { argument: index });
+        };
+        values[index] = value;
+    }
+    let mut required_goods: [String; 4] = std::array::from_fn(|_| String::new());
+    for (index, argument) in string_arguments.into_iter().enumerate() {
+        let Some(value) = argument else {
+            return handled(WarContendScriptDisposition::ArgumentMissing {
+                argument: index + 2,
+            });
+        };
+        required_goods[index] = String::from_utf8_lossy(value).into_owned();
+    }
+    let Some(region_id) = script_region_id else {
+        return handled(WarContendScriptDisposition::RegionMissing { region_id: None });
+    };
+    let Some(player) = game.find_player(player_id) else {
+        return handled(WarContendScriptDisposition::CallerMissing);
+    };
+    if player.faction_id() <= 0 {
+        return handled(WarContendScriptDisposition::PlayerWithoutFaction);
+    };
+    let player = ContendPlayerState {
+        player_id,
+        faction_id: player.faction_id(),
+        union_id: player.union_id(),
+        country: player.country(),
+        faction_name: String::from_utf8_lossy(player.faction_name()).into_owned(),
+        shape_type: i32::from(player.shape().get_action()),
+        is_dead: player.is_dead(),
+    };
+    let Some(owner) = game.find_region(region_id) else {
+        return handled(WarContendScriptDisposition::RegionMissing {
+            region_id: Some(region_id),
+        });
+    };
+    let (war_number, owner_faction_id, schedule) = match owner {
+        ServerRegionOwner::City(city) => (
+            city.war.base.get_war_number(),
+            city.war.base.owned_city_faction(),
+            ContendEntrySchedule::City,
+        ),
+        ServerRegionOwner::Village(village) => {
+            let war_number = village.war.base.get_war_number();
+            let village_id = game
+                .village_war_sys()
+                .get_village_region_id_by_time(war_number);
+            let owner_faction_id = game
+                .find_region(village_id)
+                .map(|region| region.base().owned_city_faction())
+                .or_else(|| {
+                    game.find_proxy_region(village_id)
+                        .map(|region| region.owned_city_org().0)
+                })
+                .unwrap_or(0);
+            (war_number, owner_faction_id, ContendEntrySchedule::Village)
+        }
+        _ => return handled(WarContendScriptDisposition::RegionNotWar { region_id }),
+    };
+    let Some(mut owner) = game.take_region_owner(region_id) else {
+        return handled(WarContendScriptDisposition::RegionMissing {
+            region_id: Some(region_id),
+        });
+    };
+    let war = match &mut owner {
+        ServerRegionOwner::City(region) => &mut region.war,
+        ServerRegionOwner::Village(region) => &mut region.war,
+        _ => unreachable!("war owner проверен до take"),
+    };
+    let Some(symbol_name) = war
+        .base
+        .find_npc_by_id(npc_id)
+        .map(|npc| String::from_utf8_lossy(npc.name()).into_owned())
+    else {
+        game.restore_region_owner(owner);
+        return handled(WarContendScriptDisposition::NpcMissing { region_id, npc_id });
+    };
+    let duration_ms = values[1].wrapping_mul(1_000);
+    let mut context = GameWarContendEntryContext {
+        game,
+        runtime,
+        region: war.base.clone(),
+        war_number,
+        owner_faction_id,
+        schedule,
+        needed_goods: Vec::new(),
+        effects: Vec::new(),
+    };
+    let result = war.on_enter_contend(
+        Some(&player),
+        values[0],
+        &symbol_name,
+        duration_ms,
+        std::array::from_fn(|index| required_goods[index].as_str()),
+        &mut context,
+    );
+    let needed_goods = std::mem::take(&mut context.needed_goods);
+    let effects = std::mem::take(&mut context.effects);
+    drop(context);
+    if let ServerRegionOwner::Village(region) = &mut owner {
+        for good_name in &needed_goods {
+            region.add_need_good(good_name);
+        }
+    }
+    game.restore_region_owner(owner);
+    handled(WarContendScriptDisposition::ContendInvoked {
+        region_id,
+        player_id,
+        symbol_id: values[0],
+        duration_ms,
+        required_goods,
+        result,
+        effects,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -388,7 +777,7 @@ impl<Runtime: CountryWarActionScriptRuntime> CountryContendEntryContext
     fn set_known_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
-                .publish_country_player_contend_state(&self.region, player_id, state);
+                .publish_war_player_contend_state(&self.region, player_id, state);
         self.effects.push(CountryWarContendEffect::PlayerState {
             player_id,
             state,
@@ -2493,6 +2882,11 @@ pub(crate) fn script_function_parameter_kind(
             0..=2 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_ENTER_CONTEND_STATE => match index {
+            0 | 1 => Integer,
+            2..=5 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_GET_CITY_GATE_STATE => match index {
             0..=1 => Integer,
             _ => Unused,
@@ -3004,7 +3398,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
     function_id: i32,
     argument_count: usize,
     integer_arguments: [Option<i32>; 7],
-    string_arguments: [Option<&[u8]>; 2],
+    string_arguments: [Option<&[u8]>; 7],
 ) -> Option<ScriptFunctionDispatchOutcome> {
     let player_id = script_player_id.unwrap_or_default();
     match function_id {
@@ -3652,7 +4046,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     function_id: i32,
     argument_count: usize,
     integer_arguments: [Option<i32>; 7],
-    string_arguments: [Option<&[u8]>; 2],
+    string_arguments: [Option<&[u8]>; 7],
 ) -> ScriptFunctionDispatchOutcome {
     if let Some(outcome) = run_core_player_script_function(
         game,
@@ -3721,6 +4115,24 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     }
 
     handled!(
+        run_war_contend_script_function(
+            game,
+            runtime,
+            script_player_id,
+            script_npc_id,
+            script_region_id,
+            function_id,
+            [integer_arguments[0], integer_arguments[1]],
+            [
+                string_arguments[2],
+                string_arguments[3],
+                string_arguments[4],
+                string_arguments[5],
+            ],
+        ),
+        WarContendScriptFunctionOutcome::Handled
+    );
+    handled!(
         run_country_war_action_script_function(
             game,
             runtime,
@@ -3788,7 +4200,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             integer_arguments[2],
             integer_arguments[3],
         ],
-        string_arguments,
+        [string_arguments[0], string_arguments[1]],
     ) {
         return ScriptFunctionDispatchOutcome::Handled { legacy_return };
     }

@@ -20,7 +20,8 @@
 //! World city-gate authorization `0x7FE2A` возвращается в concrete city owner,
 //! обновляет gate/build state и отправляет исходные `GS0042/GS0043` notices.
 //! `0x7FE06` декодирует полный organizing wire до owned-region tail, обновляет
-//! faction/master identity live player и только затем ретегирует `0xBFF06`.
+//! faction/master/name/union identity live player и только затем ретегирует
+//! `0xBFF06`; name/union входят в последующий war-contender lifecycle.
 //!
 //! Каждый фазовый case читает ровно один signed war ID и передаёт его своему
 //! owner-у. Faction-update cases передают текущие payload/cursor соответствующему
@@ -657,6 +658,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
             let player_id = read_i32(message, "player ID")?;
             let faction_id = read_i32(message, "faction ID")?;
             let mut faction_master_id = 0;
+            let mut faction_name = Vec::new();
+            let mut union_id = 0;
             if faction_id > 0 {
                 let _logo_id = read_i32(message, "faction logo ID")?;
                 let _level = message.base_mut().get_word().ok_or(
@@ -667,7 +670,7 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 let _experience = read_i32(message, "faction experience")?;
                 let _force = read_i32(message, "faction force")?;
                 let _contribute = read_i32(message, "faction contribute")?;
-                let _name = message
+                faction_name = message
                     .base_mut()
                     .get_str_bytes(0x100)
                     .ok_or(FactionLifecycleDispatchError::InvalidPayload)?;
@@ -676,7 +679,7 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                     .get_str_bytes(0x100)
                     .ok_or(FactionLifecycleDispatchError::InvalidPayload)?;
                 faction_master_id = read_i32(message, "faction master ID")?;
-                let _union_id = read_i32(message, "union ID")?;
+                union_id = read_i32(message, "union ID")?;
                 let _union_master_id = read_i32(message, "union master ID")?;
                 for field in ["enemy factions", "city-war enemy factions"] {
                     let count = read_i32(message, field)?;
@@ -709,7 +712,12 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 return Err(FactionLifecycleDispatchError::InvalidPayload);
             }
             let correlated = if let Some(player) = game.find_player_mut(player_id) {
-                player.restore_faction_identity(faction_id, faction_master_id);
+                player.restore_faction_identity(
+                    faction_id,
+                    faction_master_id,
+                    &faction_name,
+                    union_id,
+                );
                 true
             } else {
                 false

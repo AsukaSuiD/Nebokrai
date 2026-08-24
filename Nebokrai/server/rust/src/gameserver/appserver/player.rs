@@ -1579,6 +1579,8 @@ pub(crate) struct CPlayer {
     figure: ShapeFigure,
     faction_id: i32,
     faction_master_id: i32,
+    faction_name: Vec<u8>,
+    union_id: i32,
     team_id: i32,
     country: u8,
     server_region_id: Option<i32>,
@@ -1711,6 +1713,8 @@ impl CPlayer {
             figure,
             faction_id: 0,
             faction_master_id: 0,
+            faction_name: Vec::new(),
+            union_id: 0,
             team_id,
             country,
             server_region_id,
@@ -1872,6 +1876,14 @@ impl CPlayer {
         self.faction_id > 0 && self.faction_master_id == self.player_id()
     }
 
+    pub(crate) fn faction_name(&self) -> &[u8] {
+        &self.faction_name
+    }
+
+    pub(crate) const fn union_id(&self) -> i32 {
+        self.union_id
+    }
+
     pub(crate) const fn create_faction_operator(&self) -> bool {
         self.create_faction_operator
     }
@@ -1900,13 +1912,18 @@ impl CPlayer {
         self.faction_id = faction_id;
     }
 
-    pub(crate) const fn restore_faction_identity(
+    pub(crate) fn restore_faction_identity(
         &mut self,
         faction_id: i32,
         faction_master_id: i32,
+        faction_name: &[u8],
+        union_id: i32,
     ) {
         self.faction_id = faction_id;
         self.faction_master_id = faction_master_id;
+        self.faction_name.clear();
+        self.faction_name.extend_from_slice(faction_name);
+        self.union_id = union_id;
     }
 
     pub(crate) const fn country(&self) -> u8 {

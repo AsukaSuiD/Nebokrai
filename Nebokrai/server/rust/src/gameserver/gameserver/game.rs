@@ -6208,10 +6208,10 @@ impl CGame {
         Some(context.send_nation_player_around(region, player.shape(), None, &message))
     }
 
-    /// Concrete `CPlayer::SetContendState` effect для country-symbol entry:
+    /// Concrete `CPlayer::SetContendState` effect для war-symbol entry:
     /// unchanged state ничего не публикует, mutation идёт до exact `0xBFF28`
     /// вокруг текущей позиции player-а.
-    pub(crate) fn publish_country_player_contend_state(
+    pub(crate) fn publish_war_player_contend_state(
         &mut self,
         region: &CServerRegion,
         player_id: i32,
@@ -6226,7 +6226,7 @@ impl CGame {
         message.add_byte(u8::from(contend_state));
         let player = self
             .find_player(player_id)
-            .expect("country contender сохранён до synchronous around-send");
+            .expect("war contender сохранён до synchronous around-send");
         let Some(runtime) = GameServerAroundRuntime::new(
             self,
             &self.session_factory,
