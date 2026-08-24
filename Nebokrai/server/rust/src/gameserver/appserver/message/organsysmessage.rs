@@ -2,7 +2,8 @@
 //!
 //! Весь dispatcher RVA `0x000895A0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме фазовых
 //! cases AttackCity `0x7FE1F..0x7FE25`, Village `0x7FE2F..0x7FE33`, faction
-//! update `0x7FE35/0x7FE36` и control tail `0x7FE46..0x7FE4A` со статусом
+//! update `0x7FE35/0x7FE36`, FourNation `0x7FE3C..0x7FE45` и control tail
+//! `0x7FE46..0x7FE4A` со статусом
 //! `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\organsysmessage.cpp`.
@@ -17,7 +18,9 @@
 //! `0xBF806(GS1177)`. Затем он ограничивает казну опубликованным CountryParam
 //! maximum и отправляет World `0x60314`, сохраняет FourNation morale либо
 //! перепаковывает входной router response в адресный `0xBFF36`. Другие opcodes
-//! helpers не интерпретируют. Достигнутая war family проходит
+//! helpers не интерпретируют. FourNation сохраняет отсутствующий в exact
+//! switch case `0x7FE42` как no-op, а result request отправляет World ровно
+//! пять counters сообщением `0x60319`. Достигнутая war family проходит
 //! живой FIFO `CGame`: расписания остаются owned, local-before-proxy lookup
 //! мутирует concrete City/Village/base owners, а message/player/log effects
 //! исполняет тот же runtime-контекст, который обслуживает MainLoop.
@@ -29,6 +32,9 @@ use std::fmt;
 use super::super::organizingsystem::attackcitysys::{
     AttackCityDecodeError, AttackCityMembershipBlock, AttackCityPhaseContext, CAttackCitySys,
 };
+use super::super::organizingsystem::fournationwarsys::{
+    FourNationPhaseContext, FourNationRegionRuntime,
+};
 use super::super::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarDecodeError, VillageWarPhaseContext,
 };
@@ -39,7 +45,9 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerExploitMutationReport}
 use crate::gameserver::gameserver::game::{CGame, GameWarRegionHandle, ServerRegionOwner};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
-pub(crate) trait GameOrganizingWarRuntime: CityRegionContext + VillageRegionContext {
+pub(crate) trait GameOrganizingWarRuntime:
+    CityRegionContext + VillageRegionContext + FourNationRegionRuntime
+{
     /// Публикует region-localized `0xBF806(..., GS0127(region name))`.
     fn send_village_clear_player_notice(&mut self, region_id: i32, region_name: &[u8]);
 
@@ -68,6 +76,15 @@ pub(crate) struct WarFactionUpdateDispatchReport {
 pub(crate) struct WarPhaseDispatchReport {
     pub(crate) opcode: u32,
     pub(crate) war_number: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FourNationPhaseDispatchReport {
+    pub(crate) opcode: u32,
+    pub(crate) war_number: i32,
+    pub(crate) schedule_found: bool,
+    pub(crate) results: Option<[u32; 5]>,
+    pub(crate) delivery: Option<Result<i32, SendMessageError>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -112,6 +129,7 @@ pub(crate) struct FourNationExploitDispatchReport {
 pub(crate) enum GameOrganizingWarMessageReport {
     FactionUpdate(WarFactionUpdateDispatchReport),
     Phase(WarPhaseDispatchReport),
+    FourNationPhase(FourNationPhaseDispatchReport),
     Control(OrganizingControlDispatchReport),
 }
 
@@ -303,6 +321,9 @@ pub(crate) fn dispatch_game_organizing_war_message<Runtime: GameOrganizingWarRun
             | 0x7fe2f..=0x7fe33
             | 0x7fe35
             | 0x7fe36
+            | 0x7fe3c..=0x7fe3f
+            | 0x7fe41
+            | 0x7fe43..=0x7fe45
             | 0x7fe46..=0x7fe4a
     ) {
         return None;
@@ -313,6 +334,17 @@ pub(crate) fn dispatch_game_organizing_war_message<Runtime: GameOrganizingWarRun
             dispatch_organizing_control_message(opcode, message, game, runtime)
                 .map(GameOrganizingWarMessageReport::Control)
                 .map_err(GameOrganizingWarMessageError::Control),
+        );
+    }
+
+    if matches!(
+        opcode,
+        0x7fe3c..=0x7fe3f | 0x7fe41 | 0x7fe43..=0x7fe45
+    ) {
+        return Some(
+            dispatch_four_nation_phase_message(opcode, message, game, runtime)
+                .map(GameOrganizingWarMessageReport::FourNationPhase)
+                .map_err(GameOrganizingWarMessageError::Phase),
         );
     }
 
@@ -348,6 +380,104 @@ pub(crate) fn dispatch_game_organizing_war_message<Runtime: GameOrganizingWarRun
     };
     game.restore_war_startup_owners(owners);
     Some(result)
+}
+
+fn dispatch_four_nation_phase_message<Runtime: GameOrganizingWarRuntime>(
+    opcode: u32,
+    message: &mut CMessage,
+    game: &mut CGame,
+    runtime: &mut Runtime,
+) -> Result<FourNationPhaseDispatchReport, WarPhaseDispatchError> {
+    let (payload, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    let war_number = read_phase_war_number(payload, cursor)?;
+    let schedule_exists = game
+        .four_nation_war_sys()
+        .setups()
+        .get(war_number as usize)
+        .is_some();
+    let sign_up_counts = if opcode == 0x7fe3e && schedule_exists {
+        let mut values = [0; 5];
+        for value in &mut values {
+            *value = read_phase_war_number(payload, cursor)?;
+        }
+        Some(values)
+    } else {
+        None
+    };
+    let mut owners = game.take_war_startup_owners();
+    let (schedule_found, results) = {
+        let mut context = GameOrganizingWarContext { game, runtime };
+        match opcode {
+            0x7fe3c => (
+                owners.four_nation.on_war_start(war_number, &mut context),
+                None,
+            ),
+            0x7fe3d => (
+                owners
+                    .four_nation
+                    .on_sign_up_war_start(war_number, &mut context),
+                None,
+            ),
+            0x7fe3e => (
+                if let Some(sign_up_counts) = sign_up_counts {
+                    owners
+                        .four_nation
+                        .on_sign_up_war_end(war_number, sign_up_counts, &mut context)
+                } else {
+                    false
+                },
+                None,
+            ),
+            0x7fe3f => (
+                owners.four_nation.on_enter_start(war_number, &mut context),
+                None,
+            ),
+            0x7fe41 => (
+                owners
+                    .four_nation
+                    .on_refresh_region(war_number, &mut context),
+                None,
+            ),
+            0x7fe43 => (
+                owners.four_nation.on_war_end(war_number, &mut context),
+                None,
+            ),
+            0x7fe44 => (
+                owners.four_nation.on_clear_war(war_number, &mut context),
+                None,
+            ),
+            0x7fe45 => {
+                let results = owners
+                    .four_nation
+                    .take_war_results(war_number, &mut context);
+                (
+                    owners
+                        .four_nation
+                        .setups()
+                        .get(war_number as usize)
+                        .is_some(),
+                    results,
+                )
+            }
+            _ => unreachable!("FourNation phase opcode проверен outer dispatcher-ом"),
+        }
+    };
+    game.restore_war_startup_owners(owners);
+
+    let delivery = results.map(|values| {
+        let mut response = CMessage::new(0x60319);
+        for value in values {
+            response.base_mut().add_ulong(value);
+        }
+        response.send(game, false)
+    });
+    Ok(FourNationPhaseDispatchReport {
+        opcode,
+        war_number,
+        schedule_found,
+        results,
+        delivery,
+    })
 }
 
 fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
@@ -756,6 +886,112 @@ impl<Runtime: GameOrganizingWarRuntime> WarFactionUpdateContext
 
     fn update_village_contend_player(&mut self, region_id: i32, schedules: &CVillageWarSys) {
         self.update_contenders(region_id, ContendSchedule::Village(schedules));
+    }
+}
+
+impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
+    for GameOrganizingWarContext<'_, Runtime>
+{
+    type Region = GameWarRegionHandle;
+
+    fn find_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region> {
+        self.lookup_region_then_proxy(region_id)
+    }
+
+    fn find_server_region(&mut self, region_id: i32) -> Option<Self::Region> {
+        self.lookup_server_region(region_id)
+    }
+
+    fn find_server_nation_region(&mut self, region_id: i32) -> Option<Self::Region> {
+        matches!(
+            self.game.find_region(region_id),
+            Some(ServerRegionOwner::Nation(_))
+        )
+        .then_some(GameWarRegionHandle::Local(region_id))
+    }
+
+    fn on_war_declare(&mut self, region: Self::Region, war_number: i32) {
+        GameOrganizingWarContext::on_war_declare(self, region, war_number);
+    }
+
+    fn on_nation_war_declare(
+        &mut self,
+        region: Self::Region,
+        war_number: i32,
+        sign_up_counts: [i32; 5],
+    ) {
+        let GameWarRegionHandle::Local(region_id) = region else {
+            return;
+        };
+        if let Some(ServerRegionOwner::Nation(region)) = self.game.find_region_mut(region_id) {
+            region.war.on_war_declare(war_number);
+            self.runtime
+                .on_four_nation_declare(region, war_number, sign_up_counts);
+        }
+    }
+
+    fn on_war_mass(&mut self, region: Self::Region, war_number: i32) {
+        if let GameWarRegionHandle::Local(region_id) = region
+            && let Some(ServerRegionOwner::Nation(region)) = self.game.find_region_mut(region_id)
+        {
+            region.war.base.on_war_mass(war_number);
+            self.runtime.on_four_nation_mass(region, war_number);
+            return;
+        }
+        GameOrganizingWarContext::on_war_mass(self, region, war_number);
+    }
+
+    fn on_war_start(&mut self, region: Self::Region, war_number: i32) {
+        GameOrganizingWarContext::on_war_start(self, region, war_number);
+    }
+
+    fn on_refresh_region(&mut self, region: Self::Region, war_number: i32) {
+        let GameWarRegionHandle::Local(region_id) = region else {
+            return;
+        };
+        let Some(region) = self.game.find_region_mut(region_id) else {
+            return;
+        };
+        match region {
+            ServerRegionOwner::Nation(region) => {
+                self.runtime.on_four_nation_refresh(region, war_number)
+            }
+            region => region.base_mut().on_refresh_region(war_number),
+        }
+    }
+
+    fn on_war_end(&mut self, region: Self::Region, war_number: i32) {
+        if let GameWarRegionHandle::Local(region_id) = region
+            && let Some(ServerRegionOwner::Nation(region)) = self.game.find_region_mut(region_id)
+        {
+            region.war.on_war_end(war_number);
+            self.runtime.on_four_nation_end(region, war_number);
+            return;
+        }
+        GameOrganizingWarContext::on_war_end(self, region, war_number);
+    }
+
+    fn on_clear_war(&mut self, region: Self::Region, war_number: i32) {
+        let GameWarRegionHandle::Local(region_id) = region else {
+            return;
+        };
+        if let Some(ServerRegionOwner::Nation(region)) = self.game.find_region_mut(region_id) {
+            self.runtime.on_four_nation_clear(region, war_number);
+        }
+    }
+
+    fn take_war_results(&mut self, region: Self::Region) -> [u32; 5] {
+        let GameWarRegionHandle::Local(region_id) = region else {
+            return [0; 5];
+        };
+        let Some(ServerRegionOwner::Nation(region)) = self.game.find_region_mut(region_id) else {
+            return [0; 5];
+        };
+        self.runtime.take_four_nation_results(region)
+    }
+
+    fn add_war_end_log(&mut self, war_number: i32) {
+        self.runtime.add_four_nation_war_end_log(war_number);
     }
 }
 

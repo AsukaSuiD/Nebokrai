@@ -16,14 +16,19 @@
 //! `InitWarState` идёт по vector-order, ищет main region с proxy fallback,
 //! принимает только nation region, применяет `(index, region_state)` и копирует
 //! пять relive rectangles. Process singleton заменён owned-полем `CGame`.
-//! Direct morale assignment `0x7FE49` и replacement player-war-time `0x7FE47`
-//! также принадлежат owner-у; callbacks и остальные player-war-time методы ниже
-//! ещё сохраняют RAW.
+//! Полная фазовая цепочка `0x7FE3C..0x7FE45` сохраняет проверку индекса,
+//! DUTH/Mass/Fight, различия local/proxy lookup, очистку process-wide времени
+//! и morale, пятизначный signup payload и atomic take пяти результатов.
+//! Не материализованные внутри `ServerNationRegion` shape/NPC/player effects
+//! являются обязательной runtime-границей с mutable concrete owner-ом. Direct
+//! morale `0x7FE49` и replacement player-war-time `0x7FE47` принадлежат тому же
+//! process owner-у; остальные player-war-time queries ниже ещё сохраняют RAW.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
+use crate::gameserver::appserver::servernationregion::ServerNationRegion;
 use crate::public::date::TagTime;
 
 const FOUR_NATION_SETUP_WIRE_SIZE: usize = 0xc4;
@@ -143,6 +148,43 @@ pub(crate) trait FourNationGameStartupContext {
     );
 }
 
+pub(crate) trait FourNationPhaseContext {
+    type Region: Copy;
+
+    fn find_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region>;
+    fn find_server_region(&mut self, region_id: i32) -> Option<Self::Region>;
+    fn find_server_nation_region(&mut self, region_id: i32) -> Option<Self::Region>;
+    fn on_war_declare(&mut self, region: Self::Region, war_number: i32);
+    fn on_nation_war_declare(
+        &mut self,
+        region: Self::Region,
+        war_number: i32,
+        sign_up_counts: [i32; 5],
+    );
+    fn on_war_mass(&mut self, region: Self::Region, war_number: i32);
+    fn on_war_start(&mut self, region: Self::Region, war_number: i32);
+    fn on_refresh_region(&mut self, region: Self::Region, war_number: i32);
+    fn on_war_end(&mut self, region: Self::Region, war_number: i32);
+    fn on_clear_war(&mut self, region: Self::Region, war_number: i32);
+    fn take_war_results(&mut self, region: Self::Region) -> [u32; 5];
+    fn add_war_end_log(&mut self, war_number: i32);
+}
+
+pub(crate) trait FourNationRegionRuntime {
+    fn add_four_nation_war_end_log(&mut self, war_number: i32);
+    fn on_four_nation_declare(
+        &mut self,
+        region: &mut ServerNationRegion,
+        war_number: i32,
+        sign_up_counts: [i32; 5],
+    );
+    fn on_four_nation_mass(&mut self, region: &mut ServerNationRegion, war_number: i32);
+    fn on_four_nation_refresh(&mut self, region: &mut ServerNationRegion, war_number: i32);
+    fn on_four_nation_end(&mut self, region: &mut ServerNationRegion, war_number: i32);
+    fn on_four_nation_clear(&mut self, region: &mut ServerNationRegion, war_number: i32);
+    fn take_four_nation_results(&mut self, region: &mut ServerNationRegion) -> [u32; 5];
+}
+
 impl CFourNationWarSys {
     pub(crate) fn decord_from_byte_array(
         &mut self,
@@ -234,6 +276,126 @@ impl CFourNationWarSys {
     /// Exact hash-map replacement из `SetOnePlayerWarTime`.
     pub(crate) fn set_one_player_war_time(&mut self, player_id: i32, time_ms: u32) -> Option<u32> {
         self.player_war_times_ms.insert(player_id, time_ms)
+    }
+
+    pub(crate) fn clear_player_war_times(&mut self) {
+        self.player_war_times_ms.clear();
+    }
+
+    pub(crate) fn on_sign_up_war_start<Context: FourNationPhaseContext>(
+        &mut self,
+        war_number: i32,
+        context: &mut Context,
+    ) -> bool {
+        let Some(setup) = self.setups.get_mut(war_number as usize) else {
+            return false;
+        };
+        setup.region_state = 1;
+        if let Some(region) = context.find_region_then_proxy(setup.region_id) {
+            context.on_war_declare(region, war_number);
+        }
+        self.clear_player_war_times();
+        self.morale = 0;
+        true
+    }
+
+    pub(crate) fn on_sign_up_war_end<Context: FourNationPhaseContext>(
+        &mut self,
+        war_number: i32,
+        sign_up_counts: [i32; 5],
+        context: &mut Context,
+    ) -> bool {
+        let Some(setup) = self.setups.get(war_number as usize) else {
+            return false;
+        };
+        if let Some(region) = context.find_server_nation_region(setup.region_id) {
+            context.on_nation_war_declare(region, war_number, sign_up_counts);
+        }
+        true
+    }
+
+    pub(crate) fn on_enter_start<Context: FourNationPhaseContext>(
+        &mut self,
+        war_number: i32,
+        context: &mut Context,
+    ) -> bool {
+        let Some(setup) = self.setups.get_mut(war_number as usize) else {
+            return false;
+        };
+        setup.region_state = 2;
+        if let Some(region) = context.find_region_then_proxy(setup.region_id) {
+            context.on_war_mass(region, war_number);
+        }
+        true
+    }
+
+    pub(crate) fn on_war_start<Context: FourNationPhaseContext>(
+        &mut self,
+        war_number: i32,
+        context: &mut Context,
+    ) -> bool {
+        let Some(setup) = self.setups.get_mut(war_number as usize) else {
+            return false;
+        };
+        setup.region_state = 3;
+        if let Some(region) = context.find_region_then_proxy(setup.region_id) {
+            context.on_war_start(region, war_number);
+        }
+        true
+    }
+
+    pub(crate) fn on_refresh_region<Context: FourNationPhaseContext>(
+        &mut self,
+        war_number: i32,
+        context: &mut Context,
+    ) -> bool {
+        let Some(setup) = self.setups.get(war_number as usize) else {
+            return false;
+        };
+        if let Some(region) = context.find_server_region(setup.region_id) {
+            context.on_refresh_region(region, war_number);
+        }
+        self.clear_player_war_times();
+        true
+    }
+
+    pub(crate) fn on_war_end<Context: FourNationPhaseContext>(
+        &mut self,
+        war_number: i32,
+        context: &mut Context,
+    ) -> bool {
+        context.add_war_end_log(war_number);
+        let Some(setup) = self.setups.get(war_number as usize) else {
+            return false;
+        };
+        if let Some(region) = context.find_region_then_proxy(setup.region_id) {
+            context.on_war_end(region, war_number);
+        }
+        true
+    }
+
+    pub(crate) fn on_clear_war<Context: FourNationPhaseContext>(
+        &mut self,
+        war_number: i32,
+        context: &mut Context,
+    ) -> bool {
+        let Some(setup) = self.setups.get(war_number as usize) else {
+            return false;
+        };
+        if let Some(region) = context.find_server_nation_region(setup.region_id) {
+            context.on_clear_war(region, war_number);
+        }
+        true
+    }
+
+    pub(crate) fn take_war_results<Context: FourNationPhaseContext>(
+        &self,
+        war_number: i32,
+        context: &mut Context,
+    ) -> Option<[u32; 5]> {
+        let setup = self.setups.get(war_number as usize)?;
+        let region = context.find_server_nation_region(setup.region_id)?;
+        Some(context.take_war_results(region))
     }
 }
 
