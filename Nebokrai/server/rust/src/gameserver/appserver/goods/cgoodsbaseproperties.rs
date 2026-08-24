@@ -34,6 +34,7 @@ pub(crate) const GAP_GEM_PROBABILITY: i32 = 81;
 pub(crate) const GAP_GEM_UPGRADE_SUCCEED_RESULT: i32 = 82;
 pub(crate) const GAP_GEM_UPGRADE_FAILED_RESULT: i32 = 83;
 pub(crate) const GAP_FAIRY_STATE: i32 = 107;
+pub(crate) const GAP_EQUIP_STATE: i32 = 137;
 pub(crate) const GAP_FAIRY_COMBINATED_TIMES: i32 = 108;
 pub(crate) const GAP_FAIRY_MAX_COMBINATED_TIMES: i32 = 109;
 pub(crate) const GAP_FAIRY_LEVEL: i32 = 110;

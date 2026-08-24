@@ -302,6 +302,9 @@ use crate::gameserver::appserver::country::countryparam::CCountryParam;
 use crate::gameserver::appserver::country::countrywarsys::CountryWarSys;
 use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyProperty;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+    GAP_EQUIP_STATE, GOODS_TYPE_EQUIPMENT,
+};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goodswarmember::{
     CGoodsWarMember, GameGoodsWarMessageError, GameGoodsWarMessageReport,
@@ -371,11 +374,11 @@ use crate::gameserver::appserver::player::{
     BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, CiQingContainerAddition,
     CiQingContainerConsumption, CiQingHandConsumption, CiQingPacketAddition,
     CiQingPacketConsumption, EnhancementDeselectionBlock, EnhancementDeselectionReport,
-    EnhancementSelectionBlock, EnhancementSelectionReport, PlayerCombatProperties,
-    PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
-    PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
-    PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerProgress,
-    PlayerReliveMutation,
+    EnhancementSelectionBlock, EnhancementSelectionReport, GoodsDestroyHandConsumption,
+    PlayerCombatProperties, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
+    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
+    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport,
+    PlayerProgress, PlayerReliveMutation,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1259,6 +1262,108 @@ pub(crate) trait EquipmentDaKongContext: OldClientGoodsCodec {
         player: &mut CPlayer,
         script_path: &[u8],
     );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsDestroyDeleteRequest {
+    pub(crate) player_id: i32,
+    pub(crate) container_extend_id: i32,
+    pub(crate) goods_id: CGuid,
+    pub(crate) requested_amount: u32,
+    pub(crate) write_delete_log: bool,
+}
+
+#[must_use = "общий DeleteGoods report сохраняет mutation и client публикации"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsDestroyDeleteReport {
+    pub(crate) removed_amount: u32,
+    pub(crate) deliveries: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsDestroyAuditLog {
+    pub(crate) reason: u8,
+    pub(crate) player_id: i32,
+    pub(crate) pk_count: u16,
+    pub(crate) money: u32,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) price: u32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) removed_amount: u32,
+    pub(crate) region_id: Option<i32>,
+    pub(crate) tile_x: Result<i32, ShapeCoordinateBlock>,
+    pub(crate) tile_y: Result<i32, ShapeCoordinateBlock>,
+}
+
+pub(crate) trait GoodsDestroyContext {
+    /// Вызывает полный polymorphic `CPlayer::DeleteGoods` для произвольного
+    /// extend ID. Эта граница обязательна, пока wallet/depot/shadow owners не
+    /// сведены в один Rust dispatcher; silent miss возвращает removed `0`.
+    fn delete_goods_for_destroy_open(
+        &mut self,
+        game: &mut CGame,
+        request: GoodsDestroyDeleteRequest,
+    ) -> GoodsDestroyDeleteReport;
+
+    fn publish_goods_destroy_hand_consumption(
+        &mut self,
+        consumption: &GoodsDestroyHandConsumption,
+    ) -> Vec<i32>;
+
+    fn goods_destroy_logging_enabled(&mut self) -> bool;
+
+    /// Дополняет audit принадлежащими process/runtime значениями depot money
+    /// и client IP и отправляет точный World `0x60202`.
+    fn record_goods_destroy_log(&mut self, player: &CPlayer, log: &GoodsDestroyAuditLog);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoodsDestroyOpenOutcome {
+    DeleteRequested,
+    ConfigurationEnabled,
+    ConfigurationDisabled,
+}
+
+#[must_use = "open report сохраняет decode, delete либо configuration wire"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsDestroyOpenReport {
+    pub(crate) player_id: i32,
+    pub(crate) container_extend_id: i32,
+    pub(crate) goods_id: Option<CGuid>,
+    pub(crate) requested_amount: u32,
+    pub(crate) outcome: GoodsDestroyOpenOutcome,
+    pub(crate) deletion: Option<GoodsDestroyDeleteReport>,
+    pub(crate) notice_delivery: Option<i32>,
+    pub(crate) response_delivery: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoodsDestroyConfirmOutcome {
+    ConfigurationDisabled,
+    MissingHandGoods,
+    MissingBaseProperties,
+    OriginalNameRestricted,
+    GoodsTypeRejected,
+    EquipmentStateRestricted,
+    Destroyed,
+}
+
+#[must_use = "confirm report сохраняет guards, container mutation, audit и result wire"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsDestroyConfirmReport {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: GoodsDestroyConfirmOutcome,
+    pub(crate) goods: Option<ShapeIdentity>,
+    pub(crate) type_key: Option<u16>,
+    pub(crate) equipment_state: Option<i32>,
+    pub(crate) requested_amount: u32,
+    pub(crate) removed_amount: u32,
+    pub(crate) consumption: Option<GoodsDestroyHandConsumption>,
+    pub(crate) consumption_deliveries: Vec<i32>,
+    pub(crate) notice_delivery: Option<i32>,
+    pub(crate) audit: Option<GoodsDestroyAuditLog>,
+    pub(crate) audit_dispatched: bool,
+    pub(crate) result_delivery: Option<i32>,
 }
 
 pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {
@@ -8395,6 +8500,182 @@ impl CGame {
 
     pub(crate) const fn goods_destroy_setup_mut(&mut self) -> &mut GoodsDestroySetup {
         &mut self.goods_destroy_setup
+    }
+
+    pub(crate) fn open_goods_destroy<Context: GoodsDestroyContext>(
+        &mut self,
+        player_id: i32,
+        container_extend_id: i32,
+        goods_id: Option<CGuid>,
+        requested_amount: u32,
+        context: &mut Context,
+    ) -> GoodsDestroyOpenReport {
+        let mut report = GoodsDestroyOpenReport {
+            player_id,
+            container_extend_id,
+            goods_id,
+            requested_amount,
+            outcome: GoodsDestroyOpenOutcome::ConfigurationDisabled,
+            deletion: None,
+            notice_delivery: None,
+            response_delivery: None,
+        };
+        if container_extend_id != 0 {
+            report.outcome = GoodsDestroyOpenOutcome::DeleteRequested;
+            report.deletion = goods_id.map(|goods_id| {
+                context.delete_goods_for_destroy_open(
+                    self,
+                    GoodsDestroyDeleteRequest {
+                        player_id,
+                        container_extend_id,
+                        goods_id,
+                        requested_amount,
+                        write_delete_log: false,
+                    },
+                )
+            });
+            return report;
+        }
+
+        let enabled = self.goods_destroy_setup.enabled();
+        report.outcome = if enabled {
+            GoodsDestroyOpenOutcome::ConfigurationEnabled
+        } else {
+            let text = self.get_string_by_id(b"GS1014");
+            report.notice_delivery = Some(
+                colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                    .send_to_player(self.net_server(), player_id),
+            );
+            GoodsDestroyOpenOutcome::ConfigurationDisabled
+        };
+        let mut response = CMessage::new(0x0b_f926);
+        response.base_mut().add_byte(u8::from(enabled));
+        report.response_delivery = Some(response.send_to_player(self.net_server(), player_id));
+        report
+    }
+
+    pub(crate) fn confirm_goods_destroy<Context: GoodsDestroyContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> GoodsDestroyConfirmReport {
+        let mut report = GoodsDestroyConfirmReport {
+            player_id,
+            outcome: GoodsDestroyConfirmOutcome::ConfigurationDisabled,
+            goods: None,
+            type_key: None,
+            equipment_state: None,
+            requested_amount: 0,
+            removed_amount: 0,
+            consumption: None,
+            consumption_deliveries: Vec::new(),
+            notice_delivery: None,
+            audit: None,
+            audit_dispatched: false,
+            result_delivery: None,
+        };
+        if !self.goods_destroy_setup.enabled() {
+            return report;
+        }
+
+        let Some(hand_goods) = self
+            .find_player(player_id)
+            .and_then(CPlayer::ci_qing_hand_goods)
+        else {
+            report.outcome = GoodsDestroyConfirmOutcome::MissingHandGoods;
+            return report;
+        };
+        let identity = hand_goods.identity();
+        report.goods = Some(identity);
+        let Some(properties) = self
+            .goods_factory
+            .query_goods_base_properties(hand_goods.base_properties_index())
+        else {
+            report.outcome = GoodsDestroyConfirmOutcome::MissingBaseProperties;
+            return report;
+        };
+        if self
+            .goods_destroy_setup
+            .original_names()
+            .iter()
+            .any(|name| name.as_slice() == properties.original_name())
+        {
+            report.outcome = GoodsDestroyConfirmOutcome::OriginalNameRestricted;
+            let text = self.get_string_by_id(b"GS1015");
+            report.notice_delivery = Some(
+                colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                    .send_to_player(self.net_server(), player_id),
+            );
+            return report;
+        }
+        let type_key = if properties.goods_type() == GOODS_TYPE_EQUIPMENT {
+            properties.equip_place().wrapping_add(1) as u16
+        } else {
+            properties.goods_type() as u16
+        };
+        report.type_key = Some(type_key);
+        if !self.goods_destroy_setup.goods_types().contains(&type_key) {
+            report.outcome = GoodsDestroyConfirmOutcome::GoodsTypeRejected;
+            let text = self.get_string_by_id(b"GS1014");
+            report.notice_delivery = Some(
+                colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                    .send_to_player(self.net_server(), player_id),
+            );
+            return report;
+        }
+        let equipment_state =
+            hand_goods.addon_property_value(&self.goods_factory, GAP_EQUIP_STATE, 1);
+        report.equipment_state = Some(equipment_state);
+        if matches!(equipment_state, 1 | 2) {
+            report.outcome = GoodsDestroyConfirmOutcome::EquipmentStateRestricted;
+            let text = self.get_string_by_id(b"GSN1014");
+            report.notice_delivery = Some(
+                colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                    .send_to_player(self.net_server(), player_id),
+            );
+            return report;
+        }
+
+        let price = hand_goods.price();
+        let name = hand_goods.name().to_vec();
+        let amount = hand_goods.amount();
+        report.requested_amount = amount;
+        let consumption = self
+            .find_player_mut(player_id)
+            .and_then(|player| player.destroy_hand_goods(identity.ex_id, amount));
+        if let Some(consumption) = consumption {
+            report.removed_amount = consumption.removed_amount;
+            report.consumption_deliveries =
+                context.publish_goods_destroy_hand_consumption(&consumption);
+            report.consumption = Some(consumption);
+        }
+
+        if report.removed_amount != 0 && context.goods_destroy_logging_enabled() {
+            let player = self
+                .find_player(player_id)
+                .expect("player с hand goods остаётся в CGame после synchronous удаления");
+            let audit = GoodsDestroyAuditLog {
+                reason: 0x15,
+                player_id,
+                pk_count: player.pk_count(),
+                money: player.money(),
+                goods: identity,
+                price,
+                name,
+                removed_amount: report.removed_amount,
+                region_id: player.server_region_id(),
+                tile_x: player.shape().get_tile_x(),
+                tile_y: player.shape().get_tile_y(),
+            };
+            context.record_goods_destroy_log(player, &audit);
+            report.audit = Some(audit);
+            report.audit_dispatched = true;
+        }
+        let mut response = CMessage::new(0x0b_f927);
+        response.add_ulong(report.removed_amount);
+        report.result_delivery = Some(response.send_to_player(self.net_server(), player_id));
+        report.outcome = GoodsDestroyConfirmOutcome::Destroyed;
+        report
     }
 
     pub(crate) const fn change_body_conf_mut(&mut self) -> &mut CChangeBodyConf {

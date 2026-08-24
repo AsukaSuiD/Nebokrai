@@ -1018,6 +1018,17 @@ pub(crate) struct CiQingHandConsumption {
     pub(crate) removal: Option<AmountLimitGoodsRemoved>,
 }
 
+#[must_use = "уничтожение hand goods содержит ownership и listener-эффекты удаления"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsDestroyHandConsumption {
+    pub(crate) player_id: i32,
+    pub(crate) goods: super::shape::ShapeIdentity,
+    pub(crate) previous_amount: u32,
+    pub(crate) removed_amount: u32,
+    pub(crate) remaining_amount: u32,
+    pub(crate) removal: Option<AmountLimitGoodsRemoved>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EnhancementSelectionBlock {
     MissingGoods,
@@ -1769,6 +1780,35 @@ impl CPlayer {
         self.hand.get_goods(0)
     }
 
+    pub(crate) fn destroy_hand_goods(
+        &mut self,
+        goods_id: CGuid,
+        requested: u32,
+    ) -> Option<GoodsDestroyHandConsumption> {
+        if requested == 0 {
+            return None;
+        }
+        let goods = self.hand.find(goods_id)?;
+        let identity = goods.identity();
+        let previous_amount = goods.amount();
+        let removed_amount = previous_amount.min(requested);
+        let remaining_amount = previous_amount.wrapping_sub(removed_amount);
+        let removal = if remaining_amount == 0 {
+            self.hand.remove_goods(goods_id)
+        } else {
+            self.hand.find_mut(goods_id)?.set_amount(remaining_amount);
+            None
+        };
+        Some(GoodsDestroyHandConsumption {
+            player_id: self.player_id(),
+            goods: identity,
+            previous_amount,
+            removed_amount,
+            remaining_amount,
+            removal,
+        })
+    }
+
     pub(crate) fn remove_ci_qing_hand_goods(&mut self) -> Option<CiQingHandConsumption> {
         let goods = self.hand.get_goods(0)?;
         let identity = goods.identity();
@@ -1878,6 +1918,10 @@ impl CPlayer {
 
     pub(crate) const fn money(&self) -> u32 {
         self.money
+    }
+
+    pub(crate) const fn pk_count(&self) -> u16 {
+        self.base_properties.pk_count
     }
 
     pub(crate) const fn set_money_snapshot(&mut self, money: u32) {

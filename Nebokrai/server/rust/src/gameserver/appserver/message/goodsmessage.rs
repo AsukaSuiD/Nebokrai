@@ -41,6 +41,9 @@
 //! сохраняет last-equipment до ordered End/progress/Exit и итогового `0xBF918`;
 //! остальные routes выполняют создание отверстия, вставку камней, смену цвета,
 //! preview и уничтожение камня с общими addon, расходными, audit и script effects.
+//! Парные `0x8FC1C/0x8FC1D` замыкают уничтожение goods: query/delete route,
+//! global restrictions, hand ownership, equipment-state guard, World audit и
+//! адресные `0xBF926/0xBF927` проходят одним вертикальным сценарием.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -67,12 +70,14 @@ use crate::gameserver::gameserver::game::{
     CGame, CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
     CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport,
     CiQingOtherPersonTarget, CiQingSetupQueryReport, EquipmentComposeContext,
-    EquipmentDaKongContext,
+    EquipmentDaKongContext, GoodsDestroyConfirmReport, GoodsDestroyContext, GoodsDestroyOpenReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
 
 const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
+const OPEN_GOODS_DESTROY: u32 = 0x0008_fc1c;
+const CONFIRM_GOODS_DESTROY: u32 = 0x0008_fc1d;
 const CLOSE_EQUIPMENT_DA_KONG: u32 = 0x0008_fc1e;
 const EQUIPMENT_DA_KONG: u32 = 0x0008_fc1f;
 const EQUIPMENT_ENCHASE_GEM: u32 = 0x0008_fc20;
@@ -107,6 +112,7 @@ pub(crate) trait GameGoodsMessageRuntime:
     + CiQingComposeContext
     + EquipmentComposeContext
     + EquipmentDaKongContext
+    + GoodsDestroyContext
 {
     fn run_battle_fairy_reset_script(
         &mut self,
@@ -203,6 +209,8 @@ pub(crate) enum GameGoodsMessageOutcome {
     EquipmentCompose(EquipmentComposeReport),
     EquipmentDaKongClose(EquipmentDaKongCloseReport),
     EquipmentDaKong(EquipmentDaKongReport),
+    GoodsDestroyOpen(GoodsDestroyOpenReport),
+    GoodsDestroyConfirm(GoodsDestroyConfirmReport),
     GoodsSessionEnd(GoodsSessionEndReport),
 }
 
@@ -224,7 +232,9 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
-        CLOSE_EQUIPMENT_DA_KONG
+        OPEN_GOODS_DESTROY
+            | CONFIRM_GOODS_DESTROY
+            | CLOSE_EQUIPMENT_DA_KONG
             | EQUIPMENT_DA_KONG
             | EQUIPMENT_ENCHASE_GEM
             | EQUIPMENT_CHANGE_ROLE_COLOR
@@ -272,6 +282,40 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             .ok_or(GameGoodsMessageError::MissingField(field))
     };
     let outcome = match message_type {
+        OPEN_GOODS_DESTROY => {
+            let container_extend_id = match read_long(message, "goods destroy container extend ID")
+            {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let (goods_id, requested_amount) = if container_extend_id == 0 {
+                (None, 0)
+            } else {
+                let goods_id = match message.base_mut().get_guid() {
+                    Some(value) => value,
+                    None => {
+                        return Some(Err(GameGoodsMessageError::MissingField(
+                            "goods destroy goods GUID",
+                        )));
+                    }
+                };
+                let requested_amount = match read_long(message, "goods destroy amount") {
+                    Ok(value) => value as u32,
+                    Err(error) => return Some(Err(error)),
+                };
+                (Some(goods_id), requested_amount)
+            };
+            GameGoodsMessageOutcome::GoodsDestroyOpen(game.open_goods_destroy(
+                player_id,
+                container_extend_id,
+                goods_id,
+                requested_amount,
+                runtime,
+            ))
+        }
+        CONFIRM_GOODS_DESTROY => GameGoodsMessageOutcome::GoodsDestroyConfirm(
+            game.confirm_goods_destroy(player_id, runtime),
+        ),
         CLOSE_EQUIPMENT_DA_KONG => {
             let session_id = match read_long(message, "equipment DaKong close session ID") {
                 Ok(value) => value,
