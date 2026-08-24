@@ -1478,6 +1478,7 @@ pub(crate) struct CPlayer {
     equipment: CEquipmentContainer,
     auction_goods: CVolumeLimitGoodsContainer,
     auction_wallet: CWallet,
+    auction_open: bool,
     last_auction_option_tick_ms: u32,
     ci_qing: CVolumeLimitGoodsContainer,
     ci_qing_compose: CVolumeLimitGoodsContainer,
@@ -1584,6 +1585,7 @@ impl CPlayer {
             equipment: CEquipmentContainer::new(),
             auction_goods,
             auction_wallet: CWallet::new(),
+            auction_open: false,
             last_auction_option_tick_ms: 0,
             ci_qing,
             ci_qing_compose,
@@ -3228,6 +3230,22 @@ impl CPlayer {
 
     pub(crate) const fn auction_goods_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
         &mut self.auction_goods
+    }
+
+    pub(crate) const fn set_auction_open(&mut self, open: bool) {
+        self.auction_open = open;
+    }
+
+    /// State/container часть exact `TellClientScale`; закрытый аукцион не
+    /// создаёт client-effect, открытый сохраняет container traversal order.
+    pub(crate) fn auction_scale_goods_ids(&self) -> Option<Vec<CGuid>> {
+        self.auction_open.then(|| {
+            self.auction_goods
+                .base()
+                .traversing_goods()
+                .map(|goods| goods.identity().ex_id)
+                .collect()
+        })
     }
 
     /// Exact `ReFlushSelfGoods`: strict wrapping `last + 5000 < first sample`,
@@ -7822,20 +7840,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::OpenAuction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14788
-// RVA: 0x000367B0
-// ADDRESS: 004367b0
-// PROTOTYPE: bool __thiscall OpenAuction(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::CheckAuctionMoneyMove
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -8256,34 +8260,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::AddByteAuctionSelfToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13708
-// RVA: 0x0003EF60
-// ADDRESS: 0043ef60
-// PROTOTYPE: void __thiscall AddByteAuctionSelfToClient(CMessage * param_1, CMessage * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddByteAuctionAllToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13764
-// RVA: 0x0003F190
-// ADDRESS: 0043f190
-// PROTOTYPE: void __thiscall AddByteAuctionAllToClient(CMessage * param_1, CMessage * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::SendBackAucNode
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -8292,33 +8268,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0003F3D0
 // ADDRESS: 0043f3d0
 // PROTOTYPE: void __thiscall SendBackAucNode(CGoodsNode * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::TellClientScale
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14696
-// RVA: 0x0003F500
-// ADDRESS: 0043f500
-// PROTOTYPE: void __thiscall TellClientScale(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// FUNCTION: CPlayer::ModifyAuctionSpace
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14977
-// RVA: 0x0003F7A0
-// ADDRESS: 0043f7a0
-// PROTOTYPE: void __thiscall ModifyAuctionSpace(long param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

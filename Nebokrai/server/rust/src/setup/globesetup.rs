@@ -51,6 +51,9 @@ const AUCTION_ENABLED_OFFSET: usize = 0xC87;
 const AUCTION_FEE_MAXIMUM_OFFSET: usize = 0xC98;
 const AUCTION_FEE_MINIMUM_OFFSET: usize = 0xCA0;
 const AUCTION_FACTOR_C_OFFSET: usize = 0xCB0;
+const AUCTION_OPEN_VALUE_OFFSETS: [usize; 12] = [
+    0xC8C, 0xC90, 0xC94, 0xC98, 0xC9C, 0xCA0, 0xCA4, 0xCB0, 0xCB4, 0xCB8, 0xCBC, 0xCC0,
+];
 const JJC_ENABLED_OFFSET: usize = 0xCD4;
 const JJC_REGION_MIN_OFFSET: usize = 0xCD8;
 const JJC_REGION_MAX_OFFSET: usize = 0xCDC;
@@ -528,6 +531,12 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn auction_factor_c(&self) -> f32 {
         self.read_f32(AUCTION_FACTOR_C_OFFSET)
+    }
+
+    /// Exact `CPlayer::OpenAuction` projection: float-поля передаются клиенту
+    /// после legacy truncation к `ulong` и в исходном ABI-порядке.
+    pub(crate) fn auction_open_values(&self) -> [u32; 12] {
+        AUCTION_OPEN_VALUE_OFFSETS.map(|offset| self.read_f32(offset) as u32)
     }
 
     pub(crate) fn base_max_rp(&self, occupation: u8, level: u8) -> u16 {

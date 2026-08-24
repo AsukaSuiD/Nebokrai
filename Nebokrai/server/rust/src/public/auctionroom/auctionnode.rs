@@ -556,8 +556,16 @@ impl CGoodsNode {
     }
 
     /// Возвращает ticket вторичного временного индекса.
-    pub(super) const fn add_ticket(&self) -> u32 {
+    pub(crate) const fn add_ticket(&self) -> u32 {
         self.add_ticket
+    }
+
+    pub(crate) const fn money_type(&self) -> u8 {
+        self.money_type
+    }
+
+    pub(crate) fn seller_money(&self) -> u32 {
+        self.auction_info.money_seller()
     }
 
     /// Возвращает исходный unsigned owner id без изменения битов.
@@ -620,11 +628,6 @@ impl CGoodsNode {
             time_buyer: self.auction_info.time_buyer(),
             buyer_id: self.auction_info.buyer_id(),
         }
-    }
-
-    /// Возвращает старый byte money type.
-    pub(super) const fn money_type(&self) -> u8 {
-        self.money_type
     }
 
     /// Возвращает тип товара либо неинициализированную старую границу.

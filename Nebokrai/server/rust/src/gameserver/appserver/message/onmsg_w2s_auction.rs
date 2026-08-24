@@ -2,11 +2,13 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/onmsg_w2s_auction.cpp` подтверждают
-//! selectors `0x80401..0x80403`, `0x80409..0x80410`:
+//! selectors `0x80401..0x80403`, `0x80405`, `0x80407..0x80410`:
 //! добавление временного `CGoodsNode` в Game-specific owner map, reconciliation
 //! с World GUID-set, catalog/log/client relay, auction-state и полную YuanBao
 //! container/client mutation, а stall-result либо сообщает отказ, либо
-//! публикует `0x90201` в реальный локальный Game FIFO. GameServer primary map
+//! публикует `0x90201` в реальный локальный Game FIFO. Self/all lists сохраняют
+//! signed count/marker quirks, переводят nested goods в old-client wire и
+//! после self-list публикуют открытый player-container scale. GameServer primary map
 //! хранит `GUID -> owner id`, а не MiscServer-owned node; это исключает
 //! исходный stack-pointer lifetime без изменения наблюдаемого результата.
 //! Обрезанный payload заменяет небезопасное чтение за буфером typed error-ом
@@ -15,6 +17,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::gameserver::appserver::goods::cgoods::GoodsDecodeError;
 use crate::gameserver::appserver::message::unibillmessage::IncrementShopBillingContext;
 use crate::gameserver::appserver::player::{AuctionSelfGoodsRefresh, PlayerYuanBaoChange};
 use crate::gameserver::gameserver::game::{
@@ -30,6 +33,8 @@ const WORLD_AUCTION_ADD_ITEM_MESSAGE: i32 = 0x0008_0401;
 const WORLD_AUCTION_UNITY_MESSAGE: i32 = 0x0008_0402;
 const WORLD_AUCTION_STATE_MESSAGE: i32 = 0x0008_0403;
 const WORLD_AUCTION_REFRESH_SELF_GOODS_MESSAGE: i32 = 0x0008_0405;
+const WORLD_AUCTION_SELF_LIST_MESSAGE: i32 = 0x0008_0407;
+const WORLD_AUCTION_ALL_LIST_MESSAGE: i32 = 0x0008_0408;
 const WORLD_AUCTION_DIRECT_RELAY_MESSAGE: i32 = 0x0008_0409;
 const WORLD_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x0008_040a;
 const WORLD_AUCTION_LOG_NOTICE_MESSAGE: i32 = 0x0008_040b;
@@ -39,9 +44,12 @@ const WORLD_AUCTION_RECOLLECT_STALLS_MESSAGE: i32 = 0x0008_040e;
 const WORLD_AUCTION_BROADCAST_MESSAGE: i32 = 0x0008_040f;
 const WORLD_AUCTION_YUAN_BAO_MESSAGE: i32 = 0x0008_0410;
 const CLIENT_AUCTION_GOODS_REMOVED_MESSAGE: i32 = 0x000c_0702;
+const CLIENT_AUCTION_ALL_LIST_MESSAGE: i32 = 0x000c_0703;
+const CLIENT_AUCTION_SELF_LIST_MESSAGE: i32 = 0x000c_0704;
 const CLIENT_AUCTION_DIRECT_RELAY_MESSAGE: i32 = 0x000c_0707;
 const CLIENT_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x000c_0708;
 const CLIENT_AUCTION_CONDITION_MESSAGE: i32 = 0x000c_070a;
+const CLIENT_AUCTION_SCALE_MESSAGE: i32 = 0x000c_0709;
 const CLIENT_AUCTION_BROADCAST_MESSAGE: i32 = 0x000c_010b;
 const LOCAL_PLAYER_SHOP_OPEN_MESSAGE: i32 = 0x0009_0201;
 const GAME_AUCTION_REFRESH_SELF_GOODS_MESSAGE: i32 = 0x0006_080a;
@@ -84,6 +92,17 @@ pub(crate) enum WorldAuctionMessageError {
     MissingStallPlayerId,
     MissingStallResult,
     MissingRefreshSelfGoodsPlayerId,
+    MissingListPlayerId {
+        selector: i32,
+    },
+    MissingListCount {
+        field: &'static str,
+    },
+    MissingListMarker {
+        record_index: u32,
+    },
+    ListNodeDecode(GoodsNodeUnserializeError),
+    ListGoodsDecode(GoodsDecodeError),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -149,6 +168,15 @@ pub(crate) enum WorldAuctionMessageReport {
         player_id: i32,
         refresh: Option<AuctionSelfGoodsRefresh>,
         delivery: Option<Result<i32, SendMessageError>>,
+    },
+    AuctionList {
+        selector: i32,
+        player_id: i32,
+        player_found: bool,
+        declared_records: u32,
+        emitted_records: u32,
+        delivery: Option<i32>,
+        scale_delivery: Option<i32>,
     },
 }
 
@@ -275,6 +303,133 @@ where
                 player_id,
                 refresh,
                 delivery,
+            }))
+        }
+        selector @ (WORLD_AUCTION_SELF_LIST_MESSAGE | WORLD_AUCTION_ALL_LIST_MESSAGE) => {
+            let Some(player_id) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingListPlayerId {
+                    selector,
+                }));
+            };
+            if game.find_player(player_id).is_none() {
+                return Some(Ok(WorldAuctionMessageReport::AuctionList {
+                    selector,
+                    player_id,
+                    player_found: false,
+                    declared_records: 0,
+                    emitted_records: 0,
+                    delivery: None,
+                    scale_delivery: None,
+                }));
+            }
+
+            let Some(first_count) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingListCount {
+                    field: "declared records",
+                }));
+            };
+            let declared_records = first_count as u32;
+            let record_count = if selector == WORLD_AUCTION_ALL_LIST_MESSAGE {
+                let Some(available_count) = message.base_mut().get_long() else {
+                    return Some(Err(WorldAuctionMessageError::MissingListCount {
+                        field: "available records",
+                    }));
+                };
+                if available_count < first_count {
+                    available_count
+                } else {
+                    first_count
+                }
+            } else {
+                first_count
+            };
+
+            let client_selector = if selector == WORLD_AUCTION_SELF_LIST_MESSAGE {
+                CLIENT_AUCTION_SELF_LIST_MESSAGE
+            } else {
+                CLIENT_AUCTION_ALL_LIST_MESSAGE
+            };
+            let mut response = CMessage::new(client_selector);
+            response.base_mut().add_ulong(record_count as u32);
+            let mut emitted_records = 0u32;
+            let mut record_index = 0i32;
+            let mut self_records_remaining = record_count as u32;
+            while if selector == WORLD_AUCTION_SELF_LIST_MESSAGE {
+                self_records_remaining != 0
+            } else {
+                record_index < record_count
+            } {
+                let Some(marker) = message.base_mut().get_long() else {
+                    return Some(Err(WorldAuctionMessageError::MissingListMarker {
+                        record_index: record_index as u32,
+                    }));
+                };
+                response.base_mut().add_ulong(marker as u32);
+                if marker != 1 {
+                    if selector == WORLD_AUCTION_ALL_LIST_MESSAGE {
+                        break;
+                    }
+                    record_index = record_index.wrapping_add(1);
+                    self_records_remaining = self_records_remaining.wrapping_sub(1);
+                    continue;
+                }
+
+                let mut node = CGoodsNode::new();
+                let decode = {
+                    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                    node.unserialize(source, cursor)
+                };
+                if let Err(error) = decode {
+                    return Some(Err(WorldAuctionMessageError::ListNodeDecode(error)));
+                }
+                let remaining = node
+                    .add_ticket()
+                    .saturating_sub(runtime.auction_wall_time_seconds());
+                let old_client_payload = if node.goods_bytes().is_empty() {
+                    Vec::new()
+                } else {
+                    let goods = match game.decode_auction_goods(node.goods_bytes()) {
+                        Ok(goods) => goods,
+                        Err(error) => {
+                            return Some(Err(WorldAuctionMessageError::ListGoodsDecode(error)));
+                        }
+                    };
+                    runtime.encode_goods_for_old_client(&goods)
+                };
+                response.base_mut().add_ulong(remaining);
+                response.base_mut().add_ulong(u32::from(node.money_type()));
+                response.base_mut().add_ulong(node.seller_money());
+                response
+                    .base_mut()
+                    .add_ulong(old_client_payload.len() as u32);
+                response.base_mut().add(&old_client_payload);
+                emitted_records = emitted_records.wrapping_add(1);
+                record_index = record_index.wrapping_add(1);
+                self_records_remaining = self_records_remaining.wrapping_sub(1);
+            }
+
+            let delivery = Some(response.send_to_player(game.net_server(), player_id));
+            let scale_delivery = if selector == WORLD_AUCTION_SELF_LIST_MESSAGE {
+                game.find_player(player_id).and_then(|player| {
+                    let goods_ids = player.auction_scale_goods_ids()?;
+                    let mut scale = CMessage::new(CLIENT_AUCTION_SCALE_MESSAGE);
+                    scale.base_mut().add_ulong(goods_ids.len() as u32);
+                    for goods_id in goods_ids {
+                        scale.base_mut().add_guid(goods_id);
+                    }
+                    Some(scale.send_to_player(game.net_server(), player_id))
+                })
+            } else {
+                None
+            };
+            Some(Ok(WorldAuctionMessageReport::AuctionList {
+                selector,
+                player_id,
+                player_found: true,
+                declared_records,
+                emitted_records,
+                delivery,
+                scale_delivery,
             }))
         }
         selector @ (WORLD_AUCTION_DIRECT_RELAY_MESSAGE | WORLD_AUCTION_PLAYER_RELAY_MESSAGE) => {

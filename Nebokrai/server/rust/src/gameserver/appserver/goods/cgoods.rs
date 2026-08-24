@@ -13,10 +13,12 @@
 //! Единственный legacy null-deref в `CanStacked` при потерянном registry key
 //! выражен typed block-ом, а не тихим `false`.
 //!
-//! Constructor/release, остальная durability/time, полный codec и mutation
+//! Декодирование exact persistence-wire теперь включает `CShape`, legacy
+//! description buffer, ordered addon/value storage и обе fairy-проекции;
+//! `CGoodsFactory` и exp-config передаются явно вместо process-global owners.
+//! Constructor/release, остальная durability/time, обратный codec и mutation
 //! gameplay ниже остаются RAW: достигнутый core не выдаётся за весь 0xCC-byte
-//! legacy object. `CGoodsFactory` передаётся явно вместо исходного
-//! process-global registry.
+//! legacy object.
 
 use super::cbattlefairyproperty::{
     BattleFairyExpBlock, BattleFairyExpReport, BattleFairyPlayerFacts, CBattleFairyProperty,
@@ -38,10 +40,36 @@ use super::cgoodsbaseproperties::{
 };
 use super::cgoodsfactory::CGoodsFactory;
 use super::fairyproperties::{CFairyProperties, FairyExpBlock, FairyExpReport, FairyExpRuntime};
-use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::shape::{CShape, ShapeDecodeError, ShapeIdentity};
 use crate::public::guid::CGuid;
 
 const GOODS_OBJECT_TYPE: i32 = 700;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoodsDecodeError {
+    Shape(ShapeDecodeError),
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    UnterminatedDescription {
+        offset: usize,
+        available: usize,
+    },
+    CollectionAllocationFailed {
+        field: &'static str,
+        count: u32,
+    },
+    MissingBaseProperties(GoodsBasePropertyBlock),
+}
+
+impl From<ShapeDecodeError> for GoodsDecodeError {
+    fn from(value: ShapeDecodeError) -> Self {
+        Self::Shape(value)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsBasePropertyBlock {
@@ -187,6 +215,87 @@ impl CGoods {
 
     pub(crate) fn push_addon_property(&mut self, property: GoodsAddonProperty) {
         self.addon_properties.push(property);
+    }
+
+    /// Exact `CGoods::Unserialize`: release, shape/scalar/string/addon wire и
+    /// обе derived fairy-проекции выполняются в исходном порядке.
+    pub(crate) fn unserialize<OrdinaryThreshold, BattleThreshold>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        include_child: bool,
+        factory: &CGoodsFactory,
+        ordinary_threshold: OrdinaryThreshold,
+        battle_threshold: BattleThreshold,
+    ) -> Result<(), GoodsDecodeError>
+    where
+        OrdinaryThreshold: FnMut(u32, u32) -> u32,
+        BattleThreshold: FnMut(u32, u32) -> u32,
+    {
+        self.base_properties_index = 0;
+        self.amount = 0;
+        self.description.clear();
+        self.addon_properties.clear();
+        self.fairy_properties = None;
+        self.battle_fairy_property = None;
+
+        self.shape
+            .decode_from_byte_array(source, cursor, include_child)?;
+        self.base_properties_index =
+            read_goods_wire_u32(source, cursor, "m_dwBasePropertiesIndex")?;
+        self.amount = read_goods_wire_u32(source, cursor, "m_dwAmount")?;
+        self.price = read_goods_wire_u32(source, cursor, "m_dwPrice")?;
+        self.description = read_goods_wire_description(source, cursor)?;
+
+        let property_count = read_goods_wire_u32(source, cursor, "m_vAddonProperties count")?;
+        self.addon_properties
+            .try_reserve_exact(property_count as usize)
+            .map_err(|_| GoodsDecodeError::CollectionAllocationFailed {
+                field: "m_vAddonProperties",
+                count: property_count,
+            })?;
+        for _ in 0..property_count {
+            let property_type = read_goods_wire_i32(source, cursor, "tagAddonProperty.gapType")?;
+            let is_enabled = read_goods_wire_i32(source, cursor, "tagAddonProperty.bIsEnabled")?;
+            let is_implicit_attribute =
+                read_goods_wire_i32(source, cursor, "tagAddonProperty.bIsImplicitAttribute")?;
+            let value_count =
+                read_goods_wire_u32(source, cursor, "tagAddonProperty.vValues count")?;
+            let mut values = Vec::new();
+            values
+                .try_reserve_exact(value_count as usize)
+                .map_err(|_| GoodsDecodeError::CollectionAllocationFailed {
+                    field: "tagAddonProperty.vValues",
+                    count: value_count,
+                })?;
+            for _ in 0..value_count {
+                values.push(GoodsAddonPropertyValue {
+                    id: read_goods_wire_u32(source, cursor, "tagAddonPropertyValue.dwId")?,
+                    base_value: read_goods_wire_i32(
+                        source,
+                        cursor,
+                        "tagAddonPropertyValue.lBaseValue",
+                    )?,
+                    modifier: read_goods_wire_i32(
+                        source,
+                        cursor,
+                        "tagAddonPropertyValue.lModifier",
+                    )?,
+                });
+            }
+            self.addon_properties.push(GoodsAddonProperty {
+                property_type,
+                is_enabled,
+                is_implicit_attribute,
+                values,
+            });
+        }
+
+        self.load_fairy_properties(factory, ordinary_threshold)
+            .map_err(GoodsDecodeError::MissingBaseProperties)?;
+        self.load_battle_fairy_property(factory, battle_threshold)
+            .map_err(GoodsDecodeError::MissingBaseProperties)?;
+        Ok(())
     }
 
     pub(crate) const fn fairy_properties(&self) -> Option<&CFairyProperties> {
@@ -890,6 +999,73 @@ impl CGoods {
     }
 }
 
+fn read_goods_wire_description(
+    source: &[u8],
+    cursor: &mut usize,
+) -> Result<Vec<u8>, GoodsDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let searchable = available.min(0x404);
+    let Some(bytes) = source.get(offset..offset.saturating_add(searchable)) else {
+        return Err(GoodsDecodeError::UnexpectedEnd {
+            field: "m_strDescribe",
+            offset,
+            needed: 1,
+            available,
+        });
+    };
+    let Some(length) = bytes.iter().position(|byte| *byte == 0) else {
+        return Err(GoodsDecodeError::UnterminatedDescription { offset, available });
+    };
+    *cursor = offset + length + 1;
+    Ok(bytes[..length].to_vec())
+}
+
+fn read_goods_wire_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, GoodsDecodeError> {
+    Ok(i32::from_le_bytes(read_goods_wire(source, cursor, field)?))
+}
+
+fn read_goods_wire_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u32, GoodsDecodeError> {
+    Ok(u32::from_le_bytes(read_goods_wire(source, cursor, field)?))
+}
+
+fn read_goods_wire<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<[u8; N], GoodsDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(N) else {
+        return Err(GoodsDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(GoodsDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(bytes
+        .try_into()
+        .expect("slice содержит ровно запрошенное число байт"))
+}
+
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
@@ -1452,20 +1628,6 @@ impl CGoods {
 // RVA: 0x000CC610
 // ADDRESS: 004cc610
 // PROTOTYPE: int __thiscall SetFuMoProperty(GOODS_ADDON_PROPERTIES param_1, int param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:559
-// RVA: 0x000CC7F0
-// ADDRESS: 004cc7f0
-// PROTOTYPE: int __thiscall Unserialize(uchar * param_1, long * param_2, int param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -382,7 +382,7 @@ use crate::gameserver::appserver::cs2ccontainerobjectmove::{
     CS2CContainerObjectMove, ContainerObjectMoveOperation,
 };
 use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyProperty;
-use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_EQUIP_STATE, GOODS_TYPE_EQUIPMENT,
 };
@@ -422,6 +422,7 @@ use crate::gameserver::appserver::message::incrementshopmessage::{
 use crate::gameserver::appserver::message::logmessage::{
     GameLogMessageError, GameLogMessageReport, dispatch_game_log_message,
 };
+use crate::gameserver::appserver::message::onmsg_c2s_auction::dispatch_client_auction_lifecycle;
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
     WorldAuctionMessageError, WorldAuctionMessageReport, WorldAuctionRuntime,
     dispatch_world_auction_message,
@@ -3416,6 +3417,26 @@ impl CGame {
 
     pub(crate) const fn goods_factory_mut(&mut self) -> &mut CGoodsFactory {
         &mut self.goods_factory
+    }
+
+    pub(crate) fn decode_auction_goods(
+        &self,
+        source: &[u8],
+    ) -> Result<CGoods, GoodsDecodeError> {
+        let mut goods = CGoods::default();
+        let mut cursor = 0;
+        goods.unserialize(
+            source,
+            &mut cursor,
+            true,
+            &self.goods_factory,
+            |equip_level, level| self.fairy_exp_conf.dw_exp_up(equip_level, level),
+            |equip_level, level| {
+                self.battle_fairy_exp_config
+                    .dw_exp_up(equip_level, level)
+            },
+        )?;
+        Ok(goods)
     }
 
     pub(crate) fn select_player_enhancement_goods(
@@ -14702,6 +14723,7 @@ impl CGame {
             dispatch_server_message(message, self, runtime, |runtime| runtime.get_tick_ms())
         {
             server_messages.push(report);
+        } else if dispatch_client_auction_lifecycle(message, self).is_some() {
         } else if let Some(report) =
             dispatch_world_auction_message(message, self, runtime, |runtime| runtime.get_tick_ms())
         {

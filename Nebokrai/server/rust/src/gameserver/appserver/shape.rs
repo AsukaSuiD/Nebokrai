@@ -33,8 +33,10 @@
 //! `InitMoveCheckCellList` RVA `0x0005BE60` материализован как process-owned
 //! registry: точные 96 offsets распределены по трём figure и восьми direction,
 //! insertion-order и повторный append сохранены, `Vec` заменяет MSVC list.
+//! Persistence decode `0x0005B280/0x0005BC30` сохраняет wire-порядок и exact
+//! quirk: сериализованная position читается, но live `m_lPos` становится нулём.
 
-use super::baseobject::CBaseObject;
+use super::baseobject::{BaseObjectDecodeError, CBaseObject};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::serverregion::CServerRegion;
 use crate::public::guid::CGuid;
@@ -280,6 +282,23 @@ pub(crate) enum ShapeCoordinateBlock {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShapeDecodeError {
+    BaseObject(BaseObjectDecodeError),
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+}
+
+impl From<BaseObjectDecodeError> for ShapeDecodeError {
+    fn from(error: BaseObjectDecodeError) -> Self {
+        Self::BaseObject(error)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ShapeDirectionBlock {
     pub(crate) direction: i32,
 }
@@ -448,6 +467,35 @@ impl CShape {
 
     pub(crate) const fn set_action(&mut self, action: u16) {
         self.action = action;
+    }
+
+    /// Exact `DecordFromByteArray + DecordShapeFromByteArray`; wire position
+    /// читается, но live `m_lPos` намеренно сбрасывается в ноль.
+    pub(crate) fn decode_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        include_child: bool,
+    ) -> Result<(), ShapeDecodeError> {
+        self.base_object
+            .decord_from_byte_array(source, cursor, include_child)?;
+        let marker = read_shape_wire::<1>(source, cursor, "m_guExID marker")?[0];
+        let ex_id = if marker == 0 {
+            CGuid::GUID_INVALID
+        } else {
+            CGuid::from_legacy_bytes(read_shape_wire::<16>(source, cursor, "m_guExID")?)
+        };
+        self.base_object.set_ex_id(ex_id);
+        self.region_id = i32::from_le_bytes(read_shape_wire(source, cursor, "m_lRegionID")?);
+        self.pos_x_bits = u32::from_le_bytes(read_shape_wire(source, cursor, "m_fPosX")?);
+        self.pos_y_bits = u32::from_le_bytes(read_shape_wire(source, cursor, "m_fPosY")?);
+        self.direction = i32::from_le_bytes(read_shape_wire(source, cursor, "m_lDir")?);
+        let _serialized_position = i32::from_le_bytes(read_shape_wire(source, cursor, "m_lPos")?);
+        self.position = 0;
+        self.speed_bits = u32::from_le_bytes(read_shape_wire(source, cursor, "m_fSpeed")?);
+        self.state = u16::from_le_bytes(read_shape_wire(source, cursor, "m_wState")?);
+        self.action = u16::from_le_bytes(read_shape_wire(source, cursor, "m_wAction")?);
+        Ok(())
     }
 
     pub(crate) const fn area_index(&self) -> Option<usize> {
@@ -673,6 +721,35 @@ fn transformed_direction(direction: i32, table: &[i32; 8]) -> Result<i32, ShapeD
         .ok_or(ShapeDirectionBlock { direction })
 }
 
+fn read_shape_wire<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<[u8; N], ShapeDecodeError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(N) else {
+        return Err(ShapeDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(ShapeDecodeError::UnexpectedEnd {
+            field,
+            offset,
+            needed: N,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(bytes
+        .try_into()
+        .expect("slice содержит ровно запрошенное число байт"))
+}
+
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
@@ -755,20 +832,6 @@ fn transformed_direction(direction: i32, table: &[i32; 8]) -> Result<i32, ShapeD
 // RVA: 0x0005B250
 // ADDRESS: 0045b250
 // PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CShape::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\shape.cpp:279
-// RVA: 0x0005B280
-// ADDRESS: 0045b280
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -871,20 +934,6 @@ fn transformed_direction(direction: i32, table: &[i32; 8]) -> Result<i32, ShapeD
 // IMPLEMENTED: `CShape::CShape` материализован выше; покрытый raw-блок удалён.
 
 // IMPLEMENTED: `CShape::SetBlock` материализован выше; покрытый raw-блок удалён.
-
-// ============================================================================
-// FUNCTION: CShape::DecordShapeFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\shape.cpp:251
-// RVA: 0x0005BC30
-// ADDRESS: 0045bc30
-// PROTOTYPE: bool __thiscall DecordShapeFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // IMPLEMENTED: `CShape::IsInAround` материализован выше; покрытый raw-блок
 // удалён.

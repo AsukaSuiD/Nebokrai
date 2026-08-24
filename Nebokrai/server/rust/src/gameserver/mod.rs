@@ -58,6 +58,7 @@ pub(crate) mod appserver {
         pub(crate) mod goodsmessage;
         pub(crate) mod incrementshopmessage;
         pub(crate) mod logmessage;
+        pub(crate) mod onmsg_c2s_auction;
         pub(crate) mod onmsg_w2s_auction;
         pub(crate) mod playershopmessage;
         pub(crate) mod organsysmessage;
