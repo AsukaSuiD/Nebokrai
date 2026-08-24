@@ -12,9 +12,13 @@
 //! World `0x60314`. Quest-switch `9018/9019` сохраняет read-only lookup и
 //! странность writer-а: второй аргумент влияет только на country fallback, а
 //! применяемое значение всегда `true`; `0x60315` уходит до local map write.
-//! Полный expression evaluator и остальные function ID ниже пока остаются RAW.
+//! Exile-time `9021` остаётся полностью локальным: страна script-player, один
+//! runtime clock sample и wrapping `CCountry` calculation. Полный expression
+//! evaluator и остальные function ID ниже пока остаются RAW.
 
-use crate::gameserver::appserver::country::country::CountryScalarMutationReport;
+use crate::gameserver::appserver::country::country::{
+    CountryExileRestTimeReport, CountryScalarMutationReport,
+};
 use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongExternalRefreshReport;
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
 use crate::gameserver::gameserver::game::{
@@ -33,7 +37,84 @@ pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_MATERIAL: i32 = 9011;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH: i32 = 9013;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_SWITCH: i32 = 9018;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_SWITCH: i32 = 9019;
+pub(crate) const SCRIPT_FUNCTION_EXILE_TIME: i32 = 9021;
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
+
+pub(crate) trait CountryExileTimeScriptContext {
+    fn country_exile_time_now_milliseconds(&mut self) -> u32;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryExileTimeScriptDisposition {
+    ScriptPlayerMissing,
+    CountryMissing {
+        country: u8,
+    },
+    ParameterUnavailable {
+        field: &'static str,
+        sampled_at_ms: u32,
+    },
+    Completed(CountryExileRestTimeReport),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryExileTimeScriptFunctionOutcome {
+    DifferentFunction,
+    Handled {
+        player_id: i32,
+        legacy_return: i32,
+        disposition: CountryExileTimeScriptDisposition,
+    },
+}
+
+pub(crate) fn run_country_exile_time_script_function<Context: CountryExileTimeScriptContext>(
+    game: &CGame,
+    script_player_id: Option<i32>,
+    function_id: i32,
+    evaluated_player_id: Option<i32>,
+    context: &mut Context,
+) -> CountryExileTimeScriptFunctionOutcome {
+    if function_id != SCRIPT_FUNCTION_EXILE_TIME {
+        return CountryExileTimeScriptFunctionOutcome::DifferentFunction;
+    }
+    let Some(script_player) = script_player_id.and_then(|player_id| game.find_player(player_id))
+    else {
+        return CountryExileTimeScriptFunctionOutcome::Handled {
+            player_id: evaluated_player_id.unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+            legacy_return: -1,
+            disposition: CountryExileTimeScriptDisposition::ScriptPlayerMissing,
+        };
+    };
+    let player_id = match evaluated_player_id {
+        Some(value) if value != SCRIPT_INT_PARAMETER_ERROR => value,
+        _ => script_player_id.expect("live script player имеет ID"),
+    };
+    let country = script_player.country();
+    let Some(country_owner) = game.country_handler().country(country) else {
+        return CountryExileTimeScriptFunctionOutcome::Handled {
+            player_id,
+            legacy_return: -1,
+            disposition: CountryExileTimeScriptDisposition::CountryMissing { country },
+        };
+    };
+    let sampled_at_ms = context.country_exile_time_now_milliseconds();
+    match country_owner.exile_rest_time(player_id, sampled_at_ms, game.country_param().exile_time())
+    {
+        Ok(report) => CountryExileTimeScriptFunctionOutcome::Handled {
+            player_id,
+            legacy_return: report.remaining_seconds,
+            disposition: CountryExileTimeScriptDisposition::Completed(report),
+        },
+        Err(field) => CountryExileTimeScriptFunctionOutcome::Handled {
+            player_id,
+            legacy_return: -1,
+            disposition: CountryExileTimeScriptDisposition::ParameterUnavailable {
+                field,
+                sampled_at_ms,
+            },
+        },
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryQuestSwitchScriptDisposition {

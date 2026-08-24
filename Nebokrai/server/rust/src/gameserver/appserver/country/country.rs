@@ -23,8 +23,9 @@
 //! `SetQuestSwitch`; reader не создаёт отсутствующий ordered key. Scalar
 //! setters `power/tech-level/tech-exp/control/material`
 //! сохраняют local-before-send и selector `2/4/3/5/6` общего World `0x60314`.
-//! Остальные governance, exile-time и message методы владельца ниже ещё
-//! сохраняют RAW. `BTreeMap` и owned state заменяют STL nodes/pointers.
+//! Exile rest-time использует один wrapping DWORD sample, signed миллисекунды,
+//! truncating деление и zero floor. Остальные governance/message методы ниже
+//! ещё сохраняют RAW. `BTreeMap` и owned state заменяют STL nodes/pointers.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -97,6 +98,16 @@ pub(crate) struct CountryScalarMutationReport {
     pub(crate) selector: u8,
     pub(crate) previous: i32,
     pub(crate) applied: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryExileRestTimeReport {
+    pub(crate) country_id: u8,
+    pub(crate) player_id: i32,
+    pub(crate) started_at_ms: Option<i32>,
+    pub(crate) sampled_at_ms: u32,
+    pub(crate) remaining_ms: i32,
+    pub(crate) remaining_seconds: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -236,6 +247,37 @@ impl CCountry {
 
     pub(crate) fn exile_player_ids(&self) -> Vec<i32> {
         self.exile_started_at_ms.keys().copied().collect()
+    }
+
+    pub(crate) fn exile_rest_time(
+        &self,
+        player_id: i32,
+        sampled_at_ms: u32,
+        exile_time_ms: Option<i32>,
+    ) -> Result<CountryExileRestTimeReport, &'static str> {
+        let Some(&started_at_ms) = self.exile_started_at_ms.get(&player_id) else {
+            return Ok(CountryExileRestTimeReport {
+                country_id: self.country_id,
+                player_id,
+                started_at_ms: None,
+                sampled_at_ms,
+                remaining_ms: 0,
+                remaining_seconds: 0,
+            });
+        };
+        let exile_time_ms = exile_time_ms.ok_or("_exile_time")?;
+        let remaining_ms = exile_time_ms
+            .wrapping_sub(sampled_at_ms as i32)
+            .wrapping_add(started_at_ms);
+        let remaining_seconds = (remaining_ms / 1_000).max(0);
+        Ok(CountryExileRestTimeReport {
+            country_id: self.country_id,
+            player_id,
+            started_at_ms: Some(started_at_ms),
+            sampled_at_ms,
+            remaining_ms,
+            remaining_seconds,
+        })
     }
 
     pub(crate) fn quest_switch_message(&self, job: u8, enabled: bool) -> CMessage {
@@ -458,7 +500,7 @@ fn take_country_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CCountry::GetExileRestTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:218
