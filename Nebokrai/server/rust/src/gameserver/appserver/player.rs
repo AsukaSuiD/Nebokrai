@@ -83,6 +83,7 @@
 //! make считает/удаляет packet stack-и в container order и сохраняет
 //! new-object/stack ownership для caller network adapter-а. Owned CiQing
 //! containers имеют exact volumes `8/3`; compose slots удаляются по позиции.
+//! Основной CiQing delete сохраняет partial-amount семантику `DeleteGoods`.
 //! `skillmessage 0x90005` доведён до authorization и AI dispatch: feature/HP
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
@@ -962,8 +963,9 @@ pub(crate) struct CiQingContainerConsumption {
     pub(crate) container_extend_id: u32,
     pub(crate) position: u32,
     pub(crate) goods: super::shape::ShapeIdentity,
-    pub(crate) amount: u32,
-    pub(crate) removal: VolumeGoodsRemoveOutcome,
+    pub(crate) previous_amount: u32,
+    pub(crate) remaining_amount: u32,
+    pub(crate) removal: Option<VolumeGoodsRemoveOutcome>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1458,6 +1460,10 @@ impl CPlayer {
         self.ci_qing_compose.get_goods(position)
     }
 
+    pub(crate) fn ci_qing_goods(&self, position: u32) -> Option<&CGoods> {
+        self.ci_qing.get_goods(position)
+    }
+
     pub(crate) fn add_goods_to_ci_qing(
         &mut self,
         goods: CGoods,
@@ -1528,7 +1534,40 @@ impl CPlayer {
             container_extend_id: 2,
             position,
             goods: identity,
-            amount,
+            previous_amount: amount,
+            remaining_amount: 0,
+            removal: Some(removal),
+        })
+    }
+
+    pub(crate) fn remove_ci_qing_goods(
+        &mut self,
+        position: u32,
+        requested: u32,
+    ) -> Option<CiQingContainerConsumption> {
+        let goods = self.ci_qing.get_goods(position)?;
+        let identity = goods.identity();
+        let previous_amount = goods.amount();
+        let consumed = previous_amount.min(requested);
+        if consumed == 0 {
+            return None;
+        }
+        let remaining_amount = previous_amount.wrapping_sub(consumed);
+        let removal = if remaining_amount == 0 {
+            self.ci_qing.remove_goods(identity.ex_id)
+        } else {
+            self.ci_qing
+                .get_goods_mut(position)
+                .map(|goods| goods.set_amount(remaining_amount));
+            None
+        };
+        Some(CiQingContainerConsumption {
+            player_id: self.player_id(),
+            container_extend_id: 1,
+            position,
+            goods: identity,
+            previous_amount,
+            remaining_amount,
             removal,
         })
     }
@@ -6235,20 +6274,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x000369B0
 // ADDRESS: 004369b0
 // PROTOTYPE: bool __thiscall CheckAuctionMoneyMove(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DeleteGoodsFromCiQing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:16251
-// RVA: 0x00036AA0
-// ADDRESS: 00436aa0
-// PROTOTYPE: void __thiscall DeleteGoodsFromCiQing(ulong param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

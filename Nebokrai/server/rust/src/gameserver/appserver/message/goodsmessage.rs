@@ -23,6 +23,8 @@
 //! add сохраняют stacking/ownership effects, затем отправляется `0xBF932`.
 //! `0x8FC32` замыкает compose slots `0/1/2`, exact fallback без оплаты,
 //! recipe payment/RNG, source deletion, unlock/query и `0xBF81B` tail.
+//! `0x8FC33` расходует `CQ0008`, удаляет одну единицу из основного CiQing
+//! container и вызывает обязательный property runtime либо шлёт отказ.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -41,8 +43,8 @@ use crate::gameserver::appserver::player::{
 use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
     BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
-    CGame, CiQingComposeContext, CiQingComposeReport, CiQingGoodsQueryReport, CiQingMakeContext,
-    CiQingMakeReport, CiQingSetupQueryReport,
+    CGame, CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
+    CiQingMakeContext, CiQingMakeReport, CiQingSetupQueryReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -60,6 +62,7 @@ const QUERY_CI_QING_GOODS: u32 = 0x0008_fc2f;
 const QUERY_CI_QING_SETUP: u32 = 0x0008_fc30;
 const MAKE_CI_QING_NODE: u32 = 0x0008_fc31;
 const COMPOSE_CI_QING_NODE: u32 = 0x0008_fc32;
+const DELETE_CI_QING_GOODS: u32 = 0x0008_fc33;
 
 pub(crate) trait GameGoodsMessageRuntime:
     BattleFairyCombineContext
@@ -134,6 +137,8 @@ pub(crate) enum GameGoodsMessageOutcome {
     CiQingUnavailable,
     CiQingMake(CiQingMakeReport),
     CiQingCompose(CiQingComposeReport),
+    CiQingPositionOutOfRange { position: u32 },
+    CiQingDelete(CiQingDeleteReport),
 }
 
 #[must_use = "goods-message report содержит routing и полный gameplay result"]
@@ -167,6 +172,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             | QUERY_CI_QING_SETUP
             | MAKE_CI_QING_NODE
             | COMPOSE_CI_QING_NODE
+            | DELETE_CI_QING_GOODS
     ) {
         return None;
     }
@@ -348,6 +354,26 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                         "resolved message player остаётся в CGame во время synchronous dispatch",
                     ),
                 )
+            }
+        }
+        DELETE_CI_QING_GOODS => {
+            if !game.ci_qing_message_enabled(player_id) {
+                GameGoodsMessageOutcome::CiQingUnavailable
+            } else {
+                let position = match read_long(message, "CiQing delete position") {
+                    Ok(value) => value as u32,
+                    Err(error) => return Some(Err(error)),
+                };
+                if position >= 8 {
+                    GameGoodsMessageOutcome::CiQingPositionOutOfRange { position }
+                } else {
+                    GameGoodsMessageOutcome::CiQingDelete(
+                        game.delete_goods_from_ci_qing(player_id, position, runtime)
+                            .expect(
+                                "resolved message player остаётся в CGame во время synchronous dispatch",
+                            ),
+                    )
+                }
             }
         }
         _ => unreachable!("opcode отфильтрован перед dispatch"),

@@ -152,6 +152,9 @@
 //! Compose `0x8FC32` продолжает те же containers: exact/fallback recipe,
 //! wallet/crystal payment, два RNG, source/result ownership, unlock/query и
 //! странный append result-index после отправки `0xBF81B` сохранены буквально.
+//! Delete `0x8FC33` продолжает container owner с reset-item audit/removal,
+//! удалением одной единицы, обязательным `UpdateProperty` и отказом
+//! `PLAYER001004`; position gate остаётся во входном message owner-е.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -1143,6 +1146,7 @@ pub(crate) trait CiQingComposeContext: CiQingMakeContext {
         &mut self,
         addition: &CiQingContainerAddition,
     ) -> Vec<i32>;
+    fn update_ci_qing_player_property(&mut self, game: &mut CGame, player_id: i32);
 }
 
 pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {
@@ -1298,6 +1302,32 @@ pub(crate) struct CiQingComposeReport {
     pub(crate) result_addition: Option<CiQingContainerAddition>,
     pub(crate) rejected_result: Option<ShapeIdentity>,
     pub(crate) deliveries: Vec<CiQingComposeDelivery>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CiQingDeleteOutcome {
+    MissingGoodsOrResetItem,
+    Deleted,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CiQingDeleteDelivery {
+    Player(i32),
+    PacketConsumption(Vec<i32>),
+    ContainerConsumption(Vec<i32>),
+    PropertyUpdateDispatched,
+}
+
+#[must_use = "CiQing delete report хранит reset item, goods и property tail"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingDeleteReport {
+    pub(crate) player_id: i32,
+    pub(crate) position: u32,
+    pub(crate) outcome: CiQingDeleteOutcome,
+    pub(crate) logs: Vec<CiQingLog>,
+    pub(crate) reset_consumptions: Vec<CiQingPacketConsumption>,
+    pub(crate) goods_consumption: Option<CiQingContainerConsumption>,
+    pub(crate) deliveries: Vec<CiQingDeleteDelivery>,
 }
 
 pub(crate) trait PlayerEquipmentContext {
@@ -4906,6 +4936,83 @@ impl CGame {
         } else {
             report.outcome = CiQingComposeOutcome::Failed;
         }
+        Some(report)
+    }
+
+    pub(crate) fn delete_goods_from_ci_qing<Context: CiQingComposeContext>(
+        &mut self,
+        player_id: i32,
+        position: u32,
+        context: &mut Context,
+    ) -> Option<CiQingDeleteReport> {
+        let mut report = CiQingDeleteReport {
+            player_id,
+            position,
+            outcome: CiQingDeleteOutcome::MissingGoodsOrResetItem,
+            logs: Vec::new(),
+            reset_consumptions: Vec::new(),
+            goods_consumption: None,
+            deliveries: Vec::new(),
+        };
+        let reset_index = self
+            .goods_factory
+            .query_goods_id_by_original_name(Some(b"CQ0008"));
+        let can_delete = self.find_player(player_id).is_some_and(|player| {
+            player.ci_qing_goods(position).is_some()
+                && player.check_item_in_packet(reset_index) != 0
+        });
+        if !can_delete {
+            let delivery = colored_player_notice_message(
+                0xffff_ffff,
+                0,
+                self.get_string_by_id(b"PLAYER001004"),
+            )
+            .send_to_player(self.net_server(), player_id);
+            report
+                .deliveries
+                .push(CiQingDeleteDelivery::Player(delivery));
+            return self.find_player(player_id).map(|_| report);
+        }
+        let reset_log = CiQingLog {
+            player_id,
+            delta: -1,
+            operation: 4,
+            base_index: reset_index,
+            amount: 1,
+        };
+        context.record_ci_qing_log(&reset_log);
+        report.logs.push(reset_log);
+        let reset_consumptions = self
+            .players
+            .get_mut(&player_id)
+            .expect("player проверен до CiQing reset-item removal")
+            .remove_item_in_packet(reset_index, 1);
+        for consumption in reset_consumptions {
+            report
+                .deliveries
+                .push(CiQingDeleteDelivery::PacketConsumption(
+                    context.publish_ci_qing_packet_consumption(&consumption),
+                ));
+            report.reset_consumptions.push(consumption);
+        }
+        if let Some(consumption) = self
+            .players
+            .get_mut(&player_id)
+            .expect("player проверен до CiQing goods removal")
+            .remove_ci_qing_goods(position, 1)
+        {
+            report
+                .deliveries
+                .push(CiQingDeleteDelivery::ContainerConsumption(
+                    context.publish_ci_qing_container_consumption(&consumption),
+                ));
+            report.goods_consumption = Some(consumption);
+        }
+        context.update_ci_qing_player_property(self, player_id);
+        report
+            .deliveries
+            .push(CiQingDeleteDelivery::PropertyUpdateDispatched);
+        report.outcome = CiQingDeleteOutcome::Deleted;
         Some(report)
     }
 
