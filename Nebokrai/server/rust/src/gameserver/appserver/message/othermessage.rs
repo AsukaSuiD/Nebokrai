@@ -29,6 +29,8 @@
 //! ставит exact `QuitClientByMapID` каждому текущему player owner-у.
 //! Honor acknowledgement `0x7FA16` после World rank update условно увеличивает
 //! четыре persistent eliminate-счётчика найденного player-а.
+//! TimeToReturn `0x7FA13` запускает region countdown; его AI-tail публикует
+//! `0xBF807` и переносит registered players в virtual return points.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -39,7 +41,8 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, GameKickPlayerReport, colored_player_notice_message, player_skill_learned_message,
+    CGame, GameKickPlayerReport, GameRegionClearStarted, colored_player_notice_message,
+    player_skill_learned_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
@@ -55,6 +58,7 @@ const WORLD_REMOTE_SKILL_DELETE: u32 = 0x0007_fa09;
 const WORLD_REMOTE_SKILL_OBSERVE: u32 = 0x0007_fa0a;
 const WORLD_REMOTE_LEVEL_SET: u32 = 0x0007_fa0b;
 const WORLD_KICK_ALL_PLAYERS: u32 = 0x0007_fa0c;
+const WORLD_START_REGION_CLEAR: u32 = 0x0007_fa13;
 const PLAYER_NPC_NAME_LIST_REQUEST: u32 = 0x0008_fb06;
 const WORLD_PLAYER_RENAME_REQUEST: i32 = 0x0005_fd05;
 const WORLD_PLAYER_RENAME_RESPONSE: u32 = 0x0007_fa0e;
@@ -155,6 +159,9 @@ pub(crate) enum GameOtherMessageOutcome {
     HonorEliminateAcknowledged {
         accepted: bool,
         mutation: Option<PlayerHonorEliminateMutation>,
+    },
+    RegionClearScheduled {
+        start: Option<GameRegionClearStarted>,
     },
     LeiTingUpdated {
         client_delivery: i32,
@@ -1016,6 +1023,7 @@ pub(crate) fn dispatch_game_other_message(
             | WORLD_REMOTE_SKILL_OBSERVE
             | WORLD_REMOTE_LEVEL_SET
             | WORLD_KICK_ALL_PLAYERS
+            | WORLD_START_REGION_CLEAR
             | WORLD_HONOR_ELIMINATE_ACKNOWLEDGEMENT
             | WORLD_LEI_TING_UPDATE
     ) {
@@ -1232,6 +1240,22 @@ pub(crate) fn dispatch_game_other_message(
                 kicks: game.kick_all_players(),
             },
         }));
+    }
+    if message_type == WORLD_START_REGION_CLEAR {
+        let result = (|| {
+            let region_id = read_long(message, "clear-player region id")?;
+            let buffer_seconds = read_long(message, "clear-player buffer seconds")?;
+            let start = game.find_region(region_id).is_some().then(|| {
+                game.start_region_clear_player(region_id, buffer_seconds, now_milliseconds())
+                    .expect("clear-player region проверен до timer mutation")
+            });
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id: 0,
+                outcome: GameOtherMessageOutcome::RegionClearScheduled { start },
+            })
+        })();
+        return Some(result);
     }
     if message_type == WORLD_HONOR_ELIMINATE_ACKNOWLEDGEMENT {
         let result = (|| {

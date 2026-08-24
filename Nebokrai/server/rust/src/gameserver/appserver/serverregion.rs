@@ -1,6 +1,7 @@
 //! Базовое состояние GameServer-region `CServerRegion`.
 //!
-//! `StartClearPlayerOut` RVA `0x0007BA50`, resource forwarding
+//! `StartClearPlayerOut` RVA `0x0007BA50`, `ClearPlayerAI` RVA `0x00082FF0`
+//! и base `KickOutAllPlayerToReturnPoint` RVA `0x00082820`, resource forwarding
 //! `Save/New/Load` `0x0007BA80/0x0007BA90/0x0007C290`, обе `GetArea`
 //! `0x00001DB0/0x0007BB60` и `CreateAreaArray` `0x0007BE10`, фазовые defaults
 //! `OnWarDeclare/Start/End/Mass` RVA `0x00085560..0x000855B0`, ownership и
@@ -16,6 +17,9 @@
 //! исходники `serverregion.h/.cpp`. PDB фиксирует
 //! `m_listChangeAreaShape +0x1D0`, поля `m_Param +0x214`,
 //! `m_lWarNum +0x238`, `m_CityState +0x23C` и clear timer `+0x240..+0x248`.
+//! Countdown сохраняет wrapping DWORD comparison и signed remaining; virtual
+//! return point, random destination и полный `CPlayer::ChangeRegion` вызываются
+//! Game-owner-ом, который владеет region/player maps и runtime side effects.
 //!
 //! `i32/u32` сохраняют x86 `long/DWORD`; `String` и owned fields заменяют
 //! MFC/STL storage без изменения достигнутых эффектов. `timeGetTime` передаётся
@@ -171,6 +175,13 @@ pub(crate) struct ServerReturnSetup {
     pub(crate) does_recall_when_lost: i32,
     pub(crate) move_monster_when_refeash: i32,
     pub(crate) use_return: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ServerRegionClearPlayerTick {
+    Waiting { remaining_ms: i32, elapsed_ms: u32 },
+    Warning { remaining_ms: i32, seconds: i32 },
+    Expired,
 }
 
 /// BLOCKED_MISSING_FACT: constructor не записывает `m_stSetup`; безопасный
@@ -2185,6 +2196,36 @@ impl CServerRegion {
         self.kick_out_player_time = delay_ms;
         self.last_time_ms = now_ms;
     }
+
+    /// Exact `ClearPlayerAI`: long delay обновляется не чаще 5 секунд,
+    /// последние 10 секунд — не чаще секунды; comparison времени остаётся
+    /// unsigned DWORD, а remaining и форматируемые секунды — signed long.
+    pub(crate) fn clear_player_ai_at(&mut self, now_ms: u32) -> ServerRegionClearPlayerTick {
+        let remaining = self.kick_out_player_time as u32;
+        let elapsed_ms = now_ms.wrapping_sub(self.last_time_ms);
+        if elapsed_ms >= remaining {
+            self.kick_out_player = false;
+            self.kick_out_player_time = 0;
+            return ServerRegionClearPlayerTick::Expired;
+        }
+        let threshold = if self.kick_out_player_time < 10_001 {
+            1_001
+        } else {
+            5_001
+        };
+        if elapsed_ms < threshold {
+            return ServerRegionClearPlayerTick::Waiting {
+                remaining_ms: self.kick_out_player_time,
+                elapsed_ms,
+            };
+        }
+        self.kick_out_player_time = remaining.wrapping_sub(elapsed_ms) as i32;
+        self.last_time_ms = now_ms;
+        ServerRegionClearPlayerTick::Warning {
+            remaining_ms: self.kick_out_player_time,
+            seconds: self.kick_out_player_time / 1_000,
+        }
+    }
 }
 
 fn read_setup_i32(
@@ -2960,19 +3001,8 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 //
 //
 
-// ============================================================================
-// FUNCTION: CServerRegion::KickOutAllPlayerToReturnPoint
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:2490
-// RVA: 0x00082820
-// ADDRESS: 00482820
-// PROTOTYPE: void __thiscall KickOutAllPlayerToReturnPoint(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: base `KickOutAllPlayerToReturnPoint` замкнут через virtual return point,
+// destination randomization и typed `CPlayer::ChangeRegion` boundary в `CGame::AI`.
 
 // ============================================================================
 // FUNCTION: CServerRegion::KickOutAllPlayerToReturnPointExceptOwner
@@ -3016,19 +3046,8 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 //
 //
 
-// ============================================================================
-// FUNCTION: CServerRegion::ClearPlayerAI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:336
-// RVA: 0x00082FF0
-// ADDRESS: 00482ff0
-// PROTOTYPE: void __thiscall ClearPlayerAI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `ClearPlayerAI` countdown, `0xBF807` warning и expiry-tail
+// материализованы в `clear_player_ai_at` и `CGame::AI`.
 
 // IMPLEMENTED: `CServerRegion::AddObject` материализован выше; покрытый raw-блок удалён.
 

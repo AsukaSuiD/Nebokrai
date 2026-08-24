@@ -11,6 +11,8 @@
 //! VERIFIED_DISASSEMBLY`; точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, исходники
 //! `server/gameserver/gameserver/game.h/.cpp`.
+//! `CGame::AI` RVA `0x00005080` сохраняет signed region-map order, virtual
+//! region AI и base-tail clear countdown с warning/return side effects.
 //!
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
@@ -494,9 +496,13 @@ use crate::gameserver::appserver::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
     GameVariableSnapshotReport,
 };
-use crate::gameserver::appserver::servercityregion::CServerCityRegion;
-use crate::gameserver::appserver::servercountryregion::CServerCountryRegion;
-use crate::gameserver::appserver::servercountryregion::CountryBattleStateBlock;
+use crate::gameserver::appserver::servercityregion::{
+    CServerCityRegion, CityReturnPointContext, CityReturnPointError,
+};
+use crate::gameserver::appserver::servercountryregion::{
+    CServerCountryRegion, CountryBattleStateBlock, CountryReturnPointContext,
+    CountryReturnPointError,
+};
 use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleCancelByPlayer, GodsBattleContender,
 };
@@ -509,7 +515,7 @@ use crate::gameserver::appserver::servernationregion::{
 use crate::gameserver::appserver::serverregion::{
     CServerRegion, RegionMembershipBlock, ServerRegionMonsterContext, ServerRegionNpcContext,
     ServerRegionNpcSetup, ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport,
-    ServerReturnPlayer, ServerReturnSetupBlock,
+    ServerRegionClearPlayerTick, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::session::cequipmentcompose::{
@@ -2518,9 +2524,82 @@ pub(crate) struct GameMainLoopReport<RegionRuntimeError> {
     pub(crate) stages: Vec<GameMainLoopStage>,
     pub(crate) next_deadline_ms: Option<u32>,
     pub(crate) signed_lag_ms: Option<i32>,
+    pub(crate) ai: Option<GameAiReport>,
     pub(crate) messages: Option<GameProcessMessagesReport<RegionRuntimeError>>,
     pub(crate) net_sessions: Option<NetSessionRunReport>,
     pub(crate) auction: Option<GameAuctionRunReport>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameReturnPointBlock {
+    PlayerMissing,
+    Base(ServerReturnSetupBlock),
+    City(CityReturnPointError),
+    Country(CountryReturnPointError),
+    GodsBattleMissing,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameReturnedRegionPlayer {
+    pub(crate) player_id: i32,
+    pub(crate) point: Result<RegionReturnPoint, GameReturnPointBlock>,
+    pub(crate) destination: Option<(i32, i32)>,
+    pub(crate) random_block: Option<RegionCellAccessBlock>,
+    pub(crate) changed_region: Option<bool>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameRegionClearPlayerOutcome {
+    Waiting {
+        remaining_ms: i32,
+        elapsed_ms: u32,
+    },
+    Warning {
+        remaining_ms: i32,
+        seconds: i32,
+        delivery: i32,
+    },
+    Expired {
+        players: Vec<GameReturnedRegionPlayer>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameRegionAiReport {
+    pub(crate) region_id: i32,
+    pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameAiReport {
+    pub(crate) legacy_return: i32,
+    pub(crate) regions: Vec<GameRegionAiReport>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameRegionClearStarted {
+    pub(crate) region_id: i32,
+    pub(crate) buffer_seconds: i32,
+    pub(crate) delay_ms: i32,
+    pub(crate) previous_active: bool,
+    pub(crate) previous_remaining_ms: i32,
+    pub(crate) started_at_ms: u32,
+}
+
+struct CityReturnPointFacts {
+    player_id: i32,
+    tile_x: i32,
+    tile_y: i32,
+}
+
+impl CityReturnPointContext for CityReturnPointFacts {
+    fn read_city_player_tile_y(&mut self, player_id: i32) -> i32 {
+        (player_id == self.player_id).then_some(self.tile_y).unwrap_or(0)
+    }
+
+    fn read_city_player_tile_x(&mut self, player_id: i32) -> i32 {
+        (player_id == self.player_id).then_some(self.tile_x).unwrap_or(0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2630,6 +2709,7 @@ pub(crate) trait GameMainLoopRuntime:
     + GameShapeMessageRuntime
     + GamePlayerMessageRuntime
     + IncrementShopBillingContext
+    + CountryReturnPointContext
 {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
@@ -2638,7 +2718,8 @@ pub(crate) trait GameMainLoopRuntime:
     fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
     fn script_loop(&mut self, game: &mut CGame);
-    fn ai(&mut self, game: &mut CGame);
+    /// Выполняет virtual region AI до точного base-tail `ClearPlayerAI`.
+    fn region_ai_before_clear_player(&mut self, game: &mut CGame, region_id: i32);
     fn wait(&mut self, duration_ms: u32);
     fn output_debug(&mut self, message: &'static str);
 }
@@ -13997,6 +14078,222 @@ impl CGame {
         }
     }
 
+    pub(crate) fn start_region_clear_player(
+        &mut self,
+        region_id: i32,
+        buffer_seconds: i32,
+        now_ms: u32,
+    ) -> Option<GameRegionClearStarted> {
+        let region = self.find_region_mut(region_id)?.base_mut();
+        let report = GameRegionClearStarted {
+            region_id,
+            buffer_seconds,
+            delay_ms: buffer_seconds.wrapping_mul(1_000),
+            previous_active: region.kick_out_player,
+            previous_remaining_ms: region.kick_out_player_time,
+            started_at_ms: now_ms,
+        };
+        region.start_clear_player_out_at(report.delay_ms, now_ms);
+        Some(report)
+    }
+
+    /// Exact `CGame::AI`: signed region-map order и virtual region AI,
+    /// после которого выполняется base-tail `ClearPlayerAI` того же owner-а.
+    pub(crate) fn ai<Runtime: GameMainLoopRuntime>(&mut self, runtime: &mut Runtime) -> GameAiReport {
+        if self.net_server.is_none() {
+            return GameAiReport {
+                legacy_return: 1,
+                regions: Vec::new(),
+            };
+        }
+        let region_ids: Vec<_> = self.regions.keys().copied().collect();
+        let mut regions = Vec::with_capacity(region_ids.len());
+        for region_id in region_ids {
+            runtime.region_ai_before_clear_player(self, region_id);
+            let Some(mut owner) = self.take_region_owner(region_id) else {
+                continue;
+            };
+            let clear_player = if owner.base().kick_out_player {
+                let tick = owner.base_mut().clear_player_ai_at(runtime.get_tick_ms());
+                match tick {
+                    ServerRegionClearPlayerTick::Waiting {
+                        remaining_ms,
+                        elapsed_ms,
+                    } => Some(GameRegionClearPlayerOutcome::Waiting {
+                        remaining_ms,
+                        elapsed_ms,
+                    }),
+                    ServerRegionClearPlayerTick::Warning {
+                        remaining_ms,
+                        seconds,
+                    } => {
+                        let text = format_single_legacy_i32(
+                            self.get_string_by_id(b"GS0230"),
+                            seconds,
+                            0xff,
+                        );
+                        let mut warning = CMessage::new(0x000b_f807);
+                        warning.base_mut().add_long(-1);
+                        add_legacy_c_string(warning.base_mut(), &text);
+                        let delivery = warning.send_to_region(Some(owner.base()), None, self);
+                        Some(GameRegionClearPlayerOutcome::Warning {
+                            remaining_ms,
+                            seconds,
+                            delivery,
+                        })
+                    }
+                    ServerRegionClearPlayerTick::Expired => {
+                        let player_ids = owner.base().registered_player_ids();
+                        self.restore_region_owner(owner);
+                        let players = player_ids
+                            .into_iter()
+                            .map(|player_id| {
+                                self.return_region_player(region_id, player_id, runtime)
+                            })
+                            .collect();
+                        regions.push(GameRegionAiReport {
+                            region_id,
+                            clear_player: Some(GameRegionClearPlayerOutcome::Expired { players }),
+                        });
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            self.restore_region_owner(owner);
+            regions.push(GameRegionAiReport {
+                region_id,
+                clear_player,
+            });
+        }
+        GameAiReport {
+            legacy_return: 1,
+            regions,
+        }
+    }
+
+    fn return_region_player<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        source_region_id: i32,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> GameReturnedRegionPlayer {
+        let Some(player) = self.find_player(player_id) else {
+            return GameReturnedRegionPlayer {
+                player_id,
+                point: Err(GameReturnPointBlock::PlayerMissing),
+                destination: None,
+                random_block: None,
+                changed_region: None,
+            };
+        };
+        let facts = ServerReturnPlayer {
+            id: player_id,
+            country: player.country(),
+            faction_id: player.faction_id(),
+        };
+        let direction = player.shape().get_direction();
+        let city_facts = CityReturnPointFacts {
+            player_id,
+            tile_x: player.shape().get_tile_x().unwrap_or_default(),
+            tile_y: player.shape().get_tile_y().unwrap_or_default(),
+        };
+        let point = if self
+            .find_region(source_region_id)
+            .is_some_and(ServerRegionOwner::is_gods_battle)
+        {
+            self.gods_battle_return_point(source_region_id, player_id, runtime)
+                .map_err(GameReturnPointBlock::Base)
+                .and_then(|point| {
+                    point
+                        .map(|point| point.point)
+                        .ok_or(GameReturnPointBlock::GodsBattleMissing)
+                })
+        } else {
+            let Some(mut owner) = self.take_region_owner(source_region_id) else {
+                return GameReturnedRegionPlayer {
+                    player_id,
+                    point: Err(GameReturnPointBlock::GodsBattleMissing),
+                    destination: None,
+                    random_block: None,
+                    changed_region: None,
+                };
+            };
+            let mut city_facts = city_facts;
+            let point = match &mut owner {
+                ServerRegionOwner::Base(region) => region
+                    .get_return_point(Some(facts), &mut self.country_param)
+                    .map_err(GameReturnPointBlock::Base),
+                ServerRegionOwner::Village(region) => region
+                    .war
+                    .base
+                    .get_return_point(Some(facts), &mut self.country_param)
+                    .map_err(GameReturnPointBlock::Base),
+                ServerRegionOwner::City(region) => region
+                    .get_return_point(Some(facts), &mut self.country_param, &mut city_facts)
+                    .map_err(GameReturnPointBlock::City),
+                ServerRegionOwner::Country(region) => region
+                    .get_return_point(Some(facts), &mut self.country_param, runtime)
+                    .map_err(GameReturnPointBlock::Country),
+                ServerRegionOwner::Nation(region) => region
+                    .war
+                    .base
+                    .get_return_point(Some(facts), &mut self.country_param)
+                    .map_err(GameReturnPointBlock::Base),
+                ServerRegionOwner::GodsBattle(_) => unreachable!("GodsBattle обработан до take"),
+            };
+            self.restore_region_owner(owner);
+            point
+        };
+        let Ok(point_value) = point else {
+            return GameReturnedRegionPlayer {
+                player_id,
+                point,
+                destination: None,
+                random_block: None,
+                changed_region: None,
+            };
+        };
+        let width = point_value.right.wrapping_sub(point_value.left);
+        let height = point_value.bottom.wrapping_sub(point_value.top);
+        let mut x = point_value.left.wrapping_add(width / 2);
+        let mut y = point_value.top.wrapping_add(height / 2);
+        let mut random_block = None;
+        if width > 0 && height > 0 {
+            if let Some(destination) = self.find_region(point_value.region_id) {
+                match destination.base().region.get_random_pos_in_range(
+                    point_value.left,
+                    point_value.top,
+                    width,
+                    height,
+                    runtime,
+                ) {
+                    Ok(position) => {
+                        x = position.x;
+                        y = position.y;
+                    }
+                    Err(block) => random_block = Some(block),
+                }
+            }
+        }
+        let changed_region = runtime.change_relived_player_region(
+            player_id,
+            point_value.region_id,
+            x,
+            y,
+            direction,
+            0,
+        );
+        GameReturnedRegionPlayer {
+            player_id,
+            point: Ok(point_value),
+            destination: Some((x, y)),
+            random_block,
+            changed_region: Some(changed_region),
+        }
+    }
+
     /// Один exact `CGame::MainLoop` turn. Wrapping DWORD clocks, strict
     /// interval comparisons, profiling reads и pacing deadline сохраняют
     /// наблюдаемый Win32 порядок; wait заменён platform callback-ом.
@@ -14059,6 +14356,7 @@ impl CGame {
                 stages,
                 next_deadline_ms: state.pacing_initialized.then_some(state.pacing_deadline_ms),
                 signed_lag_ms: None,
+                ai: None,
                 messages: None,
                 net_sessions: None,
                 auction: None,
@@ -14066,6 +14364,7 @@ impl CGame {
         }
 
         state.ai_tick = state.ai_tick.wrapping_add(1);
+        let ai;
         let messages;
         let net_sessions;
         if self.setup.watch_runtime_info {
@@ -14078,7 +14377,7 @@ impl CGame {
             stages.push(GameMainLoopStage::Script);
 
             let started = runtime.get_tick_ms();
-            runtime.ai(self);
+            ai = self.ai(runtime);
             let _fairy_hatchers = self.run_fairy_hatchers(runtime);
             state.profile.ai_ms = state
                 .profile
@@ -14116,7 +14415,7 @@ impl CGame {
         } else {
             runtime.script_loop(self);
             stages.push(GameMainLoopStage::Script);
-            runtime.ai(self);
+            ai = self.ai(runtime);
             stages.push(GameMainLoopStage::Ai);
             let _fairy_hatchers = self.run_fairy_hatchers(runtime);
             stages.push(GameMainLoopStage::FairyHatcher);
@@ -14168,6 +14467,7 @@ impl CGame {
             stages,
             next_deadline_ms: Some(state.pacing_deadline_ms),
             signed_lag_ms: Some(signed_lag_ms),
+            ai: Some(ai),
             messages: Some(messages),
             net_sessions: Some(net_sessions),
             auction: Some(auction),
@@ -15351,19 +15651,8 @@ fn shape_view(
 //
 //
 
-// ============================================================================
-// FUNCTION: CGame::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:742
-// RVA: 0x00005080
-// ADDRESS: 00405080
-// PROTOTYPE: int __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CGame::AI` signed region-map order и virtual region AI с
+// base-tail `ClearPlayerAI` материализованы выше.
 
 // ============================================================================
 // FUNCTION: CGame::SaveCityRegion
