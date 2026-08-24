@@ -26,7 +26,9 @@ use std::error::Error;
 use std::fmt;
 
 const COUNTRY_PARAMETER_COUNT: usize = 39;
+const MAX_COUNTRY_POWER: usize = 2;
 const MAX_COUNTRY_TREASURY: usize = 4;
+const MAX_KING_MATERIAL_POINT: usize = 26;
 const SILENCE_TIME: usize = 30;
 const EXILE_TIME: usize = 32;
 const MAX_EXPLOIT: usize = 36;
@@ -236,6 +238,14 @@ impl CCountryParam {
         self.parameters[MAX_COUNTRY_TREASURY]
     }
 
+    pub(crate) const fn max_country_power(&self) -> Option<i32> {
+        self.parameters[MAX_COUNTRY_POWER]
+    }
+
+    pub(crate) const fn max_king_material_point(&self) -> Option<i32> {
+        self.parameters[MAX_KING_MATERIAL_POINT]
+    }
+
     pub(crate) const fn silence_time(&self) -> Option<i32> {
         self.parameters[SILENCE_TIME]
     }
@@ -254,6 +264,10 @@ impl CCountryParam {
 
     pub(crate) fn country_tech_level(&self, level: i32) -> Option<&CountryTechLevel> {
         self.country_tech_levels.get(&level)
+    }
+
+    pub(crate) fn country_tech_level_count(&self) -> i32 {
+        self.country_tech_levels.len() as i32
     }
 
     pub(crate) fn exile_rect(&self, country: u8) -> Option<CountryMainRect> {

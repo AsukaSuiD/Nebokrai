@@ -7,19 +7,198 @@
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
 //! gameplay передаётся canonical `CGame`, который сам исполняет localized
 //! notices, session/plug lifecycle и client wire; runtime сообщает только
-//! ещё не owned team skill-state. Полный expression evaluator и
-//! остальные function ID ниже пока остаются RAW.
+//! ещё не owned team skill-state. Country scalar family `9001/9003/9009/9011/
+//! 9013` сохраняет byte country lookup, field-specific clamp, local mutation и
+//! World `0x60314`. Полный expression evaluator и остальные function ID ниже
+//! пока остаются RAW.
 
+use crate::gameserver::appserver::country::country::CountryScalarMutationReport;
 use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongExternalRefreshReport;
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
 use crate::gameserver::gameserver::game::{
     CGame, EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
 };
+use crate::nets::netserver::message::SendMessageError;
 
 pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
 pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_UPGRADE: i32 = 2216;
+pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
+pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH_LEVEL: i32 = 9003;
+pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TREASURY: i32 = 9009;
+pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_MATERIAL: i32 = 9011;
+pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH: i32 = 9013;
+const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryScalarScriptDisposition {
+    ValueMissing,
+    CountryMissing {
+        country: u8,
+    },
+    ParameterUnavailable {
+        field: &'static str,
+    },
+    TechnologyLevelMissing {
+        level: i32,
+    },
+    Applied {
+        country: u8,
+        requested: i32,
+        applied: i32,
+        mutation: CountryScalarMutationReport,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryScalarScriptFunctionOutcome {
+    DifferentFunction,
+    Handled {
+        function_id: i32,
+        legacy_return: i32,
+        disposition: CountryScalarScriptDisposition,
+    },
+}
+
+pub(crate) fn run_country_scalar_script_function(
+    game: &mut CGame,
+    function_id: i32,
+    evaluated_country: Option<i32>,
+    evaluated_value: Option<i32>,
+) -> CountryScalarScriptFunctionOutcome {
+    let (selector, default_return) = match function_id {
+        SCRIPT_FUNCTION_SET_COUNTRY_POWER => (2, -1),
+        SCRIPT_FUNCTION_SET_COUNTRY_TECH_LEVEL => (4, -1),
+        SCRIPT_FUNCTION_SET_COUNTRY_TREASURY => (1, 0),
+        SCRIPT_FUNCTION_SET_COUNTRY_MATERIAL => (6, -1),
+        SCRIPT_FUNCTION_SET_COUNTRY_TECH => (3, -1),
+        _ => return CountryScalarScriptFunctionOutcome::DifferentFunction,
+    };
+    let country = evaluated_country.unwrap_or(SCRIPT_INT_PARAMETER_ERROR) as u8;
+    let Some(requested) = evaluated_value.filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+    else {
+        return CountryScalarScriptFunctionOutcome::Handled {
+            function_id,
+            legacy_return: default_return,
+            disposition: CountryScalarScriptDisposition::ValueMissing,
+        };
+    };
+    if game.country_handler().country(country).is_none() {
+        return CountryScalarScriptFunctionOutcome::Handled {
+            function_id,
+            legacy_return: default_return,
+            disposition: CountryScalarScriptDisposition::CountryMissing { country },
+        };
+    }
+
+    let applied = match function_id {
+        SCRIPT_FUNCTION_SET_COUNTRY_POWER => {
+            let Some(maximum) = game.country_param().max_country_power() else {
+                return scalar_parameter_unavailable(
+                    function_id,
+                    default_return,
+                    "_max_country_power",
+                );
+            };
+            if requested < 0 {
+                0
+            } else {
+                requested.min(maximum)
+            }
+        }
+        SCRIPT_FUNCTION_SET_COUNTRY_TECH_LEVEL => {
+            if requested <= 0 {
+                1
+            } else {
+                requested.min(game.country_param().country_tech_level_count())
+            }
+        }
+        SCRIPT_FUNCTION_SET_COUNTRY_TREASURY => {
+            let Some(maximum) = game.country_param().max_country_treasury() else {
+                return scalar_parameter_unavailable(
+                    function_id,
+                    default_return,
+                    "_max_country_treasury",
+                );
+            };
+            if requested < 0 {
+                0
+            } else {
+                requested.min(maximum)
+            }
+        }
+        SCRIPT_FUNCTION_SET_COUNTRY_MATERIAL => {
+            let Some(maximum) = game.country_param().max_king_material_point() else {
+                return scalar_parameter_unavailable(
+                    function_id,
+                    default_return,
+                    "_max_king_material_point",
+                );
+            };
+            if requested < 0 {
+                0
+            } else {
+                requested.min(maximum)
+            }
+        }
+        SCRIPT_FUNCTION_SET_COUNTRY_TECH => {
+            let next_level = game
+                .country_handler()
+                .country(country)
+                .expect("country owner проверен перед tech-level lookup")
+                .tech_level
+                .wrapping_add(1);
+            let Some(level) = game.country_param().country_tech_level(next_level) else {
+                return CountryScalarScriptFunctionOutcome::Handled {
+                    function_id,
+                    legacy_return: default_return,
+                    disposition: CountryScalarScriptDisposition::TechnologyLevelMissing {
+                        level: next_level,
+                    },
+                };
+            };
+            if requested > level.country_tech_exp {
+                level.country_tech_exp
+            } else if requested < 0 {
+                0
+            } else {
+                requested
+            }
+        }
+        _ => unreachable!("country scalar function ID проверен перед clamp"),
+    };
+    let (mutation, message) = game
+        .country_handler_mut()
+        .country_mut(country)
+        .expect("country owner жив до scalar mutation")
+        .set_script_scalar(selector, applied);
+    let delivery = message.send(game, false);
+    CountryScalarScriptFunctionOutcome::Handled {
+        function_id,
+        legacy_return: applied,
+        disposition: CountryScalarScriptDisposition::Applied {
+            country,
+            requested,
+            applied,
+            mutation,
+            delivery,
+        },
+    }
+}
+
+fn scalar_parameter_unavailable(
+    function_id: i32,
+    legacy_return: i32,
+    field: &'static str,
+) -> CountryScalarScriptFunctionOutcome {
+    CountryScalarScriptFunctionOutcome::Handled {
+        function_id,
+        legacy_return,
+        disposition: CountryScalarScriptDisposition::ParameterUnavailable { field },
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EquipmentSessionScriptFunctionOutcome {

@@ -20,8 +20,10 @@
 //! заменяет прежнюю запись текущим `timeGetTime` sample и сохраняет ordered
 //! player-ID traversal для `0x6030E/0x7FF15`. Остальные governance, exile-time,
 //! quest-switch публикует World `0x60315` до локальной map-мутации, как original
-//! `SetQuestSwitch`. Остальные governance, exile-time и message методы владельца
-//! ниже ещё сохраняют RAW. `BTreeMap` и owned state заменяют STL nodes/pointers.
+//! `SetQuestSwitch`. Scalar setters `power/tech-level/tech-exp/control/material`
+//! сохраняют local-before-send и selector `2/4/3/5/6` общего World `0x60314`.
+//! Остальные governance, exile-time и message методы владельца ниже ещё
+//! сохраняют RAW. `BTreeMap` и owned state заменяют STL nodes/pointers.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -86,6 +88,14 @@ pub(crate) struct CountryQuestSwitchMutationReport {
     pub(crate) job: u8,
     pub(crate) previous: Option<bool>,
     pub(crate) applied: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryScalarMutationReport {
+    pub(crate) country_id: u8,
+    pub(crate) selector: u8,
+    pub(crate) previous: i32,
+    pub(crate) applied: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -260,6 +270,31 @@ impl CCountry {
         self.change_attribute_to_world_message(1, treasury)
     }
 
+    pub(crate) fn set_script_scalar(
+        &mut self,
+        selector: u8,
+        value: i32,
+    ) -> (CountryScalarMutationReport, CMessage) {
+        let previous = match selector {
+            1 => std::mem::replace(&mut self.treasury, value),
+            2 => std::mem::replace(&mut self.power, value),
+            3 => std::mem::replace(&mut self.tech_current_exp, value),
+            4 => std::mem::replace(&mut self.tech_level, value),
+            5 => std::mem::replace(&mut self.control_point, value),
+            6 => std::mem::replace(&mut self.material_point, value),
+            _ => unreachable!("CCountry scalar selector ограничен exact owner-ами"),
+        };
+        (
+            CountryScalarMutationReport {
+                country_id: self.country_id,
+                selector,
+                previous,
+                applied: value,
+            },
+            self.change_attribute_to_world_message(selector, value),
+        )
+    }
+
     fn change_attribute_to_world_message(&self, attribute: u8, value: i32) -> CMessage {
         let mut message = CMessage::new(0x60314);
         message.base_mut().add_byte(self.country_id);
@@ -334,7 +369,7 @@ fn take_country_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CCountry::SetCountryPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:144
@@ -348,7 +383,7 @@ fn take_country_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CCountry::SetTechLevel
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:158
@@ -362,7 +397,7 @@ fn take_country_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CCountry::SetCountryTech
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:165
@@ -376,7 +411,7 @@ fn take_country_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CCountry::SetControlPoint
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:172
@@ -390,7 +425,7 @@ fn take_country_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CCountry::SetCountryMaterial
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:179
