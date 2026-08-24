@@ -3,19 +3,65 @@
 //! PDB `GameServer/GameServer.pdb` фиксирует `std::list<long> m_lPlugs` по
 //! `+0x64`; inline `GetPlugList` RVA `0x00070910` экспортирован из точного
 //! source-owner `server/gameserver/appserver/area.cpp` и материализован там.
-//! Этот файл задаёт только reached owned storage, заменяя list на `Vec<i32>` с
-//! тем же порядком обхода. Полные constructor, lifecycle и `InsertPlug` ниже
-//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально); `from_plug_ids` является assembly-границей уже
-//! восстановленного registry state и не подменяет их контракты.
+//! `Vec<i32>` сохраняет порядок обхода. Normal equipment-session materializes
+//! constructor defaults, Start gate и InsertPlug capacity/state prefix;
+//! team и общий polymorphic lifecycle ниже остаются RAW. `from_plug_ids`
+//! является assembly-границей уже восстановленного registry state.
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CSession {
     plug_ids: Vec<i32>,
+    minimum_plugs: u32,
+    maximum_plugs: u32,
+    lifetime: u32,
+    started: bool,
+    ended: bool,
+    aborted: bool,
 }
 
 impl CSession {
     pub(crate) const fn from_plug_ids(plug_ids: Vec<i32>) -> Self {
-        Self { plug_ids }
+        Self {
+            plug_ids,
+            minimum_plugs: 0,
+            maximum_plugs: u32::MAX,
+            lifetime: 0,
+            started: true,
+            ended: false,
+            aborted: false,
+        }
+    }
+
+    pub(crate) const fn normal(minimum_plugs: u32, maximum_plugs: u32, lifetime: u32) -> Self {
+        Self {
+            plug_ids: Vec::new(),
+            minimum_plugs,
+            maximum_plugs,
+            lifetime,
+            started: false,
+            ended: false,
+            aborted: false,
+        }
+    }
+
+    pub(crate) const fn start(&mut self) -> bool {
+        if self.started || self.ended || self.aborted {
+            return false;
+        }
+        self.started = true;
+        true
+    }
+
+    pub(crate) fn insert_plug(&mut self, plug_id: i32) -> bool {
+        if !self.started
+            || self.ended
+            || self.aborted
+            || self.maximum_plugs as usize <= self.plug_ids.len()
+        {
+            return false;
+        }
+        self.plug_ids.push(plug_id);
+        true
     }
 
     pub(crate) fn plug_ids_storage(&self) -> &[i32] {
@@ -322,7 +368,5 @@ impl CSession {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
 
 // COMPONENT_VARIANT_END: GameServer

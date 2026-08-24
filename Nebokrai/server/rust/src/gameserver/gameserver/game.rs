@@ -434,7 +434,9 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
     EquipmentUpgradeConsumptionRemoval, EquipmentUpgradeGoodsSnapshot,
     EquipmentUpgradeLostAuditLog, EquipmentUpgradeOutcome, EquipmentUpgradeReport,
 };
-use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
+use crate::gameserver::appserver::session::csessionfactory::{
+    CSessionFactory, EquipmentSessionPlugKind,
+};
 use crate::gameserver::appserver::shape::{
     CShape, MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
     ShapeView,
@@ -1509,6 +1511,41 @@ pub(crate) trait EquipmentUpgradeContext:
         &mut self,
         player: &CPlayer,
     ) -> PlayerCombatProperties;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentSessionOpenOutcome {
+    FeatureDisabled,
+    MissingOrDeadPlayer,
+    Busy,
+    TeamStateBlocked,
+    FactoryRejected,
+    SendFailed,
+    Opened,
+}
+
+#[must_use = "open report хранит session/plug identity, player lock и wire result"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentSessionOpenReport {
+    pub(crate) kind: EquipmentSessionPlugKind,
+    pub(crate) player_id: i32,
+    pub(crate) outcome: EquipmentSessionOpenOutcome,
+    pub(crate) session_id: Option<i32>,
+    pub(crate) plug_id: Option<i32>,
+    pub(crate) notification_delivery: Option<i32>,
+    pub(crate) player_transition:
+        Option<crate::gameserver::appserver::player::GoodsSessionPlayerRelease>,
+    pub(crate) open_delivery: Option<i32>,
+    pub(crate) collected_plug_ids: Vec<i32>,
+}
+
+pub(crate) trait EquipmentSessionOpenContext {
+    fn equipment_session_has_team_state(&mut self, player_id: i32) -> bool;
+    fn publish_equipment_session_notification(
+        &mut self,
+        player_id: i32,
+        string_id: &'static str,
+    ) -> i32;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5319,6 +5356,94 @@ impl CGame {
 
     pub(crate) const fn equipment_compose_list_mut(&mut self) -> &mut EquipmentComposeList {
         &mut self.equipment_compose_list
+    }
+
+    pub(crate) fn open_equipment_session<Context: EquipmentSessionOpenContext>(
+        &mut self,
+        player_id: i32,
+        kind: EquipmentSessionPlugKind,
+        context: &mut Context,
+    ) -> EquipmentSessionOpenReport {
+        let mut report = EquipmentSessionOpenReport {
+            kind,
+            player_id,
+            outcome: EquipmentSessionOpenOutcome::MissingOrDeadPlayer,
+            session_id: None,
+            plug_id: None,
+            notification_delivery: None,
+            player_transition: None,
+            open_delivery: None,
+            collected_plug_ids: Vec::new(),
+        };
+        if kind == EquipmentSessionPlugKind::DaKong && !self.da_kong_xiang_qian.key() {
+            report.outcome = EquipmentSessionOpenOutcome::FeatureDisabled;
+            return report;
+        }
+        let Some(player) = self.find_player(player_id) else {
+            return report;
+        };
+        if player.is_dead() {
+            return report;
+        }
+        if player.current_progress() != PlayerProgress::None {
+            report.outcome = EquipmentSessionOpenOutcome::Busy;
+            let string_id = match kind {
+                EquipmentSessionPlugKind::Upgrade => "GS0177",
+                EquipmentSessionPlugKind::DaKong => "GS1057",
+                EquipmentSessionPlugKind::Compose => "GS1061",
+            };
+            report.notification_delivery =
+                Some(context.publish_equipment_session_notification(player_id, string_id));
+            return report;
+        }
+        if kind != EquipmentSessionPlugKind::Upgrade
+            && context.equipment_session_has_team_state(player_id)
+        {
+            report.outcome = EquipmentSessionOpenOutcome::TeamStateBlocked;
+            let string_id = match kind {
+                EquipmentSessionPlugKind::DaKong => "GS1058",
+                EquipmentSessionPlugKind::Compose => "GS1062",
+                EquipmentSessionPlugKind::Upgrade => unreachable!(),
+            };
+            report.notification_delivery =
+                Some(context.publish_equipment_session_notification(player_id, string_id));
+            return report;
+        }
+        let Some((session_id, plug_id)) = self
+            .session_factory
+            .create_equipment_session(kind, player_id)
+        else {
+            report.outcome = EquipmentSessionOpenOutcome::FactoryRejected;
+            return report;
+        };
+        report.session_id = Some(session_id);
+        report.plug_id = Some(plug_id);
+        let (progress, lock_movement, message_type) = match kind {
+            EquipmentSessionPlugKind::Upgrade => (PlayerProgress::Upgrade, false, 0x0b_f912),
+            EquipmentSessionPlugKind::DaKong => (PlayerProgress::DaKong, false, 0x0b_f929),
+            EquipmentSessionPlugKind::Compose => (PlayerProgress::Compose, true, 0x0b_f92a),
+        };
+        report.player_transition = self
+            .find_player_mut(player_id)
+            .map(|player| player.begin_equipment_session(progress, lock_movement));
+        let mut message = CMessage::new(message_type);
+        message.add_long(session_id);
+        message.add_long(plug_id);
+        if kind == EquipmentSessionPlugKind::Upgrade {
+            message.add_long(player_id);
+        }
+        let delivery = message.send_to_player(self.net_server(), player_id);
+        report.open_delivery = Some(delivery);
+        if delivery == 0 {
+            report.outcome = EquipmentSessionOpenOutcome::SendFailed;
+            report.collected_plug_ids = self.session_factory.garbage_collect_session(session_id);
+            if let Some(player) = self.find_player_mut(player_id) {
+                let _ = player.release_goods_session_state();
+            }
+            return report;
+        }
+        report.outcome = EquipmentSessionOpenOutcome::Opened;
+        report
     }
 
     pub(crate) fn upgrade_equipment<Context: EquipmentUpgradeContext>(

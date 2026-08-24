@@ -2,15 +2,45 @@
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/script/function.cpp`. Из dense dispatcher-а
-//! материализован ID `9351 / ReflushExternProperty`: вычисляется только первая
+//! материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
+//! `9354 / OpenEquipmentCompose` и `2216 / OpenGoodsUpgrade`. Refresh вычисляет первую
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
 //! gameplay передаётся canonical `CGame`. Полный expression evaluator и
 //! остальные function ID ниже пока остаются RAW.
 
 use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongExternalRefreshReport;
-use crate::gameserver::gameserver::game::{CGame, EquipmentDaKongContext};
+use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
+use crate::gameserver::gameserver::game::{
+    CGame, EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
+};
 
 pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
+pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
+pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
+pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_UPGRADE: i32 = 2216;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentSessionScriptFunctionOutcome {
+    DifferentFunction,
+    Opened(EquipmentSessionOpenReport),
+}
+
+pub(crate) fn run_equipment_session_script_function<Context: EquipmentSessionOpenContext>(
+    game: &mut CGame,
+    player_id: i32,
+    function_id: i32,
+    context: &mut Context,
+) -> EquipmentSessionScriptFunctionOutcome {
+    let kind = match function_id {
+        SCRIPT_FUNCTION_OPEN_DA_KONG => EquipmentSessionPlugKind::DaKong,
+        SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE => EquipmentSessionPlugKind::Compose,
+        SCRIPT_FUNCTION_OPEN_EQUIPMENT_UPGRADE => EquipmentSessionPlugKind::Upgrade,
+        _ => return EquipmentSessionScriptFunctionOutcome::DifferentFunction,
+    };
+    EquipmentSessionScriptFunctionOutcome::Opened(
+        game.open_equipment_session(player_id, kind, context),
+    )
+}
 
 #[must_use = "script dispatch отличает чужой ID от handled no-op и выполненного gameplay"]
 #[derive(Clone, Debug, Eq, PartialEq)]

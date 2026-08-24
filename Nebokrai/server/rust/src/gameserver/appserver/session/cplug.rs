@@ -50,6 +50,14 @@ impl CPlug {
         self.base_object.set_id(plug_id);
     }
 
+    pub(crate) const fn set_plug_type(&mut self, plug_type: u32) {
+        self.plug_type = plug_type;
+    }
+
+    pub(crate) const fn set_session(&mut self, session_id: i32) {
+        self.session_id = session_id;
+    }
+
     pub(crate) const fn id(&self) -> i32 {
         self.base_object.get_id()
     }

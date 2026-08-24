@@ -1342,6 +1342,29 @@ impl CPlayer {
         self.current_progress = progress;
     }
 
+    pub(crate) fn begin_equipment_session(
+        &mut self,
+        progress: PlayerProgress,
+        lock_movement: bool,
+    ) -> GoodsSessionPlayerRelease {
+        let previous_progress = self.current_progress;
+        let previous_moveable_count = self.move_shape.moveable_count();
+        self.current_progress = progress;
+        if lock_movement {
+            self.move_shape.set_moveable(false);
+        }
+        GoodsSessionPlayerRelease {
+            previous_progress,
+            previous_moveable_count,
+            resulting_moveable_count: self.move_shape.moveable_count(),
+            moveable: self.move_shape.is_moveable(),
+        }
+    }
+
+    pub(crate) const fn is_dead(&self) -> bool {
+        CMoveShape::is_died(self.base_properties.health)
+    }
+
     pub(crate) fn release_goods_session_state(&mut self) -> GoodsSessionPlayerRelease {
         let previous_progress = self.current_progress;
         let previous_moveable_count = self.move_shape.moveable_count();

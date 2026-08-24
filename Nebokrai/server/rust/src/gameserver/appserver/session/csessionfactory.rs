@@ -13,9 +13,11 @@
 //! наблюдается, только exact-key lookup. `register_*`
 //! материализует достигнутый registry storage; `goodsmessage 0x8FC25`
 //! выполняет ordered session plug lookup по owner type/ID. Equipment-upgrade
-//! close материализует конкретный session GC: удаляет session и её plug IDs
-//! из base/concrete registries. Остальные `CreateSession/CreatePlug/InsertPlug`
-//! и общий polymorphic lifecycle ниже этим не объявляются реализованными.
+//! close материализует concrete session GC. Script-входы трёх equipment
+//! механик также создают normal session и typed plug, связывают owner/session,
+//! shadow owner/extend ID и insert-order. Общие team/trader/shop варианты
+//! `CreateSession/CreatePlug/InsertPlug` и их polymorphic lifecycle ниже этим
+//! не объявляются реализованными.
 
 use std::collections::BTreeMap;
 
@@ -25,16 +27,93 @@ use super::cequipmentupgrade::CEquipmentUpgrade;
 use super::cplug::CPlug;
 use super::csession::CSession;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentSessionPlugKind {
+    Upgrade,
+    DaKong,
+    Compose,
+}
+
+#[derive(Debug)]
 pub(crate) struct CSessionFactory {
     sessions: BTreeMap<i32, CSession>,
     plugs: BTreeMap<i32, CPlug>,
     equipment_compose_plugs: BTreeMap<i32, CEquipmentCompose>,
     equipment_da_kong_plugs: BTreeMap<i32, CEquipmentDaKong>,
     equipment_upgrade_plugs: BTreeMap<i32, CEquipmentUpgrade>,
+    next_session_id: i32,
+    next_plug_id: i32,
+}
+
+impl Default for CSessionFactory {
+    fn default() -> Self {
+        Self {
+            sessions: BTreeMap::new(),
+            plugs: BTreeMap::new(),
+            equipment_compose_plugs: BTreeMap::new(),
+            equipment_da_kong_plugs: BTreeMap::new(),
+            equipment_upgrade_plugs: BTreeMap::new(),
+            next_session_id: 1,
+            next_plug_id: 1,
+        }
+    }
 }
 
 impl CSessionFactory {
+    pub(crate) fn create_equipment_session(
+        &mut self,
+        kind: EquipmentSessionPlugKind,
+        player_id: i32,
+    ) -> Option<(i32, i32)> {
+        let session_id = self.next_session_id;
+        self.next_session_id = self.next_session_id.wrapping_add(1);
+        let mut session = CSession::normal(1, 1, 0);
+        if !session.start() {
+            return None;
+        }
+
+        let plug_id = self.next_plug_id;
+        self.next_plug_id = self.next_plug_id.wrapping_add(1);
+        let mut base = CPlug::new();
+        base.set_id(plug_id);
+        base.set_owner(400, player_id);
+        base.set_session(session_id);
+        base.set_plug_type(match kind {
+            EquipmentSessionPlugKind::Upgrade => 4,
+            EquipmentSessionPlugKind::DaKong => 6,
+            EquipmentSessionPlugKind::Compose => 7,
+        });
+        if !session.insert_plug(plug_id) {
+            return None;
+        }
+
+        self.sessions.insert(session_id, session);
+        self.plugs.insert(plug_id, base);
+        match kind {
+            EquipmentSessionPlugKind::Upgrade => {
+                let mut plug = CEquipmentUpgrade::new();
+                let shadow = plug.upgrade_container_mut().base_mut().base_mut();
+                shadow.base_mut().set_owner(10, session_id);
+                shadow.set_container_extend_id(plug_id.wrapping_shl(8));
+                self.equipment_upgrade_plugs.insert(plug_id, plug);
+            }
+            EquipmentSessionPlugKind::DaKong => {
+                let mut plug = CEquipmentDaKong::new();
+                let shadow = plug.upgrade_container_mut().base_mut().base_mut();
+                shadow.base_mut().set_owner(10, session_id);
+                shadow.set_container_extend_id(plug_id.wrapping_shl(8));
+                self.equipment_da_kong_plugs.insert(plug_id, plug);
+            }
+            EquipmentSessionPlugKind::Compose => {
+                let mut plug = CEquipmentCompose::new();
+                let shadow = plug.compose_container_mut().base_mut().base_mut();
+                shadow.base_mut().set_owner(10, session_id);
+                shadow.set_container_extend_id(plug_id.wrapping_shl(8));
+                self.equipment_compose_plugs.insert(plug_id, plug);
+            }
+        }
+        Some((session_id, plug_id))
+    }
     pub(crate) fn register_session(
         &mut self,
         session_id: i32,
