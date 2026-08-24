@@ -11,7 +11,8 @@
 //! string — fixed C-строки, auction/JJC/DbMisc поля читаются из общего snapshot.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
 //! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Nation contender damage
-//! читает подтверждённый `fDecTimeParam +0x568` из того же snapshot.
+//! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
+//! `lDiedStateTime +0x56C` из того же snapshot.
 
 use crate::setup::regionrouter::{
     RegionRouter, RegionRouterDecodeError, RegionRouterDecodeReport, RegionRouterSerializeError,
@@ -54,6 +55,7 @@ const DA_KONG_KEY_OFFSET: usize = 0xC85;
 const AREA_WIDTH_OFFSET: usize = 0x514;
 const AREA_HEIGHT_OFFSET: usize = 0x518;
 const CONTEND_DAMAGE_TIME_FACTOR_OFFSET: usize = 0x568;
+const DIED_STATE_TIME_OFFSET: usize = 0x56C;
 const MAX_FETCH_POWER_OFFSET: usize = 0x900;
 const BATTLE_FAIRY_ENABLED_OFFSET: usize = 0x904;
 
@@ -328,6 +330,10 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn contend_damage_time_factor(&self) -> f32 {
         self.read_f32(CONTEND_DAMAGE_TIME_FACTOR_OFFSET)
+    }
+
+    pub(crate) fn died_state_time_seconds(&self) -> i32 {
+        self.read_i32(DIED_STATE_TIME_OFFSET)
     }
 
     /// `lMaxFetchPower +0x900`: `CPlayer::SetFetchPower` сравнивает его

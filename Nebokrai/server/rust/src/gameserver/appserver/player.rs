@@ -74,6 +74,10 @@
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
 //! monster registry передаются как explicit facts.
+//! Nation-war player lifecycle связывает exact `SetContendState`,
+//! `OnDied`/`OnRelive` и millisecond-tail `PeriodicalUpdate`: owned state
+//! хранит три PDB-поля `+0xBA5/+0xBA8/+0xBAC`, а конкретные self/around
+//! маршруты сообщений остаются у `CGame`, владеющего network/session runtime.
 //! Periodic `ComputeWarSoulXY` сохраняет float follow-state, exact dead/snap
 //! thresholds, общий area-map tail и последующий `0xBF605`; restored-state
 //! concrete skill остаётся входным фактом. Non-finite повреждённый float-state
@@ -832,6 +836,9 @@ pub(crate) struct CPlayer {
     combat_properties: PlayerCombatProperties,
     ci_qing_open: bool,
     contend_state: bool,
+    city_war_died_state: bool,
+    city_war_died_state_time_ms: i32,
+    died_state_start_time_ms: u32,
     contribution: i32,
     silence_minutes: i32,
     silence_timestamp_minutes: u32,
@@ -881,6 +888,9 @@ impl CPlayer {
             combat_properties: PlayerCombatProperties::default(),
             ci_qing_open: false,
             contend_state: false,
+            city_war_died_state: false,
+            city_war_died_state_time_ms: 0,
+            died_state_start_time_ms: 0,
             contribution: 0,
             silence_minutes: 0,
             silence_timestamp_minutes: 0,
@@ -1084,11 +1094,68 @@ impl CPlayer {
         self.ci_qing_open
     }
 
-    /// Assembly/load boundary для уже восстановленного `m_bContendState`.
-    /// Полный gameplay setter имеет дополнительные broadcasts и остаётся у
-    /// своего отдельного сценария.
-    pub(crate) const fn set_contend_state_snapshot(&mut self, contend_state: bool) {
+    pub(crate) const fn contend_state(&self) -> bool {
+        self.contend_state
+    }
+
+    /// State-часть exact `SetContendState`: unchanged setter не публикуется.
+    /// `0xBFF28` собирает и маршрутизирует caller после успешной мутации.
+    pub(crate) const fn set_contend_state(&mut self, contend_state: bool) -> bool {
+        if self.contend_state == contend_state {
+            return false;
+        }
         self.contend_state = contend_state;
+        true
+    }
+
+    pub(crate) const fn city_war_died_state_time_ms(&self) -> i32 {
+        self.city_war_died_state_time_ms
+    }
+
+    pub(crate) const fn died_state_start_time_ms(&self) -> u32 {
+        self.died_state_start_time_ms
+    }
+
+    /// Direct assignment из `OnDied`: original не вызывает setter и поэтому
+    /// не посылает `0xBFF2B`; clock стартует только для positive duration.
+    pub(crate) const fn begin_city_war_death_countdown(&mut self, duration_ms: i32, now_ms: u32) {
+        self.city_war_died_state_time_ms = duration_ms;
+        if duration_ms > 0 {
+            self.died_state_start_time_ms = now_ms;
+        }
+    }
+
+    /// Достигнутый decode-tail восстановления player: persisted duration
+    /// запускает новый local clock, а action `ACT_DIED == 6` оставляет state
+    /// выключенным до `OnRelive`.
+    pub(crate) fn restore_city_war_death_countdown(&mut self, duration_ms: i32, now_ms: u32) {
+        self.city_war_died_state_time_ms = duration_ms;
+        if duration_ms > 0 {
+            self.died_state_start_time_ms = now_ms;
+            if self.shape().get_action() != 6 {
+                self.city_war_died_state = true;
+            }
+        }
+    }
+
+    /// State-часть exact `SetCityWarDiedStateTime`; caller использует return
+    /// как gate `0xBFF2B`, который допустим лишь при active died state.
+    pub(crate) const fn set_city_war_died_state_time_ms(&mut self, time_ms: i32) -> bool {
+        if self.city_war_died_state_time_ms == time_ms {
+            return false;
+        }
+        self.city_war_died_state_time_ms = time_ms;
+        self.city_war_died_state
+    }
+
+    /// Exact `SetCityWarDiedState` всегда пишет state и всегда публикует обе
+    /// копии `0xBFF2A`, даже если значение не изменилось.
+    pub(crate) const fn set_city_war_died_state(&mut self, died_state: bool) {
+        self.city_war_died_state = died_state;
+    }
+
+    pub(crate) const fn restart_died_state_clock(&mut self, now_ms: u32) {
+        self.died_state_start_time_ms = now_ms;
     }
 
     pub(crate) const fn contribution(&self) -> i32 {
@@ -4330,48 +4397,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::SetContendState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11140
-// RVA: 0x0002D730
-// ADDRESS: 0042d730
-// PROTOTYPE: void __thiscall SetContendState(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetCityWarDiedStateTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11153
-// RVA: 0x0002D7C0
-// ADDRESS: 0042d7c0
-// PROTOTYPE: void __thiscall SetCityWarDiedStateTime(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetCityWarDiedState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11169
-// RVA: 0x0002D860
-// ADDRESS: 0042d860
-// PROTOTYPE: void __thiscall SetCityWarDiedState(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::IsFactionMaster
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -5003,7 +5028,7 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 
 // ============================================================================
 // FUNCTION: CPlayer::PeriodicalUpdate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED_DEATH_STATE_TAIL
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:2348
@@ -7285,7 +7310,7 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 
 // ============================================================================
 // FUNCTION: CPlayer::OnDied
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED_NATION_PREFIX
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:3306
@@ -7537,7 +7562,7 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 
 // ============================================================================
 // FUNCTION: CPlayer::OnRelive
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED_DIED_STATE_PUBLICATION
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:1558

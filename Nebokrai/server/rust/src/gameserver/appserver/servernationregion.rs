@@ -17,6 +17,8 @@
 //! захват Алтаря. Предшествующий AI pass строго связывает четыре смерти stone
 //! guards со смертью адмирала и отдаёт ordered magic-stone replacements;
 //! player flags, сообщения и concrete NPC/monster lifetime остаются у caller-а.
+//! Virtual `GetDiedStateTime` замкнут тем же `CGame` death caller-ом через
+//! signed GlobeSetup field: wrapping seconds→milliseconds и деление пополам.
 
 use super::organizingsystem::fournationwarsys::FourNationRect;
 use super::serverregion::ServerRegionDecodeError;
@@ -1332,20 +1334,6 @@ pub(crate) fn convert_morale_to_exploit(
 // RVA: 0x000F15B0
 // ADDRESS: 004f15b0
 // PROTOTYPE: bool __thiscall IsNationFail(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: ServerNationRegion::GetDiedStateTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servernationregion.cpp:2347
-// RVA: 0x000F15D0
-// ADDRESS: 004f15d0
-// PROTOTYPE: long __thiscall GetDiedStateTime(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

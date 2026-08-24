@@ -105,6 +105,10 @@
 //! Nation contend проходит через те же canonical player/region owners: enter,
 //! cancel, damage и AI timeout исполняют `0xBFF29`, localized notices, захват
 //! с morale/top-info и три concrete treasure-box `AddNpc` в исходном порядке.
+//! Связанный player-state проход сохраняет `SetContendState` around-wire,
+//! Nation `OnDied` с half-duration penalty, обе relive-копии `0xBFF2A` и
+//! wrapping periodic countdown. Неопределённый `AL` раннего cancel-return
+//! остаётся typed outcome, а не подменяется придуманным уведомлением.
 //! Перед contend-таймером тот же Nation AI исполняет строгий gate четырёх
 //! стражей и адмирала: локализованный stone NPC получает explosion/removal
 //! around-пакеты, удаляется из spatial owner-а и заменяется monster-ом в
@@ -1005,6 +1009,16 @@ pub(crate) trait NationCombatContext: ServerRegionNpcContext {
     fn now_milliseconds(&mut self) -> u32;
     fn add_log_text(&mut self, text: &[u8]);
     fn put_debug_string(&mut self, text: &[u8]);
+
+    /// Выполняет concrete player-origin `CMessage::SendToAround`, включая
+    /// соседние areas и удалённых team members исходного runtime-а.
+    fn send_nation_player_around(
+        &mut self,
+        region: &CServerRegion,
+        origin: &CShape,
+        excluded_player_id: Option<i32>,
+        message: &CMessage,
+    ) -> Result<i32, ShapeCoordinateBlock>;
 }
 
 pub(crate) trait NationContendContext:
@@ -1067,6 +1081,7 @@ pub(crate) struct NationContendEnterReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: NationContendEnterOutcome,
     pub(crate) deliveries: Vec<i32>,
+    pub(crate) state_deliveries: Vec<Result<i32, ShapeCoordinateBlock>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1075,6 +1090,13 @@ pub(crate) struct NationContendCancelReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: Option<NationContendCancelOutcome>,
     pub(crate) delivery: Option<i32>,
+    pub(crate) state_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationContendCancelAllReport {
+    pub(crate) time_deliveries: Vec<i32>,
+    pub(crate) state_deliveries: Vec<(i32, Result<i32, ShapeCoordinateBlock>)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1121,8 +1143,55 @@ pub(crate) struct NationContendAiReport {
     pub(crate) completed: Option<NationContend>,
     pub(crate) completion_outcome: Option<NationContendCompletionOutcome>,
     pub(crate) completion_deliveries: Vec<i32>,
+    pub(crate) state_deliveries: Vec<(i32, Result<i32, ShapeCoordinateBlock>)>,
     pub(crate) top_info_delivery: Option<Result<i32, SendMessageError>>,
     pub(crate) treasure_spawns: Vec<Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NationPlayerDeathContendOutcome {
+    NotContending,
+    MissingReset,
+    RemovedLegacyReturnIndeterminate,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationPlayerDeathReport {
+    pub(crate) region_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) timing_finished: bool,
+    pub(crate) contend_outcome: NationPlayerDeathContendOutcome,
+    pub(crate) contend_state_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) contend_time_delivery: Option<i32>,
+    pub(crate) notice_delivery: Option<i32>,
+    pub(crate) died_state_time_ms: i32,
+    pub(crate) died_state_start_time_ms: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationPlayerDiedStatePublication {
+    pub(crate) player_id: i32,
+    pub(crate) state: bool,
+    pub(crate) self_delivery: i32,
+    pub(crate) around_delivery: Result<i32, ShapeCoordinateBlock>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NationPlayerDiedStateTick {
+    Inactive,
+    Waiting {
+        elapsed_ms: u32,
+    },
+    Advanced {
+        elapsed_ms: u32,
+        remaining_ms: i32,
+        time_delivery: Option<i32>,
+    },
+    Expired {
+        elapsed_ms: u32,
+        time_delivery: Option<i32>,
+        state_publication: NationPlayerDiedStatePublication,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2205,21 +2274,6 @@ impl CGame {
         self.finish_nation_war_player_timing(region_id, player_id, false, now_ms)
     }
 
-    /// Caller-side `CPlayer::OnDied` RVA `0x4D850`; exact call-site `0x4D8C6`.
-    pub(crate) fn finish_nation_war_timing_on_player_death(
-        &mut self,
-        player_id: i32,
-        now_ms: impl FnOnce() -> u32,
-    ) -> bool {
-        let Some(region_id) = self
-            .find_player(player_id)
-            .and_then(CPlayer::server_region_id)
-        else {
-            return false;
-        };
-        self.finish_nation_war_player_timing(region_id, player_id, true, now_ms)
-    }
-
     fn finish_nation_war_player_timing(
         &mut self,
         region_id: i32,
@@ -2276,6 +2330,7 @@ impl CGame {
             return None;
         };
         let mut deliveries = Vec::new();
+        let mut state_deliveries = Vec::new();
         let outcome = match self.find_player(player_id) {
             None => NationContendEnterOutcome::PlayerMissing,
             Some(player) if !player.can_attack_nation_monster() => {
@@ -2309,6 +2364,7 @@ impl CGame {
                             max_time,
                             context,
                             &mut deliveries,
+                            &mut state_deliveries,
                         )
                     }
                 } else {
@@ -2319,6 +2375,7 @@ impl CGame {
                         max_time,
                         context,
                         &mut deliveries,
+                        &mut state_deliveries,
                     )
                 }
             }
@@ -2329,30 +2386,41 @@ impl CGame {
             player_id,
             outcome,
             deliveries,
+            state_deliveries,
         })
     }
 
-    pub(crate) fn nation_cancel_contend_by_player_id(
+    pub(crate) fn nation_cancel_contend_by_player_id<Context: NationCombatContext>(
         &mut self,
         region_id: i32,
         player_id: i32,
+        context: &mut Context,
     ) -> Option<NationContendCancelReport> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
             self.restore_region_owner(owner);
             return None;
         };
-        let (outcome, delivery) = if self.find_player(player_id).is_none() {
-            (None, None)
+        let (outcome, delivery, state_delivery) = if self.find_player(player_id).is_none() {
+            (None, None, None)
         } else {
             let outcome = region.cancel_contend_by_player_id(player_id);
-            let delivery = matches!(outcome, NationContendCancelOutcome::MissingReset).then(|| {
-                if let Some(player) = self.find_player_mut(player_id) {
-                    player.set_contend_state_snapshot(false);
-                }
-                self.send_nation_contend_time(player_id, 0)
-            });
-            (Some(outcome), delivery)
+            let (delivery, state_delivery) =
+                if matches!(outcome, NationContendCancelOutcome::MissingReset) {
+                    let state_delivery = self.set_nation_player_contend_state(
+                        &region.war.base,
+                        player_id,
+                        false,
+                        context,
+                    );
+                    (
+                        Some(self.send_nation_contend_time(player_id, 0)),
+                        state_delivery,
+                    )
+                } else {
+                    (None, None)
+                };
+            (Some(outcome), delivery, state_delivery)
         };
         self.restore_region_owner(ServerRegionOwner::Nation(region));
         Some(NationContendCancelReport {
@@ -2360,24 +2428,35 @@ impl CGame {
             player_id,
             outcome,
             delivery,
+            state_delivery,
         })
     }
 
-    pub(crate) fn nation_cancel_all_contenders(&mut self, region_id: i32) -> Option<Vec<i32>> {
+    pub(crate) fn nation_cancel_all_contenders<Context: NationCombatContext>(
+        &mut self,
+        region_id: i32,
+        context: &mut Context,
+    ) -> Option<NationContendCancelAllReport> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(region) = owner else {
             self.restore_region_owner(owner);
             return None;
         };
-        let mut deliveries = Vec::new();
+        let mut time_deliveries = Vec::new();
+        let mut state_deliveries = Vec::new();
         for player_id in region.contender_player_ids() {
-            deliveries.push(self.send_nation_contend_time(player_id, 0));
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.set_contend_state_snapshot(false);
+            time_deliveries.push(self.send_nation_contend_time(player_id, 0));
+            if let Some(delivery) =
+                self.set_nation_player_contend_state(&region.war.base, player_id, false, context)
+            {
+                state_deliveries.push((player_id, delivery));
             }
         }
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        Some(deliveries)
+        Some(NationContendCancelAllReport {
+            time_deliveries,
+            state_deliveries,
+        })
     }
 
     fn finish_nation_contend_entry<Context: NationCombatContext>(
@@ -2388,13 +2467,16 @@ impl CGame {
         max_time: u32,
         context: &mut Context,
         deliveries: &mut Vec<i32>,
+        state_deliveries: &mut Vec<Result<i32, ShapeCoordinateBlock>>,
     ) -> NationContendEnterOutcome {
         if matches!(
             region.cancel_contend_by_player_id(player_id),
             NationContendCancelOutcome::MissingReset
         ) {
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.set_contend_state_snapshot(false);
+            if let Some(delivery) =
+                self.set_nation_player_contend_state(&region.war.base, player_id, false, context)
+            {
+                state_deliveries.push(delivery);
             }
             deliveries.push(self.send_nation_contend_time(player_id, 0));
         }
@@ -2404,8 +2486,10 @@ impl CGame {
             max_time as i32,
             context.now_milliseconds(),
         );
-        if let Some(player) = self.find_player_mut(player_id) {
-            player.set_contend_state_snapshot(true);
+        if let Some(delivery) =
+            self.set_nation_player_contend_state(&region.war.base, player_id, true, context)
+        {
+            state_deliveries.push(delivery);
         }
         deliveries.push(self.send_nation_contend_time(player_id, 0));
         if first_for_country && (1..=4).contains(&country) {
@@ -2491,6 +2575,7 @@ impl CGame {
         let completed = advance.completed;
         let mut completion_outcome = None;
         let mut completion_deliveries = Vec::new();
+        let mut state_deliveries = Vec::new();
         let mut top_info_delivery = None;
         let mut treasure_spawns = Vec::new();
         if let Some(contender) = completed {
@@ -2509,8 +2594,13 @@ impl CGame {
                             for cancelled_player_id in &capture.cancelled_player_ids {
                                 completion_deliveries
                                     .push(self.send_nation_contend_time(*cancelled_player_id, 0));
-                                if let Some(player) = self.find_player_mut(*cancelled_player_id) {
-                                    player.set_contend_state_snapshot(false);
+                                if let Some(delivery) = self.set_nation_player_contend_state(
+                                    &region.war.base,
+                                    *cancelled_player_id,
+                                    false,
+                                    context,
+                                ) {
+                                    state_deliveries.push((*cancelled_player_id, delivery));
                                 }
                             }
                             context.add_log_text(self.get_string_by_id(b"GS1073"));
@@ -2600,6 +2690,7 @@ impl CGame {
             completed,
             completion_outcome,
             completion_deliveries,
+            state_deliveries,
             top_info_delivery,
             treasure_spawns,
         }))
@@ -2776,6 +2867,195 @@ impl CGame {
             area_height,
             context,
         )
+    }
+
+    fn set_nation_player_contend_state<Context: NationCombatContext>(
+        &mut self,
+        region: &CServerRegion,
+        player_id: i32,
+        contend_state: bool,
+        context: &mut Context,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let player = self.find_player_mut(player_id)?;
+        if !player.set_contend_state(contend_state) {
+            return None;
+        }
+        let mut message = CMessage::new(0xbff28);
+        message.add_long(player_id);
+        message.add_byte(u8::from(contend_state));
+        let player = self
+            .find_player(player_id)
+            .expect("player сохранён между mutation и synchronous around-send");
+        Some(context.send_nation_player_around(region, player.shape(), None, &message))
+    }
+
+    fn publish_player_died_state<Context: NationCombatContext>(
+        &mut self,
+        region: &CServerRegion,
+        player_id: i32,
+        state: bool,
+        context: &mut Context,
+    ) -> Option<NationPlayerDiedStatePublication> {
+        self.find_player_mut(player_id)?
+            .set_city_war_died_state(state);
+        let mut message = CMessage::new(0xbff2a);
+        message.add_long(player_id);
+        message.add_byte(u8::from(state));
+        let self_delivery = message.send_to_player(self.net_server(), player_id);
+        let player = self
+            .find_player(player_id)
+            .expect("player сохранён между self и synchronous around-send");
+        let around_delivery =
+            context.send_nation_player_around(region, player.shape(), Some(player_id), &message);
+        Some(NationPlayerDiedStatePublication {
+            player_id,
+            state,
+            self_delivery,
+            around_delivery,
+        })
+    }
+
+    fn set_player_died_state_time(&mut self, player_id: i32, time_ms: i32) -> Option<i32> {
+        let player = self.find_player_mut(player_id)?;
+        if !player.set_city_war_died_state_time_ms(time_ms) {
+            return None;
+        }
+        let mut message = CMessage::new(0xbff2b);
+        message.add_long(player_id);
+        message.add_long(time_ms);
+        Some(message.send_to_player(self.net_server(), player_id))
+    }
+
+    /// Полный достигнутый Nation-prefix `CPlayer::OnDied`: закрывает active
+    /// war clock, исполняет virtual contend cancel, затем устанавливает
+    /// половину global death penalty без setter-wire.
+    pub(crate) fn player_died_in_nation_region<Context: NationCombatContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<NationPlayerDeathReport> {
+        let region_id = self.find_player(player_id)?.server_region_id()?;
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Nation(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let timing_finished = region
+            .finish_player_timing(player_id, true, || context.now_milliseconds())
+            .is_some();
+        let was_contending = self
+            .find_player(player_id)
+            .is_some_and(CPlayer::contend_state);
+        let mut contend_state_delivery = None;
+        let mut contend_time_delivery = None;
+        let mut notice_delivery = None;
+        let contend_outcome = if !was_contending {
+            NationPlayerDeathContendOutcome::NotContending
+        } else {
+            match region.cancel_contend_by_player_id(player_id) {
+                NationContendCancelOutcome::MissingReset => {
+                    contend_state_delivery = self.set_nation_player_contend_state(
+                        &region.war.base,
+                        player_id,
+                        false,
+                        context,
+                    );
+                    contend_time_delivery = Some(self.send_nation_contend_time(player_id, 0));
+                    notice_delivery = Some(
+                        self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS0136")),
+                    );
+                    NationPlayerDeathContendOutcome::MissingReset
+                }
+                NationContendCancelOutcome::Removed { .. } => {
+                    NationPlayerDeathContendOutcome::RemovedLegacyReturnIndeterminate
+                }
+            }
+        };
+        let died_state_time_ms = self
+            .globe_setup
+            .died_state_time_seconds()
+            .wrapping_mul(1000)
+            / 2;
+        let died_state_start_time_ms = (died_state_time_ms > 0).then(|| context.now_milliseconds());
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.begin_city_war_death_countdown(
+                died_state_time_ms,
+                died_state_start_time_ms.unwrap_or_default(),
+            );
+        }
+        self.restore_region_owner(ServerRegionOwner::Nation(region));
+        Some(NationPlayerDeathReport {
+            region_id,
+            player_id,
+            timing_finished,
+            contend_outcome,
+            contend_state_delivery,
+            contend_time_delivery,
+            notice_delivery,
+            died_state_time_ms,
+            died_state_start_time_ms,
+        })
+    }
+
+    /// Две достижимые `OnRelive` ветви сходятся в этом exact tail: positive
+    /// remaining time активирует state и публикует self, затем around.
+    pub(crate) fn publish_nation_died_state_after_relive<Context: NationCombatContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<NationPlayerDiedStatePublication> {
+        let player = self.find_player(player_id)?;
+        if player.city_war_died_state_time_ms() <= 0 {
+            return None;
+        }
+        let region_id = player.server_region_id()?;
+        let owner = self.take_region_owner(region_id)?;
+        let publication = self.publish_player_died_state(owner.base(), player_id, true, context);
+        self.restore_region_owner(owner);
+        publication
+    }
+
+    /// Exact death-state tail `CPlayer::PeriodicalUpdate`: `timeGetTime`
+    /// читается всегда, threshold строго `>1000`, DWORD elapsed wraps, а
+    /// сравнение выполняется после signed cast.
+    pub(crate) fn periodical_update_nation_died_state<Context: NationCombatContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<NationPlayerDiedStateTick> {
+        let now_ms = context.now_milliseconds();
+        let player = self.find_player(player_id)?;
+        let time_ms = player.city_war_died_state_time_ms();
+        if time_ms <= 0 {
+            return Some(NationPlayerDiedStateTick::Inactive);
+        }
+        let elapsed_ms = now_ms.wrapping_sub(player.died_state_start_time_ms());
+        if elapsed_ms <= 1000 {
+            return Some(NationPlayerDiedStateTick::Waiting { elapsed_ms });
+        }
+        self.find_player_mut(player_id)?
+            .restart_died_state_clock(now_ms);
+        if (elapsed_ms as i32) < time_ms {
+            let remaining_ms = time_ms.wrapping_sub(elapsed_ms as i32);
+            let time_delivery = self.set_player_died_state_time(player_id, remaining_ms);
+            return Some(NationPlayerDiedStateTick::Advanced {
+                elapsed_ms,
+                remaining_ms,
+                time_delivery,
+            });
+        }
+        let time_delivery = self.set_player_died_state_time(player_id, 0);
+        let region_id = self.find_player(player_id)?.server_region_id()?;
+        let owner = self.take_region_owner(region_id)?;
+        let state_publication =
+            self.publish_player_died_state(owner.base(), player_id, false, context);
+        self.restore_region_owner(owner);
+        let state_publication = state_publication?;
+        Some(NationPlayerDiedStateTick::Expired {
+            elapsed_ms,
+            time_delivery,
+            state_publication,
+        })
     }
 
     fn send_nation_contend_time(&self, player_id: i32, percentage: i32) -> i32 {
