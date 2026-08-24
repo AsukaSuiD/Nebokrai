@@ -1096,6 +1096,7 @@ pub(crate) enum NationContendCompletionOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NationMagicStoneTransitionOutcome {
     NpcMissing,
+    NpcNameAmbiguous { matches: usize },
     NpcCoordinateBlocked(ShapeCoordinateBlock),
     NpcRemovalBlocked(RegionMembershipBlock),
     MonsterPropertyMissing,
@@ -2626,14 +2627,28 @@ impl CGame {
             }
         };
         let npc_name = self.get_string_by_id(npc_name_id);
-        let Some(npc) = region.war.base.find_npc_by_name(npc_name) else {
-            return NationMagicStoneTransitionReport {
-                country,
-                npc_id: None,
-                explosion_delivery: None,
-                removal_delivery: None,
-                outcome: NationMagicStoneTransitionOutcome::NpcMissing,
-            };
+        let npc = match region.war.base.find_npc_by_name(npc_name) {
+            Ok(Some(npc)) => npc,
+            Ok(None) => {
+                return NationMagicStoneTransitionReport {
+                    country,
+                    npc_id: None,
+                    explosion_delivery: None,
+                    removal_delivery: None,
+                    outcome: NationMagicStoneTransitionOutcome::NpcMissing,
+                };
+            }
+            Err(block) => {
+                return NationMagicStoneTransitionReport {
+                    country,
+                    npc_id: None,
+                    explosion_delivery: None,
+                    removal_delivery: None,
+                    outcome: NationMagicStoneTransitionOutcome::NpcNameAmbiguous {
+                        matches: block.matches,
+                    },
+                };
+            }
         };
         let shape = npc.move_shape().shape();
         let npc_id = shape.identity().id;

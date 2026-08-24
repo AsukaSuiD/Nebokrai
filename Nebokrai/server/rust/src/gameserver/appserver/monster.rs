@@ -14,7 +14,7 @@
 //! `InitSkills/InitAI`, combat, serialization и AI остаются RAW ниже.
 
 use super::moveshape::CMoveShape;
-use super::shape::ShapeFigure;
+use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure};
 use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
@@ -109,6 +109,22 @@ impl CMonster {
     /// dispatch: action `ACT_DIED` and health-based death are independent.
     pub(crate) fn can_trigger_nation_damage(&self) -> bool {
         self.move_shape.shape().get_action() != 6 && !CMoveShape::is_died(self.hit_points)
+    }
+
+    /// Exact `OnClearWar` predicate использует ту же пару virtual action/HP,
+    /// но остаётся отдельным gameplay-контрактом phase cleanup.
+    pub(crate) fn can_clear_from_nation_war(&self) -> bool {
+        self.move_shape.shape().get_action() != 6 && !CMoveShape::is_died(self.hit_points)
+    }
+
+    pub(crate) const fn staged_for_delete(&self) -> bool {
+        self.move_shape.shape().change_state() == SHAPE_CHANGE_DELETE
+    }
+
+    pub(crate) fn stage_for_delete(&mut self) {
+        self.move_shape
+            .shape_mut()
+            .set_change_state(SHAPE_CHANGE_DELETE);
     }
 
     pub(crate) fn set_script_file(&mut self, script_file: &[u8]) {

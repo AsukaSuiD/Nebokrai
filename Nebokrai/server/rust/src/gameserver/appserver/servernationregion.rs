@@ -1524,6 +1524,8 @@ pub(crate) fn convert_morale_to_exploit(
 // ============================================================================
 // FUNCTION: ServerNationRegion::OnClearWar
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
+// IMPLEMENTED_SUBCHAIN: полный area monster/delete-state pass и четыре
+// `GS1120` NPC removal материализованы фазовым caller-ом в organsysmessage.rs.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servernationregion.cpp:948

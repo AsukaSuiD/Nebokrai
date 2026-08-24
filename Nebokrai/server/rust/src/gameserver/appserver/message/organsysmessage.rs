@@ -23,7 +23,10 @@
 //! пять counters сообщением `0x60319`. Достигнутая war family проходит
 //! живой FIFO `CGame`: расписания остаются owned, local-before-proxy lookup
 //! мутирует concrete City/Village/base owners, а message/player/log effects
-//! исполняет тот же runtime-контекст, который обслуживает MainLoop.
+//! исполняет тот же runtime-контекст, который обслуживает MainLoop. Nation
+//! clear больше не делегируется opaque callback-у: area-ordered monster pass,
+//! delete-state/list и четыре удаления `GS1120` исполняются здесь с exact
+//! `0xBF504` around-result до каждой mutation.
 
 use std::error::Error;
 use std::ffi::CString;
@@ -43,6 +46,7 @@ use super::super::servercityregion::CityRegionContext;
 use super::super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
+use super::super::shape::{CShape, ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::player::{CPlayer, PlayerExploitMutationReport};
 use crate::gameserver::gameserver::game::{CGame, GameWarRegionHandle, ServerRegionOwner};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
@@ -80,6 +84,22 @@ pub(crate) trait GameOrganizingWarRuntime:
     );
 
     fn on_four_nation_relive_block(&mut self, player_id: i32, block: FourNationReliveBlock);
+
+    /// Публикует exact `0xBF504(type,id,0)` вокруг monster/NPC до mutation.
+    fn send_four_nation_clear_around(
+        &mut self,
+        message: &CMessage,
+        region: &CServerRegion,
+        origin: &CShape,
+        game: &CGame,
+    ) -> i32;
+
+    /// Возвращает первый совпавший ID в текущем observable traversal старого
+    /// `stdext::hash_map`; повторный вызов после removal видит новый head.
+    fn find_four_nation_clear_npc_id(&mut self, region: &CServerRegion, name: &[u8])
+    -> Option<i32>;
+
+    fn on_four_nation_clear_block(&mut self, block: FourNationClearBlock);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,6 +108,21 @@ pub(crate) enum FourNationReliveBlock {
     RandomPosition(RegionCellAccessBlock),
     Coordinate(crate::gameserver::appserver::shape::ShapeCoordinateBlock),
     Position(RegionMembershipBlock),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FourNationClearBlock {
+    MonsterCoordinate {
+        monster_id: i32,
+        block: ShapeCoordinateBlock,
+    },
+    NpcRemoval {
+        npc_id: i32,
+        block: RegionMembershipBlock,
+    },
+    NpcTraversalMismatch {
+        npc_id: i32,
+    },
 }
 
 pub(crate) trait WarFactionUpdateContext {
@@ -986,6 +1021,116 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
         }
     }
 
+    /// Exact `ServerNationRegion::OnClearWar`: active/sleeping/pet/carriage
+    /// traversal сохраняет area storage order, подходящие monsters получают
+    /// disappear packet и state `1`, sleeping state `1` дополнительно
+    /// попадают в delete-list, затем удаляются до четырёх `GS1120` NPC.
+    fn clear_four_nation_war(
+        &mut self,
+        region: &mut super::super::servernationregion::ServerNationRegion,
+    ) {
+        let width = region.war.base.region.width;
+        let height = region.war.base.region.height;
+        for monster_id in region.war.base.area_monster_ids() {
+            let Some(monster) = region.war.base.find_monster_by_id(monster_id) else {
+                continue;
+            };
+            if !monster.can_clear_from_nation_war() {
+                continue;
+            }
+            let shape = monster.move_shape().shape();
+            let tile_x = match shape.get_tile_x() {
+                Ok(tile_x) => tile_x,
+                Err(block) => {
+                    self.runtime.on_four_nation_clear_block(
+                        FourNationClearBlock::MonsterCoordinate { monster_id, block },
+                    );
+                    continue;
+                }
+            };
+            let tile_y = match shape.get_tile_y() {
+                Ok(tile_y) => tile_y,
+                Err(block) => {
+                    self.runtime.on_four_nation_clear_block(
+                        FourNationClearBlock::MonsterCoordinate { monster_id, block },
+                    );
+                    continue;
+                }
+            };
+            if tile_x < 0 || tile_x >= width || tile_y < 0 || tile_y >= height {
+                continue;
+            }
+
+            let identity = shape.identity();
+            let mut removal = CMessage::new(0xbf504);
+            removal.base_mut().add_long(identity.object_type);
+            removal.base_mut().add_long(identity.id);
+            removal.base_mut().add_long(0);
+            let _delivery = self.runtime.send_four_nation_clear_around(
+                &removal,
+                &region.war.base,
+                shape,
+                self.game,
+            );
+            region
+                .war
+                .base
+                .find_monster_by_id_mut(monster_id)
+                .expect("around send не удаляет Nation monster owner")
+                .stage_for_delete();
+        }
+
+        for monster_id in region.war.base.sleeping_monster_ids() {
+            let Some(monster) = region.war.base.find_monster_by_id(monster_id) else {
+                continue;
+            };
+            if monster.staged_for_delete() {
+                region.war.base.stage_delete_shape(ShapeIdentity {
+                    object_type: 600,
+                    id: monster_id,
+                    ex_id: crate::public::guid::CGuid::GUID_INVALID,
+                });
+            }
+        }
+
+        let npc_name = self.game.get_string_by_id(b"GS1120").to_vec();
+        for _ in 0..4 {
+            let Some(npc_id) = self
+                .runtime
+                .find_four_nation_clear_npc_id(&region.war.base, &npc_name)
+            else {
+                continue;
+            };
+            let Some(npc) = region.war.base.find_npc_by_id(npc_id).filter(|npc| {
+                npc.move_shape().shape().base_object().get_name() == npc_name.as_slice()
+            }) else {
+                self.runtime.on_four_nation_clear_block(
+                    FourNationClearBlock::NpcTraversalMismatch { npc_id },
+                );
+                continue;
+            };
+            let shape = npc.move_shape().shape();
+            let identity = shape.identity();
+            let mut removal = CMessage::new(0xbf504);
+            removal.base_mut().add_long(identity.object_type);
+            removal.base_mut().add_long(identity.id);
+            removal.base_mut().add_long(0);
+            let _delivery = self.runtime.send_four_nation_clear_around(
+                &removal,
+                &region.war.base,
+                shape,
+                self.game,
+            );
+            if let Err(block) = region.war.base.remove_owned_npc_by_id(identity.id) {
+                self.runtime
+                    .on_four_nation_clear_block(FourNationClearBlock::NpcRemoval {
+                        npc_id: identity.id,
+                        block,
+                    });
+            }
+        }
+    }
+
     fn on_war_declare(&mut self, region: GameWarRegionHandle, war_number: i32) {
         match region {
             GameWarRegionHandle::Local(region_id) => {
@@ -1286,13 +1431,20 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
         GameOrganizingWarContext::on_war_end(self, region, war_number);
     }
 
-    fn on_clear_war(&mut self, region: Self::Region, war_number: i32) {
+    fn on_clear_war(&mut self, region: Self::Region, _war_number: i32) {
         let GameWarRegionHandle::Local(region_id) = region else {
             return;
         };
-        if let Some(ServerRegionOwner::Nation(region)) = self.game.find_region_mut(region_id) {
-            self.runtime.on_four_nation_clear(region, war_number);
-        }
+        let Some(owner) = self.game.take_region_owner(region_id) else {
+            return;
+        };
+        let ServerRegionOwner::Nation(mut region) = owner else {
+            self.game.restore_region_owner(owner);
+            return;
+        };
+        self.clear_four_nation_war(&mut region);
+        self.game
+            .restore_region_owner(ServerRegionOwner::Nation(region));
     }
 
     fn take_war_results(&mut self, region: Self::Region) -> [u32; 5] {

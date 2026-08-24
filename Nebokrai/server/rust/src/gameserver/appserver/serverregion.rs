@@ -45,6 +45,9 @@
 //! Message serialization/send остаются явным context-owner-ом; area storage и
 //! deferred queue принадлежат `CServerRegion`. `RefeashBlock` сначала снимает
 //! все block `3`, затем возвращает single-cell block живым `CMoveShape` и NPC.
+//! `m_listDeleteShape` теперь также имеет typed ordered identity storage:
+//! Nation clear напрямую ставит туда sleeping monsters, которых active AI
+//! scan не видит, сохраняя pointer-unique append исходника.
 //! GM `0x7FC07` использует identity snapshot registry для проверки, что каждый
 //! потенциально более ранний `GetShape` candidate разрешим runtime owner-ом;
 //! неразрешённый goods/other shape блокирует сценарий до ложного player match.
@@ -58,8 +61,9 @@
 //! War и Country subtype decoder-ы входят в этот owner напрямую.
 //! Concrete `AddNpc` уже создаёт `CNpc` через factory type `500`, назначает
 //! spawn-поля, проводит его через `AddObject/CArea` и сохраняет owned object.
-//! Type `500` ветвь `FindChildObjectByName` и достигнутое owned-NPC удаление
-//! сохраняют исходный map key-order и spatial/registry lifecycle для Nation AI.
+//! Type `500` lookup безопасно публикует только уникальное имя; observable
+//! traversal старого `stdext::hash_map` при дубликатах остаётся у caller
+//! context. Owned-NPC удаление сохраняет spatial/registry lifecycle Nation AI.
 //! Low-level `AddMonster` аналогично владеет type `600` spawn и хранит
 //! original-name key вместо висячего указателя в reloadable MonsterList;
 //! skills/AI Init и around serialization остаются concrete context callbacks.
@@ -432,6 +436,11 @@ pub(crate) struct ServerRegionNpcSpawnReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ServerRegionNpcNameBlock {
+    pub(crate) matches: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct NextNpcId(i32);
 
 impl NextNpcId {
@@ -571,6 +580,7 @@ pub(crate) struct CServerRegion {
     next_monster_id: NextMonsterId,
     owned_npcs: BTreeMap<i32, CNpc>,
     next_npc_id: NextNpcId,
+    delete_shapes: Vec<ShapeIdentity>,
     change_area_shapes: Vec<ShapeIdentity>,
     pub(crate) param: RegionParamState,
     pub(crate) return_setup: Option<ServerReturnSetup>,
@@ -838,6 +848,38 @@ impl CServerRegion {
         self.owned_monsters.get_mut(&id)
     }
 
+    /// Exact area-array traversal `FindShapes(600)` без смены pointer owner-а.
+    pub(crate) fn area_monster_ids(&self) -> Vec<i32> {
+        let mut ids = Vec::new();
+        for area in &self.areas {
+            area.append_monster_ids(&mut ids);
+        }
+        ids
+    }
+
+    /// Второй `OnClearWar` pass читает только sleeping storage каждой area.
+    pub(crate) fn sleeping_monster_ids(&self) -> Vec<i32> {
+        let mut ids = Vec::new();
+        for area in &self.areas {
+            area.append_sleeping_monster_ids(&mut ids);
+        }
+        ids
+    }
+
+    /// Сохраняет pointer-unique append в `m_listDeleteShape`; sleeping
+    /// monsters попадают сюда напрямую, потому что base AI их не сканирует.
+    pub(crate) fn stage_delete_shape(&mut self, identity: ShapeIdentity) -> bool {
+        if self.delete_shapes.contains(&identity) {
+            return false;
+        }
+        self.delete_shapes.push(identity);
+        true
+    }
+
+    pub(crate) fn staged_delete_shapes(&self) -> &[ShapeIdentity] {
+        &self.delete_shapes
+    }
+
     pub(crate) fn monster_base_property_keys(&self) -> impl Iterator<Item = &[u8]> {
         self.owned_monsters
             .values()
@@ -931,12 +973,27 @@ impl CServerRegion {
         self.owned_npcs.get(&id)
     }
 
-    /// Exact type `500` branch `FindChildObjectByName`: `m_mNpcs` обходится
-    /// в key-order и возвращает первый NPC с byte-exact C-string именем.
-    pub(crate) fn find_npc_by_name(&self, name: &[u8]) -> Option<&CNpc> {
-        self.owned_npcs
+    /// Безопасная форма type `500` lookup только для доказанно уникального
+    /// имени. Старый `stdext::hash_map` traversal при дубликатах не подменяется
+    /// порядком `BTreeMap`: неоднозначный результат становится typed block.
+    pub(crate) fn find_npc_by_name(
+        &self,
+        name: &[u8],
+    ) -> Result<Option<&CNpc>, ServerRegionNpcNameBlock> {
+        let mut matches = self
+            .owned_npcs
             .values()
-            .find(|npc| npc.move_shape().shape().base_object().get_name() == name)
+            .filter(|npc| npc.move_shape().shape().base_object().get_name() == name);
+        let Some(first) = matches.next() else {
+            return Ok(None);
+        };
+        let remaining = matches.count();
+        if remaining != 0 {
+            return Err(ServerRegionNpcNameBlock {
+                matches: remaining + 1,
+            });
+        }
+        Ok(Some(first))
     }
 
     /// Выполняет достигнутый virtual `RemoveObject` для owned NPC и только
@@ -2987,7 +3044,8 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // IMPLEMENTED_SUBCHAIN: сбор, unique insert, state reset и отложенное
 // применение `CS_CHANGEAREA`, а также monster refresh due/deficit/spawn
-// материализованы выше; weather/delete/remove/change-region/ClearPlayerAI и
+// материализованы выше; delete-list storage/unique sleeping append также
+// достигнуты, но weather/delete application/remove/change-region/ClearPlayerAI и
 // точный move-existing-monsters area callback остаются RAW в этом блоке.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb

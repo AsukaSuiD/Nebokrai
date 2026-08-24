@@ -20,6 +20,9 @@
 //! `CServerRegion::FindChildObject`; pointer ownership в `CArea` не вводится.
 //! `PlayerEnter` RVA `0x00075580` сохраняет точный девяти-area traversal, а
 //! сам `WakeUpMonsters` остаётся явным AI callback.
+//! Nation `OnClearWar` достигает ordered type `600` и sleeping-only views;
+//! они возвращают owned ID в исходном active/sleep/pet/carriage порядке без
+//! введения второго pointer owner-а.
 //! `OnRefreshMonster` RVA `0x00101A70`, вызываемый region AI только для area
 //! без plug-ов, в точном EXE является намеренным no-op (`ret 4`). Метод
 //! оставлен явным, чтобы не потерять подтверждённую границу owner-а и аргумент
@@ -168,6 +171,23 @@ impl CArea {
     /// Типизированный вид inherited `CSession::GetPlugList` для region AI.
     pub(crate) fn plug_list(&self) -> &[i32] {
         &self.players
+    }
+
+    /// Сохраняет порядок type `600` ветви `FindShapes`: active, sleeping,
+    /// pets, carriages внутри текущей area.
+    pub(crate) fn append_monster_ids(&self, destination: &mut Vec<i32>) {
+        let _guard = self.critical_section.lock();
+        destination.extend_from_slice(&self.active_monsters);
+        destination.extend_from_slice(&self.sleeping_monsters);
+        destination.extend_from_slice(&self.pets);
+        destination.extend_from_slice(&self.carriages);
+    }
+
+    /// Exact storage `GetSleepMonster`, используемый Nation clear после
+    /// общего type `600` pass.
+    pub(crate) fn append_sleeping_monster_ids(&self, destination: &mut Vec<i32>) {
+        let _guard = self.critical_section.lock();
+        destination.extend_from_slice(&self.sleeping_monsters);
     }
 
     /// Сохраняет пустой контракт `CArea::OnRefreshMonster(long)` exact EXE.

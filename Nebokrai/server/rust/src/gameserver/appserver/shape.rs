@@ -200,6 +200,7 @@ const MOVE_CHECK_CELLS: &[(usize, usize, MoveCheckCell)] = &[
 ];
 
 pub(crate) const SHAPE_CHANGE_NONE: i32 = 0;
+pub(crate) const SHAPE_CHANGE_DELETE: i32 = 1;
 pub(crate) const SHAPE_CHANGE_AREA: i32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
