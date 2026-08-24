@@ -1236,6 +1236,34 @@ pub(crate) trait HotkeyContext {
     fn publish_hotkey_hand_transfer(&mut self, transfer: &HotkeyHandTransferReport) -> Vec<i32>;
 }
 
+pub(crate) trait ContainerScriptContext {
+    /// Полный expression/script VM остаётся своим runtime owner-ом; caller
+    /// передаёт server-trusted path, nullable script data и live region/player.
+    fn run_last_container_script(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        region_id: Option<i32>,
+        script_name: &[u8],
+        script_data: Option<&[u8]>,
+    );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ContainerScriptActionOutcome {
+    InvalidAction,
+    SelectionCleared { shadows: usize },
+    EmptyScript,
+    Dispatched { script_data_found: bool },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ContainerScriptActionReport {
+    pub(crate) action: Option<i8>,
+    pub(crate) script_name: Vec<u8>,
+    pub(crate) outcome: ContainerScriptActionOutcome,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HotkeyAssignmentOutcome {
     InvalidSlot,
@@ -8708,6 +8736,76 @@ impl CGame {
 
     pub(crate) const fn synthesis(&self) -> &CSynthesis {
         &self.synthesis
+    }
+
+    pub(crate) fn handle_container_script_action<Context: ContainerScriptContext>(
+        &mut self,
+        player_id: i32,
+        region_id: Option<i32>,
+        action: i8,
+        context: &mut Context,
+    ) -> Option<ContainerScriptActionReport> {
+        if action == 0 {
+            let shadows = self
+                .find_player_mut(player_id)?
+                .clear_all_enhancement_selection();
+            return Some(ContainerScriptActionReport {
+                action: Some(action),
+                script_name: Vec::new(),
+                outcome: ContainerScriptActionOutcome::SelectionCleared { shadows },
+            });
+        }
+        if action != 1 {
+            return Some(ContainerScriptActionReport {
+                action: Some(action),
+                script_name: Vec::new(),
+                outcome: ContainerScriptActionOutcome::InvalidAction,
+            });
+        }
+        self.run_last_container_script(player_id, region_id, Some(action), context)
+    }
+
+    pub(crate) fn run_precious_box_item_script<Context: ContainerScriptContext>(
+        &mut self,
+        player_id: i32,
+        region_id: Option<i32>,
+        context: &mut Context,
+    ) -> Option<ContainerScriptActionReport> {
+        self.run_last_container_script(player_id, region_id, None, context)
+    }
+
+    fn run_last_container_script<Context: ContainerScriptContext>(
+        &mut self,
+        player_id: i32,
+        region_id: Option<i32>,
+        action: Option<i8>,
+        context: &mut Context,
+    ) -> Option<ContainerScriptActionReport> {
+        let script_name = self
+            .find_player(player_id)?
+            .last_container_script()
+            .to_vec();
+        if script_name.is_empty() {
+            return Some(ContainerScriptActionReport {
+                action,
+                script_name,
+                outcome: ContainerScriptActionOutcome::EmptyScript,
+            });
+        }
+        let script_data = self.script_file_data(&script_name).map(<[u8]>::to_vec);
+        let script_data_found = script_data.is_some();
+        context.run_last_container_script(
+            self,
+            player_id,
+            region_id,
+            &script_name,
+            script_data.as_deref(),
+        );
+        Some(ContainerScriptActionReport {
+            action,
+            script_name,
+            outcome: ContainerScriptActionOutcome::Dispatched { script_data_found },
+        })
     }
 
     pub(crate) fn assign_hotkey<Context: HotkeyContext>(

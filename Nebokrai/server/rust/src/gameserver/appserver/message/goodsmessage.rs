@@ -52,6 +52,9 @@
 //! `0x8FC08..0x8FC0A` восстанавливают весь hotkey lifecycle: безопасную
 //! 24-slot проекцию, возврат consumable из hand, positional/auto fallback,
 //! rollback/garbage object-move и ответы `0xBF908..0xBF90A`.
+//! `0x8FC11/0x8FC12` используют только server-trusted last-container script:
+//! confirm запускает live VM с region/player context, cancel очищает owned
+//! enhancement shadow, precious-box tail повторяет тот же script dispatch.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -78,12 +81,12 @@ use crate::gameserver::gameserver::game::{
     BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
     CGame, CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
     CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport,
-    CiQingOtherPersonTarget, CiQingSetupQueryReport, EquipmentComposeContext,
-    EquipmentDaKongContext, FairyContext, FairyHatchReport, FairyImplantResultReport,
-    FairySetupQueryReport, FairySyncretizeResultReport, GoodsDestroyConfirmReport,
-    GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport, HotkeyChangeReport,
-    HotkeyContext, HotkeyRemovalReport, SynthesisComposeReport, SynthesisContext,
-    SynthesisOpenReport,
+    CiQingOtherPersonTarget, CiQingSetupQueryReport, ContainerScriptActionReport,
+    ContainerScriptContext, EquipmentComposeContext, EquipmentDaKongContext, FairyContext,
+    FairyHatchReport, FairyImplantResultReport, FairySetupQueryReport, FairySyncretizeResultReport,
+    GoodsDestroyConfirmReport, GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport,
+    HotkeyChangeReport, HotkeyContext, HotkeyRemovalReport, SynthesisComposeReport,
+    SynthesisContext, SynthesisOpenReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -92,6 +95,8 @@ const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
 const ASSIGN_HOTKEY: u32 = 0x0008_fc08;
 const REMOVE_HOTKEY: u32 = 0x0008_fc09;
 const CHANGE_HOTKEY: u32 = 0x0008_fc0a;
+const HANDLE_CONTAINER_SCRIPT_ACTION: u32 = 0x0008_fc11;
+const RUN_PRECIOUS_BOX_ITEM_SCRIPT: u32 = 0x0008_fc12;
 const UPDATE_FAIRY_HATCH: u32 = 0x0008_fc13;
 const IMPLANT_FAIRY_EXPERIENCE: u32 = 0x0008_fc14;
 const SYNCRETIZE_FAIRY: u32 = 0x0008_fc15;
@@ -140,6 +145,7 @@ pub(crate) trait GameGoodsMessageRuntime:
     + GoodsDestroyContext
     + FairyContext
     + HotkeyContext
+    + ContainerScriptContext
     + SynthesisContext
 {
     fn run_battle_fairy_reset_script(
@@ -225,6 +231,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     HotkeyAssignment(HotkeyAssignmentReport),
     HotkeyRemoval(HotkeyRemovalReport),
     HotkeyChange(HotkeyChangeReport),
+    ContainerScriptAction(ContainerScriptActionReport),
     BattleFairyCombineCheck(BattleFairyCombineCheck),
     BattleFairyCombine(BattleFairyCombineReport),
     BattleFairyUpgrade(BattleFairyUpgradeReport),
@@ -284,6 +291,8 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
         ASSIGN_HOTKEY
             | REMOVE_HOTKEY
             | CHANGE_HOTKEY
+            | HANDLE_CONTAINER_SCRIPT_ACTION
+            | RUN_PRECIOUS_BOX_ITEM_SCRIPT
             | UPDATE_FAIRY_HATCH
             | IMPLANT_FAIRY_EXPERIENCE
             | SYNCRETIZE_FAIRY
@@ -381,6 +390,24 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     .expect("resolved message player остаётся live во время hotkey change"),
             )
         }
+        HANDLE_CONTAINER_SCRIPT_ACTION => {
+            let action = match message.base_mut().get_char() {
+                Some(value) => value,
+                None => {
+                    return Some(Err(GameGoodsMessageError::MissingField(
+                        "container script action",
+                    )));
+                }
+            };
+            GameGoodsMessageOutcome::ContainerScriptAction(
+                game.handle_container_script_action(player_id, region_id, action, runtime)
+                    .expect("resolved player остаётся live во время container script action"),
+            )
+        }
+        RUN_PRECIOUS_BOX_ITEM_SCRIPT => GameGoodsMessageOutcome::ContainerScriptAction(
+            game.run_precious_box_item_script(player_id, region_id, runtime)
+                .expect("resolved player остаётся live во время precious-box script action"),
+        ),
         UPDATE_FAIRY_HATCH => {
             if !game
                 .find_player(player_id)

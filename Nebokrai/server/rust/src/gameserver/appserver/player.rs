@@ -37,6 +37,8 @@
 //! Hotkey owner хранит exact 24 DWORD и связывает назначение с возвратом
 //! consumable из hand в packet/hand/wallet/YuanBao; equipment доказательно
 //! отвергает consumable до mutation.
+//! Enhancement/precious-box confirm хранит server-trusted container-script
+//! path у игрока; отмена очищает только shadow selection без переноса goods.
 //! Depot-password vertical дополнительно материализует `m_eProgress`, оба
 //! changing-guard-а, password byte-string и owned `CBank/CDepot`; numeric
 //! значения внутреннего `eProgress` не выходят в wire и потому заменены typed
@@ -1145,6 +1147,7 @@ pub(crate) struct CPlayer {
     money: u32,
     account: Vec<u8>,
     depot_password: Vec<u8>,
+    last_container_script: Vec<u8>,
     bank: CBank,
     depot: CDepot,
     hand: CAmountLimitGoodsContainer,
@@ -1232,6 +1235,7 @@ impl CPlayer {
             money: 0,
             account: Vec::new(),
             depot_password: Vec::new(),
+            last_container_script: Vec::new(),
             bank: CBank::new(),
             depot: CDepot::new(),
             hand: CAmountLimitGoodsContainer::new(),
@@ -2159,6 +2163,22 @@ impl CPlayer {
 
     pub(crate) fn enhancement_selected_goods_id(&self) -> Option<CGuid> {
         self.enhancement.base().goods_id_at(0)
+    }
+
+    /// Script-function owner пишет server-trusted path; client `0x8FC11/12`
+    /// никогда не передаёт имя исполняемого файла.
+    pub(crate) fn set_last_container_script(&mut self, script: impl AsRef<[u8]>) {
+        self.last_container_script.clear();
+        self.last_container_script
+            .extend_from_slice(script.as_ref());
+    }
+
+    pub(crate) fn last_container_script(&self) -> &[u8] {
+        &self.last_container_script
+    }
+
+    pub(crate) fn clear_all_enhancement_selection(&mut self) -> usize {
+        self.enhancement.clear()
     }
 
     pub(crate) fn record_enhancement_selection(
