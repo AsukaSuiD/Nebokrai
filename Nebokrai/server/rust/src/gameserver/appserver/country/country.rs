@@ -16,9 +16,11 @@
 //! `SetCountryTreasury` сохраняет local-before-send и exact World
 //! `0x60314(country, selector=1, value)`; `0x7FF04/05` обновляют CI/king state
 //! до client publication. Фактическую отправку выполняет
-//! dispatcher после освобождения mutable country borrow. Остальные governance,
-//! exile, quest и message методы владельца ниже ещё сохраняют RAW. `BTreeMap` и
-//! owned state заменяют STL nodes/raw pointers.
+//! dispatcher после освобождения mutable country borrow. `AddToExileList`
+//! заменяет прежнюю запись текущим `timeGetTime` sample и сохраняет ordered
+//! player-ID traversal для `0x6030E/0x7FF15`. Остальные governance, exile-time,
+//! quest и message методы владельца ниже ещё сохраняют RAW. `BTreeMap` и owned
+//! state заменяют STL nodes/raw pointers.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -67,6 +69,14 @@ pub(crate) struct CountryKingIdMutationReport {
     pub(crate) country_id: u8,
     pub(crate) previous: i32,
     pub(crate) applied: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryExileMutationReport {
+    pub(crate) country_id: u8,
+    pub(crate) player_id: i32,
+    pub(crate) previous_started_at_ms: Option<i32>,
+    pub(crate) applied_started_at_ms: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -185,6 +195,27 @@ impl CCountry {
             previous,
             applied: king_id,
         }
+    }
+
+    pub(crate) fn add_to_exile_list(
+        &mut self,
+        player_id: i32,
+        sampled_at_ms: u32,
+    ) -> CountryExileMutationReport {
+        let applied_started_at_ms = sampled_at_ms as i32;
+        let previous_started_at_ms = self
+            .exile_started_at_ms
+            .insert(player_id, applied_started_at_ms);
+        CountryExileMutationReport {
+            country_id: self.country_id,
+            player_id,
+            previous_started_at_ms,
+            applied_started_at_ms,
+        }
+    }
+
+    pub(crate) fn exile_player_ids(&self) -> Vec<i32> {
+        self.exile_started_at_ms.keys().copied().collect()
     }
 
     /// Exact `SetCountryTreasury`: сначала публикует новое значение, затем
@@ -368,7 +399,7 @@ fn take_country_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CCountry::AddToExileList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:115

@@ -33,9 +33,11 @@
 //! payload, адресно меняет type на client `0xC0304/0xC0305` и отправляет королю.
 //! Governance effects `0x7FF0C/0D/10` замыкают absolve counters/country notice,
 //! silence clock и king-authorized control-point publication `0xC030E`.
+//! Exile round-trip сохраняет Game guards и relocation, timestamped ordered
+//! country-state, ответ World `0x6030E` и итоговую синхронизацию `0x7FF15`.
 
 use super::super::country::country::{
-    CountryInformationMutationReport, CountryKingIdMutationReport,
+    CountryExileMutationReport, CountryInformationMutationReport, CountryKingIdMutationReport,
 };
 use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,
@@ -68,6 +70,19 @@ pub(crate) trait GameCountryWarRuntime:
     /// Единственный `timeGetTime` sample, который `SetSilence` переводит в
     /// минуты после успешных country/player gates.
     fn country_governance_now_milliseconds(&mut self) -> u32;
+
+    /// Исполняет exile `ChangeRegion` с сохранённым текущим направлением.
+    fn change_exiled_player_region(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        x: i32,
+        y: i32,
+        direction: i32,
+    ) -> bool;
+
+    /// Отдельный `timeGetTime` sample на каждый exact `AddToExileList`.
+    fn country_exile_now_milliseconds(&mut self) -> u32;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -139,7 +154,37 @@ pub(crate) struct GameCountryWarMessageReport {
     pub(crate) country_information_change: Option<GameCountryInformationChangeReport>,
     pub(crate) direct_response: Option<GameCountryDirectResponseReport>,
     pub(crate) governance_effect: Option<GameCountryGovernanceEffectReport>,
+    pub(crate) exile: Option<GameCountryExileReport>,
     pub(crate) broadcast: Option<CountryWarBroadcastOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameCountryExileOutcome {
+    CountryMissing,
+    PlayerMissing,
+    DestinationMissing,
+    Response {
+        guard_country: Option<u8>,
+        extra_legacy_long: Option<i32>,
+        relocation: Option<bool>,
+        mutation: Option<CountryExileMutationReport>,
+        player_ids: Vec<i32>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    ListSynchronized {
+        advertised_count: i32,
+        mutations: Vec<CountryExileMutationReport>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameCountryExileReport {
+    pub(crate) opcode: u32,
+    pub(crate) country: u8,
+    pub(crate) country_complete: bool,
+    pub(crate) player_id: Option<i32>,
+    pub(crate) player_id_complete: Option<bool>,
+    pub(crate) outcome: GameCountryExileOutcome,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -400,6 +445,20 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
     Result<GameCountryWarMessageReport, CountryWarMessageDispatchError<CountryBattleStateBlock>>,
 > {
     let opcode = message.message_type() as u32;
+    if matches!(opcode, 0x7ff0e | 0x7ff15) {
+        let exile = dispatch_country_exile_message(message, game, runtime, opcode);
+        return Some(Ok(GameCountryWarMessageReport {
+            dispatched: None,
+            governance: None,
+            entry: None,
+            player_country_change: None,
+            country_information_change: None,
+            direct_response: None,
+            governance_effect: None,
+            exile: Some(exile),
+            broadcast: None,
+        }));
+    }
     if matches!(opcode, 0x7ff0c | 0x7ff0d | 0x7ff10) {
         let governance_effect =
             dispatch_country_governance_effect_message(message, game, runtime, opcode);
@@ -411,6 +470,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             country_information_change: None,
             direct_response: None,
             governance_effect: Some(governance_effect),
+            exile: None,
             broadcast: None,
         }));
     }
@@ -424,6 +484,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             country_information_change: None,
             direct_response: Some(direct_response),
             governance_effect: None,
+            exile: None,
             broadcast: None,
         }));
     }
@@ -437,6 +498,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             country_information_change: Some(country_information_change),
             direct_response: None,
             governance_effect: None,
+            exile: None,
             broadcast: None,
         }));
     }
@@ -450,6 +512,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             country_information_change: None,
             direct_response: None,
             governance_effect: None,
+            exile: None,
             broadcast: None,
         }));
     }
@@ -463,6 +526,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             country_information_change: None,
             direct_response: None,
             governance_effect: None,
+            exile: None,
             broadcast: None,
         }));
     }
@@ -476,6 +540,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             country_information_change: None,
             direct_response: None,
             governance_effect: None,
+            exile: None,
             broadcast: None,
         }));
     }
@@ -529,8 +594,147 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
         country_information_change: None,
         direct_response: None,
         governance_effect: None,
+        exile: None,
         broadcast,
     }))
+}
+
+fn dispatch_country_exile_message<Runtime: GameCountryWarRuntime>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    opcode: u32,
+) -> GameCountryExileReport {
+    let decoded_country = message.base_mut().get_char();
+    let country = decoded_country.unwrap_or(0) as u8;
+    if opcode == 0x7ff15 {
+        let advertised_count = message.base_mut().get_long().unwrap_or(0);
+        let Some(_) = game.country_handler().country(country) else {
+            return GameCountryExileReport {
+                opcode,
+                country,
+                country_complete: decoded_country.is_some(),
+                player_id: None,
+                player_id_complete: None,
+                outcome: GameCountryExileOutcome::CountryMissing,
+            };
+        };
+        let mut mutations = Vec::new();
+        for _ in 0..advertised_count.max(0) {
+            let player_id = message.base_mut().get_long().unwrap_or(0);
+            let sampled_at_ms = runtime.country_exile_now_milliseconds();
+            let mutation = game
+                .country_handler_mut()
+                .country_mut(country)
+                .expect("country owner проверен перед синхронизацией exile-list")
+                .add_to_exile_list(player_id, sampled_at_ms);
+            mutations.push(mutation);
+        }
+        return GameCountryExileReport {
+            opcode,
+            country,
+            country_complete: decoded_country.is_some(),
+            player_id: None,
+            player_id_complete: None,
+            outcome: GameCountryExileOutcome::ListSynchronized {
+                advertised_count,
+                mutations,
+            },
+        };
+    }
+
+    if game.country_handler().country(country).is_none() {
+        return GameCountryExileReport {
+            opcode,
+            country,
+            country_complete: decoded_country.is_some(),
+            player_id: None,
+            player_id_complete: None,
+            outcome: GameCountryExileOutcome::CountryMissing,
+        };
+    }
+    let decoded_player_id = message.base_mut().get_long();
+    let player_id = decoded_player_id.unwrap_or(0);
+    let Some(player) = game.find_player(player_id) else {
+        return GameCountryExileReport {
+            opcode,
+            country,
+            country_complete: decoded_country.is_some(),
+            player_id: Some(player_id),
+            player_id_complete: Some(decoded_player_id.is_some()),
+            outcome: GameCountryExileOutcome::PlayerMissing,
+        };
+    };
+    let current_region_id = player.server_region_id();
+    let direction = player.shape().get_direction();
+    let can_exile = !player.in_changing_region() && !player.in_changing_server();
+    let guard_country = current_region_id
+        .and_then(|region_id| game.find_region(region_id))
+        .map(|region| region.base().country);
+    let can_exile = can_exile && guard_country == Some(country);
+
+    let mut extra_legacy_long = None;
+    let mut relocation = None;
+    let mut mutation = None;
+    if can_exile {
+        extra_legacy_long = message.base_mut().get_long();
+        let Some(destination) = game.country_param().exile_point(country) else {
+            return GameCountryExileReport {
+                opcode,
+                country,
+                country_complete: decoded_country.is_some(),
+                player_id: Some(player_id),
+                player_id_complete: Some(decoded_player_id.is_some()),
+                outcome: GameCountryExileOutcome::DestinationMissing,
+            };
+        };
+        if current_region_id != Some(destination.region_id) {
+            relocation = Some(runtime.change_exiled_player_region(
+                player_id,
+                destination.region_id,
+                destination.x,
+                destination.y,
+                direction,
+            ));
+        }
+        let sampled_at_ms = runtime.country_exile_now_milliseconds();
+        mutation = Some(
+            game.country_handler_mut()
+                .country_mut(country)
+                .expect("country owner проверен перед AddToExileList")
+                .add_to_exile_list(player_id, sampled_at_ms),
+        );
+    }
+
+    let player_ids = game
+        .country_handler()
+        .country(country)
+        .expect("country owner жив до exile response")
+        .exile_player_ids();
+    let mut response = CMessage::new(0x0006_030e);
+    response.base_mut().add_long(player_id);
+    response.base_mut().add_byte(u8::from(mutation.is_some()));
+    response.base_mut().add_byte(country);
+    response.base_mut().add_long(player_ids.len() as i32);
+    for &exiled_player_id in &player_ids {
+        response.base_mut().add_long(exiled_player_id);
+    }
+    let delivery = response.send(game, false);
+    GameCountryExileReport {
+        opcode,
+        country,
+        country_complete: decoded_country.is_some(),
+        player_id: Some(player_id),
+        player_id_complete: Some(decoded_player_id.is_some()),
+        outcome: GameCountryExileOutcome::Response {
+            guard_country,
+            extra_legacy_long,
+            relocation,
+            mutation,
+            player_ids,
+            delivery,
+        },
+    }
 }
 
 fn dispatch_country_governance_effect_message<Runtime: GameCountryWarRuntime>(

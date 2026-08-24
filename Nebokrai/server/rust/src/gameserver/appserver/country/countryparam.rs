@@ -16,6 +16,10 @@
 //! `map::insert` (first-wins). Process singleton технически заменён owned-полем
 //! `CGame`; неизвестные до snapshot constructor-scalars выражены `None`, а
 //! `BTreeMap` сохраняет ordered-map lookup.
+//! Один и тот же четырёх-DWORD exile wire World использует как rect только для
+//! проверки наличия, а Game `OnCountryMessage(0x7FF0E)` читает как
+//! `(region_id, x, y, legacy_fourth)`; эта межсерверная асимметрия выражена
+//! отдельным accessor-ом без изменения формата snapshot-а.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -76,6 +80,14 @@ pub(crate) struct CountryMainRect {
     pub(crate) top: i32,
     pub(crate) right: i32,
     pub(crate) bottom: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CountryExilePoint {
+    pub(crate) region_id: i32,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) legacy_fourth: i32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -246,6 +258,15 @@ impl CCountryParam {
 
     pub(crate) fn exile_rect(&self, country: u8) -> Option<CountryMainRect> {
         self.exile_rects.get(&country).copied()
+    }
+
+    pub(crate) fn exile_point(&self, country: u8) -> Option<CountryExilePoint> {
+        self.exile_rect(country).map(|wire| CountryExilePoint {
+            region_id: wire.left,
+            x: wire.top,
+            y: wire.right,
+            legacy_fourth: wire.bottom,
+        })
     }
 
     pub(crate) fn exile_rects(&self) -> &BTreeMap<u8, CountryMainRect> {
