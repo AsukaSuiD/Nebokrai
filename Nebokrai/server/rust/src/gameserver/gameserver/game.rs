@@ -453,6 +453,9 @@ use crate::gameserver::appserver::message::servermessage::{
     GameServerMessageError, GameServerMessageReport, InitialRegionStartupContext,
     WarScheduleSetupContext, dispatch_server_message,
 };
+use crate::gameserver::appserver::message::shopmessage::{
+    ShopMessageError, ShopMessageReport, dispatch_shop_message,
+};
 use crate::gameserver::appserver::message::skillmessage::{
     GameSkillMessageError, GameSkillMessageReport, GameSkillMessageRuntime,
     dispatch_game_skill_message,
@@ -2751,6 +2754,7 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) legacy_return: i32,
     pub(crate) auction_messages: Vec<Result<WorldAuctionMessageReport, WorldAuctionMessageError>>,
     pub(crate) player_shop_messages: Vec<Result<PlayerShopMessageReport, PlayerShopMessageError>>,
+    pub(crate) shop_messages: Vec<Result<ShopMessageReport, ShopMessageError>>,
     pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
     pub(crate) gma_messages: Vec<Result<GmaMessageReport, GmaMessageError>>,
     pub(crate) depot_messages: Vec<DepotMessageReport>,
@@ -7121,7 +7125,7 @@ impl CGame {
         }
     }
 
-    fn send_player_money_increase<Context: OldClientGoodsCodec>(
+    pub(crate) fn send_player_money_increase<Context: OldClientGoodsCodec>(
         &self,
         player_id: i32,
         outcome: &crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome,
@@ -14006,6 +14010,83 @@ impl CGame {
         })
     }
 
+    pub(crate) fn add_npc_shop_goods_to_packet<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        goods: Vec<CGoods>,
+        context: &mut Context,
+    ) -> Option<(Vec<CiQingPacketAddition>, Vec<CGoods>)> {
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        let player = players.get_mut(&player_id)?;
+        let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+        Some(player.add_shop_goods_to_packet(goods, goods_factory, &mut encode))
+    }
+
+    pub(crate) fn increase_player_money<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        amount: u32,
+        context: &mut Context,
+    ) -> Option<(crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome, Vec<i32>)> {
+        let created = self.create_goods_batch(self.goods_factory.get_gold_coin_index(), amount);
+        let outcome = {
+            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+            players.get_mut(&player_id)?.increase_money(amount, goods_factory, created)
+        };
+        let deliveries = self.send_player_money_increase(player_id, &outcome, context);
+        Some((outcome, deliveries))
+    }
+
+    pub(crate) fn add_region_tax(
+        &mut self,
+        region_id: i32,
+        amount: u32,
+    ) -> Vec<Result<i32, SendMessageError>> {
+        let mut deliveries = Vec::new();
+        let mut pending = vec![(region_id, amount)];
+        let mut visited = BTreeSet::new();
+        let mut updates = Vec::new();
+        while let Some((current_id, current_amount)) = pending.pop() {
+            if !visited.insert(current_id) {
+                let mut transfer = CMessage::new(0x0006_012e);
+                transfer.add_long(current_id);
+                transfer.add_ulong(current_amount);
+                deliveries.push(transfer.send(self, false));
+                continue;
+            }
+            let Some(stage) = self
+                .find_region_mut(current_id)
+                .map(|region| region.base_mut().add_tax_money(current_amount))
+            else {
+                let mut transfer = CMessage::new(0x0006_012e);
+                transfer.add_long(current_id);
+                transfer.add_ulong(current_amount);
+                deliveries.push(transfer.send(self, false));
+                continue;
+            };
+            updates.push(stage);
+            if let Some(parent_id) = stage.superior_region_id.filter(|_| stage.superior_share != 0) {
+                if self.find_region(parent_id).is_some() && !visited.contains(&parent_id) {
+                    pending.push((parent_id, stage.superior_share));
+                } else {
+                    let mut transfer = CMessage::new(0x0006_012e);
+                    transfer.add_long(parent_id);
+                    transfer.add_ulong(stage.superior_share);
+                    deliveries.push(transfer.send(self, false));
+                }
+            }
+        }
+        for stage in updates.into_iter().rev() {
+            let mut update = CMessage::new(0x0006_012d);
+            update.add_long(stage.region_id);
+            update.add_ulong(stage.today_total_tax);
+            update.add_ulong(stage.total_tax);
+            update.add_long(stage.current_tax_rate);
+            deliveries.push(update.send(self, false));
+        }
+        deliveries
+    }
+
     pub(crate) fn add_goods_to_player_packet(
         &mut self,
         player_id: i32,
@@ -16243,6 +16324,7 @@ impl CGame {
     ) -> GameProcessMessagesReport<Runtime::RuntimeError> {
         let mut auction_messages = Vec::new();
         let mut player_shop_messages = Vec::new();
+        let mut shop_messages = Vec::new();
         let mut gm_messages = Vec::new();
         let mut gma_messages = Vec::new();
         let mut depot_messages = Vec::new();
@@ -16270,6 +16352,7 @@ impl CGame {
                 runtime,
                 &mut auction_messages,
                 &mut player_shop_messages,
+                &mut shop_messages,
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
@@ -16299,6 +16382,7 @@ impl CGame {
                 runtime,
                 &mut auction_messages,
                 &mut player_shop_messages,
+                &mut shop_messages,
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
@@ -16330,6 +16414,7 @@ impl CGame {
                         runtime,
                         &mut auction_messages,
                         &mut player_shop_messages,
+                        &mut shop_messages,
                         &mut gm_messages,
                         &mut gma_messages,
                         &mut depot_messages,
@@ -16360,6 +16445,7 @@ impl CGame {
             legacy_return: 1,
             auction_messages,
             player_shop_messages,
+            shop_messages,
             gm_messages,
             gma_messages,
             depot_messages,
@@ -16385,6 +16471,7 @@ impl CGame {
         runtime: &mut Runtime,
         auction_messages: &mut Vec<Result<WorldAuctionMessageReport, WorldAuctionMessageError>>,
         player_shop_messages: &mut Vec<Result<PlayerShopMessageReport, PlayerShopMessageError>>,
+        shop_messages: &mut Vec<Result<ShopMessageReport, ShopMessageError>>,
         gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
         gma_messages: &mut Vec<Result<GmaMessageReport, GmaMessageError>>,
         depot_messages: &mut Vec<DepotMessageReport>,
@@ -16430,6 +16517,8 @@ impl CGame {
             auction_messages.push(report);
         } else if let Some(report) = dispatch_player_shop_message(message, self) {
             player_shop_messages.push(report);
+        } else if let Some(report) = dispatch_shop_message(message, self, runtime) {
+            shop_messages.push(report);
         } else if let Some(report) = dispatch_gm_message(message, self, || runtime.get_tick_ms()) {
             gm_messages.push(report);
         } else if let Some(report) = dispatch_gma_message(message, self) {

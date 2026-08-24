@@ -108,6 +108,9 @@ const AREA_TALK_INTERVAL_OFFSET: usize = 0x840;
 const PRIVATE_TALK_INTERVAL_OFFSET: usize = 0x84C;
 const UNION_TALK_INTERVAL_OFFSET: usize = 0x858;
 const REGION_CHAT_LEVEL_LIMIT_OFFSET: usize = 0x560;
+const BASE_PRICE_RATE_OFFSET: usize = 0x2EC;
+const TRADE_IN_RATE_OFFSET: usize = 0x2F0;
+const REPAIR_FACTOR_OFFSET: usize = 0x2F4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -185,6 +188,17 @@ impl Default for GlobeSetupSnapshot {
 }
 
 impl GlobeSetupSnapshot {
+    pub(crate) fn base_price_rate(&self) -> f32 {
+        self.read_f32(BASE_PRICE_RATE_OFFSET)
+    }
+
+    pub(crate) fn trade_in_rate(&self) -> f32 {
+        self.read_f32(TRADE_IN_RATE_OFFSET)
+    }
+
+    pub(crate) fn repair_factor(&self) -> f32 {
+        self.read_f32(REPAIR_FACTOR_OFFSET)
+    }
     pub(crate) fn from_bytes(bytes: [u8; GLOBE_SETUP_BLOB_LENGTH]) -> Self {
         Self {
             bytes,

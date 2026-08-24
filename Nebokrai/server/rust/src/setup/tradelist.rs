@@ -39,6 +39,9 @@ pub(crate) struct CTradeList {
 }
 
 impl CTradeList {
+    pub(crate) fn get_trade(&self, npc_name: &[u8]) -> Option<&Trade> {
+        self.trades.get(truncate_at_nul(npc_name))
+    }
     pub(crate) fn clear(&mut self) {
         self.trades.clear();
     }
@@ -181,6 +184,12 @@ impl CTradeList {
 
     pub(crate) fn len(&self) -> usize {
         self.trades.len()
+    }
+}
+
+impl Trade {
+    pub(crate) fn goods(&self) -> &[TradeGoods] {
+        &self.goods
     }
 }
 

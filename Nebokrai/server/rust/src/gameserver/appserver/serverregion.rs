@@ -17,6 +17,8 @@
 //! исходники `serverregion.h/.cpp`. PDB фиксирует
 //! `m_listChangeAreaShape +0x1D0`, поля `m_Param +0x214`,
 //! `m_lWarNum +0x238`, `m_CityState +0x23C` и clear timer `+0x240..+0x248`.
+//! Shop tax mutation и superior propagation `0x826E0/0x7C0C0` замкнуты
+//! совместно с `CGame` World-wire owner-ом.
 //! Countdown сохраняет wrapping DWORD comparison и signed remaining; virtual
 //! return point, random destination и полный `CPlayer::ChangeRegion` вызываются
 //! Game-owner-ом, который владеет region/player maps и runtime side effects.
@@ -156,6 +158,17 @@ pub(crate) struct RegionParamState {
     pub(crate) turn_in_tax_rate: i32,
     pub(crate) owned_faction_id: i32,
     pub(crate) owned_union_id: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegionTaxAddition {
+    pub(crate) region_id: i32,
+    pub(crate) retained: u32,
+    pub(crate) superior_region_id: Option<i32>,
+    pub(crate) superior_share: u32,
+    pub(crate) today_total_tax: u32,
+    pub(crate) total_tax: u32,
+    pub(crate) current_tax_rate: i32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -612,6 +625,34 @@ pub(crate) struct CServerRegion {
 }
 
 impl CServerRegion {
+    pub(crate) const fn tax_rate(&self) -> i32 {
+        self.param.current_tax_rate
+    }
+
+    /// State-owner `AddTaxMoney`: доля superior вычитается до доставки,
+    /// локальный дневной итог clamp-ится к legacy 4_000_000_000.
+    pub(crate) fn add_tax_money(&mut self, amount: u32) -> RegionTaxAddition {
+        let superior_region_id =
+            (0 < self.param.superior_region_id).then_some(self.param.superior_region_id);
+        let superior_share = superior_region_id.map_or(0, |_| {
+            (self.param.turn_in_tax_rate as f32 * amount as f32 * 0.01).round_ties_even() as u32
+        });
+        let retained = amount.wrapping_sub(superior_share);
+        self.param.today_total_tax = self
+            .param
+            .today_total_tax
+            .wrapping_add(retained)
+            .min(4_000_000_000);
+        RegionTaxAddition {
+            region_id: self.param.region_id,
+            retained,
+            superior_region_id,
+            superior_share,
+            today_total_tax: self.param.today_total_tax,
+            total_tax: self.param.total_tax,
+            current_tax_rate: self.param.current_tax_rate,
+        }
+    }
     /// Сохраняет caller-side gate начала exact `CServerRegion::AI`: signed
     /// `1000 / g_ms`, затем unsigned `s_lAITick % period`.
     pub(crate) fn refresh_monster_groups_for_ai_tick<Context: ServerRegionMonsterContext>(
@@ -2594,20 +2635,6 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 //
 
 // ============================================================================
-// FUNCTION: CServerRegion::UpdateTaxToWorldServer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:2405
-// RVA: 0x0007C0C0
-// ADDRESS: 0047c0c0
-// PROTOTYPE: void __thiscall UpdateTaxToWorldServer(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CServerRegion::ObtainTaxPayment
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -2987,20 +3014,6 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 //
 //
 
-// ============================================================================
-// FUNCTION: CServerRegion::AddTaxMoney
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:2350
-// RVA: 0x000826E0
-// ADDRESS: 004826e0
-// PROTOTYPE: void __thiscall AddTaxMoney(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // IMPLEMENTED: base `KickOutAllPlayerToReturnPoint` замкнут через virtual return point,
 // destination randomization и typed `CPlayer::ChangeRegion` boundary в `CGame::AI`.
 
@@ -3205,20 +3218,6 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // RVA: 0x00085600
 //
 // IMPLEMENTED выше: прямое owned-union field access; технические STL/SEH детали удалены.
-
-// ============================================================================
-// FUNCTION: CServerRegion::GetTaxRate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.h:392
-// RVA: 0x00085610
-// ADDRESS: 00485610
-// PROTOTYPE: long __thiscall GetTaxRate(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CServerRegion::GetMaxTaxRate

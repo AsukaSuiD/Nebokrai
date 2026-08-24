@@ -13,7 +13,8 @@
 //! growth-зависимых addon-ов в исходном порядке каждого level step; прочая
 //! CiQing batch-overload сохраняет дробление consumable/useless по stacking-
 //! limit и поштучное создание остальных типов; ordinary upgrade mutation ниже
-//! остаётся RAW.
+//! остаётся RAW. NPC shop замыкает repair/vend formulas с setup-факторами;
+//! integer durability ratio продажи сохранён как наблюдаемая x86-семантика.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -33,8 +34,8 @@ use super::cgoodsbaseproperties::{
     GAP_FATAL_BLOW_RATE_UPGRADE, GAP_GOODS_MAXIMUM_DURABILITY,
     GAP_GOODS_MAXIMUM_DURABILITY_UPGRADE, GAP_GOODS_STACKING_LIMIT, GAP_HIT_RATE_CORRECTION,
     GAP_HIT_RATE_UPGRADE, GAP_HP_UPPER_LIMIT_CORRECTION, GAP_HP_UPPER_LIMIT_CORRECTION_UPGRADE,
-    GAP_MAXIMUM_ATTACK_CORRECTION, GAP_MAXIMUM_ATTACK_UPGRADE, GAP_MINIMUM_ATTACK_CORRECTION,
-    GAP_MINIMUM_ATTACK_UPGRADE, GAP_MP_UPPER_LIMIT_CORRECTION,
+    GAP_ITEM_QUALITY, GAP_MAXIMUM_ATTACK_CORRECTION, GAP_MAXIMUM_ATTACK_UPGRADE,
+    GAP_MINIMUM_ATTACK_CORRECTION, GAP_MINIMUM_ATTACK_UPGRADE, GAP_MP_UPPER_LIMIT_CORRECTION,
     GAP_MP_UPPER_LIMIT_CORRECTION_UPGRADE, GAP_ROLE_MINIMUM_AGILITY_LIMIT,
     GAP_ROLE_MINIMUM_AGILITY_LIMIT_UPGRADE, GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT,
     GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT_UPGRADE, GAP_ROLE_MINIMUM_LEVEL_LIMIT,
@@ -43,8 +44,8 @@ use super::cgoodsbaseproperties::{
     GAP_ROLE_MINIMUM_WAKAN_LIMIT_UPGRADE, GAP_SKILL_REUSE_TIME_CORRECTION,
     GAP_SKILL_REUSE_TIME_CORRECTION_UPGRADE, GAP_STIFFEN_PROBABILITY_CORRECTION,
     GAP_STIFFEN_PROBABILITY_CORRECTION_UPGRADE, GAP_WEAPON_DAMAGE_LEVEL, GAP_WEAPON_DAMAGE_UPGRADE,
-    GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_USELESS, GoodsBasePropertiesDecodeError,
-    ICON_TYPE_GROUND,
+    GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
+    GoodsBasePropertiesDecodeError, ICON_TYPE_GROUND,
 };
 use crate::public::guid::CGuid;
 
@@ -99,6 +100,51 @@ pub(crate) struct CGoodsFactory {
 }
 
 impl CGoodsFactory {
+    pub(crate) fn calculate_repair_price(&self, goods: &CGoods, repair_factor: f32) -> u32 {
+        if !goods.can_repair(self) {
+            return 0;
+        }
+        let current = goods.addon_property_value(self, GAP_GOODS_MAXIMUM_DURABILITY, 2);
+        let maximum = goods.addon_property_value(self, GAP_GOODS_MAXIMUM_DURABILITY, 1);
+        let quality = goods.addon_property_value(self, GAP_ITEM_QUALITY, 1);
+        let factor = if 0 < quality {
+            (quality.wrapping_mul(50).wrapping_add(150)) as f32 * 0.01 * repair_factor
+        } else {
+            repair_factor
+        };
+        let damage = ((maximum.wrapping_sub(current)) as f32 / maximum as f32).max(0.0);
+        (goods.price() as f32 * damage * factor).round_ties_even() as u32
+    }
+
+    pub(crate) fn calculate_vend_price(
+        &self,
+        goods: &CGoods,
+        base_price_rate: f32,
+        trade_in_rate: f32,
+    ) -> u32 {
+        if goods.price() == 0 {
+            return 0;
+        }
+        let mut price = goods.price() as f32;
+        if self
+            .query_goods_base_properties(goods.base_properties_index())
+            .is_some_and(|properties| properties.goods_type() == GOODS_TYPE_EQUIPMENT)
+        {
+            let current = goods.addon_property_value(self, GAP_GOODS_MAXIMUM_DURABILITY, 2);
+            let maximum = goods.addon_property_value(self, GAP_GOODS_MAXIMUM_DURABILITY, 1);
+            if maximum != 0 {
+                // Primary x86 делит integer durability до преобразования во float.
+                let durability = current.min(maximum) / maximum;
+                price = goods.price() as f32 * base_price_rate
+                    + (1.0 - base_price_rate) * durability as f32 * goods.price() as f32;
+            }
+        }
+        (trade_in_rate * price).round_ties_even() as u32
+    }
+
+    pub(crate) fn repair_equipment(&self, goods: &mut CGoods) -> bool {
+        goods.repair_durability(self)
+    }
     pub(crate) fn query_goods_max_stack_number(&self, goods_index: u32) -> u32 {
         let Some(properties) = self.query_goods_base_properties(goods_index) else {
             return 1;
@@ -590,20 +636,6 @@ fn read_factory_u32(
 //
 
 // ============================================================================
-// FUNCTION: CGoodsFactory::RepairEquipment
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:605
-// RVA: 0x00063A50
-// ADDRESS: 00463a50
-// PROTOTYPE: int __cdecl RepairEquipment(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CGoodsFactory::AddExterndProperty
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -612,20 +644,6 @@ fn read_factory_u32(
 // RVA: 0x00063AA0
 // ADDRESS: 00463aa0
 // PROTOTYPE: int __cdecl AddExterndProperty(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::CalculateRepairPrice
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:497
-// RVA: 0x00063D50
-// ADDRESS: 00463d50
-// PROTOTYPE: ulong __cdecl CalculateRepairPrice(CGoods * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -654,20 +672,6 @@ fn read_factory_u32(
 // RVA: 0x000640A0
 // ADDRESS: 004640a0
 // PROTOTYPE: CGoods * __cdecl UnserializeGoods(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::CalculateVendPrice
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:544
-// RVA: 0x00064180
-// ADDRESS: 00464180
-// PROTOTYPE: ulong __cdecl CalculateVendPrice(CGoods * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

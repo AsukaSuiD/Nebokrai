@@ -12,6 +12,7 @@
 //! arithmetic.
 //! `GetEnabledAddonProperties` сохраняет instance storage order и consumable
 //! catalog fallback для полного player item-use addon loop.
+//! NPC shop использует точный repair predicate и mutation durability value 2.
 //! Единственный legacy null-deref в `CanStacked` при потерянном registry key
 //! выражен typed block-ом, а не тихим `false`.
 //!
@@ -36,9 +37,9 @@ use super::cgoodsbaseproperties::{
     GAP_FAIRY_MAIN_ABILITY, GAP_FAIRY_MAX_COMBINATED_TIMES, GAP_FAIRY_MAX_EXP, GAP_FAIRY_RIPE_ID,
     GAP_FAIRY_RIPE_MAX_LEVEL, GAP_FAIRY_RIPE_MIN_LEVEL, GAP_FAIRY_STATE, GAP_FAIRY_STRENGTH,
     GAP_FAIRY_STRENGTH_BASE_VALUE, GAP_FAIRY_WAKAN, GAP_FAIRY_WAKAN_BASE_VALUE, GAP_FAIRY_YOUNG_ID,
-    GAP_GOODS_LIFE_TYPE, GAP_GOODS_STACKING_LIMIT, GAP_GOODS_START_POINT,
-    GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT,
-    GOODS_TYPE_USELESS,
+    GAP_GOODS_LIFE_TYPE, GAP_GOODS_MAXIMUM_DURABILITY, GAP_GOODS_STACKING_LIMIT,
+    GAP_GOODS_START_POINT, GAP_PARTICULAR_ATTRIBUTE, GAP_ROLE_MINIMUM_LEVEL_LIMIT,
+    GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use super::cgoodsfactory::CGoodsFactory;
 use super::fairyproperties::{CFairyProperties, FairyExpBlock, FairyExpReport, FairyExpRuntime};
@@ -709,6 +710,24 @@ impl CGoods {
                 properties.goods_type() == GOODS_TYPE_EQUIPMENT
                     && self.query_attribute(super::cgoodsbaseproperties::GAP_BF_WEAPON_LEVEL)
             })
+    }
+
+    /// Exact `CanReparied`: только equipment без particular-attribute bit 0.
+    pub(crate) fn can_repair(&self, factory: &CGoodsFactory) -> bool {
+        factory
+            .query_goods_base_properties(self.base_properties_index)
+            .is_some_and(|properties| {
+                properties.goods_type() == GOODS_TYPE_EQUIPMENT
+                    && self.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1) & 1 == 0
+            })
+    }
+
+    pub(crate) fn repair_durability(&mut self, factory: &CGoodsFactory) -> bool {
+        if !self.can_repair(factory) {
+            return false;
+        }
+        let maximum = self.addon_property_value(factory, GAP_GOODS_MAXIMUM_DURABILITY, 1);
+        self.set_addon_property_value_first_core(GAP_GOODS_MAXIMUM_DURABILITY, 2, maximum)
     }
 
     /// Exact `QueryDaKongCount` считает только непрерывный prefix семи
@@ -1551,20 +1570,6 @@ fn read_goods_wire<const N: usize>(
 // RVA: 0x000CBA20
 // ADDRESS: 004cba20
 // PROTOTYPE: __uint64 __thiscall GetStartPoint(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::CanReparied
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:110
-// RVA: 0x000CBA80
-// ADDRESS: 004cba80
-// PROTOTYPE: int __thiscall CanReparied(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

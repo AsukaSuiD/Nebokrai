@@ -2926,6 +2926,16 @@ impl CPlayer {
         self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
     }
 
+    /// NPC shop добавляет batch напрямую при `PROGRESS_SHOPPING`.
+    pub(crate) fn add_shop_goods_to_packet(
+        &mut self,
+        goods: Vec<CGoods>,
+        factory: &CGoodsFactory,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
+    }
+
     /// Обратная половина `CTrader::RollBack`: отменяет уже выполненный
     /// contrary packet add, включая direct stack merge, и возвращает client
     /// consumption fact. Сам исходный goods caller хранит отдельно до commit.
@@ -3889,6 +3899,10 @@ impl CPlayer {
 
     pub(crate) const fn hand_mut(&mut self) -> &mut CAmountLimitGoodsContainer {
         &mut self.hand
+    }
+
+    pub(crate) const fn hand(&self) -> &CAmountLimitGoodsContainer {
+        &self.hand
     }
 
     pub(crate) const fn auction_goods_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {

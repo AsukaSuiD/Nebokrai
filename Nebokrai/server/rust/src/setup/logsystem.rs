@@ -8,7 +8,8 @@
 //! уникальность. Upgrade bytes `7/17/18` доступны battle-fairy audit caller-у;
 //! подтверждённый byte 56 немедленно передаётся
 //! `CDaKongXiangQian::SetLogKey`, остальные неподтверждённые offsets не именуются.
-//! Goods destruction и equipment compose используют подтверждённые bytes
+//! NPC buy/sell используют подтверждённые первые два bytes. Goods destruction
+//! и equipment compose используют подтверждённые bytes
 //! `55/57`; Fairy
 //! grow/incubate/implantation/syncretize — tail `60..63` того же snapshot-а.
 
@@ -37,6 +38,10 @@ impl Default for CLogSystem {
 impl CLogSystem {
     pub(crate) fn goods_trade_log_enabled(&self) -> bool {
         self.setting(0)
+    }
+
+    pub(crate) fn goods_sell_to_npc_log_enabled(&self) -> bool {
+        self.setting(1)
     }
 
     pub(crate) fn from_settings(settings: [u8; LOG_SETTINGS_LENGTH]) -> Self {
