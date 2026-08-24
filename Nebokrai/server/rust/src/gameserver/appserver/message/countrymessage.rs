@@ -27,7 +27,10 @@
 //! `ChangeRegion`, wrapping/clamped exploit и client `0xBF72E/0xBF816`.
 //! Ответ World `0x7FF01` применяет country только в диапазоне `1..4`, но для
 //! любого decoded результата найденного player публикует around `0xC0301`.
+//! `0x7FF04(country, player, job, active)` сначала меняет country-information,
+//! затем для live player публикует job через `0xC0302`; active `2` скрывает job.
 
+use super::super::country::country::CountryInformationMutationReport;
 use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,
 };
@@ -121,7 +124,35 @@ pub(crate) struct GameCountryWarMessageReport {
     pub(crate) governance: Option<CountryGovernanceReport>,
     pub(crate) entry: Option<CountryWarEntryReport>,
     pub(crate) player_country_change: Option<GamePlayerCountryChangeReport>,
+    pub(crate) country_information_change: Option<GameCountryInformationChangeReport>,
     pub(crate) broadcast: Option<CountryWarBroadcastOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameCountryInformationChangeOutcome {
+    CountryMissing,
+    PlayerMissing {
+        mutation: CountryInformationMutationReport,
+    },
+    Published {
+        mutation: CountryInformationMutationReport,
+        client_job: u8,
+        around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameCountryInformationChangeReport {
+    pub(crate) opcode: u32,
+    pub(crate) country: u8,
+    pub(crate) country_complete: bool,
+    pub(crate) player_id: i32,
+    pub(crate) player_id_complete: bool,
+    pub(crate) job: u8,
+    pub(crate) job_complete: bool,
+    pub(crate) active: u8,
+    pub(crate) active_complete: bool,
+    pub(crate) outcome: GameCountryInformationChangeOutcome,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -295,6 +326,17 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
     Result<GameCountryWarMessageReport, CountryWarMessageDispatchError<CountryBattleStateBlock>>,
 > {
     let opcode = message.message_type() as u32;
+    if opcode == 0x7ff04 {
+        let country_information_change = dispatch_country_information_change_message(message, game);
+        return Some(Ok(GameCountryWarMessageReport {
+            dispatched: None,
+            governance: None,
+            entry: None,
+            player_country_change: None,
+            country_information_change: Some(country_information_change),
+            broadcast: None,
+        }));
+    }
     if opcode == 0x7ff01 {
         let player_country_change = dispatch_player_country_change_message(message, game);
         return Some(Ok(GameCountryWarMessageReport {
@@ -302,6 +344,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             governance: None,
             entry: None,
             player_country_change: Some(player_country_change),
+            country_information_change: None,
             broadcast: None,
         }));
     }
@@ -312,6 +355,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             governance: None,
             entry: Some(entry),
             player_country_change: None,
+            country_information_change: None,
             broadcast: None,
         }));
     }
@@ -322,6 +366,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             governance: Some(governance),
             entry: None,
             player_country_change: None,
+            country_information_change: None,
             broadcast: None,
         }));
     }
@@ -372,8 +417,52 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
         governance: None,
         entry: None,
         player_country_change: None,
+        country_information_change: None,
         broadcast,
     }))
+}
+
+fn dispatch_country_information_change_message(
+    message: &mut CMessage,
+    game: &mut CGame,
+) -> GameCountryInformationChangeReport {
+    let decoded_country = message.base_mut().get_char();
+    let country = decoded_country.unwrap_or(0) as u8;
+    let decoded_player_id = message.base_mut().get_long();
+    let player_id = decoded_player_id.unwrap_or(0);
+    let decoded_job = message.base_mut().get_char();
+    let job = decoded_job.unwrap_or(0) as u8;
+    let decoded_active = message.base_mut().get_char();
+    let active = decoded_active.unwrap_or(0) as u8;
+    let base_report = |outcome| GameCountryInformationChangeReport {
+        opcode: 0x7ff04,
+        country,
+        country_complete: decoded_country.is_some(),
+        player_id,
+        player_id_complete: decoded_player_id.is_some(),
+        job,
+        job_complete: decoded_job.is_some(),
+        active,
+        active_complete: decoded_active.is_some(),
+        outcome,
+    };
+    let Some(country_owner) = game.country_handler_mut().country_mut(country) else {
+        return base_report(GameCountryInformationChangeOutcome::CountryMissing);
+    };
+    let mutation = country_owner.set_country_information(job, player_id, active);
+    if game.find_player(player_id).is_none() {
+        return base_report(GameCountryInformationChangeOutcome::PlayerMissing { mutation });
+    }
+    let client_job = if active == 2 { 0 } else { job };
+    let mut publication = CMessage::new(0x000c_0302);
+    publication.add_long(player_id);
+    publication.add_byte(client_job);
+    let around_delivery = game.send_player_shape_around(player_id, None, &publication);
+    base_report(GameCountryInformationChangeOutcome::Published {
+        mutation,
+        client_job,
+        around_delivery,
+    })
 }
 
 fn dispatch_player_country_change_message(

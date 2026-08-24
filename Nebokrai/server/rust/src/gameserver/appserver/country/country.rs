@@ -50,6 +50,18 @@ pub(crate) struct CountryDecodeReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryInformationMutationReport {
+    pub(crate) country_id: u8,
+    pub(crate) job: u8,
+    pub(crate) player_id: i32,
+    pub(crate) active: u8,
+    pub(crate) previous_player_id: i32,
+    pub(crate) applied_player_id: i32,
+    pub(crate) previous_king_id: i32,
+    pub(crate) applied_king_id: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryDecodeError {
     pub(crate) field: &'static str,
     pub(crate) offset: usize,
@@ -130,14 +142,31 @@ impl CCountry {
             .unwrap_or(0)
     }
 
-    pub(crate) fn set_country_information(&mut self, job: u8, player_id: i32, active: u8) -> bool {
+    pub(crate) fn set_country_information(
+        &mut self,
+        job: u8,
+        player_id: i32,
+        active: u8,
+    ) -> CountryInformationMutationReport {
+        let previous_king_id = self.king_id;
+        let applied_player_id = if active == 1 { player_id } else { 0 };
+        let previous_player_id = self
+            .country_information
+            .insert(job, applied_player_id)
+            .unwrap_or(0);
         if active == 1 {
-            self.country_information.insert(job, player_id);
             self.king_id = 0;
-        } else {
-            self.country_information.insert(job, 0);
         }
-        true
+        CountryInformationMutationReport {
+            country_id: self.country_id,
+            job,
+            player_id,
+            active,
+            previous_player_id,
+            applied_player_id,
+            previous_king_id,
+            applied_king_id: self.king_id,
+        }
     }
 
     /// Exact `SetCountryTreasury`: сначала публикует новое значение, затем
