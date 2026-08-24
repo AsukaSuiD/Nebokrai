@@ -97,6 +97,9 @@
 //! неизменным, как при передаче `long` по значению в EXE.
 //! World echo `0x7F805` продолжает тот же owner: tag `1/3` меняет integer либо
 //! string state первого case-insensitive имени без отдельного script runtime.
+//! Соседний World notice `0x7F804` переиспользует bounded `%s` formatter и
+//! concrete net server до адресного client `0xBF806`; unsafe `sprintf` не
+//! воспроизводится, visible `0xFF/0x3FF` wire limits сохраняются.
 //! OrganSys war opcodes `0x7FE1F..0x7FE36` тем же FIFO меняют owned
 //! AttackCity/Village schedules, concrete local/proxy region phases и
 //! contender state с сохранением City/Village message/log side effects.
@@ -13319,7 +13322,11 @@ fn gods_battle_property_message(player_id: i32, property: &[u8], value: i32) -> 
     message
 }
 
-fn colored_player_notice_message(first_color: u32, second_color: u32, text: &[u8]) -> CMessage {
+pub(crate) fn colored_player_notice_message(
+    first_color: u32,
+    second_color: u32,
+    text: &[u8],
+) -> CMessage {
     nation_colored_text_message(0xbf806, first_color, second_color, text)
 }
 
@@ -13565,7 +13572,7 @@ fn nation_world_notice_message(text: &[u8]) -> CMessage {
 /// Bounded replacement for the reached `__snprintf` `%s` subset. The EXE
 /// buffers reserve one byte for NUL (`0x100`/`0x80`), hence visible limits
 /// `0xff` and `0x7f` at callers.
-fn format_legacy_text_fields(
+pub(crate) fn format_legacy_text_fields(
     template: &[u8],
     arguments: &[&[u8]],
     maximum_bytes: usize,

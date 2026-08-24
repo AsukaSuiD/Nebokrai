@@ -69,6 +69,9 @@
 //! Runtime general-variable echo `0x7F805` читает tag/name/value в исходном
 //! порядке и меняет первый ASCII-case-insensitive owner в принадлежащем `CGame`
 //! списке; неизвестный tag после имени остаётся no-op без чтения value.
+//! Player notice response `0x7F804` сохраняет World offline/online wire,
+//! локализует exact `"GS0332 "` либо формирует `source:text`, bounded заменяет
+//! небезопасный `sprintf` и адресно шлёт client `0xBF806` с исходными colors.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -163,7 +166,8 @@ use crate::gameserver::appserver::skills::skillfactory::{
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameNetworkInitializationError, GameSingleFilePublication, GodsBattleXydApplyReport,
-    MonsterBasePropertyRefreshReport, ServerRegionOwner,
+    MonsterBasePropertyRefreshReport, ServerRegionOwner, colored_player_notice_message,
+    format_legacy_text_fields,
 };
 use crate::gameserver::gameserver::honorranks::{HonorRanksDecodeError, HonorRanksDecodeReport};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
@@ -204,6 +208,7 @@ use crate::setup::tradelist::TradeListDecodeError;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const SERVER_STARTUP_MESSAGE: i32 = 0x0007_F801;
+const WORLD_PLAYER_NOTICE_RESPONSE: i32 = 0x0007_F804;
 const GENERAL_VARIABLE_UPDATE_RESPONSE: i32 = 0x0007_F805;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_MESSAGE: i32 = 0x0007_F809;
 const PLAYER_COUNT_MESSAGE: i32 = 0x0007_F80B;
@@ -1019,6 +1024,7 @@ pub(crate) enum GameServerMessageReport {
     GodsBattleTopTen(GameGodsBattleTopTenReport),
     GodsBattleXyd(GameGodsBattleXydReport),
     GeneralVariableUpdate(GameGeneralVariableUpdateReport),
+    WorldPlayerNotice(GameWorldPlayerNoticeReport),
     BattleFairyStartup(GameBattleFairyStartupMessageReport),
     CombatRegistryStartup(GameCombatRegistryStartupMessageReport),
     PlayerEconomyStartup(GamePlayerEconomyStartupMessageReport),
@@ -1059,6 +1065,25 @@ pub(crate) struct GameGeneralVariableUpdateReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameWorldPlayerNoticeReport {
+    TargetOffline {
+        target_name: Vec<u8>,
+        source_player_id: i32,
+        text: Vec<u8>,
+        delivery: i32,
+    },
+    TargetOnline {
+        target_player_id: i32,
+        source_name: Vec<u8>,
+        text: Vec<u8>,
+        color: i32,
+        message_type: i32,
+        formatted: Vec<u8>,
+        delivery: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameGodsBattleTopTenReport {
     pub(crate) player_id: i32,
     pub(crate) entries: Vec<GodsBattleTopTenEntry>,
@@ -1078,6 +1103,7 @@ pub(crate) enum GameServerMessageError<RegionRuntimeError> {
     GodsBattleTopTen(GodsBattleTopTenDecodeError),
     GodsBattleXydUnexpectedEnd { field: &'static str },
     GeneralVariableUpdateUnexpectedEnd { field: &'static str },
+    WorldPlayerNoticeUnexpectedEnd { field: &'static str },
     BattleFairyStartup(GameBattleFairyStartupError),
     CombatRegistryStartup(GameCombatRegistryStartupError),
     PlayerEconomyStartup(GamePlayerEconomyStartupError),
@@ -1109,6 +1135,84 @@ pub(crate) fn dispatch_server_message<Context>(
 where
     Context: InitialRegionStartupContext,
 {
+    if message.message_type() == WORLD_PLAYER_NOTICE_RESPONSE {
+        let Some(target_or_mode) = message.base_mut().get_long() else {
+            return Some(Err(
+                GameServerMessageError::WorldPlayerNoticeUnexpectedEnd {
+                    field: "target player or offline marker",
+                },
+            ));
+        };
+        let report = if target_or_mode == 0 {
+            let target_name = message
+                .base_mut()
+                .get_str_bytes(0x18)
+                .expect("0x18 не достигает zero-size GetStr boundary");
+            let Some(source_player_id) = message.base_mut().get_long() else {
+                return Some(Err(
+                    GameServerMessageError::WorldPlayerNoticeUnexpectedEnd {
+                        field: "offline source player id",
+                    },
+                ));
+            };
+            let text =
+                format_legacy_text_fields(game.get_string_by_id(b"GS0332 "), &[&target_name], 0xff);
+            let delivery = colored_player_notice_message(0xffff_ffff, 0, &text)
+                .send_to_player(game.net_server(), source_player_id);
+            GameWorldPlayerNoticeReport::TargetOffline {
+                target_name,
+                source_player_id,
+                text,
+                delivery,
+            }
+        } else {
+            let text = message
+                .base_mut()
+                .get_str_bytes(0x400)
+                .expect("0x400 не достигает zero-size GetStr boundary");
+            let Some(color) = message.base_mut().get_long() else {
+                return Some(Err(
+                    GameServerMessageError::WorldPlayerNoticeUnexpectedEnd {
+                        field: "online notice color",
+                    },
+                ));
+            };
+            let Some(message_type) = message.base_mut().get_long() else {
+                return Some(Err(
+                    GameServerMessageError::WorldPlayerNoticeUnexpectedEnd {
+                        field: "online notice type",
+                    },
+                ));
+            };
+            let source_name = message
+                .base_mut()
+                .get_str_bytes(0x18)
+                .expect("0x18 не достигает zero-size GetStr boundary");
+            let mut formatted = if source_name.is_empty() {
+                text.clone()
+            } else {
+                let mut formatted = Vec::with_capacity(source_name.len() + 1 + text.len());
+                formatted.extend_from_slice(&source_name);
+                formatted.push(b':');
+                formatted.extend_from_slice(&text);
+                formatted
+            };
+            formatted.truncate(0x3ff);
+            let delivery =
+                colored_player_notice_message(color as u32, message_type as u32, &formatted)
+                    .send_to_player(game.net_server(), target_or_mode);
+            GameWorldPlayerNoticeReport::TargetOnline {
+                target_player_id: target_or_mode,
+                source_name,
+                text,
+                color,
+                message_type,
+                formatted,
+                delivery,
+            }
+        };
+        return Some(Ok(GameServerMessageReport::WorldPlayerNotice(report)));
+    }
     if message.message_type() == GENERAL_VARIABLE_UPDATE_RESPONSE {
         let Some(value_tag) = message.base_mut().get_long() else {
             return Some(Err(
