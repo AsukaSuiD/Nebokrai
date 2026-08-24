@@ -9,8 +9,10 @@
 //! notices, session/plug lifecycle и client wire; runtime сообщает только
 //! ещё не owned team skill-state. Country scalar family `9001/9003/9009/9011/
 //! 9013` сохраняет byte country lookup, field-specific clamp, local mutation и
-//! World `0x60314`. Полный expression evaluator и остальные function ID ниже
-//! пока остаются RAW.
+//! World `0x60314`. Quest-switch `9018/9019` сохраняет read-only lookup и
+//! странность writer-а: второй аргумент влияет только на country fallback, а
+//! применяемое значение всегда `true`; `0x60315` уходит до local map write.
+//! Полный expression evaluator и остальные function ID ниже пока остаются RAW.
 
 use crate::gameserver::appserver::country::country::CountryScalarMutationReport;
 use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongExternalRefreshReport;
@@ -29,7 +31,121 @@ pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH_LEVEL: i32 = 9003;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TREASURY: i32 = 9009;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_MATERIAL: i32 = 9011;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH: i32 = 9013;
+pub(crate) const SCRIPT_FUNCTION_GET_QUEST_SWITCH: i32 = 9018;
+pub(crate) const SCRIPT_FUNCTION_SET_QUEST_SWITCH: i32 = 9019;
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryQuestSwitchScriptDisposition {
+    IdentityMissing,
+    PlayerMissing,
+    CountryMissing {
+        country: u8,
+    },
+    Read {
+        country: u8,
+        enabled: bool,
+    },
+    Written {
+        country: u8,
+        raw_switch: i32,
+        mutation: crate::gameserver::appserver::country::country::CountryQuestSwitchMutationReport,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryQuestSwitchScriptFunctionOutcome {
+    DifferentFunction,
+    Handled {
+        function_id: i32,
+        identity: i32,
+        legacy_return: i32,
+        disposition: CountryQuestSwitchScriptDisposition,
+    },
+}
+
+pub(crate) fn run_country_quest_switch_script_function(
+    game: &mut CGame,
+    script_player_id: Option<i32>,
+    function_id: i32,
+    evaluated_identity: Option<i32>,
+    evaluated_switch: Option<i32>,
+    evaluated_country: Option<i32>,
+) -> CountryQuestSwitchScriptFunctionOutcome {
+    if !matches!(
+        function_id,
+        SCRIPT_FUNCTION_GET_QUEST_SWITCH | SCRIPT_FUNCTION_SET_QUEST_SWITCH
+    ) {
+        return CountryQuestSwitchScriptFunctionOutcome::DifferentFunction;
+    }
+    let identity = evaluated_identity.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    if identity == SCRIPT_INT_PARAMETER_ERROR {
+        return CountryQuestSwitchScriptFunctionOutcome::Handled {
+            function_id,
+            identity,
+            legacy_return: -1,
+            disposition: CountryQuestSwitchScriptDisposition::IdentityMissing,
+        };
+    }
+    let raw_switch = evaluated_switch.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    let raw_country = evaluated_country.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    let needs_player_country = if function_id == SCRIPT_FUNCTION_GET_QUEST_SWITCH {
+        raw_country == SCRIPT_INT_PARAMETER_ERROR
+    } else {
+        raw_switch == SCRIPT_INT_PARAMETER_ERROR || raw_country == SCRIPT_INT_PARAMETER_ERROR
+    };
+    let country = if needs_player_country {
+        let Some(player) = script_player_id.and_then(|player_id| game.find_player(player_id))
+        else {
+            return CountryQuestSwitchScriptFunctionOutcome::Handled {
+                function_id,
+                identity,
+                legacy_return: -1,
+                disposition: CountryQuestSwitchScriptDisposition::PlayerMissing,
+            };
+        };
+        player.country()
+    } else {
+        raw_country as u8
+    };
+    let Some(country_owner) = game.country_handler().country(country) else {
+        return CountryQuestSwitchScriptFunctionOutcome::Handled {
+            function_id,
+            identity,
+            legacy_return: -1,
+            disposition: CountryQuestSwitchScriptDisposition::CountryMissing { country },
+        };
+    };
+    if function_id == SCRIPT_FUNCTION_GET_QUEST_SWITCH {
+        let enabled = country_owner.quest_switch(identity as u8);
+        return CountryQuestSwitchScriptFunctionOutcome::Handled {
+            function_id,
+            identity,
+            legacy_return: i32::from(enabled),
+            disposition: CountryQuestSwitchScriptDisposition::Read { country, enabled },
+        };
+    }
+
+    let message = country_owner.quest_switch_message(identity as u8, true);
+    let delivery = message.send(game, false);
+    let mutation = game
+        .country_handler_mut()
+        .country_mut(country)
+        .expect("country owner жив после quest-switch World enqueue")
+        .apply_quest_switch(identity as u8, true);
+    CountryQuestSwitchScriptFunctionOutcome::Handled {
+        function_id,
+        identity,
+        legacy_return: if identity as u8 == 0 { -1 } else { identity },
+        disposition: CountryQuestSwitchScriptDisposition::Written {
+            country,
+            raw_switch,
+            mutation,
+            delivery,
+        },
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryScalarScriptDisposition {

@@ -20,7 +20,8 @@
 //! заменяет прежнюю запись текущим `timeGetTime` sample и сохраняет ordered
 //! player-ID traversal для `0x6030E/0x7FF15`. Остальные governance, exile-time,
 //! quest-switch публикует World `0x60315` до локальной map-мутации, как original
-//! `SetQuestSwitch`. Scalar setters `power/tech-level/tech-exp/control/material`
+//! `SetQuestSwitch`; reader не создаёт отсутствующий ordered key. Scalar
+//! setters `power/tech-level/tech-exp/control/material`
 //! сохраняют local-before-send и selector `2/4/3/5/6` общего World `0x60314`.
 //! Остальные governance, exile-time и message методы владельца ниже ещё
 //! сохраняют RAW. `BTreeMap` и owned state заменяют STL nodes/pointers.
@@ -307,6 +308,10 @@ impl CCountry {
         &self.quest_switches
     }
 
+    pub(crate) fn quest_switch(&self, job: u8) -> bool {
+        self.quest_switches.get(&job).copied().unwrap_or(false)
+    }
+
     pub(crate) fn exile_started_at_ms(&self) -> &BTreeMap<i32, i32> {
         &self.exile_started_at_ms
     }
@@ -439,7 +444,7 @@ fn take_country_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CCountry::GetQuestSwitch
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:208
