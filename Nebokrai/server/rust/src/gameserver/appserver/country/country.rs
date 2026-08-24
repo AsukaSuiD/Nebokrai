@@ -14,7 +14,8 @@
 //!
 //! `HasJob` возвращает job первого ordered player-ID match-а либо ноль.
 //! `SetCountryTreasury` сохраняет local-before-send и exact World
-//! `0x60314(country, selector=1, value)`; фактическую отправку выполняет
+//! `0x60314(country, selector=1, value)`; `0x7FF04/05` обновляют CI/king state
+//! до client publication. Фактическую отправку выполняет
 //! dispatcher после освобождения mutable country borrow. Остальные governance,
 //! exile, quest и message методы владельца ниже ещё сохраняют RAW. `BTreeMap` и
 //! owned state заменяют STL nodes/raw pointers.
@@ -59,6 +60,13 @@ pub(crate) struct CountryInformationMutationReport {
     pub(crate) applied_player_id: i32,
     pub(crate) previous_king_id: i32,
     pub(crate) applied_king_id: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryKingIdMutationReport {
+    pub(crate) country_id: u8,
+    pub(crate) previous: i32,
+    pub(crate) applied: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -166,6 +174,16 @@ impl CCountry {
             applied_player_id,
             previous_king_id,
             applied_king_id: self.king_id,
+        }
+    }
+
+    pub(crate) fn set_king_id(&mut self, king_id: i32) -> CountryKingIdMutationReport {
+        let previous = self.king_id;
+        self.king_id = king_id;
+        CountryKingIdMutationReport {
+            country_id: self.country_id,
+            previous,
+            applied: king_id,
         }
     }
 

@@ -29,8 +29,12 @@
 //! любого decoded результата найденного player публикует around `0xC0301`.
 //! `0x7FF04(country, player, job, active)` сначала меняет country-information,
 //! затем для live player публикует job через `0xC0302`; active `2` скрывает job.
+//! Family `0x7FF05/07/08` синхронизирует king ID либо, сохраняя исходный
+//! payload, адресно меняет type на client `0xC0304/0xC0305` и отправляет королю.
 
-use super::super::country::country::CountryInformationMutationReport;
+use super::super::country::country::{
+    CountryInformationMutationReport, CountryKingIdMutationReport,
+};
 use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,
 };
@@ -125,7 +129,30 @@ pub(crate) struct GameCountryWarMessageReport {
     pub(crate) entry: Option<CountryWarEntryReport>,
     pub(crate) player_country_change: Option<GamePlayerCountryChangeReport>,
     pub(crate) country_information_change: Option<GameCountryInformationChangeReport>,
+    pub(crate) direct_response: Option<GameCountryDirectResponseReport>,
     pub(crate) broadcast: Option<CountryWarBroadcastOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameCountryDirectResponseOutcome {
+    CountryMissing,
+    KingIdUpdated(CountryKingIdMutationReport),
+    Relayed {
+        player_id: i32,
+        player_id_complete: bool,
+        response_type: u32,
+        delivery: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameCountryDirectResponseReport {
+    pub(crate) opcode: u32,
+    pub(crate) country: Option<u8>,
+    pub(crate) country_complete: Option<bool>,
+    pub(crate) king_id: Option<i32>,
+    pub(crate) king_id_complete: Option<bool>,
+    pub(crate) outcome: GameCountryDirectResponseOutcome,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -326,6 +353,18 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
     Result<GameCountryWarMessageReport, CountryWarMessageDispatchError<CountryBattleStateBlock>>,
 > {
     let opcode = message.message_type() as u32;
+    if matches!(opcode, 0x7ff05 | 0x7ff07 | 0x7ff08) {
+        let direct_response = dispatch_country_direct_response_message(message, game, opcode);
+        return Some(Ok(GameCountryWarMessageReport {
+            dispatched: None,
+            governance: None,
+            entry: None,
+            player_country_change: None,
+            country_information_change: None,
+            direct_response: Some(direct_response),
+            broadcast: None,
+        }));
+    }
     if opcode == 0x7ff04 {
         let country_information_change = dispatch_country_information_change_message(message, game);
         return Some(Ok(GameCountryWarMessageReport {
@@ -334,6 +373,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             entry: None,
             player_country_change: None,
             country_information_change: Some(country_information_change),
+            direct_response: None,
             broadcast: None,
         }));
     }
@@ -345,6 +385,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             entry: None,
             player_country_change: Some(player_country_change),
             country_information_change: None,
+            direct_response: None,
             broadcast: None,
         }));
     }
@@ -356,6 +397,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             entry: Some(entry),
             player_country_change: None,
             country_information_change: None,
+            direct_response: None,
             broadcast: None,
         }));
     }
@@ -367,6 +409,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             entry: None,
             player_country_change: None,
             country_information_change: None,
+            direct_response: None,
             broadcast: None,
         }));
     }
@@ -418,8 +461,64 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
         entry: None,
         player_country_change: None,
         country_information_change: None,
+        direct_response: None,
         broadcast,
     }))
+}
+
+fn dispatch_country_direct_response_message(
+    message: &mut CMessage,
+    game: &mut CGame,
+    opcode: u32,
+) -> GameCountryDirectResponseReport {
+    if opcode == 0x7ff05 {
+        let decoded_country = message.base_mut().get_char();
+        let country = decoded_country.unwrap_or(0) as u8;
+        let decoded_king_id = message.base_mut().get_long();
+        let king_id = decoded_king_id.unwrap_or(0);
+        let Some(country_owner) = game.country_handler_mut().country_mut(country) else {
+            return GameCountryDirectResponseReport {
+                opcode,
+                country: Some(country),
+                country_complete: Some(decoded_country.is_some()),
+                king_id: Some(king_id),
+                king_id_complete: Some(decoded_king_id.is_some()),
+                outcome: GameCountryDirectResponseOutcome::CountryMissing,
+            };
+        };
+        let mutation = country_owner.set_king_id(king_id);
+        return GameCountryDirectResponseReport {
+            opcode,
+            country: Some(country),
+            country_complete: Some(decoded_country.is_some()),
+            king_id: Some(king_id),
+            king_id_complete: Some(decoded_king_id.is_some()),
+            outcome: GameCountryDirectResponseOutcome::KingIdUpdated(mutation),
+        };
+    }
+
+    let decoded_player_id = message.base_mut().get_long();
+    let player_id = decoded_player_id.unwrap_or(0);
+    let response_type = match opcode {
+        0x7ff07 => 0x000c_0304,
+        0x7ff08 => 0x000c_0305,
+        _ => unreachable!("direct country response opcode проверен caller-ом"),
+    };
+    message.set_message_type(response_type);
+    let delivery = message.send_to_player(game.net_server(), player_id);
+    GameCountryDirectResponseReport {
+        opcode,
+        country: None,
+        country_complete: None,
+        king_id: None,
+        king_id_complete: None,
+        outcome: GameCountryDirectResponseOutcome::Relayed {
+            player_id,
+            player_id_complete: decoded_player_id.is_some(),
+            response_type: response_type as u32,
+            delivery,
+        },
+    }
 }
 
 fn dispatch_country_information_change_message(
