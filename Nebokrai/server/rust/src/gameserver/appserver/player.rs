@@ -2982,6 +2982,17 @@ impl CPlayer {
         self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
     }
 
+    /// `GetPreciousItem` исполняется внутри script progress, но native owner
+    /// также добавляет награду напрямую и не применяет ordinary progress-lock.
+    pub(crate) fn add_precious_box_goods_to_packet(
+        &mut self,
+        goods: Vec<CGoods>,
+        factory: &CGoodsFactory,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
+    }
+
     /// `CTrader::Trade` добавляет contrary goods при
     /// `PROGRESS_TRADING`; этот owner намеренно обходит общий progress-lock,
     /// как прямой packet `Add` исходной функции.

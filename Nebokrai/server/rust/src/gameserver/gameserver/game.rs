@@ -348,6 +348,9 @@
 //! Equipment compose и DaKong announcement paths входят в тот же dispatcher;
 //! DaKong на точной позиции вызова временно возвращает извлечённого owned
 //! player в canonical map, сохраняя C++ player-pointer context и mutations.
+//! PreciousBox script `2221/2222/2237` соединяет trusted повторный action,
+//! configuration RNG, goods create/upgrade/packet effects, `0xBF91A..1C` и
+//! optional World announcement `0x5FF0E` в одном synchronous owner-е.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CString;
@@ -637,7 +640,7 @@ use crate::setup::monsterlist::{
 };
 use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
 use crate::setup::playerlist::CPlayerList;
-use crate::setup::preciousboxconf::PreciousBoxConf;
+use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxItem};
 use crate::setup::prisonconf::PrisonConf;
 use crate::setup::questsystem::CQuestSystem;
 use crate::setup::regionrouter::RegionRouter;
@@ -12867,6 +12870,126 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> Option<ContainerScriptActionReport> {
         self.run_last_container_script(player_id, region_id, None, runtime)
+    }
+
+    pub(crate) fn open_precious_box(&mut self, player_id: i32, script: &[u8]) -> i32 {
+        if self.find_player(player_id).is_none() {
+            return 0;
+        }
+        let mut message = CMessage::new(0x000b_f91a);
+        message.add_long(player_id);
+        let _ = message.send_to_player(self.net_server(), player_id);
+        self.find_player_mut(player_id)
+            .expect("PreciousBox player сохраняется после synchronous send")
+            .set_last_container_script(script);
+        1
+    }
+
+    pub(crate) fn close_precious_box(&self, player_id: i32) {
+        if self.find_player(player_id).is_none() {
+            return;
+        }
+        let mut message = CMessage::new(0x000b_f91c);
+        message.add_long(player_id);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    fn roll_precious_box_item(&mut self, box_id: i32) -> Option<PreciousBoxItem> {
+        let (configuration, random_state) = (&self.precious_box_conf, &mut self.random_state);
+        configuration.random_item(box_id, |upper_bound| {
+            game_legacy_random(random_state, upper_bound)
+        })
+    }
+
+    pub(crate) fn get_precious_box_item<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        box_id: i32,
+        context: &mut Context,
+    ) -> i32 {
+        if self.find_player(player_id).is_none() {
+            return -1;
+        }
+        let Some(item) = self.roll_precious_box_item(box_id) else {
+            self.send_precious_box_result(player_id, -1, 0);
+            return -1;
+        };
+        if item.item_idx <= 0 || item.amount <= 0 {
+            self.send_precious_box_result(player_id, -1, 0);
+            return -1;
+        }
+        let mut created = self.create_goods_batch(item.item_idx as u32, item.amount as u32);
+        if item.min_level != 0 {
+            let (factory, random_state) = (&self.goods_factory, &mut self.random_state);
+            for goods in &mut created {
+                let _ = factory.upgrade_equipment(goods, item.min_level, |upper_bound| {
+                    game_legacy_random(random_state, upper_bound)
+                });
+            }
+        }
+        let (additions, _rejected) = {
+            let (players, factory) = (&mut self.players, &self.goods_factory);
+            let player = players
+                .get_mut(&player_id)
+                .expect("PreciousBox player проверен до packet add");
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            player.add_precious_box_goods_to_packet(created, factory, &mut encode)
+        };
+        let mut result_position = -1;
+        for addition in additions {
+            if addition.resulting_amount.is_some() {
+                result_position = addition.position.map_or(-1, |position| position as i32);
+                let _ = self.send_player_packet_addition(&addition);
+            }
+        }
+        self.send_precious_box_result(player_id, result_position, item.amount);
+        if result_position != -1 && item.broadcast {
+            if let Some(goods) = u32::try_from(result_position).ok().and_then(|position| {
+                self.find_player(player_id)
+                    .and_then(|player| player.packet().get_goods(position))
+            }) {
+                let player_name = self
+                    .find_player(player_id)
+                    .map(CPlayer::player_name)
+                    .unwrap_or_default();
+                let template = self.get_string_by_id(if item.min_level == 0 {
+                    b"GS0185"
+                } else {
+                    b"GS0184"
+                });
+                let arguments = if item.min_level == 0 {
+                    vec![
+                        LegacyFormatArgument::Bytes(player_name),
+                        LegacyFormatArgument::Bytes(goods.name()),
+                        LegacyFormatArgument::Signed(item.amount),
+                    ]
+                } else {
+                    vec![
+                        LegacyFormatArgument::Bytes(player_name),
+                        LegacyFormatArgument::Bytes(goods.name()),
+                        LegacyFormatArgument::Signed(item.min_level),
+                        LegacyFormatArgument::Signed(item.amount),
+                    ]
+                };
+                let text = format_legacy_mixed(template, &arguments, 1023);
+                let mut message = CMessage::new(0x0005_ff0e);
+                message.add_long(player_id);
+                add_legacy_c_string(message.base_mut(), &text);
+                message.add_ulong(0xffff_ff00);
+                message.add_ulong(0xffff_0000);
+                let _ = message.send(self, false);
+            }
+        }
+        result_position
+    }
+
+    fn send_precious_box_result(&self, player_id: i32, position: i32, amount: i32) {
+        let mut message = CMessage::new(0x000b_f91b);
+        message.add_ulong(position as u32);
+        if position != -1 {
+            message.add_ulong(amount as u32);
+        }
+        let _ = message.send_to_player(self.net_server(), player_id);
     }
 
     fn run_last_container_script<Runtime: ScriptFunctionRuntime>(

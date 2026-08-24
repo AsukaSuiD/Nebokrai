@@ -48,6 +48,10 @@
 //! из того же CScript instance, ограничивает used-item lookup настоящей
 //! сумкой, изменяет addon/durability storage и публикует delete/amount/update
 //! wire; selected durability разрешается через live enhancement-shadow.
+//! PreciousBox `2221/2222/2237` сохраняет trusted action-script у player,
+//! client open/result/close wire, общий Game RNG, configuration roll,
+//! goods factory/upgrade/packet ownership и optional World announcement;
+//! повторный запуск приходит из живого goods opcode `0x8FC12`.
 //! Numeric selector получает вычисленные параметры из reached synchronous
 //! `CScript`; остальные function ID и асинхронный dialog/wait lifecycle ниже
 //! пока остаются RAW.
@@ -76,12 +80,15 @@ pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
 pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_UPGRADE: i32 = 2216;
+pub(crate) const SCRIPT_FUNCTION_OPEN_PRECIOUS_BOX: i32 = 2221;
+pub(crate) const SCRIPT_FUNCTION_GET_PRECIOUS_ITEM: i32 = 2222;
 pub(crate) const SCRIPT_FUNCTION_DELETE_USED_GOODS: i32 = 2231;
 pub(crate) const SCRIPT_FUNCTION_CHECK_USED_GOODS: i32 = 2232;
 pub(crate) const SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_1: i32 = 2233;
 pub(crate) const SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_2: i32 = 2234;
 pub(crate) const SCRIPT_FUNCTION_SET_USED_GOODS_PROPERTY_1: i32 = 2235;
 pub(crate) const SCRIPT_FUNCTION_SET_USED_GOODS_PROPERTY_2: i32 = 2236;
+pub(crate) const SCRIPT_FUNCTION_CLOSE_PRECIOUS_BOX: i32 = 2237;
 pub(crate) const SCRIPT_FUNCTION_GET_CURRENT_DURABILITY: i32 = 2243;
 pub(crate) const SCRIPT_FUNCTION_SET_CURRENT_DURABILITY: i32 = 2244;
 pub(crate) const SCRIPT_FUNCTION_GET_SELECTED_DURABILITY: i32 = 2245;
@@ -2334,6 +2341,14 @@ pub(crate) fn script_function_parameter_kind(
             0 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_OPEN_PRECIOUS_BOX => match index {
+            0 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_PRECIOUS_ITEM => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_ADD_BATTLE_FAIRY_SKILL => match index {
             0 | 1 => String,
             2 | 3 => Integer,
@@ -2729,6 +2744,31 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     integer_arguments: [Option<i32>; 4],
     string_arguments: [Option<&[u8]>; 2],
 ) -> ScriptFunctionDispatchOutcome {
+    match function_id {
+        SCRIPT_FUNCTION_OPEN_PRECIOUS_BOX => {
+            let legacy_return = script_player_id.map_or(0, |player_id| {
+                game.open_precious_box(player_id, string_arguments[0].unwrap_or_default())
+            });
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+        }
+        SCRIPT_FUNCTION_GET_PRECIOUS_ITEM => {
+            let legacy_return = script_player_id.map_or(-1, |player_id| {
+                game.get_precious_box_item(
+                    player_id,
+                    integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+                    runtime,
+                )
+            });
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+        }
+        SCRIPT_FUNCTION_CLOSE_PRECIOUS_BOX => {
+            if let Some(player_id) = script_player_id {
+                game.close_precious_box(player_id);
+            }
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+        }
+        _ => {}
+    }
     macro_rules! handled {
         ($outcome:expr, $pattern:path) => {
             match $outcome {

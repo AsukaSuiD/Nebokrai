@@ -12,7 +12,8 @@
 //! Game decoder очищает только `_box` и публикует box после полного разбора
 //! его временного odds-vector. Safe short-buffer поэтому оставляет прежние
 //! полные box-ы, но не текущий; неизвестный UB безразмерного pointer отброшен.
-//! Random reward query остаётся за границей восстановленного snapshot-owner-а.
+//! `random_item` сохраняет GameServer order: один roll `[0, 10000)`, первый
+//! подходящий half-open odds range, затем равномерный item и inclusive level.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -126,6 +127,29 @@ impl PreciousBoxConf {
 
     pub(crate) fn boxes(&self) -> &BTreeMap<i32, PreciousBox> {
         &self.boxes
+    }
+
+    pub(crate) fn random_item(
+        &self,
+        box_id: i32,
+        mut random: impl FnMut(i32) -> i32,
+    ) -> Option<PreciousBoxItem> {
+        let box_value = self.boxes.get(&box_id)?;
+        let odds_roll = random(10_000);
+        let odds = box_value
+            .odds
+            .iter()
+            .find(|odds| odds.min_odds <= odds_roll && odds_roll < odds.max_odds)?;
+        let item_count = i32::try_from(odds.items.len()).ok().filter(|count| *count > 0)?;
+        let mut item = *odds.items.get(random(item_count) as usize)?;
+        let level_width = i64::from(item.max_level) - i64::from(item.min_level) + 1;
+        if (2..=i64::from(i32::MAX)).contains(&level_width) {
+            item.min_level = item
+                .min_level
+                .wrapping_add(random(level_width as i32));
+        }
+        item.max_level = item.min_level;
+        Some(item)
     }
 
     pub(crate) fn load_from_bytes(
