@@ -22,6 +22,12 @@
 //! `0x000A9270`, а не исправлено по более позднему C++-донору. Найденный
 //! `CancelContendByPlayerID` также удаляет запись без player reset/time; reset
 //! происходит только в ветви отсутствующей записи, как в точном EXE.
+//! Faction-specific die-back lookup сохраняет ordered first-match, обязательный
+//! registered-region gate и direction `-1`; concrete caller делегирует miss
+//! подтверждённому `CServerRegion::GetReturnPoint`. Дизассемблирование RVA
+//! `0x000A6230` подтверждает `AL=1` только после найденной записи и audit-call
+//! (`0x004A6340`), `AL=0` для обоих miss (`0x004A6375`); missing-текст EXE
+//! форматирует во временный buffer, но наружу не публикует.
 //! SZL owner дополнительно материализует inclusive tier lookup и обе
 //! victim-tier gain/loss формулы; death/team/client ordering остаётся у `CGame`.
 
@@ -208,6 +214,27 @@ impl CGodsBattleMgr {
         faction: i32,
     ) -> Option<crate::setup::godsbattleconf::GodsBattleNpcFactionUpdate> {
         self.configuration.set_npc_faction(name, faction)
+    }
+
+    pub(crate) fn return_point(
+        &self,
+        region_id: i32,
+        faction: i32,
+    ) -> Option<crate::gameserver::appserver::region::RegionReturnPoint> {
+        if !self.region_set.contains(&region_id) {
+            return None;
+        }
+        let position = self
+            .configuration
+            .die_back_position(region_id, faction as u32)?;
+        Some(crate::gameserver::appserver::region::RegionReturnPoint {
+            region_id: position.destination_region,
+            left: position.left,
+            top: position.top,
+            right: position.right,
+            bottom: position.bottom,
+            direction: -1,
+        })
     }
 
     pub(crate) fn decode_top_ten(
@@ -547,7 +574,7 @@ fn gods_battle_faction_index(faction: i32) -> Option<usize> {
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::GetReturnPoint
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1340
@@ -869,7 +896,7 @@ fn gods_battle_faction_index(faction: i32) -> Option<usize> {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::GetReturnPoint
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:715

@@ -948,6 +948,17 @@ impl CGodsBattleConf {
         self.die_back_positions.push(value);
     }
 
+    pub(crate) fn die_back_position(
+        &self,
+        region: i32,
+        faction: u32,
+    ) -> Option<GodsBattleDieBackPosition> {
+        self.die_back_positions
+            .iter()
+            .copied()
+            .find(|position| position.region == region && position.faction == faction)
+    }
+
     pub(crate) fn add_to_byte_array(
         &self,
         destination: &mut Vec<u8>,

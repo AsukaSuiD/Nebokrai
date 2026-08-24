@@ -862,6 +862,16 @@ pub(crate) struct CPlayer {
     battle_fairy_container: CBattleFairyContainer,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerReliveMutation {
+    pub(crate) player_id: i32,
+    pub(crate) previous_x: i32,
+    pub(crate) previous_y: i32,
+    pub(crate) direction: i32,
+    pub(crate) health: u32,
+    pub(crate) mana: u32,
+}
+
 impl CPlayer {
     /// Собирает только достигнутый send-family state уже созданного игрока;
     /// identity другого object type отвергается до регистрации.
@@ -3022,6 +3032,31 @@ impl CPlayer {
 
     pub(crate) const fn maximum_health(&self) -> u32 {
         self.combat_properties.maximum_hp
+    }
+
+    pub(crate) const fn maximum_mana(&self) -> u32 {
+        self.combat_properties.maximum_mp
+    }
+
+    /// Owned scalar tail `OnRelive` после external passive/enter/update hooks.
+    pub(crate) fn apply_relive_scalars(
+        &mut self,
+    ) -> Result<PlayerReliveMutation, ShapeCoordinateBlock> {
+        let previous_x = self.shape().get_tile_x()?;
+        let previous_y = self.shape().get_tile_y()?;
+        let direction = self.shape().get_direction();
+        self.set_health(self.maximum_health());
+        self.set_mana(self.maximum_mana());
+        self.move_shape.shape_mut().set_action(0);
+        self.move_shape.shape_mut().set_position(0);
+        Ok(PlayerReliveMutation {
+            player_id: self.player_id(),
+            previous_x,
+            previous_y,
+            direction,
+            health: self.health(),
+            mana: self.mana(),
+        })
     }
 
     pub(crate) const fn mana(&self) -> u32 {
@@ -7616,7 +7651,7 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 
 // ============================================================================
 // FUNCTION: CPlayer::OnRelive
-// STATUS: PARTIALLY_IMPLEMENTED_DIED_STATE_PUBLICATION
+// STATUS: IMPLEMENTED_WITH_RUNTIME_CONTEXT, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:1558
