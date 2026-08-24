@@ -12221,6 +12221,16 @@ impl CGame {
             .collect()
     }
 
+    /// Exact `OnOtherMessage 0x7FA0C`: snapshot signed player-map order и
+    /// отдельный `KickPlayer` network command для каждого текущего owner-а.
+    pub(crate) fn kick_all_players(&self) -> Vec<GameKickPlayerReport> {
+        self.players
+            .keys()
+            .copied()
+            .map(|player_id| self.kick_player(player_id))
+            .collect()
+    }
+
     /// Exact `OnGMMessage 0x7FC0A`: region последовательно обходит все area,
     /// а найденные `CPlayer` передаются в `KickPlayer` в исходном порядке.
     pub(crate) fn kick_players_in_region_except(

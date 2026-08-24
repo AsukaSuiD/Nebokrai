@@ -23,6 +23,8 @@
 //! World-serialized page tail в exact client wire `0xC0405`.
 //! Cross-Game progression `0x7FA08..0B` применяет skill add/delete и level
 //! reset, публикует client/faction effects и возвращает requester feedback.
+//! Administrative World broadcast `0x7FA0C` обходит canonical player map и
+//! ставит exact `QuitClientByMapID` каждому текущему player owner-у.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -32,7 +34,7 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, colored_player_notice_message, player_skill_learned_message,
+    CGame, GameKickPlayerReport, colored_player_notice_message, player_skill_learned_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
@@ -46,6 +48,7 @@ const WORLD_REMOTE_SKILL_ADD: u32 = 0x0007_fa08;
 const WORLD_REMOTE_SKILL_DELETE: u32 = 0x0007_fa09;
 const WORLD_REMOTE_SKILL_OBSERVE: u32 = 0x0007_fa0a;
 const WORLD_REMOTE_LEVEL_SET: u32 = 0x0007_fa0b;
+const WORLD_KICK_ALL_PLAYERS: u32 = 0x0007_fa0c;
 const PLAYER_NPC_NAME_LIST_REQUEST: u32 = 0x0008_fb06;
 const WORLD_PLAYER_RENAME_REQUEST: i32 = 0x0005_fd05;
 const WORLD_PLAYER_RENAME_RESPONSE: u32 = 0x0007_fa0e;
@@ -133,6 +136,9 @@ pub(crate) enum GameOtherMessageOutcome {
         next_experience: u32,
         faction_delivery: Option<Result<i32, SendMessageError>>,
         client_delivery: i32,
+    },
+    AllPlayersKicked {
+        kicks: Vec<GameKickPlayerReport>,
     },
     LeiTingUpdated {
         client_delivery: i32,
@@ -992,6 +998,7 @@ pub(crate) fn dispatch_game_other_message(
             | WORLD_REMOTE_SKILL_DELETE
             | WORLD_REMOTE_SKILL_OBSERVE
             | WORLD_REMOTE_LEVEL_SET
+            | WORLD_KICK_ALL_PLAYERS
             | WORLD_LEI_TING_UPDATE
     ) {
         return None;
@@ -1150,6 +1157,15 @@ pub(crate) fn dispatch_game_other_message(
             })
         })();
         return Some(result);
+    }
+    if message_type == WORLD_KICK_ALL_PLAYERS {
+        return Some(Ok(GameOtherMessageReport {
+            message_type,
+            player_id: 0,
+            outcome: GameOtherMessageOutcome::AllPlayersKicked {
+                kicks: game.kick_all_players(),
+            },
+        }));
     }
     if message_type == WORLD_INCREMENT_SHOP_PAGE {
         let result = (|| {
