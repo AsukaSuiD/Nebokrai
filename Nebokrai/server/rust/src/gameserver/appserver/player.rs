@@ -226,6 +226,7 @@ use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::{CMoveShape, MoveShapePositionFacts, MoveShapeSkill};
 use super::shape::{CShape, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
+use crate::public::auctionnode::CGoodsNode;
 use crate::public::guid::CGuid;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1342,6 +1343,18 @@ pub(crate) struct PlayerAuctionGoodsReturn {
     pub(crate) bind_stored: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionBuyGate {
+    Throttled {
+        sampled_tick_ms: u32,
+        previous_tick_ms: u32,
+    },
+    Ready {
+        sampled_tick_ms: u32,
+        recorded_tick_ms: u32,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerYuanBaoChangeOutcome {
     Unchanged,
@@ -1509,6 +1522,7 @@ pub(crate) struct CPlayer {
     auction_search_weapon_type: i32,
     auction_current_page: i32,
     last_auction_option_tick_ms: u32,
+    current_auction_buy_node: Option<CGoodsNode>,
     ci_qing: CVolumeLimitGoodsContainer,
     ci_qing_compose: CVolumeLimitGoodsContainer,
     fairy_container: CFairyContainer,
@@ -1623,6 +1637,7 @@ impl CPlayer {
             auction_search_weapon_type: 0,
             auction_current_page: 0,
             last_auction_option_tick_ms: 0,
+            current_auction_buy_node: None,
             ci_qing,
             ci_qing_compose,
             fairy_container,
@@ -3364,6 +3379,53 @@ impl CPlayer {
 
     pub(crate) fn auction_goods_identity_at(&self, position: u32) -> Option<ShapeIdentity> {
         self.auction_goods.get_goods(position).map(CGoods::identity)
+    }
+
+    /// Exact `BuyItemFromAauction` clock gate: strict wrapping threshold и
+    /// отдельный второй sample записываются до GUID decode/query.
+    pub(crate) fn begin_auction_buy(&mut self, mut tick_ms: impl FnMut() -> u32) -> AuctionBuyGate {
+        let sampled_tick_ms = tick_ms();
+        let previous_tick_ms = self.last_auction_option_tick_ms;
+        if previous_tick_ms.wrapping_add(5_000) >= sampled_tick_ms {
+            return AuctionBuyGate::Throttled {
+                sampled_tick_ms,
+                previous_tick_ms,
+            };
+        }
+        let recorded_tick_ms = tick_ms();
+        self.last_auction_option_tick_ms = recorded_tick_ms;
+        AuctionBuyGate::Ready {
+            sampled_tick_ms,
+            recorded_tick_ms,
+        }
+    }
+
+    pub(crate) fn current_auction_buy_node(&self) -> Option<&CGoodsNode> {
+        self.current_auction_buy_node.as_ref()
+    }
+
+    pub(crate) fn set_current_auction_buy_node(&mut self, node: CGoodsNode) -> bool {
+        if self.current_auction_buy_node.is_some() {
+            return false;
+        }
+        self.current_auction_buy_node = Some(node);
+        true
+    }
+
+    pub(crate) fn take_current_auction_buy_node(&mut self) -> Option<CGoodsNode> {
+        self.current_auction_buy_node.take()
+    }
+
+    pub(crate) fn client_ip_text(&self) -> Vec<u8> {
+        let ip = self.client_ip;
+        format!(
+            "{}.{}.{}.{}",
+            ip & 0xff,
+            (ip >> 8) & 0xff,
+            (ip >> 16) & 0xff,
+            ip >> 24
+        )
+        .into_bytes()
     }
 
     pub(crate) fn begin_auction_search(
@@ -7067,20 +7129,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::BuyItemFromAuction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13554
-// RVA: 0x0002E820
-// ADDRESS: 0042e820
-// PROTOTYPE: void __thiscall BuyItemFromAuction(CGUID param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::IsMoney
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -7123,20 +7171,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::IsCurAucBuyNodeOK
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13948
-// RVA: 0x0002EB30
-// ADDRESS: 0042eb30
-// PROTOTYPE: bool __thiscall IsCurAucBuyNodeOK(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::CleanCurAucNode
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -7145,48 +7179,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0002EBE0
 // ADDRESS: 0042ebe0
 // PROTOTYPE: void __thiscall CleanCurAucNode(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::GetOptMoneyYuan
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14536
-// RVA: 0x0002EC10
-// ADDRESS: 0042ec10
-// PROTOTYPE: bool __thiscall GetOptMoneyYuan(long * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::GetOptMoneyJin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14575
-// RVA: 0x0002ECF0
-// ADDRESS: 0042ecf0
-// PROTOTYPE: bool __thiscall GetOptMoneyJin(long * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::QuerySellerGoodsSelf
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14715
-// RVA: 0x0002EE80
-// ADDRESS: 0042ee80
-// PROTOTYPE: void __thiscall QuerySellerGoodsSelf(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -7431,20 +7423,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::BuyItemFromAauction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13826
-// RVA: 0x00030BC0
-// ADDRESS: 00430bc0
-// PROTOTYPE: bool __thiscall BuyItemFromAauction(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::IsDonePreNode
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -7453,20 +7431,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00030CF0
 // ADDRESS: 00430cf0
 // PROTOTYPE: bool __thiscall IsDonePreNode(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetCurAucBuyNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13977
-// RVA: 0x00030D00
-// ADDRESS: 00430d00
-// PROTOTYPE: bool __thiscall SetCurAucBuyNode(CGoodsNode param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -7537,20 +7501,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00031800
 // ADDRESS: 00431800
 // PROTOTYPE: int __thiscall DeleteGoodsbyGuid(CGUID param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SendAucAbBuyOptTran
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14493
-// RVA: 0x00031900
-// ADDRESS: 00431900
-// PROTOTYPE: void __thiscall SendAucAbBuyOptTran(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -7957,20 +7907,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00036200
 // ADDRESS: 00436200
 // PROTOTYPE: bool __thiscall IsAollowAuction(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::WriteBuyAuctionLog
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14612
-// RVA: 0x00036370
-// ADDRESS: 00436370
-// PROTOTYPE: void __thiscall WriteBuyAuctionLog(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -8789,20 +8725,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::SendBuyAucNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14353
-// RVA: 0x00045EE0
-// ADDRESS: 00445ee0
-// PROTOTYPE: void __thiscall SendBuyAucNode(CGoodsNode * param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::SendAucAbOpt
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -9231,34 +9153,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0004B100
 // ADDRESS: 0044b100
 // PROTOTYPE: void __thiscall DoneCurAucNode(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DoneCurAucBuyNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14258
-// RVA: 0x0004B2A0
-// ADDRESS: 0044b2a0
-// PROTOTYPE: void __thiscall DoneCurAucBuyNode(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SendBackCurBuyNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14347
-// RVA: 0x0004B370
-// ADDRESS: 0044b370
-// PROTOTYPE: void __thiscall SendBackCurBuyNode(bool param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

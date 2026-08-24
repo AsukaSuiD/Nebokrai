@@ -51,6 +51,8 @@ const AUCTION_ENABLED_OFFSET: usize = 0xC87;
 const AUCTION_FEE_MAXIMUM_OFFSET: usize = 0xC98;
 const AUCTION_FEE_MINIMUM_OFFSET: usize = 0xCA0;
 const AUCTION_FACTOR_C_OFFSET: usize = 0xCB0;
+const AUCTION_SERVICE_FEE_MAXIMUM_OFFSET: usize = 0xCB4;
+const AUCTION_SERVICE_FEE_MINIMUM_OFFSET: usize = 0xCBC;
 const AUCTION_OPEN_VALUE_OFFSETS: [usize; 12] = [
     0xC8C, 0xC90, 0xC94, 0xC98, 0xC9C, 0xCA0, 0xCA4, 0xCB0, 0xCB4, 0xCB8, 0xCBC, 0xCC0,
 ];
@@ -531,6 +533,14 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn auction_factor_c(&self) -> f32 {
         self.read_f32(AUCTION_FACTOR_C_OFFSET)
+    }
+
+    pub(crate) fn auction_service_fee_maximum(&self) -> f32 {
+        self.read_f32(AUCTION_SERVICE_FEE_MAXIMUM_OFFSET)
+    }
+
+    pub(crate) fn auction_service_fee_minimum(&self) -> f32 {
+        self.read_f32(AUCTION_SERVICE_FEE_MINIMUM_OFFSET)
     }
 
     /// Exact `CPlayer::OpenAuction` projection: float-поля передаются клиенту

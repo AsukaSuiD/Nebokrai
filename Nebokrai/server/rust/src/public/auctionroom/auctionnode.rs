@@ -18,6 +18,7 @@ const AUCTION_SELLER_NAME_OFFSET: usize = 0x000;
 const AUCTION_MONEY_SELLER_OFFSET: usize = 0x100;
 const AUCTION_TIME_SELLER_OFFSET: usize = 0x104;
 const AUCTION_SELLER_ID_OFFSET: usize = 0x108;
+const AUCTION_SELLER_IP_OFFSET: usize = 0x10c;
 const AUCTION_BUYER_NAME_OFFSET: usize = 0x11c;
 const AUCTION_MONEY_BUYER_OFFSET: usize = 0x21c;
 const AUCTION_TIME_BUYER_OFFSET: usize = 0x220;
@@ -104,7 +105,7 @@ impl fmt::Display for GoodsNodeSerializeError {
 
 impl Error for GoodsNodeSerializeError {}
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsState(i32);
 
 impl GoodsState {
@@ -127,6 +128,7 @@ impl GoodsState {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct AuctionInfo {
     bytes: [u8; AUCTION_INFO_SIZE],
 }
@@ -169,6 +171,10 @@ impl AuctionInfo {
 
     fn seller_name(&self) -> &[u8] {
         &self.bytes[AUCTION_SELLER_NAME_OFFSET..AUCTION_MONEY_SELLER_OFFSET]
+    }
+
+    fn seller_ip(&self) -> &[u8] {
+        &self.bytes[AUCTION_SELLER_IP_OFFSET..AUCTION_BUYER_NAME_OFFSET]
     }
 
     fn money_seller(&self) -> u32 {
@@ -249,6 +255,7 @@ impl AuctionInfo {
 }
 
 /// Owned-состояние исходного `CGoodsNode`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CGoodsNode {
     db: bool,
     add_ticket: u32,
@@ -568,6 +575,18 @@ impl CGoodsNode {
         self.auction_info.money_seller()
     }
 
+    pub(crate) fn seller_id(&self) -> u32 {
+        self.auction_info.seller_id()
+    }
+
+    pub(crate) fn seller_name(&self) -> &[u8] {
+        self.auction_info.seller_name()
+    }
+
+    pub(crate) fn seller_ip(&self) -> &[u8] {
+        self.auction_info.seller_ip()
+    }
+
     /// Возвращает исходный unsigned owner id без изменения битов.
     pub(crate) const fn owner_id(&self) -> u32 {
         self.owner_id
@@ -641,13 +660,20 @@ impl CGoodsNode {
     }
 
     /// Возвращает фиксированный старый буфер имени товара.
-    pub(super) const fn goods_name(&self) -> &[u8; LEGACY_STRING_CAPACITY] {
+    pub(crate) const fn goods_name(&self) -> &[u8; LEGACY_STRING_CAPACITY] {
         &self.goods_name
     }
 
     /// Выполняет доказанное присваивание `m_GoodsState = STATE_AUCTION`.
     pub(crate) fn mark_as_auction(&mut self) {
         self.goods_state = GoodsState::AUCTION;
+    }
+
+    /// Exact `SendBuyAucNode(false)`/offline-buyer rollback перед serialize.
+    pub(crate) fn prepare_return_to_auction(&mut self) {
+        self.goods_state = GoodsState::AUCTION;
+        self.db = false;
+        self.auction_info.set_buyer_id(0);
     }
 
     /// Проверяет точное состояние `STATE_AUCTION`.

@@ -188,7 +188,7 @@ impl AuctionLogNode {
             .map(|terminator| &self.description[..terminator])
     }
 
-    fn to_legacy_bytes(&self) -> [u8; AUCTION_LOG_NODE_SIZE] {
+    pub(crate) fn to_legacy_bytes(&self) -> [u8; AUCTION_LOG_NODE_SIZE] {
         let mut bytes = [0; AUCTION_LOG_NODE_SIZE];
         for (offset, value) in [
             (0x00, self.base_id),

@@ -143,6 +143,12 @@ impl CGameAuctionRoom {
         self.auction_goods_list.keys().copied().collect()
     }
 
+    /// Exact GameServer `QueryGoodsNodeInfo` caller-у покупки нужен только
+    /// факт присутствия GUID: concrete node принадлежит World/MiscServer.
+    pub(crate) fn contains_goods(&self, guid: CGuid) -> bool {
+        self.auction_goods_list.contains_key(&guid)
+    }
+
     /// Возвращает следующий stale GUID в primary `std::map`-порядке, не
     /// выполняя мутацию до исходной client-публикации.
     pub(crate) fn next_unity_removal(

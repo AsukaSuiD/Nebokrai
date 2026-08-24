@@ -2,7 +2,7 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/onmsg_w2s_auction.cpp` подтверждают
-//! selectors `0x80401..0x80405`, `0x80407..0x80410`:
+//! selectors `0x80401..0x80410`, кроме ещё RAW `0x80411+`:
 //! добавление временного `CGoodsNode` в Game-specific owner map, reconciliation
 //! с World GUID-set, catalog/log/client relay, auction-state и полную YuanBao
 //! container/client mutation, а stall-result либо сообщает отказ, либо
@@ -16,6 +16,10 @@
 //! `0x6080E` не создаётся. GameServer primary map
 //! хранит `GUID -> owner id`, а не MiscServer-owned node; это исключает
 //! исходный stack-pointer lifetime без изменения наблюдаемого результата.
+//! Buy-result `0x80406` хранит один trusted pending node у player, возвращает
+//! competing/offline node, списывает gold с exact client wallet effect либо
+//! передаёт YuanBao trade в Billing, а success публикует два `0x60214`,
+//! `0x60806` и buyer/seller self-query в исходном порядке.
 //! Обрезанный payload заменяет небезопасное чтение за буфером typed error-ом
 //! с сохранением уже выполненных cursor/field effects. Остальные selectors
 //! остаются RAW ниже.
@@ -24,7 +28,9 @@ use std::collections::BTreeMap;
 
 use crate::gameserver::appserver::container::cgoodscontainer::GoodsStackMergeOutcome;
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
-use crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome;
+use crate::gameserver::appserver::container::cwallet::{
+    CurrencyDecreaseOutcome, CurrencyIncreaseOutcome,
+};
 use crate::gameserver::appserver::cs2ccontainerobjectamountchange::CS2CContainerObjectAmountChange;
 use crate::gameserver::appserver::cs2ccontainerobjectmove::{
     CS2CContainerObjectMove, ContainerObjectMoveOperation,
@@ -42,13 +48,14 @@ use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::SendMessageError;
 use crate::public::aucitionroom::GameAuctionRemoval;
 use crate::public::auctionlog::{AuctionLogNode, AuctionLogSystemTime};
-use crate::public::auctionnode::{CGoodsNode, GoodsNodeUnserializeError};
+use crate::public::auctionnode::{CGoodsNode, GoodsNodeSerializeError, GoodsNodeUnserializeError};
 
 const WORLD_AUCTION_ADD_ITEM_MESSAGE: i32 = 0x0008_0401;
 const WORLD_AUCTION_UNITY_MESSAGE: i32 = 0x0008_0402;
 const WORLD_AUCTION_STATE_MESSAGE: i32 = 0x0008_0403;
 const WORLD_AUCTION_RETURN_GOODS_MESSAGE: i32 = 0x0008_0404;
 const WORLD_AUCTION_REFRESH_SELF_GOODS_MESSAGE: i32 = 0x0008_0405;
+const WORLD_AUCTION_BUY_RESULT_MESSAGE: i32 = 0x0008_0406;
 const WORLD_AUCTION_SELF_LIST_MESSAGE: i32 = 0x0008_0407;
 const WORLD_AUCTION_ALL_LIST_MESSAGE: i32 = 0x0008_0408;
 const WORLD_AUCTION_DIRECT_RELAY_MESSAGE: i32 = 0x0008_0409;
@@ -70,6 +77,11 @@ const CLIENT_AUCTION_BROADCAST_MESSAGE: i32 = 0x000c_010b;
 const LOCAL_PLAYER_SHOP_OPEN_MESSAGE: i32 = 0x0009_0201;
 const GAME_AUCTION_REFRESH_SELF_GOODS_MESSAGE: i32 = 0x0006_080a;
 const WORLD_AUCTION_RETURN_LOG_MESSAGE: i32 = 0x0006_0217;
+const WORLD_AUCTION_RETURN_NODE_MESSAGE: i32 = 0x0006_0801;
+const WORLD_AUCTION_QUERY_SELF_MESSAGE: i32 = 0x0006_0802;
+const WORLD_AUCTION_BUY_SUCCEEDED_MESSAGE: i32 = 0x0006_0806;
+const WORLD_AUCTION_LOG_MESSAGE: i32 = 0x0006_0214;
+const BILLING_AUCTION_BUY_MESSAGE: i32 = 0x000e_f203;
 const CLIENT_GOODS_UPDATE_MESSAGE: i32 = 0x000b_f918;
 const PLAYER_TYPE: i32 = 400;
 const AUCTION_GOODS_EXTEND_ID: i32 = 14;
@@ -95,6 +107,9 @@ pub(crate) enum WorldAuctionMessageError {
         available: usize,
     },
     ReturnGoodsDecode(GoodsDecodeError),
+    MissingBuyResultField(&'static str),
+    BuyNodeDecode(GoodsNodeUnserializeError),
+    BuyNodeSerialize(GoodsNodeSerializeError),
     MissingRelayPlayerId {
         selector: i32,
     },
@@ -165,6 +180,15 @@ pub(crate) enum WorldAuctionMessageReport {
         goods_return: Option<PlayerAuctionGoodsReturn>,
         deliveries: Vec<i32>,
         snapshot_refresh_required: bool,
+    },
+    BuyResult {
+        result: i32,
+        player_id: Option<i32>,
+        buyer_found: bool,
+        money_type: Option<u8>,
+        world_deliveries: Vec<Result<i32, SendMessageError>>,
+        client_deliveries: Vec<i32>,
+        billing_delivery: Option<Result<i32, SendMessageError>>,
     },
     ClientRelay {
         selector: i32,
@@ -620,6 +644,200 @@ where
                 delivery,
             }))
         }
+        WORLD_AUCTION_BUY_RESULT_MESSAGE => {
+            let Some(result) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingBuyResultField(
+                    "result",
+                )));
+            };
+            if result == 0 {
+                let Some(player_id) = message.base_mut().get_long() else {
+                    return Some(Err(WorldAuctionMessageError::MissingBuyResultField(
+                        "player id",
+                    )));
+                };
+                return Some(Ok(WorldAuctionMessageReport::BuyResult {
+                    result,
+                    player_id: Some(player_id),
+                    buyer_found: game.find_player(player_id).is_some(),
+                    money_type: None,
+                    world_deliveries: Vec::new(),
+                    client_deliveries: Vec::new(),
+                    billing_delivery: None,
+                }));
+            }
+            if result != 1 {
+                return Some(Ok(WorldAuctionMessageReport::BuyResult {
+                    result,
+                    player_id: None,
+                    buyer_found: false,
+                    money_type: None,
+                    world_deliveries: Vec::new(),
+                    client_deliveries: Vec::new(),
+                    billing_delivery: None,
+                }));
+            }
+
+            let mut incoming = CGoodsNode::new();
+            let decode = {
+                let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                incoming.unserialize(source, cursor)
+            };
+            if let Err(error) = decode {
+                return Some(Err(WorldAuctionMessageError::BuyNodeDecode(error)));
+            }
+            let player_id = incoming.buyer_id() as i32;
+            let Some(player) = game.find_player(player_id) else {
+                incoming.prepare_return_to_auction();
+                let delivery =
+                    send_auction_node_world(&incoming, WORLD_AUCTION_RETURN_NODE_MESSAGE, game)
+                        .map_err(WorldAuctionMessageError::BuyNodeSerialize);
+                return match delivery {
+                    Ok(delivery) => Some(Ok(WorldAuctionMessageReport::BuyResult {
+                        result,
+                        player_id: Some(player_id),
+                        buyer_found: false,
+                        money_type: Some(incoming.money_type()),
+                        world_deliveries: vec![delivery],
+                        client_deliveries: Vec::new(),
+                        billing_delivery: None,
+                    })),
+                    Err(error) => Some(Err(error)),
+                };
+            };
+
+            let had_pending = player.current_auction_buy_node().is_some();
+            let mut world_deliveries = Vec::new();
+            if had_pending {
+                incoming.prepare_return_to_auction();
+                match send_auction_node_world(&incoming, WORLD_AUCTION_RETURN_NODE_MESSAGE, game) {
+                    Ok(delivery) => world_deliveries.push(delivery),
+                    Err(error) => {
+                        return Some(Err(WorldAuctionMessageError::BuyNodeSerialize(error)));
+                    }
+                }
+            } else {
+                let stored = game
+                    .find_player_mut(player_id)
+                    .expect("auction buyer проверен")
+                    .set_current_auction_buy_node(incoming);
+                debug_assert!(stored);
+            }
+
+            let mut node = game
+                .find_player_mut(player_id)
+                .expect("auction buyer проверен перед DoneCurAucBuyNode")
+                .take_current_auction_buy_node()
+                .expect("pending либо только что установлен");
+            let money_type = node.money_type();
+            let mut client_deliveries = Vec::new();
+            let mut billing_delivery = None;
+            if money_type == 1 {
+                if node.seller_name().first().copied().unwrap_or(0) != 0 {
+                    let buyer = game
+                        .find_player(player_id)
+                        .expect("auction buyer проверен перед Billing");
+                    let buyer_ip = buyer.client_ip_text();
+                    let (login_server_id, world_server_id) = game.server_ids();
+                    let mut billing = CMessage::new(BILLING_AUCTION_BUY_MESSAGE);
+                    billing.base_mut().add_long(3);
+                    billing.base_mut().add_long(player_id);
+                    billing.base_mut().add_ulong(node.seller_id());
+                    add_c_string(&mut billing, buyer.account());
+                    add_c_string(&mut billing, node.seller_name());
+                    add_c_string(&mut billing, &buyer_ip);
+                    add_c_string(&mut billing, node.seller_ip());
+                    add_c_string(&mut billing, buyer.player_name());
+                    add_c_string(&mut billing, node.seller_name());
+                    billing.base_mut().add_ulong(node.seller_money());
+                    billing.base_mut().add_ulong(node.base_index());
+                    billing.base_mut().add_long(node.amount());
+                    billing.base_mut().add_long(0);
+                    billing.base_mut().add_long(0);
+                    billing.base_mut().add_long(login_server_id);
+                    billing.base_mut().add_long(world_server_id);
+                    billing
+                        .base_mut()
+                        .add_guid(crate::public::guid::CGuid::GUID_INVALID);
+                    billing_delivery = Some(billing.send_to_bs(game, false));
+                }
+                let stored = game
+                    .find_player_mut(player_id)
+                    .expect("auction buyer проверен после Billing")
+                    .set_current_auction_buy_node(node);
+                debug_assert!(stored);
+            } else if money_type == 0 {
+                let price = node.seller_money();
+                let enough = game
+                    .find_player(player_id)
+                    .is_some_and(|buyer| buyer.money() >= price);
+                if !enough {
+                    node.prepare_return_to_auction();
+                    match send_auction_node_world(&node, WORLD_AUCTION_RETURN_NODE_MESSAGE, game) {
+                        Ok(delivery) => world_deliveries.push(delivery),
+                        Err(error) => {
+                            return Some(Err(WorldAuctionMessageError::BuyNodeSerialize(error)));
+                        }
+                    }
+                } else {
+                    let buyer_log_time = runtime.auction_billing_local_system_time();
+                    let (buyer_log, mut seller_log, notice) =
+                        build_auction_buy_log_effects(&node, game, buyer_log_time);
+                    let mut buyer_audit = CMessage::new(WORLD_AUCTION_LOG_MESSAGE);
+                    buyer_audit.base_mut().add(&buyer_log.to_legacy_bytes());
+                    world_deliveries.push(buyer_audit.send(game, false));
+                    client_deliveries.push(
+                        colored_player_notice_message(0xffff_ffff, 0xffff_0000, &notice)
+                            .send_to_player(game.net_server(), player_id),
+                    );
+                    seller_log.time = runtime.auction_billing_local_system_time();
+                    let mut seller_audit = CMessage::new(WORLD_AUCTION_LOG_MESSAGE);
+                    seller_audit.base_mut().add(&seller_log.to_legacy_bytes());
+                    world_deliveries.push(seller_audit.send(game, false));
+                    let decrease = game
+                        .decrease_player_money(player_id, price)
+                        .expect("auction buyer проверен перед gold decrease");
+                    client_deliveries.extend(send_auction_money_decrease(
+                        player_id,
+                        &decrease.outcome,
+                        game,
+                    ));
+                    match send_auction_node_world(&node, WORLD_AUCTION_BUY_SUCCEEDED_MESSAGE, game)
+                    {
+                        Ok(delivery) => world_deliveries.push(delivery),
+                        Err(error) => {
+                            return Some(Err(WorldAuctionMessageError::BuyNodeSerialize(error)));
+                        }
+                    }
+                    for query_player_id in [player_id, node.seller_id() as i32] {
+                        if query_player_id == player_id
+                            || game.find_player(query_player_id).is_some()
+                        {
+                            let mut query = CMessage::new(WORLD_AUCTION_QUERY_SELF_MESSAGE);
+                            query.base_mut().add_long(query_player_id);
+                            world_deliveries.push(query.send(game, false));
+                        }
+                    }
+                }
+            } else {
+                node.prepare_return_to_auction();
+                match send_auction_node_world(&node, WORLD_AUCTION_RETURN_NODE_MESSAGE, game) {
+                    Ok(delivery) => world_deliveries.push(delivery),
+                    Err(error) => {
+                        return Some(Err(WorldAuctionMessageError::BuyNodeSerialize(error)));
+                    }
+                }
+            }
+            Some(Ok(WorldAuctionMessageReport::BuyResult {
+                result,
+                player_id: Some(player_id),
+                buyer_found: true,
+                money_type: Some(money_type),
+                world_deliveries,
+                client_deliveries,
+                billing_delivery,
+            }))
+        }
         selector @ (WORLD_AUCTION_SELF_LIST_MESSAGE | WORLD_AUCTION_ALL_LIST_MESSAGE) => {
             let Some(player_id) = message.base_mut().get_long() else {
                 return Some(Err(WorldAuctionMessageError::MissingListPlayerId {
@@ -977,6 +1195,173 @@ where
         }
         _ => None,
     }
+}
+
+pub(super) fn send_auction_node_world(
+    node: &CGoodsNode,
+    selector: i32,
+    game: &CGame,
+) -> Result<Result<i32, SendMessageError>, GoodsNodeSerializeError> {
+    let payload = node.serialize()?;
+    let mut message = CMessage::new(selector);
+    message.base_mut().add(&payload);
+    Ok(message.send(game, false))
+}
+
+fn send_auction_money_decrease(
+    player_id: i32,
+    outcome: &CurrencyDecreaseOutcome,
+    game: &CGame,
+) -> Vec<i32> {
+    match outcome {
+        CurrencyDecreaseOutcome::Decreased(change) => {
+            let mut amount = CS2CContainerObjectAmountChange::default();
+            amount.set_source_container(change.owner_type, change.owner_id, change.position);
+            amount.set_source_container_extend_id(4);
+            amount.set_object(change.identity.object_type, change.identity.ex_id);
+            amount.set_object_amount(change.new_amount);
+            vec![amount.send_to_player(game, player_id)]
+        }
+        CurrencyDecreaseOutcome::Removed(removed) => {
+            let identity = removed.goods.identity();
+            let mut deleted = CS2CContainerObjectMove::default();
+            deleted.set_operation(ContainerObjectMoveOperation::DeleteObject);
+            deleted.set_source_container(removed.owner_type, removed.owner_id, removed.position);
+            deleted.set_source_container_extend_id(4);
+            deleted.set_source_object(identity.object_type, identity.ex_id, removed.amount);
+            vec![deleted.send_to_player(game, player_id)]
+        }
+        CurrencyDecreaseOutcome::NoChange
+        | CurrencyDecreaseOutcome::InvalidStoredCurrency { .. } => Vec::new(),
+    }
+}
+
+pub(super) fn build_auction_buy_log_effects(
+    node: &CGoodsNode,
+    game: &CGame,
+    time: AuctionLogSystemTime,
+) -> (AuctionLogNode, AuctionLogNode, Vec<u8>) {
+    let price = node.seller_money() as i32;
+    let (fee, seller_money) = if node.money_type() == 0 {
+        let setup = game.globe_setup();
+        let fee = ((price as f32) * setup.auction_factor_c())
+            .round()
+            .max(setup.auction_service_fee_minimum().round())
+            .min(setup.auction_service_fee_maximum().round()) as i32;
+        if fee <= price {
+            (fee, price.wrapping_sub(fee))
+        } else {
+            (price, 0)
+        }
+    } else if price > 2 {
+        (3, price.wrapping_sub(3))
+    } else {
+        (price, 0)
+    };
+    let mut description = [0; 0x100];
+    let goods_name = node
+        .goods_name()
+        .split(|byte| *byte == 0)
+        .next()
+        .unwrap_or_default();
+    let copy_len = goods_name.len().min(description.len().saturating_sub(1));
+    description[..copy_len].copy_from_slice(&goods_name[..copy_len]);
+    let common = AuctionLogNode {
+        base_id: node.base_index() as i32,
+        operation_type: -1,
+        money_type: i32::from(node.money_type()),
+        money_num: price,
+        player_id: node.buyer_id() as i32,
+        amount: node.amount(),
+        fee: 0,
+        notice: 0,
+        time,
+        description,
+        guid: node.guid(),
+        guid_key: crate::public::guid::CGuid::GUID_INVALID,
+    };
+    let buyer_log = common.clone();
+    let seller_log = AuctionLogNode {
+        operation_type: 1,
+        money_num: seller_money,
+        player_id: node.seller_id() as i32,
+        fee,
+        ..common
+    };
+    let money_name = game.get_string_by_id(b"GS0015");
+    let catalog_name = game
+        .goods_factory()
+        .query_goods_name(node.base_index())
+        .unwrap_or_default();
+    let notice = format_auction_buy_notice(
+        game.get_string_by_id(b"GPM018"),
+        price,
+        money_name,
+        catalog_name,
+    );
+    (buyer_log, seller_log, notice)
+}
+
+fn format_auction_buy_notice(
+    template: &[u8],
+    price: i32,
+    money_name: &[u8],
+    goods_name: &[u8],
+) -> Vec<u8> {
+    enum Argument<'a> {
+        Number(i32),
+        Text(&'a [u8]),
+    }
+    let arguments = [
+        Argument::Number(price),
+        Argument::Text(money_name),
+        Argument::Text(goods_name),
+    ];
+    let template = template.split(|byte| *byte == 0).next().unwrap_or_default();
+    let mut output = Vec::new();
+    let mut argument = 0usize;
+    let mut cursor = 0usize;
+    while cursor < template.len() && output.len() < 131 {
+        if template[cursor] == b'%' && template.get(cursor + 1) == Some(&b'%') {
+            output.push(b'%');
+            cursor += 2;
+            continue;
+        }
+        if template[cursor] == b'%' {
+            let conversion = template.get(cursor + 1).copied();
+            let rendered = arguments
+                .get(argument)
+                .and_then(|value| match (conversion, value) {
+                    (Some(b'd' | b'i'), Argument::Number(value)) => {
+                        Some(value.to_string().into_bytes())
+                    }
+                    (Some(b's'), Argument::Text(value)) => Some(
+                        value
+                            .split(|byte| *byte == 0)
+                            .next()
+                            .unwrap_or_default()
+                            .to_vec(),
+                    ),
+                    _ => None,
+                });
+            if let Some(rendered) = rendered {
+                let remaining = 131usize.saturating_sub(output.len());
+                output.extend_from_slice(&rendered[..rendered.len().min(remaining)]);
+                argument += 1;
+                cursor += 2;
+                continue;
+            }
+        }
+        output.push(template[cursor]);
+        cursor += 1;
+    }
+    output
+}
+
+fn add_c_string(message: &mut CMessage, value: &[u8]) {
+    let value = value.split(|byte| *byte == 0).next().unwrap_or_default();
+    message.base_mut().add(value);
+    message.base_mut().add_byte(0);
 }
 
 fn format_auction_log_notice(

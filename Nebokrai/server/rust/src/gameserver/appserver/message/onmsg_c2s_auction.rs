@@ -2,9 +2,12 @@
 //!
 //! Точная пара GameServer EXE/PDB и исходный owner
 //! `server/gameserver/appserver/message/onmsg_c2s_auction.cpp` подтверждают
-//! close `0x90A01`, cut `0x90A03` и auction controls `0x90A05..0C`: cut
+//! close `0x90A01`, cut `0x90A03`, buy `0x90A04` и auction controls
+//! `0x90A05..0C`: cut
 //! сначала посылает exact `0x60216`, затем переписывает исходный wire в
-//! `0x60809`; поиск сохраняет player criteria и сбрасывает page, browse/self
+//! `0x60809`; buy сохраняет signed client YuanBao precheck, общий 5-секундный
+//! gate и только для живого GUID посылает `0x60805`; поиск сохраняет player
+//! criteria и сбрасывает page, browse/self
 //! запросы уходят в World,
 //! клиент открытия получает `0xC0706`, player-open меняется до World `0x60810`,
 //! extension batch оплачивается `FZ0965`, логируется и добавляется в packet,
@@ -14,7 +17,7 @@
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_PACKAGE_EXTENTION;
 use crate::gameserver::appserver::player::{
-    AuctionSelfGoodsRefresh, CiQingPacketAddition, CiQingPacketConsumption,
+    AuctionBuyGate, AuctionSelfGoodsRefresh, CiQingPacketAddition, CiQingPacketConsumption,
 };
 use crate::gameserver::gameserver::game::{
     CGame, OldClientGoodsCodec, colored_player_notice_message,
@@ -23,6 +26,7 @@ use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const CLIENT_AUCTION_CLOSE_MESSAGE: i32 = 0x0009_0A01;
 const CLIENT_AUCTION_CUT_MESSAGE: i32 = 0x0009_0A03;
+const CLIENT_AUCTION_BUY_MESSAGE: i32 = 0x0009_0A04;
 const CLIENT_AUCTION_REFRESH_MESSAGE: i32 = 0x0009_0A05;
 const CLIENT_AUCTION_SEARCH_MESSAGE: i32 = 0x0009_0A06;
 const CLIENT_AUCTION_PAGE_MESSAGE: i32 = 0x0009_0A07;
@@ -41,6 +45,7 @@ const WORLD_AUCTION_CELL_MESSAGE: i32 = 0x0006_080C;
 const WORLD_AUCTION_OPEN_MESSAGE: i32 = 0x0006_0810;
 const WORLD_AUCTION_CUT_MESSAGE: i32 = 0x0006_0809;
 const WORLD_AUCTION_CUT_LOG_MESSAGE: i32 = 0x0006_0216;
+const WORLD_AUCTION_BUY_MESSAGE: i32 = 0x0006_0805;
 const WORLD_GOODS_AUDIT_MESSAGE: i32 = 0x0006_0202;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,6 +103,19 @@ pub(crate) enum ClientAuctionMessageReport {
         cut_log_delivery: Option<Result<i32, SendMessageError>>,
         world_delivery: Result<i32, SendMessageError>,
     },
+    BuyRequested {
+        player_id: i32,
+        advertised_yuan_bao: i32,
+        goods_id: crate::public::guid::CGuid,
+        gate: AuctionBuyGate,
+        world_delivery: Option<Result<i32, SendMessageError>>,
+    },
+    BuyFundsRejected {
+        player_id: i32,
+        advertised_yuan_bao: i32,
+        available_yuan_bao: u32,
+        notice_delivery: i32,
+    },
     Truncated {
         selector: i32,
         field: &'static str,
@@ -129,6 +147,7 @@ where
         selector,
         CLIENT_AUCTION_CLOSE_MESSAGE
             | CLIENT_AUCTION_CUT_MESSAGE
+            | CLIENT_AUCTION_BUY_MESSAGE
             | CLIENT_AUCTION_REFRESH_MESSAGE
             | CLIENT_AUCTION_SEARCH_MESSAGE
             | CLIENT_AUCTION_PAGE_MESSAGE
@@ -176,6 +195,54 @@ where
             player_id,
             goods_id,
             cut_log_delivery,
+            world_delivery,
+        });
+    }
+    if selector == CLIENT_AUCTION_BUY_MESSAGE {
+        let Some(advertised_yuan_bao) = message.base_mut().get_long() else {
+            return Some(ClientAuctionMessageReport::Truncated {
+                selector,
+                field: "advertised yuan bao",
+            });
+        };
+        let available_yuan_bao = game
+            .find_player(player_id)
+            .expect("auction buy player проверен")
+            .yuan_bao();
+        if (available_yuan_bao as i32) < advertised_yuan_bao {
+            let notice_delivery =
+                colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GPM021"))
+                    .send_to_player(game.net_server(), player_id);
+            return Some(ClientAuctionMessageReport::BuyFundsRejected {
+                player_id,
+                advertised_yuan_bao,
+                available_yuan_bao,
+                notice_delivery,
+            });
+        }
+        let gate = game
+            .find_player_mut(player_id)
+            .expect("auction buy player проверен перед throttle")
+            .begin_auction_buy(|| tick_ms(runtime));
+        let mut goods_id = crate::public::guid::CGuid::GUID_INVALID;
+        let world_delivery = if matches!(gate, AuctionBuyGate::Ready { .. }) {
+            goods_id = message.base_mut().get_guid().unwrap_or_default();
+            if game.auction_room().contains_goods(goods_id) {
+                let mut request = CMessage::new(WORLD_AUCTION_BUY_MESSAGE);
+                request.base_mut().add_long(player_id);
+                request.base_mut().add_guid(goods_id);
+                Some(request.send(game, false))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        return Some(ClientAuctionMessageReport::BuyRequested {
+            player_id,
+            advertised_yuan_bao,
+            goods_id,
+            gate,
             world_delivery,
         });
     }
