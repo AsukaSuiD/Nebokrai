@@ -195,8 +195,9 @@
 //! обязательными runtime owners, а не подменены синхронными заглушками.
 //! Shape commands `0x8F901..05` подключены к main message route: exact payload
 //! lengths, direction/emotion state, `0xBF601/03/502/611/738`, region lookup и
-//! effect ordering принадлежат `CGame`; polymorphic relocation, quest AI и
-//! полные shape serializers остаются конкретно названными runtime owners.
+//! effect ordering принадлежат `CGame`; player relocation уже замыкает
+//! region/area/block state и `GS0163`, а non-player polymorphic relocation,
+//! quest AI и полные shape serializers остаются runtime owners.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -13551,6 +13552,33 @@ impl CGame {
         .unwrap_or(0);
         self.restore_region_owner(owner);
         Some(delivery)
+    }
+
+    pub(crate) fn relocate_player_shape(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+    ) -> Option<Result<(), RegionMembershipBlock>> {
+        let mut player = self.players.remove(&player_id)?;
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            self.players.insert(player_id, player);
+            return None;
+        };
+        let facts = player.movement_position_facts(
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        );
+        let result = owner.base_mut().set_move_shape_tile_position(
+            player.movement_shape_mut(),
+            tile_x,
+            tile_y,
+            facts,
+        );
+        self.restore_region_owner(owner);
+        self.players.insert(player_id, player);
+        Some(result)
     }
 
     pub(crate) fn find_shape_in_region(

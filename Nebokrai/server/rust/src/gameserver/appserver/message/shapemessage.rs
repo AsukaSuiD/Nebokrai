@@ -4,9 +4,11 @@
 //! `appserver/message/shapemessage.cpp`. Материализован весь handler
 //! `0x8F901..0x8F905`: exact fixed-width decode, direction/emotion player
 //! state, region lookup, around/addressed wire и ordering внешних AI/spatial/
-//! serialization owners. `CMoveShape::OnQuestMoveStep`, `OnCannotMove`,
-//! polymorphic `SetTileXY` и полные player/goods/shape serializers остаются
-//! обязательными runtime-границами, поскольку их concrete owners ещё RAW.
+//! serialization owners. Player `SetTileXY` проходит concrete region/area/
+//! block mutation и post-move `GS0163`; `CMoveShape::OnQuestMoveStep`,
+//! `OnCannotMove`, non-player polymorphic `SetTileXY` и полные player/goods/
+//! shape serializers остаются обязательными runtime-границами, поскольку их
+//! concrete owners ещё RAW.
 
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeView};
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
@@ -18,6 +20,7 @@ const CHANGE_POSITION: u32 = 0x0008_f902;
 const QUEST_MOVE_STEP: u32 = 0x0008_f903;
 const QUERY_SHAPE_SNAPSHOT: u32 = 0x0008_f904;
 const PERFORM_EMOTION: u32 = 0x0008_f905;
+const PLAYER_TYPE: i32 = 400;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ShapeQuestMoveFacts {
@@ -48,7 +51,7 @@ pub(crate) trait GameShapeMessageRuntime {
         region_id: i32,
         identity: ShapeIdentity,
     ) -> Option<ShapeView>;
-    fn relocate_shape(
+    fn relocate_external_shape(
         &mut self,
         game: &mut CGame,
         region_id: i32,
@@ -104,6 +107,7 @@ pub(crate) enum GameShapeMessageOutcome {
     DirectionChanged,
     PositionFeatureDisabled,
     PositionTargetMissing,
+    PositionMutationBlocked,
     PositionChanged,
     QuestMoveBlocked,
     QuestMoveQueued,
@@ -268,7 +272,35 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                         &relocation,
                     ),
                 ));
-            runtime.relocate_shape(game, region_id, identity, fields.2, fields.3);
+            if identity.object_type == PLAYER_TYPE && game.find_player(identity.id).is_some() {
+                match game.relocate_player_shape(identity.id, region_id, fields.2, fields.3) {
+                    Some(Ok(())) => {}
+                    Some(Err(_)) => {
+                        report.outcome = GameShapeMessageOutcome::PositionMutationBlocked;
+                        return Some(Ok(report));
+                    }
+                    None => {
+                        report.outcome = GameShapeMessageOutcome::PositionTargetMissing;
+                        return Some(Ok(report));
+                    }
+                }
+                let contend_state = game
+                    .find_player(identity.id)
+                    .is_some_and(|player| player.contend_state());
+                if contend_state && runtime.shape_symbol_attackable(game, identity.id, region_id) {
+                    let delivery = colored_player_notice_message(
+                        0xffff_ffff,
+                        0xffff_0000,
+                        game.get_string_by_id(b"GS0163"),
+                    )
+                    .send_to_player(game.net_server(), identity.id);
+                    report
+                        .deliveries
+                        .push(GameShapeMessageDelivery::Player(delivery));
+                }
+            } else {
+                runtime.relocate_external_shape(game, region_id, identity, fields.2, fields.3);
+            }
             report.outcome = GameShapeMessageOutcome::PositionChanged;
         }
         QUEST_MOVE_STEP => {

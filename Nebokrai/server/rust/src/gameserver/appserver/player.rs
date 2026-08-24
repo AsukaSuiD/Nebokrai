@@ -124,6 +124,9 @@
 //! Shape commands сохраняют owned direction и emotion index/timestamp:
 //! ClearEmotion всегда обнуляет оба поля, PerformEmotion делает это до guards
 //! и запоминает repeated ID/time только при разрешённом живом AI owner-е.
+//! Client relocation использует общие movement facts и `CShape` owner через
+//! `CServerRegion`; caller сохраняет исходный `BF603 -> SetTileXY -> GS0163`
+//! порядок и contend/symbol predicate, поэтому замещённый RAW удалён.
 //! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
 //! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
 //! полиморфные session End/plug Exit принадлежат caller runtime-у.
@@ -1755,7 +1758,7 @@ impl CPlayer {
         self.recreate_carriage = false;
     }
 
-    pub(crate) const fn nation_relive_position_facts(
+    pub(crate) const fn movement_position_facts(
         &self,
         area_width: i32,
         area_height: i32,
@@ -1769,8 +1772,20 @@ impl CPlayer {
         }
     }
 
-    pub(crate) const fn nation_relive_shape_mut(&mut self) -> &mut CShape {
+    pub(crate) const fn movement_shape_mut(&mut self) -> &mut CShape {
         self.move_shape.shape_mut()
+    }
+
+    pub(crate) const fn nation_relive_position_facts(
+        &self,
+        area_width: i32,
+        area_height: i32,
+    ) -> MoveShapePositionFacts {
+        self.movement_position_facts(area_width, area_height)
+    }
+
+    pub(crate) const fn nation_relive_shape_mut(&mut self) -> &mut CShape {
+        self.movement_shape_mut()
     }
 
     pub(crate) const fn combat_properties(&self) -> PlayerCombatProperties {
@@ -7396,20 +7411,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00034300
 // ADDRESS: 00434300
 // PROTOTYPE: bool __thiscall IsAttackAble(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetTileXY
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:10872
-// RVA: 0x00034930
-// ADDRESS: 00434930
-// PROTOTYPE: void __thiscall SetTileXY(long param_1, long param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
