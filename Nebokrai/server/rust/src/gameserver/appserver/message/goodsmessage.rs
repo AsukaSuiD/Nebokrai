@@ -49,6 +49,9 @@
 //! `0x8FC13..0x8FC16` замыкают ordinary-fairy lifecycle: hatch timer и
 //! periodic completion, implantation с точным расходом vigour/crystal,
 //! syncretize со state/container/player effects и positional setup wire.
+//! `0x8FC08..0x8FC0A` восстанавливают весь hotkey lifecycle: безопасную
+//! 24-slot проекцию, возврат consumable из hand, positional/auto fallback,
+//! rollback/garbage object-move и ответы `0xBF908..0xBF90A`.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -78,13 +81,17 @@ use crate::gameserver::gameserver::game::{
     CiQingOtherPersonTarget, CiQingSetupQueryReport, EquipmentComposeContext,
     EquipmentDaKongContext, FairyContext, FairyHatchReport, FairyImplantResultReport,
     FairySetupQueryReport, FairySyncretizeResultReport, GoodsDestroyConfirmReport,
-    GoodsDestroyContext, GoodsDestroyOpenReport, SynthesisComposeReport, SynthesisContext,
+    GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport, HotkeyChangeReport,
+    HotkeyContext, HotkeyRemovalReport, SynthesisComposeReport, SynthesisContext,
     SynthesisOpenReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
 
 const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
+const ASSIGN_HOTKEY: u32 = 0x0008_fc08;
+const REMOVE_HOTKEY: u32 = 0x0008_fc09;
+const CHANGE_HOTKEY: u32 = 0x0008_fc0a;
 const UPDATE_FAIRY_HATCH: u32 = 0x0008_fc13;
 const IMPLANT_FAIRY_EXPERIENCE: u32 = 0x0008_fc14;
 const SYNCRETIZE_FAIRY: u32 = 0x0008_fc15;
@@ -132,6 +139,7 @@ pub(crate) trait GameGoodsMessageRuntime:
     + EquipmentDaKongContext
     + GoodsDestroyContext
     + FairyContext
+    + HotkeyContext
     + SynthesisContext
 {
     fn run_battle_fairy_reset_script(
@@ -214,6 +222,9 @@ pub(crate) enum GameGoodsMessageOutcome {
     FairyImplant(FairyImplantResultReport),
     FairySyncretize(FairySyncretizeResultReport),
     FairySetup(FairySetupQueryReport),
+    HotkeyAssignment(HotkeyAssignmentReport),
+    HotkeyRemoval(HotkeyRemovalReport),
+    HotkeyChange(HotkeyChangeReport),
     BattleFairyCombineCheck(BattleFairyCombineCheck),
     BattleFairyCombine(BattleFairyCombineReport),
     BattleFairyUpgrade(BattleFairyUpgradeReport),
@@ -270,7 +281,10 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
-        UPDATE_FAIRY_HATCH
+        ASSIGN_HOTKEY
+            | REMOVE_HOTKEY
+            | CHANGE_HOTKEY
+            | UPDATE_FAIRY_HATCH
             | IMPLANT_FAIRY_EXPERIENCE
             | SYNCRETIZE_FAIRY
             | QUERY_FAIRY_SETUP
@@ -329,6 +343,44 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             .ok_or(GameGoodsMessageError::MissingField(field))
     };
     let outcome = match message_type {
+        ASSIGN_HOTKEY => {
+            let slot = match message.base_mut().get_char() {
+                Some(value) => value as u8,
+                None => return Some(Err(GameGoodsMessageError::MissingField("hotkey slot"))),
+            };
+            let value = match read_long(message, "hotkey value") {
+                Ok(value) => value as u32,
+                Err(error) => return Some(Err(error)),
+            };
+            GameGoodsMessageOutcome::HotkeyAssignment(
+                game.assign_hotkey(player_id, slot, value, runtime)
+                    .expect("resolved message player остаётся live во время hotkey assignment"),
+            )
+        }
+        REMOVE_HOTKEY => {
+            let slot = match message.base_mut().get_char() {
+                Some(value) => value as u8,
+                None => return Some(Err(GameGoodsMessageError::MissingField("hotkey slot"))),
+            };
+            GameGoodsMessageOutcome::HotkeyRemoval(
+                game.remove_hotkey(player_id, slot)
+                    .expect("resolved message player остаётся live во время hotkey removal"),
+            )
+        }
+        CHANGE_HOTKEY => {
+            let slot = match message.base_mut().get_char() {
+                Some(value) => value as u8,
+                None => return Some(Err(GameGoodsMessageError::MissingField("hotkey slot"))),
+            };
+            let value = match read_long(message, "hotkey value") {
+                Ok(value) => value as u32,
+                Err(error) => return Some(Err(error)),
+            };
+            GameGoodsMessageOutcome::HotkeyChange(
+                game.change_hotkey(player_id, slot, value)
+                    .expect("resolved message player остаётся live во время hotkey change"),
+            )
+        }
         UPDATE_FAIRY_HATCH => {
             if !game
                 .find_player(player_id)

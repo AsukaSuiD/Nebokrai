@@ -34,6 +34,9 @@
 //! ordinary-fairy и battle-fairy containers принадлежат player type `400` с
 //! его numeric ID. Ordinary fairy получает exact volume 14 и persisted
 //! enable/vigour/experience; periodic hatcher caller замкнут через `CGame`;
+//! Hotkey owner хранит exact 24 DWORD и связывает назначение с возвратом
+//! consumable из hand в packet/hand/wallet/YuanBao; equipment доказательно
+//! отвергает consumable до mutation.
 //! Depot-password vertical дополнительно материализует `m_eProgress`, оба
 //! changing-guard-а, password byte-string и owned `CBank/CDepot`; numeric
 //! значения внутреннего `eProgress` не выходят в wire и потому заменены typed
@@ -135,7 +138,7 @@
 
 use super::area::WarSoulPoint;
 use super::container::camountlimitgoodscontainer::{
-    AmountLimitGoodsRemoved, CAmountLimitGoodsContainer,
+    AmountLimitGoodsAdded, AmountLimitGoodsRemoved, CAmountLimitGoodsContainer,
 };
 use super::container::camountlimitgoodsshadowcontainer::{
     AmountShadowAdded, CAmountLimitGoodsShadowContainer,
@@ -146,6 +149,7 @@ use super::container::cbattlefairycontainer::{
     BattleFairyContainerAddOutcome, BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill,
     BattleFairyPropertyAddEffect, BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
 };
+use super::container::ccontainer::ContainerListenerHandle;
 use super::container::ccontainer::PreviousContainer;
 use super::container::cdepot::CDepot;
 use super::container::cequipmentcontainer::{
@@ -158,6 +162,8 @@ use super::container::cgoodsshadowcontainer::{PlacedShadowGoods, ShadowRecordBlo
 use super::container::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
 };
+use super::container::cwallet::{CWallet, CurrencyGoodsAddOutcome};
+use super::container::cyuanbao::CYuanBao;
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
 use super::goods::cgoodsbaseproperties::{
@@ -171,7 +177,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISM,
     GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_POTENTIAL,
     GAP_BF_WEAPON_LEVEL, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2, GAP_GEM_LEVEL,
-    GAP_ROLE_MINIMUM_LEVEL_LIMIT,
+    GAP_ROLE_MINIMUM_LEVEL_LIMIT, GOODS_TYPE_CONSUMABLE,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::{CMoveShape, MoveShapePositionFacts, MoveShapeSkill};
@@ -883,6 +889,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) experience: u32,
     pub(crate) vigour: u32,
     pub(crate) fairy_container_enabled: bool,
+    pub(crate) hotkeys: [u32; 24],
     pub(crate) health: u32,
     pub(crate) mana: u32,
     pub(crate) fetch_power: u32,
@@ -896,6 +903,38 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) exploit: u32,
     pub(crate) gods_battle_faction: i32,
     pub(crate) szl: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HotkeyHandTransferOutcome {
+    MissingHandGoods,
+    NotConsumable,
+    UnsupportedSource,
+    Moved,
+    RolledBack,
+    GarbageCollected,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HotkeyHandOwnershipEvent {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: Option<u32>,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+}
+
+#[must_use = "hand transfer report сохраняет ownership, fallback add и object-move исход"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HotkeyHandTransferReport {
+    pub(crate) source_container_extend_id: u32,
+    pub(crate) source_position: u32,
+    pub(crate) goods: Option<ShapeIdentity>,
+    pub(crate) hand_removal: Option<HotkeyHandOwnershipEvent>,
+    pub(crate) packet_adds: Vec<VolumeGoodsAddOutcome>,
+    pub(crate) currency_adds: Vec<CurrencyGoodsAddOutcome>,
+    pub(crate) hand_rollback: Option<AmountLimitGoodsAdded>,
+    pub(crate) outcome: HotkeyHandTransferOutcome,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1113,6 +1152,8 @@ pub(crate) struct CPlayer {
     last_operated_container: u32,
     last_operated_goods_position: u32,
     packet: CVolumeLimitGoodsContainer,
+    wallet: CWallet,
+    yuan_bao: CYuanBao,
     equipment: CEquipmentContainer,
     auction_goods: CVolumeLimitGoodsContainer,
     ci_qing: CVolumeLimitGoodsContainer,
@@ -1198,6 +1239,8 @@ impl CPlayer {
             last_operated_container: 0,
             last_operated_goods_position: 0,
             packet,
+            wallet: CWallet::new(),
+            yuan_bao: CYuanBao::new(),
             equipment: CEquipmentContainer::new(),
             auction_goods: CVolumeLimitGoodsContainer::new(),
             ci_qing,
@@ -1805,6 +1848,153 @@ impl CPlayer {
 
     pub(crate) fn ci_qing_hand_goods(&self) -> Option<&CGoods> {
         self.hand.get_goods(0)
+    }
+
+    pub(crate) fn hotkey(&self, slot: u8) -> Option<u32> {
+        self.base_properties.hotkeys.get(usize::from(slot)).copied()
+    }
+
+    pub(crate) fn set_hotkey(&mut self, slot: u8, value: u32) -> bool {
+        let Some(hotkey) = self.base_properties.hotkeys.get_mut(usize::from(slot)) else {
+            return false;
+        };
+        *hotkey = value;
+        true
+    }
+
+    pub(crate) const fn last_operated_goods(&self) -> (u32, u32) {
+        (
+            self.last_operated_container,
+            self.last_operated_goods_position,
+        )
+    }
+
+    /// Storage core назначения hotkey из hand. Packet/hand/wallet/YuanBao
+    /// замкнуты на owned containers; equipment для consumable доказательно
+    /// отвергается до mutation.
+    pub(crate) fn return_hotkey_hand_goods(
+        &mut self,
+        factory: &CGoodsFactory,
+    ) -> HotkeyHandTransferReport {
+        let (source_container_extend_id, source_position) = self.last_operated_goods();
+        let mut report = HotkeyHandTransferReport {
+            source_container_extend_id,
+            source_position,
+            goods: None,
+            hand_removal: None,
+            packet_adds: Vec::new(),
+            currency_adds: Vec::new(),
+            hand_rollback: None,
+            outcome: HotkeyHandTransferOutcome::MissingHandGoods,
+        };
+        let Some(hand_goods) = self.hand.get_goods(0) else {
+            return report;
+        };
+        report.goods = Some(hand_goods.identity());
+        let Some(properties) =
+            factory.query_goods_base_properties(hand_goods.base_properties_index())
+        else {
+            report.outcome = HotkeyHandTransferOutcome::NotConsumable;
+            return report;
+        };
+        if properties.goods_type() != GOODS_TYPE_CONSUMABLE {
+            report.outcome = HotkeyHandTransferOutcome::NotConsumable;
+            return report;
+        }
+        if !(1..=5).contains(&source_container_extend_id) {
+            report.outcome = HotkeyHandTransferOutcome::UnsupportedSource;
+            return report;
+        }
+
+        let removed = self
+            .hand
+            .remove_goods(hand_goods.identity().ex_id)
+            .expect("unlocked hand goods проверен перед synchronous remove");
+        report.hand_removal = Some(HotkeyHandOwnershipEvent {
+            owner_type: removed.owner_type,
+            owner_id: removed.owner_id,
+            position: removed.position,
+            amount: removed.amount,
+            listeners: removed.listeners.clone(),
+        });
+        let mut incoming = Some(removed.goods);
+        if source_container_extend_id == 1 {
+            let owner_progress_allows = self.current_progress == PlayerProgress::None;
+            report.packet_adds.push(self.packet.add_goods_at(
+                source_position,
+                &mut incoming,
+                factory,
+                owner_progress_allows,
+            ));
+            if incoming.is_some() {
+                report.packet_adds.push(self.packet.add_goods(
+                    &mut incoming,
+                    factory,
+                    owner_progress_allows,
+                ));
+            }
+        } else if source_container_extend_id == 3 {
+            let goods = incoming.take().expect("removed hand goods остаётся owned");
+            match self.hand.add_goods(goods, factory) {
+                Ok(added) => report.hand_rollback = Some(added),
+                Err(goods) => incoming = Some(goods),
+            }
+        } else if source_container_extend_id == 4 {
+            let owner_progress_allows = self.current_progress == PlayerProgress::None;
+            report.currency_adds.push(self.wallet.add_goods(
+                source_position,
+                &mut incoming,
+                factory,
+                owner_progress_allows,
+            ));
+            if incoming.is_some() {
+                report.currency_adds.push(self.wallet.add_goods(
+                    0,
+                    &mut incoming,
+                    factory,
+                    owner_progress_allows,
+                ));
+            }
+        } else if source_container_extend_id == 5 {
+            let owner_progress_allows = self.current_progress == PlayerProgress::None;
+            report.currency_adds.push(self.yuan_bao.add_goods(
+                source_position,
+                &mut incoming,
+                factory,
+                owner_progress_allows,
+            ));
+            if incoming.is_some() {
+                report.currency_adds.push(self.yuan_bao.add_goods(
+                    0,
+                    &mut incoming,
+                    factory,
+                    owner_progress_allows,
+                ));
+            }
+        }
+
+        if incoming.is_none() {
+            if source_container_extend_id == 4 {
+                self.money = self.wallet.currency_amount();
+            }
+            report.outcome = HotkeyHandTransferOutcome::Moved;
+            return report;
+        }
+        let goods = incoming
+            .take()
+            .expect("failed destination сохраняет incoming");
+        match self.hand.add_goods(goods, factory) {
+            Ok(added) => {
+                report.hand_rollback = Some(added);
+                report.outcome = HotkeyHandTransferOutcome::RolledBack;
+            }
+            Err(goods) => {
+                report.goods = Some(goods.identity());
+                drop(goods);
+                report.outcome = HotkeyHandTransferOutcome::GarbageCollected;
+            }
+        }
+        report
     }
 
     pub(crate) fn destroy_hand_goods(
@@ -3949,6 +4139,8 @@ impl CPlayer {
             .base_mut()
             .set_owner(PLAYER_TYPE, player_id);
         self.packet.base_mut().set_owner(PLAYER_TYPE, player_id);
+        self.wallet.set_owner(PLAYER_TYPE, player_id);
+        self.yuan_bao.set_owner(PLAYER_TYPE, player_id);
         self.equipment.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.auction_goods
             .base_mut()

@@ -383,10 +383,11 @@ use crate::gameserver::appserver::player::{
     CiQingContainerConsumption, CiQingHandConsumption, CiQingPacketAddition,
     CiQingPacketConsumption, EnhancementDeselectionBlock, EnhancementDeselectionReport,
     EnhancementSelectionBlock, EnhancementSelectionReport, GoodsDestroyHandConsumption,
-    PlayerCombatProperties, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
-    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
-    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport,
-    PlayerProgress, PlayerReliveMutation,
+    HotkeyHandTransferOutcome, HotkeyHandTransferReport, PlayerCombatProperties,
+    PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
+    PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
+    PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerProgress,
+    PlayerReliveMutation,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1229,6 +1230,55 @@ pub(crate) trait FairyContext: CiQingMakeContext {
     fn record_fairy_incubate_log(&mut self, log: &FairyIncubateLog);
     fn record_fairy_implantation_log(&mut self, log: &FairyImplantationLog);
     fn record_fairy_syncretize_log(&mut self, log: &FairySyncretizeLog);
+}
+
+pub(crate) trait HotkeyContext {
+    fn publish_hotkey_hand_transfer(&mut self, transfer: &HotkeyHandTransferReport) -> Vec<i32>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HotkeyAssignmentOutcome {
+    InvalidSlot,
+    Assigned,
+    MissingHandAssigned,
+    HandMoveFailed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HotkeyAssignmentReport {
+    pub(crate) slot: u8,
+    pub(crate) value: u32,
+    pub(crate) outcome: HotkeyAssignmentOutcome,
+    pub(crate) transfer: Option<HotkeyHandTransferReport>,
+    pub(crate) transfer_deliveries: Vec<i32>,
+    pub(crate) response_deliveries: Vec<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HotkeyRemovalOutcome {
+    InvalidOrEmpty,
+    Removed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HotkeyRemovalReport {
+    pub(crate) slot: u8,
+    pub(crate) outcome: HotkeyRemovalOutcome,
+    pub(crate) delivery: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HotkeyChangeOutcome {
+    InvalidOrEmpty,
+    Changed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HotkeyChangeReport {
+    pub(crate) slot: u8,
+    pub(crate) value: u32,
+    pub(crate) outcome: HotkeyChangeOutcome,
+    pub(crate) delivery: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8660,6 +8710,150 @@ impl CGame {
         &self.synthesis
     }
 
+    pub(crate) fn assign_hotkey<Context: HotkeyContext>(
+        &mut self,
+        player_id: i32,
+        slot: u8,
+        value: u32,
+        context: &mut Context,
+    ) -> Option<HotkeyAssignmentReport> {
+        let mut report = HotkeyAssignmentReport {
+            slot,
+            value,
+            outcome: HotkeyAssignmentOutcome::InvalidSlot,
+            transfer: None,
+            transfer_deliveries: Vec::new(),
+            response_deliveries: Vec::new(),
+        };
+        if usize::from(slot) >= 24 {
+            // Старый negative-value path писал за `dwHotKey[24]`; это UB без
+            // подтверждённого wire-эффекта, поэтому malformed slot получает
+            // тот же безопасный reject, что и обычная out-of-range ветвь.
+            report
+                .response_deliveries
+                .push(send_hotkey_response(self, player_id, 0x0b_f908, b'.', None));
+            return Some(report);
+        }
+        if (value as i32) < 0 {
+            self.find_player_mut(player_id)?.set_hotkey(slot, value);
+            report.outcome = HotkeyAssignmentOutcome::Assigned;
+            report.response_deliveries.push(send_hotkey_response(
+                self,
+                player_id,
+                0x0b_f908,
+                b'-',
+                Some((slot, Some(value))),
+            ));
+            return Some(report);
+        }
+        let hand_missing = self.find_player(player_id)?.ci_qing_hand_goods().is_none();
+        if hand_missing {
+            self.find_player_mut(player_id)?.set_hotkey(slot, value);
+            report.outcome = HotkeyAssignmentOutcome::MissingHandAssigned;
+            report.response_deliveries.push(send_hotkey_response(
+                self,
+                player_id,
+                0x0b_f908,
+                b'-',
+                Some((slot, Some(value))),
+            ));
+            return Some(report);
+        }
+
+        let transfer = {
+            let (players, factory) = (&mut self.players, &self.goods_factory);
+            players
+                .get_mut(&player_id)?
+                .return_hotkey_hand_goods(factory)
+        };
+        if transfer.outcome == HotkeyHandTransferOutcome::Moved {
+            self.find_player_mut(player_id)?.set_hotkey(slot, value);
+            report.outcome = HotkeyAssignmentOutcome::Assigned;
+            report.response_deliveries.push(send_hotkey_response(
+                self,
+                player_id,
+                0x0b_f908,
+                b'-',
+                Some((slot, Some(value))),
+            ));
+        } else {
+            report.outcome = HotkeyAssignmentOutcome::HandMoveFailed;
+        }
+        if transfer.hand_removal.is_some() || transfer.outcome == HotkeyHandTransferOutcome::Moved {
+            report.transfer_deliveries = context.publish_hotkey_hand_transfer(&transfer);
+        }
+        report
+            .response_deliveries
+            .push(send_hotkey_response(self, player_id, 0x0b_f908, b'.', None));
+        report.transfer = Some(transfer);
+        Some(report)
+    }
+
+    pub(crate) fn remove_hotkey(
+        &mut self,
+        player_id: i32,
+        slot: u8,
+    ) -> Option<HotkeyRemovalReport> {
+        let removed = self
+            .find_player(player_id)?
+            .hotkey(slot)
+            .is_some_and(|value| value != 0);
+        if removed {
+            self.find_player_mut(player_id)?.set_hotkey(slot, 0);
+        }
+        let outcome = if removed {
+            HotkeyRemovalOutcome::Removed
+        } else {
+            HotkeyRemovalOutcome::InvalidOrEmpty
+        };
+        let delivery = send_hotkey_response(
+            self,
+            player_id,
+            0x0b_f909,
+            if removed { b'/' } else { b'0' },
+            removed.then_some((slot, None)),
+        );
+        Some(HotkeyRemovalReport {
+            slot,
+            outcome,
+            delivery,
+        })
+    }
+
+    pub(crate) fn change_hotkey(
+        &mut self,
+        player_id: i32,
+        slot: u8,
+        value: u32,
+    ) -> Option<HotkeyChangeReport> {
+        let changed = self
+            .find_player(player_id)?
+            .hotkey(slot)
+            .is_some_and(|current| current != 0);
+        let delivery = if changed {
+            self.find_player_mut(player_id)?.set_hotkey(slot, value);
+            Some(send_hotkey_response(
+                self,
+                player_id,
+                0x0b_f90a,
+                b'1',
+                Some((slot, Some(value))),
+            ))
+        } else {
+            None
+        };
+        Some(HotkeyChangeReport {
+            slot,
+            value,
+            outcome: if changed {
+                HotkeyChangeOutcome::Changed
+            } else {
+                HotkeyChangeOutcome::InvalidOrEmpty
+            },
+            delivery,
+        })
+    }
+
     pub(crate) fn update_fairy_hatch_state<Context: FairyContext>(
         &mut self,
         player_id: i32,
@@ -11983,6 +12177,24 @@ fn colored_player_notice_message(first_color: u32, second_color: u32, text: &[u8
 
 fn round_fairy_value(value: f32) -> u32 {
     value.round() as u32
+}
+
+fn send_hotkey_response(
+    game: &CGame,
+    player_id: i32,
+    message_type: i32,
+    marker: u8,
+    payload: Option<(u8, Option<u32>)>,
+) -> i32 {
+    let mut message = CMessage::new(message_type);
+    message.add_byte(marker);
+    if let Some((slot, value)) = payload {
+        message.add_byte(slot);
+        if let Some(value) = value {
+            message.add_ulong(value);
+        }
+    }
+    message.send_to_player(game.net_server(), player_id)
 }
 
 fn send_fairy_long(game: &CGame, player_id: i32, message_type: u32, value: u32) -> i32 {
