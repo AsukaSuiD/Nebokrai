@@ -283,7 +283,8 @@ use crate::gameserver::appserver::message::gmmessage::{
     GmMessageError, GmMessageReport, dispatch_gm_message,
 };
 use crate::gameserver::appserver::message::goodsmessage::{
-    GameGoodsMessageReport, GameGoodsMessageRuntime, dispatch_game_goods_message,
+    GameGoodsMessageError, GameGoodsMessageReport, GameGoodsMessageRuntime,
+    dispatch_game_goods_message,
 };
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
     WorldAuctionStateMessageError, WorldAuctionStateMessageReport, dispatch_world_auction_state,
@@ -1097,7 +1098,11 @@ pub(crate) struct PlayerPropertiesExternalFacts {
     pub(crate) exalt: u32,
 }
 
-pub(crate) trait BattleFairyDeathContext {
+pub(crate) trait BattleFairyOldClientCodec {
+    fn encode_battle_fairy_old_client(&mut self, goods: &CGoods) -> Vec<u8>;
+}
+
+pub(crate) trait BattleFairyDeathContext: BattleFairyOldClientCodec {
     fn player_properties_external_facts(&mut self, player_id: i32)
     -> PlayerPropertiesExternalFacts;
 }
@@ -1109,10 +1114,6 @@ pub(crate) trait BattleFairyRuntimeContext: BattleFairyDeathContext {
         origin: &CShape,
         message: &CMessage,
     ) -> Result<i32, ShapeCoordinateBlock>;
-}
-
-pub(crate) trait BattleFairyOldClientCodec {
-    fn encode_battle_fairy_old_client(&mut self, goods: &CGoods) -> Vec<u8>;
 }
 
 pub(crate) trait BattleFairyCombineContext: BattleFairyOldClientCodec {
@@ -1762,7 +1763,7 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
         >,
     >,
     pub(crate) goods_war_messages: Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
-    pub(crate) goods_messages: Vec<GameGoodsMessageReport>,
+    pub(crate) goods_messages: Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
     pub(crate) skill_messages: Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
     pub(crate) server_messages:
         Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
@@ -6889,20 +6890,22 @@ impl CGame {
         &mut self,
         player_id: i32,
         allocations: &[(i32, i32)],
-        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
         context: &mut Context,
     ) -> Option<crate::gameserver::appserver::player::BattleFairyPotentialAllocationReport> {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let coefficients = self.globe_setup.player_property_coefficients();
-        let mut report = self.players.get_mut(&player_id).map(|player| {
+        let mut report = {
+            let player = self.players.get_mut(&player_id)?;
+            let mut encode_old_client =
+                |goods: &CGoods| context.encode_battle_fairy_old_client(goods);
             player.allocate_battle_fairy_potential(
                 enabled,
                 allocations,
                 &self.goods_factory,
                 coefficients,
-                encode_old_client,
+                &mut encode_old_client,
             )
-        })?;
+        };
         for effect in report.effects.clone() {
             match effect {
                 BattleFairyPotentialAllocationEffect::Notification {
@@ -7730,7 +7733,7 @@ impl CGame {
             >,
         >,
         goods_war_messages: &mut Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
-        goods_messages: &mut Vec<GameGoodsMessageReport>,
+        goods_messages: &mut Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
         skill_messages: &mut Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
         server_messages: &mut Vec<
             Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
