@@ -8,6 +8,9 @@
 //! Rename round trip `0x8FB05 -> 0x5FD05 -> 0x7FA0E` сохраняет World/DB
 //! решение, меняет canonical player name только при result `0` и публикует
 //! exact `0xBF80F` вокруг игрока либо только самому игроку при отказе.
+//! World info `0x7FA03/04` доводит nation/country notices до exact
+//! `0xBF803/804`: ненулевой target выбирает region/player, ноль сохраняет
+//! исходный broadcast fallback.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::PlayerLeiTingDecodeBlock;
@@ -19,6 +22,8 @@ const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
 const WORLD_PLAYER_RENAME_REQUEST: i32 = 0x0005_fd05;
 const WORLD_PLAYER_RENAME_RESPONSE: u32 = 0x0007_fa0e;
 const PLAYER_RENAME_RESPONSE: i32 = 0x000b_f80f;
+const WORLD_INFO_DELIVERY: u32 = 0x0007_fa03;
+const WORLD_TOP_INFO_DELIVERY: u32 = 0x0007_fa04;
 const PRIVATE_CHAT_DELIVERY: u32 = 0x0007_fa01;
 const FACTION_CHAT_DELIVERY: u32 = 0x0007_fa02;
 const WORLD_CHAT_DELIVERY: u32 = 0x0007_fa0f;
@@ -49,9 +54,20 @@ pub(crate) enum GameOtherMessageOutcome {
         result: i8,
         delivery: i32,
     },
+    InfoDelivered {
+        target_id: i32,
+        delivery: GameInfoDelivery,
+    },
     LeiTingUpdated {
         client_delivery: i32,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameInfoDelivery {
+    Broadcast(Result<i32, SendMessageError>),
+    Region(Option<i32>),
+    Player(i32),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -118,9 +134,54 @@ pub(crate) fn dispatch_game_other_message(
             | COUNTRY_CHAT_DELIVERY
             | COUNTRY_NOTICE_DELIVERY
             | WORLD_PLAYER_RENAME_RESPONSE
+            | WORLD_INFO_DELIVERY
+            | WORLD_TOP_INFO_DELIVERY
             | WORLD_LEI_TING_UPDATE
     ) {
         return None;
+    }
+    if message_type == WORLD_INFO_DELIVERY {
+        message.set_message_type(0x000b_f803);
+        let result = (|| {
+            let target_id = read_long(message, "world info region id")?;
+            let delivery = if target_id == 0 {
+                GameInfoDelivery::Broadcast(message.send_all(game.current_net_server()))
+            } else {
+                GameInfoDelivery::Region(
+                    game.find_region(target_id)
+                        .map(|region| message.send_to_region(Some(region.base()), None, game)),
+                )
+            };
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id: 0,
+                outcome: GameOtherMessageOutcome::InfoDelivered {
+                    target_id,
+                    delivery,
+                },
+            })
+        })();
+        return Some(result);
+    }
+    if message_type == WORLD_TOP_INFO_DELIVERY {
+        message.set_message_type(0x000b_f804);
+        let result = (|| {
+            let target_id = read_long(message, "world top-info player id")?;
+            let delivery = if target_id == 0 {
+                GameInfoDelivery::Broadcast(message.send_all(game.current_net_server()))
+            } else {
+                GameInfoDelivery::Player(message.send_to_player(game.net_server(), target_id))
+            };
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id: target_id,
+                outcome: GameOtherMessageOutcome::InfoDelivered {
+                    target_id,
+                    delivery,
+                },
+            })
+        })();
+        return Some(result);
     }
     if message_type == WORLD_CHAT_DELIVERY {
         message.set_message_type(0x000b_f814);
