@@ -8,7 +8,8 @@
 //! продолжает тот же транспортный owner полным upgrade-проходом через RNG,
 //! player wallet, gems, equipment update и audit gates. Decoder `0x8FC2A`
 //! сохраняет count/reserved/pairs wire-формат и доводит распределение potential
-//! до player properties и повторных old-client goods updates.
+//! до player properties и повторных old-client goods updates. `0x8FC2B`
+//! замыкает расход reset-item, сброс potential/player state и клиентский update.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -21,10 +22,12 @@
 
 use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyCombineCheck;
 use crate::gameserver::appserver::player::{
-    BattleFairyCombineReport, BattleFairyPotentialAllocationReport, BattleFairyUpgradeReport,
+    BattleFairyCombineReport, BattleFairyPotentialAllocationReport,
+    BattleFairyPotentialResetReport, BattleFairyUpgradeReport,
 };
 use crate::gameserver::gameserver::game::{
-    BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyUpgradeContext, CGame,
+    BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
+    BattleFairyUpgradeContext, CGame,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -32,9 +35,13 @@ const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
 const COMBINE_BATTLE_FAIRY: u32 = 0x0008_fc27;
 const UPGRADE_BATTLE_FAIRY: u32 = 0x0008_fc28;
 const ALLOCATE_BATTLE_FAIRY_POTENTIAL: u32 = 0x0008_fc2a;
+const RESET_BATTLE_FAIRY_POTENTIAL: u32 = 0x0008_fc2b;
 
 pub(crate) trait GameGoodsMessageRuntime:
-    BattleFairyCombineContext + BattleFairyUpgradeContext + BattleFairyDeathContext
+    BattleFairyCombineContext
+    + BattleFairyUpgradeContext
+    + BattleFairyDeathContext
+    + BattleFairyPotentialResetContext
 {
 }
 
@@ -50,6 +57,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     BattleFairyCombine(BattleFairyCombineReport),
     BattleFairyUpgrade(BattleFairyUpgradeReport),
     BattleFairyPotentialAllocation(BattleFairyPotentialAllocationReport),
+    BattleFairyPotentialReset(BattleFairyPotentialResetReport),
 }
 
 #[must_use = "goods-message report содержит routing и полный gameplay result"]
@@ -74,6 +82,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             | COMBINE_BATTLE_FAIRY
             | UPGRADE_BATTLE_FAIRY
             | ALLOCATE_BATTLE_FAIRY_POTENTIAL
+            | RESET_BATTLE_FAIRY_POTENTIAL
     ) {
         return None;
     }
@@ -136,6 +145,10 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     ),
             )
         }
+        RESET_BATTLE_FAIRY_POTENTIAL => GameGoodsMessageOutcome::BattleFairyPotentialReset(
+            game.reset_battle_fairy_potential(player_id, runtime)
+                .expect("resolved message player остаётся в CGame во время synchronous dispatch"),
+        ),
         _ => unreachable!("opcode отфильтрован перед dispatch"),
     };
     Some(Ok(GameGoodsMessageReport {

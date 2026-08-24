@@ -7029,13 +7029,19 @@ impl CGame {
     pub(crate) fn reset_battle_fairy_potential<Context: BattleFairyPotentialResetContext>(
         &mut self,
         player_id: i32,
-        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
         context: &mut Context,
     ) -> Option<crate::gameserver::appserver::player::BattleFairyPotentialResetReport> {
         let enabled = self.globe_setup.battle_fairy_enabled();
-        let mut report = self.players.get_mut(&player_id).map(|player| {
-            player.reset_battle_fairy_potential(enabled, &self.goods_factory, encode_old_client)
-        })?;
+        let mut report = {
+            let player = self.players.get_mut(&player_id)?;
+            let mut encode_old_client =
+                |goods: &CGoods| context.encode_battle_fairy_old_client(goods);
+            player.reset_battle_fairy_potential(
+                enabled,
+                &self.goods_factory,
+                &mut encode_old_client,
+            )
+        };
         for effect in report.effects.clone() {
             match effect {
                 BattleFairyPotentialResetEffect::Notification {
