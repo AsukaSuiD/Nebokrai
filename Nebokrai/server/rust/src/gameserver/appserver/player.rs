@@ -1985,6 +1985,13 @@ impl CPlayer {
             .flatten()
     }
 
+    pub(crate) fn enhancement_remove_shadow(
+        &mut self,
+        goods_id: CGuid,
+    ) -> Option<super::container::cgoodsshadowcontainer::ShadowRemovedReport> {
+        self.enhancement.base_mut().remove_shadow(goods_id)
+    }
+
     /// Same-original-slot ветвь native shadow Remove: underlying goods после
     /// remove→add остаётся у прежнего owner-а, а здесь удаляется только shadow
     /// metadata и формируется обязательный `OT_DELETE_OBJECT` report.

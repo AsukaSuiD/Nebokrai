@@ -52,6 +52,7 @@ const JJC_PK_TIMEOUT_OFFSET: usize = 0xCE8;
 const JJC_RANK_INTERVAL_OFFSET: usize = 0xCF0;
 const TRANSFER_MONEY_INTERVAL_OFFSET: usize = 0x110C;
 const GOODS_AI_OFFSET: usize = 0xC4C;
+const PACK_ADD_OFFSET: usize = 0xC4E;
 const DA_KONG_KEY_OFFSET: usize = 0xC85;
 const AREA_WIDTH_OFFSET: usize = 0x514;
 const AREA_HEIGHT_OFFSET: usize = 0x518;
@@ -361,6 +362,12 @@ impl GlobeSetupSnapshot {
 
     pub(crate) const fn goods_ai_enabled(&self) -> bool {
         self.bytes[GOODS_AI_OFFSET] != 0
+    }
+
+    /// `bPackAdd +0xC4E` соседствует с подтверждёнными `bGoodsAi/bToAdd`;
+    /// container/equipment paths читают его до capacity и package effects.
+    pub(crate) const fn pack_add_enabled(&self) -> bool {
+        self.bytes[PACK_ADD_OFFSET] != 0
     }
 
     pub(crate) fn monster_number_scale(&self) -> f32 {

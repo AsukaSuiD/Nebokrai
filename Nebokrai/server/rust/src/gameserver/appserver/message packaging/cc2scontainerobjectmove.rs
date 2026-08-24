@@ -69,7 +69,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::GetGoods
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: packet/equipment enhancement select и same-source clear lookup в CPlayer
+// MATERIALIZED: packet/equipment enhancement select, same-source clear и cross-container remove в CPlayer/CGame
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:374
@@ -112,7 +112,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::PutGoods
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: destination extend 10 shadow placement/rollback в CPlayer/CGame
+// MATERIALIZED: destination extend 10 shadow placement и shadow→packet/equipment add/rollback в CPlayer/CGame
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:645
@@ -127,7 +127,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::Move
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: select/clear enhancement operations и ordered client publications
+// MATERIALIZED: полные packet/equipment ↔ enhancement select/clear/transfer и ordered client publications
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:1225

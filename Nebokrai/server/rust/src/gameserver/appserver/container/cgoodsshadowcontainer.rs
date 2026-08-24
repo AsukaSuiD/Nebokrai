@@ -10,8 +10,9 @@
 //! Source player lookup/move/remove передаются явным resolver-ом и не
 //! подменяются pointer cache. Storage, queries, amount callbacks, clear/release
 //! и typed reports для listener/message dispatcher-а материализованы. Реальная
-//! межконтейнерная move-транзакция и packet assembly ниже остаются RAW до
-//! замыкания player/container-message owners.
+//! packet/equipment межконтейнерная move-транзакция и packet assembly замкнуты
+//! player/container-message owner-ами; wallet/yuanbao и прочие общие routes
+//! ниже остаются RAW.
 
 use std::collections::BTreeMap;
 
@@ -724,7 +725,7 @@ impl CGoodsShadowContainer {
 // ============================================================================
 // FUNCTION: CGoodsShadowContainer::Remove
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: same-original-slot enhancement clear; cross-container ownership transfer RAW
+// MATERIALIZED: packet/equipment enhancement clear и cross-container ownership transfer; wallet/yuanbao RAW
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodsshadowcontainer.cpp:666

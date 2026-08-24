@@ -286,13 +286,17 @@ use std::time::Duration;
 
 use rustix::system::uname;
 
+use crate::gameserver::appserver::container::camountlimitgoodscontainer::AmountLimitGoodsTaken;
 use crate::gameserver::appserver::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck,
 };
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::ComposeEquipmentCell;
+use crate::gameserver::appserver::container::cequipmentcontainer::EquipmentRemoveOutcome;
 use crate::gameserver::appserver::container::cgoodscontainer::GoodsStackMergeOutcome;
-use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
+use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::{
+    VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
+};
 use crate::gameserver::appserver::country::countryhandler::CCountryHandler;
 use crate::gameserver::appserver::country::countryparam::CCountryParam;
 use crate::gameserver::appserver::country::countrywarsys::CountryWarSys;
@@ -304,7 +308,10 @@ use crate::gameserver::appserver::goodswarmember::{
     dispatch_game_goods_war_message,
 };
 use crate::gameserver::appserver::message::containermessage::{
-    GameContainerMessageError, GameContainerMessageReport, dispatch_game_container_message,
+    EnhancementTransferAddition, EnhancementTransferBlock, EnhancementTransferOutcome,
+    EnhancementTransferRemoval, EnhancementTransferReport, GameContainerMessageError,
+    GameContainerMessageReport, dispatch_game_container_message, send_enhancement_goods_collected,
+    send_enhancement_shadow_deleted,
 };
 use crate::gameserver::appserver::message::countrymessage::{
     CountryWarMessageDispatchError, GameCountryWarMessageReport, GameCountryWarRuntime,
@@ -367,7 +374,8 @@ use crate::gameserver::appserver::player::{
     EnhancementSelectionBlock, EnhancementSelectionReport, PlayerCombatProperties,
     PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
     PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
-    PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerReliveMutation,
+    PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerProgress,
+    PlayerReliveMutation,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1504,6 +1512,35 @@ pub(crate) trait PlayerEquipmentContext {
     ) -> Vec<i32>;
 }
 
+/// Container transfer использует уже материализованные player/equipment
+/// owners. Ещё не восстановленные `CanMountEquip`, полный property recompute,
+/// clock и GoodsAI registration остаются обязательными runtime facts, а не
+/// подменяются magic success или cached properties.
+pub(crate) trait GameContainerMessageRuntime:
+    OldClientGoodsCodec + PlayerEquipmentContext
+{
+    fn enhancement_equipment_remove_facts(
+        &mut self,
+        player: &CPlayer,
+        goods: &CGoods,
+        pack_add_enabled: bool,
+    ) -> PlayerEquipmentRemoveRuntimeFacts;
+
+    fn enhancement_equipment_add_facts(
+        &mut self,
+        player: &CPlayer,
+        goods: &CGoods,
+        pack_add_enabled: bool,
+    ) -> PlayerEquipmentAddRuntimeFacts;
+
+    fn recompute_enhancement_player_properties(
+        &mut self,
+        player: &CPlayer,
+    ) -> PlayerCombatProperties;
+
+    fn register_enhancement_goods_ai(&mut self, goods: &CGoods);
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GodsBattleTeamSnapshot {
     pub(crate) teammate_amount: u32,
@@ -2163,6 +2200,7 @@ pub(crate) trait GameMainLoopRuntime:
     + InitialRegionStartupContext
     + GameOrganizingWarRuntime
     + GameCountryWarRuntime
+    + GameContainerMessageRuntime
     + GameGoodsMessageRuntime
     + GameSkillMessageRuntime
 {
@@ -2888,6 +2926,235 @@ impl CGame {
             .get_mut(&player_id)
             .ok_or(EnhancementDeselectionBlock::MissingShadow)?
             .clear_enhancement_selection(shadow_position, goods_id, amount)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn transfer_player_enhancement_goods<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        shadow_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<EnhancementTransferReport, EnhancementTransferBlock> {
+        if !matches!(destination_extend_id, 1 | 2) {
+            return Err(EnhancementTransferBlock::UnsupportedDestinationContainer {
+                extend_id: destination_extend_id,
+            });
+        }
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .ok_or(EnhancementTransferBlock::MissingPlayer)?;
+        let result = self.transfer_player_enhancement_goods_inner(
+            &mut player,
+            shadow_position,
+            goods_id,
+            amount,
+            destination_extend_id,
+            destination_position,
+            context,
+        );
+        self.players.insert(player_id, player);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn transfer_player_enhancement_goods_inner<Context: GameContainerMessageRuntime>(
+        &self,
+        player: &mut CPlayer,
+        shadow_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<EnhancementTransferReport, EnhancementTransferBlock> {
+        let source = player
+            .enhancement_original_container(shadow_position, goods_id)
+            .ok_or(EnhancementTransferBlock::MissingShadow)?;
+        if !matches!(source.container_extend_id, 1 | 2) {
+            return Err(EnhancementTransferBlock::UnsupportedSourceContainer {
+                extend_id: source.container_extend_id,
+            });
+        }
+        let goods = match source.container_extend_id {
+            1 => player.packet().get_goods(source.goods_position),
+            2 => player.equipment().get_goods(source.goods_position),
+            _ => unreachable!("source extend проверен выше"),
+        }
+        .filter(|goods| goods.identity().ex_id == goods_id && goods.amount() == amount)
+        .ok_or(EnhancementTransferBlock::MissingSourceGoods)?;
+        let goods_identity = goods.identity();
+        let pack_add_enabled = self.globe_setup.pack_add_enabled();
+
+        let (removal, mut incoming) = if source.container_extend_id == 1 {
+            let removed = player
+                .packet_mut()
+                .remove_goods(goods_id)
+                .ok_or(EnhancementTransferBlock::PacketRemovalFailed)?;
+            let removed = match removed {
+                VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed)) => {
+                    removed
+                }
+                VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Split(_))
+                | VolumeGoodsRemoveOutcome::RemovedButCellMissing(_) => {
+                    return Err(EnhancementTransferBlock::PacketRemovalFailed);
+                }
+            };
+            let removal = EnhancementTransferRemoval::Packet {
+                owner_type: removed.owner_type,
+                owner_id: removed.owner_id,
+                position: removed.position.unwrap_or(source.goods_position),
+                amount: removed.amount,
+                listeners: removed.listeners,
+            };
+            (removal, Some(removed.goods))
+        } else {
+            let remove_facts =
+                context.enhancement_equipment_remove_facts(player, goods, pack_add_enabled);
+            let mut recompute =
+                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut report = player.remove_equipment_goods(
+                goods_id,
+                &self.goods_factory,
+                &self.skill_factory,
+                remove_facts,
+                &mut recompute,
+            );
+            drop(recompute);
+            self.publish_player_equipment_remove_report(&mut report, context);
+            let outcome = std::mem::replace(
+                &mut report.outcome,
+                EquipmentRemoveOutcome::Missing {
+                    partial_effects: Default::default(),
+                },
+            );
+            let removed = match outcome {
+                EquipmentRemoveOutcome::Removed(removed) => removed,
+                outcome => {
+                    report.outcome = outcome;
+                    return Err(EnhancementTransferBlock::EquipmentRemovalFailed(report));
+                }
+            };
+            let removal = EnhancementTransferRemoval::Equipment {
+                event: removed.event,
+                effects: report.effects,
+                deliveries: report.deliveries,
+            };
+            (removal, Some(removed.goods))
+        };
+
+        let shadow = player
+            .enhancement_remove_shadow(goods_id)
+            .expect("shadow проверен до удаления source goods");
+        let delete_shadow_delivery =
+            send_enhancement_shadow_deleted(self, player.player_id(), goods_identity, &shadow);
+        let destination = self.add_enhancement_transfer_goods(
+            player,
+            destination_extend_id,
+            destination_position,
+            &mut incoming,
+            pack_add_enabled,
+            context,
+        );
+        let outcome = if incoming.is_none() {
+            EnhancementTransferOutcome::Moved(destination)
+        } else {
+            let rejected = destination;
+            let rollback = self.add_enhancement_transfer_goods(
+                player,
+                source.container_extend_id,
+                source.goods_position,
+                &mut incoming,
+                pack_add_enabled,
+                context,
+            );
+            if incoming.is_none() {
+                EnhancementTransferOutcome::RolledBack {
+                    rejected,
+                    restored: rollback,
+                }
+            } else {
+                let goods = incoming
+                    .take()
+                    .expect("неуспешный rollback сохраняет detached goods");
+                let notification_delivery = send_enhancement_goods_collected(
+                    self,
+                    player.player_id(),
+                    goods.name(),
+                    goods.amount(),
+                );
+                let goods = goods.identity();
+                EnhancementTransferOutcome::GoodsCollected {
+                    rejected,
+                    rollback,
+                    goods,
+                    notification_delivery,
+                }
+            }
+        };
+        Ok(EnhancementTransferReport {
+            goods: goods_identity,
+            source,
+            removal,
+            shadow,
+            delete_shadow_delivery,
+            outcome,
+        })
+    }
+
+    fn add_enhancement_transfer_goods<Context: GameContainerMessageRuntime>(
+        &self,
+        player: &mut CPlayer,
+        extend_id: i32,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        pack_add_enabled: bool,
+        context: &mut Context,
+    ) -> EnhancementTransferAddition {
+        if extend_id == 1 {
+            let owner_progress_allows = player.current_progress() == PlayerProgress::None;
+            return EnhancementTransferAddition::Packet(player.packet_mut().add_goods_at(
+                position,
+                incoming,
+                &self.goods_factory,
+                owner_progress_allows,
+            ));
+        }
+        let add_facts = context.enhancement_equipment_add_facts(
+            player,
+            incoming
+                .as_ref()
+                .expect("destination/rollback add получает detached goods"),
+            pack_add_enabled,
+        );
+        let mut report = {
+            let context_cell = std::cell::RefCell::new(&mut *context);
+            let mut register = |goods: &CGoods| {
+                context_cell
+                    .borrow_mut()
+                    .register_enhancement_goods_ai(goods);
+            };
+            let mut recompute = |player: &CPlayer| {
+                context_cell
+                    .borrow_mut()
+                    .recompute_enhancement_player_properties(player)
+            };
+            player.add_equipment_goods(
+                position,
+                incoming,
+                &self.goods_factory,
+                &self.skill_factory,
+                add_facts,
+                &mut register,
+                &mut recompute,
+            )
+        };
+        self.publish_player_equipment_add_report(&mut report, context);
+        EnhancementTransferAddition::Equipment(report)
     }
 
     /// Создаёт достигнутый GameServer goods core; исходный код игнорировал
@@ -9167,6 +9434,15 @@ impl CGame {
                 recompute_properties,
             )
         })?;
+        self.publish_player_equipment_remove_report(&mut report, context);
+        Some(report)
+    }
+
+    fn publish_player_equipment_remove_report<Context: PlayerEquipmentContext>(
+        &self,
+        report: &mut PlayerEquipmentRemoveReport,
+        context: &mut Context,
+    ) {
         for effect in report.effects.clone() {
             match effect {
                 PlayerEquipmentRemoveEffect::WarSoulSkillDetached { .. } => {}
@@ -9191,7 +9467,6 @@ impl CGame {
                 }
             }
         }
-        Some(report)
     }
 
     /// Полный player-owned tail positional `CEquipmentContainer::Add`; оба
@@ -9219,6 +9494,15 @@ impl CGame {
                 recompute_properties,
             )
         })?;
+        self.publish_player_equipment_add_report(&mut report, context);
+        Some(report)
+    }
+
+    fn publish_player_equipment_add_report<Context: PlayerEquipmentContext>(
+        &self,
+        report: &mut PlayerEquipmentAddReport,
+        context: &mut Context,
+    ) {
         for effect in report.effects.clone() {
             match effect {
                 PlayerEquipmentAddEffect::WarSoulSkillAttached { .. } => {}
@@ -9240,7 +9524,6 @@ impl CGame {
                 }
             }
         }
-        Some(report)
     }
 
     /// Замыкает remove по GUID с тем же player/equipment state и сохраняет
