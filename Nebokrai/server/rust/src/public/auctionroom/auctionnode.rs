@@ -119,9 +119,9 @@ impl GoodsState {
         self.0
     }
 
- /// Сохраняет любой 32-битный database discriminant без преждевременного
- /// сужения до известных состояний: оригинал `LoadGoodsByOwnerId` просто
- /// копировал `GoodsState` из строки в node.
+    /// Сохраняет любой 32-битный database discriminant без преждевременного
+    /// сужения до известных состояний: оригинал `LoadGoodsByOwnerId` просто
+    /// копировал `GoodsState` из строки в node.
     pub(crate) const fn from_raw(raw: i32) -> Self {
         Self(raw)
     }
@@ -353,7 +353,7 @@ impl Default for CGoodsNode {
 }
 
 impl CGoodsNode {
- /// Создаёт узел в состоянии исходного constructor + `Clear`.
+    /// Создаёт узел в состоянии исходного constructor + `Clear`.
     pub(crate) fn new() -> Self {
         let mut node = Self {
             db: false,
@@ -378,11 +378,11 @@ impl CGoodsNode {
         node
     }
 
- /// Создаёт результат одной materialized DB-строки `Auction`.
- ///
- /// Это узкая граница `CDbMisc::LoadGoodsByOwnerId`: оригинал owner заполнял
- /// note после `CreateGoodsNoProbability`, а его goods-byte-array назначал
- /// позднее, когда все joined `AuctionGoods` строки были применены.
+    /// Создаёт результат одной materialized DB-строки `Auction`.
+    ///
+    /// Это узкая граница `CDbMisc::LoadGoodsByOwnerId`: оригинал owner заполнял
+    /// note после `CreateGoodsNoProbability`, а его goods-byte-array назначал
+    /// позднее, когда все joined `AuctionGoods` строки были применены.
     pub(crate) fn from_auction_database(
         fields: AuctionDatabaseNodeFields,
         goods_bytes: Vec<u8>,
@@ -416,14 +416,14 @@ impl CGoodsNode {
         node
     }
 
- /// Создаёт `LoadMoneyById`-note после сериализации возвращаемого gold.
- ///
- /// Оригинал owner заполнял только amount, GUID, base-index, `STATE_BACK` и
- /// goods-byte-array. `m_btGoodsType` и `m_dwLvLimit` оставались прежней
- /// неинициализированной внутренней областью, но этот path никогда не
- /// вызывает `CGoodsNode::Serialize`: `DoneOutList` извлекает только
- /// вложенный `CGoods`. Rust оставляет их `None`, поэтому ошибочный новый
- /// serialize безопасно выявляется вместо чтения мусора.
+    /// Создаёт `LoadMoneyById`-note после сериализации возвращаемого gold.
+    ///
+    /// Оригинал owner заполнял только amount, GUID, base-index, `STATE_BACK` и
+    /// goods-byte-array. `m_btGoodsType` и `m_dwLvLimit` оставались прежней
+    /// неинициализированной внутренней областью, но этот path никогда не
+    /// вызывает `CGoodsNode::Serialize`: `DoneOutList` извлекает только
+    /// вложенный `CGoods`. Rust оставляет их `None`, поэтому ошибочный новый
+    /// serialize безопасно выявляется вместо чтения мусора.
     pub(crate) fn from_auction_money_return(
         amount: i32,
         guid: CGuid,
@@ -439,10 +439,10 @@ impl CGoodsNode {
         node
     }
 
- /// Очищает ровно поля исходного `Clear` и освобождает goods-буфер.
- ///
- /// `goods_type` и `level_limit` сохраняются: старый метод не присваивал им
- /// значений ни при повторной очистке, ни в constructor-е.
+    /// Очищает ровно поля исходного `Clear` и освобождает goods-буфер.
+    ///
+    /// `goods_type` и `level_limit` сохраняются: старый метод не присваивал им
+    /// значений ни при повторной очистке, ни в constructor-е.
     pub(crate) fn clear(&mut self) {
         self.db = true;
         self.add_ticket = 0;
@@ -461,10 +461,10 @@ impl CGoodsNode {
         self.goods_bytes = Vec::new();
     }
 
- /// Читает один узел из старого byte-array, начиная с переданного offset.
- ///
- /// При безопасной ошибке уже выполненные очистка, сдвиги курсора и
- /// успешные присваивания сохраняются; реакция старого UB не имитируется.
+    /// Читает один узел из старого byte-array, начиная с переданного offset.
+    ///
+    /// При безопасной ошибке уже выполненные очистка, сдвиги курсора и
+    /// успешные присваивания сохраняются; реакция старого UB не имитируется.
     pub(crate) fn unserialize(
         &mut self,
         source: &[u8],
@@ -504,10 +504,10 @@ impl CGoodsNode {
         Ok(())
     }
 
- /// Создаёт byte-оригинал результат старого `Serialize`.
- ///
- /// Ошибка оставляет локально заблокированными только поля, которые старый
- /// constructor не задавал, либо недостижимую для 32-bit vector длину.
+    /// Создаёт byte-оригинал результат старого `Serialize`.
+    ///
+    /// Ошибка оставляет локально заблокированными только поля, которые старый
+    /// constructor не задавал, либо недостижимую для 32-bit vector длину.
     pub(crate) fn serialize(&self) -> Result<Vec<u8>, GoodsNodeSerializeError> {
         let goods_type = self
             .goods_type
@@ -550,38 +550,38 @@ impl CGoodsNode {
         Ok(output)
     }
 
- /// Возвращает GUID, по которому комната индексирует этот узел.
+    /// Возвращает GUID, по которому комната индексирует этот узел.
     pub(crate) const fn guid(&self) -> CGuid {
         self.guid
     }
 
- /// Возвращает ticket вторичного временного индекса.
+    /// Возвращает ticket вторичного временного индекса.
     pub(super) const fn add_ticket(&self) -> u32 {
         self.add_ticket
     }
 
- /// Возвращает исходный unsigned owner id без изменения битов.
+    /// Возвращает исходный unsigned owner id без изменения битов.
     pub(crate) const fn owner_id(&self) -> u32 {
         self.owner_id
     }
 
- /// Возвращает оригинал `m_bDb` для World auction relay.
+    /// Возвращает оригинал `m_bDb` для World auction relay.
     pub(crate) const fn is_db(&self) -> bool {
         self.db
     }
 
- /// Возвращает PDB-подтверждённый `m_AucInfo.dwBuyerId`.
+    /// Возвращает PDB-подтверждённый `m_AucInfo.dwBuyerId`.
     pub(crate) fn buyer_id(&self) -> u32 {
         self.auction_info.buyer_id()
     }
 
- /// Выполняет единственное доказанное присваивание `dwBuyerId`.
+    /// Выполняет единственное доказанное присваивание `dwBuyerId`.
     pub(crate) fn set_buyer_id(&mut self, buyer_id: u32) {
         self.auction_info.set_buyer_id(buyer_id);
     }
 
- /// Собирает только поля, которые исходный `CDbMisc` передавал в свои
- /// отдельные SQL write-переходы.
+    /// Собирает только поля, которые исходный `CDbMisc` передавал в свои
+    /// отдельные SQL write-переходы.
     pub(crate) fn database_write_fields(&self) -> AuctionDatabaseWriteFields<'_> {
         AuctionDatabaseWriteFields {
             guid: self.guid,
@@ -594,8 +594,8 @@ impl CGoodsNode {
         }
     }
 
- /// Собирает аргументы оригинал `exec addnewGoods` без переинтерпретации
- /// неиспользуемых байтов `AuctionInfo`.
+    /// Собирает аргументы оригинал `exec addnewGoods` без переинтерпретации
+    /// неиспользуемых байтов `AuctionInfo`.
     pub(crate) fn database_insert_fields(&self) -> AuctionDatabaseInsertFields<'_> {
         AuctionDatabaseInsertFields {
             add_ticket: self.add_ticket,
@@ -622,87 +622,87 @@ impl CGoodsNode {
         }
     }
 
- /// Возвращает старый byte money type.
+    /// Возвращает старый byte money type.
     pub(super) const fn money_type(&self) -> u8 {
         self.money_type
     }
 
- /// Возвращает тип товара либо неинициализированную старую границу.
+    /// Возвращает тип товара либо неинициализированную старую границу.
     pub(super) const fn goods_type(&self) -> Option<u8> {
         self.goods_type
     }
 
- /// Возвращает level limit либо неинициализированную старую границу.
+    /// Возвращает level limit либо неинициализированную старую границу.
     pub(super) const fn level_limit(&self) -> Option<u32> {
         self.level_limit
     }
 
- /// Возвращает фиксированный старый буфер имени товара.
+    /// Возвращает фиксированный старый буфер имени товара.
     pub(super) const fn goods_name(&self) -> &[u8; LEGACY_STRING_CAPACITY] {
         &self.goods_name
     }
 
- /// Выполняет доказанное присваивание `m_GoodsState = STATE_AUCTION`.
-    pub(super) fn mark_as_auction(&mut self) {
+    /// Выполняет доказанное присваивание `m_GoodsState = STATE_AUCTION`.
+    pub(crate) fn mark_as_auction(&mut self) {
         self.goods_state = GoodsState::AUCTION;
     }
 
- /// Проверяет точное состояние `STATE_AUCTION`.
+    /// Проверяет точное состояние `STATE_AUCTION`.
     pub(super) fn is_auction(&self) -> bool {
         self.goods_state == GoodsState::AUCTION
     }
 
- /// Возвращает действующее `DoneDelList` состояние без переинтерпретации.
+    /// Возвращает действующее `DoneDelList` состояние без переинтерпретации.
     pub(crate) const fn goods_state(&self) -> GoodsState {
         self.goods_state
     }
 
- /// Возвращает действующий unsigned индекс исходного auction-node.
+    /// Возвращает действующий unsigned индекс исходного auction-node.
     pub(crate) const fn base_index(&self) -> u32 {
         self.base_index
     }
 
- /// Возвращает исходное signed количество с сохранением опечатки `Amout`.
+    /// Возвращает исходное signed количество с сохранением опечатки `Amout`.
     pub(crate) const fn amount(&self) -> i32 {
         self.amount
     }
 
- /// Заимствует вложенный byte-array полного `CGoods`.
+    /// Заимствует вложенный byte-array полного `CGoods`.
     pub(crate) fn goods_bytes(&self) -> &[u8] {
         &self.goods_bytes
     }
 
- /// Возвращает действующий `DoneDelList` флаг наличия ставки.
+    /// Возвращает действующий `DoneDelList` флаг наличия ставки.
     pub(super) const fn offer_price(&self) -> bool {
         self.offer_price
     }
 
- /// Переводит узел в `STATE_UNDO`.
+    /// Переводит узел в `STATE_UNDO`.
     pub(super) fn mark_as_undo(&mut self) {
         self.goods_state = GoodsState::UNDO;
     }
 
- /// Переводит узел в `STATE_PRE_BUY`.
+    /// Переводит узел в `STATE_PRE_BUY`.
     pub(super) fn mark_as_pre_buy(&mut self) {
         self.goods_state = GoodsState::PRE_BUY;
     }
 
- /// Переводит узел в `STATE_SUCESSED` с исходной опечаткой имени.
+    /// Переводит узел в `STATE_SUCESSED` с исходной опечаткой имени.
     pub(super) fn mark_as_sucessed(&mut self) {
         self.goods_state = GoodsState::SUCESSED;
     }
 
- /// Переводит узел в `STATE_BACK`.
+    /// Переводит узел в `STATE_BACK`.
     pub(super) fn mark_as_back(&mut self) {
         self.goods_state = GoodsState::BACK;
     }
 
- /// Возвращает reached-поле `AuctionInfo::dwBuyerId`.
+    /// Возвращает reached-поле `AuctionInfo::dwBuyerId`.
     pub(super) fn auction_buyer_id(&self) -> u32 {
         self.auction_info.buyer_id()
     }
 
- /// Перезаписывает только `AuctionInfo::dwBuyerId`, сохраняя остальные bytes.
+    /// Перезаписывает только `AuctionInfo::dwBuyerId`, сохраняя остальные bytes.
     pub(super) fn set_auction_buyer_id(&mut self, buyer_id: u32) {
         self.auction_info.set_buyer_id(buyer_id);
     }
@@ -787,10 +787,10 @@ impl<'source, 'cursor> LegacyByteArrayReader<'source, 'cursor> {
             let source_offset = *self.cursor;
             let byte = self.read_u8(field)?;
             let Some(slot) = destination.get_mut(destination_offset) else {
- // typed boundary: helpers Misc, Game
- // и World после 256 байт продолжали
- // писать за char[0x100]. Достижимость и реакция процесса на
- // такую строку не доказаны; unsafe не вводится.
+                // typed boundary: helpers Misc, Game
+                // и World после 256 байт продолжали
+                // писать за char[0x100]. Достижимость и реакция процесса на
+                // такую строку не доказаны; unsafe не вводится.
                 return Err(GoodsNodeUnserializeError::LegacyStringOverflow {
                     field,
                     first_out_of_bounds_offset: source_offset,
@@ -842,10 +842,10 @@ impl<'source, 'cursor> LegacyByteArrayReader<'source, 'cursor> {
             });
         };
         if end > self.source.len() {
- // typed boundary: прямые scalar-read в `UnSerialize` сначала
- // сдвигали `long&`, а helpers строк/буферов тоже не знали длину
- // источника. Безопасная граница не назначает чтению за концом
- // наблюдаемого результата и не двигает курсор через отсутствующее.
+            // typed boundary: прямые scalar-read в `UnSerialize` сначала
+            // сдвигали `long&`, а helpers строк/буферов тоже не знали длину
+            // источника. Безопасная граница не назначает чтению за концом
+            // наблюдаемого результата и не двигает курсор через отсутствующее.
             return Err(GoodsNodeUnserializeError::UnexpectedEnd {
                 field,
                 offset,

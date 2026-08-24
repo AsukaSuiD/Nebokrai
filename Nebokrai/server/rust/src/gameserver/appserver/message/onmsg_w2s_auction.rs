@@ -2,52 +2,158 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/onmsg_w2s_auction.cpp` подтверждают
-//! selector `0x80403`: чтение Windows `long`, bool-проекцию и
-//! вызов `CGame::SetAuctionState`; эта ветвь имеет статус `IMPLEMENTED`.
-//! Для enabled-state время берётся только после чтения payload, как в
-//! оригинале. Обрезанный payload заменяет небезопасное чтение за буфером
-//! typed error-ом без мутации. Остальные auction selectors остаются RAW ниже.
+//! selectors `0x80401..0x80403`: добавление временного `CGoodsNode` в
+//! Game-specific owner map, reconciliation с World GUID-set и публикацию
+//! stale owner/GUID клиентам, а также auction-state. GameServer primary map
+//! хранит `GUID -> owner id`, а не MiscServer-owned node; это исключает
+//! исходный stack-pointer lifetime без изменения наблюдаемого результата.
+//! Обрезанный payload заменяет небезопасное чтение за буфером typed error-ом
+//! с сохранением уже выполненных cursor/field effects. Остальные selectors
+//! остаются RAW ниже.
+
+use std::collections::BTreeMap;
 
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::SendMessageError;
+use crate::public::aucitionroom::GameAuctionRemoval;
+use crate::public::auctionnode::{CGoodsNode, GoodsNodeUnserializeError};
 
+const WORLD_AUCTION_ADD_ITEM_MESSAGE: i32 = 0x0008_0401;
+const WORLD_AUCTION_UNITY_MESSAGE: i32 = 0x0008_0402;
 const WORLD_AUCTION_STATE_MESSAGE: i32 = 0x0008_0403;
+const CLIENT_AUCTION_GOODS_REMOVED_MESSAGE: i32 = 0x000c_0702;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldAuctionStateMessageError {
+pub(crate) enum WorldAuctionMessageError {
+    AddItemDecode(GoodsNodeUnserializeError),
+    MissingUnityTerminator,
+    TruncatedUnityGuid {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
     MissingEnabledLong,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorldAuctionStateMessageReport {
-    pub(crate) enabled: bool,
-    pub(crate) last_check_seconds: u32,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameAuctionRemovalDispatch {
+    pub(crate) removal: GameAuctionRemoval,
+    pub(crate) delivery: Option<Result<i32, SendMessageError>>,
 }
 
-/// Материализует только exact `0x80403`-ветвь большого handler-а.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorldAuctionMessageReport {
+    ItemAdded {
+        guid: crate::public::guid::CGuid,
+        owner_id: u32,
+        added: bool,
+    },
+    GoodsUnified {
+        world_goods: Vec<crate::public::guid::CGuid>,
+        removals: Vec<GameAuctionRemovalDispatch>,
+    },
+    StateChanged {
+        enabled: bool,
+        last_check_seconds: u32,
+    },
+}
+
+/// Материализует exact `0x80401..0x80403`-ветви большого handler-а.
 /// `None` означает, что сообщение должен идти в оставшийся auction owner.
-pub(crate) fn dispatch_world_auction_state(
+pub(crate) fn dispatch_world_auction_message(
     message: &mut CMessage,
     game: &mut CGame,
     wall_time_seconds: impl FnOnce() -> u32,
-) -> Option<Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>> {
-    if message.message_type() != WORLD_AUCTION_STATE_MESSAGE {
-        return None;
+) -> Option<Result<WorldAuctionMessageReport, WorldAuctionMessageError>> {
+    match message.message_type() {
+        WORLD_AUCTION_ADD_ITEM_MESSAGE => {
+            let mut item = CGoodsNode::new();
+            let decode = {
+                let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                item.unserialize(source, cursor)
+            };
+            if let Err(error) = decode {
+                return Some(Err(WorldAuctionMessageError::AddItemDecode(error)));
+            }
+            let guid = item.guid();
+            let owner_id = item.owner_id();
+            let added = game.auction_room_mut().add_item_to_auction_room(&mut item);
+            Some(Ok(WorldAuctionMessageReport::ItemAdded {
+                guid,
+                owner_id,
+                added,
+            }))
+        }
+        WORLD_AUCTION_UNITY_MESSAGE => {
+            let mut world_goods = BTreeMap::new();
+            loop {
+                let Some(marker) = message.base_mut().get_char() else {
+                    return Some(Err(WorldAuctionMessageError::MissingUnityTerminator));
+                };
+                if marker == 0 {
+                    break;
+                }
+
+                let offset = message.base_mut().cursor();
+                let wire = message.as_wire_bytes();
+                let available = wire.len().saturating_sub(offset);
+                let Some(presence) = wire.get(offset).copied() else {
+                    return Some(Err(WorldAuctionMessageError::TruncatedUnityGuid {
+                        offset,
+                        needed: 1,
+                        available,
+                    }));
+                };
+                let needed = if presence == 0 { 1 } else { 17 };
+                if available < needed {
+                    return Some(Err(WorldAuctionMessageError::TruncatedUnityGuid {
+                        offset,
+                        needed,
+                        available,
+                    }));
+                }
+                if let Some(guid) = message.base_mut().get_guid() {
+                    world_goods.insert(guid, false);
+                }
+            }
+
+            let mut removals = Vec::new();
+            while let Some(removal) = game.auction_room().next_unity_removal(&world_goods) {
+                let delivery = if removal.owner_id != 0 {
+                    let mut notice = CMessage::new(CLIENT_AUCTION_GOODS_REMOVED_MESSAGE);
+                    notice.base_mut().add_ulong(removal.owner_id);
+                    notice.base_mut().add_guid(removal.guid);
+                    Some(notice.send_all(game.current_net_server()))
+                } else {
+                    None
+                };
+                game.auction_room_mut().commit_unity_removal(removal);
+                removals.push(GameAuctionRemovalDispatch { removal, delivery });
+            }
+            Some(Ok(WorldAuctionMessageReport::GoodsUnified {
+                world_goods: world_goods.into_keys().collect(),
+                removals,
+            }))
+        }
+        WORLD_AUCTION_STATE_MESSAGE => {
+            let Some(enabled) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingEnabledLong));
+            };
+            let enabled = enabled != 0;
+            let last_check_seconds = if enabled {
+                wall_time_seconds()
+            } else {
+                game.auction_last_check_seconds()
+            };
+            game.set_auction_state(enabled, last_check_seconds);
+            Some(Ok(WorldAuctionMessageReport::StateChanged {
+                enabled,
+                last_check_seconds,
+            }))
+        }
+        _ => None,
     }
-    let Some(enabled) = message.base_mut().get_long() else {
-        return Some(Err(WorldAuctionStateMessageError::MissingEnabledLong));
-    };
-    let enabled = enabled != 0;
-    let last_check_seconds = if enabled {
-        wall_time_seconds()
-    } else {
-        game.auction_last_check_seconds()
-    };
-    game.set_auction_state(enabled, last_check_seconds);
-    Some(Ok(WorldAuctionStateMessageReport {
-        enabled,
-        last_check_seconds,
-    }))
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

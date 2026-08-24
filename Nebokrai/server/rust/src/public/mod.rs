@@ -20,7 +20,7 @@ pub(crate) mod guid;
 
 #[allow(
     dead_code,
-    reason = "CAuctionRoom подключён для восстановления MiscServer M2M до остальных auction-владельцев"
+    reason = "auction rooms подключены к MiscServer M2M и GameServer World reconciliation"
 )]
 #[path = "auctionroom/aucitionroom.rs"]
 pub(crate) mod aucitionroom;

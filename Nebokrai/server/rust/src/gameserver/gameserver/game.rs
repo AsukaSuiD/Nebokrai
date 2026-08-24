@@ -423,7 +423,7 @@ use crate::gameserver::appserver::message::logmessage::{
     GameLogMessageError, GameLogMessageReport, dispatch_game_log_message,
 };
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
-    WorldAuctionStateMessageError, WorldAuctionStateMessageReport, dispatch_world_auction_state,
+    WorldAuctionMessageError, WorldAuctionMessageReport, dispatch_world_auction_message,
 };
 use crate::gameserver::appserver::message::organsysmessage::{
     GameOrganizingWarMessageError, GameOrganizingWarMessageReport, GameOrganizingWarRuntime,
@@ -562,8 +562,7 @@ use crate::nets::netserver::mynetserver::{
     CMyNetServer, GameServerEvent, GameServerEventPublisher,
 };
 use crate::nets::servers::ServerHostError;
-use crate::public::aucitionroom::CAuctionRoom;
-use crate::public::auctionnode::CGoodsNode;
+use crate::public::aucitionroom::CGameAuctionRoom;
 use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
@@ -2624,8 +2623,7 @@ pub(crate) struct GameAuctionRunReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) legacy_return: i32,
-    pub(crate) auction_states:
-        Vec<Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>>,
+    pub(crate) auction_messages: Vec<Result<WorldAuctionMessageReport, WorldAuctionMessageError>>,
     pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
     pub(crate) gma_messages: Vec<Result<GmaMessageReport, GmaMessageError>>,
     pub(crate) depot_messages: Vec<DepotMessageReport>,
@@ -3011,7 +3009,7 @@ pub(crate) struct CGame {
     region_router: RegionRouter,
     area_width: i32,
     area_height: i32,
-    auction_room: CAuctionRoom<CGoodsNode>,
+    auction_room: CGameAuctionRoom,
     auction_now: bool,
     auction_last_check_seconds: u32,
     auction_tick_ms: u32,
@@ -3099,7 +3097,7 @@ impl CGame {
             region_router: RegionRouter::default(),
             area_width: 15,
             area_height: 15,
-            auction_room: CAuctionRoom::new(),
+            auction_room: CGameAuctionRoom::new(),
             auction_now: false,
             auction_last_check_seconds: 0,
             auction_tick_ms: 0,
@@ -5524,11 +5522,11 @@ impl CGame {
         self.auction_last_check_seconds
     }
 
-    pub(crate) const fn auction_room(&self) -> &CAuctionRoom<CGoodsNode> {
+    pub(crate) const fn auction_room(&self) -> &CGameAuctionRoom {
         &self.auction_room
     }
 
-    pub(crate) const fn auction_room_mut(&mut self) -> &mut CAuctionRoom<CGoodsNode> {
+    pub(crate) const fn auction_room_mut(&mut self) -> &mut CGameAuctionRoom {
         &mut self.auction_room
     }
 
@@ -14479,7 +14477,7 @@ impl CGame {
         &mut self,
         runtime: &mut Runtime,
     ) -> GameProcessMessagesReport<Runtime::RuntimeError> {
-        let mut auction_states = Vec::new();
+        let mut auction_messages = Vec::new();
         let mut gm_messages = Vec::new();
         let mut gma_messages = Vec::new();
         let mut depot_messages = Vec::new();
@@ -14505,7 +14503,7 @@ impl CGame {
             self.run_incoming_message(
                 &mut message,
                 runtime,
-                &mut auction_states,
+                &mut auction_messages,
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
@@ -14533,7 +14531,7 @@ impl CGame {
             self.run_incoming_message(
                 &mut message,
                 runtime,
-                &mut auction_states,
+                &mut auction_messages,
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
@@ -14563,7 +14561,7 @@ impl CGame {
                     self.run_incoming_message(
                         &mut message,
                         runtime,
-                        &mut auction_states,
+                        &mut auction_messages,
                         &mut gm_messages,
                         &mut gma_messages,
                         &mut depot_messages,
@@ -14592,7 +14590,7 @@ impl CGame {
         }
         GameProcessMessagesReport {
             legacy_return: 1,
-            auction_states,
+            auction_messages,
             gm_messages,
             gma_messages,
             depot_messages,
@@ -14616,9 +14614,7 @@ impl CGame {
         &mut self,
         message: &mut CMessage,
         runtime: &mut Runtime,
-        auction_states: &mut Vec<
-            Result<WorldAuctionStateMessageReport, WorldAuctionStateMessageError>,
-        >,
+        auction_messages: &mut Vec<Result<WorldAuctionMessageReport, WorldAuctionMessageError>>,
         gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
         gma_messages: &mut Vec<Result<GmaMessageReport, GmaMessageError>>,
         depot_messages: &mut Vec<DepotMessageReport>,
@@ -14654,9 +14650,9 @@ impl CGame {
         {
             server_messages.push(report);
         } else if let Some(report) =
-            dispatch_world_auction_state(message, self, || runtime.wall_time_seconds())
+            dispatch_world_auction_message(message, self, || runtime.wall_time_seconds())
         {
-            auction_states.push(report);
+            auction_messages.push(report);
         } else if let Some(report) = dispatch_gm_message(message, self, || runtime.get_tick_ms()) {
             gm_messages.push(report);
         } else if let Some(report) = dispatch_gma_message(message, self) {

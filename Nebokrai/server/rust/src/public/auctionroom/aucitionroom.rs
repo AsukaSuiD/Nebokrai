@@ -1,11 +1,15 @@
-//! Комната аукциона `CAuctionRoom` MiscServer и GameServer.
+//! Комнаты аукциона MiscServer и GameServer.
 //! Источник контракта — точные пары MiscServer/GameServer EXE/PDB;
 //! общий goods wire согласован с WorldServer owner-ом.
 //!
-//! Owner хранит основные и вторичные ordered списки, player search state,
+//! Misc owner хранит основные и вторичные ordered списки, player search state,
 //! opt/del/success/back queues и выполняет `AI` в исходном порядке. Add/delete
 //! ветви сохраняют последовательность мутаций, return flags, duplicate rules
 //! и partial effects; дополнительные rollback, сортировка и retry не вводятся.
+//! GameServer-вариант отделён в `CGameAuctionRoom`: его primary map хранит
+//! `GUID -> owner id`, потому что World handler передаёт временный stack-узел.
+//! Он сохраняет отдельные add/reconciliation semantics и не притворяется
+//! владельцем `CGoodsNode` после возврата из handler-а.
 //! `BTreeMap`, `VecDeque` и owned nodes заменяют MSVC containers и ручной
 //! lifetime без изменения auction opcodes или page/filter semantics.
 
@@ -81,6 +85,101 @@ const AUCTION_UNITY_DETAIL_LIMIT: usize = 20;
 pub(crate) struct UnityGoodsBuild {
     pub(crate) messages: Vec<CMessage>,
     pub(crate) blocked: Option<GoodsNodeSerializeError>,
+}
+
+/// Один удалённый при World reconciliation GameServer auction GUID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameAuctionRemoval {
+    pub(crate) owner_id: u32,
+    pub(crate) guid: CGuid,
+}
+
+/// GameServer-специализация исходного `CAuctionRoom`.
+///
+/// Точный GameServer owner (`AddItemToAuctionRoom` RVA `0x00077F00`,
+/// `UnityGoodsInGS` RVA `0x000776B0`) хранит в primary ordered map только
+/// owner id. Это существенно отличается от owned `CGoodsNode*` MiscServer:
+/// входной узел `0x80401` расположен на стеке handler-а и уничтожается сразу
+/// после вызова. `BTreeMap` и owned `Vec` заменяют только STL plumbing.
+pub(crate) struct CGameAuctionRoom {
+    auction_goods_list: BTreeMap<CGuid, u32>,
+    owner_list: BTreeMap<i32, Vec<CGuid>>,
+}
+
+impl Default for CGameAuctionRoom {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CGameAuctionRoom {
+    pub(crate) const fn new() -> Self {
+        Self {
+            auction_goods_list: BTreeMap::new(),
+            owner_list: BTreeMap::new(),
+        }
+    }
+
+    /// Exact GameServer add: primary insert, состояние временного узла и
+    /// owner-index. Invalid/duplicate не мутируют ни комнату, ни узел.
+    pub(crate) fn add_item_to_auction_room(&mut self, item: &mut CGoodsNode) -> bool {
+        let guid = item.guid();
+        if guid == CGuid::GUID_INVALID || self.auction_goods_list.contains_key(&guid) {
+            return false;
+        }
+
+        let owner_id = item.owner_id();
+        self.auction_goods_list.insert(guid, owner_id);
+        item.mark_as_auction();
+        self.owner_list
+            .entry(owner_id as i32)
+            .or_default()
+            .push(guid);
+        true
+    }
+
+    /// Копирует primary GUID в исходном `std::map`-порядке для `RunAuction`.
+    pub(crate) fn count_goods(&self) -> Vec<CGuid> {
+        self.auction_goods_list.keys().copied().collect()
+    }
+
+    /// Возвращает следующий stale GUID в primary `std::map`-порядке, не
+    /// выполняя мутацию до исходной client-публикации.
+    pub(crate) fn next_unity_removal(
+        &self,
+        world_goods: &BTreeMap<CGuid, bool>,
+    ) -> Option<GameAuctionRemoval> {
+        self.auction_goods_list
+            .iter()
+            .find(|(guid, _)| !world_goods.contains_key(guid))
+            .map(|(guid, owner_id)| GameAuctionRemoval {
+                owner_id: *owner_id,
+                guid: *guid,
+            })
+    }
+
+    /// Завершает exact `UnityGoodsInGS` transition после client send:
+    /// owner-index очищается только для ненулевого owner, затем primary entry.
+    pub(crate) fn commit_unity_removal(&mut self, removal: GameAuctionRemoval) {
+        if removal.owner_id != 0 {
+            self.del_item_from_owner_list(removal.owner_id as i32, removal.guid);
+        }
+        self.auction_goods_list.remove(&removal.guid);
+    }
+
+    fn del_item_from_owner_list(&mut self, owner_id: i32, guid: CGuid) -> bool {
+        let Some(guids) = self.owner_list.get_mut(&owner_id) else {
+            return false;
+        };
+        let Some(position) = guids.iter().position(|candidate| *candidate == guid) else {
+            return false;
+        };
+        guids.remove(position);
+        if guids.is_empty() {
+            self.owner_list.remove(&owner_id);
+        }
+        true
+    }
 }
 
 /// Safe-граница построения одной страницы старого аукционного поиска.
