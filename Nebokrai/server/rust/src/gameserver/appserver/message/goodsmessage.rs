@@ -849,6 +849,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     player_id: Some(player_id),
                     npc_id: None,
                     region_id,
+                    ..ScriptExecutionContext::default()
                 },
                 runtime,
             );

@@ -19,9 +19,10 @@
 //! Декодирование exact persistence-wire теперь включает `CShape`, legacy
 //! description buffer, ordered addon/value storage и обе fairy-проекции;
 //! `CGoodsFactory` и exp-config передаются явно вместо process-global owners.
-//! Constructor/release, остальная durability/time, обратный codec и mutation
-//! gameplay ниже остаются RAW: достигнутый core не выдаётся за весь 0xCC-byte
-//! legacy object.
+//! Script durability getter/setter теперь сохраняют exact base-value storage,
+//! включая запись `-1` без client update. Constructor/release, остальные
+//! time-поля, обратный codec и прочая gameplay mutation ниже остаются RAW:
+//! достигнутый core не выдаётся за весь 0xCC-byte legacy object.
 
 use super::cbattlefairyproperty::{
     BattleFairyExpBlock, BattleFairyExpReport, BattleFairyPlayerFacts, CBattleFairyProperty,
@@ -730,6 +731,33 @@ impl CGoods {
         self.set_addon_property_value_first_core(GAP_GOODS_MAXIMUM_DURABILITY, 2, maximum)
     }
 
+    /// Exact durability owner читает `base_value`, не сумму с modifier.
+    pub(crate) fn current_durability(&self) -> i32 {
+        self.addon_properties
+            .iter()
+            .find(|property| property.property_type == GAP_GOODS_MAXIMUM_DURABILITY)
+            .and_then(|property| property.values.iter().find(|value| value.id == 2))
+            .map_or(-1, |value| value.base_value)
+    }
+
+    /// Ноль и отсутствующий value-id `2` возвращают `-1`. Отрицательное
+    /// значение, включая `-1`, записывается до возврата как в native owner-е.
+    pub(crate) fn set_current_durability(&mut self, durability: i32) -> i32 {
+        if durability == 0 {
+            return -1;
+        }
+        let Some(value) = self
+            .addon_properties
+            .iter_mut()
+            .find(|property| property.property_type == GAP_GOODS_MAXIMUM_DURABILITY)
+            .and_then(|property| property.values.iter_mut().find(|value| value.id == 2))
+        else {
+            return -1;
+        };
+        value.base_value = durability;
+        durability
+    }
+
     /// Exact `QueryDaKongCount` считает только непрерывный prefix семи
     /// instance/base addon-слотов со значением value-id 1 в диапазоне 2..=8.
     pub(crate) fn da_kong_count(&self, factory: &CGoodsFactory) -> u32 {
@@ -1262,34 +1290,6 @@ fn read_goods_wire<const N: usize>(
 // RVA: 0x000C9B80
 // ADDRESS: 004c9b80
 // PROTOTYPE: int __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, int param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::GetCurDurability
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:989
-// RVA: 0x000C9C80
-// ADDRESS: 004c9c80
-// PROTOTYPE: long __thiscall GetCurDurability(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::SetCurDurability
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:1012
-// RVA: 0x000C9D30
-// ADDRESS: 004c9d30
-// PROTOTYPE: long __thiscall SetCurDurability(long param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -44,6 +44,10 @@
 //! `2249 / FairyExpUp` разрешает enhancement-shadow обратно в live packet или
 //! equipment goods, сохраняет grow-log, replacement ownership и concrete
 //! delete/new-object wire, включая необратимый late packet-add failure.
+//! Предметная family `2231..2236/2243..2246` получает GUID запускающего goods
+//! из того же CScript instance, ограничивает used-item lookup настоящей
+//! сумкой, изменяет addon/durability storage и публикует delete/amount/update
+//! wire; selected durability разрешается через live enhancement-shadow.
 //! Numeric selector получает вычисленные параметры из reached synchronous
 //! `CScript`; остальные function ID и асинхронный dialog/wait lifecycle ниже
 //! пока остаются RAW.
@@ -51,6 +55,7 @@
 use crate::gameserver::appserver::country::country::{
     CountryExileRestTimeReport, CountryScalarMutationReport,
 };
+use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
 };
@@ -71,6 +76,16 @@ pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
 pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_UPGRADE: i32 = 2216;
+pub(crate) const SCRIPT_FUNCTION_DELETE_USED_GOODS: i32 = 2231;
+pub(crate) const SCRIPT_FUNCTION_CHECK_USED_GOODS: i32 = 2232;
+pub(crate) const SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_1: i32 = 2233;
+pub(crate) const SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_2: i32 = 2234;
+pub(crate) const SCRIPT_FUNCTION_SET_USED_GOODS_PROPERTY_1: i32 = 2235;
+pub(crate) const SCRIPT_FUNCTION_SET_USED_GOODS_PROPERTY_2: i32 = 2236;
+pub(crate) const SCRIPT_FUNCTION_GET_CURRENT_DURABILITY: i32 = 2243;
+pub(crate) const SCRIPT_FUNCTION_SET_CURRENT_DURABILITY: i32 = 2244;
+pub(crate) const SCRIPT_FUNCTION_GET_SELECTED_DURABILITY: i32 = 2245;
+pub(crate) const SCRIPT_FUNCTION_SET_SELECTED_DURABILITY: i32 = 2246;
 pub(crate) const SCRIPT_FUNCTION_FAIRY_EXP_UP: i32 = 2249;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
@@ -2274,6 +2289,7 @@ pub(crate) fn run_equipment_da_kong_script_function<Context: EquipmentDaKongCont
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ScriptFunctionDispatchOutcome {
     DifferentFunction,
+    Invalid,
     Handled { legacy_return: i32 },
 }
 
@@ -2293,6 +2309,23 @@ pub(crate) fn script_function_parameter_kind(
 ) -> ScriptFunctionParameterKind {
     use ScriptFunctionParameterKind::{Integer, String, Unused};
     match function_id {
+        SCRIPT_FUNCTION_DELETE_USED_GOODS
+        | SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_1
+        | SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_2
+        | SCRIPT_FUNCTION_SET_CURRENT_DURABILITY
+        | SCRIPT_FUNCTION_SET_SELECTED_DURABILITY => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_SET_USED_GOODS_PROPERTY_1 | SCRIPT_FUNCTION_SET_USED_GOODS_PROPERTY_2 => {
+            match index {
+                0 | 1 => Integer,
+                _ => Unused,
+            }
+        }
+        SCRIPT_FUNCTION_CHECK_USED_GOODS
+        | SCRIPT_FUNCTION_GET_CURRENT_DURABILITY
+        | SCRIPT_FUNCTION_GET_SELECTED_DURABILITY => Unused,
         SCRIPT_FUNCTION_FAIRY_EXP_UP => match index {
             0 => Integer,
             _ => Unused,
@@ -2510,6 +2543,176 @@ fn run_fairy_script_function<Runtime: ScriptFunctionRuntime>(
     )))
 }
 
+enum GoodsItemScriptFunctionOutcome {
+    DifferentFunction,
+    Invalid,
+    Handled(i32),
+}
+
+fn script_used_goods(game: &CGame, player_id: i32, goods_id: CGuid) -> Option<&CGoods> {
+    game.find_player(player_id)
+        .and_then(|player| player.packet().base().find(goods_id))
+}
+
+fn script_selected_goods(game: &CGame, player_id: i32) -> Option<&CGoods> {
+    let player = game.find_player(player_id)?;
+    let goods_id = player.enhancement_selected_goods_id()?;
+    player.get_goods_by_id(goods_id)
+}
+
+fn run_goods_item_script_function<Runtime: ScriptFunctionRuntime>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    script_player_id: Option<i32>,
+    used_item_id: Option<CGuid>,
+    function_id: i32,
+    argument_count: usize,
+    integer_arguments: [Option<i32>; 2],
+) -> GoodsItemScriptFunctionOutcome {
+    let used_identity = || script_player_id.zip(used_item_id);
+    match function_id {
+        SCRIPT_FUNCTION_DELETE_USED_GOODS => {
+            let requested = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            if argument_count != 1 || requested <= 0 || requested == SCRIPT_INT_PARAMETER_ERROR {
+                return GoodsItemScriptFunctionOutcome::Handled(0);
+            }
+            let Some((player_id, goods_id)) = used_identity() else {
+                return GoodsItemScriptFunctionOutcome::Handled(0);
+            };
+            if script_used_goods(game, player_id, goods_id).is_none() {
+                return GoodsItemScriptFunctionOutcome::Handled(0);
+            }
+            let Some(consumption) = game
+                .find_player_mut(player_id)
+                .and_then(|player| player.remove_packet_goods_by_id(goods_id, requested as u32))
+            else {
+                return GoodsItemScriptFunctionOutcome::Handled(0);
+            };
+            let removed = consumption
+                .previous_amount
+                .wrapping_sub(consumption.remaining_amount);
+            let _ = game.send_player_packet_consumption(&consumption);
+            GoodsItemScriptFunctionOutcome::Handled(removed as i32)
+        }
+        SCRIPT_FUNCTION_CHECK_USED_GOODS => {
+            if argument_count != 0 {
+                return GoodsItemScriptFunctionOutcome::Invalid;
+            }
+            let amount = used_identity()
+                .and_then(|(player_id, goods_id)| script_used_goods(game, player_id, goods_id))
+                .map_or(0, |goods| goods.amount() as i32);
+            GoodsItemScriptFunctionOutcome::Handled(amount)
+        }
+        SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_1 | SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_2 => {
+            if argument_count != 1 {
+                return GoodsItemScriptFunctionOutcome::Handled(-1);
+            }
+            let Some((player_id, goods_id)) = used_identity() else {
+                return GoodsItemScriptFunctionOutcome::Handled(-1);
+            };
+            let Some(goods) = script_used_goods(game, player_id, goods_id) else {
+                return GoodsItemScriptFunctionOutcome::Handled(-1);
+            };
+            let property = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let value_id = if function_id == SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_1 {
+                1
+            } else {
+                2
+            };
+            let value = goods.addon_property_value(game.goods_factory(), property, value_id);
+            GoodsItemScriptFunctionOutcome::Handled(
+                if value != 0 || goods.query_attribute(property) {
+                    value
+                } else {
+                    -1
+                },
+            )
+        }
+        SCRIPT_FUNCTION_SET_USED_GOODS_PROPERTY_1 | SCRIPT_FUNCTION_SET_USED_GOODS_PROPERTY_2 => {
+            if argument_count != 2 {
+                return GoodsItemScriptFunctionOutcome::Handled(-1);
+            }
+            let Some((player_id, goods_id)) = used_identity() else {
+                return GoodsItemScriptFunctionOutcome::Handled(-1);
+            };
+            let property = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let modifier = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let value_id = if function_id == SCRIPT_FUNCTION_SET_USED_GOODS_PROPERTY_1 {
+                1
+            } else {
+                2
+            };
+            let update = game.find_player_mut(player_id).and_then(|player| {
+                let goods = player.packet_mut().base_mut().find_mut(goods_id)?;
+                goods
+                    .set_addon_property_modifier_core(property, value_id, modifier)
+                    .then(|| (goods.identity(), runtime.encode_goods_for_old_client(goods)))
+            });
+            if let Some((goods, payload)) = update {
+                send_script_goods_update(game, player_id, goods, &payload);
+                GoodsItemScriptFunctionOutcome::Handled(1)
+            } else {
+                GoodsItemScriptFunctionOutcome::Handled(0)
+            }
+        }
+        SCRIPT_FUNCTION_GET_CURRENT_DURABILITY | SCRIPT_FUNCTION_GET_SELECTED_DURABILITY => {
+            let Some(player_id) = script_player_id else {
+                return GoodsItemScriptFunctionOutcome::Handled(-1);
+            };
+            let goods = if function_id == SCRIPT_FUNCTION_GET_SELECTED_DURABILITY {
+                script_selected_goods(game, player_id)
+            } else {
+                used_item_id.and_then(|goods_id| script_used_goods(game, player_id, goods_id))
+            };
+            GoodsItemScriptFunctionOutcome::Handled(
+                goods.map_or(-1, |goods| goods.current_durability()),
+            )
+        }
+        SCRIPT_FUNCTION_SET_CURRENT_DURABILITY | SCRIPT_FUNCTION_SET_SELECTED_DURABILITY => {
+            let requested = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            if requested == SCRIPT_INT_PARAMETER_ERROR {
+                return GoodsItemScriptFunctionOutcome::Handled(-1);
+            }
+            let Some(player_id) = script_player_id else {
+                return GoodsItemScriptFunctionOutcome::Handled(-1);
+            };
+            let goods_id = if function_id == SCRIPT_FUNCTION_SET_SELECTED_DURABILITY {
+                game.find_player(player_id)
+                    .and_then(|player| player.enhancement_selected_goods_id())
+            } else {
+                used_item_id
+                    .filter(|goods_id| script_used_goods(game, player_id, *goods_id).is_some())
+            };
+            let Some(goods_id) = goods_id else {
+                return GoodsItemScriptFunctionOutcome::Handled(-1);
+            };
+            let (updated, update) = game
+                .find_player_mut(player_id)
+                .and_then(|player| player.get_goods_by_id_mut(goods_id))
+                .map_or((-1, None), |goods| {
+                    let updated = goods.set_current_durability(requested);
+                    let update = (updated != -1)
+                        .then(|| (goods.identity(), runtime.encode_goods_for_old_client(goods)));
+                    (updated, update)
+                });
+            if let Some((goods, payload)) = update {
+                send_script_goods_update(game, player_id, goods, &payload);
+            }
+            GoodsItemScriptFunctionOutcome::Handled(updated)
+        }
+        _ => GoodsItemScriptFunctionOutcome::DifferentFunction,
+    }
+}
+
+fn send_script_goods_update(game: &CGame, player_id: i32, goods: ShapeIdentity, payload: &[u8]) {
+    let mut message = CMessage::new(0x0b_f918);
+    message.add_long(player_id);
+    message.base_mut().add_guid(goods.ex_id);
+    message.add_ulong(payload.len() as u32);
+    message.base_mut().add(payload);
+    let _ = message.send_to_player(game.net_server(), player_id);
+}
+
 /// Единый reached tail `CScript::RunFunction`: selector уже разрешён через
 /// загруженный FunctionList, а аргументы вычислены тем же экземпляром CScript.
 /// Порядок family-вызовов не наблюдаем сценарием, потому что каждый owner
@@ -2520,7 +2723,9 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     script_player_id: Option<i32>,
     script_npc_id: Option<i32>,
     script_region_id: Option<i32>,
+    used_item_id: Option<CGuid>,
     function_id: i32,
+    argument_count: usize,
     integer_arguments: [Option<i32>; 4],
     string_arguments: [Option<&[u8]>; 2],
 ) -> ScriptFunctionDispatchOutcome {
@@ -2533,6 +2738,22 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
                 _ => {}
             }
         };
+    }
+
+    match run_goods_item_script_function(
+        game,
+        runtime,
+        script_player_id,
+        used_item_id,
+        function_id,
+        argument_count,
+        [integer_arguments[0], integer_arguments[1]],
+    ) {
+        GoodsItemScriptFunctionOutcome::Handled(legacy_return) => {
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+        }
+        GoodsItemScriptFunctionOutcome::Invalid => return ScriptFunctionDispatchOutcome::Invalid,
+        GoodsItemScriptFunctionOutcome::DifferentFunction => {}
     }
 
     handled!(

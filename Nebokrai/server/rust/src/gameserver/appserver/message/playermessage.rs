@@ -11,8 +11,9 @@
 //! 16-byte Windows `SYSTEMTIME`; wall/local clocks остаются runtime owner-ом.
 //! Player item-use `0x8FA04` замыкает outer progress/death guard, packet slot,
 //! region forbidden goods и `CanUseItem`, mount/change-body ветви, полный
-//! consumable-addon loop, skill/player combat mutations, recall/script/state
-//! runtime boundaries и terminal `0xBF709/0xC0101/0xC0102` расход.
+//! consumable-addon loop, skill/player combat mutations и recall/state runtime
+//! boundaries. Goods-script входит прямо в `CGame::run_script_file` с GUID
+//! исходного packet item; terminal расход публикует `0xBF709/0xC0101/0xC0102`.
 //! Общий outer guard сохраняет исходный запрет player-message во время смены
 //! сервера/региона; `0x8FA02` вызывает полный reached `CPlayer::OnRelive(0)`
 //! через concrete `CGame` relive owner со всеми state/region/wire effects.
@@ -51,8 +52,9 @@ use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
-    colored_player_notice_message, format_legacy_text_fields, CGame, GameContainerMessageRuntime,
-    PlayerReliveContext, PlayerReliveReport, PlayerTradeAbortReport, PlayerTradeReadyReport,
+    CGame, GameContainerMessageRuntime, PlayerReliveContext, PlayerReliveReport,
+    PlayerTradeAbortReport, PlayerTradeReadyReport, colored_player_notice_message,
+    format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -121,7 +123,7 @@ pub(crate) trait GamePlayerMessageRuntime:
         goods_base_index: u32,
     ) -> bool;
 
-    /// Исполняет только ещё не owned concrete state/skill/script/relocation
+    /// Исполняет только ещё не owned concrete state/skill/relocation
     /// owner; container/player scalars и wire хвост остаются у dispatcher-а.
     fn apply_player_item_runtime_effect(
         &mut self,
@@ -165,11 +167,6 @@ pub(crate) enum PlayerItemRuntimeEffect {
     },
     RecallToReturnPoint,
     RecallInsideRegion,
-    RunGoodsScript {
-        path: Vec<u8>,
-        goods_id: CGuid,
-        goods_name: Vec<u8>,
-    },
     SkillWire {
         skill_id: u32,
     },
@@ -668,6 +665,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     player_id: Some(player_id),
                     npc_id: Some(npc_id),
                     region_id: Some(region_id),
+                    ..ScriptExecutionContext::default()
                 },
                 runtime,
             );
@@ -1070,16 +1068,20 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                             }
                         }
                         0x2f => {
-                            let result = runtime.apply_player_item_runtime_effect(
-                                game,
-                                player_id,
-                                PlayerItemRuntimeEffect::RunGoodsScript {
-                                    path: format!("scripts/goods/{}.script", value(1)).into_bytes(),
-                                    goods_id,
-                                    goods_name: original_name.clone(),
-                                },
-                            );
-                            if !result.applied {
+                            let path = format!("scripts/goods/{}.script", value(1)).into_bytes();
+                            let ran = game
+                                .run_script_file(
+                                    &path,
+                                    ScriptExecutionContext {
+                                        player_id: Some(player_id),
+                                        region_id: Some(region_id),
+                                        used_item_id: Some(goods_id),
+                                        ..ScriptExecutionContext::default()
+                                    },
+                                    runtime,
+                                )
+                                .is_some();
+                            if !ran {
                                 consume = false;
                             } else if goods.addon_property_value(
                                 game.goods_factory(),

@@ -4,7 +4,8 @@
 //! непрерывный `FunctionList`, преобразует caption через `atoi` и сохраняет
 //! text → numeric ID в ordered `std::map`. `BTreeMap` является прямой safe
 //! заменой lookup/order semantics. Reached synchronous `CScript` ниже хранит
-//! instance context/cursor, вычисляет используемые выражения и вызывает
+//! instance context/cursor, включая GUID запускающего packet item, вычисляет
+//! используемые выражения и вызывает
 //! materialized numeric function families; dialog/wait lifecycle остаётся RAW.
 
 use std::collections::BTreeMap;
@@ -15,6 +16,7 @@ use super::function::{
 };
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
+use crate::public::guid::CGuid;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CScriptFunctionRegistry {
@@ -91,6 +93,7 @@ pub(crate) struct ScriptExecutionContext {
     pub(crate) player_id: Option<i32>,
     pub(crate) npc_id: Option<i32>,
     pub(crate) region_id: Option<i32>,
+    pub(crate) used_item_id: Option<CGuid>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -307,13 +310,16 @@ impl<'a> CScript<'a> {
             self.context.player_id,
             self.context.npc_id,
             self.context.region_id,
+            self.context.used_item_id,
             function_id,
+            parameters.len(),
             integer_arguments,
             [
                 string_arguments[0].as_deref(),
                 string_arguments[1].as_deref(),
             ],
         ) {
+            ScriptFunctionDispatchOutcome::Invalid => ScriptCommandOutcome::InvalidExpression,
             ScriptFunctionDispatchOutcome::DifferentFunction => {
                 ScriptCommandOutcome::UnknownFunction
             }
