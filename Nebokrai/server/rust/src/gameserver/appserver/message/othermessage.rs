@@ -15,6 +15,8 @@
 //! local distance/region/faction/private delivery и conditional chat-log.
 //! Goods-link lookup `0x8FB03 -> 0x5FD04 -> 0x7FA07` сохраняет requester/link
 //! identities и публикует World result клиенту как exact `0xBF80D` wire.
+//! Goods-link publish round trip `0x5FD03 -> 0x7FA06` сохраняет World-rewritten
+//! tail и доставляет exact `0xBF801` nearby либо всему source-региону.
 //! Region NPC-name request `0x8FB06` публикует materialized startup list
 //! клиенту как count + exact concatenated name records `0xBF813`.
 //! GM around-kick feedback `0x7FA05` замыкает World-routed `0x5FD02`:
@@ -45,6 +47,7 @@ const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
 const PLAYER_CHAT_REQUEST: u32 = 0x0008_fb01;
 const PLAYER_GOODS_LINK_REQUEST: u32 = 0x0008_fb03;
 const WORLD_GOODS_LINK_RESPONSE: u32 = 0x0007_fa07;
+const WORLD_GOODS_LINK_PUBLISH: u32 = 0x0007_fa06;
 const WORLD_GM_FEEDBACK: u32 = 0x0007_fa05;
 const WORLD_INCREMENT_SHOP_PAGE: u32 = 0x0007_fa12;
 const WORLD_REMOTE_SKILL_ADD: u32 = 0x0007_fa08;
@@ -103,6 +106,11 @@ pub(crate) enum GameOtherMessageOutcome {
     },
     GoodsLinkLookupDelivered {
         delivery: i32,
+    },
+    GoodsLinkPublished {
+        link_type: i32,
+        first_parameter: i32,
+        deliveries: Vec<i32>,
     },
     NpcNameListDelivered {
         count: i32,
@@ -1000,6 +1008,7 @@ pub(crate) fn dispatch_game_other_message(
             | WORLD_INFO_DELIVERY
             | WORLD_TOP_INFO_DELIVERY
             | WORLD_GM_FEEDBACK
+            | WORLD_GOODS_LINK_PUBLISH
             | WORLD_GOODS_LINK_RESPONSE
             | WORLD_INCREMENT_SHOP_PAGE
             | WORLD_REMOTE_SKILL_ADD
@@ -1011,6 +1020,54 @@ pub(crate) fn dispatch_game_other_message(
             | WORLD_LEI_TING_UPDATE
     ) {
         return None;
+    }
+    if message_type == WORLD_GOODS_LINK_PUBLISH {
+        let result = (|| {
+            let link_type = read_long(message, "goods-link publish type")?;
+            let first_parameter = read_long(message, "goods-link publish parameter")?;
+            let player_id = read_long(message, "goods-link publish player id")?;
+            let Some(player) = game.find_player(player_id) else {
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerMissing,
+                });
+            };
+            let region_id = player.server_region_id();
+            let tile_x = player.shape().get_tile_x().ok();
+            let tile_y = player.shape().get_tile_y().ok();
+            let deliveries = match link_type {
+                0 => {
+                    message.set_message_type(0x000b_f801);
+                    region_id
+                        .zip(tile_x)
+                        .zip(tile_y)
+                        .map(|((region_id, tile_x), tile_y)| {
+                            send_local_chat(message, game, region_id, tile_x, tile_y)
+                        })
+                        .unwrap_or_default()
+                }
+                1 => {
+                    message.set_message_type(0x000b_f801);
+                    region_id
+                        .and_then(|region_id| game.find_region(region_id))
+                        .map(|region| message.send_to_region(Some(region.base()), None, game))
+                        .into_iter()
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::GoodsLinkPublished {
+                    link_type,
+                    first_parameter,
+                    deliveries,
+                },
+            })
+        })();
+        return Some(result);
     }
     if message_type == WORLD_REMOTE_SKILL_ADD {
         let result = (|| {
