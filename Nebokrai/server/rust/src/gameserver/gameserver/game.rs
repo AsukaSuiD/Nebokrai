@@ -64,6 +64,9 @@
 //! Player templates, trade list, increment shop и contribution setup
 //! `0x01/0x03/0x04/0x05` входят туда же одной resource-группой с исходными
 //! partial publication, cursor и success-log границами.
+//! Runtime `0x90601/02/04/05` теперь использует этот же Increment Shop owner:
+//! player progress/movement, ordered catalog traversal и client/World packets
+//! проходят непосредственно из общего MainLoop FIFO.
 //! GlobeSetup, LogSystem и GM-list `0x07/0x08/0x09` также достигаются из FIFO:
 //! router/DaKong/auction/area mutations, Goods-AI broadcast и permission
 //! registry публикуются в подтверждённом порядке до соответствующих logs.
@@ -354,6 +357,9 @@ use crate::gameserver::appserver::message::gmmessage::{
 use crate::gameserver::appserver::message::goodsmessage::{
     GameGoodsMessageError, GameGoodsMessageReport, GameGoodsMessageRuntime,
     dispatch_game_goods_message,
+};
+use crate::gameserver::appserver::message::incrementshopmessage::{
+    GameIncrementShopMessageError, GameIncrementShopMessageReport, dispatch_increment_shop_message,
 };
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
     WorldAuctionStateMessageError, WorldAuctionStateMessageReport, dispatch_world_auction_state,
@@ -2596,6 +2602,8 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
     pub(crate) gma_messages: Vec<Result<GmaMessageReport, GmaMessageError>>,
     pub(crate) depot_messages: Vec<DepotMessageReport>,
+    pub(crate) increment_shop_messages:
+        Vec<Result<GameIncrementShopMessageReport, GameIncrementShopMessageError>>,
     pub(crate) organizing_war_messages:
         Vec<Result<GameOrganizingWarMessageReport, GameOrganizingWarMessageError>>,
     pub(crate) country_war_messages: Vec<
@@ -5368,6 +5376,10 @@ impl CGame {
 
     pub(crate) const fn thing_setup_mut(&mut self) -> &mut CThingSetup {
         &mut self.thing_setup
+    }
+
+    pub(crate) const fn increment_shop_list(&self) -> &CIncrementShopList {
+        &self.increment_shop_list
     }
 
     pub(crate) const fn increment_shop_list_mut(&mut self) -> &mut CIncrementShopList {
@@ -12875,6 +12887,7 @@ impl CGame {
         let mut gm_messages = Vec::new();
         let mut gma_messages = Vec::new();
         let mut depot_messages = Vec::new();
+        let mut increment_shop_messages = Vec::new();
         let mut organizing_war_messages = Vec::new();
         let mut country_war_messages = Vec::new();
         let mut goods_war_messages = Vec::new();
@@ -12895,6 +12908,7 @@ impl CGame {
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
+                &mut increment_shop_messages,
                 &mut organizing_war_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
@@ -12917,6 +12931,7 @@ impl CGame {
                 &mut gm_messages,
                 &mut gma_messages,
                 &mut depot_messages,
+                &mut increment_shop_messages,
                 &mut organizing_war_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
@@ -12941,6 +12956,7 @@ impl CGame {
                         &mut gm_messages,
                         &mut gma_messages,
                         &mut depot_messages,
+                        &mut increment_shop_messages,
                         &mut organizing_war_messages,
                         &mut country_war_messages,
                         &mut goods_war_messages,
@@ -12964,6 +12980,7 @@ impl CGame {
             gm_messages,
             gma_messages,
             depot_messages,
+            increment_shop_messages,
             organizing_war_messages,
             country_war_messages,
             goods_war_messages,
@@ -12984,6 +13001,9 @@ impl CGame {
         gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
         gma_messages: &mut Vec<Result<GmaMessageReport, GmaMessageError>>,
         depot_messages: &mut Vec<DepotMessageReport>,
+        increment_shop_messages: &mut Vec<
+            Result<GameIncrementShopMessageReport, GameIncrementShopMessageError>,
+        >,
         organizing_war_messages: &mut Vec<
             Result<GameOrganizingWarMessageReport, GameOrganizingWarMessageError>,
         >,
@@ -13015,6 +13035,8 @@ impl CGame {
             gma_messages.push(report);
         } else if let Some(report) = dispatch_depot_message(message, self) {
             depot_messages.push(report);
+        } else if let Some(report) = dispatch_increment_shop_message(message, self) {
+            increment_shop_messages.push(report);
         } else if let Some(report) = dispatch_game_organizing_war_message(message, self, runtime) {
             organizing_war_messages.push(report);
         } else if let Some(report) = dispatch_game_country_war_message(message, self, runtime) {

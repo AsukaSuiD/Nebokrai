@@ -94,6 +94,23 @@ impl IncrementShopLoadError {
 }
 
 impl CIncrementShopList {
+    pub(crate) fn affiche(&self) -> &[u8] {
+        &self.affiche
+    }
+
+    pub(crate) fn items_on_page(&self, page: u8) -> &[IncrementShopItem] {
+        self.items.get(&page).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    pub(crate) fn search_items(&self, needle: &[u8]) -> Vec<&IncrementShopItem> {
+        self.items
+            .iter()
+            .filter(|(page, _)| **page > 1)
+            .flat_map(|(_, items)| items)
+            .filter(|item| contains_bytes(&item.key, needle))
+            .collect()
+    }
+
     pub(crate) fn insert(&mut self, page: u8, item: IncrementShopItem) {
         self.items.entry(page).or_default().push(item);
     }
@@ -313,6 +330,13 @@ impl CIncrementShopList {
     pub(crate) fn item_count(&self) -> usize {
         self.items.values().map(Vec::len).sum()
     }
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    needle.is_empty()
+        || haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
