@@ -345,6 +345,9 @@
 //! GoodsAI registration и concrete client container wire.
 //! Enhancement/precious-box confirm теперь также запускают сохранённый
 //! server-trusted path прямо через тот же CScript player/region context.
+//! Equipment compose и DaKong announcement paths входят в тот же dispatcher;
+//! DaKong на точной позиции вызова временно возвращает извлечённого owned
+//! player в canonical map, сохраняя C++ player-pointer context и mutations.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CString;
@@ -1517,22 +1520,9 @@ pub(crate) trait EquipmentComposeContext: OldClientGoodsCodec + PlayerEquipmentC
         &mut self,
         player: &CPlayer,
     ) -> PlayerCombatProperties;
-    fn run_equipment_compose_script(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        script_path: &[u8],
-    );
 }
 
-pub(crate) trait EquipmentDaKongContext: OldClientGoodsCodec {
-    fn run_equipment_da_kong_script(
-        &mut self,
-        game: &mut CGame,
-        player: &mut CPlayer,
-        script_path: &[u8],
-    );
-}
+pub(crate) trait EquipmentDaKongContext: OldClientGoodsCodec {}
 
 pub(crate) trait EquipmentUpgradeContext:
     OldClientGoodsCodec + PlayerEquipmentContext
@@ -8921,7 +8911,7 @@ impl CGame {
         report
     }
 
-    pub(crate) fn compose_equipment<Context: EquipmentComposeContext>(
+    pub(crate) fn compose_equipment<Context: EquipmentComposeContext + ScriptFunctionRuntime>(
         &mut self,
         player_id: i32,
         session_id: i32,
@@ -8973,7 +8963,7 @@ impl CGame {
         report
     }
 
-    fn compose_equipment_inner<Context: EquipmentComposeContext>(
+    fn compose_equipment_inner<Context: EquipmentComposeContext + ScriptFunctionRuntime>(
         &mut self,
         player_id: i32,
         plug: &mut CEquipmentCompose,
@@ -9262,12 +9252,20 @@ impl CGame {
                 previous,
             ));
         }
-        context.run_equipment_compose_script(
-            self,
-            player_id,
-            b"scripts/goods/shenbing_gonggao.script",
-        );
-        report.script_dispatched = true;
+        let region_id = self
+            .find_player(player_id)
+            .and_then(CPlayer::server_region_id);
+        report.script_dispatched = self
+            .run_script_file(
+                b"scripts/goods/shenbing_gonggao.script",
+                ScriptExecutionContext {
+                    player_id: Some(player_id),
+                    region_id,
+                    ..ScriptExecutionContext::default()
+                },
+                context,
+            )
+            .is_some();
         report.outcome = EquipmentComposeOutcome::Completed;
         report
     }
@@ -9476,7 +9474,7 @@ impl CGame {
         report
     }
 
-    pub(crate) fn process_equipment_da_kong<Context: EquipmentDaKongContext>(
+    pub(crate) fn process_equipment_da_kong<Context: ScriptFunctionRuntime>(
         &mut self,
         player_id: i32,
         session_id: i32,
@@ -9723,7 +9721,7 @@ impl CGame {
         report
     }
 
-    fn process_equipment_da_kong_inner<Context: EquipmentDaKongContext>(
+    fn process_equipment_da_kong_inner<Context: ScriptFunctionRuntime>(
         &mut self,
         player: &mut CPlayer,
         plug: &mut CEquipmentDaKong,
@@ -10072,18 +10070,42 @@ impl CGame {
         message.send_to_around_position(region, effect.tile_x, effect.tile_y, None, &runtime)
     }
 
-    fn equipment_da_kong_run_script<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_run_script<Context: ScriptFunctionRuntime>(
         &mut self,
         report: &mut EquipmentDaKongReport,
         context: &mut Context,
         player: &mut CPlayer,
         script: &'static [u8],
     ) {
-        context.run_equipment_da_kong_script(self, player, script);
+        let player_id = player.player_id();
+        let region_id = player.server_region_id();
+        // В C++ player pointer остаётся в game map во время синхронного script
+        // call. Rust-владелец извлекает player для equipment mutation, поэтому
+        // на время dispatcher-а возвращаем исходный owned value, оставляя clone
+        // только как безопасный placeholder для ссылки вызывающего кода.
+        let attached_player = std::mem::replace(player, player.clone());
+        let displaced = self.players.insert(player_id, attached_player);
+        assert!(
+            displaced.is_none(),
+            "DaKong owner извлекает игрока перед script dispatch"
+        );
+        let _ = self.run_script_file(
+            script,
+            ScriptExecutionContext {
+                player_id: Some(player_id),
+                region_id,
+                ..ScriptExecutionContext::default()
+            },
+            context,
+        );
+        *player = self
+            .players
+            .remove(&player_id)
+            .expect("синхронный DaKong script сохраняет canonical player owner");
         report.scripts.push(script.to_vec());
     }
 
-    fn equipment_da_kong_create_socket<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_create_socket<Context: ScriptFunctionRuntime>(
         &mut self,
         player: &mut CPlayer,
         plug: &CEquipmentDaKong,
@@ -10357,7 +10379,7 @@ impl CGame {
         }
     }
 
-    fn equipment_da_kong_enchase<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_enchase<Context: ScriptFunctionRuntime>(
         &mut self,
         player: &mut CPlayer,
         plug: &mut CEquipmentDaKong,

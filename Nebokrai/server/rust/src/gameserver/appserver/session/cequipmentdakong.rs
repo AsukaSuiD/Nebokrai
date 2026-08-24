@@ -8,7 +8,9 @@
 //! equipment-session factory и MainLoop; script-only external-refresh caller `9351` использует тот же external-attribute
 //! алгоритм, обязательный reason `4`, расход, area effect `11` и item update.
 //! Уведомления, packet consumption, `0xBF918`, `0xBF50A` и World `0x60212`
-//! исполняются `CGame`; внешней границей остаётся только script VM.
+//! исполняются `CGame`; announcement scripts проходят через живой
+//! `CScript::RunFunction` dispatcher с временным возвратом owned player в
+//! canonical game map на точной позиции вызова.
 
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentdakongcontainer::{

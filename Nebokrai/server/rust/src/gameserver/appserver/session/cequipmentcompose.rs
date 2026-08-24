@@ -8,7 +8,8 @@
 //! session-stage. Addon transfer, universal `UpgradeEquipment`, validation,
 //! ordering и ownership результата принадлежат `CGame`. Notice, source/stone
 //! container wire, packet result и gated World audit также исполняются живым
-//! `CGame`; внешней границей остаётся announcement script VM.
+//! `CGame`; announcement script проходит через живой `CScript::RunFunction`
+//! dispatcher с player/region context и его runtime side effects.
 
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::{
