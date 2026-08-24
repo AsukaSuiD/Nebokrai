@@ -137,6 +137,9 @@
 //! Battle-fairy gear add/remove использует тот же properties owner и шлёт
 //! `0xBF918(player, GUID, length, old-client payload)` в effect-order, включая
 //! подтверждённый двойной update успешного remove.
+//! Skill reset `0x8FC29` сохраняет два входных long, player detach, live
+//! script callback с canonical game/player/region, повторный attach и World
+//! ack `0xBF931`; произвольный script не удерживает raw equipment pointer.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -1149,6 +1152,12 @@ pub(crate) trait BattleFairyUpgradeContext: BattleFairyOldClientCodec {
 
 pub(crate) trait BattleFairySkillRequestContext {
     fn queue_battle_fairy_skill(&mut self, player_id: i32, dispatch: BattleFairySkillDispatch);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyScriptSkillAttachReport {
+    pub(crate) skills: Vec<BattleFairySkillAdded>,
+    pub(crate) deliveries: Vec<i32>,
 }
 
 pub(crate) trait PlayerEquipmentContext {
@@ -7184,6 +7193,49 @@ impl CGame {
             }
         }
         Some(report)
+    }
+
+    /// Начальный player/equipment участок goods-message `0x8FC29`.
+    /// Отсутствующий либо не-BF headgear не запускает script и не шлёт ack.
+    pub(crate) fn detach_battle_fairy_script_skills(&mut self, player_id: i32) -> Option<Vec<u32>> {
+        let valid = self
+            .find_player(player_id)?
+            .war_soul_goods(&self.goods_factory)
+            .is_some();
+        if !valid {
+            return None;
+        }
+        let (players, goods_factory, skill_factory) =
+            (&mut self.players, &self.goods_factory, &self.skill_factory);
+        Some(
+            players
+                .get_mut(&player_id)
+                .expect("проверенный player остаётся в game map")
+                .detach_battle_fairy_script_skills(goods_factory, skill_factory),
+        )
+    }
+
+    /// Завершающий player/equipment участок `0x8FC29` после script mutation.
+    /// Safe owner перечитывает equipped headgear вместо удержания native raw
+    /// pointer через произвольный script callback.
+    pub(crate) fn attach_battle_fairy_script_skills(
+        &mut self,
+        player_id: i32,
+    ) -> BattleFairyScriptSkillAttachReport {
+        let skills = self
+            .players
+            .get_mut(&player_id)
+            .map_or_else(Vec::new, |player| {
+                player.attach_battle_fairy_script_skills(&self.goods_factory, &self.skill_factory)
+            });
+        let deliveries = skills
+            .iter()
+            .filter_map(|skill| {
+                battle_fairy_skill_learned_message(skill, &self.skill_factory, true)
+                    .map(|message| message.send_to_player(self.net_server(), skill.player_id))
+            })
+            .collect();
+        BattleFairyScriptSkillAttachReport { skills, deliveries }
     }
 
     /// Runtime entry point уже декодированного `skillmessage 0x90005`.

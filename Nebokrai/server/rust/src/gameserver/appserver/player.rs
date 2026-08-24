@@ -73,6 +73,9 @@
 //! `ResetSkill` соединяет equipment headgear, optional packet-reset item,
 //! общий Game RNG, exact несовместимые пары, полный detach/attach девяти
 //! war-soul skills и подтверждения `0xBF71D/0xBF918`.
+//! Goods-message `0x8FC29` использует отдельный script reset: player owner
+//! сохраняет native detach/attach девяти addon skills вокруг live script,
+//! не подменяя его внутренней random-веткой `ResetSkill`.
 //! `skillmessage 0x90005` доведён до authorization и AI dispatch: feature/HP
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
@@ -2967,6 +2970,47 @@ impl CPlayer {
             ));
         report.outcome = BattleFairySkillResetOutcome::Reset;
         report
+    }
+
+    /// Player-owned `DelWarSoulSkillInPlayer` перед запуском reset-script.
+    /// Native `TellClient(false)` уже после `DelSkill` не находит удалённый
+    /// skill, поэтому наблюдаемым результатом остаётся ordered detach state.
+    pub(crate) fn detach_battle_fairy_script_skills(
+        &mut self,
+        factory: &CGoodsFactory,
+        skill_factory: &CSkillFactory,
+    ) -> Vec<u32> {
+        let mut detached = Vec::new();
+        for (skill_id, _) in self.war_soul_skill_entries(factory) {
+            if skill_id == 0 {
+                continue;
+            }
+            let _deleted = self.move_shape.delete_skill(skill_id, skill_factory);
+            detached.push(skill_id);
+        }
+        detached
+    }
+
+    /// Player-owned `AddWarSoulSkillToPalyer` после reset-script: addon state
+    /// перечитывается из того же equipped headgear, затем каждый достигнутый
+    /// skill публикуется через обычный `TellClient(true)` snapshot.
+    pub(crate) fn attach_battle_fairy_script_skills(
+        &mut self,
+        factory: &CGoodsFactory,
+        skill_factory: &CSkillFactory,
+    ) -> Vec<BattleFairySkillAdded> {
+        let player_id = self.player_id();
+        let mut attached = Vec::new();
+        for (skill_id, level) in self.war_soul_skill_entries(factory) {
+            if skill_id == 0 {
+                continue;
+            }
+            let _added = self.move_shape.add_skill(skill_id, level, skill_factory);
+            if let Some(skill) = self.move_shape.skill(skill_id) {
+                attached.push(battle_fairy_skill_snapshot(player_id, skill));
+            }
+        }
+        attached
     }
 
     fn war_soul_skill_entries(&self, factory: &CGoodsFactory) -> [(u32, i32); 9] {

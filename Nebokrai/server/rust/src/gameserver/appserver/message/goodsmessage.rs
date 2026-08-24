@@ -11,7 +11,9 @@
 //! до player properties и повторных old-client goods updates. `0x8FC2B`
 //! замыкает расход reset-item, сброс potential/player state и клиентский update.
 //! Парные `0x8FC2C/0x8FC2D` ведут summon/recall через один WarSoul lifecycle,
-//! region spatial map, around packets и пересчёт player properties.
+//! region spatial map, around packets и пересчёт player properties. `0x8FC29`
+//! сохраняет два `long`, detach → live script → attach и World ack; сам script
+//! остаётся явной runtime-границей, а не подменяется упрощённым reset helper-ом.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -29,13 +31,15 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
-    BattleFairyRuntimeContext, BattleFairyUpgradeContext, CGame,
+    BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
+    CGame,
 };
-use crate::nets::netserver::message::CMessage;
+use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
 const COMBINE_BATTLE_FAIRY: u32 = 0x0008_fc27;
 const UPGRADE_BATTLE_FAIRY: u32 = 0x0008_fc28;
+const RESET_BATTLE_FAIRY_SKILLS: u32 = 0x0008_fc29;
 const ALLOCATE_BATTLE_FAIRY_POTENTIAL: u32 = 0x0008_fc2a;
 const RESET_BATTLE_FAIRY_POTENTIAL: u32 = 0x0008_fc2b;
 const SUMMON_BATTLE_FAIRY: u32 = 0x0008_fc2c;
@@ -48,11 +52,36 @@ pub(crate) trait GameGoodsMessageRuntime:
     + BattleFairyPotentialResetContext
     + BattleFairyRuntimeContext
 {
+    fn run_battle_fairy_reset_script(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        region_id: Option<i32>,
+        script_path: &[u8],
+    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameGoodsMessageError {
     MissingField(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyScriptResetOutcome {
+    MissingBattleFairyEquipment,
+    Dispatched,
+}
+
+#[must_use = "script reset report сохраняет detach, script, attach и World ack"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyScriptResetReport {
+    pub(crate) ignored_value: i32,
+    pub(crate) script_index: i32,
+    pub(crate) script_path: Vec<u8>,
+    pub(crate) outcome: BattleFairyScriptResetOutcome,
+    pub(crate) detached_skill_ids: Vec<u32>,
+    pub(crate) attached: Option<BattleFairyScriptSkillAttachReport>,
+    pub(crate) world_ack: Option<Result<i32, SendMessageError>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -61,6 +90,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     BattleFairyCombineCheck(BattleFairyCombineCheck),
     BattleFairyCombine(BattleFairyCombineReport),
     BattleFairyUpgrade(BattleFairyUpgradeReport),
+    BattleFairyScriptReset(BattleFairyScriptResetReport),
     BattleFairyPotentialAllocation(BattleFairyPotentialAllocationReport),
     BattleFairyPotentialReset(BattleFairyPotentialResetReport),
     BattleFairySummon(BattleFairySummonReport),
@@ -87,6 +117,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
         CHECK_BATTLE_FAIRY_COMBINE
             | COMBINE_BATTLE_FAIRY
             | UPGRADE_BATTLE_FAIRY
+            | RESET_BATTLE_FAIRY_SKILLS
             | ALLOCATE_BATTLE_FAIRY_POTENTIAL
             | RESET_BATTLE_FAIRY_POTENTIAL
             | SUMMON_BATTLE_FAIRY
@@ -126,6 +157,49 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             game.upgrade_battle_fairy_equipment(player_id, runtime)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch"),
         ),
+        RESET_BATTLE_FAIRY_SKILLS => {
+            let ignored_value = match read_long(message, "skill reset ignored value") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let script_index = match read_long(message, "skill reset script index") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let script_path =
+                format!("scripts/skills/restskills_0{script_index}.script").into_bytes();
+            let Some(detached_skill_ids) = game.detach_battle_fairy_script_skills(player_id) else {
+                return Some(Ok(GameGoodsMessageReport {
+                    message_type,
+                    socket_id,
+                    player_id: Some(player_id),
+                    region_id,
+                    outcome: GameGoodsMessageOutcome::BattleFairyScriptReset(
+                        BattleFairyScriptResetReport {
+                            ignored_value,
+                            script_index,
+                            script_path,
+                            outcome: BattleFairyScriptResetOutcome::MissingBattleFairyEquipment,
+                            detached_skill_ids: Vec::new(),
+                            attached: None,
+                            world_ack: None,
+                        },
+                    ),
+                }));
+            };
+            runtime.run_battle_fairy_reset_script(game, player_id, region_id, &script_path);
+            let attached = game.attach_battle_fairy_script_skills(player_id);
+            let world_ack = CMessage::new(0x0b_f931).send(game, player_id != 0);
+            GameGoodsMessageOutcome::BattleFairyScriptReset(BattleFairyScriptResetReport {
+                ignored_value,
+                script_index,
+                script_path,
+                outcome: BattleFairyScriptResetOutcome::Dispatched,
+                detached_skill_ids,
+                attached: Some(attached),
+                world_ack: Some(world_ack),
+            })
+        }
         ALLOCATE_BATTLE_FAIRY_POTENTIAL => {
             let count = match read_long(message, "allocation count") {
                 Ok(count) => count,
