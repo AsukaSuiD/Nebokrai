@@ -1851,6 +1851,22 @@ impl CPlayer {
         self.quest_states.insert(quest_id, state);
     }
 
+    pub(crate) fn accept_script_quest(&mut self, quest_id: u16) -> bool {
+        if self.quest_states.get(&quest_id).copied() == Some(0) {
+            return false;
+        }
+        self.quest_states.insert(quest_id, 0);
+        true
+    }
+
+    pub(crate) fn complete_script_quest(&mut self, quest_id: u16) -> bool {
+        let Some(state) = self.quest_states.get_mut(&quest_id) else {
+            return false;
+        };
+        *state = 1;
+        true
+    }
+
     pub(crate) fn add_friend_state(&mut self, name: &[u8]) -> PlayerFriendAddOutcome {
         let name = name.split(|byte| *byte == 0).next().unwrap_or_default();
         if self.friends.len() >= 0x28 {

@@ -276,7 +276,10 @@ pub(crate) const SCRIPT_FUNCTION_PLAY_EFFECT: i32 = 5404;
 pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
 pub(crate) const SCRIPT_FUNCTION_POST_WORLD_INFO: i32 = 5202;
 pub(crate) const SCRIPT_FUNCTION_POST_COUNTRY_INFO: i32 = 5203;
+pub(crate) const SCRIPT_FUNCTION_ADD_QUEST: i32 = 6200;
+pub(crate) const SCRIPT_FUNCTION_COMPLETE_QUEST: i32 = 6201;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
+pub(crate) const SCRIPT_FUNCTION_ACTIVITY_LOG: i32 = 9510;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_TECH_LEVEL: i32 = 9002;
@@ -3225,12 +3228,17 @@ pub(crate) fn script_function_parameter_kind(
             1..=3 => Integer,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_RGB | SCRIPT_FUNCTION_CHECK_SPACE | SCRIPT_FUNCTION_GET_QUEST_STATE => {
-            match index {
-                0..=2 => Integer,
-                _ => Unused,
-            }
-        }
+        SCRIPT_FUNCTION_RGB | SCRIPT_FUNCTION_CHECK_SPACE => match index {
+            0..=2 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_ADD_QUEST
+        | SCRIPT_FUNCTION_COMPLETE_QUEST
+        | SCRIPT_FUNCTION_GET_QUEST_STATE => match index {
+            0 | 1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_ACTIVITY_LOG => Unused,
         SCRIPT_FUNCTION_DELETE_USED_GOODS
         | SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_1
         | SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_2
@@ -4505,6 +4513,28 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: (red | green << 8 | blue << 16) as i32,
             })
+        }
+        SCRIPT_FUNCTION_ACTIVITY_LOG => {
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_ADD_QUEST | SCRIPT_FUNCTION_COMPLETE_QUEST => {
+            let Some(target_player_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let quest_id = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR) as u16;
+            let target_player_id = if target_player_id == 0 {
+                player_id
+            } else {
+                target_player_id
+            };
+            if function_id == SCRIPT_FUNCTION_ADD_QUEST {
+                game.add_script_player_quest(target_player_id, quest_id);
+            } else {
+                game.complete_script_player_quest(target_player_id, quest_id);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
         }
         SCRIPT_FUNCTION_GET_QUEST_STATE => {
             let quest_id = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);

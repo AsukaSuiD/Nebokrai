@@ -9327,6 +9327,64 @@ impl CGame {
         i32::from(mutation.legacy_result)
     }
 
+    pub(crate) fn add_script_player_quest(&mut self, player_id: i32, quest_id: u16) {
+        if !self.players.contains_key(&player_id) {
+            let mut request = CMessage::new(0x0006_013b);
+            request.add_long(player_id);
+            request.base_mut().add_short(quest_id as i16);
+            let _ = request.send(self, false);
+            return;
+        }
+        let Some(quest) = self.quest_system.quest_data_by_id(quest_id) else {
+            return;
+        };
+        let player = self
+            .players
+            .get_mut(&player_id)
+            .expect("local quest-player проверен до mutation");
+        if !player.accept_script_quest(quest_id) {
+            return;
+        }
+
+        let mut message = CMessage::new(0x000b_ff2c);
+        message.base_mut().add_short(quest_id as i16);
+        message.add_ulong(quest.old);
+        message.add_ulong(quest.quest_type);
+        message.add_ulong(quest.level);
+        message.add_ulong(quest.difficulty);
+        message.add_ulong(quest.track);
+        add_legacy_c_string(message.base_mut(), &quest.short_description);
+        add_legacy_c_string(message.base_mut(), &quest.name);
+        add_legacy_c_string(message.base_mut(), &quest.description);
+        message.add_byte(u8::from(quest.display));
+        message.add_long(quest.region_id);
+        message.add_long(quest.tile_x);
+        message.add_long(quest.tile_y);
+        message.add_long(quest.effect_id);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    pub(crate) fn complete_script_player_quest(&mut self, player_id: i32, quest_id: u16) {
+        let Some(quest_name) = self
+            .quest_system
+            .quest_data_by_id(quest_id)
+            .map(|quest| quest.name.clone())
+        else {
+            return;
+        };
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return;
+        };
+        if !player.complete_script_quest(quest_id) {
+            return;
+        }
+
+        let mut message = CMessage::new(0x000b_ff2d);
+        message.base_mut().add_short(quest_id as i16);
+        add_legacy_c_string(message.base_mut(), &quest_name);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
     /// Reached `ChangeRegion` gameplay path used by `nodupe.script`. The
     /// selector/default parsing remains in `CScript::RunFunction`; this owner
     /// performs session/player state, spatial randomization and exact client /
