@@ -180,9 +180,7 @@ pub(crate) trait FourNationRegionRuntime {
         war_number: i32,
         sign_up_counts: [i32; 5],
     );
-    fn on_four_nation_mass(&mut self, region: &mut ServerNationRegion, war_number: i32);
     fn on_four_nation_refresh(&mut self, region: &mut ServerNationRegion, war_number: i32);
-    fn kick_out_four_nation_players_to_return_point(&mut self, region: &mut ServerNationRegion);
     fn reset_four_nation_region_combat_state(
         &mut self,
         region: &mut ServerNationRegion,

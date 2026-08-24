@@ -38,7 +38,9 @@ use super::super::organizingsystem::fournationwarsys::{
 use super::super::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarDecodeError, VillageWarPhaseContext,
 };
+use super::super::region::{RegionCellAccessBlock, RegionRandomContext};
 use super::super::servercityregion::CityRegionContext;
+use super::super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
 use crate::gameserver::appserver::player::{CPlayer, PlayerExploitMutationReport};
@@ -46,13 +48,46 @@ use crate::gameserver::gameserver::game::{CGame, GameWarRegionHandle, ServerRegi
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 pub(crate) trait GameOrganizingWarRuntime:
-    CityRegionContext + VillageRegionContext + FourNationRegionRuntime
+    CityRegionContext + VillageRegionContext + FourNationRegionRuntime + RegionRandomContext
 {
     /// Публикует region-localized `0xBF806(..., GS0127(region name))`.
     fn send_village_clear_player_notice(&mut self, region_id: i32, region_name: &[u8]);
 
     /// Исполняет virtual `CPlayer::UpdateProperty` после FourNation exploit.
     fn update_player_property(&mut self, player: &mut CPlayer);
+
+    /// Exact `end_business` до same-region `ChangeRegion`; concrete session
+    /// factory и increment close-message остаются у process runtime.
+    fn end_four_nation_player_business(&mut self, player: &mut CPlayer);
+
+    /// Публикует уже собранный exact `0xBF603` в around-view
+    /// старой player position.
+    fn send_four_nation_relive_move(
+        &mut self,
+        message: &CMessage,
+        region: &CServerRegion,
+        player: &CPlayer,
+        game: &CGame,
+    );
+
+    /// Conditional `bChMap0` log после position mutation.
+    fn log_four_nation_same_region_change(
+        &mut self,
+        player: &CPlayer,
+        region_id: i32,
+        previous: (i32, i32),
+        current: (i32, i32),
+    );
+
+    fn on_four_nation_relive_block(&mut self, player_id: i32, block: FourNationReliveBlock);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FourNationReliveBlock {
+    CountryOutsideRectangles { country: u8 },
+    RandomPosition(RegionCellAccessBlock),
+    Coordinate(crate::gameserver::appserver::shape::ShapeCoordinateBlock),
+    Position(RegionMembershipBlock),
 }
 
 pub(crate) trait WarFactionUpdateContext {
@@ -814,6 +849,143 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
         let _ = war.update_contend_player(&mut context);
     }
 
+    fn kick_out_four_nation_players(
+        &mut self,
+        region: &mut super::super::servernationregion::ServerNationRegion,
+    ) {
+        let player_ids = region.war.base.registered_player_ids();
+        let (area_width, area_height) = self.game.area_dimensions();
+        for player_id in player_ids {
+            let Some((country, eligible)) = self
+                .game
+                .find_player(player_id)
+                .map(|player| (player.country(), player.can_start_nation_war_timing()))
+            else {
+                continue;
+            };
+            if !eligible {
+                continue;
+            }
+            let Some(rect) = region.relive_rects().get(usize::from(country)).copied() else {
+                self.runtime.on_four_nation_relive_block(
+                    player_id,
+                    FourNationReliveBlock::CountryOutsideRectangles { country },
+                );
+                continue;
+            };
+            let destination = match region.war.base.region.get_random_pos_in_range(
+                rect.left,
+                rect.top,
+                rect.right.wrapping_sub(rect.left),
+                rect.bottom.wrapping_sub(rect.top),
+                self.runtime,
+            ) {
+                Ok(destination) => destination,
+                Err(block) => {
+                    self.runtime.on_four_nation_relive_block(
+                        player_id,
+                        FourNationReliveBlock::RandomPosition(block),
+                    );
+                    continue;
+                }
+            };
+
+            let direction = self
+                .game
+                .find_player(player_id)
+                .expect("Nation m_vPlayers ID проверен до random position")
+                .shape()
+                .get_direction();
+            {
+                let player = self
+                    .game
+                    .find_player_mut(player_id)
+                    .expect("Nation m_vPlayers ID остаётся live до end_business");
+                self.runtime.end_four_nation_player_business(player);
+                player.prepare_nation_relive();
+            }
+            let previous = {
+                let player = self
+                    .game
+                    .find_player(player_id)
+                    .expect("end_business не удаляет player owner");
+                let x = match player.shape().get_tile_x() {
+                    Ok(x) => x,
+                    Err(block) => {
+                        self.runtime.on_four_nation_relive_block(
+                            player_id,
+                            FourNationReliveBlock::Coordinate(block),
+                        );
+                        continue;
+                    }
+                };
+                let y = match player.shape().get_tile_y() {
+                    Ok(y) => y,
+                    Err(block) => {
+                        self.runtime.on_four_nation_relive_block(
+                            player_id,
+                            FourNationReliveBlock::Coordinate(block),
+                        );
+                        continue;
+                    }
+                };
+                (x, y)
+            };
+
+            if previous != (destination.x, destination.y) {
+                let mut movement = CMessage::new(0xbf603);
+                movement.base_mut().add_long(player_id);
+                movement.base_mut().add_long(player_id);
+                movement.base_mut().add_long(destination.x);
+                movement.base_mut().add_long(destination.y);
+                movement.base_mut().add_long(0);
+                let player = self
+                    .game
+                    .find_player(player_id)
+                    .expect("Nation relive player остаётся live до around send");
+                self.runtime.send_four_nation_relive_move(
+                    &movement,
+                    &region.war.base,
+                    player,
+                    self.game,
+                );
+
+                let facts = player.nation_relive_position_facts(area_width, area_height);
+                let result = {
+                    let player = self
+                        .game
+                        .find_player_mut(player_id)
+                        .expect("around send не удаляет player owner");
+                    region.war.base.set_move_shape_tile_position(
+                        player.nation_relive_shape_mut(),
+                        destination.x,
+                        destination.y,
+                        facts,
+                    )
+                };
+                if let Err(block) = result {
+                    self.runtime.on_four_nation_relive_block(
+                        player_id,
+                        FourNationReliveBlock::Position(block),
+                    );
+                    continue;
+                }
+            }
+
+            let player = self
+                .game
+                .find_player_mut(player_id)
+                .expect("Nation relive player остаётся live до direction/log");
+            player.nation_relive_shape_mut().set_direction(direction);
+            self.runtime.log_four_nation_same_region_change(
+                player,
+                region.war.base.id,
+                previous,
+                (destination.x, destination.y),
+            );
+        }
+    }
+
     fn on_war_declare(&mut self, region: GameWarRegionHandle, war_number: i32) {
         match region {
             GameWarRegionHandle::Local(region_id) => {
@@ -979,10 +1151,21 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
 
     fn on_war_mass(&mut self, region: Self::Region, war_number: i32) {
         if let GameWarRegionHandle::Local(region_id) = region
-            && let Some(ServerRegionOwner::Nation(region)) = self.game.find_region_mut(region_id)
+            && let Some(owner) = self.game.take_region_owner(region_id)
         {
+            let ServerRegionOwner::Nation(mut region) = owner else {
+                self.game.restore_region_owner(owner);
+                GameOrganizingWarContext::on_war_mass(
+                    self,
+                    GameWarRegionHandle::Local(region_id),
+                    war_number,
+                );
+                return;
+            };
             region.war.base.on_war_mass(war_number);
-            self.runtime.on_four_nation_mass(region, war_number);
+            self.kick_out_four_nation_players(&mut region);
+            self.game
+                .restore_region_owner(ServerRegionOwner::Nation(region));
             return;
         }
         GameOrganizingWarContext::on_war_mass(self, region, war_number);
@@ -1028,8 +1211,7 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
 
             let end = CMessage::new(0xbf819);
             let _end_delivery = end.send_to_region(Some(&region.war.base), None, self.game);
-            self.runtime
-                .kick_out_four_nation_players_to_return_point(&mut region);
+            self.kick_out_four_nation_players(&mut region);
 
             let awards = region.take_player_war_awards(|| self.runtime.four_nation_now_millis());
             for award in awards {

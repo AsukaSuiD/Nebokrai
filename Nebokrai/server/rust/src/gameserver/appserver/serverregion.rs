@@ -1344,6 +1344,12 @@ impl CServerRegion {
         }
     }
 
+    /// Exact `m_vPlayers` storage order, который Nation kick обходит
+    /// напрямую, не через area scan `FindAllPlayer`.
+    pub(crate) fn registered_player_ids(&self) -> Vec<i32> {
+        self.registry.players.clone()
+    }
+
     /// Owned identity snapshot для проверки полноты resolver-а перед
     /// pointer-sensitive `OnGMMessage 0x7FC07` scan.
     pub(crate) fn registered_shape_identities(&self) -> Vec<ShapeIdentity> {

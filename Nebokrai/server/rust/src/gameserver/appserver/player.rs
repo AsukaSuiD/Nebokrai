@@ -121,7 +121,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BF_WEAPON_LEVEL, GAP_GEM_LEVEL,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
-use super::moveshape::{CMoveShape, MoveShapeSkill};
+use super::moveshape::{CMoveShape, MoveShapePositionFacts, MoveShapeSkill};
 use super::shape::{CShape, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::skillfactory::CSkillFactory;
 use crate::public::guid::CGuid;
@@ -826,6 +826,7 @@ pub(crate) struct CPlayer {
     war_soul_visual_x_bits: u32,
     war_soul_visual_y_bits: u32,
     battle_fairy_summoned: bool,
+    recreate_carriage: bool,
     active_pet_count: u32,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
@@ -874,6 +875,7 @@ impl CPlayer {
             war_soul_visual_x_bits: 0.0f32.to_bits(),
             war_soul_visual_y_bits: 0.0f32.to_bits(),
             battle_fairy_summoned: false,
+            recreate_carriage: false,
             active_pet_count: 0,
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
@@ -1042,6 +1044,31 @@ impl CPlayer {
     /// отдельно от health-based `CMoveShape::IsDied`.
     pub(crate) fn can_start_nation_war_timing(&self) -> bool {
         self.shape().get_action() != 6 && !CMoveShape::is_died(self.base_properties.health)
+    }
+
+    /// Focused same-region branch `ChangeRegion`, которую вызывает
+    /// `ServerNationRegion::KickOutAllPlayerToReturnPoint`.
+    pub(crate) fn prepare_nation_relive(&mut self) {
+        self.current_progress = PlayerProgress::None;
+        self.recreate_carriage = false;
+    }
+
+    pub(crate) const fn nation_relive_position_facts(
+        &self,
+        area_width: i32,
+        area_height: i32,
+    ) -> MoveShapePositionFacts {
+        MoveShapePositionFacts {
+            current_hit_points: self.base_properties.health,
+            figure: self.figure,
+            current_area: None,
+            area_width,
+            area_height,
+        }
+    }
+
+    pub(crate) const fn nation_relive_shape_mut(&mut self) -> &mut CShape {
+        self.move_shape.shape_mut()
     }
 
     pub(crate) const fn combat_properties(&self) -> PlayerCombatProperties {
