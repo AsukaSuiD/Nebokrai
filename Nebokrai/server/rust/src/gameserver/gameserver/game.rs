@@ -13041,7 +13041,7 @@ impl CGame {
         Some(report)
     }
 
-    fn send_player_money_decrease(
+    pub(crate) fn send_player_money_decrease(
         &self,
         player_id: i32,
         outcome: &crate::gameserver::appserver::container::cwallet::CurrencyDecreaseOutcome,
@@ -13075,6 +13075,15 @@ impl CGame {
             | CurrencyDecreaseOutcome::InvalidStoredCurrency { .. } => return Vec::new(),
         }
         vec![message.send_to_player(self, player_id)]
+    }
+
+    pub(crate) fn decrease_player_money(
+        &mut self,
+        player_id: i32,
+        amount: u32,
+    ) -> Option<crate::gameserver::appserver::player::PlayerMoneyDecrease> {
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        Some(players.get_mut(&player_id)?.decrease_money(amount, goods_factory))
     }
 
     fn send_battle_fairy_upgrade_container(&self, effect: &BattleFairyUpgradeEffect) -> Vec<i32> {
@@ -14298,7 +14307,9 @@ impl CGame {
             skill_messages.push(report);
         } else if let Some(report) = dispatch_game_shape_message(message, self, runtime) {
             shape_messages.push(report);
-        } else if let Some(report) = dispatch_game_other_message(message, self) {
+        } else if let Some(report) =
+            dispatch_game_other_message(message, self, || runtime.get_tick_ms())
+        {
             other_messages.push(report);
         } else if let Some(report) = dispatch_game_player_message(message, self, runtime) {
             player_messages.push(report);

@@ -11,6 +11,10 @@
 //! string — fixed C-строки, auction/JJC/DbMisc поля читаются из общего snapshot.
 //! BattleFairy и CiQing feature gates, а также полный ordinary-fairy setup
 //! `+0x85C..+0x8A8` читаются из подтверждённых byte offsets.
+//! Public-talk projection читает оба fixed goods-name, stack-count/money и
+//! country/world interval прямо из тех же `+0x768..+0x848` полей. Абсолютные
+//! reads `0xEF4528/68/6C/70/B0/B4` и `0xEF4604/08` в `OnOtherMessage`
+//! подтверждают общий base `0xEF3DC0` и эти offsets по точному EXE.
 //! `dwPkCountPerKill +0x4F4` обслуживает GameServer kill-confirmation path;
 //! raw snapshot остаётся единым wire owner-ом без дублирующей config-модели.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
@@ -77,6 +81,14 @@ const FAIRY_SYNCRETIC_NEEDED_GOODS_OFFSET: usize = 0x8A0;
 const FAIRY_SYNCRETIC_NEEDED_EXP_OFFSET: usize = 0x8A4;
 const FAIRY_SYNCRETIC_NEEDED_MONEY_OFFSET: usize = 0x8A8;
 const PK_COUNT_PER_KILL_OFFSET: usize = 0x4F4;
+const TALK_WORLD_GOODS_NAME_OFFSET: usize = 0x768;
+const TALK_WORLD_GOODS_AMOUNT_OFFSET: usize = 0x7A8;
+const TALK_WORLD_MONEY_OFFSET: usize = 0x7AC;
+const TALK_COUNTRY_GOODS_NAME_OFFSET: usize = 0x7B0;
+const TALK_COUNTRY_GOODS_AMOUNT_OFFSET: usize = 0x7F0;
+const TALK_COUNTRY_MONEY_OFFSET: usize = 0x7F4;
+const COUNTRY_TALK_INTERVAL_OFFSET: usize = 0x844;
+const WORLD_TALK_INTERVAL_OFFSET: usize = 0x848;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -573,6 +585,44 @@ impl GlobeSetupSnapshot {
             .position(|byte| *byte == 0)
             .unwrap_or(slot.len());
         &slot[..visible_len]
+    }
+
+    pub(crate) fn public_talk_goods_name(&self, country: bool) -> &[u8] {
+        let start = if country {
+            TALK_COUNTRY_GOODS_NAME_OFFSET
+        } else {
+            TALK_WORLD_GOODS_NAME_OFFSET
+        };
+        let slot = &self.bytes[start..start + 0x40];
+        let visible_len = slot
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(slot.len());
+        &slot[..visible_len]
+    }
+
+    pub(crate) fn public_talk_goods_amount(&self, country: bool) -> i32 {
+        self.read_i32(if country {
+            TALK_COUNTRY_GOODS_AMOUNT_OFFSET
+        } else {
+            TALK_WORLD_GOODS_AMOUNT_OFFSET
+        })
+    }
+
+    pub(crate) fn public_talk_money(&self, country: bool) -> u32 {
+        self.read_u32(if country {
+            TALK_COUNTRY_MONEY_OFFSET
+        } else {
+            TALK_WORLD_MONEY_OFFSET
+        })
+    }
+
+    pub(crate) fn public_talk_interval_ms(&self, country: bool) -> u32 {
+        self.read_u32(if country {
+            COUNTRY_TALK_INTERVAL_OFFSET
+        } else {
+            WORLD_TALK_INTERVAL_OFFSET
+        })
     }
 
     pub(crate) fn deletion_days(&self) -> u32 {

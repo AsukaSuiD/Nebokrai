@@ -31,6 +31,8 @@
 //! инъецируемому wrapping `timeGetTime`-значению; GM `0x7FC0B/0x7FC0E`
 //! замыкают name lookup, mutation, двухпроходный ordered query и World
 //! responses, поэтому отдельный scheduler не требуется.
+//! World/country public talk timestamps принадлежат тому же player state:
+//! wrapping cooldown обновляется до проверки и списания channel-cost.
 //! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
 //! изменение самих max не выполняет этот clamp без конкретного caller-а.
 //! Как в связном `RefreshContainerOwners`, достигнутые equipment,
@@ -1404,6 +1406,8 @@ pub(crate) struct CPlayer {
     contribution: i32,
     silence_minutes: i32,
     silence_timestamp_minutes: u32,
+    world_talk_timestamp_ms: u32,
+    country_talk_timestamp_ms: u32,
     money: u32,
     client_ip: u32,
     account: Vec<u8>,
@@ -1500,6 +1504,8 @@ impl CPlayer {
             contribution: 0,
             silence_minutes: 0,
             silence_timestamp_minutes: 0,
+            world_talk_timestamp_ms: 0,
+            country_talk_timestamp_ms: 0,
             money: 0,
             client_ip: 0,
             account: Vec::new(),
@@ -2822,6 +2828,26 @@ impl CPlayer {
 
     pub(crate) const fn silence_minutes(&self) -> i32 {
         self.silence_minutes
+    }
+
+    /// Exact public-chat cooldown: unsigned wrapping elapsed сравнивается до
+    /// mutation, а принятый timestamp сохраняется ещё до проверки платы.
+    pub(crate) fn begin_public_talk(
+        &mut self,
+        country: bool,
+        now_ms: u32,
+        interval_ms: u32,
+    ) -> bool {
+        let timestamp = if country {
+            &mut self.country_talk_timestamp_ms
+        } else {
+            &mut self.world_talk_timestamp_ms
+        };
+        if now_ms.wrapping_sub(*timestamp) < interval_ms {
+            return false;
+        }
+        *timestamp = now_ms;
+        true
     }
 
     pub(crate) const fn equipment(&self) -> &CEquipmentContainer {

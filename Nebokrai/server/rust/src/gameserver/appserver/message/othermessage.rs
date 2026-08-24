@@ -11,9 +11,13 @@
 //! World info `0x7FA03/04` доводит nation/country notices до exact
 //! `0xBF803/804`: ненулевой target выбирает region/player, ноль сохраняет
 //! исходный broadcast fallback.
+//! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
+//! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
-use crate::gameserver::appserver::player::PlayerLeiTingDecodeBlock;
+use crate::gameserver::appserver::player::{
+    CiQingPacketConsumption, PlayerLeiTingDecodeBlock, PlayerMoneyDecrease,
+};
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
@@ -24,6 +28,8 @@ const WORLD_PLAYER_RENAME_RESPONSE: u32 = 0x0007_fa0e;
 const PLAYER_RENAME_RESPONSE: i32 = 0x000b_f80f;
 const WORLD_INFO_DELIVERY: u32 = 0x0007_fa03;
 const WORLD_TOP_INFO_DELIVERY: u32 = 0x0007_fa04;
+const WORLD_TALK_REQUEST: u32 = 0x0008_fb07;
+const COUNTRY_TALK_REQUEST: u32 = 0x0008_fb08;
 const PRIVATE_CHAT_DELIVERY: u32 = 0x0007_fa01;
 const FACTION_CHAT_DELIVERY: u32 = 0x0007_fa02;
 const WORLD_CHAT_DELIVERY: u32 = 0x0007_fa0f;
@@ -58,8 +64,51 @@ pub(crate) enum GameOtherMessageOutcome {
         target_id: i32,
         delivery: GameInfoDelivery,
     },
+    PublicTalk(GamePublicTalkOutcome),
     LeiTingUpdated {
         client_delivery: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePublicTalkCostReport {
+    pub(crate) goods_base_index: u32,
+    pub(crate) goods_required: i32,
+    pub(crate) goods_consumption: Option<CiQingPacketConsumption>,
+    pub(crate) goods_deliveries: Vec<i32>,
+    pub(crate) money_required: u32,
+    pub(crate) money: Option<PlayerMoneyDecrease>,
+    pub(crate) money_deliveries: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GamePublicTalkOutcome {
+    Silenced {
+        country: bool,
+        delivery: i32,
+    },
+    Cooldown {
+        country: bool,
+        delivery: i32,
+    },
+    InsufficientCost {
+        country: bool,
+        country_job: u8,
+        goods_base_index: u32,
+        goods_required: i32,
+        matching_stacks: usize,
+        money_required: u32,
+        money_available: u32,
+        delivery: i32,
+    },
+    Relayed {
+        country: bool,
+        country_job: u8,
+        player_country: u8,
+        content: Vec<u8>,
+        cost: Option<GamePublicTalkCostReport>,
+        world_delivery: Result<i32, SendMessageError>,
+        log_delivery: Result<i32, SendMessageError>,
     },
 }
 
@@ -112,11 +161,213 @@ fn read_string(message: &mut CMessage, maximum: usize) -> Vec<u8> {
         .unwrap_or_default()
 }
 
+fn public_talk_failure_message(country: bool) -> CMessage {
+    let mut response = CMessage::new(if country { 0x000b_f815 } else { 0x000b_f814 });
+    response.base_mut().add_byte(0);
+    response
+}
+
+fn dispatch_public_talk(
+    message_type: u32,
+    message: &mut CMessage,
+    game: &mut CGame,
+    now_milliseconds: impl FnOnce() -> u32,
+) -> Result<GameOtherMessageReport, GameOtherMessageError> {
+    let country_channel = message_type == COUNTRY_TALK_REQUEST;
+    let content = read_string(message, 0x400);
+    message.resolve_player_context(game);
+    let Some(player_id) = message.player_id() else {
+        return Ok(GameOtherMessageReport {
+            message_type,
+            player_id: 0,
+            outcome: GameOtherMessageOutcome::PlayerMissing,
+        });
+    };
+    let Some(player) = game.find_player(player_id) else {
+        return Ok(GameOtherMessageReport {
+            message_type,
+            player_id,
+            outcome: GameOtherMessageOutcome::PlayerMissing,
+        });
+    };
+    if player.silence_minutes() > 0 {
+        let delivery =
+            colored_player_notice_message(0xffff_0000, 0, game.get_string_by_id(b"GS0330"))
+                .send_to_player(game.net_server(), player_id);
+        return Ok(GameOtherMessageReport {
+            message_type,
+            player_id,
+            outcome: GameOtherMessageOutcome::PublicTalk(GamePublicTalkOutcome::Silenced {
+                country: country_channel,
+                delivery,
+            }),
+        });
+    }
+
+    let interval_ms = game.globe_setup().public_talk_interval_ms(country_channel);
+    if !game
+        .find_player_mut(player_id)
+        .expect("public-talk player проверен до timestamp mutation")
+        .begin_public_talk(country_channel, now_milliseconds(), interval_ms)
+    {
+        let delivery =
+            colored_player_notice_message(0xffff_0000, 0, game.get_string_by_id(b"GS0049"))
+                .send_to_player(game.net_server(), player_id);
+        return Ok(GameOtherMessageReport {
+            message_type,
+            player_id,
+            outcome: GameOtherMessageOutcome::PublicTalk(GamePublicTalkOutcome::Cooldown {
+                country: country_channel,
+                delivery,
+            }),
+        });
+    }
+
+    let (player_country, player_name, region_id, tile_x, tile_y, money_available) = {
+        let player = game
+            .find_player(player_id)
+            .expect("public-talk player остаётся live после timestamp mutation");
+        (
+            player.country(),
+            player.player_name().to_vec(),
+            player.server_region_id().unwrap_or_default(),
+            player.shape().get_tile_x().unwrap_or_default(),
+            player.shape().get_tile_y().unwrap_or_default(),
+            player.money(),
+        )
+    };
+    let country_job = if country_channel {
+        game.country_handler_mut()
+            .country_mut(player_country)
+            .map(|country| country.has_job(player_id))
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let official = country_channel && country_job != 0;
+    let goods_name = game
+        .globe_setup()
+        .public_talk_goods_name(country_channel)
+        .to_vec();
+    let goods_required = game.globe_setup().public_talk_goods_amount(country_channel);
+    let money_required = game.globe_setup().public_talk_money(country_channel);
+    let goods_base_index = game
+        .goods_factory()
+        .query_goods_id_by_original_name(Some(&goods_name));
+    let matching_goods: Vec<_> = game
+        .find_player(player_id)
+        .expect("public-talk player остаётся live при cost lookup")
+        .packet()
+        .base()
+        .get_goods_by_base_properties(goods_base_index)
+        .into_iter()
+        .map(|goods| goods.identity().ex_id)
+        .collect();
+    let enough_goods = goods_required == 0
+        || (goods_required > 0 && matching_goods.len() >= goods_required as usize);
+    if !official && (!enough_goods || money_available < money_required) {
+        let delivery = public_talk_failure_message(country_channel)
+            .send_to_player(game.net_server(), player_id);
+        return Ok(GameOtherMessageReport {
+            message_type,
+            player_id,
+            outcome: GameOtherMessageOutcome::PublicTalk(GamePublicTalkOutcome::InsufficientCost {
+                country: country_channel,
+                country_job,
+                goods_base_index,
+                goods_required,
+                matching_stacks: matching_goods.len(),
+                money_required,
+                money_available,
+                delivery,
+            }),
+        });
+    }
+
+    let cost = if official {
+        None
+    } else {
+        let goods_consumption = if goods_required > 0 {
+            let goods_id = matching_goods[0];
+            game.find_player_mut(player_id)
+                .expect("public-talk player остаётся live при goods mutation")
+                .remove_packet_goods_by_id(goods_id, goods_required as u32)
+        } else {
+            None
+        };
+        let goods_deliveries = goods_consumption
+            .as_ref()
+            .map(|consumption| game.send_player_packet_consumption(consumption))
+            .unwrap_or_default();
+        let money = (money_required != 0)
+            .then(|| game.decrease_player_money(player_id, money_required))
+            .flatten();
+        let money_deliveries = money
+            .as_ref()
+            .map(|change| game.send_player_money_decrease(player_id, &change.outcome))
+            .unwrap_or_default();
+        Some(GamePublicTalkCostReport {
+            goods_base_index,
+            goods_required,
+            goods_consumption,
+            goods_deliveries,
+            money_required,
+            money,
+            money_deliveries,
+        })
+    };
+
+    let mut relay = CMessage::new(if country_channel {
+        0x0005_fd08
+    } else {
+        0x0005_fd07
+    });
+    relay.base_mut().add_byte(1);
+    if country_channel {
+        relay.base_mut().add_byte(country_job);
+        relay.base_mut().add_byte(player_country);
+    }
+    add_c_string(&mut relay, &player_name);
+    add_c_string(&mut relay, &content);
+    let world_delivery = relay.send(game, false);
+
+    let mut log = CMessage::new(0x0006_020b);
+    log.base_mut().add_byte(if country_channel { 8 } else { 7 });
+    log.base_mut().add_long(player_id);
+    log.base_mut().add_long(region_id);
+    log.base_mut().add_long(tile_x);
+    log.base_mut().add_long(tile_y);
+    add_c_string(&mut log, &content);
+    let log_delivery = log.send(game, false);
+    Ok(GameOtherMessageReport {
+        message_type,
+        player_id,
+        outcome: GameOtherMessageOutcome::PublicTalk(GamePublicTalkOutcome::Relayed {
+            country: country_channel,
+            country_job,
+            player_country,
+            content,
+            cost,
+            world_delivery,
+            log_delivery,
+        }),
+    })
+}
+
 pub(crate) fn dispatch_game_other_message(
     message: &mut CMessage,
     game: &mut CGame,
+    now_milliseconds: impl FnOnce() -> u32,
 ) -> Option<Result<GameOtherMessageReport, GameOtherMessageError>> {
     let message_type = message.message_type() as u32;
+    if matches!(message_type, WORLD_TALK_REQUEST | COUNTRY_TALK_REQUEST) {
+        return Some(dispatch_public_talk(
+            message_type,
+            message,
+            game,
+            now_milliseconds,
+        ));
+    }
     if message_type == PLAYER_RENAME_REQUEST {
         message.set_message_type(WORLD_PLAYER_RENAME_REQUEST);
         let delivery = message.send(game, false);

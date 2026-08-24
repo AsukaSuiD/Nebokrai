@@ -12,6 +12,7 @@
 //! country-information map, заменяет king slot `1`, обнуляет slots `2..7` и
 //! накладывает переданные записи с last-wins семантикой.
 //!
+//! `HasJob` возвращает job первого ordered player-ID match-а либо ноль.
 //! `SetCountryTreasury` сохраняет local-before-send и exact World
 //! `0x60314(country, selector=1, value)`; фактическую отправку выполняет
 //! dispatcher после освобождения mutable country borrow. Остальные governance,
@@ -120,6 +121,13 @@ impl CCountry {
             }
         }
         0
+    }
+
+    pub(crate) fn has_job(&self, player_id: i32) -> u8 {
+        self.country_information
+            .iter()
+            .find_map(|(&job, &owner_id)| (owner_id == player_id).then_some(job))
+            .unwrap_or(0)
     }
 
     pub(crate) fn set_country_information(&mut self, job: u8, player_id: i32, active: u8) -> bool {
@@ -278,20 +286,6 @@ fn take_country_bytes<'a>(
 // RVA: 0x000AC460
 // ADDRESS: 004ac460
 // PROTOTYPE: void __thiscall SetCountryMaterial(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCountry::HasJob
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:97
-// RVA: 0x000AC750
-// ADDRESS: 004ac750
-// PROTOTYPE: uchar __thiscall HasJob(long param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
