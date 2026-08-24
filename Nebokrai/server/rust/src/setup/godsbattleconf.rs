@@ -11,6 +11,9 @@
 //! перед её открытием. Ошибка позднего файла сохраняет обновлённые ранние
 //! секции и прежние ещё не начатые. `m_XYD[1..=2]` — те же поля, которые
 //! изменяет `SetFactionXYD`, а не отдельный Shape state.
+//! SZL calculation сохраняет first matching inclusive level band, base-money
+//! lookup по уровню жертвы, единственную revise-запись и signed x86 wrapping
+//! clamp перед wrapping addition.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -45,6 +48,14 @@ pub(crate) struct GodsBattleSzlLevel {
     pub(crate) level: u32,
     pub(crate) min_szl: u32,
     pub(crate) max_szl: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GodsBattleSzlCalculation {
+    pub(crate) value: u32,
+    pub(crate) killer_money_level: u32,
+    pub(crate) victim_money_level: u32,
+    pub(crate) revise_applied: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -785,6 +796,84 @@ impl CGodsBattleConf {
                 u32::from(country) == rule.country_a || u32::from(country) == rule.country_b
             })
             .map(|rule| rule.faction)
+    }
+
+    pub(crate) fn calculate_szl_gain(
+        &self,
+        killer_level: u8,
+        killer_szl: u32,
+        victim_level: u8,
+        victim_szl: u32,
+    ) -> GodsBattleSzlCalculation {
+        self.calculate_szl_change(killer_level, killer_szl, victim_level, victim_szl, true)
+    }
+
+    pub(crate) fn calculate_szl_loss(
+        &self,
+        killer_level: u8,
+        killer_szl: u32,
+        victim_level: u8,
+        victim_szl: u32,
+    ) -> GodsBattleSzlCalculation {
+        self.calculate_szl_change(killer_level, killer_szl, victim_level, victim_szl, false)
+    }
+
+    fn calculate_szl_change(
+        &self,
+        killer_level: u8,
+        killer_szl: u32,
+        victim_level: u8,
+        victim_szl: u32,
+        gain: bool,
+    ) -> GodsBattleSzlCalculation {
+        let killer_money_level = self.szl_level(killer_szl).unwrap_or(0);
+        let victim_money_level = self.szl_level(victim_szl).unwrap_or(0);
+        let mut value = self
+            .base_money
+            .get(&victim_money_level)
+            .map(|money| if gain { money.add } else { money.subtract })
+            .unwrap_or(0);
+        let Some(revise) = self
+            .revise_money
+            .as_slice()
+            .first()
+            .filter(|_| self.revise_money.len() == 1)
+        else {
+            return GodsBattleSzlCalculation {
+                value,
+                killer_money_level,
+                victim_money_level,
+                revise_applied: false,
+            };
+        };
+        let mut adjustment = i32::from(victim_level)
+            .wrapping_sub(i32::from(killer_level))
+            .wrapping_mul(revise.level_gap_revise as i32)
+            .wrapping_add(
+                (victim_money_level as i32)
+                    .wrapping_sub(killer_money_level as i32)
+                    .wrapping_mul(revise.money_level_gap_revise as i32),
+            );
+        if adjustment > revise.revise_max as i32 {
+            adjustment = revise.revise_max as i32;
+        }
+        if adjustment < revise.revise_min as i32 {
+            adjustment = revise.revise_min as i32;
+        }
+        value = value.wrapping_add(adjustment as u32);
+        GodsBattleSzlCalculation {
+            value,
+            killer_money_level,
+            victim_money_level,
+            revise_applied: true,
+        }
+    }
+
+    pub(crate) fn szl_level(&self, szl: u32) -> Option<u32> {
+        self.szl_levels
+            .iter()
+            .find(|level| level.min_szl <= szl && szl <= level.max_szl)
+            .map(|level| level.level)
     }
 
     pub(crate) fn set_xyd_from_db(&mut self, faction_one: u32, faction_two: u32) {

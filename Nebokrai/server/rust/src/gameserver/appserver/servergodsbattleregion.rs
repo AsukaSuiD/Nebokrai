@@ -17,6 +17,8 @@
 //! XYD round-trip использует configuration-owned slots, ordered region set и
 //! faction player sets; полные NPC/contend ветви `AddObject/RemoveObject`
 //! остаются RAW, а их player membership tail исполняет `CGame`.
+//! SZL owner дополнительно материализует inclusive tier lookup и обе
+//! victim-tier gain/loss формулы; death/team/client ordering остаётся у `CGame`.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -27,6 +29,7 @@
 
 use crate::setup::godsbattleconf::{
     CGodsBattleConf, GodsBattleDecodeError, GodsBattleDecodeReport, GodsBattleFactionXydUpdate,
+    GodsBattleSzlCalculation,
 };
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -128,6 +131,32 @@ impl CGodsBattleMgr {
             self.configuration.set_faction_xyd(1, faction_a),
             self.configuration.set_faction_xyd(2, faction_b),
         ]
+    }
+
+    pub(crate) fn calculate_szl_gain(
+        &self,
+        killer_level: u8,
+        killer_szl: u32,
+        victim_level: u8,
+        victim_szl: u32,
+    ) -> GodsBattleSzlCalculation {
+        self.configuration
+            .calculate_szl_gain(killer_level, killer_szl, victim_level, victim_szl)
+    }
+
+    pub(crate) fn calculate_szl_loss(
+        &self,
+        killer_level: u8,
+        killer_szl: u32,
+        victim_level: u8,
+        victim_szl: u32,
+    ) -> GodsBattleSzlCalculation {
+        self.configuration
+            .calculate_szl_loss(killer_level, killer_szl, victim_level, victim_szl)
+    }
+
+    pub(crate) fn szl_level(&self, szl: u32) -> Option<u32> {
+        self.configuration.szl_level(szl)
     }
 
     pub(crate) fn decode_top_ten(
@@ -290,48 +319,6 @@ impl CServerGodsBattleRegion {
 //
 
 // ============================================================================
-// FUNCTION: CGodsBattleMgr::GetPlayerSZLLev
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1025
-// RVA: 0x000A5EF0
-// ADDRESS: 004a5ef0
-// PROTOTYPE: bool __thiscall GetPlayerSZLLev(ulong * param_1, ulong * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleMgr::CalAddSZL
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:846
-// RVA: 0x000A6040
-// ADDRESS: 004a6040
-// PROTOTYPE: bool __thiscall CalAddSZL(CPlayer * param_1, CPlayer * param_2, ulong * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleMgr::CalMinSZL
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:978
-// RVA: 0x000A6120
-// ADDRESS: 004a6120
-// PROTOTYPE: bool __thiscall CalMinSZL(CPlayer * param_1, CPlayer * param_2, ulong * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CGodsBattleMgr::IsGodsBattleRegion
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -410,20 +397,6 @@ impl CServerGodsBattleRegion {
 // RVA: 0x000A6850
 // ADDRESS: 004a6850
 // PROTOTYPE: ulong __thiscall GetAlreadyDieCount(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleMgr::OnSZLMin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1372
-// RVA: 0x000A6920
-// ADDRESS: 004a6920
-// PROTOTYPE: void __thiscall OnSZLMin(CPlayer * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

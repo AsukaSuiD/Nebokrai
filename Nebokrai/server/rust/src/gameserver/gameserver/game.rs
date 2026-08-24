@@ -132,6 +132,11 @@
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
 //! живым игрокам соответствующей faction во всех зарегистрированных regions.
+//! GodsBattle death SZL tail сохраняет victim-tier base/revise formulas,
+//! team factor с exact x87 truncation, player/appellation effects и region
+//! notice. Старый donor округлял team share; EXE `0x44DC3F..0x44DC57` явно
+//! переключает x87 на truncation. Missing `%s` argument region notice-а был
+//! legacy UB и безопасно заменён буквальным bounded template text.
 //! Один `MainLoop` turn сохраняет static DWORD clocks как owned process state,
 //! exact Script→AI→Message→Session→NetSession→Auction order, optional profile
 //! reads, refresh/watch gates и wrapping pacing. Ещё не материализованные
@@ -333,7 +338,7 @@ use crate::setup::emotion::CEmotion;
 use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::globesetup::GlobeSetupSnapshot;
 use crate::setup::gmlist::CGMList;
-use crate::setup::godsbattleconf::GodsBattleFactionXydUpdate;
+use crate::setup::godsbattleconf::{GodsBattleFactionXydUpdate, GodsBattleSzlCalculation};
 use crate::setup::goodsdestructionconfig::GoodsDestroySetup;
 use crate::setup::hitlevelsetup::CHitLevelSetup;
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
@@ -357,6 +362,7 @@ use crate::setup::tradelist::CTradeList;
 use crate::transport::bind_tcp_ipv4;
 
 const PLAYER_TYPE: i32 = 400;
+const SCRIPT_SCALAR_ERROR: i32 = 0x09ff_fff9;
 const NPC_TYPE: i32 = 500;
 const MONSTER_TYPE: i32 = 600;
 const DEFAULT_SOCKET_TYPE: i32 = 1;
@@ -1026,6 +1032,17 @@ pub(crate) trait GodsBattlePlayerContext {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleTeamSnapshot {
+    pub(crate) teammate_amount: u32,
+    pub(crate) player_ids: Vec<i32>,
+}
+
+pub(crate) trait GodsBattleDeathContext {
+    fn gods_battle_team_snapshot(&mut self, team_id: i32) -> Option<GodsBattleTeamSnapshot>;
+    fn request_gods_battle_change_appellation(&mut self, player_id: i32, appellation_id: u32);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GodsBattlePlayerRegionReport {
     pub(crate) region_id: i32,
     pub(crate) player_id: i32,
@@ -1046,6 +1063,28 @@ pub(crate) struct GodsBattleXydRequestReport {
 pub(crate) struct GodsBattleXydApplyReport {
     pub(crate) updates: [GodsBattleFactionXydUpdate; 2],
     pub(crate) deliveries: Vec<(i32, i32, i32)>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleSzlPlayerUpdate {
+    pub(crate) player_id: i32,
+    pub(crate) previous: u32,
+    pub(crate) current: u32,
+    pub(crate) property_delivery: i32,
+    pub(crate) notice_delivery: i32,
+    pub(crate) removed_attempt_appellation: Option<u32>,
+    pub(crate) appellation_notice_delivery: Option<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleDeathSzlReport {
+    pub(crate) killer_id: i32,
+    pub(crate) victim_id: i32,
+    pub(crate) gain: GodsBattleSzlCalculation,
+    pub(crate) loss: GodsBattleSzlCalculation,
+    pub(crate) team: Option<GodsBattleTeamSnapshot>,
+    pub(crate) updates: Vec<GodsBattleSzlPlayerUpdate>,
+    pub(crate) region_notice_delivery: Option<i32>,
 }
 
 pub(crate) trait NationCombatContext: ServerRegionNpcContext {
@@ -4054,6 +4093,188 @@ impl CGame {
         }
     }
 
+    /// Достигнутый GodsBattle-tail `CPlayer::OnDied` после общих death effects.
+    pub(crate) fn apply_gods_battle_death_szl<Context: GodsBattleDeathContext>(
+        &mut self,
+        killer_id: i32,
+        victim_id: i32,
+        context: &mut Context,
+    ) -> Option<GodsBattleDeathSzlReport> {
+        let (killer_level, killer_szl, killer_faction, killer_team, killer_region) =
+            self.find_player(killer_id).map(|player| {
+                (
+                    player.level(),
+                    player.szl(),
+                    player.gods_battle_faction(),
+                    player.team_id(),
+                    player.server_region_id(),
+                )
+            })?;
+        let (victim_level, victim_szl, victim_faction, victim_region) =
+            self.find_player(victim_id).map(|player| {
+                (
+                    player.level(),
+                    player.szl(),
+                    player.gods_battle_faction(),
+                    player.server_region_id(),
+                )
+            })?;
+        let victim_region = victim_region?;
+        let killer_region = killer_region?;
+        if !self.gods_battle_mgr.contains_region(victim_region) || killer_faction == victim_faction
+        {
+            return None;
+        }
+
+        let gain = if victim_szl == 0 {
+            GodsBattleSzlCalculation::default()
+        } else {
+            self.gods_battle_mgr.calculate_szl_gain(
+                killer_level,
+                killer_szl,
+                victim_level,
+                victim_szl,
+            )
+        };
+        let loss = self.gods_battle_mgr.calculate_szl_loss(
+            killer_level,
+            killer_szl,
+            victim_level,
+            victim_szl,
+        );
+        let team = (killer_team != 0)
+            .then(|| context.gods_battle_team_snapshot(killer_team))
+            .flatten();
+        let mut updates = Vec::new();
+        if let Some(team) = &team {
+            if team.teammate_amount != 0 {
+                let share = gods_battle_team_szl_share(gain.value, team.teammate_amount);
+                if share != 0 {
+                    for player_id in &team.player_ids {
+                        let eligible = self.find_player(*player_id).is_some_and(|player| {
+                            player.gods_battle_faction() != victim_faction
+                                && player.server_region_id() == Some(killer_region)
+                        });
+                        if eligible {
+                            let current = self
+                                .find_player(*player_id)
+                                .expect("проверенный GodsBattle teammate")
+                                .szl();
+                            updates.push(self.update_gods_battle_player_szl(
+                                *player_id,
+                                current.wrapping_add(share),
+                                context,
+                            ));
+                        }
+                    }
+                }
+            }
+        } else if gain.value != 0 {
+            updates.push(self.update_gods_battle_player_szl(
+                killer_id,
+                killer_szl.wrapping_add(gain.value),
+                context,
+            ));
+        }
+
+        if victim_szl < loss.value {
+            if victim_szl != 0 {
+                updates.push(self.update_gods_battle_player_szl(victim_id, 0, context));
+            }
+        } else {
+            updates.push(self.update_gods_battle_player_szl(
+                victim_id,
+                victim_szl.wrapping_sub(loss.value),
+                context,
+            ));
+        }
+
+        let region_notice_delivery = (|| {
+            let template_id = match (killer_faction, victim_faction) {
+                (5, 6) => b"SZLGS11".as_slice(),
+                (6, 5) => b"SZLGS12".as_slice(),
+                _ => return None,
+            };
+            let text = legacy_c_string_prefix(self.get_string_by_id(template_id));
+            let region = self.find_region(killer_region)?;
+            let mut message = CMessage::new(0xbf816);
+            message.add_byte(2);
+            add_legacy_c_string(message.base_mut(), &text[..text.len().min(0xff)]);
+            Some(message.send_to_region(Some(region.base()), None, self))
+        })();
+        Some(GodsBattleDeathSzlReport {
+            killer_id,
+            victim_id,
+            gain,
+            loss,
+            team,
+            updates,
+            region_notice_delivery,
+        })
+    }
+
+    fn update_gods_battle_player_szl<Context: GodsBattleDeathContext>(
+        &mut self,
+        player_id: i32,
+        current: u32,
+        context: &mut Context,
+    ) -> GodsBattleSzlPlayerUpdate {
+        let (previous, attempt_appellation_id) = {
+            let player = self
+                .find_player_mut(player_id)
+                .expect("SZL update получает canonical player");
+            let previous = player.szl();
+            player.set_szl(current);
+            (previous, player.attempt_appellation_id())
+        };
+        let property_delivery = gods_battle_property_message(player_id, b"dwSZL", current as i32)
+            .send_to_player(self.net_server(), player_id);
+        let text = format_single_legacy_u32(self.get_string_by_id(b"SZLGS13"), current, 0xff);
+        let notice_delivery = colored_player_notice_message(0xffff_ffff, 0xffa8_069c, &text)
+            .send_to_player(self.net_server(), player_id);
+
+        let removed_attempt_appellation = if current < previous
+            && (40_001..50_000).contains(&attempt_appellation_id)
+            && self.gods_battle_mgr.szl_level(current).unwrap_or(0)
+                < attempt_appellation_id % 40_000
+        {
+            self.find_player_mut(player_id)
+                .expect("player сохранён после SZL publication")
+                .clear_attempt_appellation();
+            context.request_gods_battle_change_appellation(player_id, 0);
+            Some(attempt_appellation_id)
+        } else {
+            None
+        };
+        let appellation_notice_delivery = removed_attempt_appellation.map(|_| {
+            colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"SZLGS10"))
+                .send_to_player(self.net_server(), player_id)
+        });
+        GodsBattleSzlPlayerUpdate {
+            player_id,
+            previous,
+            current,
+            property_delivery,
+            notice_delivery,
+            removed_attempt_appellation,
+            appellation_notice_delivery,
+        }
+    }
+
+    /// Script scalar `11128 / ChangePlayerSZL`: вычисляется только первый
+    /// аргумент; negative и parser sentinel являются успешным no-op.
+    pub(crate) fn script_change_player_szl<Context: GodsBattleDeathContext>(
+        &mut self,
+        player_id: i32,
+        value: i32,
+        context: &mut Context,
+    ) -> Option<GodsBattleSzlPlayerUpdate> {
+        if value < 0 || value == SCRIPT_SCALAR_ERROR || self.find_player(player_id).is_none() {
+            return None;
+        }
+        Some(self.update_gods_battle_player_szl(player_id, value as u32, context))
+    }
+
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {
         &mut self.synthesis
     }
@@ -5892,6 +6113,16 @@ fn gods_battle_property_message(player_id: i32, property: &[u8], value: i32) -> 
     message
 }
 
+fn colored_player_notice_message(first_color: u32, second_color: u32, text: &[u8]) -> CMessage {
+    nation_colored_text_message(0xbf806, first_color, second_color, text)
+}
+
+fn gods_battle_team_szl_share(total: u32, teammate_amount: u32) -> u32 {
+    debug_assert_ne!(teammate_amount, 0);
+    let multiplier = f64::from(teammate_amount - 1) * 0.05 + 1.0;
+    (f64::from(total) * multiplier / f64::from(teammate_amount)) as u32
+}
+
 fn nation_colored_text_message(
     message_type: i32,
     first_color: u32,
@@ -6004,6 +6235,27 @@ fn format_single_legacy_i32(template: &[u8], value: i32, maximum_bytes: usize) -
     result.extend_from_slice(&template[marker + 2..]);
     result.truncate(maximum_bytes);
     result
+}
+
+fn format_single_legacy_u32(template: &[u8], value: u32, maximum_bytes: usize) -> Vec<u8> {
+    let template = legacy_c_string_prefix(template);
+    let marker = template
+        .windows(2)
+        .position(|window| window == b"%u" || window == b"%d");
+    let Some(marker) = marker else {
+        return template[..template.len().min(maximum_bytes)].to_vec();
+    };
+    let formatted = if template[marker + 1] == b'u' {
+        value.to_string()
+    } else {
+        (value as i32).to_string()
+    };
+    let mut output = Vec::with_capacity(template.len().saturating_add(formatted.len()));
+    output.extend_from_slice(&template[..marker]);
+    output.extend_from_slice(formatted.as_bytes());
+    output.extend_from_slice(&template[marker + 2..]);
+    output.truncate(maximum_bytes);
+    output
 }
 
 fn resolve_first_local_ipv4() -> Option<Ipv4Addr> {

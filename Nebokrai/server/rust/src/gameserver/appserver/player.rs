@@ -93,6 +93,8 @@
 //! GodsBattle player snapshot теперь также хранит persisted faction/SZL;
 //! faction membership появляется только в concrete region AddObject-tail и
 //! удаляется его RemoveObject/DelObj-tail, не при восстановлении snapshot-а.
+//! `UpdateSZL` проходит через `CGame`: player property/notice предшествуют
+//! decrease-only appellation check и script-effect-у `RequestChangeAppellation`.
 //! Симметричный `OnObjectAdded` сохраняет late-block partial mutations, после
 //! commit добавляет девять war-soul skills, пересчитывает свойства, публикует
 //! `0xBF720` с исключением owner-а и отражает даже zero-delta `PackExpand` log.
@@ -743,6 +745,7 @@ impl BattleFairyGearAddons {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerBaseProperties {
+    pub(crate) level: u8,
     pub(crate) occupation: u8,
     pub(crate) pk_count: u16,
     pub(crate) experience: u32,
@@ -837,6 +840,7 @@ pub(crate) struct CPlayer {
     battle_fairy_summoned: bool,
     recreate_carriage: bool,
     active_pet_count: u32,
+    attempt_appellation_id: u32,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
     ci_qing_open: bool,
@@ -889,6 +893,7 @@ impl CPlayer {
             battle_fairy_summoned: false,
             recreate_carriage: false,
             active_pet_count: 0,
+            attempt_appellation_id: 0,
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
             ci_qing_open: false,
@@ -1025,6 +1030,26 @@ impl CPlayer {
         self.base_properties.gods_battle_faction
     }
 
+    pub(crate) const fn level(&self) -> u8 {
+        self.base_properties.level
+    }
+
+    pub(crate) const fn szl(&self) -> u32 {
+        self.base_properties.szl
+    }
+
+    pub(crate) const fn set_szl(&mut self, value: u32) {
+        self.base_properties.szl = value;
+    }
+
+    pub(crate) const fn attempt_appellation_id(&self) -> u32 {
+        self.attempt_appellation_id
+    }
+
+    pub(crate) const fn clear_attempt_appellation(&mut self) {
+        self.attempt_appellation_id = 0;
+    }
+
     pub(crate) const fn set_gods_battle_faction(&mut self, faction: i32) {
         self.base_properties.gods_battle_faction = faction;
     }
@@ -1034,6 +1059,15 @@ impl CPlayer {
     pub(crate) const fn restore_gods_battle_state(&mut self, faction: i32, szl: u32) {
         self.base_properties.gods_battle_faction = faction;
         self.base_properties.szl = szl;
+    }
+
+    pub(crate) const fn restore_level_and_attempt_appellation(
+        &mut self,
+        level: u8,
+        attempt_appellation_id: u32,
+    ) {
+        self.base_properties.level = level;
+        self.attempt_appellation_id = attempt_appellation_id;
     }
 
     /// Exact `SetExploit`: signed CountryParam storage сравнивается как
@@ -5789,20 +5823,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::UpdateSZL
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:17775
-// RVA: 0x00036C40
-// ADDRESS: 00436c40
-// PROTOTYPE: void __thiscall UpdateSZL(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::RemoveQuest
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -7330,7 +7350,7 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 
 // ============================================================================
 // FUNCTION: CPlayer::OnDied
-// STATUS: PARTIALLY_IMPLEMENTED_NATION_PREFIX
+// STATUS: PARTIALLY_IMPLEMENTED_NATION_AND_GODS_BATTLE
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:3306
