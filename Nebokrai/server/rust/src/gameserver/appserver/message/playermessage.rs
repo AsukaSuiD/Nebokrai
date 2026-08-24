@@ -6,8 +6,10 @@
 //! accept mutation, addressed `0xBF719/71A/71B` и WorldServer
 //! `0x60501/0x60502`. Public identity `0x8FA11/17/18` замыкает headpiece
 //! state/around publication, honor-country-appellation snapshot и attempt ID
-//! до server-trusted change-appellation script boundary. Остальные opcode ниже
-//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! до server-trusted change-appellation script boundary. Client timing
+//! `0x8FA12/13/1A` замыкает quest countdown, heartbeat acknowledgement и exact
+//! 16-byte Windows `SYSTEMTIME`; wall/local clocks остаются runtime owner-ом.
+//! Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::PlayerFriendAddOutcome;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
@@ -18,13 +20,22 @@ const REQUEST_FRIEND: u32 = 0x0008_fa0d;
 const ANSWER_FRIEND: u32 = 0x0008_fa0e;
 const DELETE_FRIEND: u32 = 0x0008_fa0f;
 const SET_DISPLAY_HEAD_PIECE: u32 = 0x0008_fa11;
+const QUERY_QUEST_TIME: u32 = 0x0008_fa12;
+const ACKNOWLEDGE_HEARTBEAT: u32 = 0x0008_fa13;
 const QUERY_HONOR_IDENTITY: u32 = 0x0008_fa17;
 const REQUEST_CHANGE_APPELLATION: u32 = 0x0008_fa18;
+const QUERY_LOCAL_TIME: u32 = 0x0008_fa1a;
 
 pub(crate) trait GamePlayerMessageRuntime {
     /// Выполняет concrete `PlayerRunScript` с server-trusted path; VM и
     /// script-data owner ещё не материализованы в `CGame`.
     fn run_change_appellation_script(&mut self, game: &mut CGame, player_id: i32, path: &[u8]);
+
+    /// Возвращает legacy 32-bit `_time` seconds для quest countdown.
+    fn player_wall_time_seconds(&mut self) -> i32;
+
+    /// Возвращает поля Windows `SYSTEMTIME` в native field order.
+    fn player_local_system_time(&mut self) -> [u16; 8];
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,8 +52,11 @@ pub(crate) enum GamePlayerMessageOutcome {
     FriendMissing,
     FriendDeleted,
     DisplayHeadPieceChanged,
+    QuestTimeSent,
+    HeartbeatAcknowledged,
     HonorIdentitySent,
     AppellationChangeRequested,
+    LocalTimeSent,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -136,8 +150,11 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             | ANSWER_FRIEND
             | DELETE_FRIEND
             | SET_DISPLAY_HEAD_PIECE
+            | QUERY_QUEST_TIME
+            | ACKNOWLEDGE_HEARTBEAT
             | QUERY_HONOR_IDENTITY
             | REQUEST_CHANGE_APPELLATION
+            | QUERY_LOCAL_TIME
     ) {
         return None;
     }
@@ -286,6 +303,24 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             ));
             report.outcome = GamePlayerMessageOutcome::DisplayHeadPieceChanged;
         }
+        QUERY_QUEST_TIME => {
+            let remaining = game
+                .find_player(player_id)
+                .expect("quest-time player сохранён после context lookup")
+                .quest_time_remaining(runtime.player_wall_time_seconds());
+            let mut response = CMessage::new(0x000b_f72b);
+            response.add_long(remaining);
+            report.deliveries.push(GamePlayerMessageDelivery::Player(
+                response.send_to_player(game.net_server(), player_id),
+            ));
+            report.outcome = GamePlayerMessageOutcome::QuestTimeSent;
+        }
+        ACKNOWLEDGE_HEARTBEAT => {
+            game.find_player_mut(player_id)
+                .expect("heartbeat player сохранён после context lookup")
+                .acknowledge_heartbeat();
+            report.outcome = GamePlayerMessageOutcome::HeartbeatAcknowledged;
+        }
         QUERY_HONOR_IDENTITY => {
             let country_identity = game.player_country_identity(player_id);
             let honor = game
@@ -323,6 +358,17 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 b"scripts/circle/honorrank/changeappellation.script",
             );
             report.outcome = GamePlayerMessageOutcome::AppellationChangeRequested;
+        }
+        QUERY_LOCAL_TIME => {
+            let system_time = runtime.player_local_system_time();
+            let mut response = CMessage::new(0x000b_f73f);
+            for field in system_time {
+                response.base_mut().add(&field.to_le_bytes());
+            }
+            report.deliveries.push(GamePlayerMessageDelivery::Player(
+                response.send_to_player(game.net_server(), player_id),
+            ));
+            report.outcome = GamePlayerMessageOutcome::LocalTimeSent;
         }
         _ => unreachable!("friend opcode отфильтрован до decode"),
     }

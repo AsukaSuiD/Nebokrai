@@ -135,6 +135,9 @@
 //! Public identity owner хранит headpiece/appellation/honor state; country job
 //! вычисляется concrete `CCountry`, а change request записывает attempt ID до
 //! вызова server-trusted script owner-а.
+//! Client timing owner хранит quest countdown и heartbeat acknowledgement:
+//! остаток сохраняет signed 32-bit arithmetic исходного `time_t`, а wall/local
+//! clock остаются внешними runtime-фактами message caller-а.
 //! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
 //! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
 //! полиморфные session End/plug Exit принадлежат caller runtime-у.
@@ -1056,6 +1059,8 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) hotkeys: [u32; 24],
     pub(crate) mode: u32,
     pub(crate) display_head_piece: bool,
+    pub(crate) quest_time_begin: i32,
+    pub(crate) quest_time_limit: i32,
     pub(crate) appellation_id: u32,
     pub(crate) head_picture: i32,
     pub(crate) face_picture: i32,
@@ -1354,6 +1359,8 @@ pub(crate) struct CPlayer {
     recreate_carriage: bool,
     active_pet_count: u32,
     attempt_appellation_id: u32,
+    heart_request_sent: i32,
+    heart_received: bool,
     friends: Vec<PlayerFriend>,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
@@ -1447,6 +1454,8 @@ impl CPlayer {
             recreate_carriage: false,
             active_pet_count: 0,
             attempt_appellation_id: 0,
+            heart_request_sent: 0,
+            heart_received: false,
             friends: Vec::new(),
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
@@ -1736,6 +1745,18 @@ impl CPlayer {
 
     pub(crate) const fn display_head_piece(&self) -> bool {
         self.base_properties.display_head_piece
+    }
+
+    pub(crate) const fn quest_time_remaining(&self, now_seconds: i32) -> i32 {
+        self.base_properties
+            .quest_time_limit
+            .wrapping_sub(now_seconds)
+            .wrapping_add(self.base_properties.quest_time_begin)
+    }
+
+    pub(crate) const fn acknowledge_heartbeat(&mut self) {
+        self.heart_request_sent = 0;
+        self.heart_received = true;
     }
 
     pub(crate) const fn honor_snapshot(&self) -> PlayerHonorSnapshot {
