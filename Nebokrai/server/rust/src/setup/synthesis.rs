@@ -12,7 +12,8 @@
 //! Game decoder, напротив, очищает оба owners. Recipe публикуется лишь после
 //! полного временного formula-vector; safe NUL reader заменяет старый
 //! безразмерный `_GetStringFromByteArray` и не воспроизводит его overflow.
-//! Gameplay query-family `Get*` ещё не связана с runtime call sites.
+//! Gameplay query-family `Get*` связана с goods-message lifecycle через
+//! byte-exact recipe lookup, type validation и insertion-order forms/search.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -47,6 +48,39 @@ pub(crate) struct CSynthesis {
 }
 
 impl CSynthesis {
+    pub(crate) fn recipe(&self, synthesis_index: u32) -> Option<&SynthesisRecipe> {
+        self.recipes
+            .iter()
+            .find(|recipe| recipe.synthesis_index == synthesis_index)
+    }
+
+    pub(crate) fn forms(&self, synthesis_type: u16) -> Option<Vec<(&[u8], u32)>> {
+        is_valid_synthesis_type(synthesis_type).then(|| {
+            self.recipes
+                .iter()
+                .filter(|recipe| recipe.synthesis_type == synthesis_type)
+                .map(|recipe| (recipe.key.as_slice(), recipe.synthesis_index))
+                .collect()
+        })
+    }
+
+    pub(crate) fn search_forms(&self, synthesis_type: u16, keyword: &[u8]) -> Vec<(&[u8], u32)> {
+        if keyword.is_empty() {
+            return Vec::new();
+        }
+        self.recipes
+            .iter()
+            .filter(|recipe| {
+                recipe.synthesis_type == synthesis_type
+                    && recipe
+                        .key
+                        .windows(keyword.len())
+                        .any(|candidate| candidate == keyword)
+            })
+            .map(|recipe| (recipe.key.as_slice(), recipe.synthesis_index))
+            .collect()
+    }
+
     pub(crate) fn insert_broadcast(&mut self, tag: u16, text: Vec<u8>) -> Option<Vec<u8>> {
         self.broadcasts.insert(tag, text)
     }

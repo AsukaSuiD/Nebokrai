@@ -476,6 +476,7 @@ use crate::setup::questsystem::CQuestSystem;
 use crate::setup::regionrouter::RegionRouter;
 use crate::setup::regionsetup::CRegionSetup;
 use crate::setup::synthesis::CSynthesis;
+use crate::setup::synthesis::SynthesisFormula;
 use crate::setup::tradelist::CTradeList;
 use crate::transport::bind_tcp_ipv4;
 
@@ -1315,6 +1316,70 @@ pub(crate) trait GoodsDestroyContext {
     /// Дополняет audit принадлежащими process/runtime значениями depot money
     /// и client IP и отправляет точный World `0x60202`.
     fn record_goods_destroy_log(&mut self, player: &CPlayer, log: &GoodsDestroyAuditLog);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SynthesisOpenFacts {
+    pub(crate) safe_region_cell: bool,
+    pub(crate) fight_state_count: i32,
+    pub(crate) has_team_state: bool,
+}
+
+pub(crate) trait SynthesisContext: CiQingMakeContext {
+    fn synthesis_open_facts(&mut self, game: &CGame, player: &CPlayer) -> SynthesisOpenFacts;
+    fn publish_synthesis_money_change(
+        &mut self,
+        player_id: i32,
+        previous: u32,
+        current: u32,
+    ) -> Vec<i32>;
+    fn synthesis_result_fits_packet(&mut self, player: &CPlayer, goods: &[CGoods]) -> bool;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SynthesisOpenOutcome {
+    UnsafeRegion = 1,
+    Trading = 2,
+    Fighting = 3,
+    StallOpen = 4,
+    TeamState = 5,
+    Opened = 6,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SynthesisOpenReport {
+    pub(crate) outcome: SynthesisOpenOutcome,
+    pub(crate) delivery: i32,
+    pub(crate) player_mutation:
+        Option<crate::gameserver::appserver::player::GoodsSessionPlayerRelease>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SynthesisComposeOutcome {
+    MissingRecipe,
+    MissingIngredients,
+    InsufficientMoney,
+    InsufficientContribution,
+    InsufficientPacketSpace,
+    RandomFailure,
+    Completed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SynthesisComposeReport {
+    pub(crate) synthesis_index: u32,
+    pub(crate) requested_amount: u32,
+    pub(crate) result_amount: u32,
+    pub(crate) outcome: SynthesisComposeOutcome,
+    pub(crate) result_delivery: Option<i32>,
+    pub(crate) notice_delivery: Option<i32>,
+    pub(crate) money_delivery: Vec<i32>,
+    pub(crate) consumptions: Vec<CiQingPacketConsumption>,
+    pub(crate) consumption_deliveries: Vec<Vec<i32>>,
+    pub(crate) additions: Vec<CiQingPacketAddition>,
+    pub(crate) addition_deliveries: Vec<Vec<i32>>,
+    pub(crate) rejected_goods: Vec<ShapeIdentity>,
+    pub(crate) broadcast_delivery: Option<Result<i32, SendMessageError>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8494,6 +8559,200 @@ impl CGame {
         &mut self.synthesis
     }
 
+    pub(crate) const fn synthesis(&self) -> &CSynthesis {
+        &self.synthesis
+    }
+
+    pub(crate) fn open_synthesis<Context: SynthesisContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<SynthesisOpenReport> {
+        let player = self.find_player(player_id)?;
+        let facts = context.synthesis_open_facts(self, player);
+        let outcome = if !facts.safe_region_cell {
+            SynthesisOpenOutcome::UnsafeRegion
+        } else if player.current_progress() == PlayerProgress::Trading {
+            SynthesisOpenOutcome::Trading
+        } else if facts.fight_state_count > 0 {
+            SynthesisOpenOutcome::Fighting
+        } else if player.current_progress() == PlayerProgress::OpenStall {
+            SynthesisOpenOutcome::StallOpen
+        } else if facts.has_team_state {
+            SynthesisOpenOutcome::TeamState
+        } else {
+            SynthesisOpenOutcome::Opened
+        };
+        let mut response = CMessage::new(0x0b_f922);
+        response.base_mut().add_byte(outcome as u8);
+        let delivery = response.send_to_player(self.net_server(), player_id);
+        let player_mutation = (outcome == SynthesisOpenOutcome::Opened)
+            .then(|| {
+                self.find_player_mut(player_id)
+                    .map(CPlayer::begin_synthesis)
+            })
+            .flatten();
+        Some(SynthesisOpenReport {
+            outcome,
+            delivery,
+            player_mutation,
+        })
+    }
+
+    pub(crate) fn close_synthesis(
+        &mut self,
+        player_id: i32,
+    ) -> Option<crate::gameserver::appserver::player::GoodsSessionPlayerRelease> {
+        self.find_player_mut(player_id)?.close_synthesis()
+    }
+
+    pub(crate) fn compose_synthesis<Context: SynthesisContext>(
+        &mut self,
+        player_id: i32,
+        synthesis_index: u32,
+        amount: u32,
+        context: &mut Context,
+    ) -> Option<SynthesisComposeReport> {
+        let mut report = SynthesisComposeReport {
+            synthesis_index,
+            requested_amount: amount,
+            result_amount: amount,
+            outcome: SynthesisComposeOutcome::MissingRecipe,
+            result_delivery: None,
+            notice_delivery: None,
+            money_delivery: Vec::new(),
+            consumptions: Vec::new(),
+            consumption_deliveries: Vec::new(),
+            additions: Vec::new(),
+            addition_deliveries: Vec::new(),
+            rejected_goods: Vec::new(),
+            broadcast_delivery: None,
+        };
+        let Some(recipe) = self
+            .synthesis
+            .recipe(synthesis_index)
+            .filter(|recipe| {
+                recipe.coins != -1
+                    && recipe.prestige != -1
+                    && recipe.probability != u16::MAX
+                    && !recipe.formulas.is_empty()
+            })
+            .cloned()
+        else {
+            return Some(report);
+        };
+        let required = |formula: &SynthesisFormula| formula.amount.wrapping_mul(amount);
+        let (missing_ingredients, player_money, player_contribution) = {
+            let player = self.find_player(player_id)?;
+            (
+                recipe.formulas.iter().any(|formula| {
+                    player.check_item_in_packet(formula.goods_index) < required(formula)
+                }),
+                player.money(),
+                player.contribution(),
+            )
+        };
+        if missing_ingredients {
+            report.outcome = SynthesisComposeOutcome::MissingIngredients;
+            report.result_delivery = Some(send_synthesis_result(self, player_id, 0));
+            return Some(report);
+        }
+        let total_coins = (recipe.coins as u32).wrapping_mul(amount);
+        if player_money < total_coins {
+            report.outcome = SynthesisComposeOutcome::InsufficientMoney;
+            report.result_delivery = Some(send_synthesis_result(self, player_id, 1));
+            return Some(report);
+        }
+        if player_contribution < recipe.prestige {
+            report.outcome = SynthesisComposeOutcome::InsufficientContribution;
+            report.result_delivery = Some(send_synthesis_result(self, player_id, 2));
+            return Some(report);
+        }
+        if recipe.probability != 100
+            && game_legacy_random(&mut self.random_state, 100).wrapping_add(1)
+                > i32::from(recipe.probability)
+        {
+            report.result_amount = 0;
+        }
+        let created = if report.result_amount == 0 {
+            Vec::new()
+        } else {
+            let (random_state, goods_factory, fairy_exp_conf, battle_fairy_exp_config) = (
+                &mut self.random_state,
+                &self.goods_factory,
+                &self.fairy_exp_conf,
+                &self.battle_fairy_exp_config,
+            );
+            let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+            goods_factory.create_goods_batch(
+                recipe.goods_index,
+                report.result_amount,
+                &mut random,
+                || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
+                |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
+            )
+        };
+        if !created.is_empty()
+            && !context.synthesis_result_fits_packet(self.find_player(player_id)?, &created)
+        {
+            report.outcome = SynthesisComposeOutcome::InsufficientPacketSpace;
+            report.result_delivery = Some(send_synthesis_result(self, player_id, 3));
+            return Some(report);
+        }
+
+        let previous_money = player_money;
+        let current_money = previous_money.wrapping_sub(total_coins);
+        self.find_player_mut(player_id)?
+            .set_money_snapshot(current_money);
+        report.money_delivery =
+            context.publish_synthesis_money_change(player_id, previous_money, current_money);
+        for formula in &recipe.formulas {
+            let consumptions = self
+                .find_player_mut(player_id)?
+                .remove_item_in_packet(formula.goods_index, required(formula));
+            for consumption in consumptions {
+                report
+                    .consumption_deliveries
+                    .push(context.publish_ci_qing_packet_consumption(&consumption));
+                report.consumptions.push(consumption);
+            }
+        }
+        if report.result_amount == 0 {
+            report.outcome = SynthesisComposeOutcome::RandomFailure;
+            report.result_delivery = Some(send_synthesis_result(self, player_id, 5));
+            let text = self.get_string_by_id(b"GS1017");
+            report.notice_delivery = Some(
+                colored_player_notice_message(0xffff_ffff, 0, text)
+                    .send_to_player(self.net_server(), player_id),
+            );
+            return Some(report);
+        }
+        let (additions, rejected) = {
+            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+            let player = players.get_mut(&player_id)?;
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            player.add_goods_to_packet(created, goods_factory, &mut encode)
+        };
+        for addition in additions {
+            report
+                .addition_deliveries
+                .push(context.publish_ci_qing_packet_addition(&addition));
+            report.additions.push(addition);
+        }
+        report.rejected_goods = rejected.iter().map(CGoods::identity).collect();
+        report.outcome = SynthesisComposeOutcome::Completed;
+        report.result_delivery = Some(send_synthesis_result(self, player_id, 4));
+        let text = self.get_string_by_id(b"GS1016");
+        report.notice_delivery = Some(
+            colored_player_notice_message(0xffff_ffff, 0, text)
+                .send_to_player(self.net_server(), player_id),
+        );
+        report.broadcast_delivery = synthesis_broadcast_message(self, player_id, &recipe, amount)
+            .map(|message| message.send(self, false));
+        Some(report)
+    }
+
     pub(crate) const fn new_skill_monster_conf_mut(&mut self) -> &mut NewSkillMonsterConf {
         &mut self.new_skill_monster_conf
     }
@@ -11177,6 +11436,61 @@ fn gods_battle_property_message(player_id: i32, property: &[u8], value: i32) -> 
 
 fn colored_player_notice_message(first_color: u32, second_color: u32, text: &[u8]) -> CMessage {
     nation_colored_text_message(0xbf806, first_color, second_color, text)
+}
+
+fn send_synthesis_result(game: &CGame, player_id: i32, result: u8) -> i32 {
+    let mut message = CMessage::new(0x0b_f925);
+    message.base_mut().add_byte(result);
+    message.send_to_player(game.net_server(), player_id)
+}
+
+fn replace_all_bytes(value: &mut Vec<u8>, pattern: &[u8], replacement: &[u8]) {
+    if pattern.is_empty() {
+        return;
+    }
+    let mut cursor = 0;
+    while let Some(offset) = value[cursor..]
+        .windows(pattern.len())
+        .position(|candidate| candidate == pattern)
+    {
+        let start = cursor + offset;
+        value.splice(start..start + pattern.len(), replacement.iter().copied());
+        cursor = start + replacement.len();
+    }
+}
+
+fn synthesis_broadcast_message(
+    game: &CGame,
+    player_id: i32,
+    recipe: &crate::setup::synthesis::SynthesisRecipe,
+    amount: u32,
+) -> Option<CMessage> {
+    if recipe.broadcast_tag == 0 {
+        return None;
+    }
+    let broadcast_id = game.synthesis.broadcasts().get(&recipe.broadcast_tag)?;
+    let mut text = game.get_string_by_id(broadcast_id).to_vec();
+    if text.is_empty() {
+        return None;
+    }
+    let player_name = game
+        .find_player(player_id)?
+        .shape()
+        .base_object()
+        .get_name();
+    replace_all_bytes(&mut text, game.get_string_by_id(b"GS1018"), player_name);
+    replace_all_bytes(&mut text, game.get_string_by_id(b"GS1019"), &recipe.key);
+    replace_all_bytes(
+        &mut text,
+        game.get_string_by_id(b"GS1020"),
+        amount.to_string().as_bytes(),
+    );
+    let mut message = CMessage::new(0x05_ff0e);
+    add_legacy_c_string(message.base_mut(), player_name);
+    add_legacy_c_string(message.base_mut(), &text);
+    message.add_ulong(0xffff_ffff);
+    message.add_ulong(0xffa4_40ff);
+    Some(message)
 }
 
 /// `TellClient(skill, true)` и отдельный `ResetSkill::SendSkillLearned`

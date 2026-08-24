@@ -44,6 +44,8 @@
 //! Парные `0x8FC1C/0x8FC1D` замыкают уничтожение goods: query/delete route,
 //! global restrictions, hand ownership, equipment-state guard, World audit и
 //! адресные `0xBF926/0xBF927` проходят одним вертикальным сценарием.
+//! `0x8FC17..0x8FC1B` ведут полный synthesis lifecycle: open-lock, list/search,
+//! formula, payment/RNG/resources/result/broadcast и terminal release.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -71,11 +73,17 @@ use crate::gameserver::gameserver::game::{
     CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport,
     CiQingOtherPersonTarget, CiQingSetupQueryReport, EquipmentComposeContext,
     EquipmentDaKongContext, GoodsDestroyConfirmReport, GoodsDestroyContext, GoodsDestroyOpenReport,
+    SynthesisComposeReport, SynthesisContext, SynthesisOpenReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
 
 const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
+const OPEN_SYNTHESIS: u32 = 0x0008_fc17;
+const QUERY_SYNTHESIS_LIST: u32 = 0x0008_fc18;
+const QUERY_SYNTHESIS_FORMULA: u32 = 0x0008_fc19;
+const COMPOSE_SYNTHESIS: u32 = 0x0008_fc1a;
+const CLOSE_SYNTHESIS: u32 = 0x0008_fc1b;
 const OPEN_GOODS_DESTROY: u32 = 0x0008_fc1c;
 const CONFIRM_GOODS_DESTROY: u32 = 0x0008_fc1d;
 const CLOSE_EQUIPMENT_DA_KONG: u32 = 0x0008_fc1e;
@@ -113,6 +121,7 @@ pub(crate) trait GameGoodsMessageRuntime:
     + EquipmentComposeContext
     + EquipmentDaKongContext
     + GoodsDestroyContext
+    + SynthesisContext
 {
     fn run_battle_fairy_reset_script(
         &mut self,
@@ -202,7 +211,9 @@ pub(crate) enum GameGoodsMessageOutcome {
     CiQingUnavailable,
     CiQingMake(CiQingMakeReport),
     CiQingCompose(CiQingComposeReport),
-    CiQingPositionOutOfRange { position: u32 },
+    CiQingPositionOutOfRange {
+        position: u32,
+    },
     CiQingDelete(CiQingDeleteReport),
     CiQingMount(CiQingMountReport),
     CiQingOtherPerson(CiQingOtherPersonReport),
@@ -211,6 +222,17 @@ pub(crate) enum GameGoodsMessageOutcome {
     EquipmentDaKong(EquipmentDaKongReport),
     GoodsDestroyOpen(GoodsDestroyOpenReport),
     GoodsDestroyConfirm(GoodsDestroyConfirmReport),
+    SynthesisOpen(SynthesisOpenReport),
+    SynthesisList {
+        count: u32,
+        delivery: Option<i32>,
+    },
+    SynthesisFormula {
+        synthesis_index: u32,
+        delivery: Option<i32>,
+    },
+    SynthesisCompose(SynthesisComposeReport),
+    SynthesisClosed(Option<GoodsSessionPlayerRelease>),
     GoodsSessionEnd(GoodsSessionEndReport),
 }
 
@@ -232,7 +254,12 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
-        OPEN_GOODS_DESTROY
+        OPEN_SYNTHESIS
+            | QUERY_SYNTHESIS_LIST
+            | QUERY_SYNTHESIS_FORMULA
+            | COMPOSE_SYNTHESIS
+            | CLOSE_SYNTHESIS
+            | OPEN_GOODS_DESTROY
             | CONFIRM_GOODS_DESTROY
             | CLOSE_EQUIPMENT_DA_KONG
             | EQUIPMENT_DA_KONG
@@ -282,6 +309,126 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             .ok_or(GameGoodsMessageError::MissingField(field))
     };
     let outcome = match message_type {
+        OPEN_SYNTHESIS => GameGoodsMessageOutcome::SynthesisOpen(
+            game.open_synthesis(player_id, runtime)
+                .expect("resolved message player остаётся в CGame"),
+        ),
+        QUERY_SYNTHESIS_LIST => {
+            let mode = match message.base_mut().get_char() {
+                Some(value) => value,
+                None => {
+                    return Some(Err(GameGoodsMessageError::MissingField(
+                        "synthesis list mode",
+                    )));
+                }
+            };
+            let synthesis_type = match message.base_mut().get_word() {
+                Some(value) => value,
+                None => return Some(Err(GameGoodsMessageError::MissingField("synthesis type"))),
+            };
+            let mut include_count = true;
+            let forms = match mode {
+                0 => game.synthesis().forms(synthesis_type),
+                2 => {
+                    let keyword = match message.base_mut().get_str_bytes(0x100) {
+                        Some(value) => value
+                            .into_iter()
+                            .filter(|byte| *byte != b' ')
+                            .collect::<Vec<_>>(),
+                        None => {
+                            return Some(Err(GameGoodsMessageError::MissingField(
+                                "synthesis keyword",
+                            )));
+                        }
+                    };
+                    if keyword.is_empty() {
+                        include_count = false;
+                        Some(Vec::new())
+                    } else {
+                        Some(game.synthesis().search_forms(synthesis_type, &keyword))
+                    }
+                }
+                _ => None,
+            };
+            let (count, delivery) = if let Some(forms) = forms {
+                let count = forms.len() as u32;
+                let mut response = CMessage::new(0x0b_f923);
+                if include_count {
+                    response.add_ulong(count);
+                    for (name, index) in forms {
+                        response.base_mut().add(name);
+                        response.base_mut().add_byte(0);
+                        response.add_ulong(index);
+                    }
+                }
+                (
+                    count,
+                    Some(response.send_to_player(game.net_server(), player_id)),
+                )
+            } else {
+                (0, None)
+            };
+            GameGoodsMessageOutcome::SynthesisList { count, delivery }
+        }
+        QUERY_SYNTHESIS_FORMULA => {
+            let synthesis_index = match read_long(message, "synthesis formula index") {
+                Ok(value) => value as u32,
+                Err(error) => return Some(Err(error)),
+            };
+            let delivery = game
+                .synthesis()
+                .recipe(synthesis_index)
+                .filter(|recipe| {
+                    recipe.coins != -1
+                        && recipe.prestige != -1
+                        && recipe.probability != u16::MAX
+                        && !recipe.formulas.is_empty()
+                })
+                .map(|recipe| {
+                    let mut response = CMessage::new(0x0b_f924);
+                    response.add_long(recipe.coins);
+                    response.add_long(recipe.prestige);
+                    response
+                        .base_mut()
+                        .add_byte(u8::from(recipe.probability == 100));
+                    response.add_ulong(recipe.formulas.len() as u32 + 1);
+                    response.add_ulong(recipe.goods_index);
+                    response.add_ulong(1);
+                    for formula in &recipe.formulas {
+                        response.add_ulong(formula.goods_index);
+                        response.add_ulong(formula.amount);
+                    }
+                    response.send_to_player(game.net_server(), player_id)
+                });
+            GameGoodsMessageOutcome::SynthesisFormula {
+                synthesis_index,
+                delivery,
+            }
+        }
+        COMPOSE_SYNTHESIS => {
+            let synthesis_index = match read_long(message, "synthesis compose index") {
+                Ok(value) => value as u32,
+                Err(error) => return Some(Err(error)),
+            };
+            let amount = match read_long(message, "synthesis compose amount") {
+                Ok(value) => value as u32,
+                Err(error) => return Some(Err(error)),
+            };
+            let Some(report) = game.compose_synthesis(player_id, synthesis_index, amount, runtime)
+            else {
+                return Some(Ok(GameGoodsMessageReport {
+                    message_type,
+                    socket_id,
+                    player_id: Some(player_id),
+                    region_id,
+                    outcome: GameGoodsMessageOutcome::MissingPlayer,
+                }));
+            };
+            GameGoodsMessageOutcome::SynthesisCompose(report)
+        }
+        CLOSE_SYNTHESIS => {
+            GameGoodsMessageOutcome::SynthesisClosed(game.close_synthesis(player_id))
+        }
         OPEN_GOODS_DESTROY => {
             let container_extend_id = match read_long(message, "goods destroy container extend ID")
             {

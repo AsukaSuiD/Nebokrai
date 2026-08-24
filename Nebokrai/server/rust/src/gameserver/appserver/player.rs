@@ -1292,6 +1292,24 @@ impl CPlayer {
         }
     }
 
+    pub(crate) fn begin_synthesis(&mut self) -> GoodsSessionPlayerRelease {
+        let previous_progress = self.current_progress;
+        let previous_moveable_count = self.move_shape.moveable_count();
+        self.current_progress = PlayerProgress::Synthesis;
+        self.move_shape.set_moveable(false);
+        GoodsSessionPlayerRelease {
+            previous_progress,
+            previous_moveable_count,
+            resulting_moveable_count: self.move_shape.moveable_count(),
+            moveable: self.move_shape.is_moveable(),
+        }
+    }
+
+    pub(crate) fn close_synthesis(&mut self) -> Option<GoodsSessionPlayerRelease> {
+        (self.current_progress == PlayerProgress::Synthesis)
+            .then(|| self.release_goods_session_state())
+    }
+
     pub(crate) fn depot_password(&self) -> &[u8] {
         &self.depot_password
     }
