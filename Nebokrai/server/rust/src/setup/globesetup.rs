@@ -89,6 +89,11 @@ const TALK_COUNTRY_GOODS_AMOUNT_OFFSET: usize = 0x7F0;
 const TALK_COUNTRY_MONEY_OFFSET: usize = 0x7F4;
 const COUNTRY_TALK_INTERVAL_OFFSET: usize = 0x844;
 const WORLD_TALK_INTERVAL_OFFSET: usize = 0x848;
+const NORMAL_TALK_INTERVAL_OFFSET: usize = 0x83C;
+const AREA_TALK_INTERVAL_OFFSET: usize = 0x840;
+const PRIVATE_TALK_INTERVAL_OFFSET: usize = 0x84C;
+const UNION_TALK_INTERVAL_OFFSET: usize = 0x858;
+const REGION_CHAT_LEVEL_LIMIT_OFFSET: usize = 0x560;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -623,6 +628,26 @@ impl GlobeSetupSnapshot {
         } else {
             WORLD_TALK_INTERVAL_OFFSET
         })
+    }
+
+    pub(crate) fn normal_talk_interval_ms(&self) -> u32 {
+        self.read_u32(NORMAL_TALK_INTERVAL_OFFSET)
+    }
+
+    pub(crate) fn area_talk_interval_ms(&self) -> u32 {
+        self.read_u32(AREA_TALK_INTERVAL_OFFSET)
+    }
+
+    pub(crate) fn private_talk_interval_ms(&self) -> u32 {
+        self.read_u32(PRIVATE_TALK_INTERVAL_OFFSET)
+    }
+
+    pub(crate) fn union_talk_interval_ms(&self) -> u32 {
+        self.read_u32(UNION_TALK_INTERVAL_OFFSET)
+    }
+
+    pub(crate) fn region_chat_level_limit(&self) -> i32 {
+        self.read_i32(REGION_CHAT_LEVEL_LIMIT_OFFSET)
     }
 
     pub(crate) fn deletion_days(&self) -> u32 {

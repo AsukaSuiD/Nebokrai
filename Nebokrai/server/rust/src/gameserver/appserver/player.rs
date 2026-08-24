@@ -1366,6 +1366,16 @@ pub(crate) struct EnhancementDeselectionReport {
     pub(crate) removed: super::container::cgoodsshadowcontainer::ShadowRemovedReport,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerTalkChannel {
+    Normal,
+    Area,
+    Country,
+    World,
+    Private,
+    Union,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
@@ -1406,8 +1416,12 @@ pub(crate) struct CPlayer {
     contribution: i32,
     silence_minutes: i32,
     silence_timestamp_minutes: u32,
+    normal_talk_timestamp_ms: u32,
+    area_talk_timestamp_ms: u32,
     world_talk_timestamp_ms: u32,
     country_talk_timestamp_ms: u32,
+    private_talk_timestamp_ms: u32,
+    union_talk_timestamp_ms: u32,
     money: u32,
     client_ip: u32,
     account: Vec<u8>,
@@ -1504,8 +1518,12 @@ impl CPlayer {
             contribution: 0,
             silence_minutes: 0,
             silence_timestamp_minutes: 0,
+            normal_talk_timestamp_ms: 0,
+            area_talk_timestamp_ms: 0,
             world_talk_timestamp_ms: 0,
             country_talk_timestamp_ms: 0,
+            private_talk_timestamp_ms: 0,
+            union_talk_timestamp_ms: 0,
             money: 0,
             client_ip: 0,
             account: Vec::new(),
@@ -2830,18 +2848,21 @@ impl CPlayer {
         self.silence_minutes
     }
 
-    /// Exact public-chat cooldown: unsigned wrapping elapsed сравнивается до
-    /// mutation, а принятый timestamp сохраняется ещё до проверки платы.
-    pub(crate) fn begin_public_talk(
+    /// Exact chat cooldown: unsigned wrapping elapsed сравнивается до
+    /// mutation. Caller сохраняет исходный порядок последующих проверок.
+    pub(crate) fn begin_talk(
         &mut self,
-        country: bool,
+        channel: PlayerTalkChannel,
         now_ms: u32,
         interval_ms: u32,
     ) -> bool {
-        let timestamp = if country {
-            &mut self.country_talk_timestamp_ms
-        } else {
-            &mut self.world_talk_timestamp_ms
+        let timestamp = match channel {
+            PlayerTalkChannel::Normal => &mut self.normal_talk_timestamp_ms,
+            PlayerTalkChannel::Area => &mut self.area_talk_timestamp_ms,
+            PlayerTalkChannel::Country => &mut self.country_talk_timestamp_ms,
+            PlayerTalkChannel::World => &mut self.world_talk_timestamp_ms,
+            PlayerTalkChannel::Private => &mut self.private_talk_timestamp_ms,
+            PlayerTalkChannel::Union => &mut self.union_talk_timestamp_ms,
         };
         if now_ms.wrapping_sub(*timestamp) < interval_ms {
             return false;

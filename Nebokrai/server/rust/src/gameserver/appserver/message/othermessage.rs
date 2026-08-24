@@ -11,18 +11,21 @@
 //! World info `0x7FA03/04` доводит nation/country notices до exact
 //! `0xBF803/804`: ненулевой target выбирает region/player, ноль сохраняет
 //! исходный broadcast fallback.
+//! Player chat `0x8FB01` сохраняет lazy silence, отдельные wrapping cooldown,
+//! local distance/region/faction/private delivery и conditional chat-log.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::{
-    CiQingPacketConsumption, PlayerLeiTingDecodeBlock, PlayerMoneyDecrease,
+    CiQingPacketConsumption, PlayerLeiTingDecodeBlock, PlayerMoneyDecrease, PlayerTalkChannel,
 };
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
+const PLAYER_CHAT_REQUEST: u32 = 0x0008_fb01;
 const WORLD_PLAYER_RENAME_REQUEST: i32 = 0x0005_fd05;
 const WORLD_PLAYER_RENAME_RESPONSE: u32 = 0x0007_fa0e;
 const PLAYER_RENAME_RESPONSE: i32 = 0x000b_f80f;
@@ -65,8 +68,42 @@ pub(crate) enum GameOtherMessageOutcome {
         delivery: GameInfoDelivery,
     },
     PublicTalk(GamePublicTalkOutcome),
+    PlayerChat(GamePlayerChatOutcome),
     LeiTingUpdated {
         client_delivery: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerChatOutcome {
+    Silenced {
+        channel: i32,
+        delivery: i32,
+    },
+    InvalidSender {
+        channel: i32,
+        sender: Vec<u8>,
+    },
+    ContentTooLong {
+        channel: i32,
+        length: usize,
+    },
+    Cooldown {
+        channel: i32,
+        delivery: i32,
+    },
+    RegionLevelRestricted {
+        required_level: i32,
+        player_level: u8,
+        delivery: i32,
+    },
+    Factionless,
+    Delivered {
+        channel: i32,
+        target_player_id: Option<i32>,
+        client_deliveries: Vec<i32>,
+        world_delivery: Option<Result<i32, SendMessageError>>,
+        log_delivery: Option<Result<i32, SendMessageError>>,
     },
 }
 
@@ -161,10 +198,399 @@ fn read_string(message: &mut CMessage, maximum: usize) -> Vec<u8> {
         .unwrap_or_default()
 }
 
+fn peek_long(message: &mut CMessage) -> Option<i32> {
+    let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+    let end = cursor.checked_add(4)?;
+    Some(i32::from_le_bytes(wire.get(*cursor..end)?.try_into().ok()?))
+}
+
+fn format_legacy_level(template: &[u8], level: i32) -> Vec<u8> {
+    let template = template.split(|byte| *byte == 0).next().unwrap_or_default();
+    let Some(marker) = template.windows(2).position(|window| window == b"%d") else {
+        return template[..template.len().min(0xff)].to_vec();
+    };
+    let value = level.to_string();
+    let mut result = Vec::with_capacity(template.len().saturating_add(value.len()));
+    result.extend_from_slice(&template[..marker]);
+    result.extend_from_slice(value.as_bytes());
+    result.extend_from_slice(&template[marker + 2..]);
+    result.truncate(0xff);
+    result
+}
+
+fn send_player_chat_log(
+    game: &CGame,
+    player_id: i32,
+    region_id: i32,
+    tile_x: i32,
+    tile_y: i32,
+    log_type: u8,
+    content: &[u8],
+    receiver_id: Option<i32>,
+) -> Result<i32, SendMessageError> {
+    let mut log = CMessage::new(0x0006_020b);
+    log.base_mut().add_byte(log_type);
+    log.base_mut().add_long(player_id);
+    log.base_mut().add_long(region_id);
+    log.base_mut().add_long(tile_x);
+    log.base_mut().add_long(tile_y);
+    add_c_string(&mut log, content);
+    if let Some(receiver_id) = receiver_id {
+        log.base_mut().add_long(receiver_id);
+    }
+    log.send(game, false)
+}
+
+fn send_local_chat(
+    message: &CMessage,
+    game: &CGame,
+    region_id: i32,
+    tile_x: i32,
+    tile_y: i32,
+) -> Vec<i32> {
+    const OFFSETS: [(i32, i32); 9] = [
+        (-1, -1),
+        (0, -1),
+        (1, -1),
+        (-1, 0),
+        (0, 0),
+        (1, 0),
+        (-1, 1),
+        (0, 1),
+        (1, 1),
+    ];
+    let area_width = game.globe_setup().area_width();
+    let area_height = game.globe_setup().area_height();
+    if area_width <= 0 || area_height <= 0 {
+        return Vec::new();
+    }
+    let Some(region) = game.find_region(region_id) else {
+        return Vec::new();
+    };
+    let center_x = tile_x / area_width;
+    let center_y = tile_y / area_height;
+    let mut player_ids = Vec::new();
+    for (offset_x, offset_y) in OFFSETS {
+        region.base().find_player_ids_in_area(
+            center_x.wrapping_add(offset_x),
+            center_y.wrapping_add(offset_y),
+            &mut player_ids,
+        );
+    }
+    player_ids
+        .into_iter()
+        .filter_map(|player_id| {
+            let player = game.find_player(player_id)?;
+            let player_x = player.shape().get_tile_x().ok()?;
+            let player_y = player.shape().get_tile_y().ok()?;
+            (player_x.wrapping_sub(tile_x).wrapping_abs() < area_width
+                && player_y.wrapping_sub(tile_y).wrapping_abs() < area_height)
+                .then(|| message.send_to_player(game.net_server(), player_id))
+        })
+        .collect()
+}
+
 fn public_talk_failure_message(country: bool) -> CMessage {
     let mut response = CMessage::new(if country { 0x000b_f815 } else { 0x000b_f814 });
     response.base_mut().add_byte(0);
     response
+}
+
+fn dispatch_player_chat(
+    message: &mut CMessage,
+    game: &mut CGame,
+    mut now_milliseconds: impl FnMut() -> u32,
+) -> Result<GameOtherMessageReport, GameOtherMessageError> {
+    let message_type = PLAYER_CHAT_REQUEST;
+    let channel = peek_long(message).ok_or(GameOtherMessageError::MissingField("chat channel"))?;
+    message.resolve_player_context(game);
+    let Some(player_id) = message.player_id() else {
+        return Ok(GameOtherMessageReport {
+            message_type,
+            player_id: 0,
+            outcome: GameOtherMessageOutcome::PlayerMissing,
+        });
+    };
+    let Some(region_id) = message.region_id() else {
+        return Ok(GameOtherMessageReport {
+            message_type,
+            player_id,
+            outcome: GameOtherMessageOutcome::PlayerMissing,
+        });
+    };
+    let Some(player) = game.find_player_mut(player_id) else {
+        return Ok(GameOtherMessageReport {
+            message_type,
+            player_id,
+            outcome: GameOtherMessageOutcome::PlayerMissing,
+        });
+    };
+    if player.is_in_silence(now_milliseconds()) {
+        let delivery =
+            colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0330"))
+                .send_to_player(game.net_server(), player_id);
+        return Ok(GameOtherMessageReport {
+            message_type,
+            player_id,
+            outcome: GameOtherMessageOutcome::PlayerChat(GamePlayerChatOutcome::Silenced {
+                channel,
+                delivery,
+            }),
+        });
+    }
+
+    let decoded_channel = read_long(message, "chat channel")?;
+    debug_assert_eq!(decoded_channel, channel);
+    let _owner_type = read_long(message, "chat owner type")?;
+    let _owner_id = read_long(message, "chat owner id")?;
+    let target_name = (channel == 4).then(|| read_string(message, 0x100));
+    let sender_name = read_string(message, 0x100);
+    let content = read_string(message, 0x400);
+    let (canonical_name, player_level, faction_id, tile_x, tile_y) = {
+        let player = game
+            .find_player(player_id)
+            .expect("chat player остаётся live после decode");
+        (
+            player.player_name().to_vec(),
+            player.level(),
+            player.faction_id(),
+            player.shape().get_tile_x().unwrap_or_default(),
+            player.shape().get_tile_y().unwrap_or_default(),
+        )
+    };
+    if sender_name != canonical_name {
+        return Ok(GameOtherMessageReport {
+            message_type,
+            player_id,
+            outcome: GameOtherMessageOutcome::PlayerChat(GamePlayerChatOutcome::InvalidSender {
+                channel,
+                sender: sender_name,
+            }),
+        });
+    }
+
+    if matches!(channel, 0 | 1) && content.len() > 299 {
+        return Ok(GameOtherMessageReport {
+            message_type,
+            player_id,
+            outcome: GameOtherMessageOutcome::PlayerChat(GamePlayerChatOutcome::ContentTooLong {
+                channel,
+                length: content.len(),
+            }),
+        });
+    }
+
+    let cooldown = |game: &mut CGame, channel: PlayerTalkChannel, now_ms: u32, interval_ms: u32| {
+        game.find_player_mut(player_id)
+            .expect("chat player остаётся live при timestamp mutation")
+            .begin_talk(channel, now_ms, interval_ms)
+    };
+    let cooldown_notice = |game: &CGame, text: &[u8]| {
+        colored_player_notice_message(0xffff_0000, 0, text)
+            .send_to_player(game.net_server(), player_id)
+    };
+
+    match channel {
+        0 => {
+            let interval = game.globe_setup().normal_talk_interval_ms();
+            if !cooldown(
+                game,
+                PlayerTalkChannel::Normal,
+                now_milliseconds(),
+                interval,
+            ) {
+                let delivery = cooldown_notice(game, b"you talk to fast!");
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerChat(GamePlayerChatOutcome::Cooldown {
+                        channel,
+                        delivery,
+                    }),
+                });
+            }
+            message.set_message_type(0x000b_f801);
+            let client_deliveries = send_local_chat(message, game, region_id, tile_x, tile_y);
+            let log_delivery = game.log_system().normal_chat_enabled().then(|| {
+                send_player_chat_log(
+                    game, player_id, region_id, tile_x, tile_y, 0, &content, None,
+                )
+            });
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::PlayerChat(GamePlayerChatOutcome::Delivered {
+                    channel,
+                    target_player_id: None,
+                    client_deliveries,
+                    world_delivery: None,
+                    log_delivery,
+                }),
+            })
+        }
+        1 => {
+            let interval = game.globe_setup().area_talk_interval_ms();
+            if !cooldown(game, PlayerTalkChannel::Area, now_milliseconds(), interval) {
+                let text = game.get_string_by_id(b"GS0049");
+                let delivery = cooldown_notice(game, text);
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerChat(GamePlayerChatOutcome::Cooldown {
+                        channel,
+                        delivery,
+                    }),
+                });
+            }
+            let required_level = game.globe_setup().region_chat_level_limit();
+            if i32::from(player_level) < required_level {
+                let text = format_legacy_level(game.get_string_by_id(b"GS0046"), required_level);
+                let delivery = cooldown_notice(game, &text);
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerChat(
+                        GamePlayerChatOutcome::RegionLevelRestricted {
+                            required_level,
+                            player_level,
+                            delivery,
+                        },
+                    ),
+                });
+            }
+            message.set_message_type(0x000b_f801);
+            let delivery = game
+                .find_region(region_id)
+                .map(|region| message.send_to_region(Some(region.base()), None, game))
+                .unwrap_or_default();
+            let log_delivery = game.log_system().region_chat_enabled().then(|| {
+                send_player_chat_log(
+                    game, player_id, region_id, tile_x, tile_y, 1, &content, None,
+                )
+            });
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::PlayerChat(GamePlayerChatOutcome::Delivered {
+                    channel,
+                    target_player_id: None,
+                    client_deliveries: vec![delivery],
+                    world_delivery: None,
+                    log_delivery,
+                }),
+            })
+        }
+        2 => {
+            if faction_id <= 0 {
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerChat(
+                        GamePlayerChatOutcome::Factionless,
+                    ),
+                });
+            }
+            let interval = game.globe_setup().union_talk_interval_ms();
+            if !cooldown(game, PlayerTalkChannel::Union, now_milliseconds(), interval) {
+                let text = game.get_string_by_id(b"GS0049");
+                let delivery = cooldown_notice(game, text);
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerChat(GamePlayerChatOutcome::Cooldown {
+                        channel,
+                        delivery,
+                    }),
+                });
+            }
+            message.set_message_type(0x0005_fd01);
+            let world_delivery = Some(message.send(game, false));
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::PlayerChat(GamePlayerChatOutcome::Delivered {
+                    channel,
+                    target_player_id: None,
+                    client_deliveries: Vec::new(),
+                    world_delivery,
+                    log_delivery: None,
+                }),
+            })
+        }
+        4 => {
+            let interval = game.globe_setup().private_talk_interval_ms();
+            if !cooldown(
+                game,
+                PlayerTalkChannel::Private,
+                now_milliseconds(),
+                interval,
+            ) {
+                let text = game.get_string_by_id(b"GS0049");
+                let delivery = cooldown_notice(game, text);
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerChat(GamePlayerChatOutcome::Cooldown {
+                        channel,
+                        delivery,
+                    }),
+                });
+            }
+            let target_name = target_name.expect("private channel прочитал target name");
+            let target_player_id = game
+                .find_player_by_name(&target_name)
+                .map(|player| player.player_id());
+            let Some(target_player_id) = target_player_id else {
+                message.set_message_type(0x0005_fd01);
+                let world_delivery = Some(message.send(game, false));
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerChat(
+                        GamePlayerChatOutcome::Delivered {
+                            channel,
+                            target_player_id: None,
+                            client_deliveries: Vec::new(),
+                            world_delivery,
+                            log_delivery: None,
+                        },
+                    ),
+                });
+            };
+            message.set_message_type(0x000b_f801);
+            let mut client_deliveries =
+                vec![message.send_to_player(game.net_server(), target_player_id)];
+            let log_delivery = if target_player_id == player_id {
+                None
+            } else {
+                client_deliveries.push(message.send_to_player(game.net_server(), player_id));
+                game.log_system().private_chat_enabled().then(|| {
+                    send_player_chat_log(
+                        game,
+                        player_id,
+                        region_id,
+                        tile_x,
+                        tile_y,
+                        5,
+                        &content,
+                        Some(target_player_id),
+                    )
+                })
+            };
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::PlayerChat(GamePlayerChatOutcome::Delivered {
+                    channel,
+                    target_player_id: Some(target_player_id),
+                    client_deliveries,
+                    world_delivery: None,
+                    log_delivery,
+                }),
+            })
+        }
+        _ => unreachable!("dispatcher пропускает только materialized player-chat channels"),
+    }
 }
 
 fn dispatch_public_talk(
@@ -208,7 +634,15 @@ fn dispatch_public_talk(
     if !game
         .find_player_mut(player_id)
         .expect("public-talk player проверен до timestamp mutation")
-        .begin_public_talk(country_channel, now_milliseconds(), interval_ms)
+        .begin_talk(
+            if country_channel {
+                PlayerTalkChannel::Country
+            } else {
+                PlayerTalkChannel::World
+            },
+            now_milliseconds(),
+            interval_ms,
+        )
     {
         let delivery =
             colored_player_notice_message(0xffff_0000, 0, game.get_string_by_id(b"GS0049"))
@@ -357,15 +791,22 @@ fn dispatch_public_talk(
 pub(crate) fn dispatch_game_other_message(
     message: &mut CMessage,
     game: &mut CGame,
-    now_milliseconds: impl FnOnce() -> u32,
+    mut now_milliseconds: impl FnMut() -> u32,
 ) -> Option<Result<GameOtherMessageReport, GameOtherMessageError>> {
     let message_type = message.message_type() as u32;
+    if message_type == PLAYER_CHAT_REQUEST {
+        let channel = peek_long(message)?;
+        if matches!(channel, 0 | 1 | 2 | 4) {
+            return Some(dispatch_player_chat(message, game, now_milliseconds));
+        }
+        return None;
+    }
     if matches!(message_type, WORLD_TALK_REQUEST | COUNTRY_TALK_REQUEST) {
         return Some(dispatch_public_talk(
             message_type,
             message,
             game,
-            now_milliseconds,
+            &mut now_milliseconds,
         ));
     }
     if message_type == PLAYER_RENAME_REQUEST {

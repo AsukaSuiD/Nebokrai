@@ -138,6 +138,14 @@ impl CLogSystem {
         self.setting(46)
     }
 
+    pub(crate) fn normal_chat_enabled(&self) -> bool {
+        self.setting(44)
+    }
+
+    pub(crate) fn region_chat_enabled(&self) -> bool {
+        self.setting(45)
+    }
+
     pub(crate) fn private_chat_enabled(&self) -> bool {
         self.setting(49)
     }
