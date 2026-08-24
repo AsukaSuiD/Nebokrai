@@ -143,6 +143,9 @@
 //! Refresh-property `0x8FC2E` доведён через exact player container lookup до
 //! обязательного runtime `UpdateProperty`; неизвестная формула не заменяется
 //! текущим cached combat snapshot.
+//! CiQing query `0x8FC2F/30` использует owned player set и global setup:
+//! previews создаются общим factory/RNG, сериализуются old-client codec-ом и
+//! сохраняют ранний return первого непустого payload.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -376,7 +379,7 @@ use crate::nets::netserver::mynetserver::{
 use crate::nets::servers::ServerHostError;
 use crate::public::aucitionroom::CAuctionRoom;
 use crate::public::auctionnode::CGoodsNode;
-use crate::public::ciqing::CCiQingSetup;
+use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::equipmentcomposelist::EquipmentComposeList;
@@ -1104,11 +1107,11 @@ pub(crate) struct PlayerPropertiesExternalFacts {
     pub(crate) exalt: u32,
 }
 
-pub(crate) trait BattleFairyOldClientCodec {
-    fn encode_battle_fairy_old_client(&mut self, goods: &CGoods) -> Vec<u8>;
+pub(crate) trait OldClientGoodsCodec {
+    fn encode_goods_for_old_client(&mut self, goods: &CGoods) -> Vec<u8>;
 }
 
-pub(crate) trait BattleFairyDeathContext: BattleFairyOldClientCodec {
+pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {
     fn player_properties_external_facts(&mut self, player_id: i32)
     -> PlayerPropertiesExternalFacts;
 }
@@ -1122,7 +1125,7 @@ pub(crate) trait BattleFairyRuntimeContext: BattleFairyDeathContext {
     ) -> Result<i32, ShapeCoordinateBlock>;
 }
 
-pub(crate) trait BattleFairyCombineContext: BattleFairyOldClientCodec {
+pub(crate) trait BattleFairyCombineContext: OldClientGoodsCodec {
     fn publish_battle_fairy_object_move(&mut self, object_move: &BattleFairyObjectMove)
     -> Vec<i32>;
     fn record_battle_fairy_audit(&mut self, audit: &BattleFairyAuditLog);
@@ -1142,7 +1145,7 @@ pub(crate) trait BattleFairySkillResetContext {
     ) -> Vec<i32>;
 }
 
-pub(crate) trait BattleFairyUpgradeContext: BattleFairyOldClientCodec {
+pub(crate) trait BattleFairyUpgradeContext: OldClientGoodsCodec {
     fn publish_battle_fairy_upgrade_money(&mut self, effect: &BattleFairyUpgradeEffect)
     -> Vec<i32>;
     fn publish_battle_fairy_upgrade_container(
@@ -1161,6 +1164,28 @@ pub(crate) trait BattleFairySkillRequestContext {
 pub(crate) struct BattleFairyScriptSkillAttachReport {
     pub(crate) skills: Vec<BattleFairySkillAdded>,
     pub(crate) deliveries: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingGoodsPreview {
+    pub(crate) base_index: u32,
+    pub(crate) old_client_payload: Vec<u8>,
+    pub(crate) delivery: i32,
+}
+
+#[must_use = "CiQing goods query хранит ранний preview-send tail"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingGoodsQueryReport {
+    pub(crate) player_id: i32,
+    pub(crate) previews: Vec<CiQingGoodsPreview>,
+}
+
+#[must_use = "CiQing setup query хранит serialization и player delivery"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingSetupQueryReport {
+    pub(crate) player_id: i32,
+    pub(crate) payload: Result<Vec<u8>, CiQingSerializationBlock>,
+    pub(crate) delivery: Option<i32>,
 }
 
 pub(crate) trait PlayerEquipmentContext {
@@ -4301,6 +4326,76 @@ impl CGame {
         &mut self.ci_qing_setup
     }
 
+    /// Полный player query `goodsmessage 0x8FC2F`. Первый непустой old-client
+    /// preview сохраняет подтверждённый ранний return EXE; create miss либо
+    /// пустой payload позволяют перейти к следующему ordered set entry.
+    pub(crate) fn query_ci_qing_goods<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<CiQingGoodsQueryReport> {
+        let base_indices: Vec<_> = self.find_player(player_id)?.ci_qing_list().collect();
+        let mut previews = Vec::new();
+        for base_index in base_indices {
+            let created = {
+                let (random_state, goods_factory, fairy_exp_conf, battle_fairy_exp_config) = (
+                    &mut self.random_state,
+                    &self.goods_factory,
+                    &self.fairy_exp_conf,
+                    &self.battle_fairy_exp_config,
+                );
+                let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+                goods_factory.create_goods(
+                    base_index,
+                    &mut random,
+                    || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                    |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
+                    |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
+                )
+            };
+            let Some(goods) = created else {
+                continue;
+            };
+            let old_client_payload = context.encode_goods_for_old_client(&goods);
+            let mut message = CMessage::new(0x0c_010c);
+            message.base_mut().add(&old_client_payload);
+            let delivery = message.send_to_player(self.net_server(), player_id);
+            let stop = !old_client_payload.is_empty();
+            previews.push(CiQingGoodsPreview {
+                base_index,
+                old_client_payload,
+                delivery,
+            });
+            if stop {
+                break;
+            }
+        }
+        Some(CiQingGoodsQueryReport {
+            player_id,
+            previews,
+        })
+    }
+
+    /// Global setup query `goodsmessage 0x8FC30`; serialization block не
+    /// превращается в пустой успешный packet.
+    pub(crate) fn query_ci_qing_setup(&self, player_id: i32) -> CiQingSetupQueryReport {
+        let mut payload = Vec::new();
+        let payload = self
+            .ci_qing_setup
+            .add_byte_to_array(&mut payload)
+            .map(|()| payload);
+        let delivery = payload.as_ref().ok().map(|payload| {
+            let mut message = CMessage::new(0x0c_010d);
+            message.base_mut().add(payload);
+            message.send_to_player(self.net_server(), player_id)
+        });
+        CiQingSetupQueryReport {
+            player_id,
+            payload,
+            delivery,
+        }
+    }
+
     pub(crate) const fn ling_bao_setup(&self) -> &CLingBaoSetup {
         &self.ling_bao_setup
     }
@@ -6522,8 +6617,7 @@ impl CGame {
             )
         };
         let mut report = {
-            let mut encode_old_client =
-                |goods: &CGoods| context.encode_battle_fairy_old_client(goods);
+            let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.combine_battle_fairy(
                 battle_fairy_enabled,
                 maximum_fetch_power,
@@ -6908,8 +7002,7 @@ impl CGame {
         let coefficients = self.globe_setup.player_property_coefficients();
         let mut report = {
             let player = self.players.get_mut(&player_id)?;
-            let mut encode_old_client =
-                |goods: &CGoods| context.encode_battle_fairy_old_client(goods);
+            let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.allocate_battle_fairy_potential(
                 enabled,
                 allocations,
@@ -6978,8 +7071,7 @@ impl CGame {
             );
             let player = players.get_mut(&player_id)?;
             let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
-            let mut encode_old_client =
-                |goods: &CGoods| context.encode_battle_fairy_old_client(goods);
+            let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.upgrade_battle_fairy_equipment(
                 goods_factory,
                 log_gates,
@@ -7046,8 +7138,7 @@ impl CGame {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let mut report = {
             let player = self.players.get_mut(&player_id)?;
-            let mut encode_old_client =
-                |goods: &CGoods| context.encode_battle_fairy_old_client(goods);
+            let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.reset_battle_fairy_potential(
                 enabled,
                 &self.goods_factory,

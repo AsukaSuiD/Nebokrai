@@ -16,6 +16,8 @@
 //! остаётся явной runtime-границей, а не подменяется упрощённым reset helper-ом.
 //! `0x8FC2E` читает два GUID, выполняет exact four-container lookup и только
 //! для найденного goods вызывает обязательный virtual property runtime.
+//! Парные `0x8FC2F/0x8FC30` публикуют ordered CiQing goods preview и global
+//! setup; первый непустой preview сохраняет ранний return исходного EXE.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -34,7 +36,7 @@ use crate::gameserver::appserver::player::{
 use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
     BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
-    CGame,
+    CGame, CiQingGoodsQueryReport, CiQingSetupQueryReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -48,6 +50,8 @@ const RESET_BATTLE_FAIRY_POTENTIAL: u32 = 0x0008_fc2b;
 const SUMMON_BATTLE_FAIRY: u32 = 0x0008_fc2c;
 const RECALL_BATTLE_FAIRY: u32 = 0x0008_fc2d;
 const REFRESH_BATTLE_FAIRY_PROPERTY: u32 = 0x0008_fc2e;
+const QUERY_CI_QING_GOODS: u32 = 0x0008_fc2f;
+const QUERY_CI_QING_SETUP: u32 = 0x0008_fc30;
 
 pub(crate) trait GameGoodsMessageRuntime:
     BattleFairyCombineContext
@@ -115,6 +119,8 @@ pub(crate) enum GameGoodsMessageOutcome {
     BattleFairyPotentialReset(BattleFairyPotentialResetReport),
     BattleFairySummon(BattleFairySummonReport),
     BattleFairyPropertyRefresh(BattleFairyPropertyRefreshReport),
+    CiQingGoods(CiQingGoodsQueryReport),
+    CiQingSetup(CiQingSetupQueryReport),
 }
 
 #[must_use = "goods-message report содержит routing и полный gameplay result"]
@@ -144,6 +150,8 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             | SUMMON_BATTLE_FAIRY
             | RECALL_BATTLE_FAIRY
             | REFRESH_BATTLE_FAIRY_PROPERTY
+            | QUERY_CI_QING_GOODS
+            | QUERY_CI_QING_SETUP
     ) {
         return None;
     }
@@ -288,6 +296,13 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 goods_guid,
                 outcome,
             })
+        }
+        QUERY_CI_QING_GOODS => GameGoodsMessageOutcome::CiQingGoods(
+            game.query_ci_qing_goods(player_id, runtime)
+                .expect("resolved message player остаётся в CGame во время synchronous dispatch"),
+        ),
+        QUERY_CI_QING_SETUP => {
+            GameGoodsMessageOutcome::CiQingSetup(game.query_ci_qing_setup(player_id))
         }
         _ => unreachable!("opcode отфильтрован перед dispatch"),
     };

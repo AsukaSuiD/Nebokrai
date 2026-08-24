@@ -78,6 +78,8 @@
 //! не подменяя его внутренней random-веткой `ResetSkill`.
 //! `GetGoodsById` теперь сохраняет exact hand→packet→equipment→auction lookup;
 //! hand и auction являются owned containers и участвуют в owner refresh.
+//! CiQing unlocked base-index set хранится ordered `BTreeSet`; его query не
+//! создаёт постоянные goods, а только передаёт snapshot CGame factory owner-у.
 //! `skillmessage 0x90005` доведён до authorization и AI dispatch: feature/HP
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
@@ -146,7 +148,7 @@ use super::shape::{CShape, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, Sha
 use super::skills::skillfactory::CSkillFactory;
 use crate::public::guid::CGuid;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const PLAYER_TYPE: i32 = 400;
 const LEGACY_COMBAT_MAXIMUM: u32 = i32::MAX as u32;
@@ -944,6 +946,7 @@ pub(crate) struct CPlayer {
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
     ci_qing_open: bool,
+    ci_qing_list: BTreeSet<u32>,
     contend_state: bool,
     city_war_died_state: bool,
     city_war_died_state_time_ms: i32,
@@ -1010,6 +1013,7 @@ impl CPlayer {
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
             ci_qing_open: false,
+            ci_qing_list: BTreeSet::new(),
             contend_state: false,
             city_war_died_state: false,
             city_war_died_state_time_ms: 0,
@@ -1273,6 +1277,14 @@ impl CPlayer {
 
     pub(crate) const fn ci_qing_open(&self) -> bool {
         self.ci_qing_open
+    }
+
+    pub(crate) fn ci_qing_list(&self) -> impl ExactSizeIterator<Item = u32> + '_ {
+        self.ci_qing_list.iter().copied()
+    }
+
+    pub(crate) fn restore_ci_qing_entry(&mut self, base_index: u32) -> bool {
+        self.ci_qing_list.insert(base_index)
     }
 
     pub(crate) const fn contend_state(&self) -> bool {
