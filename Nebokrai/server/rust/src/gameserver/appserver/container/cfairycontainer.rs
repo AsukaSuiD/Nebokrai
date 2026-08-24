@@ -13,7 +13,9 @@
 //! clock/config/player facts заменяют vtable dispatch, raw pointers и globals,
 //! не меняя lock/stack/listener/message semantics. Пять hatch timer-ов codec
 //! suffix сохраняют partial decode; state/syncretize не откатывают уже
-//! выполненные remove/add и возвращают detached ownership на отказе.
+//! выполненные remove/add и возвращают detached ownership на отказе. Достигнутые
+//! state/amount client packets и incubate/syncretize World logs исполняет
+//! canonical `CGame`, поэтому здесь остаются только ordered typed effects.
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,

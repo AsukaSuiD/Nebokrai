@@ -4,7 +4,8 @@
 //! `server/gameserver/appserver/goods/fairyproperties.cpp`. Constructor и
 //! `ExpUp/LevelUp` перенесены целиком: wrapping experience, границы egg/ripe
 //! level, числовой приоритет result, четыре main-ability формулы на `f32` и
-//! world-log `0x60210`.
+//! ordered grow-log effect. Его exact World `0x60210` теперь исполняет
+//! canonical `CGame` после завершения mutation.
 //!
 //! Legacy `m_plExp` был nullable указателем внутрь addon storage `CGoods`.
 //! Rust хранит linked value как `Option<i32>` и возвращает typed block только
