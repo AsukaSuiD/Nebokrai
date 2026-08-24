@@ -12,6 +12,9 @@
 //! Общий outer guard сохраняет исходный запрет player-message во время смены
 //! сервера/региона; `0x8FA02` вызывает полный reached `CPlayer::OnRelive(0)`
 //! через concrete `CGame` relive owner со всеми state/region/wire effects.
+//! LeiTing claim `0x8FA19` сохраняет packet-space gate, exact thresholds,
+//! `BF73E -> 5FD10 -> reward script` ordering; `0x8FA10` использует тот же
+//! server-trusted script runtime для help script.
 //! Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::PlayerFriendAddOutcome;
@@ -22,6 +25,7 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const REQUEST_RELIVE: u32 = 0x0008_fa02;
+const RUN_HELP_SCRIPT: u32 = 0x0008_fa10;
 const REQUEST_FRIEND: u32 = 0x0008_fa0d;
 const ANSWER_FRIEND: u32 = 0x0008_fa0e;
 const DELETE_FRIEND: u32 = 0x0008_fa0f;
@@ -31,11 +35,24 @@ const ACKNOWLEDGE_HEARTBEAT: u32 = 0x0008_fa13;
 const QUERY_HONOR_IDENTITY: u32 = 0x0008_fa17;
 const REQUEST_CHANGE_APPELLATION: u32 = 0x0008_fa18;
 const QUERY_LOCAL_TIME: u32 = 0x0008_fa1a;
+const CLAIM_LEI_TING_REWARD: u32 = 0x0008_fa19;
+
+const LEI_TING_REWARD_SCRIPTS: [&[u8]; 9] = [
+    b"scripts/goods/leilifengxing_lingqu_20.script",
+    b"scripts/goods/leilifengxing_lingqu_60.script",
+    b"scripts/goods/leilifengxing_lingqu_80.script",
+    b"scripts/goods/leilifengxing_lingqu_100.script",
+    b"scripts/goods/leilifengxing_lingqu_4.script",
+    b"scripts/goods/leilifengxing_lingqu_10.script",
+    b"scripts/goods/leilifengxing_lingqu_16.script",
+    b"scripts/goods/leilifengxing_lingqu_22.script",
+    b"scripts/goods/leilifengxing_lingqu_28.script",
+];
 
 pub(crate) trait GamePlayerMessageRuntime: PlayerReliveContext {
     /// Выполняет concrete `PlayerRunScript` с server-trusted path; VM и
     /// script-data owner ещё не материализованы в `CGame`.
-    fn run_change_appellation_script(&mut self, game: &mut CGame, player_id: i32, path: &[u8]);
+    fn run_player_script(&mut self, game: &mut CGame, player_id: i32, path: &[u8]);
 
     /// Возвращает legacy 32-bit `_time` seconds для quest countdown.
     fn player_wall_time_seconds(&mut self) -> i32;
@@ -55,6 +72,7 @@ pub(crate) enum GamePlayerMessageOutcome {
     ChangingLocation,
     TargetMissing,
     Relived,
+    PlayerScriptRun,
     FriendRequested,
     FriendAnswered,
     FriendMissing,
@@ -65,6 +83,10 @@ pub(crate) enum GamePlayerMessageOutcome {
     HonorIdentitySent,
     AppellationChangeRequested,
     LocalTimeSent,
+    LeiTingInvalidReward,
+    LeiTingPacketFull,
+    LeiTingRewardUnavailable,
+    LeiTingRewardClaimed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -81,6 +103,7 @@ pub(crate) struct GamePlayerMessageReport {
     pub(crate) player_id: Option<i32>,
     pub(crate) target_player_id: Option<i32>,
     pub(crate) friend_name: Vec<u8>,
+    pub(crate) lei_ting_reward: Option<u16>,
     pub(crate) outcome: GamePlayerMessageOutcome,
     pub(crate) relive: Option<PlayerReliveReport>,
     pub(crate) deliveries: Vec<GamePlayerMessageDelivery>,
@@ -114,6 +137,26 @@ fn publish_friend_delete(
     message.add_long(friend_id);
     add_c_string(&mut message, friend_name);
     message.send(game, false)
+}
+
+fn publish_lei_ting_update(
+    game: &CGame,
+    player_id: i32,
+    deliveries: &mut Vec<GamePlayerMessageDelivery>,
+) {
+    let payload = game
+        .find_player(player_id)
+        .expect("LeiTing player сохранён после flag mutation")
+        .encode_lei_ting();
+    let mut client = CMessage::new(0x000b_f73e);
+    client.base_mut().add(&payload);
+    deliveries.push(GamePlayerMessageDelivery::Player(
+        client.send_to_player(game.net_server(), player_id),
+    ));
+    let mut world = CMessage::new(0x0005_fd10);
+    world.add_long(player_id);
+    world.base_mut().add(&payload);
+    deliveries.push(GamePlayerMessageDelivery::World(world.send(game, false)));
 }
 
 fn apply_friend_add(
@@ -156,6 +199,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
     if !matches!(
         message_type,
         REQUEST_RELIVE
+            | RUN_HELP_SCRIPT
             | REQUEST_FRIEND
             | ANSWER_FRIEND
             | DELETE_FRIEND
@@ -165,6 +209,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             | QUERY_HONOR_IDENTITY
             | REQUEST_CHANGE_APPELLATION
             | QUERY_LOCAL_TIME
+            | CLAIM_LEI_TING_REWARD
     ) {
         return None;
     }
@@ -175,6 +220,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         player_id,
         target_player_id: None,
         friend_name: Vec::new(),
+        lei_ting_reward: None,
         outcome: GamePlayerMessageOutcome::MissingContext,
         relive: None,
         deliveries: Vec::new(),
@@ -194,6 +240,10 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         REQUEST_RELIVE => {
             report.relive = Some(game.relive_gods_battle_player(player_id, 0, runtime));
             report.outcome = GamePlayerMessageOutcome::Relived;
+        }
+        RUN_HELP_SCRIPT => {
+            runtime.run_player_script(game, player_id, b"scripts/help/help.script");
+            report.outcome = GamePlayerMessageOutcome::PlayerScriptRun;
         }
         REQUEST_FRIEND => {
             let Some(target_id) = message.base_mut().get_long() else {
@@ -374,7 +424,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             game.find_player_mut(player_id)
                 .expect("appellation player сохранён после context lookup")
                 .request_change_appellation_state(appellation_id as u32);
-            runtime.run_change_appellation_script(
+            runtime.run_player_script(
                 game,
                 player_id,
                 b"scripts/circle/honorrank/changeappellation.script",
@@ -391,6 +441,43 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 response.send_to_player(game.net_server(), player_id),
             ));
             report.outcome = GamePlayerMessageOutcome::LocalTimeSent;
+        }
+        CLAIM_LEI_TING_REWARD => {
+            let Some(reward) = message.base_mut().get_word() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "LeiTing reward index",
+                )));
+            };
+            report.lei_ting_reward = Some(reward);
+            let Some(script) = LEI_TING_REWARD_SCRIPTS.get(usize::from(reward)) else {
+                report.outcome = GamePlayerMessageOutcome::LeiTingInvalidReward;
+                return Some(Ok(report));
+            };
+            if !game
+                .find_player(player_id)
+                .expect("LeiTing player сохранён после context lookup")
+                .packet()
+                .check_space(3)
+            {
+                let notice =
+                    colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"E19681"));
+                report.deliveries.push(GamePlayerMessageDelivery::Player(
+                    notice.send_to_player(game.net_server(), player_id),
+                ));
+                report.outcome = GamePlayerMessageOutcome::LeiTingPacketFull;
+                return Some(Ok(report));
+            }
+            if !game
+                .find_player_mut(player_id)
+                .expect("LeiTing player сохранён после packet-space lookup")
+                .change_fy_energy_flag(reward)
+            {
+                report.outcome = GamePlayerMessageOutcome::LeiTingRewardUnavailable;
+                return Some(Ok(report));
+            }
+            publish_lei_ting_update(game, player_id, &mut report.deliveries);
+            runtime.run_player_script(game, player_id, script);
+            report.outcome = GamePlayerMessageOutcome::LeiTingRewardClaimed;
         }
         _ => unreachable!("player opcode отфильтрован до decode"),
     }

@@ -205,6 +205,9 @@
 //! клиента как addressed `0xBF404/405`, замыкая online/offline контракт.
 //! Public identity commands связывают appearance around wire, honor snapshot,
 //! concrete country job lookup и appellation attempt со script runtime.
+//! LeiTing bidirectional route связывает client claim с owned player codec,
+//! `0xBF73E/0x5FD10`, WorldServer decode и обратным `0x7FA17`; process report
+//! отдельно сохраняет reached other-message результат.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -423,6 +426,9 @@ use crate::gameserver::appserver::message::onmsg_w2s_auction::{
 use crate::gameserver::appserver::message::organsysmessage::{
     GameOrganizingWarMessageError, GameOrganizingWarMessageReport, GameOrganizingWarRuntime,
     dispatch_game_organizing_war_message,
+};
+use crate::gameserver::appserver::message::othermessage::{
+    GameOtherMessageError, GameOtherMessageReport, dispatch_game_other_message,
 };
 use crate::gameserver::appserver::message::playermessage::{
     GamePlayerMessageError, GamePlayerMessageReport, GamePlayerMessageRuntime,
@@ -2562,6 +2568,7 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) goods_messages: Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
     pub(crate) skill_messages: Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
     pub(crate) shape_messages: Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
+    pub(crate) other_messages: Vec<Result<GameOtherMessageReport, GameOtherMessageError>>,
     pub(crate) player_messages: Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
     pub(crate) log_messages: Vec<Result<GameLogMessageReport, GameLogMessageError>>,
     pub(crate) server_messages:
@@ -14101,6 +14108,7 @@ impl CGame {
         let mut goods_messages = Vec::new();
         let mut skill_messages = Vec::new();
         let mut shape_messages = Vec::new();
+        let mut other_messages = Vec::new();
         let mut player_messages = Vec::new();
         let mut log_messages = Vec::new();
         let mut server_messages = Vec::new();
@@ -14126,6 +14134,7 @@ impl CGame {
                 &mut goods_messages,
                 &mut skill_messages,
                 &mut shape_messages,
+                &mut other_messages,
                 &mut player_messages,
                 &mut log_messages,
                 &mut server_messages,
@@ -14153,6 +14162,7 @@ impl CGame {
                 &mut goods_messages,
                 &mut skill_messages,
                 &mut shape_messages,
+                &mut other_messages,
                 &mut player_messages,
                 &mut log_messages,
                 &mut server_messages,
@@ -14182,6 +14192,7 @@ impl CGame {
                         &mut goods_messages,
                         &mut skill_messages,
                         &mut shape_messages,
+                        &mut other_messages,
                         &mut player_messages,
                         &mut log_messages,
                         &mut server_messages,
@@ -14210,6 +14221,7 @@ impl CGame {
             goods_messages,
             skill_messages,
             shape_messages,
+            other_messages,
             player_messages,
             log_messages,
             server_messages,
@@ -14246,6 +14258,7 @@ impl CGame {
         goods_messages: &mut Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
         skill_messages: &mut Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
         shape_messages: &mut Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
+        other_messages: &mut Vec<Result<GameOtherMessageReport, GameOtherMessageError>>,
         player_messages: &mut Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
         log_messages: &mut Vec<Result<GameLogMessageReport, GameLogMessageError>>,
         server_messages: &mut Vec<
@@ -14285,6 +14298,8 @@ impl CGame {
             skill_messages.push(report);
         } else if let Some(report) = dispatch_game_shape_message(message, self, runtime) {
             shape_messages.push(report);
+        } else if let Some(report) = dispatch_game_other_message(message, self) {
+            other_messages.push(report);
         } else if let Some(report) = dispatch_game_player_message(message, self, runtime) {
             player_messages.push(report);
         } else if let Some(report) = dispatch_game_log_message(message, self) {

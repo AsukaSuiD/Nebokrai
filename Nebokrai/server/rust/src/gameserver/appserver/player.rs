@@ -138,6 +138,9 @@
 //! Client timing owner хранит quest countdown и heartbeat acknowledgement:
 //! остаток сохраняет signed 32-bit arithmetic исходного `time_t`, а wall/local
 //! clock остаются внешними runtime-фактами message caller-а.
+//! LeiTing owner хранит пять scalar-полей и ordered `tagThing` list; codec
+//! совпадает с WorldServer `Add/DecodeByteArrayLeiTing`, а reward-флаг
+//! выставляется только после exact energy/count threshold.
 //! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
 //! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
 //! полиморфные session End/plug Exit принадлежат caller runtime-у.
@@ -219,7 +222,7 @@ use super::shape::{CShape, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, Sha
 use super::skills::skillfactory::CSkillFactory;
 use crate::public::guid::CGuid;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 const PLAYER_TYPE: i32 = 400;
 const LEGACY_COMBAT_MAXIMUM: u32 = i32::MAX as u32;
@@ -1061,6 +1064,11 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) display_head_piece: bool,
     pub(crate) quest_time_begin: i32,
     pub(crate) quest_time_limit: i32,
+    pub(crate) fy_enable_flags: u32,
+    pub(crate) fy_energy: u32,
+    pub(crate) lt_60_stamp: u32,
+    pub(crate) lt_up_60_count: u16,
+    pub(crate) remain_jing_li_dan_count: u16,
     pub(crate) appellation_id: u32,
     pub(crate) head_picture: i32,
     pub(crate) face_picture: i32,
@@ -1093,6 +1101,22 @@ pub(crate) struct PlayerHonorSnapshot {
 pub(crate) struct PlayerFriend {
     pub(crate) name: Vec<u8>,
     pub(crate) online: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerLeiTingThing {
+    pub(crate) thing_id: u16,
+    pub(crate) count: u16,
+    pub(crate) max_count: u16,
+    pub(crate) point: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerLeiTingDecodeBlock {
+    pub(crate) field: &'static str,
+    pub(crate) offset: usize,
+    pub(crate) needed: usize,
+    pub(crate) available: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1362,6 +1386,7 @@ pub(crate) struct CPlayer {
     heart_request_sent: i32,
     heart_received: bool,
     friends: Vec<PlayerFriend>,
+    lei_ting_things: VecDeque<PlayerLeiTingThing>,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
     ci_qing_open: bool,
@@ -1457,6 +1482,7 @@ impl CPlayer {
             heart_request_sent: 0,
             heart_received: false,
             friends: Vec::new(),
+            lei_ting_things: VecDeque::new(),
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
             ci_qing_open: false,
@@ -1757,6 +1783,101 @@ impl CPlayer {
     pub(crate) const fn acknowledge_heartbeat(&mut self) {
         self.heart_request_sent = 0;
         self.heart_received = true;
+    }
+
+    pub(crate) fn encode_lei_ting(&self) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(20 + self.lei_ting_things.len() * 8);
+        payload.extend_from_slice(&self.base_properties.fy_enable_flags.to_le_bytes());
+        payload.extend_from_slice(&self.base_properties.fy_energy.to_le_bytes());
+        payload.extend_from_slice(&self.base_properties.lt_60_stamp.to_le_bytes());
+        payload.extend_from_slice(&self.base_properties.lt_up_60_count.to_le_bytes());
+        payload.extend_from_slice(&self.base_properties.remain_jing_li_dan_count.to_le_bytes());
+        payload.extend_from_slice(&(self.lei_ting_things.len() as u32).to_le_bytes());
+        for thing in &self.lei_ting_things {
+            payload.extend_from_slice(&thing.thing_id.to_le_bytes());
+            payload.extend_from_slice(&thing.count.to_le_bytes());
+            payload.extend_from_slice(&thing.max_count.to_le_bytes());
+            payload.extend_from_slice(&thing.point.to_le_bytes());
+        }
+        payload
+    }
+
+    pub(crate) fn decode_lei_ting(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<(), PlayerLeiTingDecodeBlock> {
+        fn take<const N: usize>(
+            source: &[u8],
+            cursor: &mut usize,
+            field: &'static str,
+        ) -> Result<[u8; N], PlayerLeiTingDecodeBlock> {
+            let offset = *cursor;
+            let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
+                return Err(PlayerLeiTingDecodeBlock {
+                    field,
+                    offset,
+                    needed: N,
+                    available: source.len().saturating_sub(offset),
+                });
+            };
+            let value = bytes.try_into().expect("slice length проверена get range");
+            *cursor += N;
+            Ok(value)
+        }
+        fn read_u32(
+            source: &[u8],
+            cursor: &mut usize,
+            field: &'static str,
+        ) -> Result<u32, PlayerLeiTingDecodeBlock> {
+            take::<4>(source, cursor, field).map(u32::from_le_bytes)
+        }
+        fn read_u16(
+            source: &[u8],
+            cursor: &mut usize,
+            field: &'static str,
+        ) -> Result<u16, PlayerLeiTingDecodeBlock> {
+            take::<2>(source, cursor, field).map(u16::from_le_bytes)
+        }
+
+        self.base_properties.fy_enable_flags = read_u32(source, cursor, "dwfyenFlag")?;
+        self.base_properties.fy_energy = read_u32(source, cursor, "dwfyEnergy")?;
+        self.base_properties.lt_60_stamp = read_u32(source, cursor, "dwLT60Stamp")?;
+        self.base_properties.lt_up_60_count = read_u16(source, cursor, "wLTUp60Cnt")?;
+        self.base_properties.remain_jing_li_dan_count =
+            read_u16(source, cursor, "wRemainJingLiDanCnt")?;
+        self.lei_ting_things.clear();
+        let count = read_u32(source, cursor, "m_listThing count")?;
+        for _ in 0..count {
+            self.lei_ting_things.push_back(PlayerLeiTingThing {
+                thing_id: read_u16(source, cursor, "tagThing.wTID")?,
+                count: read_u16(source, cursor, "tagThing.wCnt")?,
+                max_count: read_u16(source, cursor, "tagThing.wMaxCnt")?,
+                point: read_u16(source, cursor, "tagThing.wPoint")?,
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) const fn change_fy_energy_flag(&mut self, index: u16) -> bool {
+        let threshold_reached = match index {
+            0 => self.base_properties.fy_energy >= 20,
+            1 => self.base_properties.fy_energy >= 60,
+            2 => self.base_properties.fy_energy >= 80,
+            3 => self.base_properties.fy_energy >= 100,
+            4 => self.base_properties.lt_up_60_count >= 4,
+            5 => self.base_properties.lt_up_60_count >= 10,
+            6 => self.base_properties.lt_up_60_count >= 16,
+            7 => self.base_properties.lt_up_60_count >= 22,
+            8 => self.base_properties.lt_up_60_count >= 28,
+            _ => return false,
+        };
+        let mask = 1u32 << index;
+        if !threshold_reached || self.base_properties.fy_enable_flags & mask != 0 {
+            return false;
+        }
+        self.base_properties.fy_enable_flags |= mask;
+        true
     }
 
     pub(crate) const fn honor_snapshot(&self) -> PlayerHonorSnapshot {
@@ -7197,20 +7318,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::AddByteArrayLeiTing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:17554
-// RVA: 0x00031F50
-// ADDRESS: 00431f50
-// PROTOTYPE: void __thiscall AddByteArrayLeiTing(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::GetOneThing
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -7485,20 +7592,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00033E40
 // ADDRESS: 00433e40
 // PROTOTYPE: void __thiscall AddByteGS2WS(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::UpdateLeiTingToWSandClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:17701
-// RVA: 0x00033ED0
-// ADDRESS: 00433ed0
-// PROTOTYPE: void __thiscall UpdateLeiTingToWSandClient(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -8185,34 +8278,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0003FE90
 // ADDRESS: 0043fe90
 // PROTOTYPE: void __thiscall SendCiQingGoods(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DecodeByteArrayLeiTing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:17571
-// RVA: 0x0003FFD0
-// ADDRESS: 0043ffd0
-// PROTOTYPE: void __thiscall DecodeByteArrayLeiTing(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::ChangeFyEnergyFlag
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:17595
-// RVA: 0x000400F0
-// ADDRESS: 004400f0
-// PROTOTYPE: bool __thiscall ChangeFyEnergyFlag(ushort param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -60,6 +60,7 @@ pub(crate) mod appserver {
         pub(crate) mod logmessage;
         pub(crate) mod onmsg_w2s_auction;
         pub(crate) mod organsysmessage;
+        pub(crate) mod othermessage;
         pub(crate) mod playermessage;
         pub(crate) mod sequencestring;
         pub(crate) mod servermessage;
