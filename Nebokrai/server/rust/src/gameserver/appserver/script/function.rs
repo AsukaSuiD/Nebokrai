@@ -25,6 +25,10 @@
 //! login-server ID, а `11124/11128` — с persisted player SZL и уже существующим
 //! `CGame::UpdateSZL` effect-проходом: property/notice, merit-level downgrade
 //! и appellation callback выполняются одним owner-ом.
+//! `2570 / AddIncrementLog` проводит item-script audit в существующий World
+//! `0x6020D` owner: limits, defaults, byte-narrowed type и conditional
+//! item-tail сохраняются до DB FIFO/live publication; tail вычисляется только
+//! для полного `type == 0`, как в исходном `CScript`.
 //! Также материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
 //! `9354 / OpenEquipmentCompose` и `2216 / OpenGoodsUpgrade`. Refresh вычисляет первую
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
@@ -204,6 +208,7 @@ pub(crate) const SCRIPT_FUNCTION_ADD_GOODS_LOG: i32 = 2313;
 pub(crate) const SCRIPT_FUNCTION_SCRIPT_IS_RUNNING: i32 = 2316;
 pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
+pub(crate) const SCRIPT_FUNCTION_ADD_INCREMENT_LOG: i32 = 2570;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
 pub(crate) const SCRIPT_FUNCTION_GET_AREA_ID: i32 = 5413;
 pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
@@ -3039,6 +3044,11 @@ pub(crate) fn script_function_parameter_kind(
             1 | 2 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_ADD_INCREMENT_LOG => match index {
+            0 | 3 => String,
+            1 | 2 | 4 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_ADD_GOODS
         | SCRIPT_FUNCTION_DELETE_GOODS
         | SCRIPT_FUNCTION_CHECK_GOODS
@@ -4133,6 +4143,53 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let _ = message.send(game, false);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
+        }
+        SCRIPT_FUNCTION_ADD_INCREMENT_LOG => {
+            let Some(description) = string_arguments[0].filter(|value| value.len() <= 0xff) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let Some(amount) =
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let log_type = integer_arguments[2]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .unwrap_or(1);
+            let (item_name, item_amount) = if log_type == 0 {
+                let Some(item_name) = string_arguments[3].filter(|value| value.len() <= 32) else {
+                    return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+                };
+                (
+                    item_name,
+                    integer_arguments[4]
+                        .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                        .unwrap_or(0),
+                )
+            } else {
+                (&[][..], 0)
+            };
+            let Some((player_id, client_ip)) = game
+                .find_player(player_id)
+                .map(|player| (player.player_id(), player.client_ip()))
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let mut message = CMessage::new(0x0006_020d);
+            message.add_byte(log_type as u8);
+            message.add_byte(0);
+            message.add_long(amount);
+            message.base_mut().add(description);
+            message.add_byte(0);
+            message.add_long(player_id);
+            if log_type == 0 {
+                message.base_mut().add(item_name);
+                message.add_byte(0);
+                message.add_long(item_amount);
+            }
+            message.add_ulong(client_ip);
+            let _ = message.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         _ => None,
     }

@@ -15,9 +15,9 @@
 use std::collections::BTreeMap;
 
 use super::function::{
-    ScriptFunctionDispatchOutcome, ScriptFunctionParameterKind, ScriptFunctionRuntime,
-    ScriptStringFunctionDispatchOutcome, dispatch_script_function, dispatch_script_string_function,
-    script_function_parameter_kind,
+    SCRIPT_FUNCTION_ADD_INCREMENT_LOG, ScriptFunctionDispatchOutcome, ScriptFunctionParameterKind,
+    ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome, dispatch_script_function,
+    dispatch_script_string_function, script_function_parameter_kind,
 };
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
@@ -500,6 +500,17 @@ impl<'a> CScript<'a> {
         let mut integer_arguments = [None; 7];
         let mut string_arguments: [Option<Vec<u8>>; 7] = std::array::from_fn(|_| None);
         for (index, parameter) in parameters.iter().take(7).enumerate() {
+            if function_id == SCRIPT_FUNCTION_ADD_INCREMENT_LOG && index >= 3 {
+                let parsed_type = integer_arguments[2].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+                let log_type = if parsed_type == SCRIPT_INT_PARAMETER_ERROR {
+                    1
+                } else {
+                    parsed_type
+                };
+                if log_type != 0 {
+                    break;
+                }
+            }
             match script_function_parameter_kind(function_id, index) {
                 ScriptFunctionParameterKind::Integer => {
                     integer_arguments[index] = Some(
