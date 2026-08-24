@@ -33,7 +33,13 @@
 //! concrete `ServerCountryRegion::OnEnterContend` с миллисекундным duration,
 //! публикует player state `0xBFF28`, timer `0xBFF29`, localized result и
 //! отправляет byte-narrowed победу World сообщением `0x60318`.
-//! Полный expression evaluator и остальные function ID ниже пока остаются RAW.
+//! Nation-war family `9304..9313/9315/9316` связывает current Nation region,
+//! timing/carriage/contender player-effects, FourNation seconds/time/morale,
+//! weak-state и World signup `0x6031B`; debug `GS1053..GS1056` остаётся в
+//! точном порядке вокруг соответствующих concrete вызовов.
+//! Numeric selector получает вычисленные параметры из reached synchronous
+//! `CScript`; остальные function ID и асинхронный dialog/wait lifecycle ниже
+//! пока остаются RAW.
 
 use crate::gameserver::appserver::country::country::{
     CountryExileRestTimeReport, CountryScalarMutationReport,
@@ -47,7 +53,8 @@ use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlug
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
     colored_player_notice_message, CGame, EquipmentDaKongContext, EquipmentSessionOpenContext,
-    EquipmentSessionOpenReport, ServerRegionOwner,
+    EquipmentSessionOpenReport, NationCarriageReturnReport, NationCombatContext,
+    NationContendEnterReport, ServerRegionOwner,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -87,6 +94,18 @@ pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_WAR_CAMP: i32 = 9108;
 pub(crate) const SCRIPT_FUNCTION_GET_OTHER_WAR_COUNTRY: i32 = 9109;
 pub(crate) const SCRIPT_FUNCTION_COUNTRY_WAR_VICTORY: i32 = 9110;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_WAR_RESULT: i32 = 9111;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_SEND_PLAYER_ID: i32 = 9304;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_CARRIAGE_BACK_TOWN: i32 = 9305;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_GET_FLAG_STATUS: i32 = 9306;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_GET_TIME: i32 = 9307;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_ENTER_CONTEND: i32 = 9308;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_COUNTRY_SIGN_UP: i32 = 9309;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_CLEAR_PLAYER_TIME: i32 = 9310;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_GET_NATION_STATUS: i32 = 9311;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_SET_PLAYER_TIME: i32 = 9312;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_IS_PLAYER_WEAK: i32 = 9313;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_GET_MORALE: i32 = 9315;
+pub(crate) const SCRIPT_FUNCTION_NATION_WAR_CLEAR_MORALE: i32 = 9316;
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
 const SCRIPT_PLAYER_TYPE: i32 = 400;
 const SCRIPT_NPC_TYPE: i32 = 500;
@@ -94,6 +113,24 @@ const SCRIPT_NPC_TYPE: i32 = 500;
 pub(crate) trait CountryWarActionScriptRuntime {
     /// Exact lower DWORD process tick, sampled only when a contender is added.
     fn country_contend_now_milliseconds(&mut self) -> u32;
+}
+
+pub(crate) trait ScriptFunctionRuntime:
+    CountryWarActionScriptRuntime
+    + CountryExileTimeScriptContext
+    + NationCombatContext
+    + EquipmentSessionOpenContext
+    + EquipmentDaKongContext
+{
+}
+
+impl<T> ScriptFunctionRuntime for T where
+    T: CountryWarActionScriptRuntime
+        + CountryExileTimeScriptContext
+        + NationCombatContext
+        + EquipmentSessionOpenContext
+        + EquipmentDaKongContext
+{
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -427,6 +464,515 @@ fn country_war_action_handled(
     disposition: CountryWarActionScriptDisposition,
 ) -> CountryWarActionScriptFunctionOutcome {
     CountryWarActionScriptFunctionOutcome::Handled {
+        function_id,
+        kind,
+        legacy_return,
+        disposition,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NationWarScriptKind {
+    SendPlayerId,
+    CarriageBackTown,
+    GetFlagStatus,
+    GetTime,
+    EnterContend,
+    CountrySignUp,
+    ClearPlayerTime,
+    GetNationStatus,
+    SetPlayerTime,
+    IsPlayerWeak,
+    GetMorale,
+    ClearMorale,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NationWarScriptDisposition {
+    ArgumentMissing {
+        argument: usize,
+    },
+    PlayerMissing,
+    TimingStart {
+        target_player_id: i32,
+        started: bool,
+    },
+    CarriageBackTown {
+        enter_debug: Vec<u8>,
+        report: Option<NationCarriageReturnReport>,
+        completed_debug: Option<Vec<u8>>,
+    },
+    Scalar {
+        region_id: Option<i32>,
+        player_id: Option<i32>,
+        value: i32,
+    },
+    PlayerWarTime {
+        player_id: i32,
+        enter_debug: Vec<u8>,
+        value_debug: Vec<u8>,
+        value: i32,
+    },
+    Contend {
+        player_id: i32,
+        duration_ms: u32,
+        report: Option<NationContendEnterReport>,
+    },
+    SignUpSkipped,
+    SignUpRequested {
+        country: i32,
+        delivery: Result<i32, SendMessageError>,
+    },
+    PlayerTimeCleared {
+        player_id: i32,
+        previous_ms: Option<u32>,
+    },
+    PlayerTimeSet {
+        player_id: i32,
+        time_ms: u32,
+        previous_ms: Option<u32>,
+    },
+    MoraleCleared {
+        previous: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NationWarScriptFunctionOutcome {
+    DifferentFunction,
+    Handled {
+        function_id: i32,
+        kind: NationWarScriptKind,
+        legacy_return: i32,
+        disposition: NationWarScriptDisposition,
+    },
+}
+
+pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    script_player_id: Option<i32>,
+    function_id: i32,
+    evaluated_arguments: [Option<i32>; 2],
+) -> NationWarScriptFunctionOutcome {
+    let kind = match function_id {
+        SCRIPT_FUNCTION_NATION_WAR_SEND_PLAYER_ID => NationWarScriptKind::SendPlayerId,
+        SCRIPT_FUNCTION_NATION_WAR_CARRIAGE_BACK_TOWN => NationWarScriptKind::CarriageBackTown,
+        SCRIPT_FUNCTION_NATION_WAR_GET_FLAG_STATUS => NationWarScriptKind::GetFlagStatus,
+        SCRIPT_FUNCTION_NATION_WAR_GET_TIME => NationWarScriptKind::GetTime,
+        SCRIPT_FUNCTION_NATION_WAR_ENTER_CONTEND => NationWarScriptKind::EnterContend,
+        SCRIPT_FUNCTION_NATION_WAR_COUNTRY_SIGN_UP => NationWarScriptKind::CountrySignUp,
+        SCRIPT_FUNCTION_NATION_WAR_CLEAR_PLAYER_TIME => NationWarScriptKind::ClearPlayerTime,
+        SCRIPT_FUNCTION_NATION_WAR_GET_NATION_STATUS => NationWarScriptKind::GetNationStatus,
+        SCRIPT_FUNCTION_NATION_WAR_SET_PLAYER_TIME => NationWarScriptKind::SetPlayerTime,
+        SCRIPT_FUNCTION_NATION_WAR_IS_PLAYER_WEAK => NationWarScriptKind::IsPlayerWeak,
+        SCRIPT_FUNCTION_NATION_WAR_GET_MORALE => NationWarScriptKind::GetMorale,
+        SCRIPT_FUNCTION_NATION_WAR_CLEAR_MORALE => NationWarScriptKind::ClearMorale,
+        _ => return NationWarScriptFunctionOutcome::DifferentFunction,
+    };
+    let argument = |index: usize| {
+        evaluated_arguments[index]
+            .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            .ok_or(NationWarScriptDisposition::ArgumentMissing { argument: index })
+    };
+
+    match kind {
+        NationWarScriptKind::SendPlayerId => {
+            let target_player_id = match argument(0) {
+                Ok(value) => value,
+                Err(disposition) => {
+                    return nation_war_script_handled(function_id, kind, 0, disposition)
+                }
+            };
+            let Some(script_player_id) = script_player_id else {
+                return nation_war_script_handled(
+                    function_id,
+                    kind,
+                    0,
+                    NationWarScriptDisposition::PlayerMissing,
+                );
+            };
+            let started =
+                game.script_nation_war_send_player_id(script_player_id, target_player_id, || {
+                    runtime.now_milliseconds()
+                });
+            nation_war_script_handled(
+                function_id,
+                kind,
+                0,
+                NationWarScriptDisposition::TimingStart {
+                    target_player_id,
+                    started,
+                },
+            )
+        }
+        NationWarScriptKind::CarriageBackTown => {
+            let enter_debug = nation_war_script_debug(game, runtime, b"GS1053");
+            let Some((region_id, country)) = script_player_id.and_then(|player_id| {
+                let player = game.find_player(player_id)?;
+                Some((player.server_region_id()?, i32::from(player.country())))
+            }) else {
+                return nation_war_script_handled(
+                    function_id,
+                    kind,
+                    0,
+                    NationWarScriptDisposition::CarriageBackTown {
+                        enter_debug,
+                        report: None,
+                        completed_debug: None,
+                    },
+                );
+            };
+            let report = game.script_nation_carriage_back_town(region_id, country);
+            let completed_debug = report
+                .is_some()
+                .then(|| nation_war_script_debug(game, runtime, b"GS1054"));
+            nation_war_script_handled(
+                function_id,
+                kind,
+                0,
+                NationWarScriptDisposition::CarriageBackTown {
+                    enter_debug,
+                    report,
+                    completed_debug,
+                },
+            )
+        }
+        NationWarScriptKind::GetFlagStatus => {
+            let region_id = nation_script_player_region_id(game, script_player_id);
+            let value = region_id
+                .and_then(|region_id| match game.find_region(region_id) {
+                    Some(ServerRegionOwner::Nation(region)) => Some(region.flag_belong_to_id()),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            nation_war_script_handled(
+                function_id,
+                kind,
+                value,
+                NationWarScriptDisposition::Scalar {
+                    region_id,
+                    player_id: script_player_id,
+                    value,
+                },
+            )
+        }
+        NationWarScriptKind::GetTime => {
+            let enter_debug = nation_war_script_debug(game, runtime, b"GS1055");
+            let Some(player_id) = script_player_id else {
+                return nation_war_script_handled(
+                    function_id,
+                    kind,
+                    0,
+                    NationWarScriptDisposition::PlayerMissing,
+                );
+            };
+            let debug_time = game
+                .four_nation_war_sys()
+                .player_war_time_seconds(player_id) as i32;
+            let Some(player_name) = game
+                .find_player(player_id)
+                .map(|player| player.player_name().to_vec())
+            else {
+                return nation_war_script_handled(
+                    function_id,
+                    kind,
+                    0,
+                    NationWarScriptDisposition::PlayerMissing,
+                );
+            };
+            let value_debug = format_nation_war_time_debug(
+                game.get_string_by_id(b"GS1056"),
+                &player_name,
+                debug_time,
+            );
+            runtime.put_debug_string(&value_debug);
+            let value = game
+                .four_nation_war_sys()
+                .player_war_time_seconds(player_id) as i32;
+            nation_war_script_handled(
+                function_id,
+                kind,
+                value,
+                NationWarScriptDisposition::PlayerWarTime {
+                    player_id,
+                    enter_debug,
+                    value_debug,
+                    value,
+                },
+            )
+        }
+        NationWarScriptKind::EnterContend => {
+            let seconds = match argument(0) {
+                Ok(value) => value,
+                Err(disposition) => {
+                    return nation_war_script_handled(function_id, kind, 0, disposition)
+                }
+            };
+            let Some(player_id) = script_player_id else {
+                return nation_war_script_handled(
+                    function_id,
+                    kind,
+                    0,
+                    NationWarScriptDisposition::PlayerMissing,
+                );
+            };
+            if game.find_player(player_id).is_none() {
+                return nation_war_script_handled(
+                    function_id,
+                    kind,
+                    0,
+                    NationWarScriptDisposition::PlayerMissing,
+                );
+            }
+            let duration_ms = (seconds as u32).wrapping_mul(1_000);
+            let report =
+                nation_script_player_region_id(game, Some(player_id)).and_then(|region_id| {
+                    game.nation_enter_contend(region_id, player_id, duration_ms, runtime)
+                });
+            nation_war_script_handled(
+                function_id,
+                kind,
+                0,
+                NationWarScriptDisposition::Contend {
+                    player_id,
+                    duration_ms,
+                    report,
+                },
+            )
+        }
+        NationWarScriptKind::CountrySignUp => {
+            let operation = match argument(0) {
+                Ok(value) => value,
+                Err(disposition) => {
+                    return nation_war_script_handled(function_id, kind, 0, disposition)
+                }
+            };
+            if operation == 0 {
+                return nation_war_script_handled(
+                    function_id,
+                    kind,
+                    0,
+                    NationWarScriptDisposition::SignUpSkipped,
+                );
+            }
+            let Some(country) = script_player_id
+                .and_then(|player_id| game.find_player(player_id))
+                .map(|player| i32::from(player.country()))
+            else {
+                return nation_war_script_handled(
+                    function_id,
+                    kind,
+                    0,
+                    NationWarScriptDisposition::PlayerMissing,
+                );
+            };
+            let mut request = CMessage::new(0x0006_031b);
+            request.base_mut().add_long(country);
+            let delivery = request.send(game, false);
+            let legacy_return = match delivery {
+                Ok(value) => value,
+                Err(_) => 0,
+            };
+            nation_war_script_handled(
+                function_id,
+                kind,
+                legacy_return,
+                NationWarScriptDisposition::SignUpRequested { country, delivery },
+            )
+        }
+        NationWarScriptKind::ClearPlayerTime => {
+            let player_id = match argument(0) {
+                Ok(value) => value,
+                Err(disposition) => {
+                    return nation_war_script_handled(function_id, kind, 0, disposition)
+                }
+            };
+            let previous_ms = game
+                .four_nation_war_sys_mut()
+                .clear_one_player_war_time(player_id);
+            nation_war_script_handled(
+                function_id,
+                kind,
+                0,
+                NationWarScriptDisposition::PlayerTimeCleared {
+                    player_id,
+                    previous_ms,
+                },
+            )
+        }
+        NationWarScriptKind::GetNationStatus => {
+            let region_id = nation_script_player_region_id(game, script_player_id);
+            let country = script_player_id
+                .and_then(|player_id| game.find_player(player_id))
+                .map(|player| i32::from(player.country()));
+            let value = match (region_id, country) {
+                (Some(region_id), Some(country)) => match game.find_region(region_id) {
+                    Some(ServerRegionOwner::Nation(region)) if region.is_nation_fail(country) => 1,
+                    _ => 0,
+                },
+                _ => 0,
+            };
+            nation_war_script_handled(
+                function_id,
+                kind,
+                value,
+                NationWarScriptDisposition::Scalar {
+                    region_id,
+                    player_id: script_player_id,
+                    value,
+                },
+            )
+        }
+        NationWarScriptKind::SetPlayerTime => {
+            // Exact dispatcher вычисляет оба expression до любой sentinel-проверки.
+            let player_id = evaluated_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let time_ms = evaluated_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            if player_id == SCRIPT_INT_PARAMETER_ERROR {
+                return nation_war_script_handled(
+                    function_id,
+                    kind,
+                    0,
+                    NationWarScriptDisposition::ArgumentMissing { argument: 0 },
+                );
+            }
+            if time_ms == SCRIPT_INT_PARAMETER_ERROR {
+                return nation_war_script_handled(
+                    function_id,
+                    kind,
+                    0,
+                    NationWarScriptDisposition::ArgumentMissing { argument: 1 },
+                );
+            }
+            let time_ms = time_ms as u32;
+            let previous_ms = game
+                .four_nation_war_sys_mut()
+                .set_one_player_war_time(player_id, time_ms);
+            nation_war_script_handled(
+                function_id,
+                kind,
+                0,
+                NationWarScriptDisposition::PlayerTimeSet {
+                    player_id,
+                    time_ms,
+                    previous_ms,
+                },
+            )
+        }
+        NationWarScriptKind::IsPlayerWeak => {
+            let value = script_player_id
+                .and_then(|player_id| game.find_player(player_id))
+                .map(|player| i32::from(player.is_nation_war_player_weak()))
+                .unwrap_or(0);
+            nation_war_script_handled(
+                function_id,
+                kind,
+                value,
+                NationWarScriptDisposition::Scalar {
+                    region_id: None,
+                    player_id: script_player_id,
+                    value,
+                },
+            )
+        }
+        NationWarScriptKind::GetMorale => {
+            let value = game.four_nation_war_sys().morale();
+            nation_war_script_handled(
+                function_id,
+                kind,
+                value,
+                NationWarScriptDisposition::Scalar {
+                    region_id: None,
+                    player_id: None,
+                    value,
+                },
+            )
+        }
+        NationWarScriptKind::ClearMorale => {
+            let previous = game.four_nation_war_sys_mut().clear_morale_value();
+            nation_war_script_handled(
+                function_id,
+                kind,
+                0,
+                NationWarScriptDisposition::MoraleCleared { previous },
+            )
+        }
+    }
+}
+
+fn nation_script_player_region_id(game: &CGame, player_id: Option<i32>) -> Option<i32> {
+    player_id
+        .and_then(|player_id| game.find_player(player_id))
+        .and_then(|player| player.server_region_id())
+}
+
+fn nation_war_script_debug<Runtime: NationCombatContext>(
+    game: &CGame,
+    runtime: &mut Runtime,
+    string_id: &[u8],
+) -> Vec<u8> {
+    let text = game.get_string_by_id(string_id).to_vec();
+    runtime.put_debug_string(&text);
+    text
+}
+
+fn format_nation_war_time_debug(template: &[u8], player_name: &[u8], time: i32) -> Vec<u8> {
+    enum Argument<'a> {
+        Bytes(&'a [u8]),
+        Signed(i32),
+    }
+    let arguments = [Argument::Bytes(player_name), Argument::Signed(time)];
+    let template = template.split(|byte| *byte == 0).next().unwrap_or_default();
+    let mut output = Vec::new();
+    let mut argument = 0usize;
+    let mut offset = 0usize;
+    // Safe replacement for zeroed `char[64] + _snprintf(..., 64, ...)`:
+    // one byte remains reserved for the terminator instead of reproducing
+    // the legacy unterminated-buffer UB on a fully truncated result.
+    while offset < template.len() && output.len() < 63 {
+        if template[offset] != b'%' {
+            output.push(template[offset]);
+            offset += 1;
+            continue;
+        }
+        if template.get(offset + 1) == Some(&b'%') {
+            output.push(b'%');
+            offset += 2;
+            continue;
+        }
+        let rendered = match (template.get(offset + 1).copied(), arguments.get(argument)) {
+            (Some(b's'), Some(Argument::Bytes(value))) => Some(
+                value
+                    .split(|byte| *byte == 0)
+                    .next()
+                    .unwrap_or_default()
+                    .to_vec(),
+            ),
+            (Some(b'd' | b'i'), Some(Argument::Signed(value))) => {
+                Some(value.to_string().into_bytes())
+            }
+            _ => None,
+        };
+        let Some(rendered) = rendered else {
+            output.push(b'%');
+            offset += 1;
+            continue;
+        };
+        let remaining = 63usize.saturating_sub(output.len());
+        output.extend_from_slice(&rendered[..rendered.len().min(remaining)]);
+        argument += 1;
+        offset += 2;
+    }
+    output
+}
+
+fn nation_war_script_handled(
+    function_id: i32,
+    kind: NationWarScriptKind,
+    legacy_return: i32,
+    disposition: NationWarScriptDisposition,
+) -> NationWarScriptFunctionOutcome {
+    NationWarScriptFunctionOutcome::Handled {
         function_id,
         kind,
         legacy_return,
@@ -1697,6 +2243,163 @@ pub(crate) fn run_equipment_da_kong_script_function<Context: EquipmentDaKongCont
     EquipmentDaKongScriptFunctionOutcome::Refreshed(
         game.reflush_equipment_da_kong_external_property(player_id, cost_original_name, context),
     )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScriptFunctionDispatchOutcome {
+    DifferentFunction,
+    Handled { legacy_return: i32 },
+}
+
+/// Единый reached tail `CScript::RunFunction`: selector уже разрешён через
+/// загруженный FunctionList, а аргументы вычислены тем же экземпляром CScript.
+/// Порядок family-вызовов не наблюдаем сценарием, потому что каждый owner
+/// обязан вернуть `DifferentFunction` до любых side effects для чужого ID.
+pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    script_player_id: Option<i32>,
+    script_npc_id: Option<i32>,
+    script_region_id: Option<i32>,
+    function_id: i32,
+    integer_arguments: [Option<i32>; 3],
+    first_string_argument: Option<&[u8]>,
+) -> ScriptFunctionDispatchOutcome {
+    macro_rules! handled {
+        ($outcome:expr, $pattern:path) => {
+            match $outcome {
+                $pattern { legacy_return, .. } => {
+                    return ScriptFunctionDispatchOutcome::Handled { legacy_return }
+                }
+                _ => {}
+            }
+        };
+    }
+
+    handled!(
+        run_country_war_action_script_function(
+            game,
+            runtime,
+            script_player_id,
+            script_npc_id,
+            script_region_id,
+            function_id,
+            [integer_arguments[0], integer_arguments[1]],
+        ),
+        CountryWarActionScriptFunctionOutcome::Handled
+    );
+    handled!(
+        run_nation_war_script_function(
+            game,
+            runtime,
+            script_player_id,
+            function_id,
+            [integer_arguments[0], integer_arguments[1]],
+        ),
+        NationWarScriptFunctionOutcome::Handled
+    );
+    handled!(
+        run_country_war_query_script_function(
+            game,
+            script_player_id,
+            script_npc_id,
+            function_id,
+            integer_arguments,
+        ),
+        CountryWarQueryScriptFunctionOutcome::Handled
+    );
+    handled!(
+        run_country_war_declaration_script_function(
+            game,
+            script_player_id,
+            script_npc_id,
+            function_id,
+            integer_arguments[0],
+        ),
+        CountryWarDeclarationScriptFunctionOutcome::Handled
+    );
+    handled!(
+        run_country_scalar_query_script_function(
+            game,
+            script_player_id,
+            function_id,
+            integer_arguments[0],
+        ),
+        CountryScalarQueryScriptFunctionOutcome::Handled
+    );
+    handled!(
+        run_country_identity_script_function(
+            game,
+            script_player_id,
+            function_id,
+            integer_arguments[0],
+            integer_arguments[1],
+        ),
+        CountryIdentityScriptFunctionOutcome::Handled
+    );
+    handled!(
+        run_country_control_point_script_function(
+            game,
+            function_id,
+            integer_arguments[0],
+            integer_arguments[1],
+        ),
+        CountryControlPointScriptFunctionOutcome::Handled
+    );
+    handled!(
+        run_country_exile_time_script_function(
+            game,
+            script_player_id,
+            function_id,
+            integer_arguments[0],
+            runtime,
+        ),
+        CountryExileTimeScriptFunctionOutcome::Handled
+    );
+    handled!(
+        run_country_quest_switch_script_function(
+            game,
+            script_player_id,
+            function_id,
+            integer_arguments[0],
+            integer_arguments[1],
+            integer_arguments[2],
+        ),
+        CountryQuestSwitchScriptFunctionOutcome::Handled
+    );
+    handled!(
+        run_country_scalar_script_function(
+            game,
+            function_id,
+            integer_arguments[0],
+            integer_arguments[1],
+        ),
+        CountryScalarScriptFunctionOutcome::Handled
+    );
+
+    if let EquipmentSessionScriptFunctionOutcome::Opened(_) = run_equipment_session_script_function(
+        game,
+        script_player_id.unwrap_or_default(),
+        function_id,
+        runtime,
+    ) {
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+    }
+    match run_equipment_da_kong_script_function(
+        game,
+        script_player_id.unwrap_or_default(),
+        function_id,
+        first_string_argument,
+        runtime,
+    ) {
+        EquipmentDaKongScriptFunctionOutcome::DifferentFunction => {
+            ScriptFunctionDispatchOutcome::DifferentFunction
+        }
+        EquipmentDaKongScriptFunctionOutcome::HandledWithoutCall
+        | EquipmentDaKongScriptFunctionOutcome::Refreshed(_) => {
+            ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
+        }
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

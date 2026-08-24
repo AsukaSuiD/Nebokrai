@@ -3508,6 +3508,11 @@ impl CPlayer {
         self.city_war_died_state_time_ms
     }
 
+    /// Script `9313` читает этот byte напрямую без вычисления аргументов.
+    pub(crate) const fn is_nation_war_player_weak(&self) -> bool {
+        self.city_war_died_state
+    }
+
     pub(crate) const fn died_state_start_time_ms(&self) -> u32 {
         self.died_state_start_time_ms
     }

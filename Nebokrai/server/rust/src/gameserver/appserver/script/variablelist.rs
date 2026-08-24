@@ -77,6 +77,29 @@ impl CVariableList {
         &self.variables
     }
 
+    pub(crate) fn integer(&self, name: &[u8], element_index: usize) -> Option<i32> {
+        let variable = self
+            .variables
+            .iter()
+            .find(|variable| variable.name.eq_ignore_ascii_case(name))?;
+        match &variable.value {
+            GameVariableValue::Integer(value) if element_index == 0 => Some(*value),
+            GameVariableValue::IntegerArray(values) => values.get(element_index).copied(),
+            GameVariableValue::Integer(_) | GameVariableValue::String(_) => None,
+        }
+    }
+
+    pub(crate) fn string(&self, name: &[u8]) -> Option<&[u8]> {
+        let variable = self
+            .variables
+            .iter()
+            .find(|variable| variable.name.eq_ignore_ascii_case(name))?;
+        match &variable.value {
+            GameVariableValue::String(value) => Some(value),
+            GameVariableValue::Integer(_) | GameVariableValue::IntegerArray(_) => None,
+        }
+    }
+
     pub(crate) fn release(&mut self) -> usize {
         let count = self.variables.len();
         self.variables.clear();

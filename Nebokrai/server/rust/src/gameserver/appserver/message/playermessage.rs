@@ -27,8 +27,8 @@
 //! `0xBF702 = m_Property[0x9c] + base max HP/MP` response.
 //! NPC interaction `0x8FA03` замыкает player/region/death/progress guards,
 //! around-area и figure-aware distance, `GS0057` и контекстный RunScript
-//! request; общий `RunScript/CScript` VM ещё не материализован и остаётся
-//! точно названной runtime-границей этого caller-а.
+//! request; reached `CGame::run_script_file` строит concrete player/NPC/region
+//! context и исполняет поддержанные `CScript::RunFunction` selector-ы.
 //! PvP permissions `0x8FA05` декодируют оба signed char до selector switch и
 //! меняют один из пяти live player flags без дополнительной публикации.
 //! Equipment-state refresh `0x8FA16` сохраняет packed local-time decode,
@@ -47,11 +47,12 @@ use crate::gameserver::appserver::player::{
     CiQingPacketConsumption, PlayerFriendAddOutcome, PlayerPkPermissionMutation, PlayerProgress,
     PlayerStatAllocationMutation,
 };
+use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
+use crate::gameserver::appserver::script::script::ScriptExecutionContext;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, GameContainerMessageRuntime, PlayerReliveContext, PlayerReliveReport,
-    PlayerTradeAbortReport, PlayerTradeReadyReport, colored_player_notice_message,
-    format_legacy_text_fields,
+    colored_player_notice_message, format_legacy_text_fields, CGame, GameContainerMessageRuntime,
+    PlayerReliveContext, PlayerReliveReport, PlayerTradeAbortReport, PlayerTradeReadyReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -93,23 +94,8 @@ const LEI_TING_REWARD_SCRIPTS: [&[u8]; 9] = [
 ];
 
 pub(crate) trait GamePlayerMessageRuntime:
-    PlayerReliveContext + GameContainerMessageRuntime
+    PlayerReliveContext + GameContainerMessageRuntime + ScriptFunctionRuntime
 {
-    /// Выполняет concrete `PlayerRunScript` с server-trusted path; VM и
-    /// script-data owner ещё не материализованы в `CGame`.
-    fn run_player_script(&mut self, game: &mut CGame, player_id: i32, path: &[u8]);
-
-    /// Строит exact `stRunScript { pRegion, pPlayer, pNpc, strFile }` и вызывает
-    /// `RunScript` с `CGame::GetScriptFileData(path)`, включая missing-data call.
-    fn run_npc_player_script(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        region_id: i32,
-        npc_id: i32,
-        path: &[u8],
-    );
-
     /// Возвращает legacy 32-bit `_time` seconds для quest countdown.
     fn player_wall_time_seconds(&mut self) -> i32;
 
@@ -676,7 +662,15 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 return Some(Ok(report));
             }
             report.npc_script_data_present = Some(game.script_file_data(&script_file).is_some());
-            runtime.run_npc_player_script(game, player_id, region_id, npc_id, &script_file);
+            let _ = game.run_script_file(
+                &script_file,
+                ScriptExecutionContext {
+                    player_id: Some(player_id),
+                    npc_id: Some(npc_id),
+                    region_id: Some(region_id),
+                },
+                runtime,
+            );
             report.outcome = GamePlayerMessageOutcome::NpcInteractionScriptRequested;
         }
         USE_PACKET_ITEM => {
@@ -1222,7 +1216,14 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             report.outcome = GamePlayerMessageOutcome::PkPermissionSet;
         }
         RUN_HELP_SCRIPT => {
-            runtime.run_player_script(game, player_id, b"scripts/help/help.script");
+            let _ = game.run_script_file(
+                b"scripts/help/help.script",
+                ScriptExecutionContext {
+                    player_id: Some(player_id),
+                    ..ScriptExecutionContext::default()
+                },
+                runtime,
+            );
             report.outcome = GamePlayerMessageOutcome::PlayerScriptRun;
         }
         REQUEST_TRADE => {
@@ -1664,10 +1665,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             game.find_player_mut(player_id)
                 .expect("appellation player сохранён после context lookup")
                 .request_change_appellation_state(appellation_id as u32);
-            runtime.run_player_script(
-                game,
-                player_id,
+            let _ = game.run_script_file(
                 b"scripts/circle/honorrank/changeappellation.script",
+                ScriptExecutionContext {
+                    player_id: Some(player_id),
+                    ..ScriptExecutionContext::default()
+                },
+                runtime,
             );
             report.outcome = GamePlayerMessageOutcome::AppellationChangeRequested;
         }
@@ -1716,7 +1720,14 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 return Some(Ok(report));
             }
             publish_lei_ting_update(game, player_id, &mut report.deliveries);
-            runtime.run_player_script(game, player_id, script);
+            let _ = game.run_script_file(
+                script,
+                ScriptExecutionContext {
+                    player_id: Some(player_id),
+                    ..ScriptExecutionContext::default()
+                },
+                runtime,
+            );
             report.outcome = GamePlayerMessageOutcome::LeiTingRewardClaimed;
         }
         _ => unreachable!("player opcode отфильтрован до decode"),

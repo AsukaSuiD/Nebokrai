@@ -251,6 +251,14 @@ impl ServerNationRegion {
         &self.nation_failed
     }
 
+    /// Exact `IsNationFail`: только страны `1..4` индексируют flag-array.
+    pub(crate) const fn is_nation_fail(&self, country: i32) -> bool {
+        if country <= 0 || country >= 5 {
+            return false;
+        }
+        self.nation_failed[country as usize]
+    }
+
     pub(crate) fn treasure_box_count(&self, country: u8) -> i32 {
         self.treasure_boxes
             .get(usize::from(country))
@@ -1320,20 +1328,6 @@ pub(crate) fn convert_morale_to_exploit(
 // RVA: 0x000F1230
 // ADDRESS: 004f1230
 // PROTOTYPE: ulong __thiscall ConvertMoraleToExploit(ulong param_1, int param_2, int param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: ServerNationRegion::IsNationFail
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servernationregion.cpp:2267
-// RVA: 0x000F15B0
-// ADDRESS: 004f15b0
-// PROTOTYPE: bool __thiscall IsNationFail(int param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -105,6 +105,7 @@ pub(crate) mod appserver {
         pub(crate) mod ctrader;
     }
     pub(crate) mod script {
+        pub(crate) mod function;
         pub(crate) mod script;
         pub(crate) mod variablelist;
     }

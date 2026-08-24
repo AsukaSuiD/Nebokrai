@@ -276,9 +276,31 @@ impl CFourNationWarSys {
         self.morale
     }
 
+    /// Exact `ClearMoraleValue`: process-static long становится нулём.
+    pub(crate) const fn clear_morale_value(&mut self) -> i32 {
+        let previous = self.morale;
+        self.morale = 0;
+        previous
+    }
+
     /// Exact hash-map replacement из `SetOnePlayerWarTime`.
     pub(crate) fn set_one_player_war_time(&mut self, player_id: i32, time_ms: u32) -> Option<u32> {
         self.player_war_times_ms.insert(player_id, time_ms)
+    }
+
+    /// Exact `GetPlayerWarTime`: missing key даёт ноль, stored milliseconds
+    /// усекаются целочисленным делением до полных секунд.
+    pub(crate) fn player_war_time_seconds(&self, player_id: i32) -> u32 {
+        self.player_war_times_ms
+            .get(&player_id)
+            .copied()
+            .unwrap_or(0)
+            / 1_000
+    }
+
+    /// Exact hash-map erase из `ClearOnePlayerWarTime`.
+    pub(crate) fn clear_one_player_war_time(&mut self, player_id: i32) -> Option<u32> {
+        self.player_war_times_ms.remove(&player_id)
     }
 
     pub(crate) fn clear_player_war_times(&mut self) {
@@ -607,20 +629,6 @@ fn four_nation_u32_at(bytes: &[u8], offset: usize) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CFourNationWarSys::ClearMoraleValue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\fournationwarsys.h:88
-// RVA: 0x000AEB10
-// ADDRESS: 004aeb10
-// PROTOTYPE: void __thiscall ClearMoraleValue(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CFourNationWarSys::GetWarRegionIDByTime
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -629,20 +637,6 @@ fn four_nation_u32_at(bytes: &[u8], offset: usize) -> u32 {
 // RVA: 0x001BDFB0
 // ADDRESS: 005bdfb0
 // PROTOTYPE: long __thiscall GetWarRegionIDByTime(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFourNationWarSys::GetPlayerWarTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\fournationwarsys.cpp:245
-// RVA: 0x001BE0B0
-// ADDRESS: 005be0b0
-// PROTOTYPE: ulong __thiscall GetPlayerWarTime(int param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -755,20 +749,6 @@ fn four_nation_u32_at(bytes: &[u8], offset: usize) -> u32 {
 // RVA: 0x001BF6A0
 // ADDRESS: 005bf6a0
 // PROTOTYPE: void __thiscall OnRefreshRegion(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFourNationWarSys::ClearOnePlayerWarTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\fournationwarsys.cpp:255
-// RVA: 0x001BF7E0
-// ADDRESS: 005bf7e0
-// PROTOTYPE: void __thiscall ClearOnePlayerWarTime(int param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

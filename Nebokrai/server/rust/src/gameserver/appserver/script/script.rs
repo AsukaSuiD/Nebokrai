@@ -3,12 +3,18 @@
 //! `CScript::LoadFunction(nullptr, data)` из точного EXE/PDB читает
 //! непрерывный `FunctionList`, преобразует caption через `atoi` и сохраняет
 //! text → numeric ID в ordered `std::map`. `BTreeMap` является прямой safe
-//! заменой lookup/order semantics; expression VM и instance execution ниже
-//! остаются RAW.
+//! заменой lookup/order semantics. Reached synchronous `CScript` ниже хранит
+//! instance context/cursor, вычисляет используемые выражения и вызывает
+//! materialized numeric function families; dialog/wait lifecycle остаётся RAW.
 
 use std::collections::BTreeMap;
 
+use super::function::{
+    dispatch_script_function, ScriptFunctionDispatchOutcome, ScriptFunctionRuntime,
+    SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY,
+};
 use super::variablelist::section_records;
+use crate::gameserver::gameserver::game::CGame;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CScriptFunctionRegistry {
@@ -76,6 +82,701 @@ pub(crate) fn legacy_atoi(value: &[u8]) -> i32 {
             });
     let signed = if negative { -magnitude } else { magnitude };
     signed.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ScriptExecutionContext {
+    pub(crate) player_id: Option<i32>,
+    pub(crate) npc_id: Option<i32>,
+    pub(crate) region_id: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScriptCommandOutcome {
+    Handled {
+        function_id: i32,
+        legacy_return: i32,
+    },
+    UnknownFunction,
+    InvalidExpression,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ScriptExecutionReport {
+    pub(crate) commands_read: usize,
+    pub(crate) function_calls: usize,
+    pub(crate) last_return: i32,
+    pub(crate) outcomes: Vec<ScriptCommandOutcome>,
+}
+
+/// Reached synchronous owner исходного `CScript`: instance хранит source
+/// cursor и player/NPC/region context, читает команды и передаёт вычисленные
+/// параметры в numeric `RunFunction` dispatcher. Безопасный subset включает
+/// `if/else`, `goto`, `call` и локальные присваивания; неизвестная команда
+/// останавливает instance до side effects следующей строки. Асинхронные
+/// dialog/wait owners остаются вне этого прохода.
+pub(crate) struct CScript<'a> {
+    source: &'a [u8],
+    point: usize,
+    context: ScriptExecutionContext,
+    integer_variables: BTreeMap<Vec<u8>, i32>,
+    string_variables: BTreeMap<Vec<u8>, Vec<u8>>,
+}
+
+impl<'a> CScript<'a> {
+    pub(crate) const fn new(source: &'a [u8], context: ScriptExecutionContext) -> Self {
+        Self {
+            source,
+            point: 0,
+            context,
+            integer_variables: BTreeMap::new(),
+            string_variables: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn run<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        game: &mut CGame,
+        runtime: &mut Runtime,
+    ) -> ScriptExecutionReport {
+        let mut report = ScriptExecutionReport::default();
+        while let Some(command) = self.read_command() {
+            report.commands_read += 1;
+            let command = trim_ascii(&command);
+            if command.is_empty() || command == b"{" || command == b"}" {
+                continue;
+            }
+            let name = command_name(command);
+            if name.eq_ignore_ascii_case(b"return") {
+                let expression = trim_ascii(&command[6..]);
+                if !expression.is_empty() {
+                    report.last_return = self
+                        .evaluate_integer(game, runtime, expression)
+                        .unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+                }
+                break;
+            }
+            if name.eq_ignore_ascii_case(b"<begin>")
+                || name.eq_ignore_ascii_case(b"<end>")
+                || command.ends_with(b":")
+            {
+                continue;
+            }
+            if name.eq_ignore_ascii_case(b"if") {
+                let condition = function_parameters(command)
+                    .and_then(|values| values.first().copied())
+                    .or_else(|| {
+                        command
+                            .get(name.len()..)
+                            .map(trim_ascii)
+                            .filter(|value| !value.is_empty())
+                    });
+                let Some(condition) = condition else {
+                    report
+                        .outcomes
+                        .push(ScriptCommandOutcome::InvalidExpression);
+                    break;
+                };
+                let Some(condition) = self.evaluate_integer(game, runtime, condition) else {
+                    report
+                        .outcomes
+                        .push(ScriptCommandOutcome::InvalidExpression);
+                    break;
+                };
+                if condition == 0 && !self.skip_next_block(true) {
+                    report
+                        .outcomes
+                        .push(ScriptCommandOutcome::InvalidExpression);
+                    break;
+                }
+                continue;
+            }
+            if name.eq_ignore_ascii_case(b"else") {
+                if !self.skip_next_block(false) {
+                    report
+                        .outcomes
+                        .push(ScriptCommandOutcome::InvalidExpression);
+                    break;
+                }
+                continue;
+            }
+            if name.eq_ignore_ascii_case(b"goto") {
+                let Some(target) = function_parameters(command)
+                    .and_then(|values| values.first().copied())
+                    .map(unquote)
+                    .filter(|value| !value.is_empty())
+                else {
+                    report
+                        .outcomes
+                        .push(ScriptCommandOutcome::InvalidExpression);
+                    break;
+                };
+                if !self.jump_to(target) {
+                    report
+                        .outcomes
+                        .push(ScriptCommandOutcome::InvalidExpression);
+                    break;
+                }
+                continue;
+            }
+            if name.eq_ignore_ascii_case(b"call") {
+                let Some(path) = function_parameters(command)
+                    .and_then(|values| values.first().copied())
+                    .and_then(|value| self.evaluate_string(game, runtime, value))
+                else {
+                    report
+                        .outcomes
+                        .push(ScriptCommandOutcome::InvalidExpression);
+                    break;
+                };
+                let Some(source) = game.script_file_data(&path).map(<[u8]>::to_vec) else {
+                    report
+                        .outcomes
+                        .push(ScriptCommandOutcome::InvalidExpression);
+                    break;
+                };
+                let nested = CScript::new(&source, self.context).run(game, runtime);
+                report.function_calls += nested.function_calls;
+                report.last_return = nested.last_return;
+                report.outcomes.extend(nested.outcomes);
+                continue;
+            }
+            if let Some(assigned) = self.run_assignment(game, runtime, command) {
+                if assigned {
+                    continue;
+                }
+                report
+                    .outcomes
+                    .push(ScriptCommandOutcome::InvalidExpression);
+                break;
+            }
+            match self.run_function(game, runtime, command) {
+                ScriptCommandOutcome::Handled {
+                    function_id,
+                    legacy_return,
+                } => {
+                    report.function_calls += 1;
+                    report.last_return = legacy_return;
+                    report.outcomes.push(ScriptCommandOutcome::Handled {
+                        function_id,
+                        legacy_return,
+                    });
+                }
+                outcome => {
+                    report.outcomes.push(outcome);
+                    break;
+                }
+            }
+        }
+        report
+    }
+
+    fn run_function<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        game: &mut CGame,
+        runtime: &mut Runtime,
+        expression: &[u8],
+    ) -> ScriptCommandOutcome {
+        let Some((name, parameters)) = split_function(expression) else {
+            return ScriptCommandOutcome::UnknownFunction;
+        };
+        let Some(function_id) = game.script_function_id(name) else {
+            return ScriptCommandOutcome::UnknownFunction;
+        };
+        let mut integer_arguments = [None; 3];
+        let mut first_string = None;
+        if function_id == SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY {
+            first_string = parameters
+                .first()
+                .and_then(|parameter| self.evaluate_string(game, runtime, parameter));
+        } else {
+            for (index, parameter) in parameters.iter().take(3).enumerate() {
+                integer_arguments[index] = Some(
+                    self.evaluate_integer(game, runtime, parameter)
+                        .unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+                );
+            }
+        }
+        match dispatch_script_function(
+            game,
+            runtime,
+            self.context.player_id,
+            self.context.npc_id,
+            self.context.region_id,
+            function_id,
+            integer_arguments,
+            first_string.as_deref(),
+        ) {
+            ScriptFunctionDispatchOutcome::DifferentFunction => {
+                ScriptCommandOutcome::UnknownFunction
+            }
+            ScriptFunctionDispatchOutcome::Handled { legacy_return } => {
+                ScriptCommandOutcome::Handled {
+                    function_id,
+                    legacy_return,
+                }
+            }
+        }
+    }
+
+    fn evaluate_integer<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        game: &mut CGame,
+        runtime: &mut Runtime,
+        expression: &[u8],
+    ) -> Option<i32> {
+        let expression = strip_wrapped_parentheses(expression);
+        if expression.is_empty() {
+            return None;
+        }
+        for operation in [b"||".as_slice(), b"&&".as_slice()] {
+            if let Some(position) = find_top_level(expression, operation, false) {
+                let left = self.evaluate_integer(game, runtime, &expression[..position])?;
+                let right = self.evaluate_integer(
+                    game,
+                    runtime,
+                    &expression[position + operation.len()..],
+                )?;
+                return Some(i32::from(if operation == b"||" {
+                    left != 0 || right != 0
+                } else {
+                    left != 0 && right != 0
+                }));
+            }
+        }
+        for operation in [
+            b"==".as_slice(),
+            b"!=".as_slice(),
+            b">=".as_slice(),
+            b"<=".as_slice(),
+            b">".as_slice(),
+            b"<".as_slice(),
+        ] {
+            if let Some(position) = find_top_level(expression, operation, true) {
+                let left = self.evaluate_integer(game, runtime, &expression[..position])?;
+                let right = self.evaluate_integer(
+                    game,
+                    runtime,
+                    &expression[position + operation.len()..],
+                )?;
+                let result = match operation {
+                    b"==" => left == right,
+                    b"!=" => left != right,
+                    b">=" => left >= right,
+                    b"<=" => left <= right,
+                    b">" => left > right,
+                    _ => left < right,
+                };
+                return Some(i32::from(result));
+            }
+        }
+        if let Some(position) = find_top_level_chars_reverse(expression, b"&|", false) {
+            let left = self.evaluate_integer(game, runtime, &expression[..position])?;
+            let right = self.evaluate_integer(game, runtime, &expression[position + 1..])?;
+            return Some(if expression[position] == b'&' {
+                left & right
+            } else {
+                left | right
+            });
+        }
+        if let Some(position) = find_top_level_chars_reverse(expression, b"+-", true) {
+            let left = self.evaluate_integer(game, runtime, &expression[..position])?;
+            let right = self.evaluate_integer(game, runtime, &expression[position + 1..])?;
+            return if expression[position] == b'+' {
+                left.checked_add(right)
+            } else {
+                left.checked_sub(right)
+            };
+        }
+        if let Some(position) = find_top_level_chars_reverse(expression, b"*/%", false) {
+            let left = self.evaluate_integer(game, runtime, &expression[..position])?;
+            let right = self.evaluate_integer(game, runtime, &expression[position + 1..])?;
+            return match expression[position] {
+                b'*' => left.checked_mul(right),
+                b'/' => left.checked_div(right),
+                _ => left.checked_rem(right),
+            };
+        }
+        if let Ok(text) = std::str::from_utf8(expression) {
+            if let Ok(value) = text.parse::<i32>() {
+                return Some(value);
+            }
+        }
+        if expression.starts_with(b"$") {
+            let (name, index) = split_variable_reference(expression)?;
+            let index = match index {
+                Some(index) => {
+                    usize::try_from(self.evaluate_integer(game, runtime, index)?).ok()?
+                }
+                None => 0,
+            };
+            if index == 0 {
+                if let Some(value) = self.integer_variables.get(&normalize_name(name)) {
+                    return Some(*value);
+                }
+            }
+            return game.general_variables().integer(name, index);
+        }
+        match self.run_function(game, runtime, expression) {
+            ScriptCommandOutcome::Handled { legacy_return, .. } => Some(legacy_return),
+            ScriptCommandOutcome::UnknownFunction | ScriptCommandOutcome::InvalidExpression => None,
+        }
+    }
+
+    fn evaluate_string<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        game: &mut CGame,
+        runtime: &mut Runtime,
+        expression: &[u8],
+    ) -> Option<Vec<u8>> {
+        let expression = trim_ascii(expression);
+        if expression.len() >= 2
+            && matches!(expression[0], b'"' | b'\'')
+            && expression.last() == Some(&expression[0])
+        {
+            return Some(expression[1..expression.len() - 1].to_vec());
+        }
+        if expression.starts_with(b"#") {
+            if let Some(value) = self.string_variables.get(&normalize_name(expression)) {
+                return Some(value.clone());
+            }
+            return game
+                .general_variables()
+                .string(expression)
+                .map(<[u8]>::to_vec);
+        }
+        self.evaluate_integer(game, runtime, expression)
+            .map(|value| value.to_string().into_bytes())
+    }
+
+    fn read_command(&mut self) -> Option<Vec<u8>> {
+        let length = self.source.len();
+        while self.point < length {
+            if self.source.get(self.point..self.point + 2) == Some(b"//") {
+                self.point += 2;
+                while self.point < length && !matches!(self.source[self.point], b'\n' | b'\r') {
+                    self.point += 1;
+                }
+                continue;
+            }
+            if self.source.get(self.point..self.point + 2) == Some(b"/*") {
+                self.point += 2;
+                while self.point + 1 < length
+                    && self.source.get(self.point..self.point + 2) != Some(b"*/")
+                {
+                    self.point += 1;
+                }
+                self.point = (self.point + 2).min(length);
+                continue;
+            }
+            if is_command_start(self.source[self.point]) {
+                break;
+            }
+            self.point += 1;
+        }
+        if self.point >= length {
+            return None;
+        }
+        let start = self.point;
+        let mut quoted = false;
+        while self.point < length {
+            let byte = self.source[self.point];
+            if byte == b'"' {
+                quoted = !quoted;
+            }
+            if !quoted && matches!(byte, b';' | b'\t' | b'\n' | b'\r') {
+                let end = self.point;
+                self.point += 1;
+                return Some(self.source[start..end].to_vec());
+            }
+            self.point += 1;
+        }
+        Some(self.source[start..].to_vec())
+    }
+
+    fn run_assignment<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        game: &mut CGame,
+        runtime: &mut Runtime,
+        command: &[u8],
+    ) -> Option<bool> {
+        let Some(position) = find_assignment(command) else {
+            return None;
+        };
+        let name = trim_ascii(&command[..position]);
+        let expression = trim_ascii(&command[position + 1..]);
+        if name.starts_with(b"$") {
+            let Some(value) = self.evaluate_integer(game, runtime, expression) else {
+                return Some(false);
+            };
+            self.integer_variables.insert(normalize_name(name), value);
+            return Some(true);
+        }
+        if name.starts_with(b"#") {
+            let Some(value) = self.evaluate_string(game, runtime, expression) else {
+                return Some(false);
+            };
+            self.string_variables.insert(normalize_name(name), value);
+            return Some(true);
+        }
+        None
+    }
+
+    fn skip_next_block(&mut self, preserve_else: bool) -> bool {
+        let saved = self.point;
+        let Some(command) = self.read_command() else {
+            return false;
+        };
+        if trim_ascii(&command) != b"{" {
+            self.point = saved;
+            return false;
+        }
+        let mut depth = 1_i32;
+        while let Some(command) = self.read_command() {
+            match trim_ascii(&command) {
+                b"{" => depth += 1,
+                b"}" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        if preserve_else {
+                            let after_block = self.point;
+                            let Some(next) = self.read_command() else {
+                                return true;
+                            };
+                            if !command_name(trim_ascii(&next)).eq_ignore_ascii_case(b"else") {
+                                self.point = after_block;
+                            }
+                        }
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn jump_to(&mut self, target: &[u8]) -> bool {
+        let saved = self.point;
+        self.point = 0;
+        while let Some(command) = self.read_command() {
+            let command = trim_ascii(&command);
+            if command.ends_with(b":") && trim_ascii(&command[..command.len() - 1]) == target {
+                return true;
+            }
+        }
+        self.point = saved;
+        false
+    }
+}
+
+impl CGame {
+    pub(crate) fn run_script_file<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        path: &[u8],
+        context: ScriptExecutionContext,
+        runtime: &mut Runtime,
+    ) -> Option<ScriptExecutionReport> {
+        let source = self.script_file_data(path)?.to_vec();
+        Some(CScript::new(&source, context).run(self, runtime))
+    }
+}
+
+fn trim_ascii(mut value: &[u8]) -> &[u8] {
+    while value.first().is_some_and(u8::is_ascii_whitespace) {
+        value = &value[1..];
+    }
+    while value.last().is_some_and(u8::is_ascii_whitespace) {
+        value = &value[..value.len() - 1];
+    }
+    value
+}
+
+fn strip_wrapped_parentheses(value: &[u8]) -> &[u8] {
+    let mut value = trim_ascii(value);
+    loop {
+        if value.len() < 2 || value[0] != b'(' || value[value.len() - 1] != b')' {
+            return value;
+        }
+        let mut depth = 0_i32;
+        let mut quoted = false;
+        let mut encloses_all = true;
+        for (index, byte) in value.iter().copied().enumerate() {
+            if byte == b'"' {
+                quoted = !quoted;
+            } else if !quoted && byte == b'(' {
+                depth += 1;
+            } else if !quoted && byte == b')' {
+                depth -= 1;
+                if depth == 0 && index + 1 != value.len() {
+                    encloses_all = false;
+                    break;
+                }
+            }
+        }
+        if !encloses_all || depth != 0 {
+            return value;
+        }
+        value = trim_ascii(&value[1..value.len() - 1]);
+    }
+}
+
+fn split_function(expression: &[u8]) -> Option<(&[u8], Vec<&[u8]>)> {
+    let expression = trim_ascii(expression);
+    let open = expression.iter().position(|byte| *byte == b'(')?;
+    let name = trim_ascii(&expression[..open]);
+    if name.is_empty() {
+        return None;
+    }
+    let mut parameters = Vec::new();
+    let mut start = open + 1;
+    let mut depth = 0_i32;
+    let mut quoted = false;
+    for position in open + 1..expression.len() {
+        match expression[position] {
+            b'"' => quoted = !quoted,
+            b'(' if !quoted => depth += 1,
+            b')' if !quoted && depth == 0 => {
+                let parameter = trim_ascii(&expression[start..position]);
+                if !parameter.is_empty() {
+                    parameters.push(parameter);
+                }
+                return Some((name, parameters));
+            }
+            b')' if !quoted => depth -= 1,
+            b',' if !quoted && depth == 0 => {
+                parameters.push(trim_ascii(&expression[start..position]));
+                start = position + 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn function_parameters(expression: &[u8]) -> Option<Vec<&[u8]>> {
+    split_function(expression).map(|(_, parameters)| parameters)
+}
+
+fn command_name(command: &[u8]) -> &[u8] {
+    let end = command
+        .iter()
+        .position(|byte| byte.is_ascii_whitespace() || matches!(*byte, b'(' | b';'))
+        .unwrap_or(command.len());
+    &command[..end]
+}
+
+fn unquote(value: &[u8]) -> &[u8] {
+    let value = trim_ascii(value);
+    if value.len() >= 2 && matches!(value[0], b'"' | b'\'') && value.last() == Some(&value[0]) {
+        &value[1..value.len() - 1]
+    } else {
+        value
+    }
+}
+
+fn normalize_name(value: &[u8]) -> Vec<u8> {
+    value.iter().map(u8::to_ascii_lowercase).collect()
+}
+
+fn find_assignment(value: &[u8]) -> Option<usize> {
+    let mut depth = 0_i32;
+    let mut quoted = false;
+    for (position, byte) in value.iter().copied().enumerate() {
+        match byte {
+            b'"' => quoted = !quoted,
+            b'(' if !quoted => depth += 1,
+            b')' if !quoted => depth -= 1,
+            b'=' if !quoted && depth == 0 => {
+                let previous = position.checked_sub(1).and_then(|index| value.get(index));
+                let next = value.get(position + 1);
+                if !matches!(previous, Some(b'=' | b'!' | b'<' | b'>')) && next != Some(&b'=') {
+                    return Some(position);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn find_top_level(value: &[u8], needle: &[u8], reverse: bool) -> Option<usize> {
+    let mut found = None;
+    let mut depth = 0_i32;
+    let mut quoted = false;
+    let mut position = 0;
+    while position + needle.len() <= value.len() {
+        match value[position] {
+            b'"' => quoted = !quoted,
+            b'(' if !quoted => depth += 1,
+            b')' if !quoted => depth -= 1,
+            _ => {}
+        }
+        if !quoted && depth == 0 && &value[position..position + needle.len()] == needle {
+            if !reverse {
+                return Some(position);
+            }
+            found = Some(position);
+        }
+        position += 1;
+    }
+    found
+}
+
+fn find_top_level_chars_reverse(
+    value: &[u8],
+    operations: &[u8],
+    allow_unary: bool,
+) -> Option<usize> {
+    let mut depth = 0_i32;
+    let mut quoted = false;
+    for position in (0..value.len()).rev() {
+        let byte = value[position];
+        match byte {
+            b'"' => {
+                quoted = !quoted;
+                continue;
+            }
+            b')' if !quoted => {
+                depth += 1;
+                continue;
+            }
+            b'(' if !quoted => {
+                depth -= 1;
+                continue;
+            }
+            _ => {}
+        }
+        if quoted || depth != 0 || !operations.contains(&byte) {
+            continue;
+        }
+        if allow_unary && matches!(byte, b'+' | b'-') {
+            let previous = trim_ascii(&value[..position]).last().copied();
+            if previous.is_none_or(|previous| b"(=+-*/%&|".contains(&previous)) {
+                continue;
+            }
+        }
+        return Some(position);
+    }
+    None
+}
+
+fn split_variable_reference(value: &[u8]) -> Option<(&[u8], Option<&[u8]>)> {
+    let open = value.iter().position(|byte| *byte == b'[');
+    match open {
+        None => Some((value, None)),
+        Some(open) if value.last() == Some(&b']') => Some((
+            &value[..open],
+            Some(trim_ascii(&value[open + 1..value.len() - 1])),
+        )),
+        Some(_) => None,
+    }
+}
+
+fn is_command_start(value: u8) -> bool {
+    matches!(value, b'{' | b'}' | b'<' | b'>' | b'#' | b'$') || value.is_ascii_alphabetic()
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
