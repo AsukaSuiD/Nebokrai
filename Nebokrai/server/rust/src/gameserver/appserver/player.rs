@@ -1930,6 +1930,13 @@ impl CPlayer {
         self.country
     }
 
+    /// `CPlayer::SetScriptValue("btCountry")` сужает signed script value до
+    /// исходного byte storage без country-range validation.
+    pub(crate) const fn set_script_country(&mut self, requested: i32) -> i32 {
+        self.country = requested as u8;
+        self.country as i32
+    }
+
     /// Ответ World `0x7FF01` меняет страну только для signed диапазона `1..4`;
     /// невалидное значение всё равно публикуется caller-ом в `0xC0301`.
     pub(crate) fn apply_world_country(&mut self, requested: i32) -> PlayerCountryMutationReport {

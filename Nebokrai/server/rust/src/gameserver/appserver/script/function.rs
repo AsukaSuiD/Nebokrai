@@ -128,6 +128,11 @@
 //! `GetMe/SetMe` той же ветви читают level/occupation/experience, а DWORD write
 //! сохраняет pre-mutation `BF80C`, `UpdateProperty`, `BF721` и reached
 //! `CheckLevel` terminal result.
+//! Достигнутый `xinlian/hy_pg.script` расширяет этот owner до `GetMe(lID/
+//! btCountry/lPos)`, локального `3000 / SetPlayer(btCountry)` и `5203 /
+//! PostCountryInfo`. Named write сохраняет byte narrowing, `UpdateProperty`,
+//! адресные `BF80C/BF721`; notice проходит существующий строгий маршрут
+//! `0x5FF16 → 0x7FC13 → 0xBF806` только игрокам выбранной страны.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -191,6 +196,7 @@ pub(crate) const SCRIPT_FUNCTION_SECOND: i32 = 23;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
 pub(crate) const SCRIPT_FUNCTION_GET_NAME: i32 = 2998;
+pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
 pub(crate) const SCRIPT_FUNCTION_DELETE_SKILL: i32 = 3102;
@@ -232,6 +238,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
 pub(crate) const SCRIPT_FUNCTION_GET_AREA_ID: i32 = 5413;
 pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
 pub(crate) const SCRIPT_FUNCTION_POST_WORLD_INFO: i32 = 5202;
+pub(crate) const SCRIPT_FUNCTION_POST_COUNTRY_INFO: i32 = 5203;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
@@ -3009,6 +3016,11 @@ pub(crate) fn script_function_parameter_kind(
             1 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_SET_PLAYER => match index {
+            0 | 1 => String,
+            2 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_GET_MONEY_BY_NAME
         | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME
         | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => match index {
@@ -3096,6 +3108,11 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_POST_WORLD_INFO => match index {
             0 => String,
             1 | 2 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_POST_COUNTRY_INFO => match index {
+            0 => String,
+            1..=3 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_ADD_INCREMENT_LOG => match index {
@@ -3959,6 +3976,12 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             let legacy_return = if property.eq_ignore_ascii_case(b"lRegionID") {
                 player.server_region_id().unwrap_or_default()
+            } else if property.eq_ignore_ascii_case(b"lID") {
+                player.player_id()
+            } else if property.eq_ignore_ascii_case(b"btCountry") {
+                i32::from(player.country())
+            } else if property.eq_ignore_ascii_case(b"lPos") {
+                player.shape().get_position()
             } else if property.eq_ignore_ascii_case(b"dwVigour") {
                 player.vigour() as i32
             } else if property.eq_ignore_ascii_case(b"lLevel") {
@@ -3998,6 +4021,18 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: game.set_script_player_level(player_id, target_name, level as u8),
+            })
+        }
+        SCRIPT_FUNCTION_SET_PLAYER => {
+            let (Some(target_name), Some(property)) = (string_arguments[0], string_arguments[1])
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            let requested = integer_arguments[2].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game
+                    .set_named_script_player_property(target_name, property, requested, runtime)
+                    .unwrap_or(-1),
             })
         }
         SCRIPT_FUNCTION_CREATE_FACTION => {
@@ -4457,6 +4492,47 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     .send_to_player(game.net_server(), player_id);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_POST_COUNTRY_INFO => {
+            let (Some(text), Some(country_id)) = (
+                string_arguments[0],
+                integer_arguments[1].filter(|value| (1..=4).contains(value)),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if argument_count > 4 || text.len() > 255 || text.contains(&0) {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(player_id) = script_player_id.filter(|player_id| *player_id > 0) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let color = match integer_arguments[2] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) => {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                }
+                Some(color) => color,
+                None => -1,
+            };
+            let background = match integer_arguments[3] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) => {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                }
+                Some(background) => background,
+                None => 0,
+            };
+            let mut request = CMessage::new(0x0005_ff16);
+            request.add_long(player_id);
+            request.base_mut().add(text);
+            request.add_byte(0);
+            request.add_long(country_id);
+            request.add_long(color);
+            request.add_long(background);
+            match request.send(game, false) {
+                Ok(delivery) if delivery != 0 => {
+                    Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+                }
+                _ => Some(ScriptFunctionDispatchOutcome::Invalid),
+            }
         }
         SCRIPT_FUNCTION_TALK_BOX => {
             let Some(text) = string_arguments[0].filter(|text| text.len() < 0x5000) else {
