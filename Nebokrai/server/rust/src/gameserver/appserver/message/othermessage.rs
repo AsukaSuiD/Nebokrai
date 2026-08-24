@@ -15,6 +15,8 @@
 //! local distance/region/faction/private delivery и conditional chat-log.
 //! Goods-link lookup `0x8FB03 -> 0x5FD04 -> 0x7FA07` сохраняет requester/link
 //! identities и публикует World result клиенту как exact `0xBF80D` wire.
+//! Region NPC-name request `0x8FB06` публикует materialized startup list
+//! клиенту как count + exact concatenated name records `0xBF813`.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -30,6 +32,7 @@ const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
 const PLAYER_CHAT_REQUEST: u32 = 0x0008_fb01;
 const PLAYER_GOODS_LINK_REQUEST: u32 = 0x0008_fb03;
 const WORLD_GOODS_LINK_RESPONSE: u32 = 0x0007_fa07;
+const PLAYER_NPC_NAME_LIST_REQUEST: u32 = 0x0008_fb06;
 const WORLD_PLAYER_RENAME_REQUEST: i32 = 0x0005_fd05;
 const WORLD_PLAYER_RENAME_RESPONSE: u32 = 0x0007_fa0e;
 const PLAYER_RENAME_RESPONSE: i32 = 0x000b_f80f;
@@ -78,6 +81,11 @@ pub(crate) enum GameOtherMessageOutcome {
         delivery: Result<i32, SendMessageError>,
     },
     GoodsLinkLookupDelivered {
+        delivery: i32,
+    },
+    NpcNameListDelivered {
+        count: i32,
+        bytes: usize,
         delivery: i32,
     },
     LeiTingUpdated {
@@ -837,6 +845,37 @@ pub(crate) fn dispatch_game_other_message(
             })
         })();
         return Some(result);
+    }
+    if message_type == PLAYER_NPC_NAME_LIST_REQUEST {
+        message.resolve_player_context(game);
+        let Some(player_id) = message
+            .player_id()
+            .filter(|player_id| game.find_player(*player_id).is_some())
+        else {
+            return Some(Ok(GameOtherMessageReport {
+                message_type,
+                player_id: message.player_id().unwrap_or(0),
+                outcome: GameOtherMessageOutcome::PlayerMissing,
+            }));
+        };
+        let outcome = message.region_id().and_then(|region_id| {
+            let region = game.find_region(region_id)?.base();
+            let count = region.npc_name_list_count();
+            let names = region.npc_name_list();
+            let mut response = CMessage::new(0x000b_f813);
+            response.base_mut().add_long(count);
+            response.base_mut().add(names);
+            Some(GameOtherMessageOutcome::NpcNameListDelivered {
+                count,
+                bytes: names.len(),
+                delivery: response.send_to_player(game.net_server(), player_id),
+            })
+        });
+        return Some(Ok(GameOtherMessageReport {
+            message_type,
+            player_id,
+            outcome: outcome.unwrap_or(GameOtherMessageOutcome::PlayerMissing),
+        }));
     }
     if matches!(message_type, WORLD_TALK_REQUEST | COUNTRY_TALK_REQUEST) {
         return Some(dispatch_public_talk(
