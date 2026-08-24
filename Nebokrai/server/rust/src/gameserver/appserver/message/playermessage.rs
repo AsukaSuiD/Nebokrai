@@ -4,15 +4,28 @@
 //! `appserver/message/playermessage.cpp`. Материализован friend lifecycle
 //! `0x8FA0D..0x8FA0F`: byte-exact names, 40-entry ordered state, reciprocal
 //! accept mutation, addressed `0xBF719/71A/71B` и WorldServer
-//! `0x60501/0x60502`. Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `0x60501/0x60502`. Public identity `0x8FA11/17/18` замыкает headpiece
+//! state/around publication, honor-country-appellation snapshot и attempt ID
+//! до server-trusted change-appellation script boundary. Остальные opcode ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::PlayerFriendAddOutcome;
+use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const REQUEST_FRIEND: u32 = 0x0008_fa0d;
 const ANSWER_FRIEND: u32 = 0x0008_fa0e;
 const DELETE_FRIEND: u32 = 0x0008_fa0f;
+const SET_DISPLAY_HEAD_PIECE: u32 = 0x0008_fa11;
+const QUERY_HONOR_IDENTITY: u32 = 0x0008_fa17;
+const REQUEST_CHANGE_APPELLATION: u32 = 0x0008_fa18;
+
+pub(crate) trait GamePlayerMessageRuntime {
+    /// Выполняет concrete `PlayerRunScript` с server-trusted path; VM и
+    /// script-data owner ещё не материализованы в `CGame`.
+    fn run_change_appellation_script(&mut self, game: &mut CGame, player_id: i32, path: &[u8]);
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GamePlayerMessageError {
@@ -27,11 +40,15 @@ pub(crate) enum GamePlayerMessageOutcome {
     FriendAnswered,
     FriendMissing,
     FriendDeleted,
+    DisplayHeadPieceChanged,
+    HonorIdentitySent,
+    AppellationChangeRequested,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GamePlayerMessageDelivery {
     Player(i32),
+    Around(Option<Result<i32, ShapeCoordinateBlock>>),
     World(Result<i32, SendMessageError>),
 }
 
@@ -107,12 +124,21 @@ fn apply_friend_add(
     }
 }
 
-pub(crate) fn dispatch_game_player_message(
+pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
+    runtime: &mut Runtime,
 ) -> Option<Result<GamePlayerMessageReport, GamePlayerMessageError>> {
     let message_type = message.message_type() as u32;
-    if !matches!(message_type, REQUEST_FRIEND | ANSWER_FRIEND | DELETE_FRIEND) {
+    if !matches!(
+        message_type,
+        REQUEST_FRIEND
+            | ANSWER_FRIEND
+            | DELETE_FRIEND
+            | SET_DISPLAY_HEAD_PIECE
+            | QUERY_HONOR_IDENTITY
+            | REQUEST_CHANGE_APPELLATION
+    ) {
         return None;
     }
     message.resolve_player_context(game);
@@ -241,6 +267,62 @@ pub(crate) fn dispatch_game_player_message(
                 response.send_to_player(game.net_server(), player_id),
             ));
             report.outcome = GamePlayerMessageOutcome::FriendDeleted;
+        }
+        SET_DISPLAY_HEAD_PIECE => {
+            let Some(display) = message.base_mut().get_char() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "display head piece",
+                )));
+            };
+            let display = display != 0;
+            game.find_player_mut(player_id)
+                .expect("display-head player сохранён после context lookup")
+                .set_display_head_piece(display);
+            let mut response = CMessage::new(0x000b_f722);
+            response.add_long(player_id);
+            response.base_mut().add_byte(u8::from(display));
+            report.deliveries.push(GamePlayerMessageDelivery::Around(
+                game.send_player_shape_around(player_id, Some(player_id), &response),
+            ));
+            report.outcome = GamePlayerMessageOutcome::DisplayHeadPieceChanged;
+        }
+        QUERY_HONOR_IDENTITY => {
+            let country_identity = game.player_country_identity(player_id);
+            let honor = game
+                .find_player(player_id)
+                .expect("honor player сохранён после context lookup")
+                .honor_snapshot();
+            let mut response = CMessage::new(0x000b_f737);
+            response.base_mut().add_ulong(honor.rank_of_nobility_id);
+            response.base_mut().add_ulong(u32::from(country_identity));
+            response.base_mut().add_ulong(honor.appellation_id);
+            response.base_mut().add_ulong(honor.days_eliminate);
+            response.base_mut().add_ulong(honor.weeks_eliminate);
+            response.base_mut().add_ulong(honor.months_eliminate);
+            response.base_mut().add_ulong(honor.total_eliminate);
+            report.deliveries.push(GamePlayerMessageDelivery::Player(
+                response.send_to_player(game.net_server(), player_id),
+            ));
+            report.outcome = GamePlayerMessageOutcome::HonorIdentitySent;
+        }
+        REQUEST_CHANGE_APPELLATION => {
+            let Some(appellation_id) = message.base_mut().get_long() else {
+                return Some(Err(GamePlayerMessageError::MissingField("appellation id")));
+            };
+            let Some(_legacy_ignored) = message.base_mut().get_long() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "appellation request tail",
+                )));
+            };
+            game.find_player_mut(player_id)
+                .expect("appellation player сохранён после context lookup")
+                .request_change_appellation_state(appellation_id as u32);
+            runtime.run_change_appellation_script(
+                game,
+                player_id,
+                b"scripts/circle/honorrank/changeappellation.script",
+            );
+            report.outcome = GamePlayerMessageOutcome::AppellationChangeRequested;
         }
         _ => unreachable!("friend opcode отфильтрован до decode"),
     }

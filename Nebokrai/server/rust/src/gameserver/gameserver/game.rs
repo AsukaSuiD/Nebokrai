@@ -203,6 +203,8 @@
 //! maps, owned ordered friend state, addressed client wire и WS `0x60501/02`.
 //! Обратные WS presence `0x7F904/905` сохраняют исходный payload и доходят до
 //! клиента как addressed `0xBF404/405`, замыкая online/offline контракт.
+//! Public identity commands связывают appearance around wire, honor snapshot,
+//! concrete country job lookup и appellation attempt со script runtime.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -423,7 +425,8 @@ use crate::gameserver::appserver::message::organsysmessage::{
     dispatch_game_organizing_war_message,
 };
 use crate::gameserver::appserver::message::playermessage::{
-    GamePlayerMessageError, GamePlayerMessageReport, dispatch_game_player_message,
+    GamePlayerMessageError, GamePlayerMessageReport, GamePlayerMessageRuntime,
+    dispatch_game_player_message,
 };
 use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
@@ -2618,6 +2621,7 @@ pub(crate) trait GameMainLoopRuntime:
     + GameGoodsMessageRuntime
     + GameSkillMessageRuntime
     + GameShapeMessageRuntime
+    + GamePlayerMessageRuntime
     + IncrementShopBillingContext
 {
     fn exit_requested(&self) -> bool;
@@ -5587,6 +5591,18 @@ impl CGame {
 
     pub(crate) const fn country_handler_mut(&mut self) -> &mut CCountryHandler {
         &mut self.country_handler
+    }
+
+    pub(crate) fn player_country_identity(&mut self, player_id: i32) -> u8 {
+        let Some((country_id, player_id)) = self
+            .find_player(player_id)
+            .map(|player| (player.country(), player.player_id()))
+        else {
+            return 0;
+        };
+        self.country_handler
+            .country_mut(country_id)
+            .map_or(0, |country| country.identity_for_player(player_id))
     }
 
     pub(crate) const fn attack_city_sys(&self) -> &CAttackCitySys {
@@ -14269,7 +14285,7 @@ impl CGame {
             skill_messages.push(report);
         } else if let Some(report) = dispatch_game_shape_message(message, self, runtime) {
             shape_messages.push(report);
-        } else if let Some(report) = dispatch_game_player_message(message, self) {
+        } else if let Some(report) = dispatch_game_player_message(message, self, runtime) {
             player_messages.push(report);
         } else if let Some(report) = dispatch_game_log_message(message, self) {
             log_messages.push(report);

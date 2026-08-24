@@ -132,6 +132,9 @@
 //! Friend owner хранит исходный ordered список до 40 byte-exact имён и online
 //! flag; message caller замыкает reciprocal mutation, World persistence и
 //! addressed client result, поэтому `AddFriend/DelFriend` RAW удалён.
+//! Public identity owner хранит headpiece/appellation/honor state; country job
+//! вычисляется concrete `CCountry`, а change request записывает attempt ID до
+//! вызова server-trusted script owner-а.
 //! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
 //! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
 //! полиморфные session End/plug Exit принадлежат caller runtime-у.
@@ -1052,6 +1055,8 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) fairy_container_enabled: bool,
     pub(crate) hotkeys: [u32; 24],
     pub(crate) mode: u32,
+    pub(crate) display_head_piece: bool,
+    pub(crate) appellation_id: u32,
     pub(crate) head_picture: i32,
     pub(crate) face_picture: i32,
     pub(crate) health: u32,
@@ -1067,6 +1072,16 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) exploit: u32,
     pub(crate) gods_battle_faction: i32,
     pub(crate) szl: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerHonorSnapshot {
+    pub(crate) rank_of_nobility_id: u32,
+    pub(crate) appellation_id: u32,
+    pub(crate) days_eliminate: u32,
+    pub(crate) weeks_eliminate: u32,
+    pub(crate) months_eliminate: u32,
+    pub(crate) total_eliminate: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1713,6 +1728,29 @@ impl CPlayer {
 
     pub(crate) const fn base_properties(&self) -> PlayerBaseProperties {
         self.base_properties
+    }
+
+    pub(crate) const fn set_display_head_piece(&mut self, display: bool) {
+        self.base_properties.display_head_piece = display;
+    }
+
+    pub(crate) const fn display_head_piece(&self) -> bool {
+        self.base_properties.display_head_piece
+    }
+
+    pub(crate) const fn honor_snapshot(&self) -> PlayerHonorSnapshot {
+        PlayerHonorSnapshot {
+            rank_of_nobility_id: self.base_properties.rank_of_nobility_id,
+            appellation_id: self.base_properties.appellation_id,
+            days_eliminate: self.base_properties.days_honor_eliminate,
+            weeks_eliminate: self.base_properties.weeks_honor_eliminate,
+            months_eliminate: self.base_properties.months_honor_eliminate,
+            total_eliminate: self.base_properties.total_honor_eliminate,
+        }
+    }
+
+    pub(crate) const fn request_change_appellation_state(&mut self, appellation_id: u32) {
+        self.attempt_appellation_id = appellation_id;
     }
 
     pub(crate) const fn gods_battle_faction(&self) -> i32 {
@@ -8426,20 +8464,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::get_country_identity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:12150
-// RVA: 0x00045540
-// ADDRESS: 00445540
-// PROTOTYPE: uchar __thiscall get_country_identity(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::RestoreHpMp
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -9162,20 +9186,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x000585B0
 // ADDRESS: 004585b0
 // PROTOTYPE: bool __thiscall AdjustHonorRank(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::RequestChangeAppellation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:15208
-// RVA: 0x000585C0
-// ADDRESS: 004585c0
-// PROTOTYPE: bool __thiscall RequestChangeAppellation(ulong param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
