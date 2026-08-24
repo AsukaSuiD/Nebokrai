@@ -4,7 +4,9 @@
 //! `server/gameserver/appserver/message/goodsmessage.cpp`. Материализован
 //! полный combine-проход боевой феи: `0x8FC26` проверяет состав и публикует
 //! notification либо `0xBF92C`, а `0x8FC27` исполняет player/container/game
-//! mutations, old-client codec, сетевые результаты и аудит.
+//! mutations, old-client codec, сетевые результаты и аудит. `0x8FC28`
+//! продолжает тот же транспортный owner полным upgrade-проходом через RNG,
+//! player wallet, gems, equipment update и audit gates.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -16,20 +18,27 @@
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\goodsmessage.cpp
 
 use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyCombineCheck;
-use crate::gameserver::appserver::player::BattleFairyCombineReport;
-use crate::gameserver::gameserver::game::{BattleFairyCombineContext, CGame};
+use crate::gameserver::appserver::player::{BattleFairyCombineReport, BattleFairyUpgradeReport};
+use crate::gameserver::gameserver::game::{
+    BattleFairyCombineContext, BattleFairyUpgradeContext, CGame,
+};
 use crate::nets::netserver::message::CMessage;
 
 const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
 const COMBINE_BATTLE_FAIRY: u32 = 0x0008_fc27;
+const UPGRADE_BATTLE_FAIRY: u32 = 0x0008_fc28;
 
-pub(crate) trait GameGoodsMessageRuntime: BattleFairyCombineContext {}
+pub(crate) trait GameGoodsMessageRuntime:
+    BattleFairyCombineContext + BattleFairyUpgradeContext
+{
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameGoodsMessageOutcome {
     MissingPlayer,
     BattleFairyCombineCheck(BattleFairyCombineCheck),
     BattleFairyCombine(BattleFairyCombineReport),
+    BattleFairyUpgrade(BattleFairyUpgradeReport),
 }
 
 #[must_use = "goods-message report содержит routing и полный gameplay result"]
@@ -50,7 +59,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
-        CHECK_BATTLE_FAIRY_COMBINE | COMBINE_BATTLE_FAIRY
+        CHECK_BATTLE_FAIRY_COMBINE | COMBINE_BATTLE_FAIRY | UPGRADE_BATTLE_FAIRY
     ) {
         return None;
     }
@@ -74,6 +83,10 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
         ),
         COMBINE_BATTLE_FAIRY => GameGoodsMessageOutcome::BattleFairyCombine(
             game.combine_battle_fairy(player_id, runtime)
+                .expect("resolved message player остаётся в CGame во время synchronous dispatch"),
+        ),
+        UPGRADE_BATTLE_FAIRY => GameGoodsMessageOutcome::BattleFairyUpgrade(
+            game.upgrade_battle_fairy_equipment(player_id, runtime)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch"),
         ),
         _ => unreachable!("opcode отфильтрован перед dispatch"),

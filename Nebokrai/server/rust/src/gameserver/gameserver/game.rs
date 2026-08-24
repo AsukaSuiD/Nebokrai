@@ -1135,7 +1135,7 @@ pub(crate) trait BattleFairySkillResetContext {
     ) -> Vec<i32>;
 }
 
-pub(crate) trait BattleFairyUpgradeContext {
+pub(crate) trait BattleFairyUpgradeContext: BattleFairyOldClientCodec {
     fn publish_battle_fairy_upgrade_money(&mut self, effect: &BattleFairyUpgradeEffect)
     -> Vec<i32>;
     fn publish_battle_fairy_upgrade_container(
@@ -6948,7 +6948,6 @@ impl CGame {
     pub(crate) fn upgrade_battle_fairy_equipment<Context: BattleFairyUpgradeContext>(
         &mut self,
         player_id: i32,
-        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
         context: &mut Context,
     ) -> Option<crate::gameserver::appserver::player::BattleFairyUpgradeReport> {
         let log_gates = crate::gameserver::appserver::player::BattleFairyUpgradeLogGates {
@@ -6964,11 +6963,13 @@ impl CGame {
             );
             let player = players.get_mut(&player_id)?;
             let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+            let mut encode_old_client =
+                |goods: &CGoods| context.encode_battle_fairy_old_client(goods);
             player.upgrade_battle_fairy_equipment(
                 goods_factory,
                 log_gates,
                 &mut random,
-                encode_old_client,
+                &mut encode_old_client,
             )
         };
         for effect in report.effects.clone() {
