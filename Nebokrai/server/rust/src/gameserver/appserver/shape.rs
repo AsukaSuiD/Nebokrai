@@ -207,6 +207,7 @@ const MOVE_CHECK_CELLS: &[(usize, usize, MoveCheckCell)] = &[
 pub(crate) const SHAPE_CHANGE_NONE: i32 = 0;
 pub(crate) const SHAPE_CHANGE_DELETE: i32 = 1;
 pub(crate) const SHAPE_CHANGE_AREA: i32 = 3;
+pub(crate) const SHAPE_CHANGE_REGION: i32 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ShapeIdentity {
@@ -614,6 +615,43 @@ impl CShape {
 
     pub(crate) const fn set_change_state(&mut self, change_state: i32) {
         self.change_state = change_state;
+    }
+
+    /// Exact `CPlayer::ChangeRegion` local-server tail. Region membership
+    /// remains owned by `CServerRegion::AI`; the player only publishes its
+    /// deferred destination and `CS_CHANGEREGION` marker here.
+    pub(crate) const fn stage_region_change(
+        &mut self,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+    ) {
+        self.next_region_id = region_id;
+        self.next_tile_x = tile_x;
+        self.next_tile_y = tile_y;
+        self.next_direction = direction;
+        self.change_state = SHAPE_CHANGE_REGION;
+    }
+
+    /// Deferred `CServerRegion::AI` tail after removal from the old registry.
+    /// The destination registry is populated only by client enter ack `8F801`.
+    pub(crate) fn apply_staged_region_change(&mut self) -> (i32, i32, i32, i32) {
+        let destination = (
+            self.next_region_id,
+            self.next_tile_x,
+            self.next_tile_y,
+            self.next_direction,
+        );
+        self.region_id = self.next_region_id;
+        self.set_pos_xy_base(
+            self.next_tile_x as f32 + 0.5,
+            self.next_tile_y as f32 + 0.5,
+        );
+        self.set_direction(self.next_direction);
+        self.action = 0;
+        self.change_state = SHAPE_CHANGE_NONE;
+        destination
     }
 
     pub(crate) fn get_tile_x(&self) -> Result<i32, ShapeCoordinateBlock> {

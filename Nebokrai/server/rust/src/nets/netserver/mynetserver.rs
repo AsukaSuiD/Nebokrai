@@ -209,6 +209,15 @@ impl CMyNetServer {
         self.base.command_handle().send_all(frame)
     }
 
+    /// Exact successful cross-server handoff: resolve the client by its old
+    /// player map ID and clear that route before the destination reconnects.
+    pub(crate) fn clear_player_map_id(&self, player_id: i32) -> i32 {
+        let socket_id = self.base.get_socket_id_by_map_id(player_id);
+        self.base
+            .command_handle()
+            .set_client_map_id(socket_id, 0)
+    }
+
     /// Публикует exact synthetic `0x6FA01 + map ID + empty C-string`.
     pub(crate) fn on_map_id_error(&self, map_id: i32) {
         let mut message = CMessage::new(MAP_ID_ERROR_MESSAGE);

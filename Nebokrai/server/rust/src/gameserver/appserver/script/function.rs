@@ -70,6 +70,12 @@
 //! `dwVigour`; `SetMe` передаёт direct DWORD write в `CGame`,
 //! после чего проходит обязательный `UpdateProperty` runtime и
 //! адресный `0xBF721` с уже изменённым vigour.
+//! `2304 / ChangeRegion`, достигнутый следующим блоком `nodupe.script`,
+//! сохраняет все семь positional аргументов и их asymmetric defaults. Вызов
+//! проходит canonical `CGame`: business/session tail, same/local/proxy
+//! region state, `BF603/BF601/BF505`, faction/team wire, полный GameSave
+//! `5FA02`, World `7F802` и client `BF506`; локальная ветвь завершается через
+//! `CS_CHANGEREGION` AI queue и реальный `8F801` destination-enter caller.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -89,7 +95,8 @@ use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
     EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
     GameContainerMessageRuntime, NationCarriageReturnReport, NationCombatContext,
-    NationContendEnterReport, ServerRegionOwner, colored_player_notice_message,
+    NationContendEnterReport, ScriptRegionChangeContext, ServerRegionOwner,
+    colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
@@ -119,6 +126,7 @@ pub(crate) const SCRIPT_FUNCTION_MINUTE: i32 = 18;
 pub(crate) const SCRIPT_FUNCTION_DAY_OF_WEEK: i32 = 19;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
+pub(crate) const SCRIPT_FUNCTION_CHANGE_REGION: i32 = 2304;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
 pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS: i32 = 2201;
 pub(crate) const SCRIPT_FUNCTION_CHECK_GOODS: i32 = 2202;
@@ -204,6 +212,7 @@ pub(crate) trait ScriptFunctionRuntime:
     + GameContainerMessageRuntime
     + BattleFairyDeathContext
     + BattleFairySkillResetContext
+    + ScriptRegionChangeContext
 {
 }
 
@@ -216,6 +225,7 @@ impl<T> ScriptFunctionRuntime for T where
         + GameContainerMessageRuntime
         + BattleFairyDeathContext
         + BattleFairySkillResetContext
+        + ScriptRegionChangeContext
 {
 }
 
@@ -2365,6 +2375,10 @@ pub(crate) fn script_function_parameter_kind(
             1 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_CHANGE_REGION => match index {
+            0..=6 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_SCRIPT_IS_RUNNING | SCRIPT_FUNCTION_REMOVE_SCRIPT => match index {
             0 => Integer,
             1 => String,
@@ -2816,7 +2830,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
     script_path: &[u8],
     function_id: i32,
     argument_count: usize,
-    integer_arguments: [Option<i32>; 4],
+    integer_arguments: [Option<i32>; 7],
     string_arguments: [Option<&[u8]>; 2],
 ) -> Option<ScriptFunctionDispatchOutcome> {
     let player_id = script_player_id.unwrap_or_default();
@@ -2868,6 +2882,44 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                         ScriptFunctionDispatchOutcome::Handled { legacy_return }
                     }),
             )
+        }
+        SCRIPT_FUNCTION_CHANGE_REGION => {
+            let Some(target_region_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                // Exact dispatcher treats an absent/failed first parameter as
+                // a successful no-op and continues the calling script.
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let current_direction = game
+                .find_player(player_id)
+                .map(|player| player.shape().get_direction());
+            let Some(current_direction) = current_direction else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let integer = |index: usize| {
+                integer_arguments[index].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            };
+            let (tile_x, tile_y) = match (integer(1), integer(2)) {
+                (Some(tile_x), Some(tile_y)) => (tile_x, tile_y),
+                _ => (-1, -1),
+            };
+            let direction = integer(3).unwrap_or(current_direction);
+            let use_goods = integer(4).unwrap_or_default();
+            let range = integer(5).unwrap_or(2);
+            let carriage_distance = integer(6).unwrap_or_default();
+            let _ = game.change_script_player_region(
+                player_id,
+                target_region_id,
+                tile_x,
+                tile_y,
+                direction,
+                use_goods,
+                range,
+                carriage_distance,
+                runtime,
+            );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_GET_COUNTRY => {
             if argument_count != 0 {
@@ -3199,7 +3251,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     script_path: &[u8],
     function_id: i32,
     argument_count: usize,
-    integer_arguments: [Option<i32>; 4],
+    integer_arguments: [Option<i32>; 7],
     string_arguments: [Option<&[u8]>; 2],
 ) -> ScriptFunctionDispatchOutcome {
     if let Some(outcome) = run_core_player_script_function(
@@ -3329,7 +3381,12 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         runtime,
         script_player_id,
         function_id,
-        integer_arguments,
+        [
+            integer_arguments[0],
+            integer_arguments[1],
+            integer_arguments[2],
+            integer_arguments[3],
+        ],
         string_arguments,
     ) {
         return ScriptFunctionDispatchOutcome::Handled { legacy_return };

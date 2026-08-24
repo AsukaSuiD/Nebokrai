@@ -867,6 +867,16 @@ impl CSessionFactory {
             })
     }
 
+    /// Exact registry half of `query_session_by_owner`: legacy traversal is
+    /// pointer-based, while IDs here remain deterministic owner relations.
+    pub(crate) fn query_session_id_by_owner(&self, owner_type: i32, owner_id: i32) -> Option<i32> {
+        self.plugs
+            .values()
+            .find(|plug| plug.has_owner(owner_type, owner_id))
+            .map(|plug| plug.session_id())
+            .filter(|session_id| self.sessions.contains_key(session_id))
+    }
+
     pub(crate) fn end_session(&mut self, session_id: i32) -> Option<SessionEndReport> {
         let callback_plug_ids = self.sessions.get_mut(&session_id)?.end();
         let callback_plug_ids = callback_plug_ids

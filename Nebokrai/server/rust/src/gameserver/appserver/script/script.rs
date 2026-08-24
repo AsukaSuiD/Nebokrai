@@ -496,9 +496,9 @@ impl<'a> CScript<'a> {
                 legacy_return,
             };
         }
-        let mut integer_arguments = [None; 4];
+        let mut integer_arguments = [None; 7];
         let mut string_arguments: [Option<Vec<u8>>; 2] = [None, None];
-        for (index, parameter) in parameters.iter().take(4).enumerate() {
+        for (index, parameter) in parameters.iter().take(7).enumerate() {
             match script_function_parameter_kind(function_id, index) {
                 ScriptFunctionParameterKind::Integer => {
                     integer_arguments[index] = Some(

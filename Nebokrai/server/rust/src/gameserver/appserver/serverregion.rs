@@ -117,9 +117,9 @@ use super::region::{
     RegionReturnPoint, RegionStorageBlock,
 };
 use super::shape::{
-    CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
-    ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
-    ShapeRuntimeFacts, ShapeView,
+    CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, SHAPE_CHANGE_REGION, ShapeAreaCoordinates,
+    ShapeBlockError, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch,
+    ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
 use crate::public::guid::CGuid;
 use crate::setup::monsterlist::MonsterProperties;
@@ -608,6 +608,7 @@ pub(crate) struct CServerRegion {
     next_npc_id: NextNpcId,
     delete_shapes: Vec<ShapeIdentity>,
     change_area_shapes: Vec<ShapeIdentity>,
+    change_region_shapes: Vec<ShapeIdentity>,
     pub(crate) param: RegionParamState,
     pub(crate) return_setup: Option<ServerReturnSetup>,
     forbidden_make_goods: BTreeSet<Vec<u8>>,
@@ -1792,6 +1793,24 @@ impl CServerRegion {
 
     pub(crate) fn clear_staged_area_transitions(&mut self) {
         self.change_area_shapes.clear();
+    }
+
+    /// Сохраняет pointer-unique insert в `m_listChangeRegionShape`. В отличие
+    /// от area-перехода исходник не сбрасывает marker до deferred AI tail.
+    pub(crate) fn stage_region_transition(&mut self, shape: &CShape) -> bool {
+        if shape.change_state() != SHAPE_CHANGE_REGION {
+            return false;
+        }
+        let identity = shape.identity();
+        if self.change_region_shapes.contains(&identity) {
+            return false;
+        }
+        self.change_region_shapes.push(identity);
+        true
+    }
+
+    pub(crate) fn take_staged_region_transitions(&mut self) -> Vec<ShapeIdentity> {
+        std::mem::take(&mut self.change_region_shapes)
     }
 
     pub(crate) fn apply_area_transition<

@@ -1,6 +1,72 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Владелец region-message dispatcher-а GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/message/regionmessage.cpp`. Достигнутый `0x8F801` завершает
+//! локальный `CPlayer::ChangeRegion`: проверяет live player/region context,
+//! снимает `m_bInChangingRegion`, переносит client IP, добавляет player в
+//! destination spatial registry и лишь затем передаёт serialization/weather/
+//! state tail runtime-owner-у. Остальные opcodes ниже остаются RAW.
+
+use crate::gameserver::gameserver::game::{CGame, GameRegionEnterContext, GameRegionEnterReport};
+use crate::nets::netserver::message::CMessage;
+
+const ENTER_CHANGED_REGION: u32 = 0x0008_f801;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameRegionMessageError {
+    InvalidPayloadSize { expected: usize, actual: usize },
+    MissingEntryToken,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameRegionMessageReport {
+    pub(crate) player_id: Option<i32>,
+    pub(crate) region_id: Option<i32>,
+    pub(crate) entry: Option<GameRegionEnterReport>,
+}
+
+pub(crate) fn dispatch_game_region_message<Context: GameRegionEnterContext>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    context: &mut Context,
+) -> Option<Result<GameRegionMessageReport, GameRegionMessageError>> {
+    if message.message_type() as u32 != ENTER_CHANGED_REGION {
+        return None;
+    }
+    let actual = message
+        .base_mut()
+        .as_wire_bytes()
+        .len()
+        .saturating_sub(message.base_mut().cursor());
+    if actual != 4 {
+        return Some(Err(GameRegionMessageError::InvalidPayloadSize {
+            expected: 4,
+            actual,
+        }));
+    }
+    message.resolve_player_context(game);
+    let player_id = message.player_id();
+    let region_id = message.region_id();
+    let Some(entry_token) = message.base_mut().get_long() else {
+        return Some(Err(GameRegionMessageError::MissingEntryToken));
+    };
+    let entry = match (player_id, region_id) {
+        (Some(player_id), Some(region_id)) => game.enter_changed_player_region(
+            player_id,
+            region_id,
+            entry_token,
+            message.ip(),
+            message.socket_id(),
+            context,
+        ),
+        _ => None,
+    };
+    Some(Ok(GameRegionMessageReport {
+        player_id,
+        region_id,
+        entry,
+    }))
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

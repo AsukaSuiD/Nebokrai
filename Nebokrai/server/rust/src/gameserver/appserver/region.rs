@@ -240,6 +240,22 @@ impl CRegion {
         self.country
     }
 
+    pub(crate) fn file_name(&self) -> &[u8] {
+        &self.file_name
+    }
+
+    pub(crate) const fn region_type(&self) -> i32 {
+        self.region_type
+    }
+
+    pub(crate) const fn resource_id(&self) -> i32 {
+        self.resource_id
+    }
+
+    pub(crate) const fn exp_scale_bits(&self) -> u32 {
+        self.exp_scale_bits
+    }
+
     pub(crate) fn set_name(&mut self, name: &[u8]) {
         self.base_object.set_name(name);
     }

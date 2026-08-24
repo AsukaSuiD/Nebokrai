@@ -231,7 +231,6 @@ use super::container::cwallet::{
 use super::container::cyuanbao::CYuanBao;
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
-use super::script::variablelist::{CVariableList, GameVariableMutationOutcome};
 use super::goods::cgoodsbaseproperties::{
     GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON, GAP_BF_AGILITY_POTENTIAL,
     GAP_BF_ALL_SKILL, GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_POTENTIAL,
@@ -250,6 +249,7 @@ use super::goods::cgoodsbaseproperties::{
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::{CMoveShape, MoveShapePositionFacts, MoveShapeSkill};
+use super::script::variablelist::{CVariableList, GameVariableMutationOutcome};
 use super::shape::{CShape, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
 use crate::public::auctionnode::CGoodsNode;
@@ -1580,6 +1580,7 @@ pub(crate) struct CPlayer {
     server_region_id: Option<i32>,
     in_changing_server: bool,
     in_changing_region: bool,
+    state_before_server_region_change: u16,
     current_progress: PlayerProgress,
     personal_shop_session_id: i32,
     personal_shop_plug_id: i32,
@@ -1707,6 +1708,7 @@ impl CPlayer {
             server_region_id,
             in_changing_server: false,
             in_changing_region: false,
+            state_before_server_region_change: 0,
             current_progress: PlayerProgress::None,
             personal_shop_session_id: 0,
             personal_shop_plug_id: 0,
@@ -1924,6 +1926,45 @@ impl CPlayer {
     ) {
         self.in_changing_server = in_changing_server;
         self.in_changing_region = in_changing_region;
+    }
+
+    /// Player-owned scalar tail локального `ChangeRegion`; фактическое
+    /// membership перемещение остаётся deferred у `CServerRegion::AI`.
+    pub(crate) fn stage_local_region_change(
+        &mut self,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+    ) {
+        self.in_changing_server = false;
+        self.in_changing_region = true;
+        self.recreate_carriage = false;
+        self.movement_shape_mut()
+            .stage_region_change(region_id, tile_x, tile_y, direction);
+    }
+
+    pub(crate) fn begin_server_region_change(&mut self) {
+        self.state_before_server_region_change = self.shape().get_state();
+        self.movement_shape_mut().set_state(0);
+        self.in_changing_server = true;
+        self.in_changing_region = true;
+        self.recreate_carriage = false;
+    }
+
+    pub(crate) fn cancel_server_region_change(&mut self) {
+        if self.in_changing_server {
+            let state = self.state_before_server_region_change;
+            self.movement_shape_mut().set_state(state);
+        }
+        self.in_changing_server = false;
+        self.in_changing_region = false;
+    }
+
+    pub(crate) fn apply_staged_local_region_change(&mut self) -> (i32, i32, i32, i32) {
+        let destination = self.movement_shape_mut().apply_staged_region_change();
+        self.server_region_id = Some(destination.0);
+        destination
     }
 
     pub(crate) const fn current_progress(&self) -> PlayerProgress {

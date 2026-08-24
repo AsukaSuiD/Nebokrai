@@ -64,6 +64,7 @@ pub(crate) mod appserver {
         pub(crate) mod organsysmessage;
         pub(crate) mod othermessage;
         pub(crate) mod playermessage;
+        pub(crate) mod regionmessage;
         pub(crate) mod sequencestring;
         pub(crate) mod servermessage;
         pub(crate) mod shopmessage;

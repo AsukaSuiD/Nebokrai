@@ -4,7 +4,8 @@
 //! сообщения `0x7F801` для достигнутых typed startup snapshots, runtime
 //! general-variable echo `0x7F805`,
 //! AttackCity/Village и terminal selector `0x3B`, а также полной typed Billing
-//! reconnect ветви `0x6F904`; они имеют статус `IMPLEMENTED`. Точная пара
+//! reconnect ветви `0x6F904` и ответа перехода `0x7F802`; они имеют статус
+//! `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\servermessage.cpp`.
 //!
@@ -16,8 +17,10 @@
 //! побочные эффекты. Остальные selector-ы возвращаются caller-у как `false` и
 //! этим helper-ом не интерпретируются; полный switch не имитируется. Billing
 //! handoff закрывает старый owner, публикует новый, приоритетно ставит
-//! регистрацию и только затем включает control-send. Парная World-ветвь
-//! остаётся RAW до материализации полного player snapshot.
+//! регистрацию и только затем включает control-send. `0x7F802` снимает оба
+//! changing-флага при отказе; при успехе адресно публикует `0xBF506`, выполняет
+//! remaining `OnLost` owner и удаляет player из source spatial/script maps до
+//! очистки client map-ID. Полный GameSave decode выполняет парный World owner.
 //! HonorEliminate `0x26` отдельно сохраняет оба подтверждённых sink-а:
 //! `AddLogText` и `PutStringToFile("HonorCompositior", ...)`; payload проверен
 //! по exact EXE и runtime-логам.
@@ -149,7 +152,7 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyCompos
 use crate::gameserver::appserver::goods::cgoodsfactory::{
     GoodsFactoryDecodeError, GoodsFactoryDecodeReport,
 };
-use crate::gameserver::appserver::player::{PlayerConfirmedKillReport, PlayerHonorResetReport};
+use crate::gameserver::appserver::player::{CPlayer, PlayerConfirmedKillReport, PlayerHonorResetReport};
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
 use crate::gameserver::appserver::region::{RegionCellAccessBlock, RegionRandomPosition};
 use crate::gameserver::appserver::script::variablelist::{
@@ -219,6 +222,7 @@ use crate::setup::tradelist::TradeListDecodeError;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const SERVER_STARTUP_MESSAGE: i32 = 0x0007_F801;
+const WORLD_REGION_CHANGE_RESPONSE: i32 = 0x0007_F802;
 const WORLD_PLAYER_NOTICE_RESPONSE: i32 = 0x0007_F804;
 const GENERAL_VARIABLE_UPDATE_RESPONSE: i32 = 0x0007_F805;
 const MURDERER_UPDATE_RESPONSE: i32 = 0x0007_F806;
@@ -1032,6 +1036,7 @@ fn player_ranks_decode_errors_equal(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
+    RegionChange(GameRegionChangeResponseReport),
     StringTable(GameStringTableMessageReport),
     PlayerCount(GamePlayerCountResponseReport),
     GodsBattleTopTen(GameGodsBattleTopTenReport),
@@ -1057,6 +1062,39 @@ pub(crate) enum GameServerMessageReport {
     ScriptStartup(GameScriptStartupMessageReport),
     InitialRegionStartup(GameInitialRegionStartupMessageReport),
     WarStartup(GameWarStartupMessageReport),
+}
+
+pub(crate) trait GameRegionChangeResponseContext {
+    fn script_player_is_team_captain(&mut self, player: &CPlayer) -> bool;
+
+    /// Remaining `OnLost` owners: sequence/validation registries, JJC and
+    /// virtual `OnExit(true)`. `CGame` performs region/script/map removal.
+    fn before_script_server_region_departure(&mut self, player: &mut CPlayer);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameRegionChangeResponseOutcome {
+    MissingPlayer,
+    Rejected {
+        previous_changing_server: bool,
+        previous_changing_region: bool,
+    },
+    Accepted {
+        address: Vec<u8>,
+        port: u32,
+        captain: bool,
+        team_id: i32,
+        client_delivery: i32,
+        departure: Option<Result<(), RegionMembershipBlock>>,
+    },
+}
+
+#[must_use = "response report сохраняет World decision и terminal player lifecycle"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameRegionChangeResponseReport {
+    pub(crate) accepted: bool,
+    pub(crate) player_id: i32,
+    pub(crate) outcome: GameRegionChangeResponseOutcome,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1175,6 +1213,7 @@ pub(crate) enum GameServerMessageError<RegionRuntimeError> {
     StringTable(MyStringTableDecodeError),
     GodsBattleTopTen(GodsBattleTopTenDecodeError),
     GodsBattleXydUnexpectedEnd { field: &'static str },
+    RegionChangeUnexpectedEnd { field: &'static str },
     GeneralVariableUpdateUnexpectedEnd { field: &'static str },
     WorldPlayerNoticeUnexpectedEnd { field: &'static str },
     MurdererUpdateUnexpectedEnd { field: &'static str },
@@ -1208,8 +1247,91 @@ pub(crate) fn dispatch_server_message<Context>(
     mut now_ms: impl FnMut(&mut Context) -> u32,
 ) -> Option<Result<GameServerMessageReport, GameServerMessageError<Context::RuntimeError>>>
 where
-    Context: InitialRegionStartupContext,
+    Context: InitialRegionStartupContext + GameRegionChangeResponseContext,
 {
+    if message.message_type() == WORLD_REGION_CHANGE_RESPONSE {
+        let Some(accepted) = message.base_mut().get_char() else {
+            return Some(Err(GameServerMessageError::RegionChangeUnexpectedEnd {
+                field: "accepted",
+            }));
+        };
+        let Some(player_id) = message.base_mut().get_long() else {
+            return Some(Err(GameServerMessageError::RegionChangeUnexpectedEnd {
+                field: "player id",
+            }));
+        };
+        if game.find_player(player_id).is_none() {
+            return Some(Ok(GameServerMessageReport::RegionChange(
+                GameRegionChangeResponseReport {
+                    accepted: accepted != 0,
+                    player_id,
+                    outcome: GameRegionChangeResponseOutcome::MissingPlayer,
+                },
+            )));
+        }
+        if accepted == 0 {
+            let player = game
+                .find_player_mut(player_id)
+                .expect("region-change player проверен до rejection");
+            let previous_changing_server = player.in_changing_server();
+            let previous_changing_region = player.in_changing_region();
+            player.cancel_server_region_change();
+            return Some(Ok(GameServerMessageReport::RegionChange(
+                GameRegionChangeResponseReport {
+                    accepted: false,
+                    player_id,
+                    outcome: GameRegionChangeResponseOutcome::Rejected {
+                        previous_changing_server,
+                        previous_changing_region,
+                    },
+                },
+            )));
+        }
+        let address = message
+            .base_mut()
+            .get_str_bytes(0x100)
+            .expect("0x100 не достигает zero-size GetStr boundary");
+        let Some(port) = message.base_mut().get_long().map(|value| value as u32) else {
+            return Some(Err(GameServerMessageError::RegionChangeUnexpectedEnd {
+                field: "target port",
+            }));
+        };
+        let (captain, team_id) = {
+            let player = game
+                .find_player(player_id)
+                .expect("region-change player проверен до success wire");
+            (
+                script_context.script_player_is_team_captain(player),
+                player.team_id(),
+            )
+        };
+        let mut response = CMessage::new(0x000b_f506);
+        response.base_mut().add(&address);
+        response.add_byte(0);
+        response.add_ulong(port);
+        response.add_byte(u8::from(captain));
+        response.add_long(team_id);
+        let client_delivery = response.send_to_player(game.net_server(), player_id);
+        script_context.before_script_server_region_departure(
+            game.find_player_mut(player_id)
+                .expect("client send не удаляет region-change player"),
+        );
+        let departure = game.finish_script_server_region_departure(player_id);
+        return Some(Ok(GameServerMessageReport::RegionChange(
+            GameRegionChangeResponseReport {
+                accepted: true,
+                player_id,
+                outcome: GameRegionChangeResponseOutcome::Accepted {
+                    address,
+                    port,
+                    captain,
+                    team_id,
+                    client_delivery,
+                    departure,
+                },
+            },
+        )));
+    }
     if message.message_type() == RUNTIME_SPAWN_RESPONSE {
         let Some(kind) = message.base_mut().get_char() else {
             return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {

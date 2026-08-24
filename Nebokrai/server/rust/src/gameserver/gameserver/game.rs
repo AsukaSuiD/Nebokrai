@@ -471,13 +471,14 @@ use crate::gameserver::appserver::message::playermessage::{
     GamePlayerMessageError, GamePlayerMessageReport, GamePlayerMessageRuntime,
     dispatch_game_player_message,
 };
+use crate::gameserver::appserver::message::regionmessage::dispatch_game_region_message;
 use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::message::servermessage::{
-    GameServerMessageError, GameServerMessageReport, InitialRegionStartupContext,
-    WarScheduleSetupContext, dispatch_server_message,
+    GameRegionChangeResponseContext, GameServerMessageError, GameServerMessageReport,
+    InitialRegionStartupContext, WarScheduleSetupContext, dispatch_server_message,
 };
 use crate::gameserver::appserver::message::shopmessage::{
     ShopMessageError, ShopMessageReport, dispatch_shop_message,
@@ -591,7 +592,7 @@ use crate::gameserver::appserver::session::ctrader::{
 };
 use crate::gameserver::appserver::shape::{
     CShape, MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
-    ShapeView,
+    ShapeRuntimeFacts, ShapeView,
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::gameserver::honorranks::CHonorRanks;
@@ -1844,6 +1845,88 @@ pub(crate) trait BattleFairySkillResetContext {
     ) -> Vec<i32>;
 }
 
+/// Нематериализованные virtual owners полного player GameSave, pet/carriage
+/// snapshot и skill-state остаются на runtime-границе. Region/player maps,
+/// session state и message wire исполняет непосредственно `CGame`.
+pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
+    fn finish_script_player_business(&mut self, player: &mut CPlayer);
+
+    fn prepare_script_region_companions(
+        &mut self,
+        player: &mut CPlayer,
+        source_region_id: i32,
+        target_region_id: i32,
+        target_tile_x: i32,
+        target_tile_y: i32,
+        carriage_distance: i32,
+        changing_server: bool,
+    );
+
+    fn refresh_script_region_auto_protect(&mut self, player: &mut CPlayer);
+
+    /// Exact virtual `AddGameSaveToByteArray(..., true)` result. Failure
+    /// suppresses `0x5FA02`; no partial snapshot is published.
+    fn encode_script_player_game_save(
+        &mut self,
+        player: &CPlayer,
+        destination: &mut Vec<u8>,
+    ) -> bool;
+}
+
+pub(crate) trait GameRegionEnterContext: NationCombatContext {
+    /// Remaining `8F801` serialization/weather/state tail after concrete
+    /// destination membership has been established by `CGame`.
+    fn publish_changed_player_region_entry(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        region_id: i32,
+        entry_token: i32,
+        socket_id: i32,
+    );
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameRegionEnterReport {
+    pub(crate) player_id: i32,
+    pub(crate) region_id: i32,
+    pub(crate) entry_token: i32,
+    pub(crate) previous_changing_region: bool,
+    pub(crate) relocation: Option<(i32, i32, i32)>,
+    pub(crate) membership: Result<(), RegionMembershipBlock>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScriptRegionChangeKind {
+    MissingPlayer,
+    MissingSourceRegion,
+    SameRegion,
+    LocalRegion,
+    RemoteServer,
+}
+
+#[must_use = "report сохраняет script destination, lifecycle и network result"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ScriptRegionChangeReport {
+    pub(crate) player_id: i32,
+    pub(crate) source_region_id: Option<i32>,
+    pub(crate) target_region_id: i32,
+    pub(crate) tile_x: i32,
+    pub(crate) tile_y: i32,
+    pub(crate) direction: i32,
+    pub(crate) use_goods: i32,
+    pub(crate) range: i32,
+    pub(crate) carriage_distance: i32,
+    pub(crate) kind: ScriptRegionChangeKind,
+    pub(crate) position_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) direction_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) region_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) faction_delivery: Option<Result<i32, SendMessageError>>,
+    pub(crate) team_delivery: Option<Result<i32, SendMessageError>>,
+    pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
+    pub(crate) player_snapshot_size: Option<usize>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum BattleFairyScriptAction {
     AddSkill {
@@ -2718,7 +2801,15 @@ pub(crate) enum GameRegionClearPlayerOutcome {
 pub(crate) struct GameRegionAiReport {
     pub(crate) region_id: i32,
     pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
+    pub(crate) region_changes: Vec<GameLocalRegionChange>,
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameLocalRegionChange {
+    pub(crate) player_id: i32,
+    pub(crate) destination: (i32, i32, i32, i32),
+    pub(crate) removal: Result<(), RegionMembershipBlock>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2904,6 +2995,8 @@ struct GameMainLoopState {
 pub(crate) trait GameMainLoopRuntime:
     GameMessageHandlers
     + InitialRegionStartupContext
+    + GameRegionChangeResponseContext
+    + GameRegionEnterContext
     + GameOrganizingWarRuntime
     + GameCountryWarRuntime
     + GameContainerMessageRuntime
@@ -8305,6 +8398,390 @@ impl CGame {
         external.vigour = player.vigour();
         let _ = self.send_player_properties_changed(player, external);
         Some(value)
+    }
+
+    /// Reached `ChangeRegion` gameplay path used by `nodupe.script`. The
+    /// selector/default parsing remains in `CScript::RunFunction`; this owner
+    /// performs session/player state, spatial randomization and exact client /
+    /// World wire in the original order.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn change_script_player_region<Context: ScriptRegionChangeContext>(
+        &mut self,
+        player_id: i32,
+        target_region_id: i32,
+        mut tile_x: i32,
+        mut tile_y: i32,
+        mut direction: i32,
+        use_goods: i32,
+        range: i32,
+        carriage_distance: i32,
+        context: &mut Context,
+    ) -> ScriptRegionChangeReport {
+        let mut report = ScriptRegionChangeReport {
+            player_id,
+            source_region_id: None,
+            target_region_id,
+            tile_x,
+            tile_y,
+            direction,
+            use_goods,
+            range,
+            carriage_distance,
+            kind: ScriptRegionChangeKind::MissingPlayer,
+            position_delivery: None,
+            direction_delivery: None,
+            region_delivery: None,
+            faction_delivery: None,
+            team_delivery: None,
+            world_delivery: None,
+            player_snapshot_size: None,
+        };
+        let Some(mut player) = self.players.remove(&player_id) else {
+            return report;
+        };
+        let Some(source_region_id) = player.server_region_id() else {
+            self.players.insert(player_id, player);
+            return report;
+        };
+        report.source_region_id = Some(source_region_id);
+        let Some(mut source_owner) = self.take_region_owner(source_region_id) else {
+            report.kind = ScriptRegionChangeKind::MissingSourceRegion;
+            self.players.insert(player_id, player);
+            return report;
+        };
+
+        let previous_progress = player.current_progress();
+        context.finish_script_player_business(&mut player);
+        if matches!(
+            previous_progress,
+            PlayerProgress::Trading
+                | PlayerProgress::OpenStall
+                | PlayerProgress::Upgrade
+                | PlayerProgress::DaKong
+                | PlayerProgress::Compose
+        ) && let Some(session_id) = self
+            .session_factory
+            .query_session_id_by_owner(400, player_id)
+        {
+            let _ = self.session_factory.end_session(session_id);
+        }
+        player.set_current_progress_snapshot(PlayerProgress::None);
+
+        if !(0..8).contains(&direction) {
+            direction = context.random_below(8);
+        }
+        report.direction = direction;
+        if target_region_id == source_region_id {
+            report.kind = ScriptRegionChangeKind::SameRegion;
+            context.prepare_script_region_companions(
+                &mut player,
+                source_region_id,
+                target_region_id,
+                tile_x,
+                tile_y,
+                carriage_distance,
+                false,
+            );
+            if tile_x == -1 && tile_y == -1 {
+                if let Ok(position) = source_owner.base().region.get_random_pos(context) {
+                    tile_x = position.x;
+                    tile_y = position.y;
+                }
+            } else if range > 0 {
+                let width = range.wrapping_mul(2).wrapping_add(1);
+                if let Ok(position) = source_owner.base().region.get_random_pos_in_range(
+                    tile_x.wrapping_sub(range),
+                    tile_y.wrapping_sub(range),
+                    width,
+                    width,
+                    context,
+                ) {
+                    tile_x = position.x;
+                    tile_y = position.y;
+                }
+            }
+            let previous = (
+                player.shape().get_tile_x().unwrap_or_default(),
+                player.shape().get_tile_y().unwrap_or_default(),
+            );
+            if previous != (tile_x, tile_y) {
+                let mut movement = CMessage::new(0x000b_f603);
+                movement.add_long(400);
+                movement.add_long(player_id);
+                movement.add_long(tile_x);
+                movement.add_long(tile_y);
+                movement.add_long(use_goods);
+                report.position_delivery = Some(context.send_nation_player_around(
+                    source_owner.base(),
+                    player.shape(),
+                    None,
+                    &movement,
+                ));
+                let facts = player.movement_position_facts(
+                    self.globe_setup.area_width(),
+                    self.globe_setup.area_height(),
+                );
+                let _ = source_owner.base_mut().set_move_shape_tile_position(
+                    player.movement_shape_mut(),
+                    tile_x,
+                    tile_y,
+                    facts,
+                );
+            }
+            if player.shape().get_direction() != direction {
+                player.movement_shape_mut().set_direction(direction);
+                let mut changed = CMessage::new(0x000b_f601);
+                changed.add_byte(direction as u8);
+                changed.add_long(400);
+                changed.add_long(player_id);
+                report.direction_delivery = Some(context.send_nation_player_around(
+                    source_owner.base(),
+                    player.shape(),
+                    None,
+                    &changed,
+                ));
+            }
+            context.refresh_script_region_auto_protect(&mut player);
+            report.tile_x = tile_x;
+            report.tile_y = tile_y;
+            self.restore_region_owner(source_owner);
+            self.players.insert(player_id, player);
+            return report;
+        }
+
+        if let Some(target_owner) = self.take_region_owner(target_region_id) {
+            report.kind = ScriptRegionChangeKind::LocalRegion;
+            context.prepare_script_region_companions(
+                &mut player,
+                source_region_id,
+                target_region_id,
+                tile_x,
+                tile_y,
+                carriage_distance,
+                false,
+            );
+            if tile_x == -1 && tile_y == -1 {
+                if let Ok(position) = target_owner.base().region.get_random_pos(context) {
+                    tile_x = position.x;
+                    tile_y = position.y;
+                }
+            } else if range > 0 {
+                let width = range.wrapping_mul(2).wrapping_add(1);
+                if let Ok(position) = target_owner.base().region.get_random_pos_in_range(
+                    tile_x.wrapping_sub(range),
+                    tile_y.wrapping_sub(range),
+                    width,
+                    width,
+                    context,
+                ) {
+                    tile_x = position.x;
+                    tile_y = position.y;
+                }
+            }
+
+            let target = target_owner.base();
+            let mut changed = CMessage::new(0x000b_f505);
+            changed.add_long(400);
+            changed.add_long(player_id);
+            changed.add_long(target_region_id);
+            changed.add_long(target.region.region_type());
+            changed.add_long(tile_x);
+            changed.add_long(tile_y);
+            changed.add_long(direction);
+            add_legacy_c_string(changed.base_mut(), target.region.file_name());
+            changed.add_long(target.region.resource_id());
+            changed.add_long(target.war_region_type);
+            changed.add_byte(target.country);
+            changed.add_ulong(target.region.exp_scale_bits());
+            report.region_delivery = Some(context.send_nation_player_around(
+                source_owner.base(),
+                player.shape(),
+                None,
+                &changed,
+            ));
+
+            player.stage_local_region_change(target_region_id, tile_x, tile_y, direction);
+            let _ = source_owner.base_mut().stage_region_transition(player.shape());
+            if player.faction_id() > 0 {
+                let mut faction = CMessage::new(0x0006_012a);
+                faction.add_long(player.faction_id());
+                faction.add_long(player_id);
+                faction.add_long(2);
+                faction.add_long(target_region_id);
+                report.faction_delivery = Some(faction.send(self, false));
+            }
+            if player.team_id() != 0 {
+                let mut team = CMessage::new(0x0006_0005);
+                team.add_long(player.team_id());
+                team.add_long(player_id);
+                team.add_long(source_region_id);
+                team.add_long(target_region_id);
+                report.team_delivery = Some(team.send(self, false));
+            }
+            context.refresh_script_region_auto_protect(&mut player);
+            report.tile_x = tile_x;
+            report.tile_y = tile_y;
+            self.restore_region_owner(target_owner);
+            self.restore_region_owner(source_owner);
+            self.players.insert(player_id, player);
+            return report;
+        }
+
+        report.kind = ScriptRegionChangeKind::RemoteServer;
+        context.prepare_script_region_companions(
+            &mut player,
+            source_region_id,
+            target_region_id,
+            tile_x,
+            tile_y,
+            carriage_distance,
+            true,
+        );
+        player.begin_server_region_change();
+        let mut snapshot = Vec::new();
+        if context.encode_script_player_game_save(&player, &mut snapshot) {
+            let mut request = CMessage::new(0x0005_fa02);
+            request.add_long(player_id);
+            request.add_long(target_region_id);
+            request.add_long(tile_x);
+            request.add_long(tile_y);
+            request.add_long(direction);
+            request.add_long(use_goods);
+            request.add_long(range);
+            request.base_mut().add(&snapshot);
+            report.player_snapshot_size = Some(snapshot.len());
+            let delivery = request.send(self, false);
+            if !matches!(delivery, Ok(value) if value != 0) {
+                player.cancel_server_region_change();
+            }
+            report.world_delivery = Some(delivery);
+        } else {
+            player.cancel_server_region_change();
+        }
+        context.refresh_script_region_auto_protect(&mut player);
+        report.tile_x = tile_x;
+        report.tile_y = tile_y;
+        self.restore_region_owner(source_owner);
+        self.players.insert(player_id, player);
+        report
+    }
+
+    /// Successful World `0x7F802` tail corresponding to `CPlayer::OnLost`
+    /// while `m_bInChangingServer` is set. The player leaves the source
+    /// spatial registry and all owned scripts before its client route is
+    /// released for the destination GameServer.
+    pub(crate) fn finish_script_server_region_departure(
+        &mut self,
+        player_id: i32,
+    ) -> Option<Result<(), RegionMembershipBlock>> {
+        let mut player = self.players.remove(&player_id)?;
+        let Some(region_id) = player.server_region_id() else {
+            self.players.insert(player_id, player);
+            return None;
+        };
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            self.players.insert(player_id, player);
+            return None;
+        };
+        let facts = ShapeRuntimeFacts {
+            is_player: true,
+            monster: None,
+            is_npc: false,
+            goods: None,
+            is_move_shape: true,
+            figure: player.figure(),
+        };
+        let removal = owner
+            .base_mut()
+            .remove_object(player.movement_shape_mut(), facts);
+        self.restore_region_owner(owner);
+        self.active_scripts
+            .retain(|_, script| script.player_id() != Some(player_id));
+        let _ = self.net_server().clear_player_map_id(player_id);
+        Some(removal)
+    }
+
+    /// Client `8F801` acknowledgement completes a deferred local change. The
+    /// player is added to the destination registry before snapshots/weather
+    /// and state callbacks, matching `CServerRegion::OnMessage`.
+    pub(crate) fn enter_changed_player_region<Context: GameRegionEnterContext>(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        entry_token: i32,
+        client_ip: u32,
+        socket_id: i32,
+        context: &mut Context,
+    ) -> Option<GameRegionEnterReport> {
+        let mut player = self.players.remove(&player_id)?;
+        let previous_changing_region = player.in_changing_region();
+        if !previous_changing_region || player.server_region_id() != Some(region_id) {
+            self.players.insert(player_id, player);
+            return None;
+        }
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            self.players.insert(player_id, player);
+            return None;
+        };
+        player.set_changing_state_snapshot(player.in_changing_server(), false);
+        player.set_client_ip_snapshot(client_ip);
+        let mut relocation = None;
+        let current = (
+            player.shape().get_tile_x().unwrap_or_default(),
+            player.shape().get_tile_y().unwrap_or_default(),
+        );
+        if owner.base().region.get_block(current.0, current.1).unwrap_or_default() != 0
+            && let Ok(position) = owner
+                .base()
+                .region
+                .get_random_pos_in_range(current.0, current.1, 3, 3, context)
+        {
+            player
+                .movement_shape_mut()
+                .set_pos_xy_base(position.x as f32 + 0.5, position.y as f32 + 0.5);
+            let mut moved = CMessage::new(0x000b_f603);
+            moved.add_long(400);
+            moved.add_long(player_id);
+            moved.add_long(position.x);
+            moved.add_long(position.y);
+            moved.add_long(0);
+            relocation = Some((position.x, position.y, moved.send_to_socket(self.net_server(), socket_id)));
+        }
+        let facts = ShapeRuntimeFacts {
+            is_player: true,
+            monster: None,
+            is_npc: false,
+            goods: None,
+            is_move_shape: true,
+            figure: player.figure(),
+        };
+        let membership = owner.base_mut().add_object(
+            player.movement_shape_mut(),
+            facts,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+            context.now_milliseconds(),
+            context,
+        );
+        self.restore_region_owner(owner);
+        self.players.insert(player_id, player);
+        if membership.is_ok() {
+            context.publish_changed_player_region_entry(
+                self,
+                player_id,
+                region_id,
+                entry_token,
+                socket_id,
+            );
+        }
+        Some(GameRegionEnterReport {
+            player_id,
+            region_id,
+            entry_token,
+            previous_changing_region,
+            relocation,
+            membership,
+        })
     }
 
     /// Очищает и декодирует language table, пишет exact log и лишь затем
@@ -17797,6 +18274,33 @@ impl CGame {
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 continue;
             };
+            let region_changes = owner
+                .base_mut()
+                .take_staged_region_transitions()
+                .into_iter()
+                .filter(|identity| identity.object_type == 400)
+                .filter_map(|identity| {
+                    let mut player = self.players.remove(&identity.id)?;
+                    let facts = ShapeRuntimeFacts {
+                        is_player: true,
+                        monster: None,
+                        is_npc: false,
+                        goods: None,
+                        is_move_shape: true,
+                        figure: player.figure(),
+                    };
+                    let removal = owner
+                        .base_mut()
+                        .remove_object(player.movement_shape_mut(), facts);
+                    let destination = player.apply_staged_local_region_change();
+                    self.players.insert(identity.id, player);
+                    Some(GameLocalRegionChange {
+                        player_id: identity.id,
+                        destination,
+                        removal,
+                    })
+                })
+                .collect();
             let clear_player = if owner.base().kick_out_player {
                 let tick = owner.base_mut().clear_player_ai_at(runtime.get_tick_ms());
                 match tick {
@@ -17838,6 +18342,7 @@ impl CGame {
                         regions.push(GameRegionAiReport {
                             region_id,
                             gods_battle,
+                            region_changes,
                             clear_player: Some(GameRegionClearPlayerOutcome::Expired { players }),
                         });
                         continue;
@@ -17850,6 +18355,7 @@ impl CGame {
             regions.push(GameRegionAiReport {
                 region_id,
                 gods_battle,
+                region_changes,
                 clear_player,
             });
         }
@@ -18385,6 +18891,7 @@ impl CGame {
             goods_messages.push(report);
         } else if let Some(report) = dispatch_game_skill_message(message, self, runtime) {
             skill_messages.push(report);
+        } else if dispatch_game_region_message(message, self, runtime).is_some() {
         } else if let Some(report) = dispatch_game_shape_message(message, self, runtime) {
             shape_messages.push(report);
         } else if let Some(report) = dispatch_game_other_message(message, self, runtime) {
