@@ -12322,6 +12322,18 @@ impl CGame {
         })
     }
 
+    pub(crate) fn add_goods_to_player_packet(
+        &mut self,
+        player_id: i32,
+        goods: Vec<CGoods>,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<(Vec<CiQingPacketAddition>, Vec<CGoods>)> {
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        players
+            .get_mut(&player_id)
+            .map(|player| player.add_goods_to_packet(goods, goods_factory, encode_old_client))
+    }
+
     /// Exact `CGame::KickPlayer`: queue side effect сохраняется, публичный
     /// bool исходника всегда остаётся `false`.
     pub(crate) fn kick_player(&self, player_id: i32) -> GameKickPlayerReport {

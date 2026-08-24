@@ -406,6 +406,12 @@ impl CGoodsBaseProperties {
             .any(|property| property.property_type == property_type)
     }
 
+    pub(crate) fn has_enabled_addon_property(&self, property_type: i32) -> bool {
+        self.addon_properties
+            .iter()
+            .any(|property| property.property_type == property_type && property.is_enabled != 0)
+    }
+
     pub(crate) fn get_addon_property_value(&self, property_type: i32, has_values: bool) -> i32 {
         self.addon_properties
             .iter()

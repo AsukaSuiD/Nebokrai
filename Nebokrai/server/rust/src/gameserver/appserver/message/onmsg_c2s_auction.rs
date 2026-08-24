@@ -2,14 +2,21 @@
 //!
 //! Точная пара GameServer EXE/PDB и исходный owner
 //! `server/gameserver/appserver/message/onmsg_c2s_auction.cpp` подтверждают
-//! close `0x90A01`, refresh/browse/relay `0x90A05..0A` и open `0x90A0B`: поиск сохраняет
-//! player criteria и сбрасывает page, browse/self запросы уходят в World,
+//! close `0x90A01` и auction controls `0x90A05..0C`: поиск сохраняет player
+//! criteria и сбрасывает page, browse/self запросы уходят в World,
 //! клиент открытия получает `0xC0706`, player-open меняется до World `0x60810`,
+//! extension batch оплачивается `FZ0965`, логируется и добавляется в packet,
 //! а выключенный аукцион возвращает `GPM013` до чтения payload.
 //! Остальные gameplay selectors остаются RAW ниже.
 
-use crate::gameserver::appserver::player::AuctionSelfGoodsRefresh;
-use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_PACKAGE_EXTENTION;
+use crate::gameserver::appserver::player::{
+    AuctionSelfGoodsRefresh, CiQingPacketAddition, CiQingPacketConsumption,
+};
+use crate::gameserver::gameserver::game::{
+    CGame, OldClientGoodsCodec, colored_player_notice_message,
+};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const CLIENT_AUCTION_CLOSE_MESSAGE: i32 = 0x0009_0A01;
@@ -20,6 +27,7 @@ const CLIENT_AUCTION_SELF_MESSAGE: i32 = 0x0009_0A08;
 const CLIENT_AUCTION_RELAY_MESSAGE: i32 = 0x0009_0A09;
 const CLIENT_AUCTION_CELL_MESSAGE: i32 = 0x0009_0A0A;
 const CLIENT_AUCTION_OPEN_MESSAGE: i32 = 0x0009_0A0B;
+const CLIENT_AUCTION_BUY_EXTENSION_MESSAGE: i32 = 0x0009_0A0C;
 const CLIENT_AUCTION_OPEN_SETUP_MESSAGE: i32 = 0x000C_0706;
 const WORLD_AUCTION_PAGE_MESSAGE: i32 = 0x0006_0803;
 const WORLD_AUCTION_REFRESH_MESSAGE: i32 = 0x0006_080A;
@@ -28,8 +36,35 @@ const WORLD_AUCTION_SEARCH_MESSAGE: i32 = 0x0006_080F;
 const WORLD_AUCTION_RELAY_MESSAGE: i32 = 0x0006_080B;
 const WORLD_AUCTION_CELL_MESSAGE: i32 = 0x0006_080C;
 const WORLD_AUCTION_OPEN_MESSAGE: i32 = 0x0006_0810;
+const WORLD_GOODS_AUDIT_MESSAGE: i32 = 0x0006_0202;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionExtensionBuyBlock {
+    InvalidAmount,
+    InsufficientPacketSpace,
+    MissingGoodsProperties,
+    WrongExtensionKind,
+    MissingCrystalGoods,
+    InsufficientCrystals,
+    CrystalRemovalFailed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuctionExtensionBuyReport {
+    pub(crate) player_id: i32,
+    pub(crate) goods_index: u32,
+    pub(crate) amount: u32,
+    pub(crate) required_crystals: u32,
+    pub(crate) consumptions: Vec<CiQingPacketConsumption>,
+    pub(crate) consumption_deliveries: Vec<Vec<i32>>,
+    pub(crate) additions: Vec<CiQingPacketAddition>,
+    pub(crate) addition_deliveries: Vec<Vec<i32>>,
+    pub(crate) rejected_goods: Vec<crate::gameserver::appserver::shape::ShapeIdentity>,
+    pub(crate) audit_delivery: Option<Result<i32, SendMessageError>>,
+    pub(crate) block: Option<AuctionExtensionBuyBlock>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ClientAuctionMessageReport {
     MissingPlayer {
         selector: i32,
@@ -65,6 +100,7 @@ pub(crate) enum ClientAuctionMessageReport {
         player_id: i32,
         position: u32,
     },
+    ExtensionBought(AuctionExtensionBuyReport),
 }
 
 pub(crate) fn dispatch_client_auction_message<Runtime, Tick>(
@@ -74,6 +110,7 @@ pub(crate) fn dispatch_client_auction_message<Runtime, Tick>(
     mut tick_ms: Tick,
 ) -> Option<ClientAuctionMessageReport>
 where
+    Runtime: OldClientGoodsCodec,
     Tick: FnMut(&mut Runtime) -> u32,
 {
     let selector = message.message_type();
@@ -87,6 +124,7 @@ where
             | CLIENT_AUCTION_RELAY_MESSAGE
             | CLIENT_AUCTION_CELL_MESSAGE
             | CLIENT_AUCTION_OPEN_MESSAGE
+            | CLIENT_AUCTION_BUY_EXTENSION_MESSAGE
     ) {
         return None;
     }
@@ -255,6 +293,154 @@ where
             world_selector: WORLD_AUCTION_CELL_MESSAGE,
             world_delivery,
         });
+    }
+    if selector == CLIENT_AUCTION_BUY_EXTENSION_MESSAGE {
+        let Some(goods_index) = message.base_mut().get_long() else {
+            return Some(ClientAuctionMessageReport::Truncated {
+                selector,
+                field: "extension goods index",
+            });
+        };
+        let Some(amount) = message.base_mut().get_long() else {
+            return Some(ClientAuctionMessageReport::Truncated {
+                selector,
+                field: "extension goods amount",
+            });
+        };
+        let goods_index = goods_index as u32;
+        let amount = amount as u32;
+        let mut report = AuctionExtensionBuyReport {
+            player_id,
+            goods_index,
+            amount,
+            required_crystals: 0,
+            consumptions: Vec::new(),
+            consumption_deliveries: Vec::new(),
+            additions: Vec::new(),
+            addition_deliveries: Vec::new(),
+            rejected_goods: Vec::new(),
+            audit_delivery: None,
+            block: None,
+        };
+        let block = |report: &mut AuctionExtensionBuyReport, block| {
+            report.block = Some(block);
+            ClientAuctionMessageReport::ExtensionBought(report.clone())
+        };
+        if amount as i32 <= 0 {
+            return Some(block(&mut report, AuctionExtensionBuyBlock::InvalidAmount));
+        }
+        if game
+            .find_player(player_id)
+            .is_none_or(|player| player.packet().space() < amount)
+        {
+            return Some(block(
+                &mut report,
+                AuctionExtensionBuyBlock::InsufficientPacketSpace,
+            ));
+        }
+        let Some(properties) = game
+            .goods_factory()
+            .query_goods_base_properties(goods_index)
+        else {
+            return Some(block(
+                &mut report,
+                AuctionExtensionBuyBlock::MissingGoodsProperties,
+            ));
+        };
+        if !properties.has_enabled_addon_property(GAP_GOODS_PACKAGE_EXTENTION) {
+            return Some(block(
+                &mut report,
+                AuctionExtensionBuyBlock::MissingGoodsProperties,
+            ));
+        }
+        let values = properties.get_addon_property_values(GAP_GOODS_PACKAGE_EXTENTION);
+        let kind = values
+            .iter()
+            .find(|value| value.id == 1)
+            .map_or(0, |value| value.base_value);
+        if kind != 3 {
+            return Some(block(
+                &mut report,
+                AuctionExtensionBuyBlock::WrongExtensionKind,
+            ));
+        }
+        let price = values
+            .iter()
+            .find(|value| value.id == 2)
+            .map_or(0, |value| value.base_value) as u32;
+        report.required_crystals = price.wrapping_mul(amount).wrapping_mul(100);
+        let crystal_index = game
+            .goods_factory()
+            .query_goods_id_by_original_name(Some(b"FZ0965"));
+        if crystal_index == 0 {
+            return Some(block(
+                &mut report,
+                AuctionExtensionBuyBlock::MissingCrystalGoods,
+            ));
+        }
+        if game.find_player(player_id).is_none_or(|player| {
+            player.check_item_in_packet(crystal_index) < report.required_crystals
+        }) {
+            return Some(block(
+                &mut report,
+                AuctionExtensionBuyBlock::InsufficientCrystals,
+            ));
+        }
+        report.consumptions = game
+            .find_player_mut(player_id)
+            .expect("player проверен до crystal removal")
+            .remove_item_in_packet(crystal_index, report.required_crystals);
+        if report.consumptions.is_empty() {
+            return Some(block(
+                &mut report,
+                AuctionExtensionBuyBlock::CrystalRemovalFailed,
+            ));
+        }
+        report.consumption_deliveries = report
+            .consumptions
+            .iter()
+            .map(|consumption| game.send_player_packet_consumption(consumption))
+            .collect();
+
+        let created = game.create_goods_batch(goods_index, amount);
+        if let Some(first) = created.first() {
+            let player = game
+                .find_player(player_id)
+                .expect("player существует до extension audit");
+            let mut audit = CMessage::new(WORLD_GOODS_AUDIT_MESSAGE);
+            audit.base_mut().add_byte(b'n');
+            audit.base_mut().add_long(player_id);
+            audit.base_mut().add_short(player.pk_count() as i16);
+            audit.base_mut().add_ulong(player.money());
+            audit.base_mut().add_ulong(player.depot_money());
+            audit.base_mut().add_guid(first.identity().ex_id);
+            audit.base_mut().add_ulong(first.price());
+            audit.base_mut().add(first.name());
+            audit.base_mut().add_byte(0);
+            audit.base_mut().add_ulong(created.len() as u32);
+            audit
+                .base_mut()
+                .add_long(player.server_region_id().unwrap_or_default());
+            audit
+                .base_mut()
+                .add_ulong(player.shape().get_tile_x().unwrap_or_default() as u32);
+            audit
+                .base_mut()
+                .add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
+            audit.base_mut().add_ulong(player.client_ip());
+            report.audit_delivery = Some(audit.send(game, false));
+        }
+        let mut encode = |goods: &CGoods| runtime.encode_goods_for_old_client(goods);
+        let (additions, rejected) = game
+            .add_goods_to_player_packet(player_id, created, &mut encode)
+            .expect("player существует до extension packet add");
+        report.addition_deliveries = additions
+            .iter()
+            .map(|addition| game.send_player_packet_addition(addition))
+            .collect();
+        report.additions = additions;
+        report.rejected_goods = rejected.iter().map(|goods| goods.identity()).collect();
+        return Some(ClientAuctionMessageReport::ExtensionBought(report));
     }
 
     let mut setup = CMessage::new(CLIENT_AUCTION_OPEN_SETUP_MESSAGE);
