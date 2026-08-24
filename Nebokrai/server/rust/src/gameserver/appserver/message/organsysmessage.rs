@@ -2,7 +2,7 @@
 //!
 //! Весь dispatcher RVA `0x000895A0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме фазовых
 //! cases AttackCity `0x7FE1F..0x7FE25`, Village `0x7FE2F..0x7FE33`, faction
-//! update `0x7FE35/0x7FE36` и control tail `0x7FE48..0x7FE4A` со статусом
+//! update `0x7FE35/0x7FE36` и control tail `0x7FE46..0x7FE4A` со статусом
 //! `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\organsysmessage.cpp`.
@@ -12,15 +12,18 @@
 //! `UpdateApplyWarFacs` и игнорируют legacy bool, как исходный switch. Известный
 //! opcode считается обработанным даже при отсутствующем schedule; safe
 //! short-buffer возвращается локальной ошибкой без придуманного UB-эффекта.
-//! Control tail ограничивает казну опубликованным CountryParam maximum и
-//! отправляет World `0x60314`, сохраняет FourNation morale либо перепаковывает
-//! входной router response в адресный `0xBFF36`. Другие opcodes helpers не
-//! интерпретируют. Достигнутая war family проходит
+//! Control tail сохраняет FourNation player-war-time; exploit идёт в exact
+//! порядке `0xBF80C` → clamped player state → `UpdateProperty` → локализованный
+//! `0xBF806(GS1177)`. Затем он ограничивает казну опубликованным CountryParam
+//! maximum и отправляет World `0x60314`, сохраняет FourNation morale либо
+//! перепаковывает входной router response в адресный `0xBFF36`. Другие opcodes
+//! helpers не интерпретируют. Достигнутая war family проходит
 //! живой FIFO `CGame`: расписания остаются owned, local-before-proxy lookup
 //! мутирует concrete City/Village/base owners, а message/player/log effects
 //! исполняет тот же runtime-контекст, который обслуживает MainLoop.
 
 use std::error::Error;
+use std::ffi::CString;
 use std::fmt;
 
 use super::super::organizingsystem::attackcitysys::{
@@ -32,12 +35,16 @@ use super::super::organizingsystem::villagewarsys::{
 use super::super::servercityregion::CityRegionContext;
 use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
+use crate::gameserver::appserver::player::{CPlayer, PlayerExploitMutationReport};
 use crate::gameserver::gameserver::game::{CGame, GameWarRegionHandle, ServerRegionOwner};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 pub(crate) trait GameOrganizingWarRuntime: CityRegionContext + VillageRegionContext {
     /// Публикует region-localized `0xBF806(..., GS0127(region name))`.
     fn send_village_clear_player_notice(&mut self, region_id: i32, region_name: &[u8]);
+
+    /// Исполняет virtual `CPlayer::UpdateProperty` после FourNation exploit.
+    fn update_player_property(&mut self, player: &mut CPlayer);
 }
 
 pub(crate) trait WarFactionUpdateContext {
@@ -65,6 +72,12 @@ pub(crate) struct WarPhaseDispatchReport {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum OrganizingControlDispatchReport {
+    FourNationExploit(FourNationExploitDispatchReport),
+    FourNationWarTime {
+        player_id: i32,
+        time_ms: u32,
+        previous_time_ms: Option<u32>,
+    },
     CountryTreasury {
         country_id: u8,
         requested: i32,
@@ -80,6 +93,19 @@ pub(crate) enum OrganizingControlDispatchReport {
         player_found: bool,
         delivery: Option<i32>,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FourNationExploitDispatchReport {
+    pub(crate) player_id: i32,
+    pub(crate) increment: u32,
+    pub(crate) player_found: bool,
+    pub(crate) advertised_exploit: Option<u32>,
+    pub(crate) mutation: Option<PlayerExploitMutationReport>,
+    pub(crate) property_delivery: Option<i32>,
+    pub(crate) property_update_called: bool,
+    pub(crate) notice_text: Option<Vec<u8>>,
+    pub(crate) notice_delivery: Option<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,6 +132,9 @@ pub(crate) enum OrganizingControlDispatchError {
     },
     CountryTreasuryLimitMissing {
         country_id: u8,
+    },
+    CountryExploitLimitMissing {
+        player_id: i32,
     },
 }
 
@@ -150,6 +179,10 @@ impl fmt::Display for OrganizingControlDispatchError {
             Self::CountryTreasuryLimitMissing { country_id } => write!(
                 formatter,
                 "для country {country_id} не опубликован _max_country_treasury"
+            ),
+            Self::CountryExploitLimitMissing { player_id } => write!(
+                formatter,
+                "для FourNation exploit игрока {player_id} не опубликован _max_exploit"
             ),
         }
     }
@@ -270,14 +303,14 @@ pub(crate) fn dispatch_game_organizing_war_message<Runtime: GameOrganizingWarRun
             | 0x7fe2f..=0x7fe33
             | 0x7fe35
             | 0x7fe36
-            | 0x7fe48..=0x7fe4a
+            | 0x7fe46..=0x7fe4a
     ) {
         return None;
     }
 
-    if matches!(opcode, 0x7fe48..=0x7fe4a) {
+    if matches!(opcode, 0x7fe46..=0x7fe4a) {
         return Some(
-            dispatch_organizing_control_message(opcode, message, game)
+            dispatch_organizing_control_message(opcode, message, game, runtime)
                 .map(GameOrganizingWarMessageReport::Control)
                 .map_err(GameOrganizingWarMessageError::Control),
         );
@@ -317,12 +350,93 @@ pub(crate) fn dispatch_game_organizing_war_message<Runtime: GameOrganizingWarRun
     Some(result)
 }
 
-fn dispatch_organizing_control_message(
+fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
     opcode: u32,
     message: &mut CMessage,
     game: &mut CGame,
+    runtime: &mut Runtime,
 ) -> Result<OrganizingControlDispatchReport, OrganizingControlDispatchError> {
     match opcode {
+        0x7fe46 => {
+            let player_id = read_control_i32(message, "exploit player ID")?;
+            let increment = read_control_i32(message, "exploit increment")? as u32;
+            let Some(previous_exploit) = game
+                .find_player(player_id)
+                .map(|player| player.base_properties().exploit)
+            else {
+                return Ok(OrganizingControlDispatchReport::FourNationExploit(
+                    FourNationExploitDispatchReport {
+                        player_id,
+                        increment,
+                        player_found: false,
+                        advertised_exploit: None,
+                        mutation: None,
+                        property_delivery: None,
+                        property_update_called: false,
+                        notice_text: None,
+                        notice_delivery: None,
+                    },
+                ));
+            };
+            let maximum = game
+                .country_param()
+                .max_exploit()
+                .ok_or(OrganizingControlDispatchError::CountryExploitLimitMissing { player_id })?;
+            let advertised_exploit = previous_exploit.wrapping_add(increment);
+            let mut property = CMessage::new(0xbf80c);
+            property.base_mut().add_long(player_id);
+            property.base_mut().add_long(player_id);
+            property.base_mut().add_str(Some(c"dwExploit"));
+            property.base_mut().add_ulong(advertised_exploit);
+            let property_delivery = property.send_to_player(game.net_server(), player_id);
+            let mutation = {
+                let player = game
+                    .find_player_mut(player_id)
+                    .expect("player проверен до exact exploit mutation");
+                let mutation = player.set_exploit(advertised_exploit, maximum);
+                runtime.update_player_property(player);
+                mutation
+            };
+
+            let notice_text = Some(format_four_nation_exploit_notice(
+                game.get_string_by_id(b"GS1177"),
+                increment as i32,
+            ));
+            let notice_delivery = notice_text.as_ref().map(|text| {
+                let text = CString::new(text.as_slice())
+                    .expect("legacy string prefix и decimal не содержат NUL");
+                let mut notice = CMessage::new(0xbf806);
+                notice.base_mut().add_ulong(u32::MAX);
+                notice.base_mut().add_ulong(0xffff_0000);
+                notice.base_mut().add_str(Some(&text));
+                notice.send_to_player(game.net_server(), player_id)
+            });
+            Ok(OrganizingControlDispatchReport::FourNationExploit(
+                FourNationExploitDispatchReport {
+                    player_id,
+                    increment,
+                    player_found: true,
+                    advertised_exploit: Some(advertised_exploit),
+                    mutation: Some(mutation),
+                    property_delivery: Some(property_delivery),
+                    property_update_called: true,
+                    notice_text,
+                    notice_delivery,
+                },
+            ))
+        }
+        0x7fe47 => {
+            let player_id = read_control_i32(message, "war-time player ID")?;
+            let time_ms = read_control_i32(message, "player war time")? as u32;
+            let previous_time_ms = game
+                .four_nation_war_sys_mut()
+                .set_one_player_war_time(player_id, time_ms);
+            Ok(OrganizingControlDispatchReport::FourNationWarTime {
+                player_id,
+                time_ms,
+                previous_time_ms,
+            })
+        }
         0x7fe48 => {
             let country_id = read_control_i32(message, "country ID")? as u8;
             let requested = read_control_i32(message, "country treasury")?;
@@ -378,6 +492,28 @@ fn dispatch_organizing_control_message(
         }
         _ => unreachable!("control opcode отфильтрован перед dispatcher-ом"),
     }
+}
+
+fn format_four_nation_exploit_notice(template: &[u8], increment: i32) -> Vec<u8> {
+    let template = legacy_c_string_prefix(template);
+    let Some(marker) = template.windows(2).position(|window| window == b"%d") else {
+        return template[..template.len().min(0xff)].to_vec();
+    };
+    let value = increment.to_string();
+    let mut result = Vec::with_capacity(template.len().saturating_add(value.len()));
+    result.extend_from_slice(&template[..marker]);
+    result.extend_from_slice(value.as_bytes());
+    result.extend_from_slice(&template[marker + 2..]);
+    result.truncate(0xff);
+    result
+}
+
+fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
+    let length = value
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(value.len());
+    &value[..length]
 }
 
 fn read_control_i32(

@@ -17,6 +17,10 @@
 //! сравнивается с unsigned-представлением setup limit. Это минимальный owned
 //! player state для будущих equipment/battle-fairy side effects, но не замена
 //! полного constructor-а, property recalc или runtime player lifecycle.
+//! FourNation reward `0x7FE46` добавляет owned `dwExploit`: advertised client
+//! value сохраняет wrapping addition, `SetExploit` отдельно применяет exact
+//! unsigned CountryParam maximum, а virtual `UpdateProperty` остаётся
+//! обязательным caller-runtime effect после мутации.
 //! Total honor-rank startup материализует days/weeks/months counters и
 //! nobility rank: reset меняет owned state, а пока RAW `PlayerRunScript`
 //! выражен точным typed AdjustHonorRank script-effect-ом.
@@ -745,6 +749,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) months_honor_eliminate: u32,
     pub(crate) total_honor_eliminate: u32,
     pub(crate) rank_of_nobility_id: u32,
+    pub(crate) exploit: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -755,6 +760,14 @@ pub(crate) struct PlayerHonorResetReport {
     pub(crate) previous_weeks: u32,
     pub(crate) previous_months: u32,
     pub(crate) adjust_honor_rank_script: Option<&'static [u8]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerExploitMutationReport {
+    pub(crate) player_id: i32,
+    pub(crate) previous: u32,
+    pub(crate) requested: u32,
+    pub(crate) applied: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -989,6 +1002,24 @@ impl CPlayer {
 
     pub(crate) const fn base_properties(&self) -> PlayerBaseProperties {
         self.base_properties
+    }
+
+    /// Exact `SetExploit`: signed CountryParam storage сравнивается как
+    /// `unsigned long`, затем значение зажимается только сверху.
+    pub(crate) fn set_exploit(
+        &mut self,
+        requested: u32,
+        maximum: i32,
+    ) -> PlayerExploitMutationReport {
+        let previous = self.base_properties.exploit;
+        let applied = requested.min(maximum as u32);
+        self.base_properties.exploit = applied;
+        PlayerExploitMutationReport {
+            player_id: self.player_id(),
+            previous,
+            requested,
+            applied,
+        }
     }
 
     pub(crate) const fn combat_properties(&self) -> PlayerCombatProperties {
@@ -4375,20 +4406,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0002DB40
 // ADDRESS: 0042db40
 // PROTOTYPE: void __thiscall SetQuestOn(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetExploit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:12073
-// RVA: 0x0002DBC0
-// ADDRESS: 0042dbc0
-// PROTOTYPE: void __thiscall SetExploit(ulong param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

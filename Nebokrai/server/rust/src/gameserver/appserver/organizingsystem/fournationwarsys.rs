@@ -16,8 +16,9 @@
 //! `InitWarState` идёт по vector-order, ищет main region с proxy fallback,
 //! принимает только nation region, применяет `(index, region_state)` и копирует
 //! пять relive rectangles. Process singleton заменён owned-полем `CGame`.
-//! Direct morale assignment из OrganSys `0x7FE49` также принадлежит owner-у;
-//! callbacks и player-war-time методы ниже ещё сохраняют RAW.
+//! Direct morale assignment `0x7FE49` и replacement player-war-time `0x7FE47`
+//! также принадлежат owner-у; callbacks и остальные player-war-time методы ниже
+//! ещё сохраняют RAW.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -228,6 +229,11 @@ impl CFourNationWarSys {
 
     pub(crate) const fn morale(&self) -> i32 {
         self.morale
+    }
+
+    /// Exact hash-map replacement из `SetOnePlayerWarTime`.
+    pub(crate) fn set_one_player_war_time(&mut self, player_id: i32, time_ms: u32) -> Option<u32> {
+        self.player_war_times_ms.insert(player_id, time_ms)
     }
 }
 
@@ -562,20 +568,6 @@ fn four_nation_u32_at(bytes: &[u8], offset: usize) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CFourNationWarSys::AddOnePlayerExploit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\fournationwarsys.cpp:205
-// RVA: 0x001BF100
-// ADDRESS: 005bf100
-// PROTOTYPE: void __thiscall AddOnePlayerExploit(long param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CFourNationWarSys::OnSignUpWarStart
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -598,20 +590,6 @@ fn four_nation_u32_at(bytes: &[u8], offset: usize) -> u32 {
 // RVA: 0x001BF6A0
 // ADDRESS: 005bf6a0
 // PROTOTYPE: void __thiscall OnRefreshRegion(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFourNationWarSys::SetOnePlayerWarTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\fournationwarsys.cpp:229
-// RVA: 0x001BF750
-// ADDRESS: 005bf750
-// PROTOTYPE: void __thiscall SetOnePlayerWarTime(long param_1, ulong param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

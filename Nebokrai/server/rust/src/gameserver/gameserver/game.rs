@@ -93,9 +93,10 @@
 //! OrganSys war opcodes `0x7FE1F..0x7FE36` тем же FIFO меняют owned
 //! AttackCity/Village schedules, concrete local/proxy region phases и
 //! contender state с сохранением City/Village message/log side effects.
-//! Control tail `0x7FE48..0x7FE4A` продолжает этот route: country treasury
-//! clamp публикует exact World `0x60314`, FourNation morale меняется в owned
-//! schedule, а router response переиспользует входной wire как `0xBFF36`.
+//! Control tail `0x7FE46..0x7FE4A` продолжает этот route: FourNation
+//! exploit/time выполняют player property/client effects и owned time-map,
+//! country treasury clamp публикует exact World `0x60314`, morale меняется в
+//! owned schedule, а router response переиспользует входной wire как `0xBFF36`.
 //! CountryWar `0x7FF17..0x7FF22` продолжает тот же lifecycle: мутирует
 //! country-region phases/results, выполняет clear через concrete runtime и
 //! переиспользует входной message для all/country-filtered client broadcast.
