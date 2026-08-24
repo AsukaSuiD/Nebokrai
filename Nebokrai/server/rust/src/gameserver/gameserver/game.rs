@@ -140,6 +140,10 @@
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
+//! Potential reset `0x8FC2B` продолжает тот же route: расход первого
+//! `ZHQLS01` предшествует addon/player rollback, затем идут `0xBF721` и
+//! `0xBF918`; универсальная `DeleteGoods`-публикация вызывается обязательным
+//! context с полным consumption/removal snapshot, без придуманного packet-а.
 //! GodsBattle runtime продолжает startup owner: player Add/Remove tail
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
@@ -304,7 +308,8 @@ use crate::gameserver::appserver::player::{
     BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationReport,
     BattleFairyFollowReport, BattleFairyPotentialAllocationDelivery,
-    BattleFairyPotentialAllocationEffect, BattleFairySkillRequest, BattleFairySkillRequestFacts,
+    BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetDelivery,
+    BattleFairyPotentialResetEffect, BattleFairySkillRequest, BattleFairySkillRequestFacts,
     BattleFairySkillRequestReport, BattleFairySkillResetReport, BattleFairySummonDelivery,
     BattleFairySummonEffect, BattleFairySummonReport, BattleFairyWarSoulAction, CPlayer,
     PlayerCombatProperties, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
@@ -1092,6 +1097,13 @@ pub(crate) trait BattleFairyRuntimeContext: BattleFairyDeathContext {
         origin: &CShape,
         message: &CMessage,
     ) -> Result<i32, ShapeCoordinateBlock>;
+}
+
+pub(crate) trait BattleFairyPotentialResetContext: BattleFairyDeathContext {
+    fn publish_battle_fairy_packet_consumption(
+        &mut self,
+        effect: &BattleFairyPotentialResetEffect,
+    ) -> Vec<i32>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6762,15 +6774,60 @@ impl CGame {
 
     /// Исполняемый entry point goods-message `0x8FC2B`: reset item ищется и
     /// расходуется в owned player packet до potential/player mutations.
-    pub(crate) fn reset_battle_fairy_potential(
+    pub(crate) fn reset_battle_fairy_potential<Context: BattleFairyPotentialResetContext>(
         &mut self,
         player_id: i32,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+        context: &mut Context,
     ) -> Option<crate::gameserver::appserver::player::BattleFairyPotentialResetReport> {
         let enabled = self.globe_setup.battle_fairy_enabled();
-        self.players.get_mut(&player_id).map(|player| {
+        let mut report = self.players.get_mut(&player_id).map(|player| {
             player.reset_battle_fairy_potential(enabled, &self.goods_factory, encode_old_client)
-        })
+        })?;
+        for effect in report.effects.clone() {
+            match effect {
+                BattleFairyPotentialResetEffect::Notification {
+                    player_id,
+                    string_id,
+                    color,
+                } => {
+                    let delivery = colored_player_notice_message(
+                        color,
+                        0,
+                        self.get_string_by_id(string_id.as_bytes()),
+                    )
+                    .send_to_player(self.net_server(), player_id);
+                    report
+                        .deliveries
+                        .push(BattleFairyPotentialResetDelivery::Player(delivery));
+                }
+                effect @ BattleFairyPotentialResetEffect::PacketItemConsumed { .. } => {
+                    report
+                        .deliveries
+                        .push(BattleFairyPotentialResetDelivery::PacketItem(
+                            context.publish_battle_fairy_packet_consumption(&effect),
+                        ));
+                }
+                BattleFairyPotentialResetEffect::PropertiesChanged { player_id } => {
+                    let external = context.player_properties_external_facts(player_id);
+                    if let Some(player) = self.find_player(player_id) {
+                        report
+                            .deliveries
+                            .push(BattleFairyPotentialResetDelivery::Properties(
+                                self.send_player_properties_changed(player, external),
+                            ));
+                    }
+                }
+                BattleFairyPotentialResetEffect::GoodsUpdated(update) => {
+                    report
+                        .deliveries
+                        .push(BattleFairyPotentialResetDelivery::GoodsUpdated(
+                            self.send_battle_fairy_goods_update(&update),
+                        ));
+                }
+            }
+        }
+        Some(report)
     }
 
     /// Runtime entry point `CBattleFairyContainer::ResetSkill`, общий для

@@ -593,6 +593,14 @@ pub(crate) enum BattleFairyPotentialResetEffect {
     GoodsUpdated(BattleFairyDefaultGoodsUpdate),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyPotentialResetDelivery {
+    Player(i32),
+    PacketItem(Vec<i32>),
+    Properties(i32),
+    GoodsUpdated(i32),
+}
+
 #[must_use = "reset report содержит packet ownership и player/network effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyPotentialResetReport {
@@ -600,6 +608,7 @@ pub(crate) struct BattleFairyPotentialResetReport {
     pub(crate) outcome: BattleFairyPotentialResetOutcome,
     pub(crate) recovered_potential: i32,
     pub(crate) effects: Vec<BattleFairyPotentialResetEffect>,
+    pub(crate) deliveries: Vec<BattleFairyPotentialResetDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2503,6 +2512,7 @@ impl CPlayer {
             outcome: BattleFairyPotentialResetOutcome::MissingHeadgear,
             recovered_potential: 0,
             effects: Vec::new(),
+            deliveries: Vec::new(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairyPotentialResetOutcome::FeatureDisabled;
