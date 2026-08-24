@@ -105,6 +105,10 @@
 //! Nation contend проходит через те же canonical player/region owners: enter,
 //! cancel, damage и AI timeout исполняют `0xBFF29`, localized notices, захват
 //! с morale/top-info и три concrete treasure-box `AddNpc` в исходном порядке.
+//! Перед contend-таймером тот же Nation AI исполняет строгий gate четырёх
+//! стражей и адмирала: локализованный stone NPC получает explosion/removal
+//! around-пакеты, удаляется из spatial owner-а и заменяется monster-ом в
+//! фиксированной точке.
 //! CountryWar `0x7FF17..0x7FF22` продолжает тот же lifecycle: мутирует
 //! country-region phases/results, выполняет clear через concrete runtime и
 //! переиспользует входной message для all/country-filtered client broadcast.
@@ -278,12 +282,12 @@ use crate::gameserver::appserver::servernationregion::{
     classify_nation_morale_target,
 };
 use crate::gameserver::appserver::serverregion::{
-    CServerRegion, RegionMembershipBlock, ServerRegionNpcContext, ServerRegionNpcSetup,
-    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport,
+    CServerRegion, RegionMembershipBlock, ServerRegionMonsterContext, ServerRegionNpcContext,
+    ServerRegionNpcSetup, ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::shape::{
-    MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
+    CShape, MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
     ShapeView,
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
@@ -1003,8 +1007,19 @@ pub(crate) trait NationCombatContext: ServerRegionNpcContext {
     fn put_debug_string(&mut self, text: &[u8]);
 }
 
-pub(crate) trait NationContendContext: NationCombatContext {
+pub(crate) trait NationContendContext:
+    NationCombatContext + ServerRegionMonsterContext
+{
     fn run_base_region_ai(&mut self, region: &mut CServerRegion);
+
+    /// Выполняет concrete `CMessage::SendToAround` для двух magic-stone
+    /// сообщений до virtual удаления исходного NPC.
+    fn send_nation_magic_stone_around(
+        &mut self,
+        region: &CServerRegion,
+        origin: &CShape,
+        message: &CMessage,
+    ) -> i32;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1078,9 +1093,29 @@ pub(crate) enum NationContendCompletionOutcome {
     Captured(NationContendCaptureMutation),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NationMagicStoneTransitionOutcome {
+    NpcMissing,
+    NpcCoordinateBlocked(ShapeCoordinateBlock),
+    NpcRemovalBlocked(RegionMembershipBlock),
+    MonsterPropertyMissing,
+    MonsterSpawnBlocked(RegionMembershipBlock),
+    Spawned { monster_id: i32 },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationMagicStoneTransitionReport {
+    pub(crate) country: u8,
+    pub(crate) npc_id: Option<i32>,
+    pub(crate) explosion_delivery: Option<i32>,
+    pub(crate) removal_delivery: Option<i32>,
+    pub(crate) outcome: NationMagicStoneTransitionOutcome,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NationContendAiReport {
     pub(crate) region_id: i32,
+    pub(crate) magic_stone_transitions: Vec<NationMagicStoneTransitionReport>,
     pub(crate) progress_deliveries: Vec<(i32, i32, i32)>,
     pub(crate) completed: Option<NationContend>,
     pub(crate) completion_outcome: Option<NationContendCompletionOutcome>,
@@ -2431,6 +2466,14 @@ impl CGame {
             return None;
         };
         context.run_base_region_ai(&mut region.war.base);
+        let mut magic_stone_transitions = Vec::new();
+        for country in region.take_due_magic_stone_transitions() {
+            magic_stone_transitions.push(self.replace_nation_magic_stone(
+                &mut region,
+                country,
+                context,
+            ));
+        }
         let advance = match region.advance_contenders(context.now_milliseconds()) {
             Ok(advance) => advance.unwrap_or_default(),
             Err(error) => {
@@ -2551,6 +2594,7 @@ impl CGame {
         self.restore_region_owner(ServerRegionOwner::Nation(region));
         Some(Ok(NationContendAiReport {
             region_id,
+            magic_stone_transitions,
             progress_deliveries,
             completed,
             completion_outcome,
@@ -2558,6 +2602,131 @@ impl CGame {
             top_info_delivery,
             treasure_spawns,
         }))
+    }
+
+    fn replace_nation_magic_stone<Context: NationContendContext>(
+        &self,
+        region: &mut ServerNationRegion,
+        country: u8,
+        context: &mut Context,
+    ) -> NationMagicStoneTransitionReport {
+        let (npc_name_id, monster_name_id, tile_x, tile_y) = match country {
+            1 => (b"GS1084".as_slice(), b"GS1142".as_slice(), 0xfb, 0x35),
+            2 => (b"GS1085".as_slice(), b"GS1139".as_slice(), 0xf8, 0x1c1),
+            3 => (b"GS1086".as_slice(), b"GS1140".as_slice(), 0x25, 0xfc),
+            4 => (b"GS1087".as_slice(), b"GS1141".as_slice(), 0x1dc, 0x105),
+            _ => {
+                return NationMagicStoneTransitionReport {
+                    country,
+                    npc_id: None,
+                    explosion_delivery: None,
+                    removal_delivery: None,
+                    outcome: NationMagicStoneTransitionOutcome::NpcMissing,
+                };
+            }
+        };
+        let npc_name = self.get_string_by_id(npc_name_id);
+        let Some(npc) = region.war.base.find_npc_by_name(npc_name) else {
+            return NationMagicStoneTransitionReport {
+                country,
+                npc_id: None,
+                explosion_delivery: None,
+                removal_delivery: None,
+                outcome: NationMagicStoneTransitionOutcome::NpcMissing,
+            };
+        };
+        let shape = npc.move_shape().shape();
+        let npc_id = shape.identity().id;
+        let npc_tile_x = match shape.get_tile_x() {
+            Ok(tile_x) => tile_x,
+            Err(error) => {
+                return NationMagicStoneTransitionReport {
+                    country,
+                    npc_id: Some(npc_id),
+                    explosion_delivery: None,
+                    removal_delivery: None,
+                    outcome: NationMagicStoneTransitionOutcome::NpcCoordinateBlocked(error),
+                };
+            }
+        };
+        let npc_tile_y = match shape.get_tile_y() {
+            Ok(tile_y) => tile_y,
+            Err(error) => {
+                return NationMagicStoneTransitionReport {
+                    country,
+                    npc_id: Some(npc_id),
+                    explosion_delivery: None,
+                    removal_delivery: None,
+                    outcome: NationMagicStoneTransitionOutcome::NpcCoordinateBlocked(error),
+                };
+            }
+        };
+
+        let mut explosion = CMessage::new(0xbf50a);
+        explosion.add_long(2_000_000);
+        explosion
+            .base_mut()
+            .add(&(npc_tile_x as f32 + 0.5).to_le_bytes());
+        explosion
+            .base_mut()
+            .add(&(npc_tile_y as f32 + 0.5).to_le_bytes());
+        let explosion_delivery =
+            Some(context.send_nation_magic_stone_around(&region.war.base, shape, &explosion));
+
+        let identity = shape.identity();
+        let mut removal = CMessage::new(0xbf504);
+        removal.add_long(identity.object_type);
+        removal.add_long(identity.id);
+        removal.add_long(0);
+        let removal_delivery =
+            Some(context.send_nation_magic_stone_around(&region.war.base, shape, &removal));
+
+        if let Err(error) = region.war.base.remove_owned_npc_by_id(npc_id) {
+            return NationMagicStoneTransitionReport {
+                country,
+                npc_id: Some(npc_id),
+                explosion_delivery,
+                removal_delivery,
+                outcome: NationMagicStoneTransitionOutcome::NpcRemovalBlocked(error),
+            };
+        }
+
+        let monster_name = self.get_string_by_id(monster_name_id);
+        let Some(property) = self
+            .find_monster_property_by_origin_name(monster_name)
+            .cloned()
+        else {
+            return NationMagicStoneTransitionReport {
+                country,
+                npc_id: Some(npc_id),
+                explosion_delivery,
+                removal_delivery,
+                outcome: NationMagicStoneTransitionOutcome::MonsterPropertyMissing,
+            };
+        };
+        let (area_width, area_height) = self.area_dimensions();
+        let outcome = match region.war.base.add_monster(
+            &property,
+            tile_x,
+            tile_y,
+            -1,
+            true,
+            false,
+            context.now_milliseconds(),
+            area_width,
+            area_height,
+            context,
+        ) {
+            Ok(monster_id) => NationMagicStoneTransitionOutcome::Spawned { monster_id },
+            Err(error) => NationMagicStoneTransitionOutcome::MonsterSpawnBlocked(error),
+        };
+        NationMagicStoneTransitionReport {
+            country,
+            npc_id: Some(npc_id),
+            explosion_delivery,
+            removal_delivery,
+            outcome,
+        }
     }
 
     fn spawn_nation_treasure_box<Context: NationCombatContext>(

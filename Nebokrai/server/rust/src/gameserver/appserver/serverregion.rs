@@ -58,6 +58,8 @@
 //! War и Country subtype decoder-ы входят в этот owner напрямую.
 //! Concrete `AddNpc` уже создаёт `CNpc` через factory type `500`, назначает
 //! spawn-поля, проводит его через `AddObject/CArea` и сохраняет owned object.
+//! Type `500` ветвь `FindChildObjectByName` и достигнутое owned-NPC удаление
+//! сохраняют исходный map key-order и spatial/registry lifecycle для Nation AI.
 //! Low-level `AddMonster` аналогично владеет type `600` spawn и хранит
 //! original-name key вместо висячего указателя в reloadable MonsterList;
 //! skills/AI Init и around serialization остаются concrete context callbacks.
@@ -927,6 +929,36 @@ impl CServerRegion {
 
     pub(crate) fn find_npc_by_id(&self, id: i32) -> Option<&CNpc> {
         self.owned_npcs.get(&id)
+    }
+
+    /// Exact type `500` branch `FindChildObjectByName`: `m_mNpcs` обходится
+    /// в key-order и возвращает первый NPC с byte-exact C-string именем.
+    pub(crate) fn find_npc_by_name(&self, name: &[u8]) -> Option<&CNpc> {
+        self.owned_npcs
+            .values()
+            .find(|npc| npc.move_shape().shape().base_object().get_name() == name)
+    }
+
+    /// Выполняет достигнутый virtual `RemoveObject` для owned NPC и только
+    /// после успешного spatial/registry removal отдаёт его Rust owner.
+    pub(crate) fn remove_owned_npc_by_id(
+        &mut self,
+        id: i32,
+    ) -> Result<bool, RegionMembershipBlock> {
+        let Some(mut npc) = self.owned_npcs.remove(&id) else {
+            return Ok(false);
+        };
+        let facts = ShapeRuntimeFacts {
+            is_npc: true,
+            is_move_shape: true,
+            figure: ShapeFigure::default(),
+            ..ShapeRuntimeFacts::default()
+        };
+        if let Err(error) = self.remove_object(npc.move_shape_mut().shape_mut(), facts) {
+            self.owned_npcs.insert(id, npc);
+            return Err(error);
+        }
+        Ok(true)
     }
 
     /// Декодирует полный World -> Game region snapshot в исходном порядке:
@@ -2807,6 +2839,7 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // ============================================================================
 // FUNCTION: CServerRegion::FindChildObjectByName
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
+// IMPLEMENTED_SUBCHAIN: type `500` key-order/name lookup материализован выше.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:1547

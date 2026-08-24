@@ -14,7 +14,9 @@
 //! YuYingShi gate также принадлежат этому owner-у; создание NPC и сетевые
 //! side effects выполняет достигнутый `CGame` caller. Собственный ordered
 //! contend-list сохраняет early-remove quirk, damage/AI timer arithmetic и
-//! захват Алтаря; player flags, сообщения и treasure NPC остаются у caller-а.
+//! захват Алтаря. Предшествующий AI pass строго связывает четыре смерти stone
+//! guards со смертью адмирала и отдаёт ordered magic-stone replacements;
+//! player flags, сообщения и concrete NPC/monster lifetime остаются у caller-а.
 
 use super::organizingsystem::fournationwarsys::FourNationRect;
 use super::serverregion::ServerRegionDecodeError;
@@ -413,6 +415,20 @@ impl ServerNationRegion {
 
     pub(crate) fn take_stone_guard_results(&mut self) -> [u32; 5] {
         std::mem::take(&mut self.stone_guard_died)
+    }
+
+    /// Exact prefix `AI`: страны обходятся `1..=4`, gate требует именно
+    /// `stoneGuardDie == 4 && admiralDied`, после вызова replacement счётчик
+    /// guards обнуляется независимо от того, найден ли исходный NPC.
+    pub(crate) fn take_due_magic_stone_transitions(&mut self) -> Vec<u8> {
+        let mut countries = Vec::new();
+        for country in 1..=4 {
+            if self.stone_guard_died[country] == 4 && self.da_jiang_jun_died[country] {
+                countries.push(country as u8);
+                self.stone_guard_died[country] = 0;
+            }
+        }
+        countries
     }
 
     pub(crate) fn apply_monster_morale(
@@ -1450,6 +1466,8 @@ pub(crate) fn convert_morale_to_exploit(
 // ============================================================================
 // FUNCTION: ServerNationRegion::DelNpcMagicStoneAndAddMonsterMagicStone
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
+// IMPLEMENTED_SUBCHAIN: полный localized NPC lookup, два around-пакета,
+// owned removal и fixed-position AddMonster материализованы в `CGame` выше.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servernationregion.cpp:2274
@@ -1702,6 +1720,8 @@ pub(crate) fn convert_morale_to_exploit(
 // ============================================================================
 // FUNCTION: ServerNationRegion::AI
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
+// IMPLEMENTED_SUBCHAIN: base-AI callback, ordered magic-stone gates и полный
+// contend timer/completion pass материализованы в `CGame::nation_contend_ai`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servernationregion.cpp:156
