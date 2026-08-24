@@ -52,9 +52,9 @@
 //! client open/result/close wire, общий Game RNG, configuration roll,
 //! goods factory/upgrade/packet ownership и optional World announcement;
 //! повторный запуск приходит из живого goods opcode `0x8FC12`.
-//! Numeric selector получает вычисленные параметры из reached synchronous
-//! `CScript`; остальные function ID и асинхронный dialog/wait lifecycle ниже
-//! пока остаются RAW.
+//! Numeric selector получает вычисленные параметры из owned `CScript`; return
+//! либо dialog-yield возвращается в ту же execution chain. Остальные function
+//! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
 
 use crate::gameserver::appserver::country::country::{
     CountryExileRestTimeReport, CountryScalarMutationReport,
@@ -94,6 +94,14 @@ pub(crate) const SCRIPT_FUNCTION_SET_CURRENT_DURABILITY: i32 = 2244;
 pub(crate) const SCRIPT_FUNCTION_GET_SELECTED_DURABILITY: i32 = 2245;
 pub(crate) const SCRIPT_FUNCTION_SET_SELECTED_DURABILITY: i32 = 2246;
 pub(crate) const SCRIPT_FUNCTION_FAIRY_EXP_UP: i32 = 2249;
+pub(crate) const SCRIPT_FUNCTION_RGB: i32 = 9;
+pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
+pub(crate) const SCRIPT_FUNCTION_CHECK_GOODS: i32 = 2202;
+pub(crate) const SCRIPT_FUNCTION_CHECK_SPACE: i32 = 2203;
+pub(crate) const SCRIPT_FUNCTION_ADD_INFO: i32 = 2305;
+pub(crate) const SCRIPT_FUNCTION_TALK_BOX: i32 = 2307;
+pub(crate) const SCRIPT_FUNCTION_ADD_GOODS_LOG: i32 = 2313;
+pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_TECH_LEVEL: i32 = 9002;
@@ -2298,6 +2306,7 @@ pub(crate) enum ScriptFunctionDispatchOutcome {
     DifferentFunction,
     Invalid,
     Handled { legacy_return: i32 },
+    Yielded { legacy_return: i32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2316,6 +2325,21 @@ pub(crate) fn script_function_parameter_kind(
 ) -> ScriptFunctionParameterKind {
     use ScriptFunctionParameterKind::{Integer, String, Unused};
     match function_id {
+        SCRIPT_FUNCTION_ADD_GOODS
+        | SCRIPT_FUNCTION_CHECK_GOODS
+        | SCRIPT_FUNCTION_ADD_INFO
+        | SCRIPT_FUNCTION_TALK_BOX
+        | SCRIPT_FUNCTION_ADD_GOODS_LOG => match index {
+            0 => String,
+            1..=3 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_RGB | SCRIPT_FUNCTION_CHECK_SPACE | SCRIPT_FUNCTION_GET_QUEST_STATE => {
+            match index {
+                0..=2 => Integer,
+                _ => Unused,
+            }
+        }
         SCRIPT_FUNCTION_DELETE_USED_GOODS
         | SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_1
         | SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_2
@@ -2728,6 +2752,198 @@ fn send_script_goods_update(game: &CGame, player_id: i32, goods: ShapeIdentity, 
     let _ = message.send_to_player(game.net_server(), player_id);
 }
 
+fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    script_player_id: Option<i32>,
+    script_id: i32,
+    function_id: i32,
+    argument_count: usize,
+    integer_arguments: [Option<i32>; 4],
+    string_arguments: [Option<&[u8]>; 2],
+) -> Option<ScriptFunctionDispatchOutcome> {
+    let player_id = script_player_id.unwrap_or_default();
+    match function_id {
+        SCRIPT_FUNCTION_RGB => {
+            let red = integer_arguments[0].unwrap_or_default() as u32 & 0xff;
+            let green = integer_arguments[1].unwrap_or_default() as u32 & 0xff;
+            let blue = integer_arguments[2].unwrap_or_default() as u32 & 0xff;
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: (red | green << 8 | blue << 16) as i32,
+            })
+        }
+        SCRIPT_FUNCTION_GET_QUEST_STATE => {
+            let quest_id = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let legacy_return = u16::try_from(quest_id)
+                .ok()
+                .and_then(|quest_id| {
+                    game.find_player(player_id)
+                        .map(|player| player.quest_state(quest_id))
+                })
+                .unwrap_or(2);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_CHECK_GOODS => {
+            let Some(name) = string_arguments[0].filter(|name| !name.is_empty()) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let goods_index = game
+                .goods_factory()
+                .query_goods_id_by_original_name(Some(name));
+            let amount = game
+                .find_player(player_id)
+                .map(|player| {
+                    player
+                        .packet()
+                        .base()
+                        .traversing_goods()
+                        .filter(|goods| goods.base_properties_index() == goods_index)
+                        .fold(0u32, |total, goods| total.wrapping_add(goods.amount()))
+                })
+                .unwrap_or_default();
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: amount.min(i32::MAX as u32) as i32,
+            })
+        }
+        SCRIPT_FUNCTION_CHECK_SPACE => {
+            let requested = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let package = integer_arguments[1].unwrap_or_default();
+            let legacy_return = u32::try_from(requested)
+                .ok()
+                .and_then(|requested| {
+                    game.find_player(player_id)
+                        .map(|player| (player, requested))
+                })
+                .map_or(0, |(player, requested)| {
+                    i32::from(if package == 1 {
+                        player.depot().base().check_space(requested)
+                    } else {
+                        player.packet().check_space(requested)
+                    })
+                });
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_ADD_GOODS => {
+            if argument_count > 2 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(name) = string_arguments[0].filter(|name| !name.is_empty()) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let amount = integer_arguments[1].unwrap_or(1);
+            if amount < 1 || game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let goods_index = game
+                .goods_factory()
+                .query_goods_id_by_original_name(Some(name));
+            let created = game.create_goods_batch(goods_index, amount as u32);
+            let mut encode = |goods: &CGoods| runtime.encode_goods_for_old_client(goods);
+            if let Some((additions, _rejected)) =
+                game.add_goods_to_player_packet(player_id, created, &mut encode)
+            {
+                for addition in &additions {
+                    let _ = game.send_player_packet_addition(addition);
+                }
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
+        }
+        SCRIPT_FUNCTION_ADD_INFO => {
+            let Some(text) = string_arguments[0] else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let color = integer_arguments[1].unwrap_or(-1) as u32;
+            let background = integer_arguments[2].unwrap_or_default() as u32;
+            if game.find_player(player_id).is_some() {
+                let _ = colored_player_notice_message(color, background, text)
+                    .send_to_player(game.net_server(), player_id);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_TALK_BOX => {
+            let Some(text) = string_arguments[0].filter(|text| text.len() < 0x5000) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let mut message = CMessage::new(0x000b_f805);
+            message.add_long(script_id);
+            message.base_mut().add(text);
+            message.add_byte(0);
+            message.add_byte(1);
+            if message.send_to_player(game.net_server(), player_id) == 0 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            Some(ScriptFunctionDispatchOutcome::Yielded { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_ADD_GOODS_LOG => {
+            let Some(name) = string_arguments[0] else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let log_type = integer_arguments[1].unwrap_or(14);
+            let requested_amount = integer_arguments[2].unwrap_or(1);
+            let goods_index = game
+                .goods_factory()
+                .query_goods_id_by_original_name(Some(name));
+            let facts = game.find_player(player_id).and_then(|player| {
+                let goods = player
+                    .packet()
+                    .base()
+                    .traversing_goods()
+                    .find(|goods| goods.base_properties_index() == goods_index)?;
+                Some((
+                    player.pk_count(),
+                    player.money(),
+                    player.depot_money(),
+                    goods.identity(),
+                    goods.price(),
+                    goods.name().to_vec(),
+                    player.server_region_id().unwrap_or_default(),
+                    player.shape().get_tile_x().unwrap_or_default(),
+                    player.shape().get_tile_y().unwrap_or_default(),
+                    player.client_ip(),
+                ))
+            });
+            let Some((
+                pk_count,
+                money,
+                depot_money,
+                goods,
+                price,
+                actual_name,
+                region_id,
+                x,
+                y,
+                ip,
+            )) = facts
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if log_type == 13 && game.log_system().equipment_compose_enabled() {
+                let mut message = CMessage::new(0x0006_0202);
+                message.add_byte(log_type as u8);
+                message.add_long(player_id);
+                message.base_mut().add_word(pk_count);
+                message.add_ulong(money);
+                message.add_ulong(depot_money);
+                message.base_mut().add_guid(goods.ex_id);
+                message.add_ulong(price);
+                message.base_mut().add(&actual_name);
+                message.add_byte(0);
+                message.add_long(requested_amount);
+                message.add_long(region_id);
+                message.add_long(x);
+                message.add_long(y);
+                message.add_ulong(ip);
+                let _ = message.send(game, false);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
+        }
+        _ => None,
+    }
+}
+
 /// Единый reached tail `CScript::RunFunction`: selector уже разрешён через
 /// загруженный FunctionList, а аргументы вычислены тем же экземпляром CScript.
 /// Порядок family-вызовов не наблюдаем сценарием, потому что каждый owner
@@ -2739,11 +2955,24 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     script_npc_id: Option<i32>,
     script_region_id: Option<i32>,
     used_item_id: Option<CGuid>,
+    script_id: i32,
     function_id: i32,
     argument_count: usize,
     integer_arguments: [Option<i32>; 4],
     string_arguments: [Option<&[u8]>; 2],
 ) -> ScriptFunctionDispatchOutcome {
+    if let Some(outcome) = run_core_player_script_function(
+        game,
+        runtime,
+        script_player_id,
+        script_id,
+        function_id,
+        argument_count,
+        integer_arguments,
+        string_arguments,
+    ) {
+        return outcome;
+    }
     match function_id {
         SCRIPT_FUNCTION_OPEN_PRECIOUS_BOX => {
             let legacy_return = script_player_id.map_or(0, |player_id| {

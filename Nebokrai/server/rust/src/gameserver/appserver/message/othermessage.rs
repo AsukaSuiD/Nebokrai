@@ -37,9 +37,10 @@
 //! ставит concrete `QuitBySocketId`; GUI/file logger остаётся platform runtime.
 //! Script-dialog answer `0x8FB02` сохраняет player/region no-read guard,
 //! exact mode `1/-1/0`, bounded string + CRT-like `atoi` и continue/delete
-//! request к ещё не материализованному общему script-instance owner-у.
-//! World continuation `0x7FA15` читает player/script/value и вызывает тот же
-//! `ScriptContinue` даже после null player lookup.
+//! прямо в owned script-instance `CGame`; ответ снимает TalkBox wait по
+//! исходному script ID, а cancel удаляет тот же instance. World continuation
+//! `0x7FA15` читает player/script/value и делает тот же lookup даже после null
+//! player lookup, сохраняя исходный безусловный вызов `ScriptContinue`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::{
@@ -210,20 +211,6 @@ pub(crate) enum GameScriptDialogOutcome {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameOtherScriptAction {
-    Continue {
-        script_id: i32,
-        player_id: i32,
-        player_present: bool,
-        value: i32,
-    },
-    Delete {
-        script_id: i32,
-        player_id: i32,
-    },
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameOtherErrorLog {
     ChangeGameServerFailed {
@@ -235,7 +222,6 @@ pub(crate) enum GameOtherErrorLog {
 pub(crate) trait GameOtherMessageRuntime {
     fn other_now_milliseconds(&mut self) -> u32;
     fn add_other_error_log(&mut self, event: GameOtherErrorLog);
-    fn run_other_script_action(&mut self, game: &mut CGame, action: GameOtherScriptAction);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1018,15 +1004,7 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
                 1 => {
                     let text = message.base_mut().get_str_bytes(0x32).unwrap_or_default();
                     let value = legacy_atoi(&text);
-                    runtime.run_other_script_action(
-                        game,
-                        GameOtherScriptAction::Continue {
-                            script_id,
-                            player_id,
-                            player_present: true,
-                            value,
-                        },
-                    );
+                    let _ = game.continue_player_script(script_id, player_id, value);
                     GameScriptDialogOutcome::Continued {
                         script_id,
                         mode,
@@ -1035,26 +1013,12 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
                     }
                 }
                 -1 => {
-                    runtime.run_other_script_action(
-                        game,
-                        GameOtherScriptAction::Delete {
-                            script_id,
-                            player_id,
-                        },
-                    );
+                    let _ = game.delete_player_script(script_id, player_id, false);
                     GameScriptDialogOutcome::Deleted { script_id }
                 }
                 0 => {
                     let value = read_long(message, "script dialog numeric response")?;
-                    runtime.run_other_script_action(
-                        game,
-                        GameOtherScriptAction::Continue {
-                            script_id,
-                            player_id,
-                            player_present: true,
-                            value,
-                        },
-                    );
+                    let _ = game.continue_player_script(script_id, player_id, value);
                     GameScriptDialogOutcome::Continued {
                         script_id,
                         mode,
@@ -1108,15 +1072,7 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
             let script_id = read_long(message, "script id")?;
             let value = read_long(message, "script continuation value")?;
             let player_present = game.find_player(requested_player_id).is_some();
-            runtime.run_other_script_action(
-                game,
-                GameOtherScriptAction::Continue {
-                    script_id,
-                    player_id: requested_player_id,
-                    player_present,
-                    value,
-                },
-            );
+            let _ = game.continue_player_script(script_id, requested_player_id, value);
             Ok(GameOtherMessageReport {
                 message_type,
                 player_id: requested_player_id,

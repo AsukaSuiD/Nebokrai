@@ -3,10 +3,11 @@
 //! `CScript::LoadFunction(nullptr, data)` из точного EXE/PDB читает
 //! непрерывный `FunctionList`, преобразует caption через `atoi` и сохраняет
 //! text → numeric ID в ordered `std::map`. `BTreeMap` является прямой safe
-//! заменой lookup/order semantics. Reached synchronous `CScript` ниже хранит
-//! instance context/cursor, включая GUID запускающего packet item, вычисляет
-//! используемые выражения и вызывает
-//! materialized numeric function families; dialog/wait lifecycle остаётся RAW.
+//! заменой lookup/order semantics. Owned `ActiveScript` сохраняет source,
+//! cursor, player/NPC/region context и переменные между стадиями главного
+//! цикла; `call` создаёт отдельный instance, а `TalkBox` возобновляется ответом
+//! клиента через тот же script ID. Неподтверждённые wait/pause families и
+//! остальной не достигнутый синтаксис остаются в RAW ниже.
 
 use std::collections::BTreeMap;
 
@@ -102,6 +103,10 @@ pub(crate) enum ScriptCommandOutcome {
         function_id: i32,
         legacy_return: i32,
     },
+    Yielded {
+        function_id: i32,
+        legacy_return: i32,
+    },
     UnknownFunction,
     InvalidExpression,
 }
@@ -114,18 +119,121 @@ pub(crate) struct ScriptExecutionReport {
     pub(crate) outcomes: Vec<ScriptCommandOutcome>,
 }
 
-/// Reached synchronous owner исходного `CScript`: instance хранит source
-/// cursor и player/NPC/region context, читает команды и передаёт вычисленные
-/// параметры в numeric `RunFunction` dispatcher. Безопасный subset включает
-/// `if/else`, `goto`, `call` и локальные присваивания; неизвестная команда
-/// останавливает instance до side effects следующей строки. Асинхронные
-/// dialog/wait owners остаются вне этого прохода.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ScriptStepDisposition {
+    Ended,
+    YieldedCall { path: Vec<u8> },
+    WaitingFunction { function_id: i32 },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ScriptStepReport {
+    pub(crate) execution: ScriptExecutionReport,
+    pub(crate) disposition: ScriptStepDisposition,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ScriptLoopReport {
+    pub(crate) steps: Vec<(i32, ScriptStepReport)>,
+    pub(crate) started_scripts: Vec<i32>,
+    pub(crate) ended_scripts: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ActiveScript {
+    pub(crate) id: i32,
+    pub(crate) path: Vec<u8>,
+    source: Vec<u8>,
+    point: usize,
+    context: ScriptExecutionContext,
+    integer_variables: BTreeMap<Vec<u8>, i32>,
+    string_variables: BTreeMap<Vec<u8>, Vec<u8>>,
+    waiting_function: Option<i32>,
+}
+
+impl ActiveScript {
+    pub(crate) fn new(
+        id: i32,
+        path: Vec<u8>,
+        source: Vec<u8>,
+        context: ScriptExecutionContext,
+    ) -> Self {
+        Self {
+            id,
+            path,
+            source,
+            point: 0,
+            context,
+            integer_variables: BTreeMap::new(),
+            string_variables: BTreeMap::new(),
+            waiting_function: None,
+        }
+    }
+
+    pub(crate) const fn player_id(&self) -> Option<i32> {
+        self.context.player_id
+    }
+
+    pub(crate) const fn context(&self) -> ScriptExecutionContext {
+        self.context
+    }
+
+    pub(crate) const fn waiting_function(&self) -> Option<i32> {
+        self.waiting_function
+    }
+
+    pub(crate) fn continue_with(&mut self, value: i32) -> bool {
+        if self.waiting_function.take().is_none() {
+            return false;
+        }
+        self.integer_variables
+            .insert(normalize_name(b"$m_TalkRet"), value);
+        true
+    }
+
+    pub(crate) fn run_step<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        game: &mut CGame,
+        runtime: &mut Runtime,
+    ) -> ScriptStepReport {
+        if let Some(function_id) = self.waiting_function {
+            return ScriptStepReport {
+                execution: ScriptExecutionReport::default(),
+                disposition: ScriptStepDisposition::WaitingFunction { function_id },
+            };
+        }
+        let mut script = CScript {
+            source: &self.source,
+            point: self.point,
+            context: self.context,
+            integer_variables: std::mem::take(&mut self.integer_variables),
+            string_variables: std::mem::take(&mut self.string_variables),
+            script_id: self.id,
+        };
+        let report = script.run_step(game, runtime);
+        self.point = script.point;
+        self.integer_variables = script.integer_variables;
+        self.string_variables = script.string_variables;
+        if let ScriptStepDisposition::WaitingFunction { function_id } = &report.disposition {
+            self.waiting_function = Some(*function_id);
+        }
+        report
+    }
+}
+
+/// Reached execution owner исходного `CScript`: instance читает одну
+/// непрерывную группу команд и передаёт вычисленные параметры в numeric
+/// `RunFunction` dispatcher. `call` и dialog yield возвращают управление
+/// owned scheduler-у, который сохраняет cursor и context. Безопасный subset
+/// включает `if/else`, `goto`, `call` и локальные присваивания; неизвестная
+/// команда завершает instance до side effects следующей строки.
 pub(crate) struct CScript<'a> {
     source: &'a [u8],
     point: usize,
     context: ScriptExecutionContext,
     integer_variables: BTreeMap<Vec<u8>, i32>,
     string_variables: BTreeMap<Vec<u8>, Vec<u8>>,
+    script_id: i32,
 }
 
 impl<'a> CScript<'a> {
@@ -136,14 +244,15 @@ impl<'a> CScript<'a> {
             context,
             integer_variables: BTreeMap::new(),
             string_variables: BTreeMap::new(),
+            script_id: 0,
         }
     }
 
-    pub(crate) fn run<Runtime: ScriptFunctionRuntime>(
+    pub(crate) fn run_step<Runtime: ScriptFunctionRuntime>(
         &mut self,
         game: &mut CGame,
         runtime: &mut Runtime,
-    ) -> ScriptExecutionReport {
+    ) -> ScriptStepReport {
         let mut report = ScriptExecutionReport::default();
         while let Some(command) = self.read_command() {
             report.commands_read += 1;
@@ -159,7 +268,10 @@ impl<'a> CScript<'a> {
                         .evaluate_integer(game, runtime, expression)
                         .unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
                 }
-                break;
+                return ScriptStepReport {
+                    execution: report,
+                    disposition: ScriptStepDisposition::Ended,
+                };
             }
             if name.eq_ignore_ascii_case(b"<begin>")
                 || name.eq_ignore_ascii_case(b"<end>")
@@ -234,17 +346,16 @@ impl<'a> CScript<'a> {
                         .push(ScriptCommandOutcome::InvalidExpression);
                     break;
                 };
-                let Some(source) = game.script_file_data(&path).map(<[u8]>::to_vec) else {
+                if game.script_file_data(&path).is_none() {
                     report
                         .outcomes
                         .push(ScriptCommandOutcome::InvalidExpression);
                     break;
+                }
+                return ScriptStepReport {
+                    execution: report,
+                    disposition: ScriptStepDisposition::YieldedCall { path },
                 };
-                let nested = CScript::new(&source, self.context).run(game, runtime);
-                report.function_calls += nested.function_calls;
-                report.last_return = nested.last_return;
-                report.outcomes.extend(nested.outcomes);
-                continue;
             }
             if let Some(assigned) = self.run_assignment(game, runtime, command) {
                 if assigned {
@@ -267,13 +378,31 @@ impl<'a> CScript<'a> {
                         legacy_return,
                     });
                 }
+                ScriptCommandOutcome::Yielded {
+                    function_id,
+                    legacy_return,
+                } => {
+                    report.function_calls += 1;
+                    report.last_return = legacy_return;
+                    report.outcomes.push(ScriptCommandOutcome::Yielded {
+                        function_id,
+                        legacy_return,
+                    });
+                    return ScriptStepReport {
+                        execution: report,
+                        disposition: ScriptStepDisposition::WaitingFunction { function_id },
+                    };
+                }
                 outcome => {
                     report.outcomes.push(outcome);
                     break;
                 }
             }
         }
-        report
+        ScriptStepReport {
+            execution: report,
+            disposition: ScriptStepDisposition::Ended,
+        }
     }
 
     fn run_function<Runtime: ScriptFunctionRuntime>(
@@ -311,6 +440,7 @@ impl<'a> CScript<'a> {
             self.context.npc_id,
             self.context.region_id,
             self.context.used_item_id,
+            self.script_id,
             function_id,
             parameters.len(),
             integer_arguments,
@@ -322,6 +452,12 @@ impl<'a> CScript<'a> {
             ScriptFunctionDispatchOutcome::Invalid => ScriptCommandOutcome::InvalidExpression,
             ScriptFunctionDispatchOutcome::DifferentFunction => {
                 ScriptCommandOutcome::UnknownFunction
+            }
+            ScriptFunctionDispatchOutcome::Yielded { legacy_return } => {
+                ScriptCommandOutcome::Yielded {
+                    function_id,
+                    legacy_return,
+                }
             }
             ScriptFunctionDispatchOutcome::Handled { legacy_return } => {
                 ScriptCommandOutcome::Handled {
@@ -366,6 +502,22 @@ impl<'a> CScript<'a> {
             b"<".as_slice(),
         ] {
             if let Some(position) = find_top_level(expression, operation, true) {
+                if (operation == b"==" || operation == b"!=")
+                    && (is_string_expression(&expression[..position])
+                        || is_string_expression(&expression[position + operation.len()..]))
+                {
+                    let left = self.evaluate_string(game, runtime, &expression[..position])?;
+                    let right = self.evaluate_string(
+                        game,
+                        runtime,
+                        &expression[position + operation.len()..],
+                    )?;
+                    return Some(i32::from(if operation == b"==" {
+                        left == right
+                    } else {
+                        left != right
+                    }));
+                }
                 let left = self.evaluate_integer(game, runtime, &expression[..position])?;
                 let right = self.evaluate_integer(
                     game,
@@ -428,11 +580,21 @@ impl<'a> CScript<'a> {
                     return Some(*value);
                 }
             }
+            if let Some(value) = self
+                .context
+                .player_id
+                .and_then(|player_id| game.find_player(player_id))
+                .and_then(|player| player.variable_list().integer(name, index))
+            {
+                return Some(value);
+            }
             return game.general_variables().integer(name, index);
         }
         match self.run_function(game, runtime, expression) {
             ScriptCommandOutcome::Handled { legacy_return, .. } => Some(legacy_return),
-            ScriptCommandOutcome::UnknownFunction | ScriptCommandOutcome::InvalidExpression => None,
+            ScriptCommandOutcome::UnknownFunction
+            | ScriptCommandOutcome::InvalidExpression
+            | ScriptCommandOutcome::Yielded { .. } => None,
         }
     }
 
@@ -443,6 +605,12 @@ impl<'a> CScript<'a> {
         expression: &[u8],
     ) -> Option<Vec<u8>> {
         let expression = trim_ascii(expression);
+        if let Some(position) = find_top_level_chars_reverse(expression, b"+", false) {
+            let mut left = self.evaluate_string(game, runtime, &expression[..position])?;
+            let right = self.evaluate_string(game, runtime, &expression[position + 1..])?;
+            left.extend_from_slice(&right);
+            return Some(left);
+        }
         if expression.len() >= 2
             && matches!(expression[0], b'"' | b'\'')
             && expression.last() == Some(&expression[0])
@@ -453,10 +621,26 @@ impl<'a> CScript<'a> {
             if let Some(value) = self.string_variables.get(&normalize_name(expression)) {
                 return Some(value.clone());
             }
+            if let Some(value) = self
+                .context
+                .player_id
+                .and_then(|player_id| game.find_player(player_id))
+                .and_then(|player| player.variable_list().string(expression))
+            {
+                return Some(value.to_vec());
+            }
             return game
                 .general_variables()
                 .string(expression)
                 .map(<[u8]>::to_vec);
+        }
+        if let Some((name, parameters)) = split_function(expression)
+            && game.script_function_id(name) == Some(2000)
+        {
+            let key = parameters
+                .first()
+                .and_then(|parameter| self.evaluate_string(game, runtime, parameter))?;
+            return Some(game.get_string_by_id(&key).to_vec());
         }
         self.evaluate_integer(game, runtime, expression)
             .map(|value| value.to_string().into_bytes())
@@ -522,14 +706,50 @@ impl<'a> CScript<'a> {
             let Some(value) = self.evaluate_integer(game, runtime, expression) else {
                 return Some(false);
             };
-            self.integer_variables.insert(normalize_name(name), value);
+            let normalized = normalize_name(name);
+            if let Some(current) = self.integer_variables.get_mut(&normalized) {
+                *current = value;
+                return Some(true);
+            }
+            if let Some(player) = self
+                .context
+                .player_id
+                .and_then(|player_id| game.find_player_mut(player_id))
+            {
+                let outcome = player.set_integer_variable(name, 0, value);
+                if !matches!(
+                    outcome,
+                    super::variablelist::GameVariableMutationOutcome::NameNotFound
+                ) {
+                    return Some(true);
+                }
+            }
+            let _ = game.set_general_variable_integer(name, value);
             return Some(true);
         }
         if name.starts_with(b"#") {
             let Some(value) = self.evaluate_string(game, runtime, expression) else {
                 return Some(false);
             };
-            self.string_variables.insert(normalize_name(name), value);
+            let normalized = normalize_name(name);
+            if let Some(current) = self.string_variables.get_mut(&normalized) {
+                *current = value;
+                return Some(true);
+            }
+            if let Some(player) = self
+                .context
+                .player_id
+                .and_then(|player_id| game.find_player_mut(player_id))
+            {
+                let outcome = player.set_string_variable(name, &value);
+                if !matches!(
+                    outcome,
+                    super::variablelist::GameVariableMutationOutcome::NameNotFound
+                ) {
+                    return Some(true);
+                }
+            }
+            let _ = game.set_general_variable_string(name, &value);
             return Some(true);
         }
         None
@@ -583,16 +803,11 @@ impl<'a> CScript<'a> {
     }
 }
 
-impl CGame {
-    pub(crate) fn run_script_file<Runtime: ScriptFunctionRuntime>(
-        &mut self,
-        path: &[u8],
-        context: ScriptExecutionContext,
-        runtime: &mut Runtime,
-    ) -> Option<ScriptExecutionReport> {
-        let source = self.script_file_data(path)?.to_vec();
-        Some(CScript::new(&source, context).run(self, runtime))
-    }
+fn is_string_expression(expression: &[u8]) -> bool {
+    let expression = trim_ascii(expression);
+    expression.starts_with(b"#")
+        || matches!(expression.first(), Some(b'"' | b'\''))
+        || expression.contains(&b'#')
 }
 
 fn trim_ascii(mut value: &[u8]) -> &[u8] {

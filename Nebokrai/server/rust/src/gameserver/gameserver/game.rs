@@ -528,7 +528,8 @@ use crate::gameserver::appserver::region::{
 };
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::{
-    CScriptFunctionRegistry, ScriptExecutionContext,
+    ActiveScript, CScriptFunctionRegistry, ScriptExecutionContext, ScriptLoopReport,
+    ScriptStepDisposition,
 };
 use crate::gameserver::appserver::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
@@ -2129,20 +2130,11 @@ pub(crate) trait GodsBattleDeathContext {
 }
 
 pub(crate) trait GodsBattleNpcContendContext:
-    ServerRegionMonsterContext + GodsBattlePlayerContext
+    ServerRegionMonsterContext + GodsBattlePlayerContext + ScriptFunctionRuntime
 {
     fn run_gods_battle_base_region_ai(&mut self, region: &mut CServerRegion);
-    fn now_milliseconds(&mut self) -> u32;
+    fn gods_battle_now_milliseconds(&mut self) -> u32;
     fn record_gods_battle_log(&mut self, event: GodsBattleNpcLog);
-    fn set_gods_battle_player_variable(&mut self, player_id: i32, name: &[u8], value: &[u8])
-    -> i32;
-    fn run_gods_battle_player_script(
-        &mut self,
-        region_id: i32,
-        player_id: i32,
-        path: &[u8],
-        source: Option<&[u8]>,
-    ) -> i32;
 }
 
 pub(crate) trait GodsBattleReturnPointContext {
@@ -2721,6 +2713,7 @@ pub(crate) enum GameRegionClearPlayerOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameRegionAiReport {
     pub(crate) region_id: i32,
+    pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
 }
 
@@ -2918,6 +2911,7 @@ pub(crate) trait GameMainLoopRuntime:
     + IncrementShopBillingContext
     + WorldAuctionRuntime
     + CountryReturnPointContext
+    + GodsBattleNpcContendContext
 {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
@@ -2925,7 +2919,6 @@ pub(crate) trait GameMainLoopRuntime:
     fn wall_time_seconds(&mut self) -> u32;
     fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
-    fn script_loop(&mut self, game: &mut CGame);
     /// Выполняет virtual region AI до точного base-tail `ClearPlayerAI`.
     fn region_ai_before_clear_player(&mut self, game: &mut CGame, region_id: i32);
     fn wait(&mut self, duration_ms: u32);
@@ -2980,6 +2973,7 @@ pub(crate) enum GameReleaseEvent {
         function_list: bool,
         variable_list: bool,
         files: usize,
+        active_scripts: usize,
         function_registry: usize,
         general_variables: usize,
     },
@@ -3228,6 +3222,8 @@ pub(crate) struct CGame {
     script_file_data: BTreeMap<Vec<u8>, Vec<u8>>,
     script_functions: CScriptFunctionRegistry,
     general_variables: CVariableList,
+    active_scripts: BTreeMap<i32, ActiveScript>,
+    next_script_id: i32,
     string_table: MyStringTable,
     quest_system: CQuestSystem,
     country_param: CCountryParam,
@@ -3823,6 +3819,8 @@ impl CGame {
             script_file_data: BTreeMap::new(),
             script_functions: CScriptFunctionRegistry::default(),
             general_variables: CVariableList::default(),
+            active_scripts: BTreeMap::new(),
+            next_script_id: 0,
             string_table: MyStringTable::new(),
             quest_system: CQuestSystem::default(),
             country_param: CCountryParam::default(),
@@ -8070,6 +8068,125 @@ impl CGame {
         self.script_functions.query(name)
     }
 
+    /// Exact `RunScript` owner: загруженный instance получает wrapping ID и
+    /// попадает в ordered `g_Scripts`; команды исполняет только Script-stage
+    /// главного цикла. Повтор того же файла у того же player отклоняется как
+    /// исходным `ScriptIfExit`.
+    pub(crate) fn run_script_file<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        path: &[u8],
+        context: ScriptExecutionContext,
+        _runtime: &mut Runtime,
+    ) -> Option<i32> {
+        let player_id = context.player_id?;
+        let path = legacy_c_string_prefix(path).to_vec();
+        if self
+            .active_scripts
+            .values()
+            .any(|script| script.player_id() == Some(player_id) && script.path == path)
+        {
+            return None;
+        }
+        let waiting_ids: Vec<i32> = self
+            .active_scripts
+            .iter()
+            .filter_map(|(id, script)| {
+                (script.player_id() == Some(player_id)
+                    && matches!(script.waiting_function(), Some(2307 | 2324)))
+                .then_some(*id)
+            })
+            .collect();
+        for waiting_id in waiting_ids {
+            let _ = self.delete_player_script(waiting_id, player_id, true);
+        }
+        let source = self.script_file_data(&path)?.to_vec();
+        self.next_script_id = self.next_script_id.wrapping_add(1);
+        let script_id = self.next_script_id;
+        self.active_scripts.insert(
+            script_id,
+            ActiveScript::new(script_id, path, source, context),
+        );
+        Some(script_id)
+    }
+
+    pub(crate) fn run_script_loop<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        runtime: &mut Runtime,
+    ) -> ScriptLoopReport {
+        let mut report = ScriptLoopReport::default();
+        let mut pending: Vec<i32> = self.active_scripts.keys().copied().collect();
+        let mut position = 0usize;
+        while let Some(script_id) = pending.get(position).copied() {
+            position += 1;
+            let Some(mut script) = self.active_scripts.remove(&script_id) else {
+                continue;
+            };
+            if !script
+                .player_id()
+                .is_some_and(|player_id| self.find_player(player_id).is_some())
+            {
+                report.ended_scripts.push(script_id);
+                continue;
+            }
+            let step = script.run_step(self, runtime);
+            let disposition = step.disposition.clone();
+            report.steps.push((script_id, step));
+            match disposition {
+                ScriptStepDisposition::Ended => report.ended_scripts.push(script_id),
+                ScriptStepDisposition::YieldedCall { path } => {
+                    let context = script.context();
+                    self.active_scripts.insert(script_id, script);
+                    if let Some(called_id) = self.run_script_file(&path, context, runtime) {
+                        report.started_scripts.push(called_id);
+                        pending.push(called_id);
+                    }
+                }
+                ScriptStepDisposition::WaitingFunction { .. } => {
+                    self.active_scripts.insert(script_id, script);
+                }
+            }
+        }
+        report
+    }
+
+    pub(crate) fn continue_player_script(
+        &mut self,
+        script_id: i32,
+        player_id: i32,
+        value: i32,
+    ) -> bool {
+        self.active_scripts
+            .get_mut(&script_id)
+            .filter(|script| script.player_id() == Some(player_id))
+            .is_some_and(|script| script.continue_with(value))
+    }
+
+    pub(crate) fn delete_player_script(
+        &mut self,
+        script_id: i32,
+        player_id: i32,
+        close_talk_box: bool,
+    ) -> bool {
+        let Some(script) = self
+            .active_scripts
+            .get(&script_id)
+            .filter(|script| script.player_id() == Some(player_id))
+        else {
+            return false;
+        };
+        let should_close = close_talk_box
+            && matches!(script.waiting_function(), Some(2307 | 2324));
+        self.active_scripts.remove(&script_id);
+        if should_close {
+            let mut message = CMessage::new(0x000b_f805);
+            message.add_long(script_id);
+            message.add_byte(0);
+            message.add_byte(0);
+            let _ = message.send_to_player(self.net_server(), player_id);
+        }
+        true
+    }
+
     pub(crate) const fn general_variables(&self) -> &CVariableList {
         &self.general_variables
     }
@@ -11671,7 +11788,7 @@ impl CGame {
                 -1,
                 true,
                 false,
-                context.now_milliseconds(),
+                context.gods_battle_now_milliseconds(),
                 area_width,
                 area_height,
                 context,
@@ -12302,7 +12419,7 @@ impl CGame {
                         npc_id,
                         &npc_name,
                         max_time,
-                        context.now_milliseconds(),
+                        context.gods_battle_now_milliseconds(),
                     );
                     if let Some(delivery) = self.set_gods_battle_player_contend_state(
                         &region.war.base,
@@ -12361,7 +12478,7 @@ impl CGame {
             return None;
         };
         context.run_gods_battle_base_region_ai(&mut region.war.base);
-        let advance = region.advance_contenders(context.now_milliseconds());
+        let advance = region.advance_contenders(context.gods_battle_now_milliseconds());
         let mut report = GodsBattleContendAiReport {
             region_id,
             ..GodsBattleContendAiReport::default()
@@ -12422,18 +12539,30 @@ impl CGame {
             }
             self.restore_region_owner(owner);
         }
-        let award_variable_result = context.set_gods_battle_player_variable(
-            contender.player_id,
-            b"#fengyinNpc",
-            &contender.symbol_name,
-        );
+        let award_variable_result = self
+            .find_player_mut(contender.player_id)
+            .map(|player| {
+                match player.set_string_variable(b"#fengyinNpc", &contender.symbol_name) {
+                    GameVariableMutationOutcome::UpdatedString { .. } => 1,
+                    GameVariableMutationOutcome::NameNotFound => -99_999_999,
+                    GameVariableMutationOutcome::UpdatedInteger { .. }
+                    | GameVariableMutationOutcome::UpdatedArrayElement { .. }
+                    | GameVariableMutationOutcome::TypeMismatch { .. } => 0,
+                }
+            })
+            .unwrap_or(-99_999_999);
         let award_script_result = if award_variable_result == 1 {
-            let result = context.run_gods_battle_player_script(
-                region_id,
-                contender.player_id,
-                b"scripts/npc/awardgoods.script",
-                None,
-            );
+            let result = self
+                .run_script_file(
+                    b"scripts/npc/awardgoods.script",
+                    ScriptExecutionContext {
+                        player_id: Some(contender.player_id),
+                        region_id: Some(region_id),
+                        ..ScriptExecutionContext::default()
+                    },
+                    context,
+                )
+                .map_or(0, |_| 1);
             if result == 0 {
                 context.record_gods_battle_log(GodsBattleNpcLog::AwardScriptFailed {
                     player_id: contender.player_id,
@@ -14659,12 +14788,15 @@ impl CGame {
         let variable_list = self.variable_list_file_data.take().is_some();
         let script_files = self.script_file_data.len();
         self.script_file_data.clear();
+        let active_scripts = self.active_scripts.len();
+        self.active_scripts.clear();
         let function_registry = self.script_functions.release();
         let general_variables = self.general_variables.release();
         events.push(GameReleaseEvent::ScriptDataCleared {
             function_list,
             variable_list,
             files: script_files,
+            active_scripts,
             function_registry,
             general_variables,
         });
@@ -14810,7 +14942,8 @@ impl CGame {
         client.is_some()
     }
 
-    pub(crate) fn register_player(&mut self, player: CPlayer) -> Option<CPlayer> {
+    pub(crate) fn register_player(&mut self, mut player: CPlayer) -> Option<CPlayer> {
+        player.initialize_variable_list(self.variable_list_file_data.as_deref());
         self.players.insert(player.player_id(), player)
     }
 
@@ -17458,7 +17591,15 @@ impl CGame {
         let region_ids: Vec<_> = self.regions.keys().copied().collect();
         let mut regions = Vec::with_capacity(region_ids.len());
         for region_id in region_ids {
-            runtime.region_ai_before_clear_player(self, region_id);
+            let gods_battle = if self
+                .find_region(region_id)
+                .is_some_and(ServerRegionOwner::is_gods_battle)
+            {
+                self.gods_battle_contend_ai(region_id, runtime)
+            } else {
+                runtime.region_ai_before_clear_player(self, region_id);
+                None
+            };
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 continue;
             };
@@ -17502,6 +17643,7 @@ impl CGame {
                             .collect();
                         regions.push(GameRegionAiReport {
                             region_id,
+                            gods_battle,
                             clear_player: Some(GameRegionClearPlayerOutcome::Expired { players }),
                         });
                         continue;
@@ -17513,6 +17655,7 @@ impl CGame {
             self.restore_region_owner(owner);
             regions.push(GameRegionAiReport {
                 region_id,
+                gods_battle,
                 clear_player,
             });
         }
@@ -17718,7 +17861,7 @@ impl CGame {
         let net_sessions;
         if self.setup.watch_runtime_info {
             let started = runtime.get_tick_ms();
-            runtime.script_loop(self);
+            let _scripts = self.run_script_loop(runtime);
             state.profile.script_ms = state
                 .profile
                 .script_ms
@@ -17762,7 +17905,7 @@ impl CGame {
                 .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
             stages.push(GameMainLoopStage::NetSession);
         } else {
-            runtime.script_loop(self);
+            let _scripts = self.run_script_loop(runtime);
             stages.push(GameMainLoopStage::Script);
             ai = self.ai(runtime);
             stages.push(GameMainLoopStage::Ai);

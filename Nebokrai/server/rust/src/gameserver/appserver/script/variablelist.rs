@@ -73,6 +73,12 @@ pub(crate) enum GameVariableSnapshotError {
 }
 
 impl CVariableList {
+    pub(crate) fn from_definitions(definitions: Option<&[u8]>) -> Self {
+        let mut variables = Self::default();
+        variables.load_definitions(definitions);
+        variables
+    }
+
     pub(crate) fn variables(&self) -> &[GameVariable] {
         &self.variables
     }

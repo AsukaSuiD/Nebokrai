@@ -228,6 +228,7 @@ use super::container::cwallet::{
 use super::container::cyuanbao::CYuanBao;
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
+use super::script::variablelist::{CVariableList, GameVariableMutationOutcome};
 use super::goods::cgoodsbaseproperties::{
     GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON, GAP_BF_AGILITY_POTENTIAL,
     GAP_BF_ALL_SKILL, GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_POTENTIAL,
@@ -1590,6 +1591,7 @@ pub(crate) struct CPlayer {
     heart_request_sent: i32,
     heart_received: bool,
     friends: Vec<PlayerFriend>,
+    quest_states: BTreeMap<u16, u8>,
     lei_ting_things: VecDeque<PlayerLeiTingThing>,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
@@ -1621,6 +1623,7 @@ pub(crate) struct CPlayer {
     account: Vec<u8>,
     depot_password: Vec<u8>,
     last_container_script: Vec<u8>,
+    variable_list: CVariableList,
     bank: CBank,
     depot: CDepot,
     hand: CAmountLimitGoodsContainer,
@@ -1715,6 +1718,7 @@ impl CPlayer {
             heart_request_sent: 0,
             heart_received: false,
             friends: Vec::new(),
+            quest_states: BTreeMap::new(),
             lei_ting_things: VecDeque::new(),
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
@@ -1746,6 +1750,7 @@ impl CPlayer {
             account: Vec::new(),
             depot_password: Vec::new(),
             last_container_script: Vec::new(),
+            variable_list: CVariableList::default(),
             bank: CBank::new(),
             depot: CDepot::new(),
             hand: CAmountLimitGoodsContainer::new(),
@@ -1795,6 +1800,19 @@ impl CPlayer {
 
     pub(crate) fn friends(&self) -> &[PlayerFriend] {
         &self.friends
+    }
+
+    /// Exact `GetQuestState`: отсутствующий ushort ID имеет state `2`,
+    /// существующий возвращает persisted byte без дополнительной проверки.
+    pub(crate) fn quest_state(&self, quest_id: u16) -> i32 {
+        self.quest_states
+            .get(&quest_id)
+            .copied()
+            .map_or(2, i32::from)
+    }
+
+    pub(crate) fn set_quest_state_snapshot(&mut self, quest_id: u16, state: u8) {
+        self.quest_states.insert(quest_id, state);
     }
 
     pub(crate) fn add_friend_state(&mut self, name: &[u8]) -> PlayerFriendAddOutcome {
@@ -3752,6 +3770,10 @@ impl CPlayer {
         &self.packet
     }
 
+    pub(crate) const fn depot(&self) -> &CDepot {
+        &self.depot
+    }
+
     pub(crate) fn trade_source_goods(
         &self,
         extend_id: i32,
@@ -3789,6 +3811,33 @@ impl CPlayer {
 
     pub(crate) fn last_container_script(&self) -> &[u8] {
         &self.last_container_script
+    }
+
+    pub(crate) const fn variable_list(&self) -> &CVariableList {
+        &self.variable_list
+    }
+
+    pub(crate) fn initialize_variable_list(&mut self, definitions: Option<&[u8]>) {
+        if self.variable_list.variables().is_empty() {
+            self.variable_list = CVariableList::from_definitions(definitions);
+        }
+    }
+
+    pub(crate) fn set_string_variable(
+        &mut self,
+        name: &[u8],
+        value: &[u8],
+    ) -> GameVariableMutationOutcome {
+        self.variable_list.set_string(name, value)
+    }
+
+    pub(crate) fn set_integer_variable(
+        &mut self,
+        name: &[u8],
+        element_index: usize,
+        value: i32,
+    ) -> GameVariableMutationOutcome {
+        self.variable_list.set_integer(name, element_index, value)
     }
 
     pub(crate) fn clear_all_enhancement_selection(&mut self) -> usize {

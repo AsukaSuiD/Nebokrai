@@ -37,7 +37,7 @@
 //! форматирует пять подтверждённых level-шаблонов, меняет ID того же пакета на
 //! `0x5FF15`, дописывает count/строки и возвращает его WorldServer.
 //! Script-continuation family читает `(value, script ID)` после requester-а,
-//! вызывает общий runtime `ScriptContinue`; только `0x7FC01` подавляет вызов
+//! продолжает owned `CScript`; только `0x7FC01` подавляет вызов
 //! при отсутствующем player, остальные три передают исходный null-owner факт.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
@@ -45,7 +45,7 @@
 //! расхождение между двумя time-sensitive pass-ами. Непокрытые GM
 //! selectors остаются RAW ниже.
 
-use super::othermessage::{GameOtherMessageRuntime, GameOtherScriptAction};
+use super::othermessage::GameOtherMessageRuntime;
 use crate::gameserver::gameserver::game::{
     CGame, GameKickAroundOutcome, GameKickAroundReport, GameKickPlayerReport,
 };
@@ -290,15 +290,7 @@ pub(crate) fn dispatch_gm_message<Runtime: GameOtherMessageRuntime>(
         let player_present = game.find_player(requester_id).is_some();
         let requested = message_type != GM_SCRIPT_CONTINUE_IF_PRESENT_MESSAGE || player_present;
         if requested {
-            runtime.run_other_script_action(
-                game,
-                GameOtherScriptAction::Continue {
-                    script_id,
-                    player_id: requester_id,
-                    player_present,
-                    value,
-                },
-            );
+            let _ = game.continue_player_script(script_id, requester_id, value);
         }
         return Some(Ok(GmMessageReport::ScriptContinued {
             requester_id,
