@@ -149,6 +149,10 @@
 //! function.ini `11131 / AddJingJieBuff`, снимает прежнюю hidden-skill family,
 //! проверяет progression entitlement, ставит новый realm bonus и завершает
 //! полный virtual property recompute адресным `0xBF721`.
+//! Тот же honor script расширяет единый `GetMe/SetMe` catalog полями
+//! `dwAppellationID/dwRankOfNobilityID/dwCredit/dwSZL/lContribute`: чтение
+//! идёт из canonical player storage, а обе записи сохраняют общий порядок
+//! `0xBF80C → SetScriptValue → UpdateProperty → 0xBF721`.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -4054,25 +4058,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let Some(player) = game.find_player(player_id) else {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             };
-            let legacy_return = if property.eq_ignore_ascii_case(b"lRegionID") {
-                player.server_region_id().unwrap_or_default()
-            } else if property.eq_ignore_ascii_case(b"lID") {
-                player.player_id()
-            } else if property.eq_ignore_ascii_case(b"btCountry") {
-                i32::from(player.country())
-            } else if property.eq_ignore_ascii_case(b"lPos") {
-                player.shape().get_position()
-            } else if property.eq_ignore_ascii_case(b"dwVigour") {
-                player.vigour() as i32
-            } else if property.eq_ignore_ascii_case(b"lLevel") {
-                i32::from(player.level())
-            } else if property.eq_ignore_ascii_case(b"dwExp") {
-                player.experience() as i32
-            } else if property.eq_ignore_ascii_case(b"lOccupation") {
-                i32::from(player.occupation())
-            } else {
-                return Some(ScriptFunctionDispatchOutcome::Invalid);
-            };
+            let legacy_return = player.script_value(property).unwrap_or(0);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }
         SCRIPT_FUNCTION_SET_ME => {
@@ -4084,6 +4070,8 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             if !property.eq_ignore_ascii_case(b"dwVigour")
                 && !property.eq_ignore_ascii_case(b"dwExp")
+                && !property.eq_ignore_ascii_case(b"dwAppellationID")
+                && !property.eq_ignore_ascii_case(b"dwRankOfNobilityID")
             {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             }

@@ -28,7 +28,9 @@
 //! unsigned CountryParam maximum, а virtual `UpdateProperty` остаётся
 //! обязательным caller-runtime effect после мутации.
 //! Reached script property `dwVigour` отделено от `SetVigour`:
-//! generic `SetValue` пишет биты DWORD без clamp, а пересчёт и
+//! generic `SetValue` пишет биты DWORD без clamp, включая достигнутые honor
+//! `dwAppellationID/dwRankOfNobilityID`; `GetValue` читает также credit, SZL и
+//! contribution из canonical storage. Пересчёт и
 //! `0xBF721` остаются у вызывающего `CGame`.
 //! Total honor-rank startup материализует days/weeks/months counters и
 //! nobility rank: reset меняет owned state, а пока RAW `PlayerRunScript`
@@ -1107,6 +1109,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) kill_count: u32,
     pub(crate) experience: u32,
     pub(crate) vigour: u32,
+    pub(crate) credit: u32,
     pub(crate) fairy_container_enabled: bool,
     pub(crate) hotkeys: [u32; 24],
     pub(crate) mode: u32,
@@ -2397,6 +2400,58 @@ impl CPlayer {
                 .move_shape
                 .skill(appellation_id)
                 .is_some_and(|skill| skill.level() > 0)
+    }
+
+    /// Достигнутая часть единого `m_mapNameValue/GetScriptValue` catalog.
+    /// DWORD возвращаются теми же битами в signed script integer; неизвестное
+    /// имя остаётся `None`, а сам GetMe преобразует его в legacy zero.
+    pub(crate) fn script_value(&self, property: &[u8]) -> Option<i32> {
+        if property.eq_ignore_ascii_case(b"lRegionID") {
+            Some(self.server_region_id().unwrap_or_default())
+        } else if property.eq_ignore_ascii_case(b"lID") {
+            Some(self.player_id())
+        } else if property.eq_ignore_ascii_case(b"btCountry") {
+            Some(i32::from(self.country()))
+        } else if property.eq_ignore_ascii_case(b"lPos") {
+            Some(self.shape().get_position())
+        } else if property.eq_ignore_ascii_case(b"dwVigour") {
+            Some(self.vigour() as i32)
+        } else if property.eq_ignore_ascii_case(b"lLevel") {
+            Some(i32::from(self.level()))
+        } else if property.eq_ignore_ascii_case(b"dwExp") {
+            Some(self.experience() as i32)
+        } else if property.eq_ignore_ascii_case(b"lOccupation") {
+            Some(i32::from(self.occupation()))
+        } else if property.eq_ignore_ascii_case(b"dwAppellationID") {
+            Some(self.base_properties.appellation_id as i32)
+        } else if property.eq_ignore_ascii_case(b"dwRankOfNobilityID") {
+            Some(self.base_properties.rank_of_nobility_id as i32)
+        } else if property.eq_ignore_ascii_case(b"dwCredit") {
+            Some(self.base_properties.credit as i32)
+        } else if property.eq_ignore_ascii_case(b"dwSZL") {
+            Some(self.base_properties.szl as i32)
+        } else if property.eq_ignore_ascii_case(b"lContribute") {
+            Some(self.contribution)
+        } else {
+            None
+        }
+    }
+
+    /// Direct `SetScriptValue` storage для достигнутых SetMe DWORD fields.
+    pub(crate) fn set_script_value(&mut self, property: &[u8], value: i32) -> Option<i32> {
+        if property.eq_ignore_ascii_case(b"dwVigour") {
+            Some(self.set_script_vigour(value))
+        } else if property.eq_ignore_ascii_case(b"dwExp") {
+            Some(self.set_script_experience(value))
+        } else if property.eq_ignore_ascii_case(b"dwAppellationID") {
+            self.base_properties.appellation_id = value as u32;
+            Some(value)
+        } else if property.eq_ignore_ascii_case(b"dwRankOfNobilityID") {
+            self.base_properties.rank_of_nobility_id = value as u32;
+            Some(value)
+        } else {
+            None
+        }
     }
 
     pub(crate) fn delete_realm_appellation_skill(

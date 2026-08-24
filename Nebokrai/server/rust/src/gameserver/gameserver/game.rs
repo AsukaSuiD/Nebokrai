@@ -9056,13 +9056,7 @@ impl CGame {
         }
         let recomputed = {
             let player = self.players.get_mut(&player_id)?;
-            if property.eq_ignore_ascii_case(b"dwVigour") {
-                let _ = player.set_script_vigour(value);
-            } else if property.eq_ignore_ascii_case(b"dwExp") {
-                let _ = player.set_script_experience(value);
-            } else {
-                return None;
-            }
+            let _ = player.set_script_value(property, value)?;
             context.recompute_enhancement_player_properties(player)
         };
         self.players
