@@ -1,6 +1,258 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! General-variable storage GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `server/gameserver/appserver/script/variablelist.cpp`. Startup сначала
+//! загружает declarations из полученного `VariableList` resource, затем
+//! `DecordFromByteArray` применяет World snapshot: signed count, ignored
+//! payload length, C-string name, signed scalar/string/array tag и values.
+//! `CScript::LoadGeneralVariable` передаёт cursor по значению, поэтому decoder
+//! двигает только локальную копию и не меняет позицию внешнего `CMessage`.
+//! `Vec` заменяет ручные union/allocation массивы, сохраняя insertion order,
+//! first exact-name update и cursor ordering. Malformed wire возвращает typed
+//! ошибку вместо чтения за границей; остальные expression operations ниже RAW.
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameVariableValue {
+    Integer(i32),
+    String(Vec<u8>),
+    IntegerArray(Vec<i32>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameVariable {
+    pub(crate) name: Vec<u8>,
+    pub(crate) value: GameVariableValue,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CVariableList {
+    variables: Vec<GameVariable>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GameVariableSnapshotReport {
+    pub(crate) declared_variables: usize,
+    pub(crate) snapshot_variables: usize,
+    pub(crate) declared_payload_length: i32,
+    pub(crate) consumed_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameVariableSnapshotError {
+    UnexpectedEnd {
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    NegativeCount(i32),
+    NameTooLong {
+        length: usize,
+    },
+    InvalidArrayLength(i32),
+}
+
+impl CVariableList {
+    pub(crate) fn variables(&self) -> &[GameVariable] {
+        &self.variables
+    }
+
+    pub(crate) fn release(&mut self) -> usize {
+        let count = self.variables.len();
+        self.variables.clear();
+        count
+    }
+
+    pub(crate) fn decode_world_snapshot(
+        &mut self,
+        definitions: Option<&[u8]>,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<GameVariableSnapshotReport, GameVariableSnapshotError> {
+        self.load_definitions(definitions);
+        let declared_variables = self.variables.len();
+        let start = *cursor;
+        let count = read_i32(source, cursor)?;
+        if count < 0 {
+            return Err(GameVariableSnapshotError::NegativeCount(count));
+        }
+        let declared_payload_length = read_i32(source, cursor)?;
+        for _ in 0..count {
+            let name = read_c_string(source, cursor)?;
+            if name.len() >= 0x100 {
+                return Err(GameVariableSnapshotError::NameTooLong { length: name.len() });
+            }
+            let tag = read_i32(source, cursor)?;
+            let value = if tag == 0 {
+                GameVariableValue::Integer(read_i32(source, cursor)?)
+            } else if tag < 0 {
+                GameVariableValue::String(read_c_string(source, cursor)?)
+            } else {
+                let length = usize::try_from(tag)
+                    .map_err(|_| GameVariableSnapshotError::InvalidArrayLength(tag))?;
+                let mut values = Vec::with_capacity(length);
+                for _ in 0..length {
+                    values.push(read_i32(source, cursor)?);
+                }
+                GameVariableValue::IntegerArray(values)
+            };
+            self.insert_or_update(name, value);
+        }
+        Ok(GameVariableSnapshotReport {
+            declared_variables,
+            snapshot_variables: count as usize,
+            declared_payload_length,
+            consumed_bytes: cursor.saturating_sub(start),
+        })
+    }
+
+    fn load_definitions(&mut self, definitions: Option<&[u8]>) {
+        self.variables.clear();
+        let Some(definitions) = definitions else {
+            return;
+        };
+        for (name, value) in section_records(definitions, b"VariableList") {
+            let (name, array_length) = split_array_name(name);
+            let value = trim_ascii(value);
+            let variable = if let Some(length) = array_length {
+                GameVariableValue::IntegerArray(vec![legacy_atoi(value); length])
+            } else if name.first() == Some(&b'#') || value.first() == Some(&b'\"') {
+                GameVariableValue::String(unquote(value))
+            } else {
+                GameVariableValue::Integer(legacy_atoi(value))
+            };
+            self.insert_or_update(name.to_vec(), variable);
+        }
+    }
+
+    fn insert_or_update(&mut self, name: Vec<u8>, value: GameVariableValue) {
+        if let Some(variable) = self.variables.iter_mut().find(|entry| entry.name == name) {
+            variable.value = value;
+        } else {
+            self.variables.push(GameVariable { name, value });
+        }
+    }
+}
+
+fn read_i32(source: &[u8], cursor: &mut usize) -> Result<i32, GameVariableSnapshotError> {
+    let offset = *cursor;
+    let bytes = source.get(offset..offset.saturating_add(4)).ok_or(
+        GameVariableSnapshotError::UnexpectedEnd {
+            offset,
+            needed: 4,
+            available: source.len().saturating_sub(offset),
+        },
+    )?;
+    *cursor += 4;
+    Ok(i32::from_le_bytes(
+        bytes.try_into().expect("slice длиной 4"),
+    ))
+}
+
+fn read_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, GameVariableSnapshotError> {
+    let offset = *cursor;
+    let tail = source.get(offset..).unwrap_or_default();
+    let Some(length) = tail.iter().position(|byte| *byte == 0) else {
+        return Err(GameVariableSnapshotError::UnexpectedEnd {
+            offset,
+            needed: tail.len().saturating_add(1),
+            available: tail.len(),
+        });
+    };
+    *cursor += length + 1;
+    Ok(tail[..length].to_vec())
+}
+
+pub(crate) fn section_records<'a>(source: &'a [u8], section: &[u8]) -> Vec<(&'a [u8], &'a [u8])> {
+    let bracketed = [b"[".as_slice(), section, b"]".as_slice()].concat();
+    let Some(start) = source
+        .split(|byte| *byte == b'\n')
+        .position(|line| {
+            let line = trim_ascii(line.strip_suffix(b"\r").unwrap_or(line));
+            line == section || line == bracketed
+        })
+        .map(|line| line + 1)
+    else {
+        return Vec::new();
+    };
+    source
+        .split(|byte| *byte == b'\n')
+        .skip(start)
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
+        .take_while(|line| {
+            !matches!(
+                line.first(),
+                None | Some(b' ') | Some(b'\t') | Some(b'/') | Some(b'\r')
+            ) && !trim_ascii(line).starts_with(b"[")
+        })
+        .filter_map(|line| {
+            let line = trim_ascii(line);
+            let separator = line.iter().position(|byte| *byte == b'=')?;
+            Some((
+                trim_ascii(&line[..separator]),
+                trim_ascii(&line[separator + 1..]),
+            ))
+        })
+        .collect()
+}
+
+fn split_array_name(name: &[u8]) -> (&[u8], Option<usize>) {
+    let Some(open) = name.iter().rposition(|byte| *byte == b'[') else {
+        return (name, None);
+    };
+    let Some(close) = name[open..].iter().position(|byte| *byte == b']') else {
+        return (name, None);
+    };
+    if open + close + 1 != name.len() {
+        return (name, None);
+    }
+    let length = usize::try_from(legacy_atoi(&name[open + 1..open + close]))
+        .ok()
+        .filter(|length| *length > 0);
+    (&name[..open], length)
+}
+
+fn trim_ascii(value: &[u8]) -> &[u8] {
+    let start = value
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(value.len());
+    let end = value
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .map_or(start, |index| index + 1);
+    &value[start..end]
+}
+
+fn legacy_atoi(value: &[u8]) -> i32 {
+    let value = trim_ascii(value);
+    let (negative, digits) = match value.first() {
+        Some(b'-') => (true, &value[1..]),
+        Some(b'+') => (false, &value[1..]),
+        _ => (false, value),
+    };
+    let magnitude =
+        digits
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .fold(0_i64, |current, byte| {
+                current
+                    .saturating_mul(10)
+                    .saturating_add(i64::from(*byte - b'0'))
+            });
+    let value = if negative { -magnitude } else { magnitude };
+    value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+fn unquote(value: &[u8]) -> Vec<u8> {
+    if value.first() == Some(&b'\"') {
+        value
+            .get(1..value.len().saturating_sub(1))
+            .unwrap_or_default()
+            .to_vec()
+    } else {
+        value.to_vec()
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -8,33 +260,9 @@
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\variablelist.cpp
 
-// ============================================================================
-// FUNCTION: CVariableList::CVariableList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\variablelist.cpp:18
-// RVA: 0x000AD3E0
-// ADDRESS: 004ad3e0
-// PROTOTYPE: undefined __thiscall CVariableList(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CVariableList::CVariableList` заменён безопасным `Default` owned storage.
 
-// ============================================================================
-// FUNCTION: CVariableList::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\variablelist.cpp:29
-// RVA: 0x000AD400
-// ADDRESS: 004ad400
-// PROTOTYPE: void __thiscall Release(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CVariableList::Release` материализован выше как `release`.
 
 // ============================================================================
 // FUNCTION: CVariableList::SetVarList
@@ -162,19 +390,7 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CVariableList::LoadVarList
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\variablelist.cpp:52
-// RVA: 0x000ADC30
-// ADDRESS: 004adc30
-// PROTOTYPE: void __thiscall LoadVarList(char * param_1, char * param_2, char * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CVariableList::LoadVarList` материализован выше как definition pass `load_definitions`.
 
 // ============================================================================
 // FUNCTION: CVariableList::AddVar
@@ -232,19 +448,7 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CVariableList::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\variablelist.cpp:663
-// RVA: 0x000AE3D0
-// ADDRESS: 004ae3d0
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CVariableList::DecordFromByteArray` материализован выше как `decode_world_snapshot`.
 
 // ============================================================================
 // FUNCTION: CVariableList::AddVar
@@ -343,12 +547,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

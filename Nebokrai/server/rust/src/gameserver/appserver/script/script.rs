@@ -1,6 +1,82 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Script resource registry GameServer.
+//!
+//! `CScript::LoadFunction(nullptr, data)` из точного EXE/PDB читает
+//! непрерывный `FunctionList`, преобразует caption через `atoi` и сохраняет
+//! text → numeric ID в ordered `std::map`. `BTreeMap` является прямой safe
+//! заменой lookup/order semantics; expression VM и instance execution ниже
+//! остаются RAW.
+
+use std::collections::BTreeMap;
+
+use super::variablelist::section_records;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CScriptFunctionRegistry {
+    functions: BTreeMap<Vec<u8>, i32>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ScriptFunctionLoadReport {
+    pub(crate) declared_functions: usize,
+    pub(crate) replaced_names: usize,
+}
+
+impl CScriptFunctionRegistry {
+    pub(crate) fn load(&mut self, source: &[u8]) -> ScriptFunctionLoadReport {
+        self.functions.clear();
+        let mut report = ScriptFunctionLoadReport::default();
+        for (caption, name) in section_records(source, b"FunctionList") {
+            let id = legacy_atoi(caption);
+            if self.functions.insert(name.to_vec(), id).is_some() {
+                report.replaced_names += 1;
+            }
+            report.declared_functions += 1;
+        }
+        report
+    }
+
+    pub(crate) fn query(&self, name: &[u8]) -> Option<i32> {
+        self.functions.get(visible_c_string(name)).copied()
+    }
+
+    pub(crate) fn release(&mut self) -> usize {
+        let count = self.functions.len();
+        self.functions.clear();
+        count
+    }
+}
+
+fn visible_c_string(value: &[u8]) -> &[u8] {
+    value.split(|byte| *byte == 0).next().unwrap_or_default()
+}
+
+fn legacy_atoi(value: &[u8]) -> i32 {
+    let value = visible_c_string(value);
+    let value = value
+        .get(
+            value
+                .iter()
+                .position(|byte| !byte.is_ascii_whitespace())
+                .unwrap_or(value.len())..,
+        )
+        .unwrap_or_default();
+    let (negative, digits) = match value.first() {
+        Some(b'-') => (true, &value[1..]),
+        Some(b'+') => (false, &value[1..]),
+        _ => (false, value),
+    };
+    let magnitude =
+        digits
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .fold(0_i64, |current, byte| {
+                current
+                    .saturating_mul(10)
+                    .saturating_add(i64::from(*byte - b'0'))
+            });
+    let signed = if negative { -magnitude } else { magnitude };
+    signed.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -23,19 +99,7 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CScript::ReleaseGeneralVariable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\script.cpp:379
-// RVA: 0x00024AD0
-// ADDRESS: 00424ad0
-// PROTOTYPE: void __cdecl ReleaseGeneralVariable(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CScript::ReleaseGeneralVariable` замкнут в `CGame::release` через owned `CVariableList`.
 
 // ============================================================================
 // FUNCTION: CScript::SetVariableList
@@ -233,19 +297,7 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CScript::LoadGeneralVariable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\script.cpp:368
-// RVA: 0x00025220
-// ADDRESS: 00425220
-// PROTOTYPE: void __cdecl LoadGeneralVariable(uchar * param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CScript::LoadGeneralVariable` замкнут в startup decoder-е owned `CVariableList`.
 
 // ============================================================================
 // FUNCTION: CScript::SetPlayer
@@ -499,19 +551,7 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CScript::ReleaseFunction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\script.cpp:358
-// RVA: 0x00028D20
-// ADDRESS: 00428d20
-// PROTOTYPE: void __cdecl ReleaseFunction(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CScript::ReleaseFunction` замкнут в `CGame::release` через owned function registry.
 
 // ============================================================================
 // FUNCTION: CScript::RunStep
@@ -541,19 +581,7 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CScript::LoadFunction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\script.cpp:333
-// RVA: 0x00029100
-// ADDRESS: 00429100
-// PROTOTYPE: void __cdecl LoadFunction(char * param_1, char * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CScript::LoadFunction` материализован выше как `CScriptFunctionRegistry::load`.
 
 // ============================================================================
 // FUNCTION: CVariableList::`scalar_deleting_destructor'
@@ -568,7 +596,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
 
 // COMPONENT_VARIANT_END: GameServer

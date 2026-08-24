@@ -44,10 +44,11 @@
 //! CountryWarSys, CFourNationWarSys и CEmotion process singletons хранятся
 //! owned-полями `CGame`, сохраняя exact startup wire и runtime lookup-
 //! контракты без отдельных global allocations.
-//! Function/variable/script file buffers принадлежат `CGame`; script parser
-//! globals остаются явной context-границей. Повторный function/variable setter
-//! безопасно материализует исходный freed-owner контракт как `None`; старый
-//! `length + 1` NUL-padding заменён bounded `Vec` и C-string prefix adapter-ом.
+//! Function/variable/script file buffers, function registry и general-variable
+//! list принадлежат `CGame` от startup FIFO до `Release`. Повторный
+//! function/variable setter безопасно материализует исходный freed-owner
+//! контракт как `None`; старый `length + 1` NUL-padding заменён bounded `Vec` и
+//! C-string prefix adapter-ом.
 //! `MyStringTable` также принадлежит `CGame`: reload сначала очищает map,
 //! публикует decoded prefix и сохраняет пустой fallback `GetStringByID`.
 //! `CHonorRanks` хранит четыре rank-type × четыре country snapshots; поля
@@ -90,9 +91,10 @@
 //! Honor configuration/ranks `0x26..0x2A` проходят полный FIFO pass; total
 //! snapshot сбрасывает counters canonical player map и возвращает точные
 //! AdjustHonorRank script-effects для внешнего script runtime.
-//! Function/variable/general/script-file resources `0x0A..0x0D` получают
-//! parser callbacks от того же `GameMainLoopRuntime`, который исполняет Script
-//! stage, и публикуются из живого FIFO с duplicate-owner семантикой.
+//! Function/variable/general/script-file resources `0x0A..0x0D` публикуются из
+//! живого FIFO с duplicate-owner семантикой; function map и variable snapshot
+//! декодируются concrete owner-ами `CGame`, а general cursor остаётся внешне
+//! неизменным, как при передаче `long` по значению в EXE.
 //! OrganSys war opcodes `0x7FE1F..0x7FE36` тем же FIFO меняют owned
 //! AttackCity/Village schedules, concrete local/proxy region phases и
 //! contender state с сохранением City/Village message/log side effects.
@@ -396,6 +398,10 @@ use crate::gameserver::appserver::player::{
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionReturnPoint,
+};
+use crate::gameserver::appserver::script::script::CScriptFunctionRegistry;
+use crate::gameserver::appserver::script::variablelist::{
+    CVariableList, GameVariableSnapshotError, GameVariableSnapshotReport,
 };
 use crate::gameserver::appserver::servercityregion::CServerCityRegion;
 use crate::gameserver::appserver::servercountryregion::CServerCountryRegion;
@@ -1111,15 +1117,6 @@ impl std::error::Error for GameInitializationThroughBillingError {
             Self::Sequence(error) => Some(error),
         }
     }
-}
-
-pub(crate) trait GameScriptResourceContext {
-    /// Выполняет исходный `CScript::LoadFunction(nullptr, data)`.
-    fn load_function_list(&mut self, data: &[u8]);
-
-    /// Создаёт новый global `CVariableList` и декодирует его с локальной копией
-    /// cursor, не меняя внешний message cursor.
-    fn load_general_variables(&mut self, source: &[u8], cursor: usize);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2653,7 +2650,6 @@ struct GameMainLoopState {
 /// decoder получает тот же live factory-контекст без отдельного shadow state.
 pub(crate) trait GameMainLoopRuntime:
     GameMessageHandlers
-    + GameScriptResourceContext
     + InitialRegionStartupContext
     + GameOrganizingWarRuntime
     + GameCountryWarRuntime
@@ -2675,8 +2671,6 @@ pub(crate) trait GameMainLoopRuntime:
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameReleaseExternalOwner {
-    ScriptFunctions,
-    GeneralVariables,
     SocketRuntime,
     PkSystem,
     BaseMessageRuntime,
@@ -2723,6 +2717,8 @@ pub(crate) enum GameReleaseEvent {
         function_list: bool,
         variable_list: bool,
         files: usize,
+        function_registry: usize,
+        general_variables: usize,
     },
     ExternalOwner(GameReleaseExternalOwner),
     SkillFactoryCleared,
@@ -2967,6 +2963,8 @@ pub(crate) struct CGame {
     function_list_file_data: Option<Vec<u8>>,
     variable_list_file_data: Option<Vec<u8>>,
     script_file_data: BTreeMap<Vec<u8>, Vec<u8>>,
+    script_functions: CScriptFunctionRegistry,
+    general_variables: CVariableList,
     string_table: MyStringTable,
     quest_system: CQuestSystem,
     country_param: CCountryParam,
@@ -3053,6 +3051,8 @@ impl CGame {
             function_list_file_data: None,
             variable_list_file_data: None,
             script_file_data: BTreeMap::new(),
+            script_functions: CScriptFunctionRegistry::default(),
+            general_variables: CVariableList::default(),
             string_table: MyStringTable::new(),
             quest_system: CQuestSystem::default(),
             country_param: CCountryParam::default(),
@@ -5462,11 +5462,7 @@ impl CGame {
         self.set_auction_state(false, self.auction_last_check_seconds);
     }
 
-    pub(crate) fn set_function_file_data<Context: GameScriptResourceContext>(
-        &mut self,
-        data: Vec<u8>,
-        context: &mut Context,
-    ) -> GameSingleFilePublication {
+    pub(crate) fn set_function_file_data(&mut self, data: Vec<u8>) -> GameSingleFilePublication {
         if self.function_list_file_data.is_some() {
             self.function_list_file_data.take();
             return GameSingleFilePublication::RepeatedOwnerFreed;
@@ -5476,7 +5472,8 @@ impl CGame {
             .function_list_file_data
             .as_deref()
             .expect("function list только что опубликован");
-        context.load_function_list(legacy_c_string_prefix(published));
+        self.script_functions
+            .load(legacy_c_string_prefix(published));
         GameSingleFilePublication::Published
     }
 
@@ -5489,13 +5486,17 @@ impl CGame {
         GameSingleFilePublication::Published
     }
 
-    pub(crate) fn set_general_variable_file_data<Context: GameScriptResourceContext>(
+    pub(crate) fn set_general_variable_file_data(
         &mut self,
         source: &[u8],
         cursor: usize,
-        context: &mut Context,
-    ) {
-        context.load_general_variables(source, cursor);
+    ) -> Result<GameVariableSnapshotReport, GameVariableSnapshotError> {
+        let mut local_cursor = cursor;
+        self.general_variables.decode_world_snapshot(
+            self.variable_list_file_data.as_deref(),
+            source,
+            &mut local_cursor,
+        )
     }
 
     pub(crate) fn set_script_file_data(&mut self, path: Vec<u8>, data: Vec<u8>) -> bool {
@@ -5516,6 +5517,14 @@ impl CGame {
         self.script_file_data
             .get(legacy_c_string_prefix(path))
             .map(Vec::as_slice)
+    }
+
+    pub(crate) fn script_function_id(&self, name: &[u8]) -> Option<i32> {
+        self.script_functions.query(name)
+    }
+
+    pub(crate) const fn general_variables(&self) -> &CVariableList {
+        &self.general_variables
     }
 
     /// Очищает и декодирует language table, пишет exact log и лишь затем
@@ -11180,18 +11189,15 @@ impl CGame {
         let variable_list = self.variable_list_file_data.take().is_some();
         let script_files = self.script_file_data.len();
         self.script_file_data.clear();
+        let function_registry = self.script_functions.release();
+        let general_variables = self.general_variables.release();
         events.push(GameReleaseEvent::ScriptDataCleared {
             function_list,
             variable_list,
             files: script_files,
+            function_registry,
+            general_variables,
         });
-        for owner in [
-            GameReleaseExternalOwner::ScriptFunctions,
-            GameReleaseExternalOwner::GeneralVariables,
-        ] {
-            runtime.release_external_owner(owner);
-            events.push(GameReleaseEvent::ExternalOwner(owner));
-        }
         let debug = GameReleaseDebug::ScriptDataCleared;
         runtime.put_debug_string(debug.clone());
         events.push(GameReleaseEvent::Debug(debug));

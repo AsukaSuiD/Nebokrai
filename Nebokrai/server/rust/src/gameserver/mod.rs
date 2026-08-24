@@ -87,6 +87,10 @@ pub(crate) mod appserver {
         pub(crate) mod csession;
         pub(crate) mod csessionfactory;
     }
+    pub(crate) mod script {
+        pub(crate) mod script;
+        pub(crate) mod variablelist;
+    }
     pub(crate) mod shape;
 }
 

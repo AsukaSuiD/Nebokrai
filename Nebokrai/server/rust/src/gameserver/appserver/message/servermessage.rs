@@ -137,6 +137,9 @@ use crate::gameserver::appserver::goods::cgoodsfactory::{
 };
 use crate::gameserver::appserver::player::PlayerHonorResetReport;
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
+use crate::gameserver::appserver::script::variablelist::{
+    GameVariableSnapshotError, GameVariableSnapshotReport,
+};
 use crate::gameserver::appserver::servercityregion::{
     CServerCityRegion, CityRegionDecodeContext, CityRegionDecodeError,
 };
@@ -155,8 +158,8 @@ use crate::gameserver::appserver::skills::skillfactory::{
     SkillFactoryDecodeError, SkillFactoryDecodeReport,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, GameNetworkInitializationError, GameScriptResourceContext, GameSingleFilePublication,
-    GodsBattleXydApplyReport, MonsterBasePropertyRefreshReport, ServerRegionOwner,
+    CGame, GameNetworkInitializationError, GameSingleFilePublication, GodsBattleXydApplyReport,
+    MonsterBasePropertyRefreshReport, ServerRegionOwner,
 };
 use crate::gameserver::gameserver::honorranks::{HonorRanksDecodeError, HonorRanksDecodeReport};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
@@ -906,6 +909,7 @@ pub(crate) enum GameScriptStartupReport {
     },
     GeneralVariables {
         start_offset: usize,
+        snapshot: GameVariableSnapshotReport,
     },
     ScriptFile {
         path_bytes: usize,
@@ -915,7 +919,10 @@ pub(crate) enum GameScriptStartupReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GameScriptStartupError(pub(crate) GameScriptResourceDecodeError);
+pub(crate) enum GameScriptStartupError {
+    Resource(GameScriptResourceDecodeError),
+    GeneralVariables(GameVariableSnapshotError),
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameScriptStartupMessageReport {
@@ -1073,7 +1080,7 @@ pub(crate) fn dispatch_server_message<Context>(
     mut now_ms: impl FnMut(&mut Context) -> u32,
 ) -> Option<Result<GameServerMessageReport, GameServerMessageError<Context::RuntimeError>>>
 where
-    Context: GameScriptResourceContext + InitialRegionStartupContext,
+    Context: InitialRegionStartupContext,
 {
     if message.message_type() == STRING_TABLE_REFRESH_MESSAGE {
         return Some(dispatch_string_table_message(
@@ -1633,14 +1640,9 @@ where
             let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-                decode_script_startup(
-                    consumed_selector,
-                    wire,
-                    cursor,
-                    game,
-                    script_context,
-                    |text| log_effects.push(text.to_vec()),
-                )
+                decode_script_startup(consumed_selector, wire, cursor, game, |text| {
+                    log_effects.push(text.to_vec())
+                })
                 .expect("script-resource selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::ScriptStartup)
             } {
@@ -1658,12 +1660,11 @@ where
     }
 }
 
-fn decode_script_startup<Context: GameScriptResourceContext>(
+fn decode_script_startup(
     selector: i32,
     source: &[u8],
     cursor: &mut usize,
     game: &mut CGame,
-    script_context: &mut Context,
     mut add_log_text: impl FnMut(&[u8]),
 ) -> Option<Result<GameScriptStartupReport, GameScriptStartupError>> {
     match selector {
@@ -1675,7 +1676,7 @@ fn decode_script_startup<Context: GameScriptResourceContext>(
             };
             let declared_length = match read_script_resource_length(source, cursor, resource) {
                 Ok(length) => length,
-                Err(error) => return Some(Err(GameScriptStartupError(error))),
+                Err(error) => return Some(Err(GameScriptStartupError::Resource(error))),
             };
             let data = match take_script_resource_bytes(
                 source,
@@ -1688,10 +1689,10 @@ fn decode_script_startup<Context: GameScriptResourceContext>(
                 },
             ) {
                 Ok(data) => data.to_vec(),
-                Err(error) => return Some(Err(GameScriptStartupError(error))),
+                Err(error) => return Some(Err(GameScriptStartupError::Resource(error))),
             };
             if selector == FUNCTION_LIST_SELECTOR {
-                let publication = game.set_function_file_data(data, script_context);
+                let publication = game.set_function_file_data(data);
                 add_log_text(b"FunctionList...OK!");
                 Some(Ok(GameScriptStartupReport::FunctionList {
                     declared_length,
@@ -1708,17 +1709,23 @@ fn decode_script_startup<Context: GameScriptResourceContext>(
         }
         GENERAL_VARIABLE_SELECTOR => {
             let start_offset = *cursor;
-            game.set_general_variable_file_data(source, start_offset, script_context);
+            let snapshot = match game.set_general_variable_file_data(source, *cursor) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    return Some(Err(GameScriptStartupError::GeneralVariables(error)));
+                }
+            };
             add_log_text(b"GeneralVariableList...OK!");
             Some(Ok(GameScriptStartupReport::GeneralVariables {
                 start_offset,
+                snapshot,
             }))
         }
         SCRIPT_FILE_SELECTOR => {
             let path = read_script_resource_path(source, cursor, 0x104);
             let declared_length = match read_script_resource_length(source, cursor, "ScriptFile") {
                 Ok(length) => length,
-                Err(error) => return Some(Err(GameScriptStartupError(error))),
+                Err(error) => return Some(Err(GameScriptStartupError::Resource(error))),
             };
             let data = match take_script_resource_bytes(
                 source,
@@ -1727,7 +1734,7 @@ fn decode_script_startup<Context: GameScriptResourceContext>(
                 "ScriptFile data",
             ) {
                 Ok(data) => data.to_vec(),
-                Err(error) => return Some(Err(GameScriptStartupError(error))),
+                Err(error) => return Some(Err(GameScriptStartupError::Resource(error))),
             };
             let path_bytes = path.len();
             let replaced = game.set_script_file_data(path, data);
@@ -2927,6 +2934,7 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     },
     GeneralVariable {
         start_offset: usize,
+        snapshot: GameVariableSnapshotReport,
     },
     ScriptFile {
         path_bytes: usize,
@@ -3013,6 +3021,7 @@ pub(crate) enum GameOwnedStartupSnapshotError {
     LogSystem(LogSystemDecodeError),
     GmList(GmListDecodeError),
     ScriptResource(GameScriptResourceDecodeError),
+    GeneralVariables(GameVariableSnapshotError),
     ProxyRegion(ProxyRegionDecodeError),
     RegionSetup(RegionSetupDecodeError),
     IdIndex(GameIdIndexDecodeError),
@@ -3066,6 +3075,7 @@ impl fmt::Display for GameOwnedStartupSnapshotError {
             Self::LogSystem(error) => error.fmt(formatter),
             Self::GmList(error) => error.fmt(formatter),
             Self::ScriptResource(error) => error.fmt(formatter),
+            Self::GeneralVariables(error) => write!(formatter, "{error:?}"),
             Self::ProxyRegion(error) => error.fmt(formatter),
             Self::RegionSetup(error) => error.fmt(formatter),
             Self::IdIndex(error) => error.fmt(formatter),
@@ -3116,6 +3126,7 @@ impl Error for GameOwnedStartupSnapshotError {
             Self::LogSystem(error) => Some(error),
             Self::GmList(error) => Some(error),
             Self::ScriptResource(error) => Some(error),
+            Self::GeneralVariables(_) => None,
             Self::ProxyRegion(error) => Some(error),
             Self::RegionSetup(error) => Some(error),
             Self::IdIndex(error) => Some(error),
@@ -3153,23 +3164,15 @@ impl Error for GameOwnedStartupSnapshotError {
 }
 
 /// Декодирует startup snapshots, чьи state owners уже принадлежат `CGame`.
-pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceContext>(
+pub(crate) fn dispatch_game_owned_startup_snapshot(
     selector: i32,
     message: &mut CMessage,
     game: &mut CGame,
-    script_context: &mut Context,
     mut add_log_text: impl FnMut(&[u8]),
     mut put_string_to_file: impl FnMut(&str, &[u8]),
 ) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
     let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-    if let Some(result) = decode_script_startup(
-        selector,
-        source,
-        cursor,
-        game,
-        script_context,
-        &mut add_log_text,
-    ) {
+    if let Some(result) = decode_script_startup(selector, source, cursor, game, &mut add_log_text) {
         return Some(match result {
             Ok(GameScriptStartupReport::FunctionList {
                 declared_length,
@@ -3185,9 +3188,13 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 declared_length,
                 publication,
             }),
-            Ok(GameScriptStartupReport::GeneralVariables { start_offset }) => {
-                Ok(GameOwnedStartupSnapshotReport::GeneralVariable { start_offset })
-            }
+            Ok(GameScriptStartupReport::GeneralVariables {
+                start_offset,
+                snapshot,
+            }) => Ok(GameOwnedStartupSnapshotReport::GeneralVariable {
+                start_offset,
+                snapshot,
+            }),
             Ok(GameScriptStartupReport::ScriptFile {
                 path_bytes,
                 declared_length,
@@ -3197,8 +3204,11 @@ pub(crate) fn dispatch_game_owned_startup_snapshot<Context: GameScriptResourceCo
                 declared_length,
                 replaced,
             }),
-            Err(GameScriptStartupError(error)) => {
+            Err(GameScriptStartupError::Resource(error)) => {
                 Err(GameOwnedStartupSnapshotError::ScriptResource(error))
+            }
+            Err(GameScriptStartupError::GeneralVariables(error)) => {
+                Err(GameOwnedStartupSnapshotError::GeneralVariables(error))
             }
         });
     }
