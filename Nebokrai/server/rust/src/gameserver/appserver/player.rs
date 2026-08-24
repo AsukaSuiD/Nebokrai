@@ -24,6 +24,9 @@
 //! value сохраняет wrapping addition, `SetExploit` отдельно применяет exact
 //! unsigned CountryParam maximum, а virtual `UpdateProperty` остаётся
 //! обязательным caller-runtime effect после мутации.
+//! Reached script property `dwVigour` отделено от `SetVigour`:
+//! generic `SetValue` пишет биты DWORD без clamp, а пересчёт и
+//! `0xBF721` остаются у вызывающего `CGame`.
 //! Total honor-rank startup материализует days/weeks/months counters и
 //! nobility rank: reset меняет owned state, а пока RAW `PlayerRunScript`
 //! выражен точным typed AdjustHonorRank script-effect-ом.
@@ -6321,6 +6324,11 @@ impl CPlayer {
 
     pub(crate) const fn set_vigour(&mut self, value: u32) {
         self.base_properties.vigour = value;
+    }
+
+    pub(crate) const fn set_script_vigour(&mut self, value: i32) -> i32 {
+        self.base_properties.vigour = value as u32;
+        value
     }
 
     pub(crate) const fn fairy_container_enabled(&self) -> bool {

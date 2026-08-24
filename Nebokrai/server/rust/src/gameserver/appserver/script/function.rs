@@ -66,6 +66,10 @@
 //! SYSTEMTIME-поля через `TagTime`, меняет owned general variables
 //! в scheduler-е и публикует `PostWorldInfo` по уже замкнутому
 //! `0x5FF0E → 0x7FC0D → 0xBF806/0xBF804` contract.
+//! Соседняя vigour-normalization ветвь читает/пишет живой
+//! `dwVigour`; `SetMe` передаёт direct DWORD write в `CGame`,
+//! после чего проходит обязательный `UpdateProperty` runtime и
+//! адресный `0xBF721` с уже изменённым vigour.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -114,6 +118,7 @@ pub(crate) const SCRIPT_FUNCTION_HOUR: i32 = 17;
 pub(crate) const SCRIPT_FUNCTION_MINUTE: i32 = 18;
 pub(crate) const SCRIPT_FUNCTION_DAY_OF_WEEK: i32 = 19;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
+pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
 pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS: i32 = 2201;
 pub(crate) const SCRIPT_FUNCTION_CHECK_GOODS: i32 = 2202;
@@ -2355,6 +2360,11 @@ pub(crate) fn script_function_parameter_kind(
             0 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_SET_ME => match index {
+            0 => String,
+            1 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_SCRIPT_IS_RUNNING | SCRIPT_FUNCTION_REMOVE_SCRIPT => match index {
             0 => Integer,
             1 => String,
@@ -2830,14 +2840,34 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let Some(property) = string_arguments[0] else {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             };
-            if !property.eq_ignore_ascii_case(b"lRegionID") {
+            let Some(player) = game.find_player(player_id) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let legacy_return = if property.eq_ignore_ascii_case(b"lRegionID") {
+                player.server_region_id().unwrap_or_default()
+            } else if property.eq_ignore_ascii_case(b"dwVigour") {
+                player.vigour() as i32
+            } else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_SET_ME => {
+            if argument_count != 2 {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             }
-            let legacy_return = game
-                .find_player(player_id)
-                .and_then(|player| player.server_region_id())
-                .unwrap_or_default();
-            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+            let (Some(property), Some(value)) = (string_arguments[0], integer_arguments[1]) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if !property.eq_ignore_ascii_case(b"dwVigour") {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            Some(
+                game.set_script_player_vigour(player_id, value, runtime)
+                    .map_or(ScriptFunctionDispatchOutcome::Invalid, |legacy_return| {
+                        ScriptFunctionDispatchOutcome::Handled { legacy_return }
+                    }),
+            )
         }
         SCRIPT_FUNCTION_GET_COUNTRY => {
             if argument_count != 0 {

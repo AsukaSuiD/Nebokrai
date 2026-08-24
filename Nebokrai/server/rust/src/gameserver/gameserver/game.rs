@@ -51,6 +51,10 @@
 //! function/variable setter безопасно материализует исходный freed-owner
 //! контракт как `None`; старый `length + 1` NUL-padding заменён bounded `Vec` и
 //! C-string prefix adapter-ом.
+//! Reached `SetMe("dwVigour")` пишет поле как generic DWORD без
+//! `SetVigour` clamp, затем проводит обязательный virtual
+//! `UpdateProperty` и публикует полный player `0xBF721` через тот
+//! же properties runtime, который уже обслуживает equipment/fairy paths.
 //! Тот же owner доводит battle-fairy script `9400..9411` до canonical players,
 //! enhancement/equipment goods, общего RNG, skill/property mutation, client
 //! wire и file audit; goods reset `0x8FC29` вызывает его напрямую.
@@ -8268,6 +8272,39 @@ impl CGame {
         value: &[u8],
     ) -> GameVariableMutationOutcome {
         self.general_variables.set_string(name, value)
+    }
+
+    /// Exact reached `SetMe("dwVigour", value)` tail: generic property storage
+    /// пишет DWORD без `SetVigour` clamp, затем virtual `UpdateProperty`
+    /// пересчитывает derived state и `OnChangeProperties` публикует
+    /// адресный `0xBF721`.
+    pub(crate) fn set_script_player_vigour<Context>(
+        &mut self,
+        player_id: i32,
+        value: i32,
+        context: &mut Context,
+    ) -> Option<i32>
+    where
+        Context: GameContainerMessageRuntime + BattleFairyDeathContext,
+    {
+        let recomputed = {
+            let player = self.players.get_mut(&player_id)?;
+            let _ = player.set_script_vigour(value);
+            context.recompute_enhancement_player_properties(player)
+        };
+        self.players
+            .get_mut(&player_id)
+            .expect("script-player сохранён между write и UpdateProperty")
+            .apply_recomputed_combat_properties(recomputed);
+
+        let mut external = context.player_properties_external_facts(player_id);
+        let player = self
+            .players
+            .get(&player_id)
+            .expect("script-player сохранён до OnChangeProperties");
+        external.vigour = player.vigour();
+        let _ = self.send_player_properties_changed(player, external);
+        Some(value)
     }
 
     /// Очищает и декодирует language table, пишет exact log и лишь затем
