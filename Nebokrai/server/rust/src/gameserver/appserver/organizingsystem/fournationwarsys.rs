@@ -187,7 +187,6 @@ pub(crate) trait FourNationRegionRuntime {
         war_number: i32,
     );
     fn on_four_nation_clear(&mut self, region: &mut ServerNationRegion, war_number: i32);
-    fn take_four_nation_results(&mut self, region: &mut ServerNationRegion) -> [u32; 5];
 }
 
 impl CFourNationWarSys {

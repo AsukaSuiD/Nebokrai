@@ -1302,7 +1302,7 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
         let Some(ServerRegionOwner::Nation(region)) = self.game.find_region_mut(region_id) else {
             return [0; 5];
         };
-        self.runtime.take_four_nation_results(region)
+        region.take_stone_guard_results()
     }
 
     fn add_war_end_log(&mut self, war_number: i32) {

@@ -263,7 +263,9 @@ use crate::gameserver::appserver::servercountryregion::CountryBattleStateBlock;
 use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion,
 };
-use crate::gameserver::appserver::servernationregion::ServerNationRegion;
+use crate::gameserver::appserver::servernationregion::{
+    NationMoraleMutation, ServerNationRegion, classify_nation_morale_target,
+};
 use crate::gameserver::appserver::serverregion::{CServerRegion, RegionMembershipBlock};
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::shape::{
@@ -979,6 +981,25 @@ pub(crate) struct GameWarStartupOwners {
     pub(crate) village: CVillageWarSys,
     pub(crate) country: CountryWarSys,
     pub(crate) four_nation: CFourNationWarSys,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NationMonsterDeathOutcome {
+    KillerMissing,
+    MonsterMissing,
+    MonsterPropertyMissing,
+    Unclassified,
+    CountryOutsideNation,
+    MoraleChanged(NationMoraleMutation),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationMonsterDeathReport {
+    pub(crate) region_id: i32,
+    pub(crate) monster_id: i32,
+    pub(crate) killer_player_id: i32,
+    pub(crate) outcome: NationMonsterDeathOutcome,
+    pub(crate) morale_delivery: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1972,24 +1993,7 @@ impl CGame {
             return false;
         };
 
-        let colors = [0xfffc_0000, 0xffd1_eefe, 0xffe2_bf18, 0xff78_fcdb];
-        let string_ids: [[&[u8]; 2]; 4] = [
-            [b"GS1075", b"GS1074"],
-            [b"GS1077", b"GS1076"],
-            [b"GS1079", b"GS1078"],
-            [b"GS1081", b"GS1080"],
-        ];
-        let mut snapshot = CMessage::new(0xbf818);
-        for index in 0..4 {
-            snapshot.base_mut().add_ulong(colors[index]);
-            let text = format_single_legacy_i32(
-                self.get_string_by_id(string_ids[index][usize::from(failed[index + 1])]),
-                morale[index + 1],
-                0xff,
-            );
-            let text = CString::new(text).expect("localized morale text обрезан до NUL");
-            snapshot.base_mut().add_str(Some(&text));
-        }
+        let snapshot = self.four_nation_morale_snapshot(morale, failed);
         let _delivery = snapshot.send_to_player(self.net_server(), player_id);
 
         let timing_exists = self
@@ -2067,6 +2071,106 @@ impl CGame {
         region
             .finish_player_timing(player_id, died, now_ms)
             .is_some()
+    }
+
+    pub(crate) fn nation_monster_died(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        killer_player_id: i32,
+    ) -> Option<NationMonsterDeathReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Nation(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let outcome = if !region
+            .war
+            .base
+            .registered_player_ids()
+            .contains(&killer_player_id)
+        {
+            NationMonsterDeathOutcome::KillerMissing
+        } else {
+            match region.war.base.find_monster_by_id(monster_id) {
+                None => NationMonsterDeathOutcome::MonsterMissing,
+                Some(monster) => {
+                    let Some(race) = monster
+                        .base_property_key()
+                        .and_then(|key| self.find_monster_property_by_origin_name(key))
+                        .map(|property| property.race)
+                    else {
+                        self.restore_region_owner(ServerRegionOwner::Nation(region));
+                        return Some(NationMonsterDeathReport {
+                            region_id,
+                            monster_id,
+                            killer_player_id,
+                            outcome: NationMonsterDeathOutcome::MonsterPropertyMissing,
+                            morale_delivery: None,
+                        });
+                    };
+                    let target = classify_nation_morale_target(monster.original_name(), |id| {
+                        self.get_string_by_id(id).to_vec()
+                    });
+                    match target {
+                        None => NationMonsterDeathOutcome::Unclassified,
+                        Some(target) => {
+                            let attacker_country = self
+                                .find_player(killer_player_id)
+                                .expect("killer проверен в Nation m_vPlayers")
+                                .country();
+                            match u8::try_from(race).ok().and_then(|defender_country| {
+                                region.apply_monster_morale(
+                                    target,
+                                    defender_country,
+                                    attacker_country,
+                                )
+                            }) {
+                                Some(mutation) => {
+                                    NationMonsterDeathOutcome::MoraleChanged(mutation)
+                                }
+                                None => NationMonsterDeathOutcome::CountryOutsideNation,
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        let morale_delivery =
+            matches!(outcome, NationMonsterDeathOutcome::MoraleChanged(_)).then(|| {
+                self.four_nation_morale_snapshot(*region.morale(), *region.nation_failed())
+                    .send_to_region(Some(&region.war.base), None, self)
+            });
+        self.restore_region_owner(ServerRegionOwner::Nation(region));
+        Some(NationMonsterDeathReport {
+            region_id,
+            monster_id,
+            killer_player_id,
+            outcome,
+            morale_delivery,
+        })
+    }
+
+    fn four_nation_morale_snapshot(&self, morale: [i32; 5], failed: [bool; 5]) -> CMessage {
+        let colors = [0xfffc_0000, 0xffd1_eefe, 0xffe2_bf18, 0xff78_fcdb];
+        let string_ids: [[&[u8]; 2]; 4] = [
+            [b"GS1075", b"GS1074"],
+            [b"GS1077", b"GS1076"],
+            [b"GS1079", b"GS1078"],
+            [b"GS1081", b"GS1080"],
+        ];
+        let mut snapshot = CMessage::new(0xbf818);
+        for index in 0..4 {
+            snapshot.base_mut().add_ulong(colors[index]);
+            let text = format_single_legacy_i32(
+                self.get_string_by_id(string_ids[index][usize::from(failed[index + 1])]),
+                morale[index + 1],
+                0xff,
+            );
+            let text = CString::new(text).expect("localized morale text обрезан до NUL");
+            snapshot.base_mut().add_str(Some(&text));
+        }
+        snapshot
     }
 
     pub(crate) fn find_region_by_name(&self, name: &[u8]) -> Option<&ServerRegionOwner> {

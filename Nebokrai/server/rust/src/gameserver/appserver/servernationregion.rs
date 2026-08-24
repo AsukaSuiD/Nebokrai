@@ -16,13 +16,97 @@ use super::organizingsystem::fournationwarsys::FourNationRect;
 use super::serverregion::ServerRegionDecodeError;
 use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError};
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ServerNationRegion {
     pub(crate) war: CServerWarRegion,
     relive_rects: [FourNationRect; 5],
     morale: [i32; 5],
+    lost_morale: [i32; 5],
     nation_failed: [bool; 5],
+    treasure_boxes: [i32; 5],
+    magic_stone_attacked: [bool; 5],
+    jin_wei_jun_attacked: [bool; 5],
+    guard_attacked: [bool; 5],
+    guard_first_die: [bool; 5],
+    stone_guard_died: [u32; 5],
+    yu_ying_shi_added: [bool; 5],
+    da_jiang_jun_died: [bool; 5],
     player_war_times: Vec<NationPlayerWarTime>,
+}
+
+impl Default for ServerNationRegion {
+    fn default() -> Self {
+        Self {
+            war: CServerWarRegion::default(),
+            relive_rects: [FourNationRect::default(); 5],
+            morale: [1000; 5],
+            lost_morale: [0; 5],
+            nation_failed: [false; 5],
+            treasure_boxes: [0; 5],
+            magic_stone_attacked: [false; 5],
+            jin_wei_jun_attacked: [false; 5],
+            guard_attacked: [false; 5],
+            guard_first_die: [false; 5],
+            stone_guard_died: [0; 5],
+            yu_ying_shi_added: [false; 5],
+            da_jiang_jun_died: [false; 5],
+            player_war_times: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NationMoraleTarget {
+    StoneGuard,
+    Guard,
+    Admiral,
+    MagicStone,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NationMoraleMutation {
+    pub(crate) defender_country: u8,
+    pub(crate) attacker_country: u8,
+    pub(crate) target: NationMoraleTarget,
+    pub(crate) defender_morale: i32,
+    pub(crate) attacker_morale: i32,
+    pub(crate) lost_morale: i32,
+    pub(crate) first_guard_notice: bool,
+    pub(crate) check_morale_spawn: bool,
+    pub(crate) check_admiral_spawn: bool,
+    pub(crate) nation_failed: bool,
+}
+
+pub(crate) fn classify_nation_morale_target(
+    monster_original_name: &[u8],
+    mut string_by_id: impl FnMut(&[u8]) -> Vec<u8>,
+) -> Option<NationMoraleTarget> {
+    const GROUPS: &[(NationMoraleTarget, &[&[u8]])] = &[
+        (
+            NationMoraleTarget::StoneGuard,
+            &[b"GS1088", b"GS1096", b"GS1104", b"GS1112"],
+        ),
+        (
+            NationMoraleTarget::Guard,
+            &[
+                b"GS1095", b"GS1103", b"GS1111", b"GS1119", b"GS1092", b"GS1100", b"GS1108",
+                b"GS1116", b"GS1094", b"GS1102", b"GS1110", b"GS1118",
+            ],
+        ),
+        (
+            NationMoraleTarget::Admiral,
+            &[b"GS1091", b"GS1099", b"GS1107", b"GS1115"],
+        ),
+        (
+            NationMoraleTarget::MagicStone,
+            &[b"GS1142", b"GS1139", b"GS1140", b"GS1141"],
+        ),
+    ];
+    GROUPS.iter().find_map(|(target, ids)| {
+        ids.iter()
+            .any(|id| string_by_id(id) == monster_original_name)
+            .then_some(*target)
+    })
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -93,8 +177,16 @@ impl ServerNationRegion {
     /// counters start empty; signup counts сам owner в этой функции не читает.
     pub(crate) fn reset_for_war_declare(&mut self) {
         self.player_war_times.clear();
-        self.morale.fill(0);
+        self.lost_morale.fill(0);
         self.nation_failed.fill(false);
+        self.treasure_boxes.fill(0);
+        self.magic_stone_attacked.fill(false);
+        self.jin_wei_jun_attacked.fill(false);
+        self.guard_attacked.fill(false);
+        self.guard_first_die.fill(false);
+        self.stone_guard_died.fill(0);
+        self.yu_ying_shi_added.fill(false);
+        self.da_jiang_jun_died.fill(false);
     }
 
     /// Exact materialized prefix `OnRefreshRegion`: morale всех five slots
@@ -102,7 +194,16 @@ impl ServerNationRegion {
     pub(crate) fn reset_for_region_refresh(&mut self) {
         self.player_war_times.clear();
         self.morale.fill(1000);
+        self.lost_morale.fill(0);
         self.nation_failed.fill(false);
+        self.treasure_boxes.fill(0);
+        self.magic_stone_attacked.fill(false);
+        self.jin_wei_jun_attacked.fill(false);
+        self.guard_attacked.fill(false);
+        self.guard_first_die.fill(false);
+        self.stone_guard_died.fill(0);
+        self.yu_ying_shi_added.fill(false);
+        self.da_jiang_jun_died.fill(false);
     }
 
     /// Exact `OnPlayerTimgingStart`: repeated start меняет только clock,
@@ -197,8 +298,83 @@ impl ServerNationRegion {
     /// Materialized subset final reset-loop `OnWarEnd`: все пять slots,
     /// включая unused index 0, обнуляются после award pass.
     pub(crate) fn reset_materialized_war_state(&mut self) {
-        self.morale.fill(0);
+        self.lost_morale.fill(0);
         self.nation_failed.fill(false);
+        self.magic_stone_attacked.fill(false);
+        self.jin_wei_jun_attacked.fill(false);
+        self.guard_attacked.fill(false);
+        self.guard_first_die.fill(false);
+        self.stone_guard_died.fill(0);
+        self.yu_ying_shi_added.fill(false);
+        self.da_jiang_jun_died.fill(false);
+    }
+
+    pub(crate) fn take_stone_guard_results(&mut self) -> [u32; 5] {
+        std::mem::take(&mut self.stone_guard_died)
+    }
+
+    pub(crate) fn apply_monster_morale(
+        &mut self,
+        target: NationMoraleTarget,
+        defender_country: u8,
+        attacker_country: u8,
+    ) -> Option<NationMoraleMutation> {
+        let defender = usize::from(defender_country);
+        let attacker = usize::from(attacker_country);
+        if !(1..=4).contains(&defender) || !(1..=4).contains(&attacker) {
+            return None;
+        }
+        let delta = match target {
+            NationMoraleTarget::StoneGuard => 50,
+            NationMoraleTarget::Guard => 25,
+            NationMoraleTarget::Admiral => 100,
+            NationMoraleTarget::MagicStone => 300,
+        };
+        if self.morale[defender] > delta + 99 {
+            self.morale[defender] = self.morale[defender].wrapping_sub(delta);
+        }
+        if self.morale[defender] < 100 {
+            self.morale[defender] = 100;
+        }
+        let attacker_receives_morale = !self.nation_failed[attacker] && attacker != defender;
+        let first_guard_notice = attacker_receives_morale && !self.guard_first_die[defender];
+        if attacker_receives_morale {
+            self.morale[attacker] = self.morale[attacker].wrapping_add(delta);
+            self.lost_morale[defender] = self.lost_morale[defender].wrapping_add(delta);
+            if first_guard_notice {
+                self.guard_first_die[defender] = true;
+            }
+        }
+        if target == NationMoraleTarget::StoneGuard {
+            self.stone_guard_died[defender] = self.stone_guard_died[defender].wrapping_add(1);
+        }
+        if target == NationMoraleTarget::Admiral {
+            self.da_jiang_jun_died[defender] = true;
+        }
+        let nation_failed = target == NationMoraleTarget::MagicStone;
+        if nation_failed {
+            self.nation_failed[defender] = true;
+            if self.treasure_boxes[defender] != 0 {
+                self.morale[defender] = self.morale[defender]
+                    .wrapping_sub(self.treasure_boxes[defender].wrapping_mul(400));
+                if self.morale[defender] < 100 {
+                    self.morale[defender] = 100;
+                }
+            }
+        }
+        Some(NationMoraleMutation {
+            defender_country,
+            attacker_country,
+            target,
+            defender_morale: self.morale[defender],
+            attacker_morale: self.morale[attacker],
+            lost_morale: self.lost_morale[defender],
+            first_guard_notice,
+            check_morale_spawn: target != NationMoraleTarget::MagicStone
+                || self.morale[attacker] > 2499,
+            check_admiral_spawn: target == NationMoraleTarget::Admiral,
+            nation_failed,
+        })
     }
 }
 
