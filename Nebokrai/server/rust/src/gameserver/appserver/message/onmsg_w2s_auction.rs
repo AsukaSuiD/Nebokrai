@@ -2,10 +2,10 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/onmsg_w2s_auction.cpp` подтверждают
-//! selectors `0x80401..0x80403`, `0x80409`, `0x8040A`, `0x8040F` и `0x80410`:
-//! добавление временного `CGoodsNode` в Game-specific owner map, reconciliation
-//! с World GUID-set, client relay/broadcast, auction-state и полную YuanBao
-//! container/client mutation. GameServer primary map
+//! selectors `0x80401..0x80403`, `0x80409`, `0x8040A`, `0x8040C`, `0x8040F` и
+//! `0x80410`: добавление временного `CGoodsNode` в Game-specific owner map,
+//! reconciliation с World GUID-set, catalog condition/client relay/broadcast,
+//! auction-state и полную YuanBao container/client mutation. GameServer primary map
 //! хранит `GUID -> owner id`, а не MiscServer-owned node; это исключает
 //! исходный stack-pointer lifetime без изменения наблюдаемого результата.
 //! Обрезанный payload заменяет небезопасное чтение за буфером typed error-ом
@@ -27,11 +27,13 @@ const WORLD_AUCTION_UNITY_MESSAGE: i32 = 0x0008_0402;
 const WORLD_AUCTION_STATE_MESSAGE: i32 = 0x0008_0403;
 const WORLD_AUCTION_DIRECT_RELAY_MESSAGE: i32 = 0x0008_0409;
 const WORLD_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x0008_040a;
+const WORLD_AUCTION_CONDITION_MESSAGE: i32 = 0x0008_040c;
 const WORLD_AUCTION_BROADCAST_MESSAGE: i32 = 0x0008_040f;
 const WORLD_AUCTION_YUAN_BAO_MESSAGE: i32 = 0x0008_0410;
 const CLIENT_AUCTION_GOODS_REMOVED_MESSAGE: i32 = 0x000c_0702;
 const CLIENT_AUCTION_DIRECT_RELAY_MESSAGE: i32 = 0x000c_0707;
 const CLIENT_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x000c_0708;
+const CLIENT_AUCTION_CONDITION_MESSAGE: i32 = 0x000c_070a;
 const CLIENT_AUCTION_BROADCAST_MESSAGE: i32 = 0x000c_010b;
 
 pub(crate) trait WorldAuctionRuntime: IncrementShopBillingContext {
@@ -50,6 +52,10 @@ pub(crate) enum WorldAuctionMessageError {
     MissingEnabledLong,
     MissingRelayPlayerId {
         selector: i32,
+    },
+    MissingConditionPlayerId,
+    MissingConditionField {
+        field: &'static str,
     },
     MissingYuanBaoPlayerId,
     MissingYuanBaoAmount,
@@ -84,6 +90,12 @@ pub(crate) enum WorldAuctionMessageReport {
     },
     ClientBroadcast {
         delivery: Result<i32, SendMessageError>,
+    },
+    AuctionCondition {
+        player_id: i32,
+        player_found: bool,
+        created_goods: Vec<u32>,
+        delivery: Option<i32>,
     },
     YuanBaoChanged {
         player_id: i32,
@@ -210,6 +222,61 @@ pub(crate) fn dispatch_world_auction_message<Runtime: WorldAuctionRuntime>(
                 player_id,
                 payload,
                 delivery,
+            }))
+        }
+        WORLD_AUCTION_CONDITION_MESSAGE => {
+            let Some(player_id) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingConditionPlayerId));
+            };
+            if game.find_player(player_id).is_none() {
+                return Some(Ok(WorldAuctionMessageReport::AuctionCondition {
+                    player_id,
+                    player_found: false,
+                    created_goods: Vec::new(),
+                    delivery: None,
+                }));
+            }
+
+            let mut response = CMessage::new(CLIENT_AUCTION_CONDITION_MESSAGE);
+            let mut created_goods = Vec::new();
+            loop {
+                let Some(goods_index) = message.base_mut().get_long() else {
+                    return Some(Err(WorldAuctionMessageError::MissingConditionField {
+                        field: "goods index",
+                    }));
+                };
+                let Some(second) = message.base_mut().get_long() else {
+                    return Some(Err(WorldAuctionMessageError::MissingConditionField {
+                        field: "second condition",
+                    }));
+                };
+                let Some(third) = message.base_mut().get_long() else {
+                    return Some(Err(WorldAuctionMessageError::MissingConditionField {
+                        field: "third condition",
+                    }));
+                };
+                let Some(goods) = game
+                    .create_goods_batch(goods_index as u32, 1)
+                    .into_iter()
+                    .next()
+                else {
+                    response.base_mut().add_long(0);
+                    break;
+                };
+                response.base_mut().add_long(1);
+                response
+                    .base_mut()
+                    .add(&runtime.encode_goods_for_old_client(&goods));
+                response.base_mut().add_long(second);
+                response.base_mut().add_long(third);
+                created_goods.push(goods_index as u32);
+            }
+            let delivery = response.send_to_player(game.net_server(), player_id);
+            Some(Ok(WorldAuctionMessageReport::AuctionCondition {
+                player_id,
+                player_found: true,
+                created_goods,
+                delivery: Some(delivery),
             }))
         }
         WORLD_AUCTION_BROADCAST_MESSAGE => {

@@ -8305,21 +8305,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::SendAuctionBangCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14938
-// RVA: 0x0003F620
-// ADDRESS: 0043f620
-// PROTOTYPE: void __thiscall SendAuctionBangCondition(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::ModifyAuctionSpace
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
