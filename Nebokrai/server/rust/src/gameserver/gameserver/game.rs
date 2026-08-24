@@ -468,7 +468,8 @@ use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
 };
 use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::gameserver::appserver::player::{
-    BattleFairyCombineDelivery, BattleFairyCombineEffect, BattleFairyCombineReport,
+    AuctionSelfGoodsRefresh, BattleFairyCombineDelivery, BattleFairyCombineEffect,
+    BattleFairyCombineReport,
     BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationReport,
     BattleFairyFollowDelivery, BattleFairyFollowEffect, BattleFairyFollowReport,
@@ -5542,6 +5543,17 @@ impl CGame {
 
     pub(crate) const fn auction_room_mut(&mut self) -> &mut CGameAuctionRoom {
         &mut self.auction_room
+    }
+
+    pub(crate) fn refresh_player_auction_self_goods(
+        &mut self,
+        player_id: i32,
+        tick_ms: impl FnMut() -> u32,
+    ) -> Option<AuctionSelfGoodsRefresh> {
+        let factory = &self.goods_factory;
+        self.players
+            .get_mut(&player_id)
+            .map(|player| player.refresh_auction_self_goods(factory, tick_ms))
     }
 
     /// Возвращает process-owned Game variant для async producer-ов.
@@ -14691,7 +14703,7 @@ impl CGame {
         {
             server_messages.push(report);
         } else if let Some(report) =
-            dispatch_world_auction_message(message, self, runtime)
+            dispatch_world_auction_message(message, self, runtime, |runtime| runtime.get_tick_ms())
         {
             auction_messages.push(report);
         } else if let Some(report) = dispatch_player_shop_message(message, self) {

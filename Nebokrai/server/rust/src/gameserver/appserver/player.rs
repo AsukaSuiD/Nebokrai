@@ -1269,6 +1269,20 @@ pub(crate) struct GoodsSessionPlayerRelease {
     pub(crate) moveable: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionSelfGoodsRefresh {
+    Throttled {
+        sampled_tick_ms: u32,
+        previous_tick_ms: u32,
+    },
+    Requested {
+        sampled_tick_ms: u32,
+        recorded_tick_ms: u32,
+        goods_space: u32,
+        wallet_space: u32,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CiQingPacketConsumption {
     pub(crate) player_id: i32,
@@ -1463,6 +1477,8 @@ pub(crate) struct CPlayer {
     yuan_bao: CYuanBao,
     equipment: CEquipmentContainer,
     auction_goods: CVolumeLimitGoodsContainer,
+    auction_wallet: CWallet,
+    last_auction_option_tick_ms: u32,
     ci_qing: CVolumeLimitGoodsContainer,
     ci_qing_compose: CVolumeLimitGoodsContainer,
     fairy_container: CFairyContainer,
@@ -1504,6 +1520,8 @@ impl CPlayer {
         let _empty_release = ci_qing_compose.set_container_volume(3);
         let mut fairy_container = CFairyContainer::new();
         let _empty_release = fairy_container.base_mut().set_container_volume(14);
+        let mut auction_goods = CVolumeLimitGoodsContainer::new();
+        let _empty_release = auction_goods.set_container_volume(0x12);
         let mut player = Self {
             move_shape,
             figure,
@@ -1564,7 +1582,9 @@ impl CPlayer {
             wallet: CWallet::new(),
             yuan_bao: CYuanBao::new(),
             equipment: CEquipmentContainer::new(),
-            auction_goods: CVolumeLimitGoodsContainer::new(),
+            auction_goods,
+            auction_wallet: CWallet::new(),
+            last_auction_option_tick_ms: 0,
             ci_qing,
             ci_qing_compose,
             fairy_container,
@@ -3208,6 +3228,33 @@ impl CPlayer {
 
     pub(crate) const fn auction_goods_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
         &mut self.auction_goods
+    }
+
+    /// Exact `ReFlushSelfGoods`: strict wrapping `last + 5000 < first sample`,
+    /// затем отдельный второй `timeGetTime` sample записывается до World send.
+    pub(crate) fn refresh_auction_self_goods(
+        &mut self,
+        factory: &CGoodsFactory,
+        mut tick_ms: impl FnMut() -> u32,
+    ) -> AuctionSelfGoodsRefresh {
+        let sampled_tick_ms = tick_ms();
+        let previous_tick_ms = self.last_auction_option_tick_ms;
+        if previous_tick_ms.wrapping_add(5_000) >= sampled_tick_ms {
+            return AuctionSelfGoodsRefresh::Throttled {
+                sampled_tick_ms,
+                previous_tick_ms,
+            };
+        }
+        let recorded_tick_ms = tick_ms();
+        self.last_auction_option_tick_ms = recorded_tick_ms;
+        let wallet_amount = self.auction_wallet.currency_amount();
+        let wallet_maximum = self.auction_wallet.max_stack_number(factory);
+        AuctionSelfGoodsRefresh::Requested {
+            sampled_tick_ms,
+            recorded_tick_ms,
+            goods_space: self.auction_goods.space(),
+            wallet_space: wallet_maximum.wrapping_sub(wallet_amount),
+        }
     }
 
     /// Exact derived `bHasPet`: отдельный pet owner materializes list later;
@@ -5134,6 +5181,7 @@ impl CPlayer {
         self.auction_goods
             .base_mut()
             .set_owner(PLAYER_TYPE, player_id);
+        self.auction_wallet.set_owner(PLAYER_TYPE, player_id);
         self.ci_qing.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.ci_qing_compose
             .base_mut()
@@ -7264,20 +7312,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00030D00
 // ADDRESS: 00430d00
 // PROTOTYPE: bool __thiscall SetCurAucBuyNode(CGoodsNode param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::ReFlushSelfGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14723
-// RVA: 0x00030D90
-// ADDRESS: 00430d90
-// PROTOTYPE: void __thiscall ReFlushSelfGoods(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

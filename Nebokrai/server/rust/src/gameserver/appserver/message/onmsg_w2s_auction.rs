@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 
 use crate::gameserver::appserver::message::unibillmessage::IncrementShopBillingContext;
-use crate::gameserver::appserver::player::PlayerYuanBaoChange;
+use crate::gameserver::appserver::player::{AuctionSelfGoodsRefresh, PlayerYuanBaoChange};
 use crate::gameserver::gameserver::game::{
     CGame, PersonalShopRecollection, colored_player_notice_message,
 };
@@ -29,6 +29,7 @@ use crate::public::auctionnode::{CGoodsNode, GoodsNodeUnserializeError};
 const WORLD_AUCTION_ADD_ITEM_MESSAGE: i32 = 0x0008_0401;
 const WORLD_AUCTION_UNITY_MESSAGE: i32 = 0x0008_0402;
 const WORLD_AUCTION_STATE_MESSAGE: i32 = 0x0008_0403;
+const WORLD_AUCTION_REFRESH_SELF_GOODS_MESSAGE: i32 = 0x0008_0405;
 const WORLD_AUCTION_DIRECT_RELAY_MESSAGE: i32 = 0x0008_0409;
 const WORLD_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x0008_040a;
 const WORLD_AUCTION_LOG_NOTICE_MESSAGE: i32 = 0x0008_040b;
@@ -43,6 +44,7 @@ const CLIENT_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x000c_0708;
 const CLIENT_AUCTION_CONDITION_MESSAGE: i32 = 0x000c_070a;
 const CLIENT_AUCTION_BROADCAST_MESSAGE: i32 = 0x000c_010b;
 const LOCAL_PLAYER_SHOP_OPEN_MESSAGE: i32 = 0x0009_0201;
+const GAME_AUCTION_REFRESH_SELF_GOODS_MESSAGE: i32 = 0x0006_080a;
 
 pub(crate) trait WorldAuctionRuntime: IncrementShopBillingContext {
     fn auction_wall_time_seconds(&mut self) -> u32;
@@ -81,6 +83,7 @@ pub(crate) enum WorldAuctionMessageError {
     MissingYuanBaoAmount,
     MissingStallPlayerId,
     MissingStallResult,
+    MissingRefreshSelfGoodsPlayerId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -142,15 +145,25 @@ pub(crate) enum WorldAuctionMessageReport {
     StallsRecollected {
         recollections: Vec<PersonalShopRecollection>,
     },
+    SelfGoodsRefresh {
+        player_id: i32,
+        refresh: Option<AuctionSelfGoodsRefresh>,
+        delivery: Option<Result<i32, SendMessageError>>,
+    },
 }
 
 /// Материализует достигнутые sync/relay/state/YuanBao ветви handler-а.
 /// `None` означает, что сообщение должен идти в оставшийся auction owner.
-pub(crate) fn dispatch_world_auction_message<Runtime: WorldAuctionRuntime>(
+pub(crate) fn dispatch_world_auction_message<Runtime, Tick>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Option<Result<WorldAuctionMessageReport, WorldAuctionMessageError>> {
+    mut tick_ms: Tick,
+) -> Option<Result<WorldAuctionMessageReport, WorldAuctionMessageError>>
+where
+    Runtime: WorldAuctionRuntime,
+    Tick: FnMut(&mut Runtime) -> u32,
+{
     match message.message_type() {
         WORLD_AUCTION_ADD_ITEM_MESSAGE => {
             let mut item = CGoodsNode::new();
@@ -235,6 +248,33 @@ pub(crate) fn dispatch_world_auction_message<Runtime: WorldAuctionRuntime>(
             Some(Ok(WorldAuctionMessageReport::StateChanged {
                 enabled,
                 last_check_seconds,
+            }))
+        }
+        WORLD_AUCTION_REFRESH_SELF_GOODS_MESSAGE => {
+            let Some(player_id) = message.base_mut().get_long() else {
+                return Some(Err(
+                    WorldAuctionMessageError::MissingRefreshSelfGoodsPlayerId,
+                ));
+            };
+            let refresh = game.refresh_player_auction_self_goods(player_id, || tick_ms(runtime));
+            let delivery = match refresh {
+                Some(AuctionSelfGoodsRefresh::Requested {
+                    goods_space,
+                    wallet_space,
+                    ..
+                }) => {
+                    let mut response = CMessage::new(GAME_AUCTION_REFRESH_SELF_GOODS_MESSAGE);
+                    response.base_mut().add_long(player_id);
+                    response.base_mut().add_ulong(goods_space);
+                    response.base_mut().add_ulong(wallet_space);
+                    Some(response.send(game, false))
+                }
+                Some(AuctionSelfGoodsRefresh::Throttled { .. }) | None => None,
+            };
+            Some(Ok(WorldAuctionMessageReport::SelfGoodsRefresh {
+                player_id,
+                refresh,
+                delivery,
             }))
         }
         selector @ (WORLD_AUCTION_DIRECT_RELAY_MESSAGE | WORLD_AUCTION_PLAYER_RELAY_MESSAGE) => {

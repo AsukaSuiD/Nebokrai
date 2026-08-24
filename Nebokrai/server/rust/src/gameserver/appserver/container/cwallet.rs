@@ -445,20 +445,6 @@ pub(crate) type CWallet = CSingleCurrencyContainer<GoldCoinCurrency>;
 //
 
 // ============================================================================
-// FUNCTION: CWallet::GetMaxStackNum
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cwallet.cpp:478
-// RVA: 0x000D5D00
-// ADDRESS: 004d5d00
-// PROTOTYPE: ulong __thiscall GetMaxStackNum(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CWallet::CWallet
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
