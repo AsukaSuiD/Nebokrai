@@ -313,10 +313,10 @@ use crate::gameserver::appserver::player::{
     BattleFairyPotentialResetEffect, BattleFairySkillAdded, BattleFairySkillRequest,
     BattleFairySkillRequestFacts, BattleFairySkillRequestReport, BattleFairySkillResetDelivery,
     BattleFairySkillResetEffect, BattleFairySkillResetReport, BattleFairySummonDelivery,
-    BattleFairySummonEffect, BattleFairySummonReport, BattleFairyWarSoulAction, CPlayer,
-    PlayerCombatProperties, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
-    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport,
-    PlayerReliveMutation,
+    BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeDelivery,
+    BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, PlayerCombatProperties,
+    PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentRemoveReport,
+    PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerReliveMutation,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1119,6 +1119,17 @@ pub(crate) trait BattleFairySkillResetContext {
         &mut self,
         effect: &BattleFairySkillResetEffect,
     ) -> Vec<i32>;
+}
+
+pub(crate) trait BattleFairyUpgradeContext {
+    fn publish_battle_fairy_upgrade_money(&mut self, effect: &BattleFairyUpgradeEffect)
+    -> Vec<i32>;
+    fn publish_battle_fairy_upgrade_container(
+        &mut self,
+        effect: &BattleFairyUpgradeEffect,
+    ) -> Vec<i32>;
+    fn publish_battle_fairy_upgrade_audit(&mut self, effect: &BattleFairyUpgradeEffect)
+    -> Vec<i32>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6830,29 +6841,79 @@ impl CGame {
     /// Полный runtime entry point goods-message `0x8FC28`: общий Game RNG,
     /// live log gates, factory, player wallet и positional BF-container
     /// исполняются в одном mutable snapshot-е.
-    pub(crate) fn upgrade_battle_fairy_equipment(
+    pub(crate) fn upgrade_battle_fairy_equipment<Context: BattleFairyUpgradeContext>(
         &mut self,
         player_id: i32,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+        context: &mut Context,
     ) -> Option<crate::gameserver::appserver::player::BattleFairyUpgradeReport> {
         let log_gates = crate::gameserver::appserver::player::BattleFairyUpgradeLogGates {
             success: self.log_system.goods_upgrade_success_enabled(),
             failure: self.log_system.goods_upgrade_failure_enabled(),
             lost_target: self.log_system.goods_lost_by_upgrade_enabled(),
         };
-        let (players, random_state, goods_factory) = (
-            &mut self.players,
-            &mut self.random_state,
-            &self.goods_factory,
-        );
-        let player = players.get_mut(&player_id)?;
-        let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
-        Some(player.upgrade_battle_fairy_equipment(
-            goods_factory,
-            log_gates,
-            &mut random,
-            encode_old_client,
-        ))
+        let mut report = {
+            let (players, random_state, goods_factory) = (
+                &mut self.players,
+                &mut self.random_state,
+                &self.goods_factory,
+            );
+            let player = players.get_mut(&player_id)?;
+            let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+            player.upgrade_battle_fairy_equipment(
+                goods_factory,
+                log_gates,
+                &mut random,
+                encode_old_client,
+            )
+        };
+        for effect in report.effects.clone() {
+            match effect {
+                BattleFairyUpgradeEffect::Notification {
+                    player_id,
+                    string_id,
+                    color,
+                    format_value,
+                } => {
+                    let template = self.get_string_by_id(string_id.as_bytes());
+                    let text = format_value.map_or_else(
+                        || legacy_c_string_prefix(template).to_vec(),
+                        |value| format_single_legacy_u32(template, value, 255),
+                    );
+                    let delivery = colored_player_notice_message(color, 0, &text)
+                        .send_to_player(self.net_server(), player_id);
+                    report
+                        .deliveries
+                        .push(BattleFairyUpgradeDelivery::Player(delivery));
+                }
+                effect @ BattleFairyUpgradeEffect::MoneyChanged { .. } => {
+                    report.deliveries.push(BattleFairyUpgradeDelivery::Money(
+                        context.publish_battle_fairy_upgrade_money(&effect),
+                    ));
+                }
+                BattleFairyUpgradeEffect::GoodsUpdated(update) => {
+                    report
+                        .deliveries
+                        .push(BattleFairyUpgradeDelivery::GoodsUpdated(
+                            self.send_battle_fairy_goods_update(&update),
+                        ));
+                }
+                effect @ (BattleFairyUpgradeEffect::GemConsumed(_)
+                | BattleFairyUpgradeEffect::TargetDeleted { .. }) => {
+                    report
+                        .deliveries
+                        .push(BattleFairyUpgradeDelivery::Container(
+                            context.publish_battle_fairy_upgrade_container(&effect),
+                        ));
+                }
+                effect @ BattleFairyUpgradeEffect::Audit { .. } => {
+                    report.deliveries.push(BattleFairyUpgradeDelivery::Audit(
+                        context.publish_battle_fairy_upgrade_audit(&effect),
+                    ));
+                }
+            }
+        }
+        Some(report)
     }
 
     /// Исполняемый entry point goods-message `0x8FC2B`: reset item ищется и

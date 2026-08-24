@@ -561,6 +561,15 @@ pub(crate) enum BattleFairyUpgradeEffect {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyUpgradeDelivery {
+    Player(i32),
+    Money(Vec<i32>),
+    GoodsUpdated(i32),
+    Container(Vec<i32>),
+    Audit(Vec<i32>),
+}
+
 #[must_use = "upgrade report содержит wallet, ownership и network effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyUpgradeReport {
@@ -572,6 +581,7 @@ pub(crate) struct BattleFairyUpgradeReport {
     pub(crate) resulting_level: Option<i32>,
     pub(crate) consumed_gems: Vec<BattleFairyUpgradeConsumedGem>,
     pub(crate) effects: Vec<BattleFairyUpgradeEffect>,
+    pub(crate) deliveries: Vec<BattleFairyUpgradeDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2296,6 +2306,7 @@ impl CPlayer {
             resulting_level: None,
             consumed_gems: Vec::new(),
             effects: Vec::new(),
+            deliveries: Vec::new(),
         };
         if self.server_region_id.is_none() {
             return report;
