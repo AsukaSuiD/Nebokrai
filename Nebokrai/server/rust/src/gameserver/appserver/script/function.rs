@@ -15,8 +15,10 @@
 //! Exile-time `9021` остаётся полностью локальным: страна script-player, один
 //! runtime clock sample и wrapping `CCountry` calculation. `9317 / AddKingPoint`
 //! складывает delta как DWORD, меняет local control point и публикует selector
-//! `5`, сохраняя нулевой script result. Полный expression evaluator и остальные
-//! function ID ниже пока остаются RAW.
+//! `5`, сохраняя нулевой script result. Government identity `9004/9005/9006`
+//! читает mutating CI, отправляет назначение `0x60304` без преждевременной
+//! local mutation и читает отдельный краткоживущий king-ID response state.
+//! Полный expression evaluator и остальные function ID ниже пока остаются RAW.
 
 use crate::gameserver::appserver::country::country::{
     CountryExileRestTimeReport, CountryScalarMutationReport,
@@ -26,7 +28,7 @@ use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlug
 use crate::gameserver::gameserver::game::{
     CGame, EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
 };
-use crate::nets::netserver::message::SendMessageError;
+use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
 pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
@@ -37,11 +39,195 @@ pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH_LEVEL: i32 = 9003;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TREASURY: i32 = 9009;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_MATERIAL: i32 = 9011;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH: i32 = 9013;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_CI: i32 = 9004;
+pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_CI: i32 = 9005;
+pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_KING_ID: i32 = 9006;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_SWITCH: i32 = 9018;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_SWITCH: i32 = 9019;
 pub(crate) const SCRIPT_FUNCTION_EXILE_TIME: i32 = 9021;
 pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryIdentityScriptDisposition {
+    ArgumentMissing {
+        argument: usize,
+    },
+    ScriptPlayerMissing,
+    TargetPlayerMissing {
+        player_id: i32,
+    },
+    IdentityOutOfRange {
+        identity: i32,
+    },
+    CountryMissing {
+        country: u8,
+    },
+    CountryInformationRead {
+        country: u8,
+        identity: u8,
+        player_id: i32,
+    },
+    AssignmentRequested {
+        country: u8,
+        identity: u8,
+        player_id: i32,
+        delivery: Result<i32, SendMessageError>,
+    },
+    KingIdRead {
+        country: u8,
+        king_id: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryIdentityScriptFunctionOutcome {
+    DifferentFunction,
+    Handled {
+        function_id: i32,
+        legacy_return: i32,
+        disposition: CountryIdentityScriptDisposition,
+    },
+}
+
+pub(crate) fn run_country_identity_script_function(
+    game: &mut CGame,
+    script_player_id: Option<i32>,
+    function_id: i32,
+    evaluated_first: Option<i32>,
+    evaluated_second: Option<i32>,
+) -> CountryIdentityScriptFunctionOutcome {
+    if !matches!(
+        function_id,
+        SCRIPT_FUNCTION_GET_COUNTRY_CI
+            | SCRIPT_FUNCTION_SET_COUNTRY_CI
+            | SCRIPT_FUNCTION_GET_COUNTRY_KING_ID
+    ) {
+        return CountryIdentityScriptFunctionOutcome::DifferentFunction;
+    }
+    if function_id == SCRIPT_FUNCTION_SET_COUNTRY_CI {
+        let identity = evaluated_first.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+        if identity == SCRIPT_INT_PARAMETER_ERROR {
+            return country_identity_handled(
+                function_id,
+                -1,
+                CountryIdentityScriptDisposition::ArgumentMissing { argument: 0 },
+            );
+        }
+        let raw_target = evaluated_second.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+        let target_id = if raw_target == SCRIPT_INT_PARAMETER_ERROR {
+            let Some(player_id) = script_player_id else {
+                return country_identity_handled(
+                    function_id,
+                    -1,
+                    CountryIdentityScriptDisposition::ScriptPlayerMissing,
+                );
+            };
+            player_id
+        } else {
+            raw_target
+        };
+        let Some(target) = game.find_player(target_id) else {
+            return country_identity_handled(
+                function_id,
+                -1,
+                CountryIdentityScriptDisposition::TargetPlayerMissing {
+                    player_id: target_id,
+                },
+            );
+        };
+        let country = target.country();
+        if !(0..=8).contains(&identity) {
+            return country_identity_handled(
+                function_id,
+                -1,
+                CountryIdentityScriptDisposition::IdentityOutOfRange { identity },
+            );
+        }
+        let mut request = CMessage::new(0x0006_0304);
+        request.base_mut().add_byte(country);
+        request.base_mut().add_long(target_id);
+        request.base_mut().add_byte(identity as u8);
+        return country_identity_handled(
+            function_id,
+            0,
+            CountryIdentityScriptDisposition::AssignmentRequested {
+                country,
+                identity: identity as u8,
+                player_id: target_id,
+                delivery: request.send(game, false),
+            },
+        );
+    }
+
+    let raw_country = evaluated_first.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    let country_was_defaulted = raw_country == SCRIPT_INT_PARAMETER_ERROR;
+    let country = if raw_country == SCRIPT_INT_PARAMETER_ERROR {
+        let Some(player) = script_player_id.and_then(|player_id| game.find_player(player_id))
+        else {
+            return country_identity_handled(
+                function_id,
+                -1,
+                CountryIdentityScriptDisposition::ScriptPlayerMissing,
+            );
+        };
+        player.country()
+    } else {
+        raw_country as u8
+    };
+    if function_id == SCRIPT_FUNCTION_GET_COUNTRY_KING_ID {
+        let Some(country_owner) = game.country_handler().country(country) else {
+            return country_identity_handled(
+                function_id,
+                -1,
+                CountryIdentityScriptDisposition::CountryMissing { country },
+            );
+        };
+        let king_id = country_owner.king_id();
+        return country_identity_handled(
+            function_id,
+            king_id,
+            CountryIdentityScriptDisposition::KingIdRead { country, king_id },
+        );
+    }
+
+    let identity = if country_was_defaulted {
+        1
+    } else {
+        evaluated_second
+            .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            .unwrap_or(1) as u8
+    };
+    let Some(country_owner) = game.country_handler_mut().country_mut(country) else {
+        return country_identity_handled(
+            function_id,
+            -1,
+            CountryIdentityScriptDisposition::CountryMissing { country },
+        );
+    };
+    let player_id = country_owner.country_information(identity);
+    country_identity_handled(
+        function_id,
+        player_id,
+        CountryIdentityScriptDisposition::CountryInformationRead {
+            country,
+            identity,
+            player_id,
+        },
+    )
+}
+
+fn country_identity_handled(
+    function_id: i32,
+    legacy_return: i32,
+    disposition: CountryIdentityScriptDisposition,
+) -> CountryIdentityScriptFunctionOutcome {
+    CountryIdentityScriptFunctionOutcome::Handled {
+        function_id,
+        legacy_return,
+        disposition,
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryControlPointScriptDisposition {

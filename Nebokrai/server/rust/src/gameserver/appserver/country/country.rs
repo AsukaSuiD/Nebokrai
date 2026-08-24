@@ -228,6 +228,10 @@ impl CCountry {
         }
     }
 
+    pub(crate) const fn king_id(&self) -> i32 {
+        self.king_id
+    }
+
     pub(crate) fn add_to_exile_list(
         &mut self,
         player_id: i32,
