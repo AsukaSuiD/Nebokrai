@@ -602,7 +602,9 @@ use crate::gameserver::appserver::shape::{
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::gameserver::honorranks::CHonorRanks;
-use crate::gameserver::gameserver::playerranks::CPlayerRanks;
+use crate::gameserver::gameserver::playerranks::{
+    CPlayerRanks, PlayerRanksRequestOutcome, PlayerRanksSerializeError,
+};
 use crate::nets::clients::ClientConnectError;
 use crate::nets::mysocket::legacy_ipv4_word;
 use crate::nets::netserver::message::{
@@ -15958,6 +15960,21 @@ impl CGame {
 
     pub(crate) const fn player_ranks_mut(&mut self) -> Option<&mut CPlayerRanks> {
         self.player_ranks.as_mut()
+    }
+
+    pub(crate) fn request_script_player_ranks(
+        &mut self,
+        player_id: i32,
+        maximum_rank_count: i32,
+        now_ms: u32,
+    ) -> Option<Result<PlayerRanksRequestOutcome, PlayerRanksSerializeError>> {
+        let (ranks, net_server) = (&mut self.player_ranks, &self.net_server);
+        Some(ranks.as_mut()?.on_player_get_ranks(
+            player_id,
+            maximum_rank_count,
+            now_ms,
+            net_server.as_ref()?,
+        ))
     }
 
     pub(crate) const fn honor_ranks(&self) -> &CHonorRanks {

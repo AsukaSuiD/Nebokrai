@@ -136,6 +136,10 @@
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
+//! Reached rank NPC scripts `6051 / RequestPlayerRanks` проверяют player/NPC
+//! до выражения, затем передают limit и один clock sample в owned
+//! `CPlayerRanks`: двухсекундный per-player cooldown и `0xBFF30` client wire
+//! остаются у snapshot owner-а, загруженного startup/timer цепочкой World.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -222,6 +226,7 @@ pub(crate) const SCRIPT_FUNCTION_CITY_WAR_DECLARE: i32 = 6044;
 pub(crate) const SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME: i32 = 6045;
 pub(crate) const SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME: i32 = 6046;
 pub(crate) const SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID: i32 = 6047;
+pub(crate) const SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS: i32 = 6051;
 pub(crate) const SCRIPT_FUNCTION_GET_WAR_REGION_STATE: i32 = 6054;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_OWNING_REGION: i32 = 6055;
 pub(crate) const SCRIPT_FUNCTION_GET_WAR_START_TIME: i32 = 6056;
@@ -1911,6 +1916,29 @@ pub(crate) fn owned_region_script_caller_is_live(
         && script_region_id.is_some_and(|region_id| game.find_region(region_id).is_some())
 }
 
+pub(crate) fn script_player_npc_caller_exists(
+    game: &CGame,
+    script_player_id: Option<i32>,
+    script_npc_id: Option<i32>,
+) -> bool {
+    let (Some(player_id), Some(npc_id)) = (script_player_id, script_npc_id) else {
+        return false;
+    };
+    game.resolve_shape(ShapeIdentity {
+        object_type: SCRIPT_PLAYER_TYPE,
+        id: player_id,
+        ex_id: CGuid::GUID_INVALID,
+    })
+    .is_some()
+        && game
+            .resolve_shape(ShapeIdentity {
+                object_type: SCRIPT_NPC_TYPE,
+                id: npc_id,
+                ex_id: CGuid::GUID_INVALID,
+            })
+            .is_some()
+}
+
 fn country_war_query_completed(
     function_id: i32,
     kind: CountryWarQueryKind,
@@ -3107,6 +3135,10 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_PLAY_EFFECT => match index {
             0..=2 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS => match index {
+            0 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_RELOAD => match index {
@@ -4691,6 +4723,22 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     integer_arguments: [Option<i32>; 7],
     string_arguments: [Option<&[u8]>; 7],
 ) -> ScriptFunctionDispatchOutcome {
+    if function_id == SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS {
+        if !script_player_npc_caller_exists(game, script_player_id, script_npc_id) {
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+        }
+        if let (Some(player_id), Some(maximum_rank_count)) = (
+            script_player_id,
+            integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+        ) {
+            let _ = game.request_script_player_ranks(
+                player_id,
+                maximum_rank_count,
+                runtime.country_contend_now_milliseconds(),
+            );
+        }
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+    }
     if function_id == SCRIPT_FUNCTION_PLAY_EFFECT {
         let (Some(player_id), Some(region_id)) = (script_player_id, script_region_id) else {
             return ScriptFunctionDispatchOutcome::Invalid;

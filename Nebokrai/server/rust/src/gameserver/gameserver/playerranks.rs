@@ -11,6 +11,9 @@
 //! prefix. Двухсекундный cooldown использует wrapping `u32` timestamps и удаляет
 //! expired keys в sorted order. Compatibility quirk serializer-а сохранён:
 //! ограниченный declared count не ограничивает фактический обход rank list.
+//! Reached `6051 / RequestPlayerRanks` вызывается живым `CScript` через
+//! `CGame`: NPC/player gate и аргумент остаются у script owner-а, а этот owner
+//! получает единый process tick, применяет cooldown и отправляет `0xBFF30`.
 
 use std::collections::{BTreeMap, TryReserveError};
 use std::error::Error;
