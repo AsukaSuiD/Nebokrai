@@ -17,11 +17,12 @@
 //! живой FIFO: `CountryWarSys`, country regions/results и canonical player
 //! traversal принадлежат `CGame`, а gate/guard/kick и virtual contender
 //! effects остаются обязательной runtime-границей concrete owners.
-//! Client governance `0x90502..0x90509` проверяет caller/target changing state,
+//! Client governance `0x90502..0x9050A` проверяет caller/target changing state,
 //! сохраняет selector-specific `GS/WS` ошибки через `0xC030D` и пересылает
 //! исходный payload с caller ID/country в достигнутые WorldServer
-//! `0x60306..0x6030D`. `0x9050A -> 0x6030F` остаётся отдельно названной
-//! границей до materialization соответствующего World permission owner-а.
+//! `0x60306..0x6030D`. Ветка `0x9050A` также сохраняет исходную проверку
+//! target changing-state и wire `[target, caller, country]`; подтверждённый
+//! WorldServer `0x6030F` принимает пакет как намеренный no-op без ответа.
 
 use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,
@@ -105,6 +106,9 @@ pub(crate) struct GameCountryWarMessageReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryGovernanceOutcome {
     MissingPlayer,
+    MissingTarget {
+        target_id: i32,
+    },
     Forwarded {
         world_type: u32,
         target_id: Option<i32>,
@@ -210,7 +214,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
     Result<GameCountryWarMessageReport, CountryWarMessageDispatchError<CountryBattleStateBlock>>,
 > {
     let opcode = message.message_type() as u32;
-    if matches!(opcode, 0x90502..=0x90509) {
+    if matches!(opcode, 0x90502..=0x9050a) {
         let governance = dispatch_country_governance_message(message, game, opcode);
         return Some(Ok(GameCountryWarMessageReport {
             dispatched: None,
@@ -292,11 +296,21 @@ fn dispatch_country_governance_message(
     };
     let country = player.country();
     let target_id = match opcode {
-        0x90504..=0x90507 | 0x90509 => Some(message.base_mut().get_long().unwrap_or(0)),
+        0x90504..=0x90507 | 0x90509..=0x9050a => Some(message.base_mut().get_long().unwrap_or(0)),
         0x90508 => Some(player_id),
         _ => None,
     };
     let target = target_id.and_then(|target_id| game.find_player(target_id));
+    if opcode == 0x9050a && target.is_none() {
+        return CountryGovernanceReport {
+            opcode,
+            player_id: Some(player_id),
+            country: Some(country),
+            outcome: CountryGovernanceOutcome::MissingTarget {
+                target_id: target_id.expect("0x9050A всегда читает target ID"),
+            },
+        };
+    }
     let rejection = match opcode {
         0x90504 if target.is_none() => Some(b"GS0047".as_slice()),
         0x90504 if target.is_some_and(changing_location) => Some(b"GS0017".as_slice()),
@@ -309,6 +323,7 @@ fn dispatch_country_governance_message(
         0x90508 if target.is_some_and(changing_location) => Some(b"GS0021".as_slice()),
         0x90509 if target.is_none() => Some(b"WS0072".as_slice()),
         0x90509 if target.is_some_and(changing_location) => Some(b"GS0021".as_slice()),
+        0x9050a if target.is_some_and(changing_location) => Some(b"GS0022".as_slice()),
         _ => None,
     };
     if let Some(string_id) = rejection {
@@ -335,6 +350,7 @@ fn dispatch_country_governance_message(
         0x90507 => 0x0006_030b,
         0x90508 => 0x0006_030c,
         0x90509 => 0x0006_030d,
+        0x9050a => 0x0006_030f,
         _ => unreachable!("governance opcode проверен перед dispatcher-ом"),
     };
     message.set_message_type(world_type);

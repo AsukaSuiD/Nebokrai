@@ -4,6 +4,8 @@
 //! Ветки `0x60301`, `0x60304`, `0x60306..0x6031D` сохраняют управление
 //! королём/министрами, scalar sync, player lists и country-war events.
 //! Неизвестный opcode — no-op; relays меняют только type и вызывают `SendAll`.
+//! Отдельно подтверждённый `0x6030F` также ведёт прямо в общий выход dispatcher-а:
+//! payload `[target, caller, country]` не читается, состояние и сеть не меняются.
 //!
 //! Governance идёт через `GetCountry -> permission -> operation`; byte job не
 //! проверяется заранее. Scalar limits несимметричны: treasury/power зажимаются
@@ -483,6 +485,9 @@ pub(crate) enum WorldCountryMessageOutcome {
     NoOp {
         request_type: i32,
     },
+    IgnoredGovernanceRequest {
+        request_type: i32,
+    },
     Relay(WorldCountryRelayOutcome),
     PlayerCountryChanged(WorldCountryPlayerChangeSync),
     NewDaySet(WorldCountryNewDaySync),
@@ -521,6 +526,11 @@ pub(crate) fn on_country_message(
     mut message: CMessage,
 ) -> WorldCountryMessageDispatch {
     let request_type = message.message_type();
+    if request_type == 0x0006_030f {
+        return WorldCountryMessageDispatch::Handled(
+            WorldCountryMessageOutcome::IgnoredGovernanceRequest { request_type },
+        );
+    }
     if request_type == 0x0006_031b {
         let source_map_id = message.map_id();
         let source_socket_id = message.socket_id();
