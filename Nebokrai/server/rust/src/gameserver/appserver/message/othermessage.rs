@@ -21,6 +21,8 @@
 //! target map prefix отбрасывается, requester получает exact `0xBF806`.
 //! Increment Shop page `0x7FA12` замыкает `0x90605 -> 0x5FD0A` и сохраняет
 //! World-serialized page tail в exact client wire `0xC0405`.
+//! Cross-Game progression `0x7FA08..0B` применяет skill add/delete и level
+//! reset, публикует client/faction effects и возвращает requester feedback.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -29,7 +31,9 @@ use crate::gameserver::appserver::player::{
     CiQingPacketConsumption, PlayerLeiTingDecodeBlock, PlayerMoneyDecrease, PlayerTalkChannel,
 };
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
-use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
+use crate::gameserver::gameserver::game::{
+    CGame, colored_player_notice_message, player_skill_learned_message,
+};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
@@ -38,6 +42,10 @@ const PLAYER_GOODS_LINK_REQUEST: u32 = 0x0008_fb03;
 const WORLD_GOODS_LINK_RESPONSE: u32 = 0x0007_fa07;
 const WORLD_GM_FEEDBACK: u32 = 0x0007_fa05;
 const WORLD_INCREMENT_SHOP_PAGE: u32 = 0x0007_fa12;
+const WORLD_REMOTE_SKILL_ADD: u32 = 0x0007_fa08;
+const WORLD_REMOTE_SKILL_DELETE: u32 = 0x0007_fa09;
+const WORLD_REMOTE_SKILL_OBSERVE: u32 = 0x0007_fa0a;
+const WORLD_REMOTE_LEVEL_SET: u32 = 0x0007_fa0b;
 const PLAYER_NPC_NAME_LIST_REQUEST: u32 = 0x0008_fb06;
 const WORLD_PLAYER_RENAME_REQUEST: i32 = 0x0005_fd05;
 const WORLD_PLAYER_RENAME_RESPONSE: u32 = 0x0007_fa0e;
@@ -103,6 +111,28 @@ pub(crate) enum GameOtherMessageOutcome {
     },
     IncrementShopPageDelivered {
         delivery: i32,
+    },
+    RemoteSkillAdded {
+        skill_name: Vec<u8>,
+        level: u16,
+        legacy_result: bool,
+        client_delivery: Option<i32>,
+        feedback_delivery: Result<i32, SendMessageError>,
+    },
+    RemoteSkillDeleted {
+        skill_name: Vec<u8>,
+        legacy_result: bool,
+        client_delivery: i32,
+    },
+    RemoteSkillObserved {
+        skill_name: Vec<u8>,
+    },
+    RemoteLevelSet {
+        previous_level: u8,
+        level: u8,
+        next_experience: u32,
+        faction_delivery: Option<Result<i32, SendMessageError>>,
+        client_delivery: i32,
     },
     LeiTingUpdated {
         client_delivery: i32,
@@ -226,6 +256,13 @@ fn read_char(message: &mut CMessage, field: &'static str) -> Result<i8, GameOthe
         .ok_or(GameOtherMessageError::MissingField(field))
 }
 
+fn read_word(message: &mut CMessage, field: &'static str) -> Result<u16, GameOtherMessageError> {
+    message
+        .base_mut()
+        .get_word()
+        .ok_or(GameOtherMessageError::MissingField(field))
+}
+
 fn read_string(message: &mut CMessage, maximum: usize) -> Vec<u8> {
     message
         .base_mut()
@@ -249,6 +286,34 @@ fn format_legacy_level(template: &[u8], level: i32) -> Vec<u8> {
     result.extend_from_slice(&template[..marker]);
     result.extend_from_slice(value.as_bytes());
     result.extend_from_slice(&template[marker + 2..]);
+    result.truncate(0xff);
+    result
+}
+
+fn format_skill_feedback(template: &[u8], player: &[u8], skill: &[u8], level: u16) -> Vec<u8> {
+    let template = template.split(|byte| *byte == 0).next().unwrap_or_default();
+    let strings = [player, skill];
+    let mut string_index = 0;
+    let mut offset = 0;
+    let mut result = Vec::with_capacity(template.len().saturating_add(32));
+    while offset < template.len() && result.len() < 0xff {
+        if template.get(offset..offset + 2) == Some(b"%%") {
+            result.push(b'%');
+            offset += 2;
+        } else if template.get(offset..offset + 2) == Some(b"%s") {
+            if let Some(value) = strings.get(string_index) {
+                result.extend_from_slice(value);
+                string_index += 1;
+            }
+            offset += 2;
+        } else if template.get(offset..offset + 2) == Some(b"%d") {
+            result.extend_from_slice(level.to_string().as_bytes());
+            offset += 2;
+        } else {
+            result.push(template[offset]);
+            offset += 1;
+        }
+    }
     result.truncate(0xff);
     result
 }
@@ -923,9 +988,168 @@ pub(crate) fn dispatch_game_other_message(
             | WORLD_GM_FEEDBACK
             | WORLD_GOODS_LINK_RESPONSE
             | WORLD_INCREMENT_SHOP_PAGE
+            | WORLD_REMOTE_SKILL_ADD
+            | WORLD_REMOTE_SKILL_DELETE
+            | WORLD_REMOTE_SKILL_OBSERVE
+            | WORLD_REMOTE_LEVEL_SET
             | WORLD_LEI_TING_UPDATE
     ) {
         return None;
+    }
+    if message_type == WORLD_REMOTE_SKILL_ADD {
+        let result = (|| {
+            let player_name = read_string(message, 0x100);
+            let Some(player_id) = game
+                .find_player_by_name(&player_name)
+                .map(|player| player.player_id())
+            else {
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id: 0,
+                    outcome: GameOtherMessageOutcome::PlayerMissing,
+                });
+            };
+            let skill_name = read_string(message, 0x100);
+            let level = read_word(message, "remote skill level")?;
+            let requester_id = read_long(message, "remote skill requester id")?;
+            let target_map_id = read_long(message, "remote skill target map id")?;
+            let mutation = game.add_remote_player_skill(player_id, &skill_name, level);
+            let client_delivery = mutation.as_ref().and_then(|mutation| {
+                player_skill_learned_message(
+                    0x000b_f71d,
+                    mutation.skill_id,
+                    mutation.skill_level,
+                    i32::from(level),
+                    &skill_name,
+                    game.skill_factory(),
+                    false,
+                )
+                .map(|response| response.send_to_player(game.net_server(), player_id))
+            });
+            let feedback_text = format_skill_feedback(
+                game.get_string_by_id(b"GS0048"),
+                &player_name,
+                &skill_name,
+                level,
+            );
+            let mut feedback = CMessage::new(0x0005_fd02);
+            feedback.base_mut().add_long(target_map_id);
+            feedback.base_mut().add_long(requester_id);
+            feedback.base_mut().add_long(-1);
+            feedback.base_mut().add_long(0);
+            add_c_string(&mut feedback, &feedback_text);
+            let feedback_delivery = feedback.send(game, false);
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::RemoteSkillAdded {
+                    skill_name,
+                    level,
+                    legacy_result: mutation.is_some_and(|mutation| mutation.legacy_result),
+                    client_delivery,
+                    feedback_delivery,
+                },
+            })
+        })();
+        return Some(result);
+    }
+    if message_type == WORLD_REMOTE_SKILL_DELETE {
+        let result = (|| {
+            let player_name = read_string(message, 0x100);
+            let Some(player_id) = game
+                .find_player_by_name(&player_name)
+                .map(|player| player.player_id())
+            else {
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id: 0,
+                    outcome: GameOtherMessageOutcome::PlayerMissing,
+                });
+            };
+            let skill_name = read_string(message, 0x100);
+            let mutation = game
+                .delete_remote_player_skill(player_id, &skill_name)
+                .expect("remote skill player проверен до mutation");
+            let mut response = CMessage::new(0x000b_f71e);
+            add_c_string(&mut response, &skill_name);
+            let client_delivery = response.send_to_player(game.net_server(), player_id);
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::RemoteSkillDeleted {
+                    skill_name,
+                    legacy_result: mutation.legacy_result,
+                    client_delivery,
+                },
+            })
+        })();
+        return Some(result);
+    }
+    if message_type == WORLD_REMOTE_SKILL_OBSERVE {
+        let player_name = read_string(message, 0x100);
+        let Some(player_id) = game
+            .find_player_by_name(&player_name)
+            .map(|player| player.player_id())
+        else {
+            return Some(Ok(GameOtherMessageReport {
+                message_type,
+                player_id: 0,
+                outcome: GameOtherMessageOutcome::PlayerMissing,
+            }));
+        };
+        let skill_name = read_string(message, 0x100);
+        return Some(Ok(GameOtherMessageReport {
+            message_type,
+            player_id,
+            outcome: GameOtherMessageOutcome::RemoteSkillObserved { skill_name },
+        }));
+    }
+    if message_type == WORLD_REMOTE_LEVEL_SET {
+        let result = (|| {
+            let player_name = read_string(message, 0x100);
+            let Some(player_id) = game
+                .find_player_by_name(&player_name)
+                .map(|player| player.player_id())
+            else {
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id: 0,
+                    outcome: GameOtherMessageOutcome::PlayerMissing,
+                });
+            };
+            let level = read_char(message, "remote player level")? as u8;
+            let mutation = game
+                .find_player_mut(player_id)
+                .expect("remote level player проверен до mutation")
+                .apply_remote_level(level);
+            let faction_delivery = (mutation.previous_level != level && mutation.faction_id > 0)
+                .then(|| {
+                    let mut faction = CMessage::new(0x0006_012a);
+                    faction.base_mut().add_long(mutation.faction_id);
+                    faction.base_mut().add_long(mutation.player_id);
+                    faction.base_mut().add_long(1);
+                    faction.base_mut().add_ulong(u32::from(mutation.level));
+                    faction.send(game, false)
+                });
+            let next_experience = game.player_list().level_experience(level);
+            let mut response = CMessage::new(0x000b_f708);
+            response.base_mut().add_byte(mutation.level);
+            response.base_mut().add_ulong(0);
+            response.base_mut().add_ulong(next_experience);
+            let client_delivery = response.send_to_player(game.net_server(), player_id);
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::RemoteLevelSet {
+                    previous_level: mutation.previous_level,
+                    level,
+                    next_experience,
+                    faction_delivery,
+                    client_delivery,
+                },
+            })
+        })();
+        return Some(result);
     }
     if message_type == WORLD_INCREMENT_SHOP_PAGE {
         let result = (|| {

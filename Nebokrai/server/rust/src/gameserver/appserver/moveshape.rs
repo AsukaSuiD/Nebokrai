@@ -27,11 +27,12 @@
 //!
 //! Combat, pets, общий AI tick и остальные поля/методы ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально). Для battle-fairy combine/reset материализованы `AddSkill`
-//! и ID-overload `DelSkill`: factory подтверждает level/type/name, а `BTreeMap`
+//! и оба name/ID overload-а `DelSkill/AddSkill`: factory подтверждает
+//! level/type/name, а `BTreeMap`
 //! хранит identity вместо четырёх raw pointer-vector-ов. При удалении current
 //! skill ID очищается до category lookup, как в EXE. Concrete skill execution,
-//! его virtual параметры и char-name overload остаются у отдельных skill
-//! owners. Derived HP/figure передаются как факты, а не копируются из ещё сырых
+//! его virtual параметры остаются у отдельных skill owners. Derived HP/figure
+//! передаются как факты, а не копируются из ещё сырых
 //! player/monster owners.
 //! `GetCurrentSkill` получил только безопасный ID-view для caller-а
 //! `SummonBF`; virtual lifecycle skill остаётся у будущего skill owner-а.
@@ -1300,19 +1301,6 @@ fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
 //
 
 // ============================================================================
-// FUNCTION: CMoveShape::DelSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2562
-// RVA: 0x000CF560
-// ADDRESS: 004cf560
-// PROTOTYPE: int __thiscall DelSkill(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CMoveShape::CheckSkill
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -1594,19 +1582,6 @@ fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
 //
 
 // ============================================================================
-// FUNCTION: CMoveShape::AddSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2502
-// RVA: 0x000D1C70
-// ADDRESS: 004d1c70
-// PROTOTYPE: int __thiscall AddSkill(tagSkillID param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CMoveShape::AddPet
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -1686,20 +1661,6 @@ fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
 // RVA: 0x000D2890
 // ADDRESS: 004d2890
 // PROTOTYPE: void __thiscall OnBeenAttacked(tagAttackInformation * param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMoveShape::AddSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2489
-// RVA: 0x000D3C70
-// ADDRESS: 004d3c70
-// PROTOTYPE: int __thiscall AddSkill(char * param_1, long param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

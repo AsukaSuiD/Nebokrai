@@ -134,6 +134,15 @@ impl CPlayerList {
         self.player_experience.clear();
     }
 
+    /// Exact `GetLelExp(unsigned char)`: нулевой и превышающий count level дают
+    /// ноль, остальные адресуют positional массив как `level - 1`.
+    pub(crate) fn level_experience(&self, level: u8) -> u32 {
+        let Some(index) = level.checked_sub(1).map(usize::from) else {
+            return 0;
+        };
+        self.player_experience.get(index).copied().unwrap_or(0)
+    }
+
     pub(crate) fn clear_properties_upgrades(&mut self) {
         self.fighter_upgrades.clear();
         self.hunter_upgrades.clear();

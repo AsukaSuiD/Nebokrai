@@ -3904,6 +3904,31 @@ impl CGame {
         &mut self.skill_factory
     }
 
+    pub(crate) fn add_remote_player_skill(
+        &mut self,
+        player_id: i32,
+        name: &[u8],
+        level: u16,
+    ) -> Option<crate::gameserver::appserver::player::PlayerRemoteSkillMutation> {
+        let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+        players
+            .get_mut(&player_id)?
+            .add_remote_skill(name, level, skill_factory)
+    }
+
+    pub(crate) fn delete_remote_player_skill(
+        &mut self,
+        player_id: i32,
+        name: &[u8],
+    ) -> Option<crate::gameserver::appserver::player::PlayerRemoteSkillMutation> {
+        let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+        Some(
+            players
+                .get_mut(&player_id)?
+                .delete_remote_skill(name, skill_factory),
+        )
+    }
+
     pub(crate) fn decode_monster_list(
         &mut self,
         source: &[u8],
@@ -12521,7 +12546,15 @@ impl CGame {
                 }
                 BattleFairyCombineEffect::SkillAdded(skill) => {
                     if let Some(message) =
-                        battle_fairy_skill_learned_message(&skill, &self.skill_factory, false)
+                        player_skill_learned_message(
+                            skill.message_type,
+                            skill.skill_id,
+                            skill.skill_level,
+                            skill.skill_level,
+                            &skill.skill_name,
+                            &self.skill_factory,
+                            false,
+                        )
                     {
                         report
                             .deliveries
@@ -12822,7 +12855,15 @@ impl CGame {
                 PlayerEquipmentAddEffect::WarSoulSkillAttached { .. } => {}
                 PlayerEquipmentAddEffect::SkillAdded(skill) => {
                     if let Some(message) =
-                        battle_fairy_skill_learned_message(&skill, &self.skill_factory, true)
+                        player_skill_learned_message(
+                            skill.message_type,
+                            skill.skill_id,
+                            skill.skill_level,
+                            skill.skill_level,
+                            &skill.skill_name,
+                            &self.skill_factory,
+                            true,
+                        )
                     {
                         report.deliveries.push(PlayerEquipmentDelivery::SkillAdded(
                             message.send_to_player(self.net_server(), skill.player_id),
@@ -13349,7 +13390,15 @@ impl CGame {
                 }
                 BattleFairySkillResetEffect::SkillAdded(skill) => {
                     if let Some(message) =
-                        battle_fairy_skill_learned_message(&skill, &self.skill_factory, true)
+                        player_skill_learned_message(
+                            skill.message_type,
+                            skill.skill_id,
+                            skill.skill_level,
+                            skill.skill_level,
+                            &skill.skill_name,
+                            &self.skill_factory,
+                            true,
+                        )
                     {
                         report
                             .deliveries
@@ -13360,7 +13409,15 @@ impl CGame {
                 }
                 BattleFairySkillResetEffect::SelectedSkillLearned(skill) => {
                     if let Some(message) =
-                        battle_fairy_skill_learned_message(&skill, &self.skill_factory, false)
+                        player_skill_learned_message(
+                            skill.message_type,
+                            skill.skill_id,
+                            skill.skill_level,
+                            skill.skill_level,
+                            &skill.skill_name,
+                            &self.skill_factory,
+                            false,
+                        )
                     {
                         report.deliveries.push(
                             BattleFairySkillResetDelivery::SelectedSkillLearned(
@@ -13417,7 +13474,15 @@ impl CGame {
         let deliveries = skills
             .iter()
             .filter_map(|skill| {
-                battle_fairy_skill_learned_message(skill, &self.skill_factory, true)
+                player_skill_learned_message(
+                    skill.message_type,
+                    skill.skill_id,
+                    skill.skill_level,
+                    skill.skill_level,
+                    &skill.skill_name,
+                    &self.skill_factory,
+                    true,
+                )
                     .map(|message| message.send_to_player(self.net_server(), skill.player_id))
             })
             .collect();
@@ -14785,8 +14850,12 @@ fn synthesis_broadcast_message(
 /// используют один opcode, но первый добавляет delay к restore и масштабирует
 /// MP только для float-skill, а второй передаёт чистый restore и масштабирует
 /// стоимость безусловно.
-fn battle_fairy_skill_learned_message(
-    skill: &BattleFairySkillAdded,
+pub(crate) fn player_skill_learned_message(
+    message_type: u32,
+    skill_id: u32,
+    skill_level: i32,
+    wire_skill_level: i32,
+    skill_name: &[u8],
     factory: &CSkillFactory,
     player_tell_client: bool,
 ) -> Option<CMessage> {
@@ -14796,7 +14865,7 @@ fn battle_fairy_skill_learned_message(
     const SKILL_USAGE_DELAY_TIME: u32 = 10001;
     const SKILL_USAGE_REUSE_SKILL_DELAY_TIME: u32 = 10005;
 
-    let properties = factory.query_skill_base_properties(skill.skill_id, skill.skill_level)?;
+    let properties = factory.query_skill_base_properties(skill_id, skill_level)?;
     let range = |usage| {
         let value = properties.query_property(usage) as i32;
         if value > 0 { value } else { 1 }
@@ -14804,16 +14873,16 @@ fn battle_fairy_skill_learned_message(
     let restore_time = properties.query_property(SKILL_USAGE_REUSE_SKILL_DELAY_TIME);
     let delay_time = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let raw_cost = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
-    let scale_cost = !player_tell_client || CSkillFactory::is_need_float(skill.skill_id);
+    let scale_cost = !player_tell_client || CSkillFactory::is_need_float(skill_id);
     let cost = if scale_cost {
         (f64::from(raw_cost) * 0.0001_f64).round() as i32
     } else {
         raw_cost as i32
     };
 
-    let mut message = CMessage::new(skill.message_type as i32);
-    add_legacy_c_string(message.base_mut(), &skill.skill_name);
-    message.base_mut().add_short(skill.skill_level as i16);
+    let mut message = CMessage::new(message_type as i32);
+    add_legacy_c_string(message.base_mut(), skill_name);
+    message.base_mut().add_short(wire_skill_level as i16);
     message.add_ulong(if player_tell_client {
         restore_time.wrapping_add(delay_time)
     } else {

@@ -31,6 +31,9 @@
 //! инъецируемому wrapping `timeGetTime`-значению; GM `0x7FC0B/0x7FC0E`
 //! замыкают name lookup, mutation, двухпроходный ordered query и World
 //! responses, поэтому отдельный scheduler не требуется.
+//! Cross-Game progression `0x7FA08..0B` использует owned skill map и level/exp:
+//! name-overload-ы делегируют factory ID lookup, а `SetLevel` возвращает
+//! faction side effect caller-у до exact client progression packet.
 //! World/country public talk timestamps принадлежат тому же player state:
 //! wrapping cooldown обновляется до проверки и списания channel-cost.
 //! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
@@ -221,7 +224,7 @@ use super::goods::cgoodsbaseproperties::{
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::{CMoveShape, MoveShapePositionFacts, MoveShapeSkill};
 use super::shape::{CShape, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeView};
-use super::skills::skillfactory::CSkillFactory;
+use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
 use crate::public::guid::CGuid;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1136,6 +1139,21 @@ pub(crate) struct PlayerConfirmedKillReport {
     pub(crate) murderer_timestamp_started: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerRemoteSkillMutation {
+    pub(crate) skill_id: u32,
+    pub(crate) skill_level: i32,
+    pub(crate) legacy_result: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerRemoteLevelMutation {
+    pub(crate) player_id: i32,
+    pub(crate) faction_id: i32,
+    pub(crate) previous_level: u8,
+    pub(crate) level: u8,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HotkeyHandTransferOutcome {
     MissingHandGoods,
@@ -1925,6 +1943,55 @@ impl CPlayer {
 
     pub(crate) const fn level(&self) -> u8 {
         self.base_properties.level
+    }
+
+    /// Cross-Game level relay сохраняет `SetLevel` mutation и отдельный
+    /// caller-side faction publication; experience сбрасывается после неё.
+    pub(crate) fn apply_remote_level(&mut self, level: u8) -> PlayerRemoteLevelMutation {
+        let mutation = PlayerRemoteLevelMutation {
+            player_id: self.player_id(),
+            faction_id: self.faction_id,
+            previous_level: self.base_properties.level,
+            level,
+        };
+        self.base_properties.level = level;
+        self.base_properties.experience = 0;
+        mutation
+    }
+
+    pub(crate) fn add_remote_skill(
+        &mut self,
+        name: &[u8],
+        level: u16,
+        factory: &CSkillFactory,
+    ) -> Option<PlayerRemoteSkillMutation> {
+        let skill_id = factory.query_skill_id(Some(name));
+        if skill_id == UNKNOWN_SKILL_ID {
+            return None;
+        }
+        let legacy_result = self
+            .move_shape
+            .add_skill(skill_id, i32::from(level), factory);
+        let skill = self.move_shape.skill(skill_id)?;
+        Some(PlayerRemoteSkillMutation {
+            skill_id,
+            skill_level: skill.level(),
+            legacy_result,
+        })
+    }
+
+    pub(crate) fn delete_remote_skill(
+        &mut self,
+        name: &[u8],
+        factory: &CSkillFactory,
+    ) -> PlayerRemoteSkillMutation {
+        let skill_id = factory.query_skill_id(Some(name));
+        let legacy_result = self.move_shape.delete_skill(skill_id, factory);
+        PlayerRemoteSkillMutation {
+            skill_id,
+            skill_level: 0,
+            legacy_result,
+        }
     }
 
     pub(crate) const fn szl(&self) -> u32 {
@@ -5974,19 +6041,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::GetNextExp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.h:570
-// RVA: 0x0002AF00
-// ADDRESS: 0042af00
-// PROTOTYPE: ulong __thiscall GetNextExp(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CPlayer::SetFetchPower
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -6497,19 +6551,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::SetLevel
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:10892
-// RVA: 0x0002D4D0
-// ADDRESS: 0042d4d0
-// PROTOTYPE: void __thiscall SetLevel(uchar param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CPlayer::PerformEmotion
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
