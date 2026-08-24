@@ -128,6 +128,9 @@
 //! Equipment add/remove проведены через canonical player registry до war-soul
 //! state/skills, property callbacks, remove vitals clamp и typed around
 //! `0xBF720`; полный virtual property owner остаётся caller adapter-ом.
+//! Periodic battle-fairy death prefix теперь также доведён через equipment
+//! addon lookup и четыре player state mutation до адресного `0xBF721` в
+//! точном field order; ещё не owned RP/vigour/mode/exalt приходят typed facts.
 //! GodsBattle runtime продолжает startup owner: player Add/Remove tail
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
@@ -1049,6 +1052,25 @@ pub(crate) trait GodsBattlePlayerContext {
         origin: &CShape,
         message: &CMessage,
     ) -> Result<i32, ShapeCoordinateBlock>;
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerPropertiesExternalFacts {
+    pub(crate) add_element_attack: u32,
+    pub(crate) attack_speed: i16,
+    pub(crate) cch: i16,
+    pub(crate) maximum_rp: u32,
+    pub(crate) rp: u32,
+    pub(crate) maximum_vigour: u32,
+    pub(crate) vigour: u32,
+    pub(crate) credit: u32,
+    pub(crate) mode: u32,
+    pub(crate) exalt: u32,
+}
+
+pub(crate) trait BattleFairyDeathContext {
+    fn player_properties_external_facts(&mut self, player_id: i32)
+    -> PlayerPropertiesExternalFacts;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6663,17 +6685,66 @@ impl CGame {
         Some(report)
     }
 
-    /// Выполняет periodic HP-death prefix `CPlayer::AI` над игроком из
-    /// canonical ordered registry. Возвращаемый effect оставляет virtual
-    /// `PropertiesChanged` явной границей до полного property owner-а.
-    pub(crate) fn refresh_battle_fairy_death(
+    /// Выполняет periodic HP-death prefix `CPlayer::AI` и немедленно замыкает
+    /// reached virtual `OnChangeProperties` точным адресным `0xBF721`.
+    pub(crate) fn refresh_battle_fairy_death<Context: BattleFairyDeathContext>(
         &mut self,
         player_id: i32,
+        context: &mut Context,
     ) -> Option<BattleFairyDeathReport> {
         let factory = &self.goods_factory;
-        self.players
+        let mut report = self
+            .players
             .get_mut(&player_id)
-            .map(|player| player.refresh_battle_fairy_death(factory))
+            .map(|player| player.refresh_battle_fairy_death(factory))?;
+        if report.outcome == crate::gameserver::appserver::player::BattleFairyDeathOutcome::Died {
+            let external = context.player_properties_external_facts(player_id);
+            report.property_delivery = self
+                .find_player(player_id)
+                .map(|player| self.send_player_properties_changed(player, external));
+        }
+        Some(report)
+    }
+
+    fn send_player_properties_changed(
+        &self,
+        player: &CPlayer,
+        external: PlayerPropertiesExternalFacts,
+    ) -> i32 {
+        let combat = player.combat_properties();
+        let base = player.base_properties();
+        let mut message = CMessage::new(0xbf721);
+        message.add_long(player.player_id());
+        message.add_long(player.player_id());
+        message.add_ulong(combat.strength);
+        message.add_ulong(combat.dexterity);
+        message.add_ulong(combat.constitution);
+        message.add_ulong(combat.intelligence);
+        message.add_ulong(combat.minimum_attack);
+        message.add_ulong(combat.maximum_attack);
+        message.add_ulong(external.add_element_attack);
+        message.add_ulong(combat.element_modify as u32);
+        message.base_mut().add_short(external.attack_speed);
+        message.base_mut().add_short(external.cch);
+        message.add_ulong(combat.defense);
+        message.add_ulong(combat.element_resistance);
+        message.add_ulong(u32::from(combat.burden));
+        message.add_ulong(combat.maximum_hp);
+        message.add_ulong(base.health);
+        message.add_ulong(combat.maximum_mp);
+        message.add_ulong(base.mana);
+        message.add_ulong(external.maximum_rp);
+        message.add_ulong(external.rp);
+        message.base_mut().add_short(combat.reank as i16);
+        message.add_ulong(external.maximum_vigour);
+        message.add_ulong(external.vigour);
+        message.add_ulong(external.credit);
+        message.add_ulong(external.mode);
+        message.add_ulong(u32::from(player.war_soul_state() == 1));
+        message.add_ulong(u32::from(base.battle_fairy_recall));
+        message.add_ulong(u32::from(base.battle_fairy_died));
+        message.add_ulong(external.exalt);
+        message.send_to_player(self.net_server(), player.player_id())
     }
 
     /// Один exact `CGame::RunAuction` pass. Feature gate не читает часы;

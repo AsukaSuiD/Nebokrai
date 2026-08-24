@@ -84,8 +84,10 @@
 //! блокируется typed outcome до старого x87 integer conversion.
 //! Periodic HP-death prefix `CPlayer::AI` повторно нормализует summon/state и
 //! recall/died флаги нулевой по HP equipped fairy, затем вызывает
-//! `PropertiesChanged`. Оригинал в этой ветви не чистит stale area-map entry и
-//! не посылает status broadcast; оба отсутствующих side effect сохранены.
+//! `PropertiesChanged`; `CGame` собирает exact `0xBF721`, а ещё не owned
+//! RP/vigour/mode/exalt scalar-ы получает обязательными runtime facts.
+//! Оригинал в этой ветви не чистит stale area-map entry и не посылает status
+//! broadcast; оба отсутствующих side effect сохранены.
 //! `CEquipmentContainer::OnObjectRemoved` player-tail связывает снятие
 //! headgear с exact `SetWarSoulStaus(0)`, девятью skill detach, пересчётом
 //! свойств при уже отсутствующем slot-е, HP/MP clamp и `0xBF720`. Полный
@@ -340,6 +342,7 @@ pub(crate) struct BattleFairyDeathReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: BattleFairyDeathOutcome,
     pub(crate) effects: Vec<BattleFairyDeathEffect>,
+    pub(crate) property_delivery: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1762,6 +1765,7 @@ impl CPlayer {
             player_id,
             outcome: BattleFairyDeathOutcome::MissingHeadgear,
             effects: Vec::new(),
+            property_delivery: None,
         };
         let Some(goods) = self.equipment.get_goods(10) else {
             return report;
@@ -7665,7 +7669,7 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 
 // ============================================================================
 // FUNCTION: CPlayer::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED_BATTLE_FAIRY_DEATH_PREFIX
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:2264
