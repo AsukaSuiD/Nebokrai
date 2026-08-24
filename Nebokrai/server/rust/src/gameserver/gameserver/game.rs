@@ -310,7 +310,8 @@ use crate::gameserver::appserver::player::{
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationReport,
     BattleFairyFollowReport, BattleFairyObjectMove, BattleFairyPotentialAllocationDelivery,
     BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetDelivery,
-    BattleFairyPotentialResetEffect, BattleFairySkillAdded, BattleFairySkillRequest,
+    BattleFairyPotentialResetEffect, BattleFairySkillAdded, BattleFairySkillDispatch,
+    BattleFairySkillRequest, BattleFairySkillRequestDelivery, BattleFairySkillRequestEffect,
     BattleFairySkillRequestFacts, BattleFairySkillRequestReport, BattleFairySkillResetDelivery,
     BattleFairySkillResetEffect, BattleFairySkillResetReport, BattleFairySummonDelivery,
     BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeDelivery,
@@ -1130,6 +1131,10 @@ pub(crate) trait BattleFairyUpgradeContext {
     ) -> Vec<i32>;
     fn publish_battle_fairy_upgrade_audit(&mut self, effect: &BattleFairyUpgradeEffect)
     -> Vec<i32>;
+}
+
+pub(crate) trait BattleFairySkillRequestContext {
+    fn queue_battle_fairy_skill(&mut self, player_id: i32, dispatch: BattleFairySkillDispatch);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -7076,14 +7081,15 @@ impl CGame {
     /// Facts оставляют explicit boundaries для ещё сырого `CPlayerAI`,
     /// `SymbolIsAttackAble` и monster registry, не выдавая player-only resolver
     /// текущего `CGame` за полный region lookup.
-    pub(crate) fn request_battle_fairy_skill(
+    pub(crate) fn request_battle_fairy_skill<Context: BattleFairySkillRequestContext>(
         &self,
         player_id: i32,
         request: BattleFairySkillRequest,
         facts: BattleFairySkillRequestFacts,
+        context: &mut Context,
     ) -> Option<BattleFairySkillRequestReport> {
         let enabled = self.globe_setup.battle_fairy_enabled();
-        self.players.get(&player_id).map(|player| {
+        let mut report = self.players.get(&player_id).map(|player| {
             player.request_battle_fairy_skill(
                 enabled,
                 request,
@@ -7091,7 +7097,48 @@ impl CGame {
                 &self.goods_factory,
                 &self.skill_factory,
             )
-        })
+        })?;
+        for effect in report.effects.clone() {
+            match effect {
+                BattleFairySkillRequestEffect::Notification {
+                    player_id,
+                    string_id,
+                    color,
+                    message_type,
+                } => {
+                    let delivery = colored_player_notice_message(
+                        color,
+                        message_type,
+                        self.get_string_by_id(string_id.as_bytes()),
+                    )
+                    .send_to_player(self.net_server(), player_id);
+                    report
+                        .deliveries
+                        .push(BattleFairySkillRequestDelivery::Player(delivery));
+                }
+                BattleFairySkillRequestEffect::SocketReject {
+                    message_type,
+                    reason,
+                    code,
+                } => {
+                    let mut message = CMessage::new(message_type as i32);
+                    message.base_mut().add_byte(reason as u8);
+                    message.base_mut().add_byte(code);
+                    report
+                        .deliveries
+                        .push(BattleFairySkillRequestDelivery::SocketReject(
+                            message.send_to_player(self.net_server(), player_id),
+                        ));
+                }
+                BattleFairySkillRequestEffect::AiDispatch(dispatch) => {
+                    context.queue_battle_fairy_skill(player_id, dispatch);
+                    report
+                        .deliveries
+                        .push(BattleFairySkillRequestDelivery::AiQueued);
+                }
+            }
+        }
+        Some(report)
     }
 
     /// Завершает periodic `ComputeWarSoulXY` tick через тот же region area-map,

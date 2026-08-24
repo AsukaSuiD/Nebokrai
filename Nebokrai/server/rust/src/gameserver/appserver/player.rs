@@ -157,7 +157,7 @@ const BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE: u32 = 0x0b_f71e;
 const BATTLE_FAIRY_SKILL_RESET_ITEM_MISSING: &str = "ZHGS0022";
 const SKILL_EFFECT_MESSAGE_TYPE: u32 = 0x0b_fe01;
 const SKILL_REJECT_WAR_SOUL_REASON: u32 = 4;
-const SKILL_REJECT_CODE: u8 = 0x0c;
+const SKILL_REJECT_CODE: u8 = 2;
 const SKILL_POJIA: u32 = 530;
 const SKILL_LEIMING: u32 = 543;
 const SKILL_ID_MASK: u32 = i32::MAX as u32;
@@ -767,6 +767,13 @@ pub(crate) enum BattleFairySkillRequestEffect {
     AiDispatch(BattleFairySkillDispatch),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairySkillRequestDelivery {
+    Player(i32),
+    SocketReject(i32),
+    AiQueued,
+}
+
 #[must_use = "war-soul skill report содержит authorization, target rewrite и dispatch"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairySkillRequestReport {
@@ -779,6 +786,7 @@ pub(crate) struct BattleFairySkillRequestReport {
     pub(crate) target_y: i32,
     pub(crate) outcome: BattleFairySkillRequestOutcome,
     pub(crate) effects: Vec<BattleFairySkillRequestEffect>,
+    pub(crate) deliveries: Vec<BattleFairySkillRequestDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -2972,6 +2980,7 @@ impl CPlayer {
             target_y: request.target_y,
             outcome: BattleFairySkillRequestOutcome::MissingHeadgear,
             effects: Vec::new(),
+            deliveries: Vec::new(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairySkillRequestOutcome::FeatureDisabled;
