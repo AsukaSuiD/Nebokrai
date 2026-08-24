@@ -8583,6 +8583,31 @@ impl CGame {
         }
     }
 
+    pub(crate) fn apply_script_faction_upgrade_debit(
+        &mut self,
+        player_id: i32,
+        money: u32,
+        goods_name: &[u8],
+    ) -> bool {
+        if self.find_player(player_id).is_none() {
+            return false;
+        }
+        if let Some(change) = self.decrease_player_money(player_id, money) {
+            let _ = self.send_player_money_decrease(player_id, &change.outcome);
+        }
+        let base_index = self
+            .goods_factory
+            .query_goods_id_by_original_name(Some(goods_name));
+        let consumptions = self
+            .find_player_mut(player_id)
+            .map(|player| player.remove_item_in_packet(base_index, 1))
+            .unwrap_or_default();
+        for consumption in consumptions {
+            let _ = self.send_player_packet_consumption(&consumption);
+        }
+        true
+    }
+
     /// Exact `RunScript` owner: загруженный instance получает wrapping ID и
     /// попадает в ordered `g_Scripts`; команды исполняет только Script-stage
     /// главного цикла. Повтор того же файла у того же player отклоняется как

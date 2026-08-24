@@ -2,11 +2,13 @@
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/script/function.cpp`. Из dense dispatcher-а
-//! faction menu `3012/6001/6002/6003/6015` проходит от вычисленных аргументов и
+//! faction menu `3012/6001/6002/6003/6011/6015` проходит от вычисленных аргументов и
 //! player/NPC distance gate в owned `CGame` session state; создание и заявка
 //! завершаются только через живой OrganSys client/World callback dispatcher;
 //! отмена заявки сохраняет тот же NPC distance gate и World `0x60109`.
-//! материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
+//! Upgrade `6011` добавляет exact player GameSave в `0x60126`; авторитетный
+//! World charge `0x7FE1E` возвращается через тот же organizing dispatcher.
+//! Также материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
 //! `9354 / OpenEquipmentCompose` и `2216 / OpenGoodsUpgrade`. Refresh вычисляет первую
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
 //! gameplay передаётся canonical `CGame`, который сам исполняет localized
@@ -160,6 +162,7 @@ pub(crate) const SCRIPT_FUNCTION_SET_SKILL_LEVEL: i32 = 3103;
 pub(crate) const SCRIPT_FUNCTION_CREATE_FACTION: i32 = 6001;
 pub(crate) const SCRIPT_FUNCTION_APPLY_JOIN_FACTION: i32 = 6002;
 pub(crate) const SCRIPT_FUNCTION_QUIT_JOIN_FACTION: i32 = 6003;
+pub(crate) const SCRIPT_FUNCTION_UPGRADE_FACTION: i32 = 6011;
 pub(crate) const SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME: i32 = 6015;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_REGION: i32 = 2304;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
@@ -3116,6 +3119,27 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let mut request = CMessage::new(0x0006_0109);
                 request.add_long(player_id);
                 let _ = request.send(game, false);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_UPGRADE_FACTION => {
+            if country_war_script_caller_gate(game, script_player_id, script_npc_id).is_ok() {
+                let faction_id = game
+                    .find_player(player_id)
+                    .map(|player| player.faction_id())
+                    .unwrap_or_default();
+                if faction_id > 0 {
+                    let mut snapshot = Vec::new();
+                    if game.find_player(player_id).is_some_and(|player| {
+                        runtime.encode_script_player_game_save(player, &mut snapshot)
+                    }) {
+                        let mut request = CMessage::new(0x0006_0126);
+                        request.add_long(faction_id);
+                        request.add_long(player_id);
+                        request.base_mut().add(&snapshot);
+                        let _ = request.send(game, false);
+                    }
+                }
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }

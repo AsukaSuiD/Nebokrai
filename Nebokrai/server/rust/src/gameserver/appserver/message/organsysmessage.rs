@@ -1,7 +1,7 @@
 //! Владелец GameServer dispatcher-а organizing messages `OnOrgasysMessage`.
 //!
 //! Весь dispatcher RVA `0x000895A0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме фазовых
-//! cases faction lifecycle `0x90101/0x90105/0x90106/0x7FE01/0x7FE07`,
+//! cases faction lifecycle `0x90101/0x90105/0x90106/0x7FE01/0x7FE07/0x7FE1E`,
 //! AttackCity `0x7FE1F..0x7FE25`, Village `0x7FE2F..0x7FE33`, faction
 //! update `0x7FE35/0x7FE36`, FourNation `0x7FE3C..0x7FE45` и control tail
 //! `0x7FE46..0x7FE4A` со статусом
@@ -12,6 +12,8 @@
 //! create snapshot World, ретегируют list page в `0xBFF07` и замыкают
 //! application `0x60108`; универсальный legacy session manager заменён
 //! минимальным owned state в `CGame` с теми же timeout и operator-флагами.
+//! Upgrade charge `0x7FE1E` списывает World-authoritative money/goods через
+//! canonical wallet и packet-container effects живого игрока.
 //!
 //! Каждый фазовый case читает ровно один signed war ID и передаёт его своему
 //! owner-у. Faction-update cases передают текущие payload/cursor соответствующему
@@ -418,6 +420,7 @@ pub(crate) fn dispatch_game_organizing_war_message<
             | 0x90106
             | 0x7fe01
             | 0x7fe07
+            | 0x7fe1e
             | 0x7fe1f..=0x7fe25
             | 0x7fe2f..=0x7fe33
             | 0x7fe35
@@ -430,7 +433,10 @@ pub(crate) fn dispatch_game_organizing_war_message<
         return None;
     }
 
-    if matches!(opcode, 0x90101 | 0x90105 | 0x90106 | 0x7fe01 | 0x7fe07) {
+    if matches!(
+        opcode,
+        0x90101 | 0x90105 | 0x90106 | 0x7fe01 | 0x7fe07 | 0x7fe1e
+    ) {
         return Some(
             dispatch_faction_lifecycle_message(opcode, message, game, runtime)
                 .map(GameOrganizingWarMessageReport::FactionLifecycle)
@@ -641,6 +647,25 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 player_id,
                 correlated,
                 delivery,
+            })
+        }
+        0x7fe1e => {
+            let player_id = read_i32(message, "player ID")?;
+            let money = read_i32(message, "money")?;
+            let goods_name = message
+                .base_mut()
+                .get_str_bytes(100)
+                .ok_or(FactionLifecycleDispatchError::InvalidPayload)?;
+            if money < 0 || !message.base_mut().unread_bytes().is_empty() {
+                return Err(FactionLifecycleDispatchError::InvalidPayload);
+            }
+            let correlated =
+                game.apply_script_faction_upgrade_debit(player_id, money as u32, &goods_name);
+            Ok(FactionLifecycleDispatchReport {
+                opcode,
+                player_id,
+                correlated,
+                delivery: None,
             })
         }
         _ => unreachable!("faction lifecycle opcode проверен caller-ом"),
