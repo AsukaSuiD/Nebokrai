@@ -1454,12 +1454,6 @@ pub(crate) trait EquipmentComposeContext: OldClientGoodsCodec + PlayerEquipmentC
         &mut self,
         player: &CPlayer,
     ) -> PlayerCombatProperties;
-    fn prepare_equipment_compose_result(
-        &mut self,
-        result: &mut CGoods,
-        source: &EquipmentComposeSourceSnapshot,
-        required_level: i32,
-    ) -> bool;
     fn run_equipment_compose_script(
         &mut self,
         game: &mut CGame,
@@ -6583,11 +6577,18 @@ impl CGame {
             name: result.name().to_vec(),
         };
         self.record_equipment_compose_log(&mut report, &result_log);
-        if !context.prepare_equipment_compose_result(&mut result, &base_source, required_level) {
-            report.rejected_result = Some(result.identity());
-            report.outcome = EquipmentComposeOutcome::FactoryRejected;
-            return report;
+        for &(property, value_id, value) in &base_source.transferred_addons {
+            let _ = result.set_addon_property_value_first_core(property, value_id, value);
         }
+        let (factory, random_state) = (&self.goods_factory, &mut self.random_state);
+        let _ = factory.upgrade_equipment(&mut result, required_level, |upper_bound| {
+            game_legacy_random(random_state, upper_bound)
+        });
+        let _ = result.set_addon_property_value_first_core(
+            crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_LEVEL,
+            1,
+            required_level,
+        );
         let result_identity = result.identity();
         let (addition, rejected_result) = {
             let (players, goods_factory) = (&mut self.players, &self.goods_factory);

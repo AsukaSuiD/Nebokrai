@@ -5,10 +5,10 @@
 //! plug хранит трёхслотовый shadow container; gameplay `Compose` вызывается
 //! живым `goodsmessage 0x8FC24` через проверенные session/plug identity.
 //! Insert/end listener lifecycle связан с packet/equipment и terminal
-//! session-stage. Universal `UpgradeEquipment` остаётся обязательным runtime-
-//! effect; validation, ordering и ownership результата принадлежат `CGame` и
-//! не подменяются этим storage owner-ом. Notice, source/stone container wire,
-//! packet result и gated World audit исполняются живым `CGame`.
+//! session-stage. Addon transfer, universal `UpgradeEquipment`, validation,
+//! ordering и ownership результата принадлежат `CGame`. Notice, source/stone
+//! container wire, packet result и gated World audit также исполняются живым
+//! `CGame`; внешней границей остаётся announcement script VM.
 
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::{
