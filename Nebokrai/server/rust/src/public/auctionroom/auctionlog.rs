@@ -127,6 +127,67 @@ impl Default for AuctionLogNode {
 }
 
 impl AuctionLogNode {
+    /// Декодирует точный raw `stLogNode[0x150]`, который World handler копировал
+    /// через `_GetBufferFromByteArray` без field-wise wire преобразований.
+    pub(crate) fn from_legacy_bytes(bytes: &[u8; AUCTION_LOG_NODE_SIZE]) -> Self {
+        let read_i32 = |offset: usize| {
+            i32::from_le_bytes(
+                bytes[offset..offset + 4]
+                    .try_into()
+                    .expect("поле stLogNode помещается в fixed layout"),
+            )
+        };
+        let read_u16 = |offset: usize| {
+            u16::from_le_bytes(
+                bytes[offset..offset + 2]
+                    .try_into()
+                    .expect("SYSTEMTIME поле помещается в fixed layout"),
+            )
+        };
+        let mut description = [0; AUCTION_LOG_DESCRIPTION_SIZE];
+        description.copy_from_slice(&bytes[0x30..0x130]);
+        let guid = CGuid::from_legacy_bytes(
+            bytes[0x130..0x140]
+                .try_into()
+                .expect("auction GUID имеет 16 байт"),
+        );
+        let guid_key = CGuid::from_legacy_bytes(
+            bytes[0x140..0x150]
+                .try_into()
+                .expect("auction GUID key имеет 16 байт"),
+        );
+        Self {
+            base_id: read_i32(0x00),
+            operation_type: read_i32(0x04),
+            money_type: read_i32(0x08),
+            money_num: read_i32(0x0c),
+            player_id: read_i32(0x10),
+            amount: read_i32(0x14),
+            fee: read_i32(0x18),
+            notice: read_i32(0x1c),
+            time: AuctionLogSystemTime {
+                year: read_u16(0x20),
+                month: read_u16(0x22),
+                day_of_week: read_u16(0x24),
+                day: read_u16(0x26),
+                hour: read_u16(0x28),
+                minute: read_u16(0x2a),
+                second: read_u16(0x2c),
+                milliseconds: read_u16(0x2e),
+            },
+            description,
+            guid,
+            guid_key,
+        }
+    }
+
+    pub(crate) fn description(&self) -> Option<&[u8]> {
+        self.description
+            .iter()
+            .position(|byte| *byte == 0)
+            .map(|terminator| &self.description[..terminator])
+    }
+
     fn to_legacy_bytes(&self) -> [u8; AUCTION_LOG_NODE_SIZE] {
         let mut bytes = [0; AUCTION_LOG_NODE_SIZE];
         for (offset, value) in [
@@ -305,9 +366,9 @@ enum AuctionHistoryRowDecode {
 
 /// Owned-состояние исходного `CAuctionLog` без process-static singleton-а.
 pub(crate) struct CAuctionLog {
- /// Нулевой sentinel гарантирует первый daily-ranking проход: допустимый
- /// `tm_mday` лежит в диапазоне `1..=31`. Это безопасная замена чтения
- /// неинициализированного слова в исходном constructor-е.
+    /// Нулевой sentinel гарантирует первый daily-ranking проход: допустимый
+    /// `tm_mday` лежит в диапазоне `1..=31`. Это безопасная замена чтения
+    /// неинициализированного слова в исходном constructor-е.
     old_auction_day: i32,
     log_list: BTreeMap<i32, Vec<AuctionLogNode>>,
     player_pages: BTreeMap<i32, i32>,
@@ -321,7 +382,7 @@ impl Default for CAuctionLog {
 }
 
 impl CAuctionLog {
- /// Создаёт только доказанные constructor-ом пустые контейнеры.
+    /// Создаёт только доказанные constructor-ом пустые контейнеры.
     pub(crate) const fn new() -> Self {
         Self {
             old_auction_day: 0,
@@ -339,22 +400,20 @@ impl CAuctionLog {
         self.old_auction_day = day;
     }
 
- /// Multimap insert всегда принимает ещё одну запись и возвращает `true`.
+    /// Multimap insert всегда принимает ещё одну запись и возвращает `true`.
     pub(crate) fn add_item(&mut self, item: AuctionLogNode) -> bool {
         self.log_list.entry(item.player_id).or_default().push(item);
         true
     }
 
- /// Потоково загружает live history, затем очищает и загружает ranking.
+    /// Потоково загружает live history, затем очищает и загружает ranking.
     pub(crate) async fn load_item(
         &mut self,
         active_connection: Option<&mut WorldTdsClient>,
         increment_log_days: u32,
     ) -> AuctionLogLoadOutcome {
         let Some(active_connection) = active_connection else {
-            return AuctionLogLoadOutcome::ReturnedFalse(
-                AuctionLogLoadFailure::MissingConnection,
-            );
+            return AuctionLogLoadOutcome::ReturnedFalse(AuctionLogLoadFailure::MissingConnection);
         };
 
         let history_sql = format!(
@@ -364,13 +423,11 @@ impl CAuctionLog {
         let mut history = match active_connection.simple_query(history_sql).await {
             Ok(history) => history,
             Err(source) => {
-                return AuctionLogLoadOutcome::ReturnedFalse(
-                    AuctionLogLoadFailure::Database {
-                        stage: AuctionLogLoadStage::History,
-                        row_index: None,
-                        source,
-                    },
-                );
+                return AuctionLogLoadOutcome::ReturnedFalse(AuctionLogLoadFailure::Database {
+                    stage: AuctionLogLoadStage::History,
+                    row_index: None,
+                    source,
+                });
             }
         };
         let mut history_row_index = 0usize;
@@ -379,13 +436,11 @@ impl CAuctionLog {
                 Ok(Some(item)) => item,
                 Ok(None) => break,
                 Err(source) => {
-                    return AuctionLogLoadOutcome::ReturnedFalse(
-                        AuctionLogLoadFailure::Database {
-                            stage: AuctionLogLoadStage::History,
-                            row_index: Some(history_row_index),
-                            source,
-                        },
-                    );
+                    return AuctionLogLoadOutcome::ReturnedFalse(AuctionLogLoadFailure::Database {
+                        stage: AuctionLogLoadStage::History,
+                        row_index: Some(history_row_index),
+                        source,
+                    });
                 }
             };
             let Some(row) = item.into_row() else {
@@ -394,13 +449,11 @@ impl CAuctionLog {
             let node = match decode_auction_history_row(&row) {
                 Ok(node) => node,
                 Err(AuctionHistoryRowDecode::Database(source)) => {
-                    return AuctionLogLoadOutcome::ReturnedFalse(
-                        AuctionLogLoadFailure::Database {
-                            stage: AuctionLogLoadStage::History,
-                            row_index: Some(history_row_index),
-                            source,
-                        },
-                    );
+                    return AuctionLogLoadOutcome::ReturnedFalse(AuctionLogLoadFailure::Database {
+                        stage: AuctionLogLoadStage::History,
+                        row_index: Some(history_row_index),
+                        source,
+                    });
                 }
                 Err(AuctionHistoryRowDecode::MissingRequiredValue(column)) => {
                     return AuctionLogLoadOutcome::ReturnedFalse(
@@ -429,13 +482,11 @@ impl CAuctionLog {
         {
             Ok(ranking) => ranking,
             Err(source) => {
-                return AuctionLogLoadOutcome::ReturnedFalse(
-                    AuctionLogLoadFailure::Database {
-                        stage: AuctionLogLoadStage::Ranking,
-                        row_index: None,
-                        source,
-                    },
-                );
+                return AuctionLogLoadOutcome::ReturnedFalse(AuctionLogLoadFailure::Database {
+                    stage: AuctionLogLoadStage::Ranking,
+                    row_index: None,
+                    source,
+                });
             }
         };
         self.goods_list.clear();
@@ -445,13 +496,11 @@ impl CAuctionLog {
                 Ok(Some(item)) => item,
                 Ok(None) => break,
                 Err(source) => {
-                    return AuctionLogLoadOutcome::ReturnedFalse(
-                        AuctionLogLoadFailure::Database {
-                            stage: AuctionLogLoadStage::Ranking,
-                            row_index: Some(ranking_row_index),
-                            source,
-                        },
-                    );
+                    return AuctionLogLoadOutcome::ReturnedFalse(AuctionLogLoadFailure::Database {
+                        stage: AuctionLogLoadStage::Ranking,
+                        row_index: Some(ranking_row_index),
+                        source,
+                    });
                 }
             };
             let Some(row) = item.into_row() else {
@@ -460,13 +509,11 @@ impl CAuctionLog {
             let node = match decode_auction_bang_row(&row) {
                 Ok(node) => node,
                 Err(AuctionHistoryRowDecode::Database(source)) => {
-                    return AuctionLogLoadOutcome::ReturnedFalse(
-                        AuctionLogLoadFailure::Database {
-                            stage: AuctionLogLoadStage::Ranking,
-                            row_index: Some(ranking_row_index),
-                            source,
-                        },
-                    );
+                    return AuctionLogLoadOutcome::ReturnedFalse(AuctionLogLoadFailure::Database {
+                        stage: AuctionLogLoadStage::Ranking,
+                        row_index: Some(ranking_row_index),
+                        source,
+                    });
                 }
                 Err(AuctionHistoryRowDecode::MissingRequiredValue(column)) => {
                     return AuctionLogLoadOutcome::ReturnedFalse(
@@ -488,7 +535,7 @@ impl CAuctionLog {
         AuctionLogLoadOutcome::ReturnedTrue
     }
 
- /// Неатомарно пересчитывает две оригинал строки `AuctionMostGoods`.
+    /// Неатомарно пересчитывает две оригинал строки `AuctionMostGoods`.
     pub(crate) async fn update_auction_bang_db(
         &mut self,
         active_connection: Option<&mut WorldTdsClient>,
@@ -525,12 +572,10 @@ impl CAuctionLog {
             .execute(most_money_update.as_str(), &[])
             .await
         {
-            return AuctionBangUpdateOutcome::ReturnedFalse(
-                AuctionBangUpdateFailure::Database {
-                    stage: AuctionBangUpdateStage::MostMoneyUpdate,
-                    source,
-                },
-            );
+            return AuctionBangUpdateOutcome::ReturnedFalse(AuctionBangUpdateFailure::Database {
+                stage: AuctionBangUpdateStage::MostMoneyUpdate,
+                source,
+            });
         }
 
         let most_count = match query_first_auction_bang(
@@ -557,18 +602,16 @@ impl CAuctionLog {
             .execute(most_count_update.as_str(), &[])
             .await
         {
-            return AuctionBangUpdateOutcome::ReturnedFalse(
-                AuctionBangUpdateFailure::Database {
-                    stage: AuctionBangUpdateStage::MostCountUpdate,
-                    source,
-                },
-            );
+            return AuctionBangUpdateOutcome::ReturnedFalse(AuctionBangUpdateFailure::Database {
+                stage: AuctionBangUpdateStage::MostCountUpdate,
+                source,
+            });
         }
 
         AuctionBangUpdateOutcome::ReturnedTrue
     }
 
- /// Сохраняет оригинал переход page и исторически странный bool результата.
+    /// Сохраняет оригинал переход page и исторически странный bool результата.
     pub(crate) fn compute_page(&mut self, direction: i32, player_id: i32) -> bool {
         let Some(page) = self.player_pages.get_mut(&player_id) else {
             self.player_pages.insert(player_id, 0);
@@ -577,10 +620,7 @@ impl CAuctionLog {
 
         match direction {
             1 => {
-                let count = self
-                    .log_list
-                    .get(&player_id)
-                    .map_or(0, Vec::len) as u32 as i32;
+                let count = self.log_list.get(&player_id).map_or(0, Vec::len) as u32 as i32;
                 *page = page.wrapping_add(1);
                 if count < page.wrapping_mul(AUCTION_LOG_RECORDS_PER_PAGE) {
                     *page = page.wrapping_sub(1);
@@ -599,7 +639,7 @@ impl CAuctionLog {
         }
     }
 
- /// Добавляет player/page и до семнадцати сокращённых записей.
+    /// Добавляет player/page и до семнадцати сокращённых записей.
     pub(crate) fn add_byte_at_current_page(
         &self,
         player_id: i32,
@@ -625,8 +665,9 @@ impl CAuctionLog {
                 .get(usize::try_from(skip).expect("неотрицательный i32 помещается в usize")..)
                 .unwrap_or(&[])
         };
-        let page_records =
-            &page_records[..page_records.len().min(AUCTION_LOG_RECORDS_PER_PAGE as usize)];
+        let page_records = &page_records[..page_records
+            .len()
+            .min(AUCTION_LOG_RECORDS_PER_PAGE as usize)];
 
         message.base_mut().add_long(player_id);
         message.base_mut().add_long(page_records.len() as i32);
@@ -652,7 +693,7 @@ impl CAuctionLog {
         })
     }
 
- /// Добавляет последнюю вставленную подходящую запись одного GUID.
+    /// Добавляет последнюю вставленную подходящую запись одного GUID.
     pub(crate) fn add_byte_goods_log(
         &self,
         player_id: i32,
@@ -691,7 +732,7 @@ impl CAuctionLog {
         AuctionGoodsLogWriteOutcome::Written { found: true }
     }
 
- /// Публикует все записи игрока, включая ранее отмеченные, в оригинал порядке.
+    /// Публикует все записи игрока, включая ранее отмеченные, в оригинал порядке.
     pub(crate) fn collect_no_notice<Q: AuctionNoticeWriteQueue>(
         &mut self,
         player_id: i32,
@@ -724,7 +765,7 @@ impl CAuctionLog {
         }
     }
 
- /// Строит `0x8040C` и сохраняет исходную отправку по numeric map ID.
+    /// Строит `0x8040C` и сохраняет исходную отправку по numeric map ID.
     pub(crate) fn send_auction_msg_to_game_server(
         &self,
         player_id: u32,
@@ -756,10 +797,9 @@ fn decode_auction_history_row(row: &Row) -> Result<AuctionLogNode, AuctionHistor
     }
 
     let time = required!(NaiveDateTime, "log_time");
-    let year = u16::try_from(time.year())
-        .map_err(|_| AuctionHistoryRowDecode::Blocked(
-            AuctionLogLoadBlockSource::CalendarOutsideSystemTime,
-        ))?;
+    let year = u16::try_from(time.year()).map_err(|_| {
+        AuctionHistoryRowDecode::Blocked(AuctionLogLoadBlockSource::CalendarOutsideSystemTime)
+    })?;
     let time = AuctionLogSystemTime {
         year,
         month: u16::try_from(time.month()).expect("chrono month помещается в SYSTEMTIME"),
@@ -784,17 +824,19 @@ fn decode_auction_history_row(row: &Row) -> Result<AuctionLogNode, AuctionHistor
     let guid_text = row
         .try_get::<&str, _>("guid")
         .map_err(AuctionHistoryRowDecode::Database)?;
-    let guid = CGuid::from_legacy_text(guid_text)
-        .map_err(|_| AuctionHistoryRowDecode::Blocked(
-            AuctionLogLoadBlockSource::MalformedGuid { column: "guid" },
-        ))?;
+    let guid = CGuid::from_legacy_text(guid_text).map_err(|_| {
+        AuctionHistoryRowDecode::Blocked(AuctionLogLoadBlockSource::MalformedGuid {
+            column: "guid",
+        })
+    })?;
     let guid_key_text = row
         .try_get::<&str, _>("guidKey")
         .map_err(AuctionHistoryRowDecode::Database)?;
-    let guid_key = CGuid::from_legacy_text(guid_key_text)
-        .map_err(|_| AuctionHistoryRowDecode::Blocked(
-            AuctionLogLoadBlockSource::MalformedGuid { column: "guidKey" },
-        ))?;
+    let guid_key = CGuid::from_legacy_text(guid_key_text).map_err(|_| {
+        AuctionHistoryRowDecode::Blocked(AuctionLogLoadBlockSource::MalformedGuid {
+            column: "guidKey",
+        })
+    })?;
 
     let description_text = required!(&str, "strdescri");
     let (description_text, _, _) = WINDOWS_1251.encode(description_text);
@@ -825,10 +867,7 @@ fn decode_auction_history_row(row: &Row) -> Result<AuctionLogNode, AuctionHistor
 }
 
 fn decode_auction_bang_row(row: &Row) -> Result<AuctionBangNode, AuctionHistoryRowDecode> {
-    fn required_i32(
-        row: &Row,
-        column: &'static str,
-    ) -> Result<i32, AuctionHistoryRowDecode> {
+    fn required_i32(row: &Row, column: &'static str) -> Result<i32, AuctionHistoryRowDecode> {
         row.try_get::<i32, _>(column)
             .map_err(AuctionHistoryRowDecode::Database)?
             .ok_or(AuctionHistoryRowDecode::MissingRequiredValue(column))
@@ -849,19 +888,21 @@ async fn query_first_auction_bang(
     query_stage: AuctionBangUpdateStage,
     row_stage: AuctionBangUpdateStage,
 ) -> Result<AuctionBangNode, AuctionBangUpdateFailure> {
-    let mut rows = active_connection.simple_query(sql).await.map_err(|source| {
-        AuctionBangUpdateFailure::Database {
+    let mut rows = active_connection
+        .simple_query(sql)
+        .await
+        .map_err(|source| AuctionBangUpdateFailure::Database {
             stage: query_stage,
             source,
-        }
-    })?;
+        })?;
     loop {
-        let item = rows.try_next().await.map_err(|source| {
-            AuctionBangUpdateFailure::Database {
+        let item = rows
+            .try_next()
+            .await
+            .map_err(|source| AuctionBangUpdateFailure::Database {
                 stage: row_stage,
                 source,
-            }
-        })?;
+            })?;
         let Some(item) = item else {
             return Err(AuctionBangUpdateFailure::MissingRow { stage: row_stage });
         };

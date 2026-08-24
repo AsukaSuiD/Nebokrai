@@ -2,10 +2,10 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/onmsg_w2s_auction.cpp` подтверждают
-//! selectors `0x80401..0x80403`, `0x80409`, `0x8040A`, `0x8040C`, `0x8040F` и
-//! `0x80410`: добавление временного `CGoodsNode` в Game-specific owner map,
-//! reconciliation с World GUID-set, catalog condition/client relay/broadcast,
-//! auction-state и полную YuanBao container/client mutation. GameServer primary map
+//! selectors `0x80401..0x80403`, `0x80409..0x8040C`, `0x8040F` и `0x80410`:
+//! добавление временного `CGoodsNode` в Game-specific owner map, reconciliation
+//! с World GUID-set, catalog/log/client relay, auction-state и полную YuanBao
+//! container/client mutation. GameServer primary map
 //! хранит `GUID -> owner id`, а не MiscServer-owned node; это исключает
 //! исходный stack-pointer lifetime без изменения наблюдаемого результата.
 //! Обрезанный payload заменяет небезопасное чтение за буфером typed error-ом
@@ -16,10 +16,11 @@ use std::collections::BTreeMap;
 
 use crate::gameserver::appserver::message::unibillmessage::IncrementShopBillingContext;
 use crate::gameserver::appserver::player::PlayerYuanBaoChange;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::SendMessageError;
 use crate::public::aucitionroom::GameAuctionRemoval;
+use crate::public::auctionlog::{AuctionLogNode, AuctionLogSystemTime};
 use crate::public::auctionnode::{CGoodsNode, GoodsNodeUnserializeError};
 
 const WORLD_AUCTION_ADD_ITEM_MESSAGE: i32 = 0x0008_0401;
@@ -27,6 +28,7 @@ const WORLD_AUCTION_UNITY_MESSAGE: i32 = 0x0008_0402;
 const WORLD_AUCTION_STATE_MESSAGE: i32 = 0x0008_0403;
 const WORLD_AUCTION_DIRECT_RELAY_MESSAGE: i32 = 0x0008_0409;
 const WORLD_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x0008_040a;
+const WORLD_AUCTION_LOG_NOTICE_MESSAGE: i32 = 0x0008_040b;
 const WORLD_AUCTION_CONDITION_MESSAGE: i32 = 0x0008_040c;
 const WORLD_AUCTION_BROADCAST_MESSAGE: i32 = 0x0008_040f;
 const WORLD_AUCTION_YUAN_BAO_MESSAGE: i32 = 0x0008_0410;
@@ -56,6 +58,18 @@ pub(crate) enum WorldAuctionMessageError {
     MissingConditionPlayerId,
     MissingConditionField {
         field: &'static str,
+    },
+    MissingLogPlayerId,
+    MissingLogCount,
+    TruncatedLogNode {
+        record_index: u32,
+    },
+    LogDescriptionWithoutTerminator {
+        record_index: u32,
+    },
+    LogNoticeTemplateMismatch,
+    LogNoticeOutsideLegacyBuffer {
+        length: usize,
     },
     MissingYuanBaoPlayerId,
     MissingYuanBaoAmount,
@@ -96,6 +110,13 @@ pub(crate) enum WorldAuctionMessageReport {
         player_found: bool,
         created_goods: Vec<u32>,
         delivery: Option<i32>,
+    },
+    AuctionLogNotices {
+        player_id: i32,
+        declared_records: u32,
+        player_found: bool,
+        processed_records: u32,
+        deliveries: Vec<i32>,
     },
     YuanBaoChanged {
         player_id: i32,
@@ -279,6 +300,64 @@ pub(crate) fn dispatch_world_auction_message<Runtime: WorldAuctionRuntime>(
                 delivery: Some(delivery),
             }))
         }
+        WORLD_AUCTION_LOG_NOTICE_MESSAGE => {
+            let Some(player_id) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingLogPlayerId));
+            };
+            let Some(declared_records) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingLogCount));
+            };
+            let declared_records = declared_records as u32;
+            if game.find_player(player_id).is_none() || declared_records == 0 {
+                return Some(Ok(WorldAuctionMessageReport::AuctionLogNotices {
+                    player_id,
+                    declared_records,
+                    player_found: game.find_player(player_id).is_some(),
+                    processed_records: 0,
+                    deliveries: Vec::new(),
+                }));
+            }
+
+            let mut deliveries = Vec::new();
+            for record_index in 0..declared_records {
+                let mut bytes = [0; 0x150];
+                if !message.base_mut().get(&mut bytes) {
+                    return Some(Err(WorldAuctionMessageError::TruncatedLogNode {
+                        record_index,
+                    }));
+                }
+                let node = AuctionLogNode::from_legacy_bytes(&bytes);
+                if node.notice == 0 && node.operation_type == 1 {
+                    let template = game.get_string_by_id(b"GPM001");
+                    let text = if template.first().is_none_or(|byte| *byte == 0) {
+                        Vec::new()
+                    } else {
+                        let Some(description) = node.description() else {
+                            return Some(Err(
+                                WorldAuctionMessageError::LogDescriptionWithoutTerminator {
+                                    record_index,
+                                },
+                            ));
+                        };
+                        match format_auction_log_notice(template, description, node.time) {
+                            Ok(text) => text,
+                            Err(error) => return Some(Err(error)),
+                        }
+                    };
+                    deliveries.push(
+                        colored_player_notice_message(0xffff_ffff, 0, &text)
+                            .send_to_player(game.net_server(), player_id),
+                    );
+                }
+            }
+            Some(Ok(WorldAuctionMessageReport::AuctionLogNotices {
+                player_id,
+                declared_records,
+                player_found: true,
+                processed_records: declared_records,
+                deliveries,
+            }))
+        }
         WORLD_AUCTION_BROADCAST_MESSAGE => {
             message.set_message_type(CLIENT_AUCTION_BROADCAST_MESSAGE);
             let delivery = message.send_all(game.current_net_server());
@@ -321,6 +400,55 @@ pub(crate) fn dispatch_world_auction_message<Runtime: WorldAuctionRuntime>(
         }
         _ => None,
     }
+}
+
+fn format_auction_log_notice(
+    template: &[u8],
+    description: &[u8],
+    time: AuctionLogSystemTime,
+) -> Result<Vec<u8>, WorldAuctionMessageError> {
+    let template = template.split(|byte| *byte == 0).next().unwrap_or_default();
+    let numbers = [
+        time.year,
+        time.month,
+        time.day,
+        time.hour,
+        time.minute,
+        time.second,
+    ];
+    let mut number_index = 0usize;
+    let mut description_written = false;
+    let mut output = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < template.len() {
+        if template[cursor..].starts_with(b"%s") {
+            if description_written {
+                return Err(WorldAuctionMessageError::LogNoticeTemplateMismatch);
+            }
+            output.extend_from_slice(description);
+            description_written = true;
+            cursor += 2;
+        } else if template[cursor..].starts_with(b"%ld") {
+            let Some(value) = numbers.get(number_index) else {
+                return Err(WorldAuctionMessageError::LogNoticeTemplateMismatch);
+            };
+            output.extend_from_slice(value.to_string().as_bytes());
+            number_index += 1;
+            cursor += 3;
+        } else {
+            output.push(template[cursor]);
+            cursor += 1;
+        }
+        if output.len() > 1027 {
+            return Err(WorldAuctionMessageError::LogNoticeOutsideLegacyBuffer {
+                length: output.len(),
+            });
+        }
+    }
+    if !description_written || number_index != numbers.len() {
+        return Err(WorldAuctionMessageError::LogNoticeTemplateMismatch);
+    }
+    Ok(output)
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
