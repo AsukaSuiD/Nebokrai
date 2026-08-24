@@ -15,8 +15,13 @@
 //! хранит единственный overwrite-able requester, exact World request и
 //! terminal-marker decoder; client publication выполняет dispatcher-owner.
 //! XYD round-trip использует configuration-owned slots, ordered region set и
-//! faction player sets; полные NPC/contend ветви `AddObject/RemoveObject`
-//! остаются RAW, а их player membership tail исполняет `CGame`.
+//! faction player/NPC sets. NPC guard/counter lifecycle и GodsBattle-contend
+//! исполняет `CGame`; byte-owned имя contender сохраняет исходную GBK.
+//! Проверка first-contender намеренно сравнивает normal `m_lFactionID` с
+//! сохранённым GodsBattle faction: это несовпадение подтверждено RVA
+//! `0x000A9270`, а не исправлено по более позднему C++-донору. Найденный
+//! `CancelContendByPlayerID` также удаляет запись без player reset/time; reset
+//! происходит только в ветви отсутствующей записи, как в точном EXE.
 //! SZL owner дополнительно материализует inclusive tier lookup и обе
 //! victim-tier gain/loss формулы; death/team/client ordering остаётся у `CGame`.
 
@@ -48,6 +53,7 @@ const EMPTY_DIE_BACK_CONFIGURATION: &[u8] =
 pub(crate) struct CGodsBattleMgr {
     configuration: CGodsBattleConf,
     region_set: BTreeSet<i32>,
+    killed_monster_count: std::collections::BTreeMap<Vec<u8>, u32>,
     pending_top_ten_player_id: i32,
 }
 
@@ -159,6 +165,51 @@ impl CGodsBattleMgr {
         self.configuration.szl_level(szl)
     }
 
+    pub(crate) fn npc_configuration(
+        &self,
+        name: &[u8],
+    ) -> Option<&crate::setup::godsbattleconf::GodsBattleFactionNpcName> {
+        self.configuration.npc_by_name(name)
+    }
+
+    pub(crate) fn npc_name_by_monster(&self, original_name: &[u8]) -> Option<&[u8]> {
+        self.configuration.npc_name_by_monster(original_name)
+    }
+
+    pub(crate) fn npc_monster_count(&self, name: &[u8]) -> u32 {
+        self.configuration
+            .npc_by_name(name)
+            .map(|npc| {
+                npc.monsters
+                    .split(|byte| *byte == b',')
+                    .filter(|token| !token.is_empty())
+                    .count() as u32
+            })
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn npc_killed_monster_count(&self, name: &[u8]) -> u32 {
+        self.killed_monster_count.get(name).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn reset_npc_killed_monster_count(&mut self, name: &[u8]) {
+        self.killed_monster_count.insert(name.to_vec(), 0);
+    }
+
+    pub(crate) fn increment_npc_killed_monster_count(&mut self, name: &[u8]) -> Option<u32> {
+        let count = self.killed_monster_count.get_mut(name)?;
+        *count = count.wrapping_add(1);
+        Some(*count)
+    }
+
+    pub(crate) fn update_npc_faction(
+        &mut self,
+        name: &[u8],
+        faction: i32,
+    ) -> Option<crate::setup::godsbattleconf::GodsBattleNpcFactionUpdate> {
+        self.configuration.set_npc_faction(name, faction)
+    }
+
     pub(crate) fn decode_top_ten(
         &self,
         source: &[u8],
@@ -250,6 +301,30 @@ pub(crate) struct CServerGodsBattleRegion {
     pub(crate) war: CServerWarRegion,
     faction_players: [BTreeSet<i32>; 3],
     faction_npcs: [BTreeSet<i32>; 3],
+    contenders: Vec<GodsBattleContender>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GodsBattleContender {
+    pub(crate) symbol_id: i32,
+    pub(crate) symbol_name: Vec<u8>,
+    pub(crate) player_id: i32,
+    pub(crate) gods_battle_faction: i32,
+    pub(crate) current_time: i32,
+    pub(crate) max_time: i32,
+    pub(crate) start_time_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleCancelByPlayer {
+    RemovedWithoutPlayerReset,
+    MissingReset,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GodsBattleContendAdvance {
+    pub(crate) progress: Vec<(i32, i32)>,
+    pub(crate) completed: Vec<GodsBattleContender>,
 }
 
 impl CServerGodsBattleRegion {
@@ -288,6 +363,144 @@ impl CServerGodsBattleRegion {
         };
         Some(self.faction_players[index].iter().copied().collect())
     }
+
+    pub(crate) fn add_faction_npc(&mut self, npc_id: i32, faction: i32) -> bool {
+        let Some(index) = gods_battle_faction_index(faction) else {
+            return false;
+        };
+        self.faction_npcs[index].insert(npc_id)
+    }
+
+    pub(crate) fn npc_faction_index(&self, npc_id: i32) -> Option<usize> {
+        self.faction_npcs
+            .iter()
+            .position(|npcs| npcs.contains(&npc_id))
+    }
+
+    pub(crate) fn remove_faction_npc(&mut self, npc_id: i32) -> bool {
+        self.faction_npcs
+            .iter_mut()
+            .fold(false, |removed, npcs| npcs.remove(&npc_id) || removed)
+    }
+
+    pub(crate) fn change_npc_faction(&mut self, npc_id: i32, faction: i32) -> bool {
+        let Some(target) = gods_battle_faction_index(faction) else {
+            return false;
+        };
+        let Some(previous) = self.npc_faction_index(npc_id) else {
+            return false;
+        };
+        if self.faction_npcs[target].contains(&npc_id) {
+            return false;
+        }
+        if self.faction_npcs[previous].remove(&npc_id) {
+            self.faction_npcs[target].insert(npc_id);
+        }
+        true
+    }
+
+    pub(crate) fn npc_faction(&self, npc_id: i32) -> Option<i32> {
+        match self.npc_faction_index(npc_id)? {
+            0 => Some(7),
+            1 => Some(5),
+            2 => Some(6),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_player_contending_symbol(&self, player_id: i32, symbol_id: i32) -> bool {
+        self.contenders
+            .iter()
+            .any(|contender| contender.player_id == player_id && contender.symbol_id == symbol_id)
+    }
+
+    /// Специализация GodsBattle намеренно не сбрасывает player-state/time,
+    /// когда contender найден и удалён: это подтверждённый legacy contract.
+    pub(crate) fn cancel_contend_by_player_id(
+        &mut self,
+        player_id: i32,
+    ) -> GodsBattleCancelByPlayer {
+        if let Some(index) = self
+            .contenders
+            .iter()
+            .position(|contender| contender.player_id == player_id)
+        {
+            self.contenders.remove(index);
+            GodsBattleCancelByPlayer::RemovedWithoutPlayerReset
+        } else {
+            GodsBattleCancelByPlayer::MissingReset
+        }
+    }
+
+    /// Проверка first-for-faction использует normal `m_lFactionID`, тогда как
+    /// contender хранит `lGodsBattleFaciton`; несовпадение подтверждено EXE.
+    pub(crate) fn add_contender(
+        &mut self,
+        player_id: i32,
+        normal_faction: i32,
+        gods_battle_faction: i32,
+        symbol_id: i32,
+        symbol_name: &[u8],
+        max_time: i32,
+        now_ms: u32,
+    ) -> bool {
+        let first_for_legacy_faction = self
+            .contenders
+            .iter()
+            .all(|contender| contender.gods_battle_faction != normal_faction);
+        self.contenders.push(GodsBattleContender {
+            symbol_id,
+            symbol_name: symbol_name.to_vec(),
+            player_id,
+            gods_battle_faction,
+            current_time: 0,
+            max_time,
+            start_time_ms: now_ms,
+        });
+        first_for_legacy_faction
+    }
+
+    pub(crate) fn cancel_contend_by_symbol(
+        &mut self,
+        symbol_id: i32,
+    ) -> Option<GodsBattleContender> {
+        let index = self
+            .contenders
+            .iter()
+            .position(|contender| contender.symbol_id == symbol_id)?;
+        Some(self.contenders.remove(index))
+    }
+
+    pub(crate) fn advance_contenders(&mut self, now_ms: u32) -> GodsBattleContendAdvance {
+        let mut advance = GodsBattleContendAdvance::default();
+        for contender in &mut self.contenders {
+            let elapsed = now_ms.wrapping_sub(contender.start_time_ms);
+            let candidate = (contender.current_time as u32).wrapping_add(elapsed);
+            if candidate >= contender.max_time as u32 {
+                advance.progress.push((contender.player_id, 100));
+                advance.completed.push(contender.clone());
+            } else if elapsed >= 1000 {
+                contender.current_time = contender.current_time.wrapping_add(elapsed as i32);
+                contender.start_time_ms = now_ms;
+                let percentage = if contender.max_time == 0 {
+                    0
+                } else {
+                    contender.current_time.wrapping_mul(100) / contender.max_time
+                };
+                advance.progress.push((contender.player_id, percentage));
+            }
+        }
+        advance
+    }
+}
+
+fn gods_battle_faction_index(faction: i32) -> Option<usize> {
+    match faction {
+        7 => Some(0),
+        5 => Some(1),
+        6 => Some(2),
+        _ => None,
+    }
 }
 
 // ============================================================================
@@ -306,7 +519,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::IsPlayerContendSymbol
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:438
@@ -348,7 +561,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::DelObj
-// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_MEMBERSHIP
+// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_AND_NPC_TAIL
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:183
@@ -362,7 +575,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::OnEnterContend
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:410
@@ -376,7 +589,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::GetNpcNameByMonster
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1220
@@ -390,7 +603,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::GetAlreadyDieCount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1320
@@ -404,7 +617,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::RemoveObject
-// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_MEMBERSHIP
+// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_AND_NPC_TAIL
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:138
@@ -418,7 +631,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::CancelContendByPlayerID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:452
@@ -474,7 +687,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::AddContend
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:361
@@ -488,7 +701,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::CancelContendBySymbol
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:568
@@ -502,7 +715,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:592
@@ -544,7 +757,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::GetMonsterCountByNpcName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1237
@@ -558,7 +771,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::OnNpcMonsterDie
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1253
@@ -572,7 +785,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::OnEnterContend
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1078
@@ -586,7 +799,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::OnNpcUpdate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1186
@@ -628,7 +841,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::OnNpcSetFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:648
@@ -670,7 +883,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::RefreshMonsterForNpc
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1150
@@ -684,7 +897,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::AddObject
-// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_MEMBERSHIP
+// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_AND_NPC_TAIL
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:24
@@ -698,7 +911,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::OnChangeFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:226
@@ -712,7 +925,7 @@ impl CServerGodsBattleRegion {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::OnContendTimeOver
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:476

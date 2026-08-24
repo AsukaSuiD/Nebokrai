@@ -97,6 +97,15 @@ impl CMonster {
         &self.original_name
     }
 
+    pub(crate) fn display_name(&self) -> &[u8] {
+        let name = self.move_shape.shape().base_object().get_name();
+        if name.is_empty() {
+            &self.original_name
+        } else {
+            name
+        }
+    }
+
     pub(crate) const fn hit_points(&self) -> u32 {
         self.hit_points
     }

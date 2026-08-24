@@ -356,8 +356,7 @@ pub(crate) fn load_monster_list(
                 element_avoid,
             });
         }
-        let skill_count =
-            parse_monster_number::<i32>(read("skill count")?, record, "skill count")?;
+        let skill_count = parse_monster_number::<i32>(read("skill count")?, record, "skill count")?;
         if skill_count < 0 {
             return Err(MonsterListLoadError::NegativeSkillCount {
                 record,
@@ -368,16 +367,8 @@ pub(crate) fn load_monster_list(
         for _ in 0..skill_count {
             skills.push(MonsterSkill {
                 id: parse_monster_number::<u16>(read("skill ID")?, record, "skill ID")?,
-                level: parse_monster_number::<u16>(
-                    read("skill level")?,
-                    record,
-                    "skill level",
-                )?,
-                odds: parse_monster_number::<u16>(
-                    read("skill odds")?,
-                    record,
-                    "skill odds",
-                )?,
+                level: parse_monster_number::<u16>(read("skill level")?, record, "skill level")?,
+                odds: parse_monster_number::<u16>(read("skill odds")?, record, "skill odds")?,
             });
         }
         let monster = MonsterProperties {
@@ -451,9 +442,11 @@ pub(crate) fn load_drop_goods_list(
             continue;
         };
         if first == b">" {
-            let name = tokens.get(1).ok_or(MonsterListLoadError::MissingSectionName {
-                line: line_index + 1,
-            })?;
+            let name = tokens
+                .get(1)
+                .ok_or(MonsterListLoadError::MissingSectionName {
+                    line: line_index + 1,
+                })?;
             let name = name.to_vec();
             drops.insert(
                 name.clone(),
@@ -484,24 +477,22 @@ pub(crate) fn load_drop_goods_list(
             ..MonsterDrop::default()
         };
         if money {
-            (drop.odds, drop.maximum_odds) = parse_pair(values[0], b'/').ok_or_else(|| {
-                MonsterListLoadError::DropValue {
+            (drop.odds, drop.maximum_odds) =
+                parse_pair(values[0], b'/').ok_or_else(|| MonsterListLoadError::DropValue {
                     line: line_index + 1,
                     name: first.to_vec(),
-                }
-            })?;
+                })?;
             (drop.minimum_money, drop.maximum_money) =
                 parse_pair(values[1], b'-').ok_or_else(|| MonsterListLoadError::DropValue {
                     line: line_index + 1,
                     name: first.to_vec(),
                 })?;
         } else if !implicit_zero_level {
-            drop.level = parse_bytes::<i32>(values[0]).ok_or_else(|| {
-                MonsterListLoadError::DropValue {
+            drop.level =
+                parse_bytes::<i32>(values[0]).ok_or_else(|| MonsterListLoadError::DropValue {
                     line: line_index + 1,
                     name: first.to_vec(),
-                }
-            })?;
+                })?;
         }
         let odds_index = usize::from(!implicit_zero_level);
         let attenuation_index = if implicit_zero_level { 1 } else { 2 };
@@ -538,18 +529,37 @@ pub(crate) fn load_drop_goods_list(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MonsterListLoadError {
-    Missing { record: usize, field: &'static str },
-    Invalid { record: usize, field: &'static str, token: Vec<u8> },
+    Missing {
+        record: usize,
+        field: &'static str,
+    },
+    Invalid {
+        record: usize,
+        field: &'static str,
+        token: Vec<u8>,
+    },
     AvoidanceOutsideRange {
         record: usize,
         index: u32,
         attack_avoid: u16,
         element_avoid: u16,
     },
-    NegativeSkillCount { record: usize, count: i32 },
-    MissingSectionName { line: usize },
-    DropFieldCount { line: usize, name: Vec<u8>, actual: usize },
-    DropValue { line: usize, name: Vec<u8> },
+    NegativeSkillCount {
+        record: usize,
+        count: i32,
+    },
+    MissingSectionName {
+        line: usize,
+    },
+    DropFieldCount {
+        line: usize,
+        name: Vec<u8>,
+        actual: usize,
+    },
+    DropValue {
+        line: usize,
+        name: Vec<u8>,
+    },
 }
 
 impl fmt::Display for MonsterListLoadError {
@@ -578,7 +588,10 @@ fn parse_bytes<T: std::str::FromStr>(token: &[u8]) -> Option<T> {
 
 fn parse_pair(token: &[u8], separator: u8) -> Option<(i32, i32)> {
     let index = token.iter().position(|byte| *byte == separator)?;
-    Some((parse_bytes(&token[..index])?, parse_bytes(&token[index + 1..])?))
+    Some((
+        parse_bytes(&token[..index])?,
+        parse_bytes(&token[index + 1..])?,
+    ))
 }
 
 /// Ищет свойство по legacy C-строке original name.
@@ -596,6 +609,17 @@ pub(crate) fn get_monster_property_by_origin_name<'registry>(
         .next()
         .unwrap_or_default();
     monsters.get(c_string)
+}
+
+pub(crate) fn get_monster_property_by_origin_name_mut<'registry>(
+    monsters: &'registry mut MonsterRegistry,
+    origin_name: &[u8],
+) -> Option<&'registry mut MonsterProperties> {
+    let c_string = origin_name
+        .split(|byte| *byte == b'\0')
+        .next()
+        .unwrap_or_default();
+    monsters.get_mut(c_string)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

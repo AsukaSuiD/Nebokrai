@@ -137,6 +137,13 @@
 //! notice. Старый donor округлял team share; EXE `0x44DC3F..0x44DC57` явно
 //! переключает x87 на truncation. Missing `%s` argument region notice-а был
 //! legacy UB и безопасно заменён буквальным bounded template text.
+//! GodsBattle NPC-contend продолжает тот же owner: Add/Remove NPC поддерживает
+//! faction sets, guard spawn меняет global monster race после создания,
+//! AI-type `0x17` death ведёт per-NPC counter, а manager gate замыкается в
+//! contender timer. Успешный timeout меняет faction, публикует World subtype
+//! `2`, исполняет `#fengyinNpc` award-script и рассылает region/top-info wire.
+//! Имена и форматирование остаются bounded byte/GBK, а подтверждённые legacy
+//! cancel/first-faction несоответствия сохранены в concrete region owner-е.
 //! Один `MainLoop` turn сохраняет static DWORD clocks как owned process state,
 //! exact Script→AI→Message→Session→NetSession→Auction order, optional profile
 //! reads, refresh/watch gates и wrapping pacing. Ещё не материализованные
@@ -286,7 +293,7 @@ use crate::gameserver::appserver::servercityregion::CServerCityRegion;
 use crate::gameserver::appserver::servercountryregion::CServerCountryRegion;
 use crate::gameserver::appserver::servercountryregion::CountryBattleStateBlock;
 use crate::gameserver::appserver::servergodsbattleregion::{
-    CGodsBattleMgr, CServerGodsBattleRegion,
+    CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleCancelByPlayer, GodsBattleContender,
 };
 use crate::gameserver::appserver::servernationregion::{
     NationCarriageReturnOutcome, NationContend, NationContendArithmeticBlock,
@@ -349,6 +356,7 @@ use crate::setup::logsystem::CLogSystem;
 use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListDecodeError, MonsterListDecodeReport, MonsterProperties,
     MonsterRegistry, decode_monster_list, get_monster_property_by_origin_name,
+    get_monster_property_by_origin_name_mut,
 };
 use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
 use crate::setup::playerlist::CPlayerList;
@@ -1040,6 +1048,150 @@ pub(crate) struct GodsBattleTeamSnapshot {
 pub(crate) trait GodsBattleDeathContext {
     fn gods_battle_team_snapshot(&mut self, team_id: i32) -> Option<GodsBattleTeamSnapshot>;
     fn request_gods_battle_change_appellation(&mut self, player_id: i32, appellation_id: u32);
+}
+
+pub(crate) trait GodsBattleNpcContendContext:
+    ServerRegionMonsterContext + GodsBattlePlayerContext
+{
+    fn run_gods_battle_base_region_ai(&mut self, region: &mut CServerRegion);
+    fn now_milliseconds(&mut self) -> u32;
+    fn record_gods_battle_log(&mut self, event: GodsBattleNpcLog);
+    fn set_gods_battle_player_variable(&mut self, player_id: i32, name: &[u8], value: &[u8])
+    -> i32;
+    fn run_gods_battle_player_script(
+        &mut self,
+        region_id: i32,
+        player_id: i32,
+        path: &[u8],
+        source: Option<&[u8]>,
+    ) -> i32;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleNpcLog {
+    InvalidMonsterToken {
+        token: Vec<u8>,
+    },
+    MonsterSpawnFailed {
+        npc_name: Vec<u8>,
+        monster: Vec<u8>,
+    },
+    MonsterSpawned {
+        npc_name: Vec<u8>,
+        monster: Vec<u8>,
+        faction: i32,
+    },
+    FactionUpdated {
+        npc_name: Vec<u8>,
+        faction: i32,
+    },
+    MonsterWithoutNpc {
+        monster: Vec<u8>,
+    },
+    MissingKillCounter {
+        npc_name: Vec<u8>,
+    },
+    MonsterKilled {
+        npc_name: Vec<u8>,
+        monster: Vec<u8>,
+        killer_type: i32,
+        killer_id: i32,
+    },
+    NoConfiguredMonsters {
+        npc_name: Vec<u8>,
+    },
+    KillCountExceeded {
+        npc_name: Vec<u8>,
+    },
+    AwardVariableMissing {
+        player_id: i32,
+        npc_name: Vec<u8>,
+    },
+    AwardScriptFailed {
+        player_id: i32,
+        npc_name: Vec<u8>,
+    },
+    NpcCaptured {
+        player_id: i32,
+        npc_name: Vec<u8>,
+        faction: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleContendEnterOutcome {
+    PlayerMissing,
+    NpcMissing,
+    PlayerUnavailable,
+    AlreadyContending,
+    InvalidPlayerFaction,
+    InvalidNpcFaction,
+    GuardsRemain { remaining: u32 },
+    AlreadyOwned,
+    Entered { first_for_legacy_faction: bool },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleContendEnterReport {
+    pub(crate) region_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) npc_id: i32,
+    pub(crate) outcome: GodsBattleContendEnterOutcome,
+    pub(crate) deliveries: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleContendCompletionOutcome {
+    PlayerMissing,
+    FactionChangeRejected,
+    Captured {
+        faction: i32,
+        award_variable_result: i32,
+        award_script_result: Option<i32>,
+        top_info_delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleContendCompletionReport {
+    pub(crate) contender: GodsBattleContender,
+    pub(crate) outcome: GodsBattleContendCompletionOutcome,
+    pub(crate) deliveries: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GodsBattleContendAiReport {
+    pub(crate) region_id: i32,
+    pub(crate) progress_deliveries: Vec<(i32, i32, i32)>,
+    pub(crate) completions: Vec<GodsBattleContendCompletionReport>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleMonsterTokenBlock {
+    FieldCount { token: Vec<u8>, fields: usize },
+    MissingMonsterProperty { original_name: Vec<u8> },
+    Membership(RegionMembershipBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleNpcFactionReport {
+    pub(crate) region_id: i32,
+    pub(crate) npc_id: i32,
+    pub(crate) npc_name: Vec<u8>,
+    pub(crate) faction: i32,
+    pub(crate) spawned_monster_ids: Vec<i32>,
+    pub(crate) spawn_blocks: Vec<GodsBattleMonsterTokenBlock>,
+    pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleMonsterDeathReport {
+    pub(crate) region_id: i32,
+    pub(crate) monster_id: i32,
+    pub(crate) npc_name: Option<Vec<u8>>,
+    pub(crate) killed: Option<u32>,
+    pub(crate) total: Option<u32>,
+    pub(crate) player_notice_delivery: Option<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2180,6 +2332,13 @@ impl CGame {
         origin_name: &[u8],
     ) -> Option<&MonsterProperties> {
         get_monster_property_by_origin_name(&self.monster_registry, origin_name)
+    }
+
+    pub(crate) fn find_monster_property_by_origin_name_mut(
+        &mut self,
+        origin_name: &[u8],
+    ) -> Option<&mut MonsterProperties> {
+        get_monster_property_by_origin_name_mut(&mut self.monster_registry, origin_name)
     }
 
     /// Эквивалент `RefreashAllMonsterBaseProperty`: old raw pointers заменены
@@ -4046,6 +4205,656 @@ impl CGame {
             membership_changed,
             region_state_delivery,
         })
+    }
+
+    /// NPC-tail concrete GodsBattle `AddObject`: membership предшествует
+    /// guard spawn, затем kill counter сбрасывается без World publication.
+    pub(crate) fn enter_gods_battle_npc<Context: GodsBattleNpcContendContext>(
+        &mut self,
+        region_id: i32,
+        npc_id: i32,
+        context: &mut Context,
+    ) -> Option<GodsBattleNpcFactionReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::GodsBattle(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let Some((npc_name, configuration)) =
+            region.war.base.find_npc_by_id(npc_id).and_then(|npc| {
+                let name = npc.name().to_vec();
+                self.gods_battle_mgr
+                    .npc_configuration(&name)
+                    .cloned()
+                    .map(|configuration| (name, configuration))
+            })
+        else {
+            self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+            return None;
+        };
+        let faction = configuration.faction;
+        if !region.add_faction_npc(npc_id, faction) {
+            self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+            return None;
+        }
+
+        let (spawned_monster_ids, spawn_blocks) =
+            self.spawn_gods_battle_npc_monsters(&mut region, &configuration, faction, context);
+        self.gods_battle_mgr
+            .reset_npc_killed_monster_count(&npc_name);
+        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+        Some(GodsBattleNpcFactionReport {
+            region_id,
+            npc_id,
+            npc_name,
+            faction,
+            spawned_monster_ids,
+            spawn_blocks,
+            world_delivery: None,
+        })
+    }
+
+    fn spawn_gods_battle_npc_monsters<Context: GodsBattleNpcContendContext>(
+        &mut self,
+        region: &mut CServerGodsBattleRegion,
+        configuration: &crate::setup::godsbattleconf::GodsBattleFactionNpcName,
+        faction: i32,
+        context: &mut Context,
+    ) -> (Vec<i32>, Vec<GodsBattleMonsterTokenBlock>) {
+        let (area_width, area_height) = self.area_dimensions();
+        let mut spawned_monster_ids = Vec::new();
+        let mut spawn_blocks = Vec::new();
+        for token in configuration
+            .monsters
+            .split(|byte| *byte == b',')
+            .filter(|token| !token.is_empty())
+        {
+            let fields = token
+                .split(|byte| *byte == b'|')
+                .filter(|field| !field.is_empty())
+                .collect::<Vec<_>>();
+            if fields.len() != 3 {
+                context.record_gods_battle_log(GodsBattleNpcLog::InvalidMonsterToken {
+                    token: token.to_vec(),
+                });
+                spawn_blocks.push(GodsBattleMonsterTokenBlock::FieldCount {
+                    token: token.to_vec(),
+                    fields: fields.len(),
+                });
+                break;
+            }
+            let original_name = fields[0];
+            let Some(property) = self
+                .find_monster_property_by_origin_name(original_name)
+                .cloned()
+            else {
+                context.record_gods_battle_log(GodsBattleNpcLog::MonsterSpawnFailed {
+                    npc_name: configuration.name.clone(),
+                    monster: original_name.to_vec(),
+                });
+                spawn_blocks.push(GodsBattleMonsterTokenBlock::MissingMonsterProperty {
+                    original_name: original_name.to_vec(),
+                });
+                continue;
+            };
+            let spawn = region.war.base.add_monster(
+                &property,
+                legacy_atoi_i32(fields[1]),
+                legacy_atoi_i32(fields[2]),
+                -1,
+                true,
+                false,
+                context.now_milliseconds(),
+                area_width,
+                area_height,
+                context,
+            );
+            let monster_id = match spawn {
+                Ok(monster_id) => monster_id,
+                Err(block) => {
+                    context.record_gods_battle_log(GodsBattleNpcLog::MonsterSpawnFailed {
+                        npc_name: configuration.name.clone(),
+                        monster: original_name.to_vec(),
+                    });
+                    spawn_blocks.push(GodsBattleMonsterTokenBlock::Membership(block));
+                    continue;
+                }
+            };
+            if let Some(property) = self.find_monster_property_by_origin_name_mut(original_name) {
+                property.race = faction as u32;
+            }
+            context.record_gods_battle_log(GodsBattleNpcLog::MonsterSpawned {
+                npc_name: configuration.name.clone(),
+                monster: original_name.to_vec(),
+                faction,
+            });
+            spawned_monster_ids.push(monster_id);
+        }
+        (spawned_monster_ids, spawn_blocks)
+    }
+
+    pub(crate) fn change_gods_battle_npc_faction<Context: GodsBattleNpcContendContext>(
+        &mut self,
+        region_id: i32,
+        npc_id: i32,
+        faction: i32,
+        context: &mut Context,
+    ) -> Option<GodsBattleNpcFactionReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::GodsBattle(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let Some((npc_name, configuration)) =
+            region.war.base.find_npc_by_id(npc_id).and_then(|npc| {
+                let name = npc.name().to_vec();
+                self.gods_battle_mgr
+                    .npc_configuration(&name)
+                    .cloned()
+                    .map(|configuration| (name, configuration))
+            })
+        else {
+            self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+            return None;
+        };
+        if !region.change_npc_faction(npc_id, faction) {
+            self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+            return None;
+        }
+        let (spawned_monster_ids, spawn_blocks) =
+            self.spawn_gods_battle_npc_monsters(&mut region, &configuration, faction, context);
+        self.gods_battle_mgr
+            .reset_npc_killed_monster_count(&npc_name);
+        let world_delivery = self
+            .gods_battle_mgr
+            .update_npc_faction(&npc_name, faction)
+            .map(|_| {
+                let mut message = CMessage::new(0x5fa0f);
+                message.add_byte(2);
+                add_legacy_c_string(message.base_mut(), &npc_name);
+                message.add_ulong(faction as u32);
+                context.record_gods_battle_log(GodsBattleNpcLog::FactionUpdated {
+                    npc_name: npc_name.clone(),
+                    faction,
+                });
+                message.send(self, false)
+            });
+        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+        Some(GodsBattleNpcFactionReport {
+            region_id,
+            npc_id,
+            npc_name,
+            faction,
+            spawned_monster_ids,
+            spawn_blocks,
+            world_delivery,
+        })
+    }
+
+    pub(crate) fn leave_gods_battle_npc(&mut self, region_id: i32, npc_id: i32) -> bool {
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let ServerRegionOwner::GodsBattle(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return false;
+        };
+        let removed = region.remove_faction_npc(npc_id);
+        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+        removed
+    }
+
+    pub(crate) fn gods_battle_monster_died<Context: GodsBattleNpcContendContext>(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        killer_type: i32,
+        killer_id: i32,
+        context: &mut Context,
+    ) -> Option<GodsBattleMonsterDeathReport> {
+        let (original_name, display_name) = self
+            .find_region(region_id)
+            .and_then(|owner| match owner {
+                ServerRegionOwner::GodsBattle(region) => {
+                    region.war.base.find_monster_by_id(monster_id)
+                }
+                _ => None,
+            })
+            .map(|monster| {
+                (
+                    monster.original_name().to_vec(),
+                    monster.display_name().to_vec(),
+                )
+            })?;
+        if self
+            .find_monster_property_by_origin_name(&original_name)
+            .is_none_or(|property| property.ai != 0x17)
+        {
+            return None;
+        }
+        let Some(npc_name) = self
+            .gods_battle_mgr
+            .npc_name_by_monster(&original_name)
+            .map(ToOwned::to_owned)
+        else {
+            context.record_gods_battle_log(GodsBattleNpcLog::MonsterWithoutNpc {
+                monster: display_name,
+            });
+            return Some(GodsBattleMonsterDeathReport {
+                region_id,
+                monster_id,
+                npc_name: None,
+                killed: None,
+                total: None,
+                player_notice_delivery: None,
+            });
+        };
+        let Some(killed) = self
+            .gods_battle_mgr
+            .increment_npc_killed_monster_count(&npc_name)
+        else {
+            context.record_gods_battle_log(GodsBattleNpcLog::MissingKillCounter {
+                npc_name: npc_name.clone(),
+            });
+            return Some(GodsBattleMonsterDeathReport {
+                region_id,
+                monster_id,
+                npc_name: Some(npc_name),
+                killed: None,
+                total: None,
+                player_notice_delivery: None,
+            });
+        };
+        context.record_gods_battle_log(GodsBattleNpcLog::MonsterKilled {
+            npc_name: npc_name.clone(),
+            monster: display_name.clone(),
+            killer_type,
+            killer_id,
+        });
+        let total = self.gods_battle_mgr.npc_monster_count(&npc_name);
+        if total == 0 {
+            context.record_gods_battle_log(GodsBattleNpcLog::NoConfiguredMonsters {
+                npc_name: npc_name.clone(),
+            });
+            return Some(GodsBattleMonsterDeathReport {
+                region_id,
+                monster_id,
+                npc_name: Some(npc_name),
+                killed: Some(killed),
+                total: Some(total),
+                player_notice_delivery: None,
+            });
+        }
+        let remaining = (total as i32).wrapping_sub(killed as i32);
+        let player_notice_delivery =
+            if killer_type == PLAYER_TYPE && self.find_player(killer_id).is_some() {
+                let text = if remaining > 0 {
+                    format_legacy_mixed(
+                        self.get_string_by_id(b"SZLGS8"),
+                        &[
+                            LegacyFormatArgument::Bytes(&display_name),
+                            LegacyFormatArgument::Signed(remaining),
+                            LegacyFormatArgument::Bytes(&npc_name),
+                        ],
+                        0xff,
+                    )
+                } else if remaining == 0 {
+                    format_legacy_mixed(
+                        self.get_string_by_id(b"SZLGS9"),
+                        &[LegacyFormatArgument::Bytes(&npc_name)],
+                        0xff,
+                    )
+                } else {
+                    context.record_gods_battle_log(GodsBattleNpcLog::KillCountExceeded {
+                        npc_name: npc_name.clone(),
+                    });
+                    Vec::new()
+                };
+                (!text.is_empty()).then(|| {
+                    colored_player_notice_message(0xffff_ffff, 0, &text)
+                        .send_to_player(self.net_server(), killer_id)
+                })
+            } else {
+                None
+            };
+        Some(GodsBattleMonsterDeathReport {
+            region_id,
+            monster_id,
+            npc_name: Some(npc_name),
+            killed: Some(killed),
+            total: Some(total),
+            player_notice_delivery,
+        })
+    }
+
+    pub(crate) fn enter_gods_battle_contend<Context: GodsBattleNpcContendContext>(
+        &mut self,
+        region_id: i32,
+        player_id: i32,
+        npc_id: i32,
+        max_time: i32,
+        context: &mut Context,
+    ) -> Option<GodsBattleContendEnterReport> {
+        let mut deliveries = Vec::new();
+        let player_facts = self.find_player(player_id).map(|player| {
+            (
+                player.can_enter_gods_battle_contend(),
+                player.faction_id(),
+                player.gods_battle_faction(),
+            )
+        });
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::GodsBattle(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let npc_name = region
+            .war
+            .base
+            .find_npc_by_id(npc_id)
+            .map(|npc| npc.name().to_vec());
+        let outcome = match (player_facts, npc_name) {
+            (None, _) => GodsBattleContendEnterOutcome::PlayerMissing,
+            (_, None) => GodsBattleContendEnterOutcome::NpcMissing,
+            (Some((false, _, _)), Some(_)) => GodsBattleContendEnterOutcome::PlayerUnavailable,
+            (Some((_, _, gods_faction)), Some(_)) if !matches!(gods_faction, 5 | 6) => {
+                GodsBattleContendEnterOutcome::InvalidPlayerFaction
+            }
+            (Some((_, _, _)), Some(_)) if region.npc_faction(npc_id).is_none() => {
+                GodsBattleContendEnterOutcome::InvalidNpcFaction
+            }
+            (Some((_, normal_faction, gods_faction)), Some(npc_name)) => {
+                let total = self.gods_battle_mgr.npc_monster_count(&npc_name);
+                let killed = self.gods_battle_mgr.npc_killed_monster_count(&npc_name);
+                if killed != total {
+                    let remaining = total.wrapping_sub(killed);
+                    let text = format_legacy_mixed(
+                        self.get_string_by_id(b"SZLGS6"),
+                        &[LegacyFormatArgument::Bytes(&npc_name)],
+                        0xff,
+                    );
+                    deliveries.push(
+                        colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
+                            .send_to_player(self.net_server(), player_id),
+                    );
+                    GodsBattleContendEnterOutcome::GuardsRemain { remaining }
+                } else if region.npc_faction(npc_id) == Some(gods_faction) {
+                    let text = format_legacy_mixed(
+                        self.get_string_by_id(b"SZLGS7"),
+                        &[LegacyFormatArgument::Bytes(&npc_name)],
+                        0xff,
+                    );
+                    deliveries.push(
+                        colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
+                            .send_to_player(self.net_server(), player_id),
+                    );
+                    GodsBattleContendEnterOutcome::AlreadyOwned
+                } else if region.is_player_contending_symbol(player_id, npc_id) {
+                    GodsBattleContendEnterOutcome::AlreadyContending
+                } else {
+                    if matches!(
+                        region.cancel_contend_by_player_id(player_id),
+                        GodsBattleCancelByPlayer::MissingReset
+                    ) {
+                        if let Some(delivery) = self.set_gods_battle_player_contend_state(
+                            &region.war.base,
+                            player_id,
+                            false,
+                            context,
+                        ) {
+                            deliveries.push(delivery);
+                        }
+                        deliveries.push(self.send_gods_battle_contend_time(player_id, 0));
+                    }
+                    let first_for_legacy_faction = region.add_contender(
+                        player_id,
+                        normal_faction,
+                        gods_faction,
+                        npc_id,
+                        &npc_name,
+                        max_time,
+                        context.now_milliseconds(),
+                    );
+                    if let Some(delivery) = self.set_gods_battle_player_contend_state(
+                        &region.war.base,
+                        player_id,
+                        true,
+                        context,
+                    ) {
+                        deliveries.push(delivery);
+                    }
+                    deliveries.push(self.send_gods_battle_contend_time(player_id, 0));
+                    if first_for_legacy_faction {
+                        let faction_text = match gods_faction {
+                            5 => self.get_string_by_id(b"SZLGS1"),
+                            6 => self.get_string_by_id(b"SZLGS2"),
+                            _ => &[],
+                        };
+                        let text =
+                            format_legacy_text_fields(b"%s%s", &[faction_text, &npc_name], 0xff);
+                        deliveries.push(
+                            nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
+                                .send_to_region(Some(&region.war.base), None, self),
+                        );
+                    }
+                    deliveries.push(
+                        colored_player_notice_message(
+                            0xffff_ffff,
+                            0xffff_0000,
+                            self.get_string_by_id(b"SZLGS3"),
+                        )
+                        .send_to_player(self.net_server(), player_id),
+                    );
+                    GodsBattleContendEnterOutcome::Entered {
+                        first_for_legacy_faction,
+                    }
+                }
+            }
+        };
+        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+        Some(GodsBattleContendEnterReport {
+            region_id,
+            player_id,
+            npc_id,
+            outcome,
+            deliveries,
+        })
+    }
+
+    pub(crate) fn gods_battle_contend_ai<Context: GodsBattleNpcContendContext>(
+        &mut self,
+        region_id: i32,
+        context: &mut Context,
+    ) -> Option<GodsBattleContendAiReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::GodsBattle(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        context.run_gods_battle_base_region_ai(&mut region.war.base);
+        let advance = region.advance_contenders(context.now_milliseconds());
+        let mut report = GodsBattleContendAiReport {
+            region_id,
+            ..GodsBattleContendAiReport::default()
+        };
+        for (player_id, percentage) in advance.progress {
+            let delivery = self.send_gods_battle_contend_time(player_id, percentage);
+            report
+                .progress_deliveries
+                .push((player_id, percentage, delivery));
+        }
+        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+        for contender in advance.completed {
+            report
+                .completions
+                .push(self.complete_gods_battle_contend(region_id, contender, context));
+        }
+        Some(report)
+    }
+
+    fn complete_gods_battle_contend<Context: GodsBattleNpcContendContext>(
+        &mut self,
+        region_id: i32,
+        contender: GodsBattleContender,
+        context: &mut Context,
+    ) -> GodsBattleContendCompletionReport {
+        let Some(faction) = self
+            .find_player(contender.player_id)
+            .map(CPlayer::gods_battle_faction)
+        else {
+            return GodsBattleContendCompletionReport {
+                contender,
+                outcome: GodsBattleContendCompletionOutcome::PlayerMissing,
+                deliveries: Vec::new(),
+            };
+        };
+        let changed =
+            self.change_gods_battle_npc_faction(region_id, contender.symbol_id, faction, context);
+        let mut deliveries =
+            self.cancel_gods_battle_contend_symbol(region_id, contender.symbol_id, context);
+        if changed.is_none() {
+            return GodsBattleContendCompletionReport {
+                contender,
+                outcome: GodsBattleContendCompletionOutcome::FactionChangeRejected,
+                deliveries,
+            };
+        }
+        let capture_text = match faction {
+            5 => self.get_string_by_id(b"SZLGS4").to_vec(),
+            6 => self.get_string_by_id(b"SZLGS5").to_vec(),
+            _ => Vec::new(),
+        };
+        if let Some(owner) = self.take_region_owner(region_id) {
+            if let ServerRegionOwner::GodsBattle(region) = &owner {
+                deliveries.push(
+                    nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &capture_text)
+                        .send_to_region(Some(&region.war.base), None, self),
+                );
+            }
+            self.restore_region_owner(owner);
+        }
+        let award_variable_result = context.set_gods_battle_player_variable(
+            contender.player_id,
+            b"#fengyinNpc",
+            &contender.symbol_name,
+        );
+        let award_script_result = if award_variable_result == 1 {
+            let result = context.run_gods_battle_player_script(
+                region_id,
+                contender.player_id,
+                b"scripts/npc/awardgoods.script",
+                None,
+            );
+            if result == 0 {
+                context.record_gods_battle_log(GodsBattleNpcLog::AwardScriptFailed {
+                    player_id: contender.player_id,
+                    npc_name: contender.symbol_name.clone(),
+                });
+            }
+            Some(result)
+        } else {
+            if award_variable_result == -99_999_999 {
+                context.record_gods_battle_log(GodsBattleNpcLog::AwardVariableMissing {
+                    player_id: contender.player_id,
+                    npc_name: contender.symbol_name.clone(),
+                });
+            }
+            None
+        };
+        let top_info_delivery = self.send_top_info_to_client(-1, 0, 1, 1, &capture_text);
+        context.record_gods_battle_log(GodsBattleNpcLog::NpcCaptured {
+            player_id: contender.player_id,
+            npc_name: contender.symbol_name.clone(),
+            faction,
+        });
+        GodsBattleContendCompletionReport {
+            contender,
+            outcome: GodsBattleContendCompletionOutcome::Captured {
+                faction,
+                award_variable_result,
+                award_script_result,
+                top_info_delivery,
+            },
+            deliveries,
+        }
+    }
+
+    fn cancel_gods_battle_contend_symbol<Context: GodsBattleNpcContendContext>(
+        &mut self,
+        region_id: i32,
+        symbol_id: i32,
+        context: &mut Context,
+    ) -> Vec<i32> {
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return Vec::new();
+        };
+        let ServerRegionOwner::GodsBattle(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return Vec::new();
+        };
+        let mut deliveries = Vec::new();
+        if let Some(contender) = region.cancel_contend_by_symbol(symbol_id) {
+            deliveries.push(self.send_gods_battle_contend_time(contender.player_id, 0));
+            if let Some(delivery) = self.set_gods_battle_player_contend_state(
+                &region.war.base,
+                contender.player_id,
+                false,
+                context,
+            ) {
+                deliveries.push(delivery);
+            }
+        }
+        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+        deliveries
+    }
+
+    fn set_gods_battle_player_contend_state<Context: GodsBattleNpcContendContext>(
+        &mut self,
+        region: &CServerRegion,
+        player_id: i32,
+        state: bool,
+        context: &mut Context,
+    ) -> Option<i32> {
+        let player = self.find_player_mut(player_id)?;
+        if !player.set_contend_state(state) {
+            return None;
+        }
+        let mut message = CMessage::new(0xbff28);
+        message.add_long(player_id);
+        message.add_byte(u8::from(state));
+        let player = self
+            .find_player(player_id)
+            .expect("GodsBattle player сохранён до synchronous around-send");
+        context
+            .send_gods_battle_player_around(region, player.shape(), &message)
+            .ok()
+    }
+
+    fn send_gods_battle_contend_time(&self, player_id: i32, percentage: i32) -> i32 {
+        let mut message = CMessage::new(0xbff29);
+        message.add_long(percentage);
+        message.send_to_player(self.net_server(), player_id)
+    }
+
+    pub(crate) fn send_top_info_to_client(
+        &self,
+        first: i32,
+        target_player_id: i32,
+        third: i32,
+        fourth: i32,
+        text: &[u8],
+    ) -> Result<i32, SendMessageError> {
+        let mut message = CMessage::new(0xbf804);
+        message.add_long(target_player_id);
+        message.add_long(first);
+        message.add_long(third);
+        message.add_long(fourth);
+        add_legacy_c_string(message.base_mut(), text);
+        if target_player_id == 0 {
+            message.send_all(Some(self.net_server()))
+        } else {
+            Ok(message.send_to_player(self.net_server(), target_player_id))
+        }
     }
 
     pub(crate) fn apply_gods_battle_xyd(
@@ -6123,6 +6932,34 @@ fn gods_battle_team_szl_share(total: u32, teammate_amount: u32) -> u32 {
     (f64::from(total) * multiplier / f64::from(teammate_amount)) as u32
 }
 
+fn legacy_atoi_i32(value: &[u8]) -> i32 {
+    let mut value = legacy_c_string_prefix(value);
+    while value.first().is_some_and(u8::is_ascii_whitespace) {
+        value = &value[1..];
+    }
+    let (negative, value) = match value.first() {
+        Some(b'-') => (true, &value[1..]),
+        Some(b'+') => (false, &value[1..]),
+        _ => (false, value),
+    };
+    let mut parsed = 0_i32;
+    let mut found = false;
+    for byte in value {
+        if !byte.is_ascii_digit() {
+            break;
+        }
+        found = true;
+        parsed = parsed.wrapping_mul(10).wrapping_add(i32::from(byte - b'0'));
+    }
+    if !found {
+        0
+    } else if negative {
+        parsed.wrapping_neg()
+    } else {
+        parsed
+    }
+}
+
 fn nation_colored_text_message(
     message_type: i32,
     first_color: u32,
@@ -6185,6 +7022,62 @@ fn format_legacy_text_fields(
                 offset += 1;
             }
         }
+    }
+    output.truncate(maximum_bytes);
+    output
+}
+
+enum LegacyFormatArgument<'a> {
+    Bytes(&'a [u8]),
+    Signed(i32),
+}
+
+/// Bounded replacement for the reached SZLGS `%s`/`%d` templates. It keeps
+/// `%%` and leaves an unmatched conversion literal instead of reading a
+/// missing vararg beyond the proven call contract.
+fn format_legacy_mixed(
+    template: &[u8],
+    arguments: &[LegacyFormatArgument<'_>],
+    maximum_bytes: usize,
+) -> Vec<u8> {
+    let template = legacy_c_string_prefix(template);
+    let mut output = Vec::with_capacity(template.len());
+    let mut argument_index = 0usize;
+    let mut offset = 0usize;
+    while offset < template.len() && output.len() < maximum_bytes {
+        if template[offset] != b'%' {
+            output.push(template[offset]);
+            offset += 1;
+            continue;
+        }
+        let conversion = template.get(offset + 1).copied();
+        if conversion == Some(b'%') {
+            output.push(b'%');
+            offset += 2;
+            continue;
+        }
+        let Some(argument) = arguments.get(argument_index) else {
+            output.push(b'%');
+            offset += 1;
+            continue;
+        };
+        let rendered = match (conversion, argument) {
+            (Some(b's'), LegacyFormatArgument::Bytes(value)) => {
+                legacy_c_string_prefix(value).to_vec()
+            }
+            (Some(b'd' | b'i'), LegacyFormatArgument::Signed(value)) => {
+                value.to_string().into_bytes()
+            }
+            _ => {
+                output.push(b'%');
+                offset += 1;
+                continue;
+            }
+        };
+        let remaining = maximum_bytes.saturating_sub(output.len());
+        output.extend_from_slice(&rendered[..rendered.len().min(remaining)]);
+        argument_index += 1;
+        offset += 2;
     }
     output.truncate(maximum_bytes);
     output
@@ -6398,7 +7291,7 @@ fn shape_view(
 
 // ============================================================================
 // FUNCTION: CGame::SendTopInfoToClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1105

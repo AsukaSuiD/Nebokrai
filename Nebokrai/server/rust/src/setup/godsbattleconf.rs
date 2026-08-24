@@ -927,6 +927,23 @@ impl CGodsBattleConf {
         &self.npc_names
     }
 
+    pub(crate) fn npc_by_name(&self, name: &[u8]) -> Option<&GodsBattleFactionNpcName> {
+        self.npc_names.iter().find(|npc| npc.name == name)
+    }
+
+    pub(crate) fn npc_name_by_monster(&self, original_name: &[u8]) -> Option<&[u8]> {
+        self.npc_names
+            .iter()
+            .find(|npc| {
+                original_name.is_empty()
+                    || npc
+                        .monsters
+                        .windows(original_name.len())
+                        .any(|candidate| candidate == original_name)
+            })
+            .map(|npc| npc.name.as_slice())
+    }
+
     pub(crate) fn push_die_back_position(&mut self, value: GodsBattleDieBackPosition) {
         self.die_back_positions.push(value);
     }

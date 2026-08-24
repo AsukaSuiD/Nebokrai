@@ -47,6 +47,14 @@ impl CNpc {
         &mut self.move_shape
     }
 
+    pub(crate) const fn npc_id(&self) -> i32 {
+        self.move_shape.shape().identity().id
+    }
+
+    pub(crate) fn name(&self) -> &[u8] {
+        self.move_shape.shape().base_object().get_name()
+    }
+
     pub(crate) fn set_script_file(&mut self, script_file: &[u8]) {
         let prefix_len = script_file
             .iter()

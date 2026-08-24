@@ -827,6 +827,7 @@ pub(crate) enum PlayerProgress {
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
     figure: ShapeFigure,
+    faction_id: i32,
     team_id: i32,
     country: u8,
     server_region_id: Option<i32>,
@@ -880,6 +881,7 @@ impl CPlayer {
         let mut player = Self {
             move_shape,
             figure,
+            faction_id: 0,
             team_id,
             country,
             server_region_id,
@@ -927,6 +929,14 @@ impl CPlayer {
 
     pub(crate) const fn team_id(&self) -> i32 {
         self.team_id
+    }
+
+    pub(crate) const fn faction_id(&self) -> i32 {
+        self.faction_id
+    }
+
+    pub(crate) const fn restore_faction_id(&mut self, faction_id: i32) {
+        self.faction_id = faction_id;
     }
 
     pub(crate) const fn country(&self) -> u8 {
@@ -1112,6 +1122,10 @@ impl CPlayer {
 
     /// Тот же double guard использует `ServerNationRegion::OnMonsterDamage`.
     pub(crate) fn can_attack_nation_monster(&self) -> bool {
+        self.shape().get_action() != 6 && !CMoveShape::is_died(self.base_properties.health)
+    }
+
+    pub(crate) fn can_enter_gods_battle_contend(&self) -> bool {
         self.shape().get_action() != 6 && !CMoveShape::is_died(self.base_properties.health)
     }
 
