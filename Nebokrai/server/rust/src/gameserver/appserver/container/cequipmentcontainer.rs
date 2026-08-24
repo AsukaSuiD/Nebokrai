@@ -556,6 +556,12 @@ impl CEquipmentContainer {
             .find(|goods| goods.identity().ex_id == goods_id)
     }
 
+    pub(crate) fn find_mut(&mut self, goods_id: CGuid) -> Option<&mut CGoods> {
+        self.equipment
+            .values_mut()
+            .find(|goods| goods.identity().ex_id == goods_id)
+    }
+
     pub(crate) fn query_goods_position_by_id(&self, goods_id: CGuid) -> Option<EquipmentColumn> {
         self.equipment
             .iter()

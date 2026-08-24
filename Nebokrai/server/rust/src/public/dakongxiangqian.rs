@@ -12,7 +12,8 @@
 //! только MSVC map plumbing, сохраняя order wire `0x2B`; parser намеренно
 //! принимает частичный текст как исходный formatted-stream owner.
 //! Game decoder также очищает primary state, но дописывает deluxe vector.
-//! Gameplay random/query family остаётся RAW.
+//! Gameplay query/RNG family принимает общий GameServer MSVCRT random через
+//! тонкий closure, сохраняя inclusive probability и weighted-choice quirks.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -52,6 +53,7 @@ pub(crate) struct CDaKongXiangQian {
     external_attributes: [ExternalAttributeMap; 3],
     delux_modify: Vec<DaKongDeluxModify>,
     key: bool,
+    log_key: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -250,6 +252,82 @@ impl CDaKongXiangQian {
         self.key
     }
 
+    pub(crate) fn set_log_key(&mut self, enabled: bool) -> bool {
+        self.log_key = enabled;
+        enabled
+    }
+
+    pub(crate) const fn log_key(&self) -> bool {
+        self.log_key
+    }
+
+    /// Exact `GetSuccessProbability`: roll `0..9999` сравнивается через
+    /// `<=`, поэтому нулевая вероятность сохраняет один успешный исход.
+    pub(crate) fn get_success_probability(
+        &self,
+        index: i32,
+        mut random: impl FnMut(i32) -> i32,
+    ) -> bool {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.info.get(index))
+            .is_some_and(|info| random(10_000) <= info.probability)
+    }
+
+    pub(crate) fn get_color(&self, index: i32, mut random: impl FnMut(i32) -> i32) -> i32 {
+        let Some(info) = usize::try_from(index)
+            .ok()
+            .and_then(|index| self.info.get(index))
+        else {
+            return -1;
+        };
+        choose_random(
+            &[
+                info.red,
+                info.green,
+                info.blue,
+                info.yellow,
+                info.cyan,
+                info.purple,
+                info.delux,
+            ],
+            &mut random,
+        )
+    }
+
+    pub(crate) fn make_sure_external_attribute(
+        &self,
+        group: i32,
+        goods_id: u32,
+        mut random: impl FnMut(i32) -> i32,
+    ) -> Option<(i32, i32)> {
+        let attributes = usize::try_from(group)
+            .ok()
+            .and_then(|group| self.external_attributes.get(group))?
+            .get(&goods_id)?;
+        let probabilities: Vec<_> = attributes
+            .iter()
+            .map(|attribute| attribute.probability)
+            .collect();
+        let selected = usize::try_from(choose_random(&probabilities, &mut random)).ok()?;
+        let attribute = attributes.get(selected)?;
+        let width = attribute
+            .maximum
+            .wrapping_sub(attribute.minimum)
+            .wrapping_add(1);
+        Some((
+            attribute.property_type,
+            random(width).wrapping_add(attribute.minimum),
+        ))
+    }
+
+    pub(crate) fn check_external_property(&self, goods_id: u32, group: i32) -> bool {
+        usize::try_from(group.wrapping_sub(1))
+            .ok()
+            .and_then(|group| self.external_attributes.get(group))
+            .is_some_and(|attributes| attributes.contains_key(&goods_id))
+    }
+
     /// Воспроизводит статический Game decoder selector-а `0x2B`.
     pub(crate) fn decord_from_byte_array(
         &mut self,
@@ -311,6 +389,20 @@ impl CDaKongXiangQian {
             delux_modify: self.delux_modify.len(),
         })
     }
+}
+
+fn choose_random(weights: &[i32], random: &mut impl FnMut(i32) -> i32) -> i32 {
+    if weights.is_empty() {
+        return -1;
+    }
+    let mut roll = random(10_000).wrapping_add(1);
+    for (index, weight) in weights.iter().enumerate() {
+        roll = roll.wrapping_sub(*weight);
+        if roll < 1 {
+            return index as i32;
+        }
+    }
+    -1
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

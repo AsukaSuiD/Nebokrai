@@ -2308,7 +2308,8 @@ fn decode_runtime_configuration_startup(
                     return Some(Err(GameRuntimeConfigurationStartupError::LogSystem(error)));
                 }
             };
-            game.da_kong_xiang_qian_mut().set_key(report.da_kong_log);
+            game.da_kong_xiang_qian_mut()
+                .set_log_key(report.da_kong_log);
             add_log_text(b"Initial SI_LOGSYSTEM...OK!");
             Some(Ok(GameRuntimeConfigurationStartupReport::LogSystem {
                 entries: report.items,

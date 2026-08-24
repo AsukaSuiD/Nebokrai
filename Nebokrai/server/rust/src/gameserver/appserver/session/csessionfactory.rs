@@ -19,6 +19,7 @@
 use std::collections::BTreeMap;
 
 use super::cequipmentcompose::CEquipmentCompose;
+use super::cequipmentdakong::CEquipmentDaKong;
 use super::cplug::CPlug;
 use super::csession::CSession;
 
@@ -27,6 +28,7 @@ pub(crate) struct CSessionFactory {
     sessions: BTreeMap<i32, CSession>,
     plugs: BTreeMap<i32, CPlug>,
     equipment_compose_plugs: BTreeMap<i32, CEquipmentCompose>,
+    equipment_da_kong_plugs: BTreeMap<i32, CEquipmentDaKong>,
 }
 
 impl CSessionFactory {
@@ -92,6 +94,29 @@ impl CSessionFactory {
         plug_id: i32,
     ) -> Option<CEquipmentCompose> {
         self.equipment_compose_plugs.remove(&plug_id)
+    }
+
+    pub(crate) fn register_equipment_da_kong_plug(
+        &mut self,
+        plug_id: i32,
+        plug: CEquipmentDaKong,
+    ) -> Option<CEquipmentDaKong> {
+        self.equipment_da_kong_plugs.insert(plug_id, plug)
+    }
+
+    pub(crate) fn query_equipment_da_kong_plug(&self, plug_id: i32) -> Option<&CEquipmentDaKong> {
+        self.equipment_da_kong_plugs.get(&plug_id)
+    }
+
+    pub(crate) fn query_equipment_da_kong_plug_mut(
+        &mut self,
+        plug_id: i32,
+    ) -> Option<&mut CEquipmentDaKong> {
+        self.equipment_da_kong_plugs.get_mut(&plug_id)
+    }
+
+    pub(crate) fn take_equipment_da_kong_plug(&mut self, plug_id: i32) -> Option<CEquipmentDaKong> {
+        self.equipment_da_kong_plugs.remove(&plug_id)
     }
 }
 

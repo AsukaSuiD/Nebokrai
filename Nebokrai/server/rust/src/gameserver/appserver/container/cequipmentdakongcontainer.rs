@@ -158,8 +158,26 @@ impl CEquipmentDaKongContainer {
         &self.equipment_goods
     }
 
+    pub(crate) fn invalidate_equipment_goods(&mut self, position: u32) -> Option<CGuid> {
+        let goods_id = self.equipment_goods.get_mut(&position)?;
+        let previous = *goods_id;
+        *goods_id = CGuid::GUID_INVALID;
+        Some(previous)
+    }
+
     pub(crate) const fn last_goods(&self) -> CGuid {
         self.last_goods
+    }
+
+    pub(crate) fn goods_id(&self, cell: DaKongCell) -> Option<CGuid> {
+        self.positions.get(&cell).copied()
+    }
+
+    pub(crate) fn original_container_information(
+        &self,
+        goods_id: CGuid,
+    ) -> Option<PreviousContainer> {
+        self.base.base().original_container_information(goods_id)
     }
 
     pub(crate) const fn set_last_goods(&mut self, goods_id: CGuid) {

@@ -1506,6 +1506,37 @@ impl CPlayer {
         consumptions
     }
 
+    pub(crate) fn remove_packet_goods_by_id(
+        &mut self,
+        goods_id: CGuid,
+        requested: u32,
+    ) -> Option<CiQingPacketConsumption> {
+        if requested == 0 {
+            return None;
+        }
+        let goods = self.packet.base().find(goods_id)?;
+        let identity = goods.identity();
+        let previous_amount = goods.amount();
+        let consumed = previous_amount.min(requested);
+        let remaining_amount = previous_amount.wrapping_sub(consumed);
+        let removal = if remaining_amount == 0 {
+            self.packet.remove_goods(goods_id)
+        } else {
+            let position = self.packet.query_goods_position(goods_id)?;
+            self.packet
+                .get_goods_mut(position)?
+                .set_amount(remaining_amount);
+            None
+        };
+        Some(CiQingPacketConsumption {
+            player_id: self.player_id(),
+            goods: identity,
+            previous_amount,
+            remaining_amount,
+            removal,
+        })
+    }
+
     /// Player-side `AddGoodsToPacket`: успешный add забирает ownership из
     /// входного vector, rejected/несовместимый stack остаётся у caller-а.
     pub(crate) fn add_goods_to_packet(
@@ -1854,6 +1885,19 @@ impl CPlayer {
             .or_else(|| self.packet.base().find(goods_id))
             .or_else(|| self.equipment.find(goods_id))
             .or_else(|| self.auction_goods.base().find(goods_id))
+    }
+
+    pub(crate) fn get_goods_by_id_mut(&mut self, goods_id: CGuid) -> Option<&mut CGoods> {
+        if self.hand.find(goods_id).is_some() {
+            return self.hand.find_mut(goods_id);
+        }
+        if self.packet.base().find(goods_id).is_some() {
+            return self.packet.base_mut().find_mut(goods_id);
+        }
+        if self.equipment.find(goods_id).is_some() {
+            return self.equipment.find_mut(goods_id);
+        }
+        self.auction_goods.base_mut().find_mut(goods_id)
     }
 
     pub(crate) const fn hand_mut(&mut self) -> &mut CAmountLimitGoodsContainer {

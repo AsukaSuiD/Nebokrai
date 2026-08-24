@@ -37,6 +37,9 @@
 //! `0x8FC24` соседним route-ом замыкает equipment compose: session/plug
 //! identity, validation, необратимое удаление двух equipment и камня,
 //! universal upgrade, packet ownership, result-shadow и announcement script.
+//! `0x8FC1F..0x8FC23` ведут единый equipment DaKong plug: создание отверстия,
+//! вставку камней, смену цвета, preview и уничтожение камня с общими addon,
+//! расходными, audit, script и `0xBF918` effects.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -54,17 +57,26 @@ use crate::gameserver::appserver::player::{
     GoodsSessionPlayerRelease,
 };
 use crate::gameserver::appserver::session::cequipmentcompose::EquipmentComposeReport;
+use crate::gameserver::appserver::session::cequipmentdakong::{
+    EquipmentDaKongOperation, EquipmentDaKongReport,
+};
 use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
     BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
     CGame, CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
     CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport,
     CiQingOtherPersonTarget, CiQingSetupQueryReport, EquipmentComposeContext,
+    EquipmentDaKongContext,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
 
 const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
+const EQUIPMENT_DA_KONG: u32 = 0x0008_fc1f;
+const EQUIPMENT_ENCHASE_GEM: u32 = 0x0008_fc20;
+const EQUIPMENT_CHANGE_ROLE_COLOR: u32 = 0x0008_fc21;
+const EQUIPMENT_QUERY_DA_KONG_RESULT: u32 = 0x0008_fc22;
+const EQUIPMENT_DESTROY_GEM: u32 = 0x0008_fc23;
 const COMBINE_BATTLE_FAIRY: u32 = 0x0008_fc27;
 const UPGRADE_BATTLE_FAIRY: u32 = 0x0008_fc28;
 const RESET_BATTLE_FAIRY_SKILLS: u32 = 0x0008_fc29;
@@ -92,6 +104,7 @@ pub(crate) trait GameGoodsMessageRuntime:
     + CiQingMakeContext
     + CiQingComposeContext
     + EquipmentComposeContext
+    + EquipmentDaKongContext
 {
     fn run_battle_fairy_reset_script(
         &mut self,
@@ -186,6 +199,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     CiQingMount(CiQingMountReport),
     CiQingOtherPerson(CiQingOtherPersonReport),
     EquipmentCompose(EquipmentComposeReport),
+    EquipmentDaKong(EquipmentDaKongReport),
     GoodsSessionEnd(GoodsSessionEndReport),
 }
 
@@ -207,7 +221,12 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
-        COMPOSE_EQUIPMENT
+        EQUIPMENT_DA_KONG
+            | EQUIPMENT_ENCHASE_GEM
+            | EQUIPMENT_CHANGE_ROLE_COLOR
+            | EQUIPMENT_QUERY_DA_KONG_RESULT
+            | EQUIPMENT_DESTROY_GEM
+            | COMPOSE_EQUIPMENT
             | END_GOODS_SESSION
             | CHECK_BATTLE_FAIRY_COMBINE
             | COMBINE_BATTLE_FAIRY
@@ -249,6 +268,59 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             .ok_or(GameGoodsMessageError::MissingField(field))
     };
     let outcome = match message_type {
+        EQUIPMENT_DA_KONG
+        | EQUIPMENT_ENCHASE_GEM
+        | EQUIPMENT_CHANGE_ROLE_COLOR
+        | EQUIPMENT_QUERY_DA_KONG_RESULT
+        | EQUIPMENT_DESTROY_GEM => {
+            let session_id = match read_long(message, "equipment DaKong session ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let requested_plug_id = match read_long(message, "equipment DaKong plug ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let operation = match message_type {
+                EQUIPMENT_DA_KONG => {
+                    let color_index = match read_long(message, "DaKong color index") {
+                        Ok(value) => value,
+                        Err(error) => return Some(Err(error)),
+                    };
+                    EquipmentDaKongOperation::DaKong { color_index }
+                }
+                EQUIPMENT_ENCHASE_GEM => {
+                    let parameter = match read_long(message, "enchase gem parameter") {
+                        Ok(value) => value,
+                        Err(error) => return Some(Err(error)),
+                    };
+                    EquipmentDaKongOperation::EnchaseGem { parameter }
+                }
+                EQUIPMENT_CHANGE_ROLE_COLOR => {
+                    let socket = match read_long(message, "DaKong color socket") {
+                        Ok(value) => value,
+                        Err(error) => return Some(Err(error)),
+                    };
+                    EquipmentDaKongOperation::ChangeRoleColor { socket }
+                }
+                EQUIPMENT_QUERY_DA_KONG_RESULT => EquipmentDaKongOperation::QueryResult,
+                EQUIPMENT_DESTROY_GEM => {
+                    let socket = match read_long(message, "destroy gem socket") {
+                        Ok(value) => value as u32,
+                        Err(error) => return Some(Err(error)),
+                    };
+                    EquipmentDaKongOperation::DestroyGem { socket }
+                }
+                _ => unreachable!("DaKong opcode отфильтрован outer match"),
+            };
+            GameGoodsMessageOutcome::EquipmentDaKong(game.process_equipment_da_kong(
+                player_id,
+                session_id,
+                requested_plug_id,
+                operation,
+                runtime,
+            ))
+        }
         COMPOSE_EQUIPMENT => {
             let session_id = match read_long(message, "equipment compose session ID") {
                 Ok(value) => value,
@@ -496,8 +568,8 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 GameGoodsMessageOutcome::CiQingMount(
                     game.mount_ci_qing_from_hand(player_id, amount, runtime)
                         .expect(
-                            "resolved message player остаётся в CGame во время synchronous dispatch",
-                        ),
+                        "resolved message player остаётся в CGame во время synchronous dispatch",
+                    ),
                 )
             }
         }

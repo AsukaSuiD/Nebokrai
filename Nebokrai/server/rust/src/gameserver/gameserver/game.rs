@@ -272,7 +272,7 @@
 //! reconnect player snapshot остаются локальными границами; nullable раннюю
 //! ветвь `CMessage::SendAll` принимает отдельно как `Option`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CString;
 use std::fmt;
 use std::fs;
@@ -391,6 +391,13 @@ use crate::gameserver::appserver::session::cequipmentcompose::{
     CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
     EquipmentComposeAuditLog, EquipmentComposeOutcome, EquipmentComposeReport,
     EquipmentComposeSourceConsumption, EquipmentComposeSourceSnapshot,
+};
+use crate::gameserver::appserver::session::cequipmentdakong::{
+    CEquipmentDaKong, DA_KONG_USE_SINKER_INDEX, EquipmentDaKongAuditLog,
+    EquipmentDaKongClientUpdate, EquipmentDaKongEnchaseEvent, EquipmentDaKongGemSnapshot,
+    EquipmentDaKongGoodsSnapshot, EquipmentDaKongOperation, EquipmentDaKongOutcome,
+    EquipmentDaKongReport, deal_enchase_gems, deal_with_da_kong_external_attributes,
+    deal_with_da_kong_seven, equipment_da_kong_condition,
 };
 use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
 use crate::gameserver::appserver::shape::{
@@ -1210,6 +1217,29 @@ pub(crate) trait EquipmentComposeContext: OldClientGoodsCodec {
         &mut self,
         game: &mut CGame,
         player_id: i32,
+        script_path: &[u8],
+    );
+}
+
+pub(crate) trait EquipmentDaKongContext: OldClientGoodsCodec {
+    fn publish_equipment_da_kong_notification(
+        &mut self,
+        player_id: i32,
+        string_id: &'static str,
+    ) -> i32;
+    fn record_equipment_da_kong_log(&mut self, player: &CPlayer, log: &EquipmentDaKongAuditLog);
+    fn publish_equipment_da_kong_consumption(
+        &mut self,
+        consumption: &CiQingPacketConsumption,
+    ) -> Vec<i32>;
+    fn publish_equipment_da_kong_update(
+        &mut self,
+        update: &EquipmentDaKongClientUpdate,
+    ) -> Vec<i32>;
+    fn run_equipment_da_kong_script(
+        &mut self,
+        game: &mut CGame,
+        player: &mut CPlayer,
         script_path: &[u8],
     );
 }
@@ -4891,6 +4921,735 @@ impl CGame {
         report.script_dispatched = true;
         report.outcome = EquipmentComposeOutcome::Completed;
         report
+    }
+
+    pub(crate) fn process_equipment_da_kong<Context: EquipmentDaKongContext>(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        requested_plug_id: i32,
+        operation: EquipmentDaKongOperation,
+        context: &mut Context,
+    ) -> EquipmentDaKongReport {
+        let mut report = EquipmentDaKongReport {
+            session_id,
+            requested_plug_id,
+            actual_plug_id: None,
+            operation,
+            outcome: EquipmentDaKongOutcome::MissingSessionOrPlug,
+            return_value: 0,
+            notifications: Vec::new(),
+            packet_consumptions: Vec::new(),
+            packet_consumption_deliveries: Vec::new(),
+            gem_consumptions: Vec::new(),
+            logs: Vec::new(),
+            client_updates: Vec::new(),
+            client_update_deliveries: Vec::new(),
+            scripts: Vec::new(),
+        };
+        if self.session_factory.query_session(session_id).is_none() {
+            return report;
+        }
+        report.actual_plug_id = self
+            .session_factory
+            .query_session_plug_by_owner(session_id, 400, player_id)
+            .map(|plug| plug.id());
+        let Some(actual_plug_id) = report.actual_plug_id else {
+            return report;
+        };
+        if actual_plug_id != requested_plug_id {
+            report.outcome = EquipmentDaKongOutcome::PlugIdMismatch;
+            return report;
+        }
+        let Some(mut plug) = self
+            .session_factory
+            .take_equipment_da_kong_plug(actual_plug_id)
+        else {
+            return report;
+        };
+        let Some(mut player) = self.players.remove(&player_id) else {
+            self.session_factory
+                .register_equipment_da_kong_plug(actual_plug_id, plug);
+            return report;
+        };
+        report = self.process_equipment_da_kong_inner(&mut player, &mut plug, report, context);
+        self.players.insert(player_id, player);
+        self.session_factory
+            .register_equipment_da_kong_plug(actual_plug_id, plug);
+        report
+    }
+
+    fn process_equipment_da_kong_inner<Context: EquipmentDaKongContext>(
+        &mut self,
+        player: &mut CPlayer,
+        plug: &mut CEquipmentDaKong,
+        mut report: EquipmentDaKongReport,
+        context: &mut Context,
+    ) -> EquipmentDaKongReport {
+        if player.server_region_id().is_none() {
+            report.outcome = EquipmentDaKongOutcome::MissingRegion;
+            if matches!(
+                report.operation,
+                EquipmentDaKongOperation::EnchaseGem { .. }
+            ) {
+                report.return_value = 1;
+            }
+            return report;
+        }
+        match report.operation {
+            EquipmentDaKongOperation::DaKong { color_index } => {
+                self.equipment_da_kong_create_socket(
+                    player,
+                    plug,
+                    color_index,
+                    &mut report,
+                    context,
+                );
+            }
+            EquipmentDaKongOperation::ChangeRoleColor { socket } => {
+                self.equipment_da_kong_change_color(player, plug, socket, &mut report, context);
+            }
+            EquipmentDaKongOperation::QueryResult => {
+                if self.equipment_da_kong_publish_preview(player, plug, &mut report, context) {
+                    report.return_value = 1;
+                    report.outcome = EquipmentDaKongOutcome::Completed;
+                } else {
+                    report.outcome = EquipmentDaKongOutcome::PreviewRejected;
+                }
+            }
+            EquipmentDaKongOperation::EnchaseGem { parameter } => {
+                self.equipment_da_kong_enchase(player, plug, parameter, &mut report, context);
+            }
+            EquipmentDaKongOperation::DestroyGem { socket } => {
+                self.equipment_da_kong_destroy_gem(player, plug, socket, &mut report, context);
+            }
+        }
+        report
+    }
+
+    fn equipment_da_kong_equipment_id(plug: &CEquipmentDaKong) -> Option<CGuid> {
+        plug.upgrade_container().goods_id(
+            crate::gameserver::appserver::container::cequipmentdakongcontainer::DaKongCell::Equipment,
+        )
+    }
+
+    fn equipment_da_kong_gems(
+        &self,
+        player: &CPlayer,
+        plug: &CEquipmentDaKong,
+    ) -> [Option<EquipmentDaKongGemSnapshot>; 7] {
+        use crate::gameserver::appserver::container::cequipmentdakongcontainer::DaKongCell;
+        let cells = [
+            DaKongCell::GemOne,
+            DaKongCell::GemTwo,
+            DaKongCell::GemThree,
+            DaKongCell::GemFour,
+            DaKongCell::GemFive,
+            DaKongCell::GemSix,
+            DaKongCell::GemSeven,
+        ];
+        std::array::from_fn(|index| {
+            plug.upgrade_container()
+                .goods_id(cells[index])
+                .and_then(|goods_id| player.get_goods_by_id(goods_id))
+                .map(|goods| EquipmentDaKongGemSnapshot::capture(goods, &self.goods_factory))
+        })
+    }
+
+    fn equipment_da_kong_notify<Context: EquipmentDaKongContext>(
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+        player_id: i32,
+        string_id: &'static str,
+    ) {
+        report
+            .notifications
+            .push(context.publish_equipment_da_kong_notification(player_id, string_id));
+    }
+
+    fn equipment_da_kong_publish_update<Context: EquipmentDaKongContext>(
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+        player_id: i32,
+        goods: &CGoods,
+    ) {
+        let update = EquipmentDaKongClientUpdate {
+            player_id,
+            goods: goods.identity(),
+            old_client_payload: context.encode_goods_for_old_client(goods),
+        };
+        let deliveries = context.publish_equipment_da_kong_update(&update);
+        report.client_updates.push(update);
+        report.client_update_deliveries.push(deliveries);
+    }
+
+    fn equipment_da_kong_consume_packet<Context: EquipmentDaKongContext>(
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+        player: &mut CPlayer,
+        base_index: u32,
+    ) {
+        for consumption in player.remove_item_in_packet(base_index, 1) {
+            let deliveries = context.publish_equipment_da_kong_consumption(&consumption);
+            report.packet_consumptions.push(consumption);
+            report.packet_consumption_deliveries.push(deliveries);
+        }
+    }
+
+    fn equipment_da_kong_log<Context: EquipmentDaKongContext>(
+        &self,
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+        player: &CPlayer,
+        reason: u8,
+        cost_base_index: u32,
+        equipment: &CGoods,
+    ) {
+        self.equipment_da_kong_log_snapshot(
+            report,
+            context,
+            player,
+            reason,
+            cost_base_index,
+            EquipmentDaKongGoodsSnapshot::capture(equipment, &self.goods_factory),
+        );
+    }
+
+    fn equipment_da_kong_log_snapshot<Context: EquipmentDaKongContext>(
+        &self,
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+        player: &CPlayer,
+        reason: u8,
+        cost_base_index: u32,
+        equipment: EquipmentDaKongGoodsSnapshot,
+    ) {
+        if !self.da_kong_xiang_qian.log_key() {
+            return;
+        }
+        let Some(cost) = self
+            .goods_factory
+            .query_goods_base_properties(cost_base_index)
+        else {
+            return;
+        };
+        let log = EquipmentDaKongAuditLog {
+            player_id: player.player_id(),
+            reason,
+            cost_base_index,
+            cost_price: cost.price(),
+            cost_name: cost.name().to_vec(),
+            equipment,
+        };
+        context.record_equipment_da_kong_log(player, &log);
+        report.logs.push(log);
+    }
+
+    fn equipment_da_kong_run_script<Context: EquipmentDaKongContext>(
+        &mut self,
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+        player: &mut CPlayer,
+        script: &'static [u8],
+    ) {
+        context.run_equipment_da_kong_script(self, player, script);
+        report.scripts.push(script.to_vec());
+    }
+
+    fn equipment_da_kong_create_socket<Context: EquipmentDaKongContext>(
+        &mut self,
+        player: &mut CPlayer,
+        plug: &CEquipmentDaKong,
+        color_index: i32,
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+    ) {
+        const STONES: [&[u8]; 7] = [
+            b"FZ1042", b"FZ1043", b"FZ1044", b"FZ1045", b"FZ1046", b"FZ1047", b"FZ1048",
+        ];
+        let player_id = player.player_id();
+        let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
+            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+            return;
+        };
+        let Some(equipment) = player.get_goods_by_id(equipment_id) else {
+            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+            return;
+        };
+        let socket_count = equipment.da_kong_count(&self.goods_factory) as usize;
+        if socket_count > 6 {
+            report.outcome = EquipmentDaKongOutcome::ConditionRejected;
+            return;
+        }
+        let stone_index = self
+            .goods_factory
+            .query_goods_id_by_original_name(Some(STONES[socket_count]));
+        if player.check_item_in_packet(stone_index) == 0
+            || equipment.addon_property_value(
+                &self.goods_factory,
+                crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_DAKONG_1
+                    + socket_count as i32,
+                1,
+            ) != 1
+        {
+            Self::equipment_da_kong_notify(report, context, player_id, "GS1166");
+            report.outcome = EquipmentDaKongOutcome::MissingResource;
+            return;
+        }
+        let succeeded = {
+            let (setup, random_state) = (&self.da_kong_xiang_qian, &mut self.random_state);
+            setup.get_success_probability(socket_count as i32, |upper_bound| {
+                game_legacy_random(random_state, upper_bound)
+            })
+        };
+        if succeeded {
+            let mut color = {
+                let (setup, random_state) = (&self.da_kong_xiang_qian, &mut self.random_state);
+                setup.get_color(color_index, |upper_bound| {
+                    game_legacy_random(random_state, upper_bound)
+                })
+            };
+            if socket_count == 6 {
+                color = 6;
+            }
+            let (new_count, equipment_base_index) = {
+                let equipment = player
+                    .get_goods_by_id_mut(equipment_id)
+                    .expect("DaKong equipment проверен до socket mutation");
+                let _ = equipment.set_addon_property_modifier_core(
+                    crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_DAKONG_1
+                        + socket_count as i32,
+                    1,
+                    color.wrapping_add(1),
+                );
+                (
+                    equipment.da_kong_count(&self.goods_factory),
+                    equipment.base_properties_index(),
+                )
+            };
+            if new_count == 6 {
+                self.equipment_da_kong_run_script(
+                    report,
+                    context,
+                    player,
+                    b"scripts/goods/hole06_gonggao.script",
+                );
+            } else if new_count == 7 {
+                self.equipment_da_kong_run_script(
+                    report,
+                    context,
+                    player,
+                    b"scripts/goods/hole07_gonggao.script",
+                );
+            }
+            if matches!(new_count, 3 | 6 | 7) {
+                let group = match new_count {
+                    3 => 0,
+                    6 => 1,
+                    _ => 2,
+                };
+                let external = {
+                    let (setup, random_state) = (&self.da_kong_xiang_qian, &mut self.random_state);
+                    setup.make_sure_external_attribute(group, equipment_base_index, |upper_bound| {
+                        game_legacy_random(random_state, upper_bound)
+                    })
+                };
+                let property =
+                    crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_DAKONG_EXTERN_1
+                        + group;
+                let equipment = player
+                    .get_goods_by_id_mut(equipment_id)
+                    .expect("DaKong equipment сохраняется после announcement script");
+                let (external_type, external_value) = external.unwrap_or_default();
+                let _ = equipment.set_addon_property_value_first_core(property, 1, external_type);
+                let _ = equipment.set_addon_property_modifier_core(property, 2, external_value);
+            }
+            Self::equipment_da_kong_notify(report, context, player_id, "GS1164");
+        } else {
+            Self::equipment_da_kong_notify(report, context, player_id, "GS1165");
+        }
+        let equipment = player
+            .get_goods_by_id(equipment_id)
+            .expect("DaKong equipment сохраняется до audit");
+        self.equipment_da_kong_log(report, context, player, 1, stone_index, equipment);
+        Self::equipment_da_kong_consume_packet(report, context, player, stone_index);
+        let _ = self.equipment_da_kong_publish_preview(player, plug, report, context);
+        report.return_value = 1;
+        report.outcome = EquipmentDaKongOutcome::Completed;
+    }
+
+    fn equipment_da_kong_publish_preview<Context: EquipmentDaKongContext>(
+        &self,
+        player: &CPlayer,
+        plug: &CEquipmentDaKong,
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+    ) -> bool {
+        let goods = Self::equipment_da_kong_equipment_id(plug)
+            .and_then(|goods_id| player.get_goods_by_id(goods_id))
+            .or_else(|| player.get_goods_by_id(plug.upgrade_container().last_goods()));
+        let Some(mut preview) = goods.cloned() else {
+            return false;
+        };
+        let gems = self.equipment_da_kong_gems(player, plug);
+        let _ = deal_enchase_gems(&mut preview, &gems, &self.goods_factory, false);
+        Self::equipment_da_kong_publish_update(report, context, player.player_id(), &preview);
+        true
+    }
+
+    fn equipment_da_kong_change_color<Context: EquipmentDaKongContext>(
+        &mut self,
+        player: &mut CPlayer,
+        plug: &CEquipmentDaKong,
+        socket: i32,
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+    ) {
+        if !(1..=7).contains(&socket) {
+            report.outcome = EquipmentDaKongOutcome::InvalidParameter;
+            return;
+        }
+        let player_id = player.player_id();
+        let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
+            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+            return;
+        };
+        let property =
+            crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_DAKONG_1 + socket - 1;
+        let Some(equipment) = player.get_goods_by_id(equipment_id) else {
+            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+            return;
+        };
+        let color = equipment.addon_property_value(&self.goods_factory, property, 1);
+        let gem_index = equipment.addon_property_value(&self.goods_factory, property, 2);
+        if !(2..=8).contains(&color) || gem_index != 0 {
+            Self::equipment_da_kong_notify(report, context, player_id, "GS1170");
+            report.return_value = 1;
+            report.outcome = EquipmentDaKongOutcome::ConditionRejected;
+            return;
+        }
+        let stone_index = self
+            .goods_factory
+            .query_goods_id_by_original_name(Some(b"FZ1049"));
+        if player.check_item_in_packet(stone_index) == 0 {
+            Self::equipment_da_kong_notify(report, context, player_id, "GS1171");
+            report.return_value = 1;
+            report.outcome = EquipmentDaKongOutcome::MissingResource;
+            return;
+        }
+        Self::equipment_da_kong_consume_packet(report, context, player, stone_index);
+        if player
+            .get_goods_by_id(equipment_id)
+            .is_some_and(|equipment| {
+                equipment.addon_property_value(&self.goods_factory, property, 2) >= 1
+            })
+        {
+            Self::equipment_da_kong_notify(report, context, player_id, "GS1172");
+            report.return_value = 1;
+            report.outcome = EquipmentDaKongOutcome::ConditionRejected;
+            return;
+        }
+        let mut new_color = {
+            let (setup, random_state) = (&self.da_kong_xiang_qian, &mut self.random_state);
+            setup.get_color(socket - 1, |upper_bound| {
+                game_legacy_random(random_state, upper_bound)
+            })
+        };
+        if socket == 7 {
+            new_color = 6;
+        }
+        let equipment = player
+            .get_goods_by_id_mut(equipment_id)
+            .expect("color equipment проверен до mutation");
+        let _ = equipment.set_addon_property_modifier_core(property, 1, new_color.wrapping_add(1));
+        Self::equipment_da_kong_notify(report, context, player_id, "GS1173");
+        let equipment = player
+            .get_goods_by_id(equipment_id)
+            .expect("color equipment сохраняется до audit/update");
+        self.equipment_da_kong_log(report, context, player, 0, stone_index, equipment);
+        Self::equipment_da_kong_publish_update(report, context, player_id, equipment);
+        report.return_value = 1;
+        report.outcome = EquipmentDaKongOutcome::Completed;
+    }
+
+    fn equipment_da_kong_consume_shadow_gems<Context: EquipmentDaKongContext>(
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+        player: &mut CPlayer,
+        plug: &mut CEquipmentDaKong,
+    ) {
+        use crate::gameserver::appserver::container::cequipmentdakongcontainer::DaKongCell;
+        let ledger = plug
+            .upgrade_container()
+            .equipment_goods()
+            .iter()
+            .map(|(&position, &goods_id)| (position, goods_id))
+            .collect::<Vec<_>>();
+        for (position, goods_id) in ledger {
+            let Some(cell) = DaKongCell::from_position(position) else {
+                continue;
+            };
+            if goods_id == CGuid::GUID_INVALID {
+                continue;
+            }
+            let previous = plug
+                .upgrade_container()
+                .original_container_information(goods_id)
+                .unwrap_or_default();
+            let identity = player
+                .get_goods_by_id(goods_id)
+                .map(CGoods::identity)
+                .unwrap_or(ShapeIdentity {
+                    object_type: 700,
+                    id: 0,
+                    ex_id: goods_id,
+                });
+            let mut external_deliveries = Vec::new();
+            if let Some(consumption) = player.remove_packet_goods_by_id(goods_id, 1) {
+                external_deliveries = context.publish_equipment_da_kong_consumption(&consumption);
+                report.packet_consumptions.push(consumption);
+                report
+                    .packet_consumption_deliveries
+                    .push(external_deliveries.clone());
+                let _ = plug
+                    .upgrade_container_mut()
+                    .on_source_removed(Some(goods_id), 1);
+            } else {
+                let _ = plug
+                    .upgrade_container_mut()
+                    .invalidate_equipment_goods(position);
+            }
+            report.gem_consumptions.push(
+                crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongGemConsumption {
+                    cell,
+                    goods: identity,
+                    previous,
+                    external_deliveries,
+                },
+            );
+        }
+    }
+
+    fn equipment_da_kong_enchase<Context: EquipmentDaKongContext>(
+        &mut self,
+        player: &mut CPlayer,
+        plug: &mut CEquipmentDaKong,
+        _parameter: i32,
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+    ) {
+        let player_id = player.player_id();
+        let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
+            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+            report.return_value = 1;
+            return;
+        };
+        let gems = self.equipment_da_kong_gems(player, plug);
+        let effects = {
+            let Some(equipment) = player.get_goods_by_id_mut(equipment_id) else {
+                report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+                report.return_value = 1;
+                return;
+            };
+            deal_enchase_gems(equipment, &gems, &self.goods_factory, true)
+        };
+        let changed = effects
+            .events
+            .iter()
+            .any(|event| matches!(event, EquipmentDaKongEnchaseEvent::GemApplied { .. }));
+        for event in effects.events {
+            match event {
+                EquipmentDaKongEnchaseEvent::Notification(string_id) => {
+                    Self::equipment_da_kong_notify(report, context, player_id, string_id);
+                }
+                EquipmentDaKongEnchaseEvent::GemApplied {
+                    gem,
+                    equipment,
+                    audit,
+                } => {
+                    if audit {
+                        self.equipment_da_kong_log_snapshot(
+                            report,
+                            context,
+                            player,
+                            2,
+                            gem.base_index,
+                            equipment,
+                        );
+                    }
+                }
+                EquipmentDaKongEnchaseEvent::Script(script) => {
+                    self.equipment_da_kong_run_script(report, context, player, script);
+                }
+            }
+        }
+        if changed {
+            Self::equipment_da_kong_notify(report, context, player_id, "GS1167");
+        }
+        Self::equipment_da_kong_consume_shadow_gems(report, context, player, plug);
+        let equipment = player
+            .get_goods_by_id(equipment_id)
+            .expect("enchase equipment сохраняется после gem consumption");
+        Self::equipment_da_kong_publish_update(report, context, player_id, equipment);
+        report.return_value = 1;
+        report.outcome = EquipmentDaKongOutcome::Completed;
+    }
+
+    fn equipment_da_kong_destroy_gem<Context: EquipmentDaKongContext>(
+        &mut self,
+        player: &mut CPlayer,
+        plug: &CEquipmentDaKong,
+        socket: u32,
+        report: &mut EquipmentDaKongReport,
+        context: &mut Context,
+    ) {
+        let player_id = player.player_id();
+        let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
+            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+            return;
+        };
+        if player.check_item_in_packet(DA_KONG_USE_SINKER_INDEX) == 0 {
+            Self::equipment_da_kong_notify(report, context, player_id, "GS1174");
+            report.outcome = EquipmentDaKongOutcome::MissingResource;
+            return;
+        }
+        let gems = self.equipment_da_kong_gems(player, plug);
+        let mut removed = false;
+        let mut new_seven_after_removal = None;
+        if (1..=7).contains(&socket) {
+            let property = crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_DAKONG_1
+                + socket as i32
+                - 1;
+            let (socket_color, gem_index) = player
+                .get_goods_by_id(equipment_id)
+                .map(|equipment| {
+                    (
+                        equipment.addon_property_value(&self.goods_factory, property, 1),
+                        equipment.addon_property_value(&self.goods_factory, property, 2) as u32,
+                    )
+                })
+                .unwrap_or_default();
+            if !(2..=8).contains(&socket_color) || gem_index == 0 {
+                Self::equipment_da_kong_notify(report, context, player_id, "GS1175");
+            } else {
+                let slot_seven = gems[6].or_else(|| {
+                    player.get_goods_by_id(equipment_id).and_then(|equipment| {
+                        EquipmentDaKongGemSnapshot::from_catalog(
+                            equipment.addon_property_value(
+                                &self.goods_factory,
+                                crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_DAKONG_1 + 6,
+                                2,
+                            ) as u32,
+                            &self.goods_factory,
+                        )
+                    })
+                });
+                let equipment = player
+                    .get_goods_by_id_mut(equipment_id)
+                    .expect("destroy equipment проверен до mutation");
+                deal_with_da_kong_external_attributes(
+                    equipment,
+                    &self.goods_factory,
+                    slot_seven,
+                    false,
+                );
+                if socket != 7 {
+                    deal_with_da_kong_seven(equipment, &self.goods_factory, false);
+                }
+                let mut add_types = BTreeSet::new();
+                CDaKongXiangQian::get_add_type(&mut add_types);
+                if let Some(base) = self.goods_factory.query_goods_base_properties(gem_index) {
+                    let gem =
+                        EquipmentDaKongGemSnapshot::from_catalog(gem_index, &self.goods_factory);
+                    let gem_color = base
+                        .get_addon_property_values(
+                            crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BAOSHI_COLOR,
+                        )
+                        .iter()
+                        .find(|value| value.id == 1)
+                        .map_or(0, |value| value.base_value);
+                    for addon in base.addon_properties() {
+                        if !add_types.contains(&addon.property_type) {
+                            continue;
+                        }
+                        let mut value = addon
+                            .values
+                            .iter()
+                            .find(|value| value.id == 1)
+                            .or_else(|| addon.values.first())
+                            .map_or(0, |value| value.base_value);
+                        if socket < 7 && gem_color == 8 {
+                            value = 0;
+                        }
+                        if socket == 7 && gem_color != 8 {
+                            value /= 2;
+                        }
+                        if socket == 7
+                            && gem_color == 8
+                            && !gem.is_some_and(|gem| {
+                                equipment_da_kong_condition(gem, equipment, &self.goods_factory)
+                            })
+                        {
+                            value = 0;
+                        }
+                        let _ = equipment.cut_addon_property_value(
+                            &self.goods_factory,
+                            addon.property_type,
+                            1,
+                            value,
+                            gem_index,
+                        );
+                    }
+                }
+                let _ = equipment.set_addon_property_modifier_core(property, 2, 0);
+                deal_with_da_kong_seven(equipment, &self.goods_factory, true);
+                let new_seven_index = equipment.addon_property_value(
+                    &self.goods_factory,
+                    crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_DAKONG_1 + 6,
+                    2,
+                ) as u32;
+                new_seven_after_removal = gems[6].or_else(|| {
+                    EquipmentDaKongGemSnapshot::from_catalog(new_seven_index, &self.goods_factory)
+                });
+                removed = true;
+            }
+        }
+        if removed {
+            Self::equipment_da_kong_consume_packet(
+                report,
+                context,
+                player,
+                DA_KONG_USE_SINKER_INDEX,
+            );
+            let equipment = player
+                .get_goods_by_id_mut(equipment_id)
+                .expect("destroy equipment сохраняется до extern restore");
+            deal_with_da_kong_external_attributes(
+                equipment,
+                &self.goods_factory,
+                new_seven_after_removal,
+                true,
+            );
+            let equipment = player
+                .get_goods_by_id(equipment_id)
+                .expect("destroy equipment сохраняется до audit");
+            self.equipment_da_kong_log(
+                report,
+                context,
+                player,
+                3,
+                DA_KONG_USE_SINKER_INDEX,
+                equipment,
+            );
+        }
+        let mut preview = player
+            .get_goods_by_id(equipment_id)
+            .expect("destroy equipment сохраняется до preview")
+            .clone();
+        let _ = deal_enchase_gems(&mut preview, &gems, &self.goods_factory, false);
+        Self::equipment_da_kong_publish_update(report, context, player_id, &preview);
+        report.return_value = 1;
+        report.outcome = EquipmentDaKongOutcome::Completed;
     }
 
     pub(crate) const fn words_filter(&self) -> &CWordsFilter {

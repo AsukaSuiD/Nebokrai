@@ -4,7 +4,7 @@
 //! `server/gameserver/appserver/goods/cgoods.h/.cpp`. Материализованы shape
 //! identity, base-properties index, amount/price/add-ticket/description,
 //! ordered addon storage, first-match lookup с fallback в registry, exact
-//! instance-addon mutation, stack classification/limit, equipment-upgrade
+//! instance-addon mutation, DaKong modifier/cut/color semantics, stack classification/limit, equipment-upgrade
 //! eligibility, timed equipment start-point, wrapping weight и адаптеры
 //! ordinary/battle-fairy свойств к addon storage. BF-upgrade eligibility
 //! проверяет catalog equipment type и instance-only level marker.
@@ -22,18 +22,19 @@ use super::cbattlefairyproperty::{
     BattleFairyExpBlock, BattleFairyExpReport, BattleFairyPlayerFacts, CBattleFairyProperty,
 };
 use super::cgoodsbaseproperties::{
-    CGoodsBaseProperties, EQUIP_PLACE_HEADGEAR, GAP_BF_AGILITY, GAP_BF_AGILITY_BASE, GAP_BF_BLAST,
-    GAP_BF_BRAVE, GAP_BF_BRAVE_BASE, GAP_BF_CURRENT_EXP, GAP_BF_CURRENT_MAX_EXP,
-    GAP_BF_CUT_HURT_SCALE, GAP_BF_HP, GAP_BF_LEVEL, GAP_BF_MODULE, GAP_BF_MP, GAP_BF_PULLULATERATE,
-    GAP_BF_SPRITE, GAP_BF_SPRITUALISM, GAP_BF_SPRITUALISM_BASE, GAP_BF_STRENGH,
-    GAP_BF_STRENGH_BASE, GAP_DAKONG_1, GAP_FAIRY_AGILITY, GAP_FAIRY_AGILITY_BASE_VALUE,
-    GAP_FAIRY_COMBINATED_TIMES, GAP_FAIRY_EGG_ID, GAP_FAIRY_EXP, GAP_FAIRY_GROWING_RATE,
-    GAP_FAIRY_HP, GAP_FAIRY_HP_BASE_VALUE, GAP_FAIRY_LEVEL, GAP_FAIRY_MAIN_ABILITY,
-    GAP_FAIRY_MAX_COMBINATED_TIMES, GAP_FAIRY_MAX_EXP, GAP_FAIRY_RIPE_ID, GAP_FAIRY_RIPE_MAX_LEVEL,
-    GAP_FAIRY_RIPE_MIN_LEVEL, GAP_FAIRY_STATE, GAP_FAIRY_STRENGTH, GAP_FAIRY_STRENGTH_BASE_VALUE,
-    GAP_FAIRY_WAKAN, GAP_FAIRY_WAKAN_BASE_VALUE, GAP_FAIRY_YOUNG_ID, GAP_GOODS_LIFE_TYPE,
-    GAP_GOODS_STACKING_LIMIT, GAP_GOODS_START_POINT, GAP_ROLE_MINIMUM_LEVEL_LIMIT,
-    GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
+    CGoodsBaseProperties, EQUIP_PLACE_HEADGEAR, GAP_BAOSHI_COLOR, GAP_BF_AGILITY,
+    GAP_BF_AGILITY_BASE, GAP_BF_BLAST, GAP_BF_BRAVE, GAP_BF_BRAVE_BASE, GAP_BF_CURRENT_EXP,
+    GAP_BF_CURRENT_MAX_EXP, GAP_BF_CUT_HURT_SCALE, GAP_BF_HP, GAP_BF_LEVEL, GAP_BF_MODULE,
+    GAP_BF_MP, GAP_BF_PULLULATERATE, GAP_BF_SPRITE, GAP_BF_SPRITUALISM, GAP_BF_SPRITUALISM_BASE,
+    GAP_BF_STRENGH, GAP_BF_STRENGH_BASE, GAP_DAKONG_1, GAP_FAIRY_AGILITY,
+    GAP_FAIRY_AGILITY_BASE_VALUE, GAP_FAIRY_COMBINATED_TIMES, GAP_FAIRY_EGG_ID, GAP_FAIRY_EXP,
+    GAP_FAIRY_GROWING_RATE, GAP_FAIRY_HP, GAP_FAIRY_HP_BASE_VALUE, GAP_FAIRY_LEVEL,
+    GAP_FAIRY_MAIN_ABILITY, GAP_FAIRY_MAX_COMBINATED_TIMES, GAP_FAIRY_MAX_EXP, GAP_FAIRY_RIPE_ID,
+    GAP_FAIRY_RIPE_MAX_LEVEL, GAP_FAIRY_RIPE_MIN_LEVEL, GAP_FAIRY_STATE, GAP_FAIRY_STRENGTH,
+    GAP_FAIRY_STRENGTH_BASE_VALUE, GAP_FAIRY_WAKAN, GAP_FAIRY_WAKAN_BASE_VALUE, GAP_FAIRY_YOUNG_ID,
+    GAP_GOODS_LIFE_TYPE, GAP_GOODS_STACKING_LIMIT, GAP_GOODS_START_POINT,
+    GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT,
+    GOODS_TYPE_USELESS,
 };
 use super::cgoodsfactory::CGoodsFactory;
 use super::fairyproperties::{CFairyProperties, FairyExpBlock, FairyExpReport, FairyExpRuntime};
@@ -620,6 +621,31 @@ impl CGoods {
         changed
     }
 
+    /// DaKong-facing exact prefix `SetAddonPropertyValue`: native функция
+    /// останавливается на первой паре property/value.
+    pub(crate) fn set_addon_property_value_first_core(
+        &mut self,
+        property_type: i32,
+        value_id: u32,
+        value: i32,
+    ) -> bool {
+        let Some(found) = self
+            .addon_properties
+            .iter_mut()
+            .find(|property| property.property_type == property_type)
+            .and_then(|property| {
+                property
+                    .values
+                    .iter_mut()
+                    .find(|value| value.id == value_id)
+            })
+        else {
+            return false;
+        };
+        found.modifier = value.wrapping_sub(found.base_value);
+        true
+    }
+
     /// Safe replacement pointer-а `lCurrentExp`: первый instance value
     /// возвращает именно modifier, не сумму base+modifier.
     pub(crate) fn instance_addon_modifier(&self, property_type: i32, value_id: u32) -> Option<i32> {
@@ -651,6 +677,113 @@ impl CGoods {
         };
         value.modifier = modifier;
         true
+    }
+
+    /// Exact `SetAddonPropertyModifier`: меняет только первое найденное
+    /// instance-value и хранит переданное число именно как modifier.
+    pub(crate) fn set_addon_property_modifier_core(
+        &mut self,
+        property_type: i32,
+        value_id: u32,
+        modifier: i32,
+    ) -> bool {
+        self.set_instance_addon_modifier(property_type, value_id, modifier)
+    }
+
+    /// Exact `CutAddonPropertyValue`: существующий modifier уменьшается и
+    /// clamp-ится к нулю. Отрицательный расход создаёт instance-property из
+    /// универсальной пары значений либо из схемы source goods.
+    pub(crate) fn cut_addon_property_value(
+        &mut self,
+        factory: &CGoodsFactory,
+        property_type: i32,
+        value_id: u32,
+        amount: i32,
+        source_goods_index: u32,
+    ) -> bool {
+        if let Some(value) = self
+            .addon_properties
+            .iter_mut()
+            .find(|property| property.property_type == property_type)
+            .and_then(|property| {
+                property
+                    .values
+                    .iter_mut()
+                    .find(|value| value.id == value_id)
+            })
+        {
+            value.modifier = value.modifier.wrapping_sub(amount).max(0);
+            return true;
+        }
+        if amount >= 0 {
+            return true;
+        }
+
+        let new_modifier = amount.wrapping_neg();
+        if source_goods_index == 0 {
+            self.addon_properties.push(GoodsAddonProperty {
+                property_type,
+                is_enabled: 1,
+                is_implicit_attribute: 0,
+                values: [1, 2]
+                    .into_iter()
+                    .map(|id| GoodsAddonPropertyValue {
+                        id,
+                        base_value: 0,
+                        modifier: if id == value_id { new_modifier } else { 0 },
+                    })
+                    .collect(),
+            });
+            return true;
+        }
+
+        if let Some(source) = factory
+            .query_goods_base_properties(source_goods_index)
+            .and_then(|properties| {
+                properties
+                    .addon_properties()
+                    .iter()
+                    .find(|property| property.property_type == property_type)
+            })
+        {
+            self.addon_properties.push(GoodsAddonProperty {
+                property_type,
+                is_enabled: source.is_enabled,
+                is_implicit_attribute: source.is_implicit_attribute,
+                values: source
+                    .values
+                    .iter()
+                    .map(|value| GoodsAddonPropertyValue {
+                        id: value.id,
+                        base_value: 0,
+                        modifier: if value.id == value_id {
+                            new_modifier
+                        } else {
+                            0
+                        },
+                    })
+                    .collect(),
+            });
+        }
+        true
+    }
+
+    /// Exact `QueryEnchanseColor`: считает цвет catalog gem-а в семи
+    /// сохранённых socket index-ах, включая непоследовательные отверстия.
+    pub(crate) fn query_enchanse_color(&self, factory: &CGoodsFactory, color: i32) -> i32 {
+        (0..7).fold(0i32, |count, offset| {
+            let gem_index = self.addon_property_value(factory, GAP_DAKONG_1 + offset, 2) as u32;
+            let gem_color = factory
+                .query_goods_base_properties(gem_index)
+                .and_then(|properties| {
+                    properties
+                        .get_addon_property_values(GAP_BAOSHI_COLOR)
+                        .iter()
+                        .find(|value| value.id == 1)
+                })
+                .map_or(0, |value| value.base_value);
+            count.wrapping_add(i32::from(gem_color != 0 && gem_color == color))
+        })
     }
 
     pub(crate) fn goods_time_type(&self, factory: &CGoodsFactory) -> u32 {
@@ -939,20 +1072,6 @@ impl CGoods {
 //
 
 // ============================================================================
-// FUNCTION: CGoods::SetAddonPropertyModifier
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:397
-// RVA: 0x000CA6C0
-// ADDRESS: 004ca6c0
-// PROTOTYPE: int __thiscall SetAddonPropertyModifier(GOODS_ADDON_PROPERTIES param_1, ulong param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CGoods::SetAddonPropertyValue
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -1115,20 +1234,6 @@ impl CGoods {
 // RVA: 0x000CB640
 // ADDRESS: 004cb640
 // PROTOTYPE: int __thiscall QueryDaKongCount(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::QueryEnchanseColor
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:1519
-// RVA: 0x000CB680
-// ADDRESS: 004cb680
-// PROTOTYPE: int __thiscall QueryEnchanseColor(int param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -1353,20 +1458,6 @@ impl CGoods {
 // RVA: 0x000CC9A0
 // ADDRESS: 004cc9a0
 // PROTOTYPE: void __thiscall CopyAddonProperties(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoods::CutAddonPropertyValue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoods.cpp:1386
-// RVA: 0x000CC9D0
-// ADDRESS: 004cc9d0
-// PROTOTYPE: bool __thiscall CutAddonPropertyValue(GOODS_ADDON_PROPERTIES param_1, ulong param_2, int param_3, int param_4)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
