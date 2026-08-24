@@ -19,8 +19,9 @@
 //! dispatcher после освобождения mutable country borrow. `AddToExileList`
 //! заменяет прежнюю запись текущим `timeGetTime` sample и сохраняет ordered
 //! player-ID traversal для `0x6030E/0x7FF15`. Остальные governance, exile-time,
-//! quest и message методы владельца ниже ещё сохраняют RAW. `BTreeMap` и owned
-//! state заменяют STL nodes/raw pointers.
+//! quest-switch публикует World `0x60315` до локальной map-мутации, как original
+//! `SetQuestSwitch`. Остальные governance, exile-time и message методы владельца
+//! ниже ещё сохраняют RAW. `BTreeMap` и owned state заменяют STL nodes/pointers.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -77,6 +78,14 @@ pub(crate) struct CountryExileMutationReport {
     pub(crate) player_id: i32,
     pub(crate) previous_started_at_ms: Option<i32>,
     pub(crate) applied_started_at_ms: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryQuestSwitchMutationReport {
+    pub(crate) country_id: u8,
+    pub(crate) job: u8,
+    pub(crate) previous: Option<bool>,
+    pub(crate) applied: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -216,6 +225,30 @@ impl CCountry {
 
     pub(crate) fn exile_player_ids(&self) -> Vec<i32> {
         self.exile_started_at_ms.keys().copied().collect()
+    }
+
+    pub(crate) fn quest_switch_message(&self, job: u8, enabled: bool) -> CMessage {
+        let mut message = CMessage::new(0x0006_0315);
+        message.base_mut().add_byte(self.country_id);
+        message.base_mut().add_byte(job);
+        message.base_mut().add_byte(u8::from(enabled));
+        message
+    }
+
+    /// Caller отправляет `quest_switch_message` до этого вызова, сохраняя exact
+    /// `SetQuestSwitch` ordering: World side effect предшествует local map write.
+    pub(crate) fn apply_quest_switch(
+        &mut self,
+        job: u8,
+        enabled: bool,
+    ) -> CountryQuestSwitchMutationReport {
+        let previous = self.quest_switches.insert(job, enabled);
+        CountryQuestSwitchMutationReport {
+            country_id: self.country_id,
+            job,
+            previous,
+            applied: enabled,
+        }
     }
 
     /// Exact `SetCountryTreasury`: сначала публикует новое значение, затем
@@ -413,7 +446,7 @@ fn take_country_bytes<'a>(
 
 // ============================================================================
 // FUNCTION: CCountry::SetQuestSwitch
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\country\country.cpp:192
