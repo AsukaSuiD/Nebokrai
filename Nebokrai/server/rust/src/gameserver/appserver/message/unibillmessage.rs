@@ -11,7 +11,9 @@
 //! seller/buyer plugs. Auction subset `type 3`
 //! завершает pending `CGoodsNode`: логирует сделку, посылает success/self
 //! refresh, синхронизирует обе YuanBao wallet или `0x60814` offline seller.
-//! Остальные UniBill cases остаются ниже RAW до их session owners.
+//! Auth/refresh `0xFF001/0xFF004` выполняют player/account lookup, exact
+//! balance mutation и failure log; Win32 GUI-log заменён stderr, а совместимый
+//! `Bill` file sink сохранён общей реализацией `put_string_to_file`.
 
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::player::{
@@ -22,9 +24,12 @@ use crate::gameserver::gameserver::game::{
     colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::public::tools::put_string_to_file;
 
 const INCREMENT_PURCHASE_RESPONSE: i32 = 0x000F_F002;
+const BILLING_AUTH_RESPONSE: i32 = 0x000F_F001;
 const BILLING_TRADE_RESPONSE: i32 = 0x000F_F003;
+const BILLING_REFRESH_RESPONSE: i32 = 0x000F_F004;
 const INCREMENT_PURCHASE_AUDIT: i32 = 0x0006_020D;
 
 pub(crate) trait IncrementShopBillingContext: GameContainerMessageRuntime {
@@ -52,6 +57,8 @@ pub(crate) enum IncrementShopBillingOutcome {
     PlayerTradeRejected { receiver_id: i32, result: i32 },
     PersonalShopCompleted { seller_id: i32 },
     PersonalShopRejected { seller_id: i32, result: i32 },
+    BillingBalanceCompleted,
+    BillingBalanceRejected { result: i32 },
     Completed,
 }
 
@@ -84,6 +91,12 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: IncrementShopBill
     game: &mut CGame,
     context: &mut Context,
 ) -> Option<Result<IncrementShopBillingReport, IncrementShopBillingMessageError>> {
+    if message.message_type() == BILLING_AUTH_RESPONSE {
+        return Some(dispatch_billing_auth(message, game, context));
+    }
+    if message.message_type() == BILLING_REFRESH_RESPONSE {
+        return Some(dispatch_billing_refresh(message, game, context));
+    }
     if message.message_type() == BILLING_TRADE_RESPONSE {
         let unread = message.unread_bytes();
         if unread.len() < 24 {
@@ -270,6 +283,67 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: IncrementShopBill
     }
     report.outcome = IncrementShopBillingOutcome::Completed;
     Some(Ok(report))
+}
+
+fn dispatch_billing_auth<Context: IncrementShopBillingContext>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    context: &mut Context,
+) -> Result<IncrementShopBillingReport, IncrementShopBillingMessageError> {
+    let player_id = read_billing_long(message, "billing auth player id")?;
+    let mut report = empty_trade_report(player_id, Vec::new());
+    if game.find_player(player_id).is_none() {
+        return Ok(report);
+    }
+    let result = read_billing_long(message, "billing auth result")?;
+    if result != 0 {
+        log_billing_failure(message.socket_id(), "MSG_B2S_BILLING_AUTHEN", result);
+        report.outcome = IncrementShopBillingOutcome::BillingBalanceRejected { result };
+        return Ok(report);
+    }
+    let current = read_billing_long(message, "billing auth yuan bao")? as u32;
+    report.last_point = Some(current);
+    let change = set_billing_yuan_bao(game, player_id, current)
+        .expect("billing auth player проверен перед balance mutation");
+    report
+        .yuan_bao_deliveries
+        .extend(context.publish_increment_shop_yuan_bao_change(&change));
+    report.yuan_bao_change = Some(change);
+    report.outcome = IncrementShopBillingOutcome::BillingBalanceCompleted;
+    Ok(report)
+}
+
+fn dispatch_billing_refresh<Context: IncrementShopBillingContext>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    context: &mut Context,
+) -> Result<IncrementShopBillingReport, IncrementShopBillingMessageError> {
+    let account = message.base_mut().get_str_bytes(0x40).ok_or(
+        IncrementShopBillingMessageError::MissingField("billing refresh account"),
+    )?;
+    let player_id = game
+        .find_player_by_account(&account)
+        .map_or(0, |player| player.player_id());
+    let mut report = empty_trade_report(player_id, Vec::new());
+    if player_id == 0 {
+        return Ok(report);
+    }
+    let result = read_billing_long(message, "billing refresh result")?;
+    if result != 0 {
+        log_billing_failure(message.socket_id(), "MSG_B2S_BILLING_REFRESH", result);
+        report.outcome = IncrementShopBillingOutcome::BillingBalanceRejected { result };
+        return Ok(report);
+    }
+    let current = read_billing_long(message, "billing refresh yuan bao")? as u32;
+    report.last_point = Some(current);
+    let change = set_billing_yuan_bao(game, player_id, current)
+        .expect("billing refresh account lookup вернул canonical player");
+    report
+        .yuan_bao_deliveries
+        .extend(context.publish_increment_shop_yuan_bao_change(&change));
+    report.yuan_bao_change = Some(change);
+    report.outcome = IncrementShopBillingOutcome::BillingBalanceCompleted;
+    Ok(report)
 }
 
 fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
@@ -576,51 +650,8 @@ fn add_c_string(message: &mut CMessage, value: &[u8]) {
     message.base_mut().add_byte(0);
 }
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\unibillmessage.cpp
-// ============================================================================
-// FUNCTION: OnUniBillMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\unibillmessage.cpp:166
-// RVA: 0x00087050
-// ADDRESS: 00487050
-// PROTOTYPE: void __cdecl OnUniBillMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@005c4ac6
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\unibillmessage.cpp
-// RVA: 0x001C4AC6
-// ADDRESS: 005c4ac6
-// PROTOTYPE: undefined Catch@005c4ac6()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@005c4b66
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\unibillmessage.cpp
-// RVA: 0x001C4B66
-// ADDRESS: 005c4b66
-// PROTOTYPE: undefined Catch@005c4b66()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
+fn log_billing_failure(socket_id: i32, operation: &str, result: i32) {
+    let line = format!("{socket_id} : Receive {operation} : (RES){result}...");
+    eprintln!("{line}");
+    put_string_to_file("Bill", line.as_bytes());
+}

@@ -3,7 +3,8 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/message/containermessage.cpp`. Материализован
 //! полные player packet/equipment ↔ enhancement-shadow и equipment-session
-//! upgrade/DaKong/compose и входной auction-listing проходы `0x90301`:
+//! upgrade/DaKong/compose, personal-shop seller и входной auction-listing
+//! проходы `0x90301`:
 //! одиннадцать wire-полей, outer changing/region/progress/death guards,
 //! Receive-нормализация owner ID, точный source position/GUID/amount,
 //! запрет stackable goods, однослотовый AddShadow, last-operated state и обе

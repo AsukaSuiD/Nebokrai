@@ -5,8 +5,8 @@
 //! `0x90201..0x90208`: guards, local seller/buyer session, shadow goods и цены,
 //! open/close/enter/exit/end, cash/Billing purchase и client/around/World wire.
 //! Rust handler подключён к реальному message FIFO; malformed payload выражен
-//! typed error вместо invalid access. Сохранённый RAW ниже служит документацией
-//! только для ещё не достигнутых общих runtime owners (state `0x186A4`).
+//! typed error вместо invalid access. Проверка общего state `0x186A4` остаётся
+//! явно названной runtime-границей до материализации state owner-а.
 
 use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::appserver::region::RegionCellAccessBlock;
@@ -692,25 +692,3 @@ fn send_world_shop_completion(game: &CGame, player_id: i32) -> Result<i32, SendM
     completion.base_mut().add_ulong(client_ip);
     completion.send(game, false)
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\playershopmessage.cpp
-
-// ============================================================================
-// FUNCTION: OnPlayerShopMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\playershopmessage.cpp:21
-// RVA: 0x0008B310
-// ADDRESS: 0048b310
-// PROTOTYPE: void __cdecl OnPlayerShopMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer

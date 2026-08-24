@@ -7101,20 +7101,9 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::SetPersonalShopFlag
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:507
-// RVA: 0x0002AF60
-// ADDRESS: 0042af60
-// PROTOTYPE: void __thiscall SetPersonalShopFlag(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// MATERIALIZED: personal-shop flag storage lives above. Non-zero assignment is
+// reached only after CSessionFactory seller ownership validation in the message caller;
+// `(0, 0)` remains the unconditional terminal reset.
 // ============================================================================
 // FUNCTION: CPlayer::GetDefaultAttackSkillID
 // STATUS: UNKNOWN (сохранены только метаданные исследования)

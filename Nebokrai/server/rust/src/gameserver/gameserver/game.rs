@@ -14962,6 +14962,15 @@ impl CGame {
             .find(|player| legacy_c_string_prefix(player.shape().base_object().get_name()) == name)
     }
 
+    /// Exact `FindPlayerByAccount(char*)`: canonical player map в signed
+    /// ID-order и byte-exact C-string comparison загруженного account.
+    pub(crate) fn find_player_by_account(&self, account: &[u8]) -> Option<&CPlayer> {
+        let account = legacy_c_string_prefix(account);
+        self.players
+            .values()
+            .find(|player| legacy_c_string_prefix(player.account()) == account)
+    }
+
     /// Замыкает GM silence mutation от ordered name lookup до exact
     /// `SetSilence` timestamp. Отсутствующий player не создаёт state.
     pub(crate) fn silence_player_by_name(
@@ -18114,20 +18123,8 @@ fn shape_view(
 
 // IMPLEMENTED, VERIFIED_DISASSEMBLY: `FindPlayer(char const*)` RVA `0x00003A60`
 // материализован выше как ordered byte-name lookup; покрытый raw удалён.
-// ============================================================================
-// FUNCTION: CGame::FindPlayerByAccount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:964
-// RVA: 0x00003B20
-// ADDRESS: 00403b20
-// PROTOTYPE: CPlayer * __thiscall FindPlayerByAccount(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// IMPLEMENTED, VERIFIED_DISASSEMBLY: `FindPlayerByAccount(char*)` materialized
+// above as ordered byte-exact account lookup; covered raw removed.
 // ============================================================================
 // FUNCTION: CGame::SendTopInfoToClient
 // STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY

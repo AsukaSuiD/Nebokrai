@@ -17,7 +17,8 @@
 //! механик также создают normal session и typed plug, связывают owner/session,
 //! shadow owner/extend ID и insert-order. Container-message проход разрешает
 //! wire `(session, plug << 8)`, записывает и снимает typed upgrade/DaKong/
-//! compose shadows с исходным player slot. Terminal `End/Exit` хранится здесь,
+//! compose и personal-shop seller shadows с исходным player slot. Terminal
+//! `End/Exit` хранится здесь,
 //! а ended equipment-session GC сохраняет session/plug order и owner identity
 //! для listener detach на MainLoop session-stage. Достигнутый personal-shop
 //! lifecycle создаёт normal `(1, 20, 0)` session, typed seller/buyer plugs,
