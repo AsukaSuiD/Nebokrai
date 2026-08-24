@@ -1,111 +1,74 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Исполняемый owner изменения количества container-object `0xC0102` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/message packaging/cs2ccontainerobjectamountchange.cpp`.
+//! Сохраняется полный wire: source container type/id/extend/position, object
+//! type/GUID и итоговое amount. Текущий достигнутый caller отправляет packet
+//! одному player; `SendToSession` остаётся за session fan-out owner-ом.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectamountchange.cpp
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectAmountChange::CS2CContainerObjectAmountChange
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectamountchange.cpp:17
-// RVA: 0x000D75E0
-// ADDRESS: 004d75e0
-// PROTOTYPE: undefined __thiscall CS2CContainerObjectAmountChange(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const CONTAINER_OBJECT_AMOUNT_CHANGE_MESSAGE: i32 = 0x000c_0102;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CS2CContainerObjectAmountChange {
+    source_container_type: i32,
+    source_container_id: i32,
+    source_container_extend_id: i32,
+    source_container_position: u32,
+    object_type: i32,
+    object_id: CGuid,
+    amount: u32,
+}
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectAmountChange::SetSourceContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectamountchange.cpp:33
-// RVA: 0x000D7620
-// ADDRESS: 004d7620
-// PROTOTYPE: void __thiscall SetSourceContainer(long param_1, long param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl Default for CS2CContainerObjectAmountChange {
+    fn default() -> Self {
+        Self {
+            source_container_type: 0,
+            source_container_id: 0,
+            source_container_extend_id: 0,
+            source_container_position: 0,
+            object_type: 0,
+            object_id: CGuid::GUID_INVALID,
+            amount: 0,
+        }
+    }
+}
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectAmountChange::SetObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectamountchange.cpp:40
-// RVA: 0x000D7640
-// ADDRESS: 004d7640
-// PROTOTYPE: void __thiscall SetObject(long param_1, CGUID * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl CS2CContainerObjectAmountChange {
+    pub(crate) fn set_source_container(&mut self, object_type: i32, object_id: i32, position: u32) {
+        self.source_container_type = object_type;
+        self.source_container_id = object_id;
+        self.source_container_position = position;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectAmountChange::SetObjectAmount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectamountchange.cpp:47
-// RVA: 0x000D7660
-// ADDRESS: 004d7660
-// PROTOTYPE: void __thiscall SetObjectAmount(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn set_source_container_extend_id(&mut self, extend_id: i32) {
+        self.source_container_extend_id = extend_id;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectAmountChange::SetSourceContainerExtendID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectamountchange.cpp:52
-// RVA: 0x000D7670
-// ADDRESS: 004d7670
-// PROTOTYPE: void __thiscall SetSourceContainerExtendID(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn set_object(&mut self, object_type: i32, object_id: CGuid) {
+        self.object_type = object_type;
+        self.object_id = object_id;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectAmountChange::Send
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectamountchange.cpp:57
-// RVA: 0x000D7680
-// ADDRESS: 004d7680
-// PROTOTYPE: void __thiscall Send(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn set_object_amount(&mut self, amount: u32) {
+        self.amount = amount;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectAmountChange::SendToSession
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectamountchange.cpp:74
-// RVA: 0x000D7750
-// ADDRESS: 004d7750
-// PROTOTYPE: void __thiscall SendToSession(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer
+    pub(crate) fn send_to_player(&self, game: &CGame, player_id: i32) -> i32 {
+        if player_id == 0 {
+            return 0;
+        }
+        let mut message = CMessage::new(CONTAINER_OBJECT_AMOUNT_CHANGE_MESSAGE);
+        message.add_long(self.source_container_type);
+        message.add_long(self.source_container_id);
+        message.add_long(self.source_container_extend_id);
+        message.add_ulong(self.source_container_position);
+        message.add_long(self.object_type);
+        message.base_mut().add_guid(self.object_id);
+        message.add_ulong(self.amount);
+        message.send_to_player(game.net_server(), player_id)
+    }
+}

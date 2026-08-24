@@ -65,6 +65,8 @@ pub(crate) mod appserver {
     }
     #[path = "message packaging/cs2ccontainerobjectmove.rs"]
     pub(crate) mod cs2ccontainerobjectmove;
+    #[path = "message packaging/cs2ccontainerobjectamountchange.rs"]
+    pub(crate) mod cs2ccontainerobjectamountchange;
     pub(crate) mod monster;
     pub(crate) mod moveshape;
     pub(crate) mod npc;

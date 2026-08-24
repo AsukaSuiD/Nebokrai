@@ -323,6 +323,7 @@ use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::{
 use crate::gameserver::appserver::country::countryhandler::CCountryHandler;
 use crate::gameserver::appserver::country::countryparam::CCountryParam;
 use crate::gameserver::appserver::country::countrywarsys::CountryWarSys;
+use crate::gameserver::appserver::cs2ccontainerobjectamountchange::CS2CContainerObjectAmountChange;
 use crate::gameserver::appserver::cs2ccontainerobjectmove::{
     CS2CContainerObjectMove, ContainerObjectMoveOperation,
 };
@@ -1763,17 +1764,6 @@ pub(crate) trait BattleFairySkillResetContext {
         &mut self,
         effect: &BattleFairySkillResetEffect,
     ) -> Vec<i32>;
-}
-
-pub(crate) trait BattleFairyUpgradeContext: OldClientGoodsCodec {
-    fn publish_battle_fairy_upgrade_money(&mut self, effect: &BattleFairyUpgradeEffect)
-    -> Vec<i32>;
-    fn publish_battle_fairy_upgrade_container(
-        &mut self,
-        effect: &BattleFairyUpgradeEffect,
-    ) -> Vec<i32>;
-    fn publish_battle_fairy_upgrade_audit(&mut self, effect: &BattleFairyUpgradeEffect)
-    -> Vec<i32>;
 }
 
 pub(crate) trait BattleFairySkillRequestContext {
@@ -12258,7 +12248,7 @@ impl CGame {
     /// Полный runtime entry point goods-message `0x8FC28`: общий Game RNG,
     /// live log gates, factory, player wallet и positional BF-container
     /// исполняются в одном mutable snapshot-е.
-    pub(crate) fn upgrade_battle_fairy_equipment<Context: BattleFairyUpgradeContext>(
+    pub(crate) fn upgrade_battle_fairy_equipment<Context: OldClientGoodsCodec>(
         &mut self,
         player_id: i32,
         context: &mut Context,
@@ -12303,9 +12293,11 @@ impl CGame {
                         .deliveries
                         .push(BattleFairyUpgradeDelivery::Player(delivery));
                 }
-                effect @ BattleFairyUpgradeEffect::MoneyChanged { .. } => {
+                BattleFairyUpgradeEffect::MoneyChanged {
+                    player_id, outcome, ..
+                } => {
                     report.deliveries.push(BattleFairyUpgradeDelivery::Money(
-                        context.publish_battle_fairy_upgrade_money(&effect),
+                        self.send_battle_fairy_money_change(player_id, &outcome),
                     ));
                 }
                 BattleFairyUpgradeEffect::GoodsUpdated(update) => {
@@ -12315,22 +12307,153 @@ impl CGame {
                             self.send_battle_fairy_goods_update(&update),
                         ));
                 }
-                effect @ (BattleFairyUpgradeEffect::GemConsumed(_)
+                effect @ (BattleFairyUpgradeEffect::GemConsumed { .. }
                 | BattleFairyUpgradeEffect::TargetDeleted { .. }) => {
                     report
                         .deliveries
                         .push(BattleFairyUpgradeDelivery::Container(
-                            context.publish_battle_fairy_upgrade_container(&effect),
+                            self.send_battle_fairy_upgrade_container(&effect),
                         ));
                 }
                 effect @ BattleFairyUpgradeEffect::Audit { .. } => {
                     report.deliveries.push(BattleFairyUpgradeDelivery::Audit(
-                        context.publish_battle_fairy_upgrade_audit(&effect),
+                        self.send_battle_fairy_upgrade_audit(&effect),
                     ));
                 }
             }
         }
         Some(report)
+    }
+
+    fn send_battle_fairy_money_change(
+        &self,
+        player_id: i32,
+        outcome: &crate::gameserver::appserver::container::cwallet::CurrencyDecreaseOutcome,
+    ) -> Vec<i32> {
+        use crate::gameserver::appserver::container::cwallet::CurrencyDecreaseOutcome;
+
+        let mut message = CS2CContainerObjectMove::default();
+        match outcome {
+            CurrencyDecreaseOutcome::Decreased(change) => {
+                message.set_operation(ContainerObjectMoveOperation::MoveObject);
+                message.set_source_container(change.owner_type, change.owner_id, change.position);
+                message.set_source_container_extend_id(4);
+                message.set_source_object(
+                    change.identity.object_type,
+                    change.identity.ex_id,
+                    change.amount,
+                );
+            }
+            CurrencyDecreaseOutcome::Removed(removed) => {
+                message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+                message.set_source_container(
+                    removed.owner_type,
+                    removed.owner_id,
+                    removed.position,
+                );
+                message.set_source_container_extend_id(4);
+                let identity = removed.goods.identity();
+                message.set_source_object(identity.object_type, identity.ex_id, removed.amount);
+            }
+            CurrencyDecreaseOutcome::NoChange
+            | CurrencyDecreaseOutcome::InvalidStoredCurrency { .. } => return Vec::new(),
+        }
+        vec![message.send_to_player(self, player_id)]
+    }
+
+    fn send_battle_fairy_upgrade_container(&self, effect: &BattleFairyUpgradeEffect) -> Vec<i32> {
+        match effect {
+            BattleFairyUpgradeEffect::GemConsumed {
+                player_id,
+                consumed,
+            } if consumed.removed => {
+                vec![self.send_battle_fairy_upgrade_delete_for_player(
+                    *player_id,
+                    consumed.goods,
+                    consumed.cell.position(),
+                    consumed.previous_amount,
+                )]
+            }
+            BattleFairyUpgradeEffect::GemConsumed {
+                player_id,
+                consumed,
+            } => {
+                let mut message = CS2CContainerObjectAmountChange::default();
+                message.set_source_container(PLAYER_TYPE, *player_id, consumed.cell.position());
+                message.set_source_container_extend_id(12);
+                message.set_object(consumed.goods.object_type, consumed.goods.ex_id);
+                message.set_object_amount(consumed.remaining_amount);
+                vec![message.send_to_player(self, *player_id)]
+            }
+            BattleFairyUpgradeEffect::TargetDeleted {
+                player_id,
+                goods,
+                position,
+                ..
+            } => vec![self.send_battle_fairy_upgrade_delete_for_player(
+                *player_id,
+                goods.identity,
+                *position,
+                goods.amount,
+            )],
+            _ => Vec::new(),
+        }
+    }
+
+    fn send_battle_fairy_upgrade_delete_for_player(
+        &self,
+        player_id: i32,
+        goods: crate::gameserver::appserver::shape::ShapeIdentity,
+        position: u32,
+        amount: u32,
+    ) -> i32 {
+        let mut message = CS2CContainerObjectMove::default();
+        message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+        message.set_source_container(PLAYER_TYPE, player_id, position);
+        message.set_source_container_extend_id(12);
+        message.set_source_object(goods.object_type, goods.ex_id, amount);
+        message.send_to_player(self, player_id)
+    }
+
+    fn send_battle_fairy_upgrade_audit(&self, effect: &BattleFairyUpgradeEffect) -> Vec<i32> {
+        let BattleFairyUpgradeEffect::Audit {
+            message_type,
+            event,
+            player_id,
+            player,
+            target,
+            gems,
+        } = effect
+        else {
+            return Vec::new();
+        };
+        let mut message = CMessage::new(*message_type as i32);
+        message.add_byte(*event);
+        message.add_long(*player_id);
+        if *message_type == 0x0006_0203 {
+            add_battle_fairy_upgrade_log_goods(&mut message, Some(target));
+            for gem in gems {
+                add_battle_fairy_upgrade_log_goods(&mut message, gem.as_ref());
+            }
+            message.add_long(player.region_id);
+            message.add_long(player.tile_x);
+            message.add_long(player.tile_y);
+        } else {
+            message.base_mut().add_short(player.pk_count as i16);
+            message.add_ulong(player.money);
+            message.add_ulong(player.depot_money);
+            message.base_mut().add_guid(target.identity.ex_id);
+            // Primary GameServer пишет price в поле, которое WorldServer
+            // исторически называет amount, и literal 1 в поле price.
+            message.add_ulong(target.price);
+            add_legacy_c_string(message.base_mut(), &target.name);
+            message.add_ulong(1);
+            message.add_long(player.region_id);
+            message.add_long(player.tile_x);
+            message.add_long(player.tile_y);
+            message.add_ulong(player.client_ip);
+        }
+        message.send(self, false).into_iter().collect()
     }
 
     /// Исполняемый entry point goods-message `0x8FC2B`: reset item ищется и
@@ -13446,6 +13569,19 @@ fn resolve_billing_bind_ipv4(raw: &[u8]) -> Result<Ipv4Addr, GameClientInitializ
 fn add_legacy_c_string(message: &mut crate::nets::basemessage::CBaseMessage, value: &[u8]) {
     message.add(legacy_c_string_prefix(value));
     message.add_byte(0);
+}
+
+fn add_battle_fairy_upgrade_log_goods(
+    message: &mut CMessage,
+    goods: Option<&crate::gameserver::appserver::player::BattleFairyUpgradeGoodsSnapshot>,
+) {
+    if let Some(goods) = goods {
+        message.base_mut().add_guid(goods.identity.ex_id);
+        add_legacy_c_string(message.base_mut(), &goods.name);
+    } else {
+        message.base_mut().add_guid(CGuid::GUID_INVALID);
+        add_legacy_c_string(message.base_mut(), b"");
+    }
 }
 
 fn gods_battle_property_message(player_id: i32, property: &[u8], value: i32) -> CMessage {

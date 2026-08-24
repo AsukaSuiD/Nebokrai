@@ -87,12 +87,12 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
 use crate::gameserver::appserver::session::csessionfactory::{PlugExitReport, SessionEndReport};
 use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyPotentialResetContext, BattleFairyRuntimeContext,
-    BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext, CGame, CiQingComposeContext,
-    CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport, CiQingMakeContext,
-    CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport, CiQingOtherPersonTarget,
-    CiQingSetupQueryReport, ContainerScriptActionReport, ContainerScriptContext,
-    EquipmentComposeContext, EquipmentDaKongContext, EquipmentUpgradeContext, FairyContext,
-    FairyHatchReport, FairyImplantResultReport, FairySetupQueryReport, FairySyncretizeResultReport,
+    BattleFairyScriptSkillAttachReport, CGame, CiQingComposeContext, CiQingComposeReport,
+    CiQingDeleteReport, CiQingGoodsQueryReport, CiQingMakeContext, CiQingMakeReport,
+    CiQingMountReport, CiQingOtherPersonReport, CiQingOtherPersonTarget, CiQingSetupQueryReport,
+    ContainerScriptActionReport, ContainerScriptContext, EquipmentComposeContext,
+    EquipmentDaKongContext, EquipmentUpgradeContext, FairyContext, FairyHatchReport,
+    FairyImplantResultReport, FairySetupQueryReport, FairySyncretizeResultReport,
     GoodsDestroyConfirmReport, GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport,
     HotkeyChangeReport, HotkeyContext, HotkeyRemovalReport, PlayerEquipmentInspectionReport,
     SynthesisComposeReport, SynthesisContext, SynthesisOpenReport,
@@ -145,8 +145,7 @@ const COMPOSE_EQUIPMENT: u32 = 0x0008_fc24;
 const END_GOODS_SESSION: u32 = 0x0008_fc25;
 
 pub(crate) trait GameGoodsMessageRuntime:
-    BattleFairyUpgradeContext
-    + BattleFairyDeathContext
+    BattleFairyDeathContext
     + BattleFairyPotentialResetContext
     + BattleFairyRuntimeContext
     + CiQingMakeContext

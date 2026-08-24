@@ -78,10 +78,11 @@
 //! Gear add/remove теперь через `CGame` действительно исполняет ordered
 //! `0xBF721/0xBF918`; remove сохраняет две одинаково обязательные публикации
 //! old-client payload после успешного `BFPropertyAdd(-1)`.
-//! Upgrade `0x8FC28` замыкает validation, wallet snapshot, общий RNG,
+//! Upgrade `0x8FC28` замыкает validation, owned wallet goods, общий RNG,
 //! factory level/growth mutation, target failure outcome, positional расход
-//! gem-ов и ordered client/audit effects. Конкретный wallet-object codec и
-//! полная audit-wire упаковка остаются transport boundary returned report-а.
+//! gem-ов и ordered client/audit effects. Снимки target/gems/player сохраняют
+//! World audit после необратимого удаления, а `CGame` публикует concrete
+//! `0xC0101/0xC0102`, `0xBF918` и `0x60202/0x60203` в исходном порядке.
 //! `ResetPotential` использует owned packet `CVolumeLimitGoodsContainer` 8×12:
 //! первый `ZHQLS01` расходуется до addon/player mutation, семь tracked-вкладов
 //! возвращаются в общий potential и публикуется один итоговый `0xBF918`.
@@ -607,6 +608,36 @@ pub(crate) enum BattleFairyUpgradeOutcome {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyUpgradeGoodsSnapshot {
+    pub(crate) identity: super::shape::ShapeIdentity,
+    pub(crate) name: Vec<u8>,
+    pub(crate) price: u32,
+    pub(crate) amount: u32,
+}
+
+impl BattleFairyUpgradeGoodsSnapshot {
+    fn capture(goods: &CGoods) -> Self {
+        Self {
+            identity: goods.identity(),
+            name: goods.name().to_vec(),
+            price: goods.price(),
+            amount: goods.amount(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyUpgradePlayerSnapshot {
+    pub(crate) pk_count: u16,
+    pub(crate) money: u32,
+    pub(crate) depot_money: u32,
+    pub(crate) region_id: i32,
+    pub(crate) tile_x: i32,
+    pub(crate) tile_y: i32,
+    pub(crate) client_ip: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum BattleFairyUpgradeEffect {
     Notification {
         player_id: i32,
@@ -618,20 +649,26 @@ pub(crate) enum BattleFairyUpgradeEffect {
         player_id: i32,
         previous: u32,
         current: u32,
+        outcome: CurrencyDecreaseOutcome,
     },
     GoodsUpdated(BattleFairyDefaultGoodsUpdate),
-    GemConsumed(BattleFairyUpgradeConsumedGem),
+    GemConsumed {
+        player_id: i32,
+        consumed: BattleFairyUpgradeConsumedGem,
+    },
     TargetDeleted {
         player_id: i32,
-        goods: super::shape::ShapeIdentity,
+        goods: BattleFairyUpgradeGoodsSnapshot,
+        position: u32,
         removal: VolumeGoodsRemoveOutcome,
     },
     Audit {
         message_type: u32,
         event: u8,
         player_id: i32,
-        target: super::shape::ShapeIdentity,
-        gems: [Option<super::shape::ShapeIdentity>; 4],
+        player: BattleFairyUpgradePlayerSnapshot,
+        target: BattleFairyUpgradeGoodsSnapshot,
+        gems: [Option<BattleFairyUpgradeGoodsSnapshot>; 4],
     },
 }
 
@@ -3542,7 +3579,7 @@ impl CPlayer {
         if self.server_region_id.is_none() {
             return report;
         }
-        if self.money < price {
+        if self.wallet.currency_amount() < price {
             report.outcome = BattleFairyUpgradeOutcome::InsufficientMoney;
             push_battle_fairy_upgrade_notification(&mut report, "ZHGS0015", Some(price));
             return report;
@@ -3563,7 +3600,7 @@ impl CPlayer {
         }
         let current_level = equipment.addon_property_value(factory, GAP_BF_WEAPON_LEVEL, 1);
         report.previous_level = Some(current_level);
-        let target_identity = equipment.identity();
+        let target = BattleFairyUpgradeGoodsSnapshot::capture(equipment);
         let Some(base_gem) = self
             .battle_fairy_container
             .base()
@@ -3588,12 +3625,12 @@ impl CPlayer {
             return report;
         }
         report.probability = self.battle_fairy_container.probability(factory);
-        if self.money < price {
+        if self.wallet.currency_amount() < price {
             report.outcome = BattleFairyUpgradeOutcome::InsufficientMoney;
             push_battle_fairy_upgrade_notification(&mut report, "ZHGS0020", None);
             return report;
         }
-        let gem_identities = [
+        let gems = [
             BattleFairyCell::GemBase,
             BattleFairyCell::GemOne,
             BattleFairyCell::GemTwo,
@@ -3603,15 +3640,27 @@ impl CPlayer {
             self.battle_fairy_container
                 .base()
                 .get_goods(cell.position())
-                .map(CGoods::identity)
+                .map(BattleFairyUpgradeGoodsSnapshot::capture)
         });
-        let previous_money = self.money;
-        self.money = self.money.wrapping_sub(price);
+        let previous_money = self.wallet.currency_amount();
+        let money_outcome = self.wallet.decrease_currency(price, factory);
+        self.money = self.wallet.currency_amount();
         report.effects.push(BattleFairyUpgradeEffect::MoneyChanged {
             player_id,
             previous: previous_money,
             current: self.money,
+            outcome: money_outcome,
         });
+
+        let audit_player = BattleFairyUpgradePlayerSnapshot {
+            pk_count: self.base_properties.pk_count,
+            money: self.money,
+            depot_money: self.depot_money(),
+            region_id: self.server_region_id.unwrap_or_default(),
+            tile_x: self.shape().get_tile_x().unwrap_or_default(),
+            tile_y: self.shape().get_tile_y().unwrap_or_default(),
+            client_ip: self.client_ip,
+        };
 
         let success = (random(100) as u32).wrapping_add(1) <= report.probability;
         let mut target_present = true;
@@ -3632,8 +3681,9 @@ impl CPlayer {
                     message_type: 0x0006_0203,
                     event: 1,
                     player_id,
-                    target: target_identity,
-                    gems: gem_identities,
+                    player: audit_player,
+                    target: target.clone(),
+                    gems: gems.clone(),
                 });
             }
         } else {
@@ -3642,8 +3692,9 @@ impl CPlayer {
                     message_type: 0x0006_0203,
                     event: 2,
                     player_id,
-                    target: target_identity,
-                    gems: gem_identities,
+                    player: audit_player,
+                    target: target.clone(),
+                    gems: gems.clone(),
                 });
             }
             match self.battle_fairy_container.fail_result(factory) {
@@ -3683,11 +3734,12 @@ impl CPlayer {
                             message_type: 0x0006_0202,
                             event: 5,
                             player_id,
-                            target: target_identity,
-                            gems: gem_identities,
+                            player: audit_player,
+                            target: target.clone(),
+                            gems: gems.clone(),
                         });
                     }
-                    if let Some((goods, removal)) =
+                    if let Some((_goods, removal)) =
                         self.battle_fairy_container.delete_upgrade_target()
                     {
                         target_present = false;
@@ -3695,7 +3747,8 @@ impl CPlayer {
                             .effects
                             .push(BattleFairyUpgradeEffect::TargetDeleted {
                                 player_id,
-                                goods,
+                                goods: target.clone(),
+                                position: BattleFairyCell::Equipment.position(),
                                 removal,
                             });
                     }
@@ -3742,9 +3795,10 @@ impl CPlayer {
                 continue;
             };
             report.consumed_gems.push(consumed.clone());
-            report
-                .effects
-                .push(BattleFairyUpgradeEffect::GemConsumed(consumed.clone()));
+            report.effects.push(BattleFairyUpgradeEffect::GemConsumed {
+                player_id,
+                consumed: consumed.clone(),
+            });
             if !consumed.removed
                 && let Some(goods) = self
                     .battle_fairy_container

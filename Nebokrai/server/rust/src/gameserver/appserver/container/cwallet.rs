@@ -10,8 +10,9 @@
 //! Query, add/stack, remove, direct increase/decrease и lifecycle возвращают
 //! typed reports для будущего listener/message dispatcher-а. Exact decrease
 //! при запросе больше balance выполняет unsigned wrapping subtraction — это
-//! наблюдаемый legacy-контракт, а не внутренний pointer-дефект. Codec и сборка
-//! `CS2CContainerObjectMove` ниже остаются RAW до соответствующих owners.
+//! наблюдаемый legacy-контракт, а не внутренний pointer-дефект. Достигнутый
+//! battle-fairy caller собирает из outcome точный `CS2CContainerObjectMove`;
+//! increase/create публикации остаются за своими ещё отдельными сценариями.
 
 use std::marker::PhantomData;
 
@@ -485,19 +486,9 @@ pub(crate) type CWallet = CSingleCurrencyContainer<GoldCoinCurrency>;
 //
 //
 
-// ============================================================================
-// FUNCTION: CWallet::DecreaseGoldCoins
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cwallet.cpp:431
-// RVA: 0x000D5E30
-// ADDRESS: 004d5e30
-// PROTOTYPE: int __thiscall DecreaseGoldCoins(ulong param_1, void * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// `DecreaseGoldCoins` материализован как `decrease_currency`: exact delete при
+// равном amount, wrapping partial subtraction, identity/owner/position и
+// outcome для `0xC0101/OT_DELETE_OBJECT` либо `OT_MOVE_OBJECT` сохранены.
 
 // ============================================================================
 // FUNCTION: CWallet::Add
