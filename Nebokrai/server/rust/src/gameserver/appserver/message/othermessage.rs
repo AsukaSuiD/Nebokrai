@@ -17,6 +17,8 @@
 //! identities и публикует World result клиенту как exact `0xBF80D` wire.
 //! Region NPC-name request `0x8FB06` публикует materialized startup list
 //! клиенту как count + exact concatenated name records `0xBF813`.
+//! GM around-kick feedback `0x7FA05` замыкает World-routed `0x5FD02`:
+//! target map prefix отбрасывается, requester получает exact `0xBF806`.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -32,6 +34,7 @@ const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
 const PLAYER_CHAT_REQUEST: u32 = 0x0008_fb01;
 const PLAYER_GOODS_LINK_REQUEST: u32 = 0x0008_fb03;
 const WORLD_GOODS_LINK_RESPONSE: u32 = 0x0007_fa07;
+const WORLD_GM_FEEDBACK: u32 = 0x0007_fa05;
 const PLAYER_NPC_NAME_LIST_REQUEST: u32 = 0x0008_fb06;
 const WORLD_PLAYER_RENAME_REQUEST: i32 = 0x0005_fd05;
 const WORLD_PLAYER_RENAME_RESPONSE: u32 = 0x0007_fa0e;
@@ -86,6 +89,13 @@ pub(crate) enum GameOtherMessageOutcome {
     NpcNameListDelivered {
         count: i32,
         bytes: usize,
+        delivery: i32,
+    },
+    GmFeedbackDelivered {
+        target_map_id: i32,
+        color: u32,
+        notice_type: u32,
+        text: Vec<u8>,
         delivery: i32,
     },
     LeiTingUpdated {
@@ -904,10 +914,41 @@ pub(crate) fn dispatch_game_other_message(
             | WORLD_PLAYER_RENAME_RESPONSE
             | WORLD_INFO_DELIVERY
             | WORLD_TOP_INFO_DELIVERY
+            | WORLD_GM_FEEDBACK
             | WORLD_GOODS_LINK_RESPONSE
             | WORLD_LEI_TING_UPDATE
     ) {
         return None;
+    }
+    if message_type == WORLD_GM_FEEDBACK {
+        let result = (|| {
+            let target_map_id = read_long(message, "GM feedback target map id")?;
+            let player_id = read_long(message, "GM feedback requester player id")?;
+            let color = read_long(message, "GM feedback color")? as u32;
+            let notice_type = read_long(message, "GM feedback notice type")? as u32;
+            let text = read_string(message, 0x100);
+            if game.find_player(player_id).is_none() {
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerMissing,
+                });
+            }
+            let delivery = colored_player_notice_message(color, notice_type, &text)
+                .send_to_player(game.net_server(), player_id);
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::GmFeedbackDelivered {
+                    target_map_id,
+                    color,
+                    notice_type,
+                    text,
+                    delivery,
+                },
+            })
+        })();
+        return Some(result);
     }
     if message_type == WORLD_GOODS_LINK_RESPONSE {
         let result = (|| {
