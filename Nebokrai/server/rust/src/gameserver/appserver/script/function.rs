@@ -59,6 +59,9 @@
 //! Следующий sanitation-блок `2002/2316/2317/2500` читает live player
 //! region/country и работает с тем же owned script registry; current-script
 //! removal завершается на command boundary без legacy use-after-free.
+//! `5108 / GetOnlinePlayers` замыкает уже существующий World contract
+//! `0x5FF01 → 0x7FC01`: scheduler ждёт remote count и повторяет исходное
+//! expression без повторной отправки запроса.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -113,6 +116,7 @@ pub(crate) const SCRIPT_FUNCTION_ADD_GOODS_LOG: i32 = 2313;
 pub(crate) const SCRIPT_FUNCTION_SCRIPT_IS_RUNNING: i32 = 2316;
 pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
+pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
@@ -2347,7 +2351,7 @@ pub(crate) fn script_function_parameter_kind(
             1 => String,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_GET_COUNTRY => Unused,
+        SCRIPT_FUNCTION_GET_COUNTRY | SCRIPT_FUNCTION_GET_ONLINE_PLAYERS => Unused,
         SCRIPT_FUNCTION_ADD_GOODS
         | SCRIPT_FUNCTION_DELETE_GOODS
         | SCRIPT_FUNCTION_CHECK_GOODS
@@ -2814,6 +2818,19 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: i32::from(player.country()),
+            })
+        }
+        SCRIPT_FUNCTION_GET_ONLINE_PLAYERS => {
+            if argument_count != 0 || game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let local_count = game.player_count().min(i32::MAX as u32) as i32;
+            let mut request = CMessage::new(0x0005_ff01);
+            request.add_long(player_id);
+            request.add_long(script_id);
+            let _ = request.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Yielded {
+                legacy_return: local_count,
             })
         }
         SCRIPT_FUNCTION_SCRIPT_IS_RUNNING | SCRIPT_FUNCTION_REMOVE_SCRIPT => {

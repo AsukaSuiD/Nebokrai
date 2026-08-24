@@ -7,8 +7,10 @@
 //! cursor, player/NPC/region context и переменные между стадиями главного
 //! цикла; `call` создаёт отдельный instance, а `TalkBox` возобновляется ответом
 //! клиента через тот же script ID. Path/player lookup и remove поддерживают
-//! также текущий вынутый из map instance. Неподтверждённые wait/pause families и
-//! остальной не достигнутый синтаксис остаются в RAW ниже.
+//! также текущий вынутый из map instance; async function внутри expression
+//! сохраняет cursor и единожды потребляет continuation result при replay.
+//! Неподтверждённые wait/pause families и остальной не достигнутый синтаксис
+//! остаются в RAW ниже.
 
 use std::collections::BTreeMap;
 
@@ -127,8 +129,13 @@ pub(crate) struct ScriptExecutionReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ScriptStepDisposition {
     Ended,
-    YieldedCall { path: Vec<u8> },
-    WaitingFunction { function_id: i32 },
+    YieldedCall {
+        path: Vec<u8>,
+    },
+    WaitingFunction {
+        function_id: i32,
+        replay_command: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -154,6 +161,8 @@ pub(crate) struct ActiveScript {
     integer_variables: BTreeMap<Vec<u8>, i32>,
     string_variables: BTreeMap<Vec<u8>, Vec<u8>>,
     waiting_function: Option<i32>,
+    waiting_replay: bool,
+    resumed_function: Option<(i32, i32)>,
 }
 
 impl ActiveScript {
@@ -172,6 +181,8 @@ impl ActiveScript {
             integer_variables: BTreeMap::new(),
             string_variables: BTreeMap::new(),
             waiting_function: None,
+            waiting_replay: false,
+            resumed_function: None,
         }
     }
 
@@ -188,11 +199,15 @@ impl ActiveScript {
     }
 
     pub(crate) fn continue_with(&mut self, value: i32) -> bool {
-        if self.waiting_function.take().is_none() {
+        let Some(function_id) = self.waiting_function.take() else {
             return false;
-        }
+        };
         self.integer_variables
             .insert(normalize_name(b"$m_TalkRet"), value);
+        if self.waiting_replay {
+            self.resumed_function = Some((function_id, value));
+        }
+        self.waiting_replay = false;
         true
     }
 
@@ -204,7 +219,10 @@ impl ActiveScript {
         if let Some(function_id) = self.waiting_function {
             return ScriptStepReport {
                 execution: ScriptExecutionReport::default(),
-                disposition: ScriptStepDisposition::WaitingFunction { function_id },
+                disposition: ScriptStepDisposition::WaitingFunction {
+                    function_id,
+                    replay_command: self.waiting_replay,
+                },
             };
         }
         let mut script = CScript {
@@ -215,13 +233,21 @@ impl ActiveScript {
             integer_variables: std::mem::take(&mut self.integer_variables),
             string_variables: std::mem::take(&mut self.string_variables),
             script_id: self.id,
+            resumed_function: self.resumed_function.take(),
+            pending_yield: None,
         };
         let report = script.run_step(game, runtime);
         self.point = script.point;
         self.integer_variables = script.integer_variables;
         self.string_variables = script.string_variables;
-        if let ScriptStepDisposition::WaitingFunction { function_id } = &report.disposition {
+        self.resumed_function = script.resumed_function;
+        if let ScriptStepDisposition::WaitingFunction {
+            function_id,
+            replay_command,
+        } = &report.disposition
+        {
             self.waiting_function = Some(*function_id);
+            self.waiting_replay = *replay_command;
         }
         report
     }
@@ -241,6 +267,8 @@ pub(crate) struct CScript<'a> {
     integer_variables: BTreeMap<Vec<u8>, i32>,
     string_variables: BTreeMap<Vec<u8>, Vec<u8>>,
     script_id: i32,
+    resumed_function: Option<(i32, i32)>,
+    pending_yield: Option<i32>,
 }
 
 impl<'a> CScript<'a> {
@@ -250,7 +278,11 @@ impl<'a> CScript<'a> {
         runtime: &mut Runtime,
     ) -> ScriptStepReport {
         let mut report = ScriptExecutionReport::default();
-        while let Some(command) = self.read_command() {
+        loop {
+            let command_point = self.point;
+            let Some(command) = self.read_command() else {
+                break;
+            };
             report.commands_read += 1;
             let command = trim_ascii(&command);
             if command.is_empty() || command == b"{" || command == b"}" {
@@ -291,6 +323,16 @@ impl<'a> CScript<'a> {
                     break;
                 };
                 let Some(condition) = self.evaluate_integer(game, runtime, condition) else {
+                    if let Some(function_id) = self.pending_yield.take() {
+                        self.point = command_point;
+                        return ScriptStepReport {
+                            execution: report,
+                            disposition: ScriptStepDisposition::WaitingFunction {
+                                function_id,
+                                replay_command: true,
+                            },
+                        };
+                    }
                     report
                         .outcomes
                         .push(ScriptCommandOutcome::InvalidExpression);
@@ -357,6 +399,16 @@ impl<'a> CScript<'a> {
                 if assigned {
                     continue;
                 }
+                if let Some(function_id) = self.pending_yield.take() {
+                    self.point = command_point;
+                    return ScriptStepReport {
+                        execution: report,
+                        disposition: ScriptStepDisposition::WaitingFunction {
+                            function_id,
+                            replay_command: true,
+                        },
+                    };
+                }
                 report
                     .outcomes
                     .push(ScriptCommandOutcome::InvalidExpression);
@@ -386,7 +438,10 @@ impl<'a> CScript<'a> {
                     });
                     return ScriptStepReport {
                         execution: report,
-                        disposition: ScriptStepDisposition::WaitingFunction { function_id },
+                        disposition: ScriptStepDisposition::WaitingFunction {
+                            function_id,
+                            replay_command: false,
+                        },
                     };
                 }
                 ScriptCommandOutcome::Terminated {
@@ -428,6 +483,19 @@ impl<'a> CScript<'a> {
         let Some(function_id) = game.script_function_id(name) else {
             return ScriptCommandOutcome::UnknownFunction;
         };
+        if self
+            .resumed_function
+            .is_some_and(|(resumed_id, _)| resumed_id == function_id)
+        {
+            let (_, legacy_return) = self
+                .resumed_function
+                .take()
+                .expect("resumed function проверена перед consume");
+            return ScriptCommandOutcome::Handled {
+                function_id,
+                legacy_return,
+            };
+        }
         let mut integer_arguments = [None; 4];
         let mut string_arguments: [Option<Vec<u8>>; 2] = [None, None];
         for (index, parameter) in parameters.iter().take(4).enumerate() {
@@ -466,6 +534,7 @@ impl<'a> CScript<'a> {
                 ScriptCommandOutcome::UnknownFunction
             }
             ScriptFunctionDispatchOutcome::Yielded { legacy_return } => {
+                self.pending_yield = Some(function_id);
                 ScriptCommandOutcome::Yielded {
                     function_id,
                     legacy_return,
