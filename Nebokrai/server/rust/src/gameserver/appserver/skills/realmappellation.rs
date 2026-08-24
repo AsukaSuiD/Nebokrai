@@ -43,6 +43,10 @@ pub(crate) fn is_bonus_skill(skill_id: u32) -> bool {
     BONUS_SKILLS.contains(&skill_id)
 }
 
+pub(crate) fn is_internal_skill(skill_id: u32) -> bool {
+    is_title(skill_id) || is_bonus_skill(skill_id)
+}
+
 fn resolve_bonus(appellation_id: u32) -> Option<RealmBonusIdentity> {
     is_title(appellation_id).then(|| RealmBonusIdentity {
         skill_id: BONUS_SKILLS[((appellation_id - 1001) / 10) as usize],

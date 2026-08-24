@@ -9243,6 +9243,90 @@ impl CGame {
         }
     }
 
+    pub(crate) fn script_player_skill_level(
+        &self,
+        script_player_id: i32,
+        target_name: &[u8],
+        skill_name: &[u8],
+    ) -> i32 {
+        let target = if target_name.is_empty() {
+            self.find_player(script_player_id)
+        } else {
+            self.find_player_by_name(target_name)
+        };
+        let Some(target) = target else {
+            return -1;
+        };
+        let skill_id = self.skill_factory.query_skill_id(Some(skill_name));
+        target.item_skill_level(skill_id)
+    }
+
+    /// `AddSkill` достигнут из goods-script runtime: обычный skill публикует
+    /// адресный `TellClient(0xBF71D)` целевому игроку, а внутренние realm title/
+    /// bonus skills подавляют этот packet и проходят полный property recompute.
+    pub(crate) fn add_script_player_skill<Context: RealmAppellationScriptContext>(
+        &mut self,
+        script_player_id: i32,
+        target_name: &[u8],
+        skill_name: &[u8],
+        level: i32,
+        context: &mut Context,
+    ) -> i32 {
+        let target_id = if target_name.is_empty() {
+            self.find_player(script_player_id).map(CPlayer::player_id)
+        } else {
+            self.find_player_by_name(target_name).map(CPlayer::player_id)
+        };
+        let Some(target_id) = target_id else {
+            return -1;
+        };
+        let previous_properties = self
+            .find_player(target_id)
+            .expect("script skill target проверен до mutation")
+            .combat_properties();
+        let mutation = {
+            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+            players
+                .get_mut(&target_id)
+                .and_then(|player| player.set_script_skill_level(skill_name, level, skill_factory))
+        };
+        let Some(mutation) = mutation else {
+            return 0;
+        };
+
+        if crate::gameserver::appserver::skills::realmappellation::is_internal_skill(
+            mutation.skill_id,
+        ) {
+            let current_properties = {
+                let player = self
+                    .find_player(target_id)
+                    .expect("realm skill mutation сохраняет canonical player");
+                context.recompute_realm_appellation_player_properties(player)
+            };
+            self.find_player_mut(target_id)
+                .expect("realm skill recompute сохраняет canonical player")
+                .apply_recomputed_combat_properties(current_properties);
+            if previous_properties != current_properties {
+                let external = context.player_properties_external_facts(target_id);
+                if let Some(player) = self.find_player(target_id) {
+                    let _ = self.send_player_properties_changed(player, external);
+                }
+            }
+        } else if let Some(response) = player_skill_learned_message(
+            0x000b_f71d,
+            mutation.skill_id,
+            mutation.skill_level,
+            mutation.skill_level,
+            skill_name,
+            &self.skill_factory,
+            true,
+        ) {
+            let _ = response.send_to_player(self.net_server(), target_id);
+        }
+
+        i32::from(mutation.legacy_result)
+    }
+
     /// Reached `ChangeRegion` gameplay path used by `nodupe.script`. The
     /// selector/default parsing remains in `CScript::RunFunction`; this owner
     /// performs session/player state, spatial randomization and exact client /

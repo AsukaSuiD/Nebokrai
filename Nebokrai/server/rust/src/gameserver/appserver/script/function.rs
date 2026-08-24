@@ -225,6 +225,8 @@ pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
 pub(crate) const SCRIPT_FUNCTION_DELETE_SKILL: i32 = 3102;
 pub(crate) const SCRIPT_FUNCTION_SET_SKILL_LEVEL: i32 = 3103;
+pub(crate) const SCRIPT_FUNCTION_ADD_SKILL: i32 = 3101;
+pub(crate) const SCRIPT_FUNCTION_GET_SKILL_LEVEL: i32 = 3104;
 pub(crate) const SCRIPT_FUNCTION_CREATE_FACTION: i32 = 6001;
 pub(crate) const SCRIPT_FUNCTION_APPLY_JOIN_FACTION: i32 = 6002;
 pub(crate) const SCRIPT_FUNCTION_QUIT_JOIN_FACTION: i32 = 6003;
@@ -3133,6 +3135,15 @@ pub(crate) fn script_function_parameter_kind(
             2 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_ADD_SKILL => match index {
+            0 | 1 => String,
+            2 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_SKILL_LEVEL => match index {
+            0 | 1 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_CHANGE_REGION => match index {
             0..=6 => Integer,
             _ => Unused,
@@ -4289,6 +4300,56 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     target_name,
                     skill_name,
                     level,
+                ),
+            })
+        }
+        SCRIPT_FUNCTION_GET_SKILL_LEVEL => {
+            if argument_count != 2 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let (Some(target_name), Some(skill_name)) = (string_arguments[0], string_arguments[1])
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if target_name.len() > 49 || skill_name.is_empty() || skill_name.len() > 255 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.script_player_skill_level(player_id, target_name, skill_name),
+            })
+        }
+        SCRIPT_FUNCTION_ADD_SKILL => {
+            if !(2..=3).contains(&argument_count) {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let (Some(target_name), Some(skill_name)) = (string_arguments[0], string_arguments[1])
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let level = if argument_count == 2 {
+                1
+            } else {
+                let Some(level) =
+                    integer_arguments[2].filter(|level| *level != SCRIPT_INT_PARAMETER_ERROR)
+                else {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                };
+                level
+            };
+            if target_name.len() > 49
+                || skill_name.is_empty()
+                || skill_name.len() > 255
+                || !(1..=i16::MAX as i32).contains(&level)
+            {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.add_script_player_skill(
+                    player_id,
+                    target_name,
+                    skill_name,
+                    level,
+                    runtime,
                 ),
             })
         }
