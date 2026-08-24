@@ -25,13 +25,16 @@
 //! around-area и figure-aware distance, `GS0057` и контекстный RunScript
 //! request; общий `RunScript/CScript` VM ещё не материализован и остаётся
 //! точно названной runtime-границей этого caller-а.
+//! PvP permissions `0x8FA05` декодируют оба signed char до selector switch и
+//! меняют один из пяти live player flags без дополнительной публикации.
 //! Equipment-state refresh `0x8FA16` сохраняет packed local-time decode,
 //! strict grace-minute comparison, addon mutation и around `0xBF928`.
 //! Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_EQUIP_STATE;
 use crate::gameserver::appserver::player::{
-    PlayerFriendAddOutcome, PlayerProgress, PlayerStatAllocationMutation,
+    PlayerFriendAddOutcome, PlayerPkPermissionMutation, PlayerProgress,
+    PlayerStatAllocationMutation,
 };
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
@@ -44,6 +47,7 @@ use crate::public::guid::CGuid;
 const ALLOCATE_STAT_POINT: u32 = 0x0008_fa01;
 const REQUEST_RELIVE: u32 = 0x0008_fa02;
 const INTERACT_WITH_NPC: u32 = 0x0008_fa03;
+const SET_PK_PERMISSION: u32 = 0x0008_fa05;
 const REQUEST_TRADE: u32 = 0x0008_fa06;
 const ANSWER_TRADE: u32 = 0x0008_fa07;
 const TOGGLE_TRADE_READY: u32 = 0x0008_fa0b;
@@ -133,6 +137,7 @@ pub(crate) enum GamePlayerMessageOutcome {
     NpcInteractionTooFar,
     NpcInteractionScriptSuppressed,
     NpcInteractionScriptRequested,
+    PkPermissionSet,
     Relived,
     PlayerScriptRun,
     TradeRequested,
@@ -177,6 +182,7 @@ pub(crate) struct GamePlayerMessageReport {
     pub(crate) npc_distance: Option<i32>,
     pub(crate) npc_script_file: Vec<u8>,
     pub(crate) npc_script_data_present: Option<bool>,
+    pub(crate) pk_permission: Option<PlayerPkPermissionMutation>,
     pub(crate) friend_name: Vec<u8>,
     pub(crate) lei_ting_reward: Option<u16>,
     pub(crate) equipment_goods_id: Option<CGuid>,
@@ -301,6 +307,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         ALLOCATE_STAT_POINT
             | REQUEST_RELIVE
             | INTERACT_WITH_NPC
+            | SET_PK_PERMISSION
             | REQUEST_TRADE
             | ANSWER_TRADE
             | TOGGLE_TRADE_READY
@@ -330,6 +337,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         npc_distance: None,
         npc_script_file: Vec::new(),
         npc_script_data_present: None,
+        pk_permission: None,
         friend_name: Vec::new(),
         lei_ting_reward: None,
         equipment_goods_id: None,
@@ -469,6 +477,27 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             report.npc_script_data_present = Some(game.script_file_data(&script_file).is_some());
             runtime.run_npc_player_script(game, player_id, region_id, npc_id, &script_file);
             report.outcome = GamePlayerMessageOutcome::NpcInteractionScriptRequested;
+        }
+        SET_PK_PERMISSION => {
+            if game.find_player(player_id).is_none() {
+                return Some(Ok(report));
+            }
+            let Some(selector) = message.base_mut().get_char() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "PK permission selector",
+                )));
+            };
+            let Some(value) = message.base_mut().get_char() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "PK permission value",
+                )));
+            };
+            report.pk_permission = Some(
+                game.find_player_mut(player_id)
+                    .expect("PK-permission player сохранён после context lookup")
+                    .set_pk_permission(selector, value != 0),
+            );
+            report.outcome = GamePlayerMessageOutcome::PkPermissionSet;
         }
         RUN_HELP_SCRIPT => {
             runtime.run_player_script(game, player_id, b"scripts/help/help.script");

@@ -35,6 +35,9 @@
 //! четырьмя base stat и base HP/MP maxima. Сохранены общий STR gate для всех
 //! `Add*`, безусловный расход очка и отдельный 0x9c-byte `m_Property` wire:
 //! reached recompute заменяет только подтверждённые поля, не обнуляя хвост.
+//! PvP preferences `0x8FA05` хранят пять live permission flags, которые
+//! downstream player/skill AI читает при выборе обычных, team, union,
+//! criminal и country целей; unknown selector только потребляет вход.
 //! Cross-Game progression `0x7FA08..0B` использует owned skill map и level/exp:
 //! name-overload-ы делегируют factory ID lookup, а `SetLevel` возвращает
 //! faction side effect caller-у до exact client progression packet.
@@ -1078,6 +1081,11 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) base_dexterity: u32,
     pub(crate) base_constitution: u32,
     pub(crate) base_intelligence: u32,
+    pub(crate) pk_normal: bool,
+    pub(crate) pk_team: bool,
+    pub(crate) pk_union: bool,
+    pub(crate) pk_badman: bool,
+    pub(crate) pk_country: bool,
     pub(crate) pk_count: u16,
     pub(crate) kill_count: u32,
     pub(crate) experience: u32,
@@ -1272,6 +1280,26 @@ pub(crate) struct PlayerStatAllocationMutation {
     pub(crate) stat_changed: bool,
     pub(crate) previous: PlayerStatAllocationState,
     pub(crate) current: PlayerStatAllocationState,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerPkPermissions {
+    pub(crate) player: bool,
+    pub(crate) teammate: bool,
+    pub(crate) guild_member: bool,
+    pub(crate) criminal: bool,
+    pub(crate) country: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerPkPermissionMutation {
+    pub(crate) player_id: i32,
+    pub(crate) selector: i8,
+    pub(crate) requested: bool,
+    pub(crate) recognized: bool,
+    pub(crate) changed: bool,
+    pub(crate) previous: PlayerPkPermissions,
+    pub(crate) current: PlayerPkPermissions,
 }
 
 impl PlayerCombatProperties {
@@ -2458,6 +2486,68 @@ impl CPlayer {
             previous,
             current: self.stat_allocation_state(),
         })
+    }
+
+    pub(crate) const fn pk_permissions(&self) -> PlayerPkPermissions {
+        PlayerPkPermissions {
+            player: self.base_properties.pk_normal,
+            teammate: self.base_properties.pk_team,
+            guild_member: self.base_properties.pk_union,
+            criminal: self.base_properties.pk_badman,
+            country: self.base_properties.pk_country,
+        }
+    }
+
+    /// Граница восстановления пяти persisted `bPk_*` перед skill/AI use.
+    pub(crate) const fn restore_pk_permissions(&mut self, permissions: PlayerPkPermissions) {
+        self.base_properties.pk_normal = permissions.player;
+        self.base_properties.pk_team = permissions.teammate;
+        self.base_properties.pk_union = permissions.guild_member;
+        self.base_properties.pk_badman = permissions.criminal;
+        self.base_properties.pk_country = permissions.country;
+    }
+
+    /// Exact selector `0x8FA05`; неизвестное signed-char значение не меняет
+    /// state, но caller уже прочитал оба входных байта.
+    pub(crate) fn set_pk_permission(
+        &mut self,
+        selector: i8,
+        requested: bool,
+    ) -> PlayerPkPermissionMutation {
+        let previous = self.pk_permissions();
+        let recognized = match selector {
+            0 => {
+                self.base_properties.pk_normal = requested;
+                true
+            }
+            1 => {
+                self.base_properties.pk_team = requested;
+                true
+            }
+            2 => {
+                self.base_properties.pk_union = requested;
+                true
+            }
+            3 => {
+                self.base_properties.pk_badman = requested;
+                true
+            }
+            4 => {
+                self.base_properties.pk_country = requested;
+                true
+            }
+            _ => false,
+        };
+        let current = self.pk_permissions();
+        PlayerPkPermissionMutation {
+            player_id: self.player_id(),
+            selector,
+            requested,
+            recognized,
+            changed: previous != current,
+            previous,
+            current,
+        }
     }
 
     /// Exact `GetCurBurden`: только equipment, packet и hand, в исходном
