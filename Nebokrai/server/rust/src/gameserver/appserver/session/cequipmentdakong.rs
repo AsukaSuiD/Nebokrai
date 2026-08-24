@@ -5,7 +5,8 @@
 //! хранит восьмислотовый shadow и достигается из goods opcodes
 //! `0x8FC1F..0x8FC23`; gameplay выполняется через canonical `CGame`, player,
 //! goods factory и общий MSVCRT RNG. Listener/session lifecycle и script-only
-//! external-refresh caller остаются отдельными достигнутыми границами.
+//! external-refresh caller `9351` использует тот же external-attribute
+//! алгоритм, обязательный reason `4`, расход, area effect `11` и item update.
 
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentdakongcontainer::{
@@ -108,6 +109,40 @@ pub(crate) struct EquipmentDaKongClientUpdate {
     pub(crate) player_id: i32,
     pub(crate) goods: ShapeIdentity,
     pub(crate) old_client_payload: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentDaKongAroundEffect {
+    pub(crate) effect_id: i32,
+    pub(crate) region_id: i32,
+    pub(crate) tile_x: i32,
+    pub(crate) tile_y: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentDaKongExternalRefreshOutcome {
+    FeatureDisabled,
+    EmptyCostName,
+    MissingSelection,
+    MissingEquipment,
+    UpdatedWithoutRefresh,
+    Refreshed,
+}
+
+#[must_use = "external refresh report хранит mutation, расход, world log, effect и client update"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentDaKongExternalRefreshReport {
+    pub(crate) player_id: i32,
+    pub(crate) cost_original_name: Vec<u8>,
+    pub(crate) equipment_id: Option<crate::public::guid::CGuid>,
+    pub(crate) outcome: EquipmentDaKongExternalRefreshOutcome,
+    pub(crate) consumption: Option<CiQingPacketConsumption>,
+    pub(crate) consumption_deliveries: Vec<i32>,
+    pub(crate) log: Option<EquipmentDaKongAuditLog>,
+    pub(crate) effect: Option<EquipmentDaKongAroundEffect>,
+    pub(crate) effect_delivery: Option<i32>,
+    pub(crate) client_update: Option<EquipmentDaKongClientUpdate>,
+    pub(crate) client_update_deliveries: Vec<i32>,
 }
 
 #[must_use = "DaKong report хранит validation, addon mutations, расход и terminal wire"]

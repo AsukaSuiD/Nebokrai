@@ -393,11 +393,12 @@ use crate::gameserver::appserver::session::cequipmentcompose::{
     EquipmentComposeSourceConsumption, EquipmentComposeSourceSnapshot,
 };
 use crate::gameserver::appserver::session::cequipmentdakong::{
-    CEquipmentDaKong, DA_KONG_USE_SINKER_INDEX, EquipmentDaKongAuditLog,
-    EquipmentDaKongClientUpdate, EquipmentDaKongEnchaseEvent, EquipmentDaKongGemSnapshot,
-    EquipmentDaKongGoodsSnapshot, EquipmentDaKongOperation, EquipmentDaKongOutcome,
-    EquipmentDaKongReport, deal_enchase_gems, deal_with_da_kong_external_attributes,
-    deal_with_da_kong_seven, equipment_da_kong_condition,
+    CEquipmentDaKong, DA_KONG_USE_SINKER_INDEX, EquipmentDaKongAroundEffect,
+    EquipmentDaKongAuditLog, EquipmentDaKongClientUpdate, EquipmentDaKongEnchaseEvent,
+    EquipmentDaKongExternalRefreshOutcome, EquipmentDaKongExternalRefreshReport,
+    EquipmentDaKongGemSnapshot, EquipmentDaKongGoodsSnapshot, EquipmentDaKongOperation,
+    EquipmentDaKongOutcome, EquipmentDaKongReport, deal_enchase_gems,
+    deal_with_da_kong_external_attributes, deal_with_da_kong_seven, equipment_da_kong_condition,
 };
 use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
 use crate::gameserver::appserver::shape::{
@@ -1236,6 +1237,10 @@ pub(crate) trait EquipmentDaKongContext: OldClientGoodsCodec {
         &mut self,
         update: &EquipmentDaKongClientUpdate,
     ) -> Vec<i32>;
+    fn publish_equipment_da_kong_around_effect(
+        &mut self,
+        effect: &EquipmentDaKongAroundEffect,
+    ) -> i32;
     fn run_equipment_da_kong_script(
         &mut self,
         game: &mut CGame,
@@ -4976,6 +4981,193 @@ impl CGame {
         self.players.insert(player_id, player);
         self.session_factory
             .register_equipment_da_kong_plug(actual_plug_id, plug);
+        report
+    }
+
+    pub(crate) fn reflush_equipment_da_kong_external_property<Context: EquipmentDaKongContext>(
+        &mut self,
+        player_id: i32,
+        cost_original_name: &[u8],
+        context: &mut Context,
+    ) -> EquipmentDaKongExternalRefreshReport {
+        let mut report = EquipmentDaKongExternalRefreshReport {
+            player_id,
+            cost_original_name: cost_original_name.to_vec(),
+            equipment_id: None,
+            outcome: EquipmentDaKongExternalRefreshOutcome::FeatureDisabled,
+            consumption: None,
+            consumption_deliveries: Vec::new(),
+            log: None,
+            effect: None,
+            effect_delivery: None,
+            client_update: None,
+            client_update_deliveries: Vec::new(),
+        };
+        if !self.da_kong_xiang_qian.key() {
+            return report;
+        }
+        if cost_original_name.is_empty() {
+            report.outcome = EquipmentDaKongExternalRefreshOutcome::EmptyCostName;
+            return report;
+        }
+        let Some(mut player) = self.players.remove(&player_id) else {
+            report.outcome = EquipmentDaKongExternalRefreshOutcome::MissingSelection;
+            return report;
+        };
+        report = self.reflush_equipment_da_kong_external_property_inner(
+            &mut player,
+            cost_original_name,
+            report,
+            context,
+        );
+        self.players.insert(player_id, player);
+        report
+    }
+
+    fn reflush_equipment_da_kong_external_property_inner<Context: EquipmentDaKongContext>(
+        &mut self,
+        player: &mut CPlayer,
+        cost_original_name: &[u8],
+        mut report: EquipmentDaKongExternalRefreshReport,
+        context: &mut Context,
+    ) -> EquipmentDaKongExternalRefreshReport {
+        use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+            GAP_DAKONG_1, GAP_DAKONG_EXTERN_1, GAP_DAKONG_EXTERN_2, GAP_DAKONG_EXTERN_3,
+        };
+
+        let Some(equipment_id) = player.enhancement_selected_goods_id() else {
+            report.outcome = EquipmentDaKongExternalRefreshOutcome::MissingSelection;
+            return report;
+        };
+        report.equipment_id = Some(equipment_id);
+        let Some(equipment) = player.get_goods_by_id(equipment_id) else {
+            report.outcome = EquipmentDaKongExternalRefreshOutcome::MissingEquipment;
+            return report;
+        };
+        let old_seven = EquipmentDaKongGemSnapshot::from_catalog(
+            equipment.addon_property_value(&self.goods_factory, GAP_DAKONG_1 + 6, 2) as u32,
+            &self.goods_factory,
+        );
+        let equipment = player
+            .get_goods_by_id_mut(equipment_id)
+            .expect("external refresh equipment проверен до снятия бонусов");
+        deal_with_da_kong_external_attributes(equipment, &self.goods_factory, old_seven, false);
+
+        let refresh = match cost_original_name {
+            b"FZ1052" => Some((0, GAP_DAKONG_EXTERN_1)),
+            b"FZ1051" => Some((1, GAP_DAKONG_EXTERN_2)),
+            b"FZ1050" => Some((2, GAP_DAKONG_EXTERN_3)),
+            _ => None,
+        };
+        let mut refreshed = false;
+        if let Some((group, property)) = refresh {
+            let cost_base_index = self
+                .goods_factory
+                .query_goods_id_by_original_name(Some(cost_original_name));
+            let can_refresh = self
+                .goods_factory
+                .query_goods_base_properties(cost_base_index)
+                .is_some()
+                && player.check_item_in_packet(cost_base_index) != 0
+                && player
+                    .get_goods_by_id(equipment_id)
+                    .is_some_and(|equipment| {
+                        equipment.addon_property_value(&self.goods_factory, property, 1) > 0
+                            && equipment.addon_property_value(&self.goods_factory, property, 2) > 0
+                    });
+            if can_refresh {
+                let (property_type, property_value) = {
+                    let (setup, random_state) = (&self.da_kong_xiang_qian, &mut self.random_state);
+                    setup
+                        .make_sure_external_attribute(
+                            group,
+                            player
+                                .get_goods_by_id(equipment_id)
+                                .expect("external refresh equipment сохраняется до RNG")
+                                .base_properties_index(),
+                            |upper_bound| game_legacy_random(random_state, upper_bound),
+                        )
+                        .unwrap_or_default()
+                };
+                let equipment = player
+                    .get_goods_by_id_mut(equipment_id)
+                    .expect("external refresh equipment сохраняется до mutation");
+                let _ = equipment.set_addon_property_value_first_core(property, 1, property_type);
+                let _ = equipment.set_addon_property_modifier_core(property, 2, property_value);
+
+                if let Some(cost) = self
+                    .goods_factory
+                    .query_goods_base_properties(cost_base_index)
+                {
+                    let log = EquipmentDaKongAuditLog {
+                        player_id: player.player_id(),
+                        reason: 4,
+                        cost_base_index,
+                        cost_price: cost.price(),
+                        cost_name: cost.name().to_vec(),
+                        equipment: EquipmentDaKongGoodsSnapshot::capture(
+                            player
+                                .get_goods_by_id(equipment_id)
+                                .expect("external refresh equipment сохраняется до world log"),
+                            &self.goods_factory,
+                        ),
+                    };
+                    context.record_equipment_da_kong_log(player, &log);
+                    report.log = Some(log);
+                }
+                if let Some(consumption) = player
+                    .remove_item_in_packet(cost_base_index, 1)
+                    .into_iter()
+                    .next()
+                {
+                    report.consumption_deliveries =
+                        context.publish_equipment_da_kong_consumption(&consumption);
+                    report.consumption = Some(consumption);
+                }
+                if let (Some(region_id), Ok(tile_x), Ok(tile_y)) = (
+                    player.server_region_id(),
+                    player.shape().get_tile_x(),
+                    player.shape().get_tile_y(),
+                ) {
+                    let effect = EquipmentDaKongAroundEffect {
+                        effect_id: 11,
+                        region_id,
+                        tile_x,
+                        tile_y,
+                    };
+                    report.effect_delivery =
+                        Some(context.publish_equipment_da_kong_around_effect(&effect));
+                    report.effect = Some(effect);
+                }
+                refreshed = true;
+            }
+        }
+
+        let new_seven = player.get_goods_by_id(equipment_id).and_then(|equipment| {
+            EquipmentDaKongGemSnapshot::from_catalog(
+                equipment.addon_property_value(&self.goods_factory, GAP_DAKONG_1 + 6, 2) as u32,
+                &self.goods_factory,
+            )
+        });
+        let equipment = player
+            .get_goods_by_id_mut(equipment_id)
+            .expect("external refresh equipment сохраняется до возврата бонусов");
+        deal_with_da_kong_external_attributes(equipment, &self.goods_factory, new_seven, true);
+        let equipment = player
+            .get_goods_by_id(equipment_id)
+            .expect("external refresh equipment сохраняется до client update");
+        let update = EquipmentDaKongClientUpdate {
+            player_id: player.player_id(),
+            goods: equipment.identity(),
+            old_client_payload: context.encode_goods_for_old_client(equipment),
+        };
+        report.client_update_deliveries = context.publish_equipment_da_kong_update(&update);
+        report.client_update = Some(update);
+        report.outcome = if refreshed {
+            EquipmentDaKongExternalRefreshOutcome::Refreshed
+        } else {
+            EquipmentDaKongExternalRefreshOutcome::UpdatedWithoutRefresh
+        };
         report
     }
 

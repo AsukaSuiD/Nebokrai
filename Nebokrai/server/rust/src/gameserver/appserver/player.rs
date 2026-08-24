@@ -78,6 +78,10 @@
 //! не подменяя его внутренней random-веткой `ResetSkill`.
 //! `GetGoodsById` теперь сохраняет exact hand→packet→equipment→auction lookup;
 //! hand и auction являются owned containers и участвуют в owner refresh.
+//! Однослотовый `m_cEnhancementContainer` хранит shadow выбранного исходного
+//! goods и даёт script ID 9351 тот же живой предмет без копии. Входящее
+//! заполнение этого shadow остаётся у ещё RAW `CC2SContainerObjectMove::Move`;
+//! script-механика не подменяет его фиктивным выбором.
 //! CiQing unlocked base-index set хранится ordered `BTreeSet`; его query не
 //! создаёт постоянные goods, а только передаёт snapshot CGame factory owner-у;
 //! make считает/удаляет packet stack-и в container order и сохраняет
@@ -130,18 +134,23 @@ use super::area::WarSoulPoint;
 use super::container::camountlimitgoodscontainer::{
     AmountLimitGoodsRemoved, CAmountLimitGoodsContainer,
 };
+use super::container::camountlimitgoodsshadowcontainer::{
+    AmountShadowAdded, CAmountLimitGoodsShadowContainer,
+};
 use super::container::cbank::CBank;
 use super::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck, BattleFairyCombineRemovedInput,
     BattleFairyContainerAddOutcome, BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill,
     BattleFairyPropertyAddEffect, BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
 };
+use super::container::ccontainer::PreviousContainer;
 use super::container::cdepot::CDepot;
 use super::container::cequipmentcontainer::{
     CEquipmentContainer, EquipmentAddOutcome, EquipmentAddRuntimeFacts, EquipmentAroundUpdate,
     EquipmentColumn, EquipmentOwnerPlayerFacts, EquipmentRemoveOutcome,
     EquipmentRemoveRuntimeFacts,
 };
+use super::container::cgoodsshadowcontainer::{PlacedShadowGoods, ShadowRecordBlock};
 use super::container::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
 };
@@ -1008,6 +1017,12 @@ pub(crate) struct CiQingHandConsumption {
     pub(crate) removal: Option<AmountLimitGoodsRemoved>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EnhancementSelectionBlock {
+    MissingGoods,
+    Shadow(ShadowRecordBlock),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
@@ -1047,6 +1062,7 @@ pub(crate) struct CPlayer {
     bank: CBank,
     depot: CDepot,
     hand: CAmountLimitGoodsContainer,
+    enhancement: CAmountLimitGoodsShadowContainer,
     packet: CVolumeLimitGoodsContainer,
     equipment: CEquipmentContainer,
     auction_goods: CVolumeLimitGoodsContainer,
@@ -1081,6 +1097,8 @@ impl CPlayer {
         let owner_id = move_shape.shape().identity().id;
         let mut packet = CVolumeLimitGoodsContainer::new();
         let _empty_release = packet.set_container_dimensions(8, 12);
+        let mut enhancement = CAmountLimitGoodsShadowContainer::new();
+        enhancement.set_goods_amount_limit(1);
         let mut ci_qing = CVolumeLimitGoodsContainer::new();
         let _empty_release = ci_qing.set_container_volume(8);
         let mut ci_qing_compose = CVolumeLimitGoodsContainer::new();
@@ -1123,6 +1141,7 @@ impl CPlayer {
             bank: CBank::new(),
             depot: CDepot::new(),
             hand: CAmountLimitGoodsContainer::new(),
+            enhancement,
             packet,
             equipment: CEquipmentContainer::new(),
             auction_goods: CVolumeLimitGoodsContainer::new(),
@@ -1839,6 +1858,30 @@ impl CPlayer {
 
     pub(crate) const fn packet(&self) -> &CVolumeLimitGoodsContainer {
         &self.packet
+    }
+
+    pub(crate) fn enhancement_selected_goods_id(&self) -> Option<CGuid> {
+        self.enhancement.base().goods_id_at(0)
+    }
+
+    pub(crate) fn record_enhancement_selection(
+        &mut self,
+        goods_id: CGuid,
+        previous: PreviousContainer,
+        placed_position: u32,
+    ) -> Result<AmountShadowAdded, EnhancementSelectionBlock> {
+        let goods = self
+            .get_goods_by_id(goods_id)
+            .ok_or(EnhancementSelectionBlock::MissingGoods)?;
+        let placed = PlacedShadowGoods {
+            identity: goods_id,
+            position: placed_position,
+            base_properties_index: goods.base_properties_index(),
+            amount: goods.amount(),
+        };
+        self.enhancement
+            .record_placed_goods(previous, placed)
+            .map_err(EnhancementSelectionBlock::Shadow)
     }
 
     pub(crate) const fn packet_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
@@ -3669,6 +3712,10 @@ impl CPlayer {
             .base_mut()
             .set_owner(PLAYER_TYPE, player_id);
         self.hand.set_owner(PLAYER_TYPE, player_id);
+        self.enhancement
+            .base_mut()
+            .base_mut()
+            .set_owner(PLAYER_TYPE, player_id);
         self.packet.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.equipment.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.auction_goods

@@ -1,6 +1,42 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Script-function dispatcher исторического GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `server/gameserver/appserver/script/function.cpp`. Из dense dispatcher-а
+//! материализован ID `9351 / ReflushExternProperty`: вычисляется только первая
+//! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
+//! gameplay передаётся canonical `CGame`. Полный expression evaluator и
+//! остальные function ID ниже пока остаются RAW.
+
+use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongExternalRefreshReport;
+use crate::gameserver::gameserver::game::{CGame, EquipmentDaKongContext};
+
+pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
+
+#[must_use = "script dispatch отличает чужой ID от handled no-op и выполненного gameplay"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentDaKongScriptFunctionOutcome {
+    DifferentFunction,
+    HandledWithoutCall,
+    Refreshed(EquipmentDaKongExternalRefreshReport),
+}
+
+pub(crate) fn run_equipment_da_kong_script_function<Context: EquipmentDaKongContext>(
+    game: &mut CGame,
+    player_id: i32,
+    function_id: i32,
+    evaluated_first_string: Option<&[u8]>,
+    context: &mut Context,
+) -> EquipmentDaKongScriptFunctionOutcome {
+    if function_id != SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY {
+        return EquipmentDaKongScriptFunctionOutcome::DifferentFunction;
+    }
+    let Some(cost_original_name) = evaluated_first_string.filter(|value| !value.is_empty()) else {
+        return EquipmentDaKongScriptFunctionOutcome::HandledWithoutCall;
+    };
+    EquipmentDaKongScriptFunctionOutcome::Refreshed(
+        game.reflush_equipment_da_kong_external_property(player_id, cost_original_name, context),
+    )
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -217,8 +253,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

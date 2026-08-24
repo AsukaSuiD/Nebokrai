@@ -188,6 +188,10 @@ impl CGoodsShadowContainer {
             .map(|position| position as u32)
     }
 
+    pub(crate) fn goods_id_at(&self, position: u32) -> Option<CGuid> {
+        self.shadows.keys().nth(position as usize).copied()
+    }
+
     pub(crate) fn original_container_information(
         &self,
         goods_id: CGuid,
