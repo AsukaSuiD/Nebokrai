@@ -404,6 +404,7 @@ pub(crate) struct PlayerEquipmentRemoveReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: EquipmentRemoveOutcome,
     pub(crate) effects: Vec<PlayerEquipmentRemoveEffect>,
+    pub(crate) deliveries: Vec<PlayerEquipmentDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -437,6 +438,14 @@ pub(crate) struct PlayerEquipmentAddReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: EquipmentAddOutcome,
     pub(crate) effects: Vec<PlayerEquipmentAddEffect>,
+    pub(crate) deliveries: Vec<PlayerEquipmentDelivery>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerEquipmentDelivery {
+    SkillAdded(i32),
+    SkillRemoved(i32),
+    Runtime(Vec<i32>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1619,6 +1628,7 @@ impl CPlayer {
             player_id,
             outcome,
             effects,
+            deliveries: Vec::new(),
         }
     }
 
@@ -1696,6 +1706,7 @@ impl CPlayer {
             player_id,
             outcome,
             effects,
+            deliveries: Vec::new(),
         }
     }
 

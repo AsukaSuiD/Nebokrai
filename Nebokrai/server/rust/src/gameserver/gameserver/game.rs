@@ -316,7 +316,8 @@ use crate::gameserver::appserver::player::{
     BattleFairySkillResetEffect, BattleFairySkillResetReport, BattleFairySummonDelivery,
     BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeDelivery,
     BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, PlayerCombatProperties,
-    PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentRemoveReport,
+    PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
+    PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
     PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerReliveMutation,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
@@ -1135,6 +1136,17 @@ pub(crate) trait BattleFairyUpgradeContext {
 
 pub(crate) trait BattleFairySkillRequestContext {
     fn queue_battle_fairy_skill(&mut self, player_id: i32, dispatch: BattleFairySkillDispatch);
+}
+
+pub(crate) trait PlayerEquipmentContext {
+    fn publish_player_equipment_add_effect(
+        &mut self,
+        effect: &PlayerEquipmentAddEffect,
+    ) -> Vec<i32>;
+    fn publish_player_equipment_remove_effect(
+        &mut self,
+        effect: &PlayerEquipmentRemoveEffect,
+    ) -> Vec<i32>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6677,16 +6689,17 @@ impl CGame {
     /// Полный player-owned tail `CEquipmentContainer::Remove`: callback
     /// materializes reached результат ещё отдельного virtual
     /// `PropertiesChanged`, наблюдая player уже без removed slot-а.
-    pub(crate) fn remove_player_equipment(
+    pub(crate) fn remove_player_equipment<Context: PlayerEquipmentContext>(
         &mut self,
         player_id: i32,
         ex_id: CGuid,
         runtime: PlayerEquipmentRemoveRuntimeFacts,
         recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
+        context: &mut Context,
     ) -> Option<PlayerEquipmentRemoveReport> {
         let (players, goods_factory, skill_factory) =
             (&mut self.players, &self.goods_factory, &self.skill_factory);
-        players.get_mut(&player_id).map(|player| {
+        let mut report = players.get_mut(&player_id).map(|player| {
             player.remove_equipment_goods(
                 ex_id,
                 goods_factory,
@@ -6694,12 +6707,37 @@ impl CGame {
                 runtime,
                 recompute_properties,
             )
-        })
+        })?;
+        for effect in report.effects.clone() {
+            match effect {
+                PlayerEquipmentRemoveEffect::WarSoulSkillDetached { .. } => {}
+                PlayerEquipmentRemoveEffect::SkillRemoved(skill) => {
+                    let mut message = CMessage::new(skill.message_type as i32);
+                    add_legacy_c_string(message.base_mut(), &skill.skill_name);
+                    report
+                        .deliveries
+                        .push(PlayerEquipmentDelivery::SkillRemoved(
+                            message.send_to_player(self.net_server(), skill.player_id),
+                        ));
+                }
+                effect @ (PlayerEquipmentRemoveEffect::WarSoulStatusAround { .. }
+                | PlayerEquipmentRemoveEffect::PropertiesChangedWithoutRemovedSlot {
+                    ..
+                }
+                | PlayerEquipmentRemoveEffect::VitalsClamped { .. }
+                | PlayerEquipmentRemoveEffect::AroundUpdate(_)) => {
+                    report.deliveries.push(PlayerEquipmentDelivery::Runtime(
+                        context.publish_player_equipment_remove_effect(&effect),
+                    ));
+                }
+            }
+        }
+        Some(report)
     }
 
     /// Полный player-owned tail positional `CEquipmentContainer::Add`; оба
     /// callback-а вызываются в native порядке относительно container commit.
-    pub(crate) fn add_player_equipment(
+    pub(crate) fn add_player_equipment<Context: PlayerEquipmentContext>(
         &mut self,
         player_id: i32,
         position: u32,
@@ -6707,10 +6745,11 @@ impl CGame {
         runtime: PlayerEquipmentAddRuntimeFacts,
         register_with_goods_ai: &mut dyn FnMut(&CGoods),
         recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
+        context: &mut Context,
     ) -> Option<PlayerEquipmentAddReport> {
         let (players, goods_factory, skill_factory) =
             (&mut self.players, &self.goods_factory, &self.skill_factory);
-        players.get_mut(&player_id).map(|player| {
+        let mut report = players.get_mut(&player_id).map(|player| {
             player.add_equipment_goods(
                 position,
                 incoming,
@@ -6720,7 +6759,29 @@ impl CGame {
                 register_with_goods_ai,
                 recompute_properties,
             )
-        })
+        })?;
+        for effect in report.effects.clone() {
+            match effect {
+                PlayerEquipmentAddEffect::WarSoulSkillAttached { .. } => {}
+                PlayerEquipmentAddEffect::SkillAdded(skill) => {
+                    if let Some(message) =
+                        battle_fairy_skill_learned_message(&skill, &self.skill_factory, true)
+                    {
+                        report.deliveries.push(PlayerEquipmentDelivery::SkillAdded(
+                            message.send_to_player(self.net_server(), skill.player_id),
+                        ));
+                    }
+                }
+                effect @ (PlayerEquipmentAddEffect::PropertiesChanged { .. }
+                | PlayerEquipmentAddEffect::AroundUpdate(_)
+                | PlayerEquipmentAddEffect::PackageExtensionLogged { .. }) => {
+                    report.deliveries.push(PlayerEquipmentDelivery::Runtime(
+                        context.publish_player_equipment_add_effect(&effect),
+                    ));
+                }
+            }
+        }
+        Some(report)
     }
 
     /// Замыкает remove по GUID с тем же player/equipment state и сохраняет
