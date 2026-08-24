@@ -62,6 +62,10 @@
 //! `5108 / GetOnlinePlayers` замыкает уже существующий World contract
 //! `0x5FF01 → 0x7FC01`: scheduler ждёт remote count и повторяет исходное
 //! expression без повторной отправки запроса.
+//! Недельный reset из того же reached script читает локальные
+//! SYSTEMTIME-поля через `TagTime`, меняет owned general variables
+//! в scheduler-е и публикует `PostWorldInfo` по уже замкнутому
+//! `0x5FF0E → 0x7FC0D → 0xBF806/0xBF804` contract.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -84,6 +88,7 @@ use crate::gameserver::gameserver::game::{
     NationContendEnterReport, ServerRegionOwner, colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::public::date::TagTime;
 use crate::public::guid::CGuid;
 
 pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
@@ -105,6 +110,9 @@ pub(crate) const SCRIPT_FUNCTION_GET_SELECTED_DURABILITY: i32 = 2245;
 pub(crate) const SCRIPT_FUNCTION_SET_SELECTED_DURABILITY: i32 = 2246;
 pub(crate) const SCRIPT_FUNCTION_FAIRY_EXP_UP: i32 = 2249;
 pub(crate) const SCRIPT_FUNCTION_RGB: i32 = 9;
+pub(crate) const SCRIPT_FUNCTION_HOUR: i32 = 17;
+pub(crate) const SCRIPT_FUNCTION_MINUTE: i32 = 18;
+pub(crate) const SCRIPT_FUNCTION_DAY_OF_WEEK: i32 = 19;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
 pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS: i32 = 2201;
@@ -117,6 +125,7 @@ pub(crate) const SCRIPT_FUNCTION_SCRIPT_IS_RUNNING: i32 = 2316;
 pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
+pub(crate) const SCRIPT_FUNCTION_POST_WORLD_INFO: i32 = 5202;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
@@ -2351,7 +2360,16 @@ pub(crate) fn script_function_parameter_kind(
             1 => String,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_GET_COUNTRY | SCRIPT_FUNCTION_GET_ONLINE_PLAYERS => Unused,
+        SCRIPT_FUNCTION_HOUR
+        | SCRIPT_FUNCTION_MINUTE
+        | SCRIPT_FUNCTION_DAY_OF_WEEK
+        | SCRIPT_FUNCTION_GET_COUNTRY
+        | SCRIPT_FUNCTION_GET_ONLINE_PLAYERS => Unused,
+        SCRIPT_FUNCTION_POST_WORLD_INFO => match index {
+            0 => String,
+            1 | 2 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_ADD_GOODS
         | SCRIPT_FUNCTION_DELETE_GOODS
         | SCRIPT_FUNCTION_CHECK_GOODS
@@ -2793,6 +2811,18 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
 ) -> Option<ScriptFunctionDispatchOutcome> {
     let player_id = script_player_id.unwrap_or_default();
     match function_id {
+        SCRIPT_FUNCTION_HOUR | SCRIPT_FUNCTION_MINUTE | SCRIPT_FUNCTION_DAY_OF_WEEK => {
+            if argument_count != 0 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let now = TagTime::local_now();
+            let legacy_return = match function_id {
+                SCRIPT_FUNCTION_HOUR => i32::from(now.hour),
+                SCRIPT_FUNCTION_MINUTE => i32::from(now.minute),
+                _ => i32::from(now.day_of_week),
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
         SCRIPT_FUNCTION_GET_ME => {
             if argument_count != 1 {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
@@ -2832,6 +2862,39 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Yielded {
                 legacy_return: local_count,
             })
+        }
+        SCRIPT_FUNCTION_POST_WORLD_INFO => {
+            let Some(text) =
+                string_arguments[0].filter(|text| text.len() <= 0xff && !text.contains(&0))
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if argument_count > 3 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            if game
+                .find_player(player_id)
+                .and_then(|player| player.server_region_id())
+                .is_none()
+            {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let color = integer_arguments[1].unwrap_or(-1);
+            let background = integer_arguments[2].unwrap_or_default();
+            let mut request = CMessage::new(0x0005_ff0e);
+            request.add_long(player_id);
+            request.base_mut().add(text);
+            request.add_byte(0);
+            request.add_long(color);
+            request.add_long(background);
+            request.add_long(i32::from(color == -2));
+            request.add_long(0);
+            match request.send(game, false) {
+                Ok(delivery) if delivery != 0 => {
+                    Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+                }
+                Ok(_) | Err(_) => Some(ScriptFunctionDispatchOutcome::Invalid),
+            }
         }
         SCRIPT_FUNCTION_SCRIPT_IS_RUNNING | SCRIPT_FUNCTION_REMOVE_SCRIPT => {
             if function_id == SCRIPT_FUNCTION_SCRIPT_IS_RUNNING && argument_count != 2 {
