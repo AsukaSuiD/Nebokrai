@@ -9,6 +9,7 @@
 //! Typed loaders/accessors накладываются только на подтверждённые offsets:
 //! create-role limit остаётся signed `i16`, country names/identities и special
 //! string — fixed C-строки, auction/JJC/DbMisc поля читаются из общего snapshot.
+//! BattleFairy и CiQing feature gates читаются из подтверждённых byte offsets.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
 //! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Nation contender damage
 //! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
@@ -58,6 +59,7 @@ const CONTEND_DAMAGE_TIME_FACTOR_OFFSET: usize = 0x568;
 const DIED_STATE_TIME_OFFSET: usize = 0x56C;
 const MAX_FETCH_POWER_OFFSET: usize = 0x900;
 const BATTLE_FAIRY_ENABLED_OFFSET: usize = 0x904;
+const CI_QING_ENABLED_OFFSET: usize = 0xD00;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -346,6 +348,11 @@ impl GlobeSetupSnapshot {
     /// сообщений; это не persisted `CPlayer::bBattleFairyEnabled`.
     pub(crate) const fn battle_fairy_enabled(&self) -> bool {
         self.bytes[BATTLE_FAIRY_ENABLED_OFFSET] != 0
+    }
+
+    /// `bCiQing +0xD00` — общий gate клиентских операций татуировок.
+    pub(crate) const fn ci_qing_enabled(&self) -> bool {
+        self.bytes[CI_QING_ENABLED_OFFSET] != 0
     }
 
     pub(crate) const fn da_kong_key(&self) -> bool {

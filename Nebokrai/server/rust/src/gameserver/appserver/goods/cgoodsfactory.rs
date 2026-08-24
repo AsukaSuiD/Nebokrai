@@ -11,7 +11,9 @@
 //! предмета замкнуто вместе с обязательной загрузкой ordinary/battle-fairy
 //! свойств. Пошаговый `UpgradeBFEquipment` меняет instance level и восемь
 //! growth-зависимых addon-ов в исходном порядке каждого level step; прочая
-//! массовая и ordinary upgrade mutation ниже остаётся RAW.
+//! CiQing batch-overload сохраняет дробление consumable/useless по stacking-
+//! limit и поштучное создание остальных типов; ordinary upgrade mutation ниже
+//! остаётся RAW.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -23,7 +25,8 @@ use super::cgoodsbaseproperties::{
     GAP_BF_AGILITY_GROW, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_GROW, GAP_BF_LIFE_ADDON,
     GAP_BF_LIFE_GROW, GAP_BF_MP_ADDON, GAP_BF_MP_GROW, GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_GROW,
     GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISE_GROW, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_GROW,
-    GAP_BF_WEAPON_LEVEL, GoodsBasePropertiesDecodeError, ICON_TYPE_GROUND,
+    GAP_BF_WEAPON_LEVEL, GAP_GOODS_STACKING_LIMIT, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_USELESS,
+    GoodsBasePropertiesDecodeError, ICON_TYPE_GROUND,
 };
 use crate::public::guid::CGuid;
 
@@ -220,6 +223,68 @@ impl CGoodsFactory {
             .load_battle_fairy_property(self, battle_fairy_threshold_for_level)
             .expect("catalog entry проверена create_goods_core");
         Some(goods)
+    }
+
+    /// Exact overload `CreateGoods(goods_index, amount, vector)`: stackable
+    /// типы дробятся по limit с `id == 1`, остальные создаются поштучно.
+    pub(crate) fn create_goods_batch<Random, Guid, FairyThreshold, BattleFairyThreshold>(
+        &self,
+        goods_index: u32,
+        mut amount: u32,
+        mut random: Random,
+        mut create_guid: Guid,
+        mut fairy_threshold_for_level: FairyThreshold,
+        mut battle_fairy_threshold_for_level: BattleFairyThreshold,
+    ) -> Vec<CGoods>
+    where
+        Random: FnMut(i32) -> i32,
+        Guid: FnMut() -> CGuid,
+        FairyThreshold: FnMut(u32, u32) -> u32,
+        BattleFairyThreshold: FnMut(u32, u32) -> u32,
+    {
+        let Some(properties) = self.query_goods_base_properties(goods_index) else {
+            return Vec::new();
+        };
+        let mut created = Vec::new();
+        let stackable = matches!(
+            properties.goods_type(),
+            GOODS_TYPE_CONSUMABLE | GOODS_TYPE_USELESS
+        );
+        let maximum = if stackable {
+            properties
+                .get_addon_property_values(GAP_GOODS_STACKING_LIMIT)
+                .iter()
+                .find(|value| value.id == 1)
+                .map(|value| value.base_value)
+                .filter(|value| *value > 0)
+                .map_or(1, |value| value as u32)
+        } else {
+            1
+        };
+        while amount != 0 {
+            let created_goods = self.create_goods(
+                goods_index,
+                &mut random,
+                &mut create_guid,
+                &mut fairy_threshold_for_level,
+                &mut battle_fairy_threshold_for_level,
+            );
+            if stackable {
+                let Some(mut goods) = created_goods else {
+                    break;
+                };
+                let stack = amount.min(maximum);
+                goods.set_amount(stack);
+                amount = amount.wrapping_sub(stack);
+                created.push(goods);
+            } else {
+                if let Some(goods) = created_goods {
+                    created.push(goods);
+                }
+                amount = amount.wrapping_sub(1);
+            }
+        }
+        created
     }
 
     pub(crate) fn release(&mut self) {
@@ -540,20 +605,6 @@ fn read_factory_u32(
 // RVA: 0x000682E0
 // ADDRESS: 004682e0
 // PROTOTYPE: CGoods * __cdecl CreateGoods(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsFactory::CreateGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\goods\cgoodsfactory.cpp:370
-// RVA: 0x00068450
-// ADDRESS: 00468450
-// PROTOTYPE: void __cdecl CreateGoods(ulong param_1, ulong param_2, vector<CGoods*,std::allocator<CGoods*>_> * param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -18,6 +18,9 @@
 //! для найденного goods вызывает обязательный virtual property runtime.
 //! Парные `0x8FC2F/0x8FC30` публикуют ordered CiQing goods preview и global
 //! setup; первый непустой preview сохраняет ранний return исходного EXE.
+//! `0x8FC31` продолжает тот же owner полным make-проходом: оба feature gate-а
+//! стоят до decode, ресурсы расходуются в audit/delete order, factory и packet
+//! add сохраняют stacking/ownership effects, затем отправляется `0xBF932`.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -36,7 +39,7 @@ use crate::gameserver::appserver::player::{
 use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
     BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
-    CGame, CiQingGoodsQueryReport, CiQingSetupQueryReport,
+    CGame, CiQingGoodsQueryReport, CiQingMakeContext, CiQingMakeReport, CiQingSetupQueryReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -52,6 +55,7 @@ const RECALL_BATTLE_FAIRY: u32 = 0x0008_fc2d;
 const REFRESH_BATTLE_FAIRY_PROPERTY: u32 = 0x0008_fc2e;
 const QUERY_CI_QING_GOODS: u32 = 0x0008_fc2f;
 const QUERY_CI_QING_SETUP: u32 = 0x0008_fc30;
+const MAKE_CI_QING_NODE: u32 = 0x0008_fc31;
 
 pub(crate) trait GameGoodsMessageRuntime:
     BattleFairyCombineContext
@@ -59,6 +63,7 @@ pub(crate) trait GameGoodsMessageRuntime:
     + BattleFairyDeathContext
     + BattleFairyPotentialResetContext
     + BattleFairyRuntimeContext
+    + CiQingMakeContext
 {
     fn run_battle_fairy_reset_script(
         &mut self,
@@ -121,6 +126,8 @@ pub(crate) enum GameGoodsMessageOutcome {
     BattleFairyPropertyRefresh(BattleFairyPropertyRefreshReport),
     CiQingGoods(CiQingGoodsQueryReport),
     CiQingSetup(CiQingSetupQueryReport),
+    CiQingUnavailable,
+    CiQingMake(CiQingMakeReport),
 }
 
 #[must_use = "goods-message report содержит routing и полный gameplay result"]
@@ -152,6 +159,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             | REFRESH_BATTLE_FAIRY_PROPERTY
             | QUERY_CI_QING_GOODS
             | QUERY_CI_QING_SETUP
+            | MAKE_CI_QING_NODE
     ) {
         return None;
     }
@@ -303,6 +311,26 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
         ),
         QUERY_CI_QING_SETUP => {
             GameGoodsMessageOutcome::CiQingSetup(game.query_ci_qing_setup(player_id))
+        }
+        MAKE_CI_QING_NODE => {
+            if !game.ci_qing_message_enabled(player_id) {
+                GameGoodsMessageOutcome::CiQingUnavailable
+            } else {
+                let base_index = match read_long(message, "CiQing make base index") {
+                    Ok(value) => value as u32,
+                    Err(error) => return Some(Err(error)),
+                };
+                let amount = match read_long(message, "CiQing make amount") {
+                    Ok(value) => value as u32,
+                    Err(error) => return Some(Err(error)),
+                };
+                GameGoodsMessageOutcome::CiQingMake(
+                    game.make_ci_qing_node(player_id, base_index, amount, runtime)
+                        .expect(
+                            "resolved message player остаётся в CGame во время synchronous dispatch",
+                        ),
+                )
+            }
         }
         _ => unreachable!("opcode отфильтрован перед dispatch"),
     };

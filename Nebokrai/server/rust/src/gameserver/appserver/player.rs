@@ -79,7 +79,9 @@
 //! `GetGoodsById` теперь сохраняет exact hand→packet→equipment→auction lookup;
 //! hand и auction являются owned containers и участвуют в owner refresh.
 //! CiQing unlocked base-index set хранится ordered `BTreeSet`; его query не
-//! создаёт постоянные goods, а только передаёт snapshot CGame factory owner-у.
+//! создаёт постоянные goods, а только передаёт snapshot CGame factory owner-у;
+//! make считает/удаляет packet stack-и в container order и сохраняет
+//! new-object/stack ownership для caller network adapter-а.
 //! `skillmessage 0x90005` доведён до authorization и AI dispatch: feature/HP
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
@@ -925,6 +927,24 @@ pub(crate) enum PlayerProgress {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingPacketConsumption {
+    pub(crate) player_id: i32,
+    pub(crate) goods: super::shape::ShapeIdentity,
+    pub(crate) previous_amount: u32,
+    pub(crate) remaining_amount: u32,
+    pub(crate) removal: Option<VolumeGoodsRemoveOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingPacketAddition {
+    pub(crate) player_id: i32,
+    pub(crate) source: super::shape::ShapeIdentity,
+    pub(crate) outcome: VolumeGoodsAddOutcome,
+    pub(crate) old_client_payload: Option<Vec<u8>>,
+    pub(crate) resulting_amount: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
     figure: ShapeFigure,
@@ -1285,6 +1305,123 @@ impl CPlayer {
 
     pub(crate) fn restore_ci_qing_entry(&mut self, base_index: u32) -> bool {
         self.ci_qing_list.insert(base_index)
+    }
+
+    pub(crate) fn check_item_in_packet(&self, base_index: u32) -> u32 {
+        if base_index == 0 {
+            return 0;
+        }
+        self.packet
+            .base()
+            .get_goods_by_base_properties(base_index)
+            .into_iter()
+            .fold(0u32, |total, goods| total.wrapping_add(goods.amount()))
+    }
+
+    /// Exact insertion-order `remove_item_in_packet`: каждый stack проходит
+    /// через семантику `DeleteGoods(PEI_PACKET, ..., remaining, false)`.
+    pub(crate) fn remove_item_in_packet(
+        &mut self,
+        base_index: u32,
+        requested: u32,
+    ) -> Vec<CiQingPacketConsumption> {
+        if base_index == 0 || requested == 0 {
+            return Vec::new();
+        }
+        let candidates: Vec<_> = self
+            .packet
+            .base()
+            .get_goods_by_base_properties(base_index)
+            .into_iter()
+            .map(|goods| (goods.identity(), goods.amount()))
+            .collect();
+        let player_id = self.player_id();
+        let mut removed_amount = 0u32;
+        let mut consumptions = Vec::new();
+        for (identity, previous_amount) in candidates {
+            let remaining_request = requested.wrapping_sub(removed_amount);
+            if remaining_request == 0 {
+                break;
+            }
+            let consumed = previous_amount.min(remaining_request);
+            if consumed == 0 {
+                continue;
+            }
+            let remaining_amount = previous_amount.wrapping_sub(consumed);
+            let removal = if remaining_amount == 0 {
+                self.packet.remove_goods(identity.ex_id)
+            } else {
+                let position = self.packet.query_goods_position(identity.ex_id);
+                if let Some(goods) =
+                    position.and_then(|position| self.packet.get_goods_mut(position))
+                {
+                    goods.set_amount(remaining_amount);
+                }
+                None
+            };
+            removed_amount = removed_amount.wrapping_add(consumed);
+            consumptions.push(CiQingPacketConsumption {
+                player_id,
+                goods: identity,
+                previous_amount,
+                remaining_amount,
+                removal,
+            });
+        }
+        consumptions
+    }
+
+    /// Player-side `AddGoodsToPacket`: успешный add забирает ownership из
+    /// входного vector, rejected/несовместимый stack остаётся у caller-а.
+    pub(crate) fn add_goods_to_packet(
+        &mut self,
+        goods: Vec<CGoods>,
+        factory: &CGoodsFactory,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        let player_id = self.player_id();
+        let owner_progress_allows = self.current_progress == PlayerProgress::None;
+        let mut additions = Vec::new();
+        let mut remaining = Vec::new();
+        for goods in goods {
+            let source = goods.identity();
+            let mut incoming = Some(goods);
+            let outcome = self
+                .packet
+                .add_goods(&mut incoming, factory, owner_progress_allows);
+            let (old_client_payload, resulting_amount) = match &outcome {
+                VolumeGoodsAddOutcome::Added(added) => {
+                    let stored = self
+                        .packet
+                        .base()
+                        .find(added.identity.ex_id)
+                        .expect("успешный packet add сохранил новый goods");
+                    (Some(encode_old_client(stored)), Some(stored.amount()))
+                }
+                VolumeGoodsAddOutcome::Stack(stack) => {
+                    let target = match stack {
+                        super::container::cgoodscontainer::GoodsStackMergeOutcome::Merged {
+                            target,
+                            ..
+                        } => self.packet.base().find(target.ex_id),
+                        _ => None,
+                    };
+                    (None, target.map(CGoods::amount))
+                }
+                VolumeGoodsAddOutcome::Rejected(_) => (None, None),
+            };
+            additions.push(CiQingPacketAddition {
+                player_id,
+                source,
+                outcome,
+                old_client_payload,
+                resulting_amount,
+            });
+            if let Some(goods) = incoming {
+                remaining.push(goods);
+            }
+        }
+        (additions, remaining)
     }
 
     pub(crate) const fn contend_state(&self) -> bool {
@@ -5571,34 +5708,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::check_item_in_packet
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:388
-// RVA: 0x00032900
-// ADDRESS: 00432900
-// PROTOTYPE: uint __thiscall check_item_in_packet(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::remove_item_in_packet
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:408
-// RVA: 0x000329E0
-// ADDRESS: 004329e0
-// PROTOTYPE: uint __thiscall remove_item_in_packet(int param_1, int param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::GetNumSkills
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -6215,20 +6324,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::AddGoodsToPacket
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:431
-// RVA: 0x0003BFD0
-// ADDRESS: 0043bfd0
-// PROTOTYPE: bool __thiscall AddGoodsToPacket(vector<CGoods*,std::allocator<CGoods*>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::DecordOrgSysFromByteArray
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -6601,20 +6696,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0003FB60
 // ADDRESS: 0043fb60
 // PROTOTYPE: void __thiscall AddItemToTaoZhuangItemList(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::MakeCiQingNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:15864
-// RVA: 0x0003FCD0
-// ADDRESS: 0043fcd0
-// PROTOTYPE: ulong __thiscall MakeCiQingNode(ulong param_1, ulong param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

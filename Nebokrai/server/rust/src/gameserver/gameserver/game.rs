@@ -146,6 +146,9 @@
 //! CiQing query `0x8FC2F/30` использует owned player set и global setup:
 //! previews создаются общим factory/RNG, сериализуются old-client codec-ом и
 //! сохраняют ранний return первого непустого payload.
+//! Make `0x8FC31` использует тот же setup/player owner: глобальный `bCiQing`,
+//! session gate, recipe, packet resources/space, batch factory, container
+//! ownership, audit и адресный result проходят одним synchronous сценарием.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -333,10 +336,11 @@ use crate::gameserver::appserver::player::{
     BattleFairySkillRequestFacts, BattleFairySkillRequestReport, BattleFairySkillResetDelivery,
     BattleFairySkillResetEffect, BattleFairySkillResetReport, BattleFairySummonDelivery,
     BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeDelivery,
-    BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, PlayerCombatProperties,
-    PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
-    PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
-    PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerReliveMutation,
+    BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, CiQingPacketAddition,
+    CiQingPacketConsumption, PlayerCombatProperties, PlayerEquipmentAddEffect,
+    PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery,
+    PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
+    PlayerHonorResetReport, PlayerReliveMutation,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1111,6 +1115,15 @@ pub(crate) trait OldClientGoodsCodec {
     fn encode_goods_for_old_client(&mut self, goods: &CGoods) -> Vec<u8>;
 }
 
+pub(crate) trait CiQingMakeContext: OldClientGoodsCodec {
+    fn record_ci_qing_log(&mut self, log: &CiQingLog);
+    fn publish_ci_qing_packet_consumption(
+        &mut self,
+        consumption: &CiQingPacketConsumption,
+    ) -> Vec<i32>;
+    fn publish_ci_qing_packet_addition(&mut self, addition: &CiQingPacketAddition) -> Vec<i32>;
+}
+
 pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {
     fn player_properties_external_facts(&mut self, player_id: i32)
     -> PlayerPropertiesExternalFacts;
@@ -1186,6 +1199,48 @@ pub(crate) struct CiQingSetupQueryReport {
     pub(crate) player_id: i32,
     pub(crate) payload: Result<Vec<u8>, CiQingSerializationBlock>,
     pub(crate) delivery: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingLog {
+    pub(crate) player_id: i32,
+    pub(crate) delta: i32,
+    pub(crate) operation: u32,
+    pub(crate) base_index: u32,
+    pub(crate) amount: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CiQingMakeOutcome {
+    UnknownNode,
+    AmountOutOfRange,
+    MissingRecipe,
+    InsufficientSourceA,
+    InsufficientSourceB,
+    InsufficientPacketSpace,
+    Completed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CiQingMakeDelivery {
+    Consumption(Vec<i32>),
+    Addition(Vec<i32>),
+    Result(i32),
+}
+
+#[must_use = "CiQing make report хранит ресурсы, ownership, аудит и ответ"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingMakeReport {
+    pub(crate) player_id: i32,
+    pub(crate) requested_base_index: u32,
+    pub(crate) requested_amount: u32,
+    pub(crate) result_base_index: u32,
+    pub(crate) outcome: CiQingMakeOutcome,
+    pub(crate) logs: Vec<CiQingLog>,
+    pub(crate) consumptions: Vec<CiQingPacketConsumption>,
+    pub(crate) additions: Vec<CiQingPacketAddition>,
+    pub(crate) rejected_goods: Vec<ShapeIdentity>,
+    pub(crate) deliveries: Vec<CiQingMakeDelivery>,
 }
 
 pub(crate) trait PlayerEquipmentContext {
@@ -4394,6 +4449,153 @@ impl CGame {
             payload,
             delivery,
         }
+    }
+
+    pub(crate) fn ci_qing_message_enabled(&self, player_id: i32) -> bool {
+        self.globe_setup.ci_qing_enabled()
+            && self
+                .find_player(player_id)
+                .is_some_and(CPlayer::ci_qing_open)
+    }
+
+    /// Полный `CPlayer::MakeCiQingNode` и его `goodsmessage 0x8FC31` tail.
+    /// Resource logs предшествуют каждому DeleteGoods-effect; финальный
+    /// positive log сохраняет странный native count оставшихся в vector-е
+    /// (то есть не добавленных), после чего всегда отправляется `0xBF932`.
+    pub(crate) fn make_ci_qing_node<Context: CiQingMakeContext>(
+        &mut self,
+        player_id: i32,
+        base_index: u32,
+        amount: u32,
+        context: &mut Context,
+    ) -> Option<CiQingMakeReport> {
+        let mut report = CiQingMakeReport {
+            player_id,
+            requested_base_index: base_index,
+            requested_amount: amount,
+            result_base_index: 0,
+            outcome: CiQingMakeOutcome::UnknownNode,
+            logs: Vec::new(),
+            consumptions: Vec::new(),
+            additions: Vec::new(),
+            rejected_goods: Vec::new(),
+            deliveries: Vec::new(),
+        };
+        let player = self.find_player(player_id)?;
+        if !player.ci_qing_list().any(|entry| entry == base_index) {
+            return Some(self.finish_ci_qing_make(report));
+        }
+        if amount >= 10 {
+            report.outcome = CiQingMakeOutcome::AmountOutOfRange;
+            return Some(self.finish_ci_qing_make(report));
+        }
+        let Some(recipe) = self
+            .ci_qing_setup
+            .make()
+            .iter()
+            .find(|node| node.destination_base_index == base_index)
+            .copied()
+        else {
+            report.outcome = CiQingMakeOutcome::MissingRecipe;
+            return Some(self.finish_ci_qing_make(report));
+        };
+        let need_a = recipe.source_a_count.wrapping_mul(amount);
+        let need_b = recipe.source_b_count.wrapping_mul(amount);
+        if player.check_item_in_packet(recipe.source_a_base_index) < need_a {
+            report.outcome = CiQingMakeOutcome::InsufficientSourceA;
+            return Some(self.finish_ci_qing_make(report));
+        }
+        if player.check_item_in_packet(recipe.source_b_base_index) < need_b {
+            report.outcome = CiQingMakeOutcome::InsufficientSourceB;
+            return Some(self.finish_ci_qing_make(report));
+        }
+        if !player.packet().check_space(amount) {
+            report.outcome = CiQingMakeOutcome::InsufficientPacketSpace;
+            return Some(self.finish_ci_qing_make(report));
+        }
+
+        for (source_base_index, required) in [
+            (recipe.source_a_base_index, need_a),
+            (recipe.source_b_base_index, need_b),
+        ] {
+            let log = CiQingLog {
+                player_id,
+                delta: -1,
+                operation: 1,
+                base_index: source_base_index,
+                amount: required,
+            };
+            context.record_ci_qing_log(&log);
+            report.logs.push(log);
+            let consumptions = self
+                .players
+                .get_mut(&player_id)
+                .expect("player проверен до CiQing resource removal")
+                .remove_item_in_packet(source_base_index, required);
+            for consumption in consumptions {
+                report.deliveries.push(CiQingMakeDelivery::Consumption(
+                    context.publish_ci_qing_packet_consumption(&consumption),
+                ));
+                report.consumptions.push(consumption);
+            }
+        }
+
+        let created = {
+            let (random_state, goods_factory, fairy_exp_conf, battle_fairy_exp_config) = (
+                &mut self.random_state,
+                &self.goods_factory,
+                &self.fairy_exp_conf,
+                &self.battle_fairy_exp_config,
+            );
+            let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+            goods_factory.create_goods_batch(
+                recipe.destination_base_index,
+                amount,
+                &mut random,
+                || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
+                |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
+            )
+        };
+        let (additions, rejected) = {
+            let goods_factory = &self.goods_factory;
+            let player = self
+                .players
+                .get_mut(&player_id)
+                .expect("player проверен до CiQing packet add");
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            player.add_goods_to_packet(created, goods_factory, &mut encode)
+        };
+        for addition in additions {
+            if addition.resulting_amount.is_some() {
+                report.deliveries.push(CiQingMakeDelivery::Addition(
+                    context.publish_ci_qing_packet_addition(&addition),
+                ));
+            }
+            report.additions.push(addition);
+        }
+        report.rejected_goods = rejected.iter().map(CGoods::identity).collect();
+        let log = CiQingLog {
+            player_id,
+            delta: 1,
+            operation: 1,
+            base_index: recipe.destination_base_index,
+            amount: rejected.len() as u32,
+        };
+        context.record_ci_qing_log(&log);
+        report.logs.push(log);
+        report.result_base_index = recipe.destination_base_index;
+        report.outcome = CiQingMakeOutcome::Completed;
+        Some(self.finish_ci_qing_make(report))
+    }
+
+    fn finish_ci_qing_make(&self, mut report: CiQingMakeReport) -> CiQingMakeReport {
+        let mut message = CMessage::new(0x0b_f932);
+        message.add_ulong(report.result_base_index);
+        report.deliveries.push(CiQingMakeDelivery::Result(
+            message.send_to_player(self.net_server(), report.player_id),
+        ));
+        report
     }
 
     pub(crate) const fn ling_bao_setup(&self) -> &CLingBaoSetup {
