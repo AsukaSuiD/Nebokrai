@@ -227,6 +227,7 @@ impl BattleFairyCombineExecutionNotification {
 pub(crate) struct BattleFairyCombineRemovedInput {
     pub(crate) cell: BattleFairyCell,
     pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -691,7 +692,9 @@ impl CBattleFairyContainer {
         &mut self,
         cell: BattleFairyCell,
     ) -> Option<BattleFairyCombineRemovedInput> {
-        let identity = self.base.get_goods(cell.position())?.identity();
+        let goods = self.base.get_goods(cell.position())?;
+        let identity = goods.identity();
+        let amount = goods.amount();
         let outcome = self.base.remove_goods(identity.ex_id)?;
         match outcome {
             VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed))
@@ -702,6 +705,7 @@ impl CBattleFairyContainer {
                 Some(BattleFairyCombineRemovedInput {
                     cell,
                     goods: identity,
+                    amount,
                 })
             }
             VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Split(_))

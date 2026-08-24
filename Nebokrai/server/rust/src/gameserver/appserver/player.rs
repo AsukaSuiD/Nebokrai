@@ -55,8 +55,11 @@
 //! адресные object/skill/goods/audit effects. `BTreeMap` skill storage в
 //! `CMoveShape` заменяет четыре pointer-vector-а только для общего confirmed
 //! identity/level/type/name state; выполнение concrete skill owners не
-//! перенесено сюда. Account для audit принадлежит player snapshot и пока
-//! заполняется отдельным caller-ом при восстановлении player identity.
+//! перенесено сюда. Результат combine кладётся в обычную ячейку `Battle`, а
+//! не в gear-ячейку, поэтому исходный owner доказательно не вызывает здесь
+//! `BFPropertyAdd`, equipment mutation или `PropertiesChanged`. Account для
+//! audit принадлежит player snapshot и пока заполняется отдельным caller-ом
+//! при восстановлении player identity.
 //! Поэтому `from_send_state` остаётся явной assembly-границей уже
 //! восстановленного runtime. Figure передаётся как доказанный derived virtual
 //! fact; владение spatial state остаётся у `CMoveShape`.
@@ -228,6 +231,8 @@ pub(crate) struct BattleFairyObjectMove {
     pub(crate) player_id: i32,
     pub(crate) container_extend_id: u32,
     pub(crate) goods: super::shape::ShapeIdentity,
+    pub(crate) position: u32,
+    pub(crate) amount: u32,
     pub(crate) old_client_payload: Option<Vec<u8>>,
 }
 
@@ -4611,8 +4616,10 @@ impl CPlayer {
 
     /// Полный player-side `BatllteFairyCombine`: gate, validation, exact
     /// random/deplete/remove order, creation, skill-state и адресные effects.
-    /// Transport получает уже ordered report, не подменяя неизвестные поля
-    /// исторических packet-encoder-ов выдуманными нулями.
+    /// Battle cell не является gear slot, поэтому этот caller намеренно не
+    /// запускает `BFPropertyAdd` и общий player property recalc. Transport
+    /// получает уже ordered report, не подменяя неизвестные поля исторических
+    /// packet-encoder-ов выдуманными нулями.
     pub(crate) fn combine_battle_fairy<Create>(
         &mut self,
         battle_fairy_enabled: bool,
@@ -4710,6 +4717,8 @@ impl CPlayer {
                     player_id,
                     container_extend_id: BATTLE_FAIRY_CONTAINER_EXTEND_ID,
                     goods: removed.goods,
+                    position: removed.cell.position(),
+                    amount: removed.amount,
                     old_client_payload: None,
                 },
             ));
@@ -4740,6 +4749,7 @@ impl CPlayer {
             return report;
         };
         let created_identity = created.identity();
+        let created_amount = created.amount();
         let mut incoming = Some(created);
         let stored = matches!(
             self.battle_fairy_container.add_at(
@@ -4774,6 +4784,8 @@ impl CPlayer {
                 player_id,
                 container_extend_id: BATTLE_FAIRY_CONTAINER_EXTEND_ID,
                 goods: created_identity,
+                position: BattleFairyCell::Battle.position(),
+                amount: created_amount,
                 old_client_payload: Some(old_client_payload),
             },
         ));

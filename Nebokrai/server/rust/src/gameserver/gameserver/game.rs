@@ -323,6 +323,9 @@ use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::{
 use crate::gameserver::appserver::country::countryhandler::CCountryHandler;
 use crate::gameserver::appserver::country::countryparam::CCountryParam;
 use crate::gameserver::appserver::country::countrywarsys::CountryWarSys;
+use crate::gameserver::appserver::cs2ccontainerobjectmove::{
+    CS2CContainerObjectMove, ContainerObjectMoveOperation,
+};
 use crate::gameserver::appserver::goods::cbattlefairyproperty::CBattleFairyProperty;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
@@ -392,11 +395,11 @@ use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
 };
 use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::gameserver::appserver::player::{
-    BattleFairyAuditLog, BattleFairyCombineDelivery, BattleFairyCombineEffect,
-    BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
+    BattleFairyCombineDelivery, BattleFairyCombineEffect, BattleFairyCombineReport,
+    BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationReport,
     BattleFairyFollowDelivery, BattleFairyFollowEffect, BattleFairyFollowReport,
-    BattleFairyObjectMove, BattleFairyPotentialAllocationDelivery,
+    BattleFairyObjectMove, BattleFairyObjectMoveOperation, BattleFairyPotentialAllocationDelivery,
     BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetDelivery,
     BattleFairyPotentialResetEffect, BattleFairySkillAdded, BattleFairySkillDispatch,
     BattleFairySkillRequest, BattleFairySkillRequestDelivery, BattleFairySkillRequestEffect,
@@ -495,6 +498,7 @@ use crate::public::netsessionmanager::{
     CNetSessionManager, NetSessionManagerVariant, NetSessionRunReport,
 };
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
+use crate::public::tools::put_string_to_file;
 use crate::public::wordsfilter::CWordsFilter;
 use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
@@ -1745,12 +1749,6 @@ pub(crate) trait BattleFairyRuntimeContext: BattleFairyDeathContext {
         origin: &CShape,
         message: &CMessage,
     ) -> Result<i32, ShapeCoordinateBlock>;
-}
-
-pub(crate) trait BattleFairyCombineContext: OldClientGoodsCodec {
-    fn publish_battle_fairy_object_move(&mut self, object_move: &BattleFairyObjectMove)
-    -> Vec<i32>;
-    fn record_battle_fairy_audit(&mut self, audit: &BattleFairyAuditLog);
 }
 
 pub(crate) trait BattleFairyPotentialResetContext: BattleFairyDeathContext {
@@ -11726,7 +11724,7 @@ impl CGame {
     /// Отсутствующий player, как и исходный outer lookup, не посылает packet.
     /// Old-client serializer остаётся explicit transport boundary: его нельзя
     /// заменить пустым payload без изменения `OT_NEW_OBJECT/0xbf918`.
-    pub(crate) fn combine_battle_fairy<Context: BattleFairyCombineContext>(
+    pub(crate) fn combine_battle_fairy<Context: OldClientGoodsCodec>(
         &mut self,
         player_id: i32,
         context: &mut Context,
@@ -11810,11 +11808,10 @@ impl CGame {
                         ));
                 }
                 BattleFairyCombineEffect::ObjectMove(object_move) => {
+                    let delivery = self.send_battle_fairy_container_object_move(&object_move);
                     report
                         .deliveries
-                        .push(BattleFairyCombineDelivery::ObjectMove(
-                            context.publish_battle_fairy_object_move(&object_move),
-                        ));
+                        .push(BattleFairyCombineDelivery::ObjectMove(vec![delivery]));
                 }
                 BattleFairyCombineEffect::SkillAdded(skill) => {
                     if let Some(message) =
@@ -11835,12 +11832,59 @@ impl CGame {
                         ));
                 }
                 BattleFairyCombineEffect::Audit(audit) => {
-                    context.record_battle_fairy_audit(&audit);
+                    let template = self.get_string_by_id(audit.string_id.as_bytes());
+                    // В ветке ZHGS0003 оригинал передаёт в GetName null goods;
+                    // безопасная Rust-проекция сохраняет второй форматный аргумент
+                    // пустым, не выдумывая имя не созданного предмета.
+                    let formatted = if audit.string_id == "ZHGS0007" {
+                        format_legacy_text_fields(template, &[&audit.account], 0xff)
+                    } else {
+                        format_legacy_text_fields(
+                            template,
+                            &[&audit.account, &audit.goods_name],
+                            0xff,
+                        )
+                    };
+                    put_string_to_file("BattleFairy", &formatted);
                     report.deliveries.push(BattleFairyCombineDelivery::Audit);
                 }
             }
         }
         Some(report)
+    }
+
+    fn send_battle_fairy_container_object_move(&self, object_move: &BattleFairyObjectMove) -> i32 {
+        let mut message = CS2CContainerObjectMove::default();
+        match object_move.operation {
+            BattleFairyObjectMoveOperation::Delete => {
+                message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+                message.set_source_container(
+                    PLAYER_TYPE,
+                    object_move.player_id,
+                    object_move.position,
+                );
+                message.set_source_container_extend_id(object_move.container_extend_id as i32);
+                message.set_source_object(
+                    object_move.goods.object_type,
+                    object_move.goods.ex_id,
+                    object_move.amount,
+                );
+            }
+            BattleFairyObjectMoveOperation::New => {
+                message.set_operation(ContainerObjectMoveOperation::NewObject);
+                message.set_destination_container(
+                    PLAYER_TYPE,
+                    object_move.player_id,
+                    object_move.position,
+                );
+                message.set_destination_container_extend_id(object_move.container_extend_id as i32);
+                message
+                    .set_destination_object(object_move.goods.object_type, object_move.goods.ex_id);
+                message
+                    .set_object_stream(object_move.old_client_payload.clone().unwrap_or_default());
+            }
+        }
+        message.send_to_player(self, object_move.player_id)
     }
 
     /// Исполняемый entry point для `goodsmessage` opcode `0x8FC2C/0x8FC2D`.

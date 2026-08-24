@@ -1,239 +1,169 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Исполняемый owner клиентского container-move `0xC0101` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/message packaging/cs2ccontainerobjectmove.cpp`. Реализация
+//! сохраняет полный fixed prefix, self-move normalization и разный tail:
+//! delete пишет только source amount, move/switch — обе amount, new — длину
+//! и old-client stream. `SendToAround` и `SendToSession` не требуются этому
+//! caller-у и остаются неизвестными до своих spatial/session подсистем; Rust
+//! `Drop` заменяет технический MSVC destructor без отдельного adapter-а.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::SetOperation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:42
-// RVA: 0x000D6FA0
-// ADDRESS: 004d6fa0
-// PROTOTYPE: void __thiscall SetOperation(OPERATION_TYPE param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const CONTAINER_OBJECT_MOVE_MESSAGE: i32 = 0x000c_0101;
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::SetSourceContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:47
-// RVA: 0x000D6FB0
-// ADDRESS: 004d6fb0
-// PROTOTYPE: void __thiscall SetSourceContainer(long param_1, long param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ContainerObjectMoveOperation {
+    #[default]
+    RollBack = 0,
+    MoveObject = 1,
+    NewObject = 2,
+    DeleteObject = 3,
+    SwitchObject = 4,
+}
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::SetDestinationContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:54
-// RVA: 0x000D6FD0
-// ADDRESS: 004d6fd0
-// PROTOTYPE: void __thiscall SetDestinationContainer(long param_1, long param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CS2CContainerObjectMove {
+    operation: ContainerObjectMoveOperation,
+    source_container_type: i32,
+    source_container_id: i32,
+    source_container_extend_id: i32,
+    source_container_position: u32,
+    destination_container_type: i32,
+    destination_container_id: i32,
+    destination_container_extend_id: i32,
+    destination_container_position: u32,
+    source_object_type: i32,
+    source_object_id: CGuid,
+    source_object_amount: u32,
+    destination_object_type: i32,
+    destination_object_id: CGuid,
+    destination_object_amount: u32,
+    object_stream: Vec<u8>,
+}
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::SetSourceObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:61
-// RVA: 0x000D6FF0
-// ADDRESS: 004d6ff0
-// PROTOTYPE: void __thiscall SetSourceObject(long param_1, CGUID * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl Default for CS2CContainerObjectMove {
+    fn default() -> Self {
+        Self {
+            operation: ContainerObjectMoveOperation::RollBack,
+            source_container_type: 0,
+            source_container_id: 0,
+            source_container_extend_id: 0,
+            source_container_position: 0,
+            destination_container_type: 0,
+            destination_container_id: 0,
+            destination_container_extend_id: 0,
+            destination_container_position: 0,
+            source_object_type: 0,
+            source_object_id: CGuid::GUID_INVALID,
+            source_object_amount: 0,
+            destination_object_type: 0,
+            destination_object_id: CGuid::GUID_INVALID,
+            destination_object_amount: 0,
+            object_stream: Vec::new(),
+        }
+    }
+}
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::SetDestinationObject
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:72
-// RVA: 0x000D7020
-// ADDRESS: 004d7020
-// PROTOTYPE: void __thiscall SetDestinationObject(long param_1, CGUID * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl CS2CContainerObjectMove {
+    pub(crate) fn set_operation(&mut self, operation: ContainerObjectMoveOperation) {
+        self.operation = operation;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::GetObjectStream
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:83
-// RVA: 0x000D7050
-// ADDRESS: 004d7050
-// PROTOTYPE: vector<unsigned_char,std::allocator<unsigned_char>_> * __thiscall GetObjectStream(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn set_source_container(&mut self, object_type: i32, object_id: i32, position: u32) {
+        self.source_container_type = object_type;
+        self.source_container_id = object_id;
+        self.source_container_position = position;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::GetSourceContainerType
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:245
-// RVA: 0x000D7060
-// ADDRESS: 004d7060
-// PROTOTYPE: long __thiscall GetSourceContainerType(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn set_destination_container(
+        &mut self,
+        object_type: i32,
+        object_id: i32,
+        position: u32,
+    ) {
+        self.destination_container_type = object_type;
+        self.destination_container_id = object_id;
+        self.destination_container_position = position;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::GetSourceObjectType
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:255
-// RVA: 0x000D7070
-// ADDRESS: 004d7070
-// PROTOTYPE: long __thiscall GetSourceObjectType(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn set_source_container_extend_id(&mut self, extend_id: i32) {
+        self.source_container_extend_id = extend_id;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::GetguSourceObjectID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:260
-// RVA: 0x000D7080
-// ADDRESS: 004d7080
-// PROTOTYPE: CGUID * __thiscall GetguSourceObjectID(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn set_destination_container_extend_id(&mut self, extend_id: i32) {
+        self.destination_container_extend_id = extend_id;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::GetguDestinationObjectID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:276
-// RVA: 0x000D70A0
-// ADDRESS: 004d70a0
-// PROTOTYPE: CGUID * __thiscall GetguDestinationObjectID(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn set_source_object(&mut self, object_type: i32, object_id: CGuid, amount: u32) {
+        self.source_object_type = object_type;
+        self.source_object_id = object_id;
+        self.source_object_amount = amount;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::GetOperation
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:286
-// RVA: 0x000D70B0
-// ADDRESS: 004d70b0
-// PROTOTYPE: OPERATION_TYPE __thiscall GetOperation(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn set_destination_object(&mut self, object_type: i32, object_id: CGuid) {
+        self.destination_object_type = object_type;
+        self.destination_object_id = object_id;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::Send
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:115
-// RVA: 0x000D70C0
-// ADDRESS: 004d70c0
-// PROTOTYPE: void __thiscall Send(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn set_object_stream(&mut self, object_stream: Vec<u8>) {
+        self.object_stream = object_stream;
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::SendToAround
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:200
-// RVA: 0x000D72B0
-// ADDRESS: 004d72b0
-// PROTOTYPE: void __thiscall SendToAround(CShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn send_to_player(mut self, game: &CGame, player_id: i32) -> i32 {
+        if player_id == 0 {
+            return 0;
+        }
+        self.normalize_self_move();
+        self.message().send_to_player(game.net_server(), player_id)
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::~CS2CContainerObjectMove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:37
-// RVA: 0x000D7460
-// ADDRESS: 004d7460
-// PROTOTYPE: void __thiscall ~CS2CContainerObjectMove(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    fn normalize_self_move(&mut self) {
+        if self.source_object_type != self.destination_object_type
+            || self.source_object_id != self.destination_object_id
+        {
+            return;
+        }
+        self.destination_object_type = 0;
+        self.destination_object_id = CGuid::GUID_INVALID;
+        if self.source_container_type == self.destination_container_type
+            && self.source_container_id == self.destination_container_id
+            && self.source_container_extend_id == self.destination_container_extend_id
+            && self.source_container_position == self.destination_container_position
+        {
+            self.operation = ContainerObjectMoveOperation::RollBack;
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::SendToSession
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:98
-// RVA: 0x000D74E0
-// ADDRESS: 004d74e0
-// PROTOTYPE: void __thiscall SendToSession(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CS2CContainerObjectMove::CS2CContainerObjectMove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cs2ccontainerobjectmove.cpp:16
-// RVA: 0x000D7560
-// ADDRESS: 004d7560
-// PROTOTYPE: undefined __thiscall CS2CContainerObjectMove(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+    fn message(&self) -> CMessage {
+        let mut message = CMessage::new(CONTAINER_OBJECT_MOVE_MESSAGE);
+        message.add_byte(self.operation as u8);
+        if self.operation == ContainerObjectMoveOperation::RollBack {
+            return message;
+        }
+        message.add_long(self.source_container_type);
+        message.add_long(self.source_container_id);
+        message.add_long(self.source_container_extend_id);
+        message.add_ulong(self.source_container_position);
+        message.add_long(self.destination_container_type);
+        message.add_long(self.destination_container_id);
+        message.add_long(self.destination_container_extend_id);
+        message.add_ulong(self.destination_container_position);
+        message.add_long(self.source_object_type);
+        message.base_mut().add_guid(self.source_object_id);
+        message.add_long(self.destination_object_type);
+        message.base_mut().add_guid(self.destination_object_id);
+        if self.operation != ContainerObjectMoveOperation::NewObject {
+            message.add_ulong(self.source_object_amount);
+            if self.operation != ContainerObjectMoveOperation::DeleteObject {
+                message.add_ulong(self.destination_object_amount);
+            }
+            return message;
+        }
+        message.add_ulong(self.object_stream.len() as u32);
+        message.base_mut().add(&self.object_stream);
+        message
+    }
+}

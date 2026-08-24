@@ -63,6 +63,8 @@ pub(crate) mod appserver {
         pub(crate) mod skillmessage;
         pub(crate) mod unibillmessage;
     }
+    #[path = "message packaging/cs2ccontainerobjectmove.rs"]
+    pub(crate) mod cs2ccontainerobjectmove;
     pub(crate) mod monster;
     pub(crate) mod moveshape;
     pub(crate) mod npc;
