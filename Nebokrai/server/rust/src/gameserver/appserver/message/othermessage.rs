@@ -13,6 +13,8 @@
 //! исходный broadcast fallback.
 //! Player chat `0x8FB01` сохраняет lazy silence, отдельные wrapping cooldown,
 //! local distance/region/faction/private delivery и conditional chat-log.
+//! Goods-link lookup `0x8FB03 -> 0x5FD04 -> 0x7FA07` сохраняет requester/link
+//! identities и публикует World result клиенту как exact `0xBF80D` wire.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -26,6 +28,8 @@ use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
 const PLAYER_CHAT_REQUEST: u32 = 0x0008_fb01;
+const PLAYER_GOODS_LINK_REQUEST: u32 = 0x0008_fb03;
+const WORLD_GOODS_LINK_RESPONSE: u32 = 0x0007_fa07;
 const WORLD_PLAYER_RENAME_REQUEST: i32 = 0x0005_fd05;
 const WORLD_PLAYER_RENAME_RESPONSE: u32 = 0x0007_fa0e;
 const PLAYER_RENAME_RESPONSE: i32 = 0x000b_f80f;
@@ -69,6 +73,13 @@ pub(crate) enum GameOtherMessageOutcome {
     },
     PublicTalk(GamePublicTalkOutcome),
     PlayerChat(GamePlayerChatOutcome),
+    GoodsLinkLookupForwarded {
+        link_index: i32,
+        delivery: Result<i32, SendMessageError>,
+    },
+    GoodsLinkLookupDelivered {
+        delivery: i32,
+    },
     LeiTingUpdated {
         client_delivery: i32,
     },
@@ -801,6 +812,32 @@ pub(crate) fn dispatch_game_other_message(
         }
         return None;
     }
+    if message_type == PLAYER_GOODS_LINK_REQUEST {
+        let result = (|| {
+            let link_index = read_long(message, "goods-link index")?;
+            message.resolve_player_context(game);
+            let Some(player_id) = message.player_id() else {
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id: 0,
+                    outcome: GameOtherMessageOutcome::PlayerMissing,
+                });
+            };
+            let mut relay = CMessage::new(0x0005_fd04);
+            relay.base_mut().add_long(player_id);
+            relay.base_mut().add_long(link_index);
+            let delivery = relay.send(game, false);
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::GoodsLinkLookupForwarded {
+                    link_index,
+                    delivery,
+                },
+            })
+        })();
+        return Some(result);
+    }
     if matches!(message_type, WORLD_TALK_REQUEST | COUNTRY_TALK_REQUEST) {
         return Some(dispatch_public_talk(
             message_type,
@@ -828,9 +865,30 @@ pub(crate) fn dispatch_game_other_message(
             | WORLD_PLAYER_RENAME_RESPONSE
             | WORLD_INFO_DELIVERY
             | WORLD_TOP_INFO_DELIVERY
+            | WORLD_GOODS_LINK_RESPONSE
             | WORLD_LEI_TING_UPDATE
     ) {
         return None;
+    }
+    if message_type == WORLD_GOODS_LINK_RESPONSE {
+        let result = (|| {
+            let player_id = read_long(message, "goods-link requester player id")?;
+            if game.find_player(player_id).is_none() {
+                return Ok(GameOtherMessageReport {
+                    message_type,
+                    player_id,
+                    outcome: GameOtherMessageOutcome::PlayerMissing,
+                });
+            }
+            message.set_message_type(0x000b_f80d);
+            let delivery = message.send_to_player(game.net_server(), player_id);
+            Ok(GameOtherMessageReport {
+                message_type,
+                player_id,
+                outcome: GameOtherMessageOutcome::GoodsLinkLookupDelivered { delivery },
+            })
+        })();
+        return Some(result);
     }
     if message_type == WORLD_INFO_DELIVERY {
         message.set_message_type(0x000b_f803);
