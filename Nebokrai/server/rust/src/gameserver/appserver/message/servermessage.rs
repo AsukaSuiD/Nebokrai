@@ -1,7 +1,8 @@
 //! Владелец входного GameServer dispatcher-а `OnServerMessage`.
 //!
 //! Весь dispatcher RVA `0x0009D300` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме цепочек
-//! сообщения `0x7F801` для достигнутых typed startup snapshots,
+//! сообщения `0x7F801` для достигнутых typed startup snapshots, runtime
+//! general-variable echo `0x7F805`,
 //! AttackCity/Village и terminal selector `0x3B`, а также полной typed Billing
 //! reconnect ветви `0x6F904`; они имеют статус `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
@@ -65,6 +66,9 @@
 //! последнему requester-у manager-а. Соседний `0x7F80E` применяет оба XYD
 //! slot-а и публикует изменившийся `dwXYD` только участникам соответствующей
 //! faction во всех зарегистрированных GodsBattle regions.
+//! Runtime general-variable echo `0x7F805` читает tag/name/value в исходном
+//! порядке и меняет первый ASCII-case-insensitive owner в принадлежащем `CGame`
+//! списке; неизвестный tag после имени остаётся no-op без чтения value.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -138,7 +142,7 @@ use crate::gameserver::appserver::goods::cgoodsfactory::{
 use crate::gameserver::appserver::player::PlayerHonorResetReport;
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
 use crate::gameserver::appserver::script::variablelist::{
-    GameVariableSnapshotError, GameVariableSnapshotReport,
+    GameVariableMutationOutcome, GameVariableSnapshotError, GameVariableSnapshotReport,
 };
 use crate::gameserver::appserver::servercityregion::{
     CServerCityRegion, CityRegionDecodeContext, CityRegionDecodeError,
@@ -200,6 +204,7 @@ use crate::setup::tradelist::TradeListDecodeError;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const SERVER_STARTUP_MESSAGE: i32 = 0x0007_F801;
+const GENERAL_VARIABLE_UPDATE_RESPONSE: i32 = 0x0007_F805;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_MESSAGE: i32 = 0x0007_F809;
 const PLAYER_COUNT_MESSAGE: i32 = 0x0007_F80B;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_RESPONSE: i32 = 0x0005_FA0A;
@@ -1013,6 +1018,7 @@ pub(crate) enum GameServerMessageReport {
     PlayerCount(GamePlayerCountResponseReport),
     GodsBattleTopTen(GameGodsBattleTopTenReport),
     GodsBattleXyd(GameGodsBattleXydReport),
+    GeneralVariableUpdate(GameGeneralVariableUpdateReport),
     BattleFairyStartup(GameBattleFairyStartupMessageReport),
     CombatRegistryStartup(GameCombatRegistryStartupMessageReport),
     PlayerEconomyStartup(GamePlayerEconomyStartupMessageReport),
@@ -1030,6 +1036,26 @@ pub(crate) enum GameServerMessageReport {
     ScriptStartup(GameScriptStartupMessageReport),
     InitialRegionStartup(GameInitialRegionStartupMessageReport),
     WarStartup(GameWarStartupMessageReport),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameGeneralVariableUpdateValue {
+    Integer {
+        value: i32,
+        mutation: GameVariableMutationOutcome,
+    },
+    String {
+        value: Vec<u8>,
+        mutation: GameVariableMutationOutcome,
+    },
+    IgnoredTag,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameGeneralVariableUpdateReport {
+    pub(crate) value_tag: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) value: GameGeneralVariableUpdateValue,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1051,6 +1077,7 @@ pub(crate) enum GameServerMessageError<RegionRuntimeError> {
     StringTable(MyStringTableDecodeError),
     GodsBattleTopTen(GodsBattleTopTenDecodeError),
     GodsBattleXydUnexpectedEnd { field: &'static str },
+    GeneralVariableUpdateUnexpectedEnd { field: &'static str },
     BattleFairyStartup(GameBattleFairyStartupError),
     CombatRegistryStartup(GameCombatRegistryStartupError),
     PlayerEconomyStartup(GamePlayerEconomyStartupError),
@@ -1082,6 +1109,46 @@ pub(crate) fn dispatch_server_message<Context>(
 where
     Context: InitialRegionStartupContext,
 {
+    if message.message_type() == GENERAL_VARIABLE_UPDATE_RESPONSE {
+        let Some(value_tag) = message.base_mut().get_long() else {
+            return Some(Err(
+                GameServerMessageError::GeneralVariableUpdateUnexpectedEnd { field: "value tag" },
+            ));
+        };
+        let name = message
+            .base_mut()
+            .get_str_bytes(0x100)
+            .expect("0x100 не достигает zero-size GetStr boundary");
+        let value = match value_tag {
+            1 => {
+                let Some(value) = message.base_mut().get_long() else {
+                    return Some(Err(
+                        GameServerMessageError::GeneralVariableUpdateUnexpectedEnd {
+                            field: "integer value",
+                        },
+                    ));
+                };
+                let mutation = game.set_general_variable_integer(&name, value);
+                GameGeneralVariableUpdateValue::Integer { value, mutation }
+            }
+            3 => {
+                let value = message
+                    .base_mut()
+                    .get_str_bytes(0x100)
+                    .expect("0x100 не достигает zero-size GetStr boundary");
+                let mutation = game.set_general_variable_string(&name, &value);
+                GameGeneralVariableUpdateValue::String { value, mutation }
+            }
+            _ => GameGeneralVariableUpdateValue::IgnoredTag,
+        };
+        return Some(Ok(GameServerMessageReport::GeneralVariableUpdate(
+            GameGeneralVariableUpdateReport {
+                value_tag,
+                name,
+                value,
+            },
+        )));
+    }
     if message.message_type() == STRING_TABLE_REFRESH_MESSAGE {
         return Some(dispatch_string_table_message(
             message,

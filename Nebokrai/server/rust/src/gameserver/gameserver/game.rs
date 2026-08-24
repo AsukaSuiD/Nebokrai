@@ -95,6 +95,8 @@
 //! живого FIFO с duplicate-owner семантикой; function map и variable snapshot
 //! декодируются concrete owner-ами `CGame`, а general cursor остаётся внешне
 //! неизменным, как при передаче `long` по значению в EXE.
+//! World echo `0x7F805` продолжает тот же owner: tag `1/3` меняет integer либо
+//! string state первого case-insensitive имени без отдельного script runtime.
 //! OrganSys war opcodes `0x7FE1F..0x7FE36` тем же FIFO меняют owned
 //! AttackCity/Village schedules, concrete local/proxy region phases и
 //! contender state с сохранением City/Village message/log side effects.
@@ -401,7 +403,8 @@ use crate::gameserver::appserver::region::{
 };
 use crate::gameserver::appserver::script::script::CScriptFunctionRegistry;
 use crate::gameserver::appserver::script::variablelist::{
-    CVariableList, GameVariableSnapshotError, GameVariableSnapshotReport,
+    CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
+    GameVariableSnapshotReport,
 };
 use crate::gameserver::appserver::servercityregion::CServerCityRegion;
 use crate::gameserver::appserver::servercountryregion::CServerCountryRegion;
@@ -5525,6 +5528,22 @@ impl CGame {
 
     pub(crate) const fn general_variables(&self) -> &CVariableList {
         &self.general_variables
+    }
+
+    pub(crate) fn set_general_variable_integer(
+        &mut self,
+        name: &[u8],
+        value: i32,
+    ) -> GameVariableMutationOutcome {
+        self.general_variables.set_integer(name, 0, value)
+    }
+
+    pub(crate) fn set_general_variable_string(
+        &mut self,
+        name: &[u8],
+        value: &[u8],
+    ) -> GameVariableMutationOutcome {
+        self.general_variables.set_string(name, value)
     }
 
     /// Очищает и декодирует language table, пишет exact log и лишь затем

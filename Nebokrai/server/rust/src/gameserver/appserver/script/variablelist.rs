@@ -8,8 +8,10 @@
 //! `CScript::LoadGeneralVariable` передаёт cursor по значению, поэтому decoder
 //! двигает только локальную копию и не меняет позицию внешнего `CMessage`.
 //! `Vec` заменяет ручные union/allocation массивы, сохраняя insertion order,
-//! first exact-name update и cursor ordering. Malformed wire возвращает typed
-//! ошибку вместо чтения за границей; остальные expression operations ниже RAW.
+//! first exact-name snapshot update и cursor ordering. Runtime `0x7F805`
+//! сохраняет `_stricmp` lookup, scalar/array index rules и string retyping.
+//! Malformed wire возвращает typed ошибку вместо чтения за границей; остальные
+//! expression operations ниже RAW.
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameVariableValue {
@@ -38,6 +40,25 @@ pub(crate) struct GameVariableSnapshotReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameVariableMutationOutcome {
+    UpdatedInteger {
+        variable_index: usize,
+    },
+    UpdatedArrayElement {
+        variable_index: usize,
+        element_index: usize,
+    },
+    UpdatedString {
+        variable_index: usize,
+        retyped: bool,
+    },
+    TypeMismatch {
+        variable_index: usize,
+    },
+    NameNotFound,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameVariableSnapshotError {
     UnexpectedEnd {
         offset: usize,
@@ -60,6 +81,63 @@ impl CVariableList {
         let count = self.variables.len();
         self.variables.clear();
         count
+    }
+
+    /// Exact integer `SetVarValue(name, index, value)`: первый
+    /// ASCII-case-insensitive owner, scalar только при index `0`, массив только
+    /// внутри длины; строка с совпавшим именем блокирует дальнейший поиск.
+    pub(crate) fn set_integer(
+        &mut self,
+        name: &[u8],
+        element_index: usize,
+        value: i32,
+    ) -> GameVariableMutationOutcome {
+        let Some((variable_index, variable)) = self
+            .variables
+            .iter_mut()
+            .enumerate()
+            .find(|(_, variable)| variable.name.eq_ignore_ascii_case(name))
+        else {
+            return GameVariableMutationOutcome::NameNotFound;
+        };
+        match &mut variable.value {
+            GameVariableValue::Integer(current) if element_index == 0 => {
+                *current = value;
+                GameVariableMutationOutcome::UpdatedInteger { variable_index }
+            }
+            GameVariableValue::IntegerArray(current) => {
+                let Some(current) = current.get_mut(element_index) else {
+                    return GameVariableMutationOutcome::TypeMismatch { variable_index };
+                };
+                *current = value;
+                GameVariableMutationOutcome::UpdatedArrayElement {
+                    variable_index,
+                    element_index,
+                }
+            }
+            GameVariableValue::Integer(_) | GameVariableValue::String(_) => {
+                GameVariableMutationOutcome::TypeMismatch { variable_index }
+            }
+        }
+    }
+
+    /// Exact string `SetVarValue(name, value)` переводит первую совпавшую
+    /// scalar/array запись в строковый layout и заменяет существующую строку.
+    pub(crate) fn set_string(&mut self, name: &[u8], value: &[u8]) -> GameVariableMutationOutcome {
+        let Some((variable_index, variable)) = self
+            .variables
+            .iter_mut()
+            .enumerate()
+            .find(|(_, variable)| variable.name.eq_ignore_ascii_case(name))
+        else {
+            return GameVariableMutationOutcome::NameNotFound;
+        };
+        let retyped = !matches!(variable.value, GameVariableValue::String(_));
+        variable.value = GameVariableValue::String(value.to_vec());
+        GameVariableMutationOutcome::UpdatedString {
+            variable_index,
+            retyped,
+        }
     }
 
     pub(crate) fn decode_world_snapshot(
@@ -362,35 +440,9 @@ fn unquote(value: &[u8]) -> Vec<u8> {
 //
 //
 
-// ============================================================================
-// FUNCTION: CVariableList::SetVarValue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\variablelist.cpp:547
-// RVA: 0x000ADA90
-// ADDRESS: 004ada90
-// PROTOTYPE: int __thiscall SetVarValue(char * param_1, int param_2, int param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: integer `CVariableList::SetVarValue` материализован выше как `set_integer`.
 
-// ============================================================================
-// FUNCTION: CVariableList::SetVarValue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\script\variablelist.cpp:587
-// RVA: 0x000ADB50
-// ADDRESS: 004adb50
-// PROTOTYPE: int __thiscall SetVarValue(char * param_1, char * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CVariableList::LoadVarList` материализован выше как definition pass `load_definitions`.
+// IMPLEMENTED: string `CVariableList::SetVarValue` материализован выше как `set_string`.
 
 // ============================================================================
 // FUNCTION: CVariableList::AddVar
