@@ -5,7 +5,9 @@
 //! материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
 //! `9354 / OpenEquipmentCompose` и `2216 / OpenGoodsUpgrade`. Refresh вычисляет первую
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
-//! gameplay передаётся canonical `CGame`. Полный expression evaluator и
+//! gameplay передаётся canonical `CGame`, который сам исполняет localized
+//! notices, session/plug lifecycle и client wire; runtime сообщает только
+//! ещё не owned team skill-state. Полный expression evaluator и
 //! остальные function ID ниже пока остаются RAW.
 
 use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongExternalRefreshReport;

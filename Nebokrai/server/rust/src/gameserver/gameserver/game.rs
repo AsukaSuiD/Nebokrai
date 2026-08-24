@@ -206,6 +206,10 @@
 //! concrete `0xC0101` сохраняет move/rollback/delete, фактическую destination
 //! position/identity/amount и self-move normalization; success `0xBF908`
 //! предшествует move, а terminal `'.'` отправляется только до hand removal.
+//! Script-open upgrade/DaKong/compose создают concrete session/plug, меняют
+//! progress/movement, подключают listeners и публикуют `0xBF912/29/2A` с
+//! полным send-failure rollback; busy/team notices теперь также адресные.
+//! Только запрос team skill-state остаётся внешним state-owner fact.
 //! GodsBattle runtime продолжает startup owner: player Add/Remove tail
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
@@ -1528,11 +1532,6 @@ pub(crate) struct EquipmentSessionOpenReport {
 
 pub(crate) trait EquipmentSessionOpenContext {
     fn equipment_session_has_team_state(&mut self, player_id: i32) -> bool;
-    fn publish_equipment_session_notification(
-        &mut self,
-        player_id: i32,
-        string_id: &'static str,
-    ) -> i32;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5644,6 +5643,12 @@ impl CGame {
         &mut self.equipment_compose_list
     }
 
+    fn send_equipment_session_notification(&self, player_id: i32, string_id: &str) -> i32 {
+        let text = self.get_string_by_id(string_id.as_bytes());
+        colored_player_notice_message(0xffff_ffff, 0, text)
+            .send_to_player(self.net_server(), player_id)
+    }
+
     pub(crate) fn open_equipment_session<Context: EquipmentSessionOpenContext>(
         &mut self,
         player_id: i32,
@@ -5680,7 +5685,7 @@ impl CGame {
                 EquipmentSessionPlugKind::Compose => "GS1061",
             };
             report.notification_delivery =
-                Some(context.publish_equipment_session_notification(player_id, string_id));
+                Some(self.send_equipment_session_notification(player_id, string_id));
             return report;
         }
         if kind != EquipmentSessionPlugKind::Upgrade
@@ -5693,7 +5698,7 @@ impl CGame {
                 EquipmentSessionPlugKind::Upgrade => unreachable!(),
             };
             report.notification_delivery =
-                Some(context.publish_equipment_session_notification(player_id, string_id));
+                Some(self.send_equipment_session_notification(player_id, string_id));
             return report;
         }
         let Some((session_id, plug_id)) = self
