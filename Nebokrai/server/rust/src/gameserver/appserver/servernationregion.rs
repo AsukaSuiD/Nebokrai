@@ -10,7 +10,9 @@
 //! `_tagPlayerWarTime`, wrapping `timeGetTime` arithmetic и x87-truncated
 //! morale→exploit. Линейный owned `Vec` заменяет MSVC `stdext::hash_map`:
 //! lookup-семантика совпадает, а недоказанный bucket-order не выдаётся
-//! за gameplay-контракт. Остальное nation combat state ниже остаётся RAW.
+//! за gameplay-контракт. First-hit guard state, morale mutation и одноразовый
+//! YuYingShi gate также принадлежат этому owner-у; создание NPC и сетевые
+//! side effects выполняет достигнутый `CGame` caller.
 
 use super::organizingsystem::fournationwarsys::FourNationRect;
 use super::serverregion::ServerRegionDecodeError;
@@ -19,6 +21,7 @@ use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegion
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ServerNationRegion {
     pub(crate) war: CServerWarRegion,
+    country_names: [Vec<u8>; 5],
     relive_rects: [FourNationRect; 5],
     morale: [i32; 5],
     lost_morale: [i32; 5],
@@ -38,6 +41,7 @@ impl Default for ServerNationRegion {
     fn default() -> Self {
         Self {
             war: CServerWarRegion::default(),
+            country_names: std::array::from_fn(|_| Vec::new()),
             relive_rects: [FourNationRect::default(); 5],
             morale: [1000; 5],
             lost_morale: [0; 5],
@@ -61,6 +65,22 @@ pub(crate) enum NationMoraleTarget {
     Guard,
     Admiral,
     MagicStone,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NationMonsterDamageNotice {
+    StoneGuard {
+        defender_country: u8,
+        attacker_country: u8,
+    },
+    JinWeiJun {
+        defender_country: u8,
+        attacker_country: u8,
+    },
+    MagicStone {
+        defender_country: u8,
+        attacker_country: u8,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -147,12 +167,30 @@ impl ServerNationRegion {
         &self.relive_rects
     }
 
+    pub(crate) fn set_country_names(&mut self, country_names: [Vec<u8>; 5]) {
+        self.country_names = country_names;
+    }
+
+    pub(crate) fn country_name(&self, country: u8) -> &[u8] {
+        self.country_names
+            .get(usize::from(country))
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
     pub(crate) const fn morale(&self) -> &[i32; 5] {
         &self.morale
     }
 
     pub(crate) const fn nation_failed(&self) -> &[bool; 5] {
         &self.nation_failed
+    }
+
+    pub(crate) fn treasure_box_count(&self, country: u8) -> i32 {
+        self.treasure_boxes
+            .get(usize::from(country))
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Region battle owner публикует текущую morale без clamp:
@@ -375,6 +413,95 @@ impl ServerNationRegion {
             check_admiral_spawn: target == NationMoraleTarget::Admiral,
             nation_failed,
         })
+    }
+
+    /// Exact `OnMonsterDamage` first-hit pass. Проверка четырёх stone needles
+    /// сохраняет исходный порядок и странность EXE: gate выбирается по needle,
+    /// а установленный флаг — по race атакованного monster-а.
+    pub(crate) fn register_monster_first_hit(
+        &mut self,
+        monster_original_name: &[u8],
+        defender_country: u8,
+        attacker_country: u8,
+        mut string_by_id: impl FnMut(&[u8]) -> Vec<u8>,
+    ) -> Option<NationMonsterDamageNotice> {
+        let defender = usize::from(defender_country);
+        let attacker = usize::from(attacker_country);
+        if !(1..=4).contains(&defender) || !(1..=4).contains(&attacker) || defender == attacker {
+            return None;
+        }
+
+        for (country, needle) in [b"11000", b"12000", b"13000", b"14000"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, needle)| (index + 1, needle.as_slice()))
+        {
+            if !self.guard_attacked[country]
+                && monster_original_name
+                    .windows(needle.len())
+                    .any(|window| window == needle)
+            {
+                self.guard_attacked[defender] = true;
+                return Some(NationMonsterDamageNotice::StoneGuard {
+                    defender_country,
+                    attacker_country,
+                });
+            }
+        }
+
+        for (country, string_id) in [b"GS1095", b"GS1103", b"GS1111", b"GS1119"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| (index + 1, id.as_slice()))
+        {
+            if !self.jin_wei_jun_attacked[country]
+                && string_by_id(string_id) == monster_original_name
+            {
+                self.jin_wei_jun_attacked[defender] = true;
+                return Some(NationMonsterDamageNotice::JinWeiJun {
+                    defender_country,
+                    attacker_country,
+                });
+            }
+        }
+
+        for (country, string_id) in [b"GS1142", b"GS1139", b"GS1140", b"GS1141"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| (index + 1, id.as_slice()))
+        {
+            if !self.magic_stone_attacked[country]
+                && string_by_id(string_id) == monster_original_name
+            {
+                self.magic_stone_attacked[defender] = true;
+                return Some(NationMonsterDamageNotice::MagicStone {
+                    defender_country,
+                    attacker_country,
+                });
+            }
+        }
+        None
+    }
+
+    pub(crate) fn mark_yu_ying_shi_due_to_morale(&mut self, country: u8) -> bool {
+        let country = usize::from(country);
+        if !(1..=4).contains(&country)
+            || self.yu_ying_shi_added[country]
+            || (self.lost_morale[country] < 300 && self.morale[country] < 2500)
+        {
+            return false;
+        }
+        self.yu_ying_shi_added[country] = true;
+        true
+    }
+
+    pub(crate) fn mark_yu_ying_shi_due_to_admiral(&mut self, country: u8) -> bool {
+        let country = usize::from(country);
+        if !(1..=4).contains(&country) || self.yu_ying_shi_added[country] {
+            return false;
+        }
+        self.yu_ying_shi_added[country] = true;
+        true
     }
 }
 

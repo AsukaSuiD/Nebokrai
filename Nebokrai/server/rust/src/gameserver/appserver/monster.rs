@@ -105,6 +105,12 @@ impl CMonster {
         self.hit_points = hit_points;
     }
 
+    /// Guards reached from `CMonster::OnBeenHurted` before Nation first-hit
+    /// dispatch: action `ACT_DIED` and health-based death are independent.
+    pub(crate) fn can_trigger_nation_damage(&self) -> bool {
+        self.move_shape.shape().get_action() != 6 && !CMoveShape::is_died(self.hit_points)
+    }
+
     pub(crate) fn set_script_file(&mut self, script_file: &[u8]) {
         let prefix_len = script_file
             .iter()

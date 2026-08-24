@@ -97,6 +97,9 @@
 //! exploit/time выполняют player property/client effects и owned time-map,
 //! country treasury clamp публикует exact World `0x60314`, morale меняется в
 //! owned schedule, а router response переиспользует входной wire как `0xBFF36`.
+//! Nation combat callback-ы продолжают эту вертикаль: `OnBeenHurted` хранит
+//! first-hit flags и exact World notices, `OnDied` исполняет morale/fail
+//! packets, regional notices и одноразовый YuYingShi через concrete `AddNpc`.
 //! CountryWar `0x7FF17..0x7FF22` продолжает тот же lifecycle: мутирует
 //! country-region phases/results, выполняет clear через concrete runtime и
 //! переиспользует входной message для all/country-filtered client broadcast.
@@ -264,9 +267,13 @@ use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion,
 };
 use crate::gameserver::appserver::servernationregion::{
-    NationMoraleMutation, ServerNationRegion, classify_nation_morale_target,
+    NationMonsterDamageNotice, NationMoraleMutation, ServerNationRegion,
+    classify_nation_morale_target,
 };
-use crate::gameserver::appserver::serverregion::{CServerRegion, RegionMembershipBlock};
+use crate::gameserver::appserver::serverregion::{
+    CServerRegion, RegionMembershipBlock, ServerRegionNpcContext, ServerRegionNpcSetup,
+    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport,
+};
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::shape::{
     MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
@@ -983,6 +990,34 @@ pub(crate) struct GameWarStartupOwners {
     pub(crate) four_nation: CFourNationWarSys,
 }
 
+pub(crate) trait NationCombatContext: ServerRegionNpcContext {
+    fn now_milliseconds(&mut self) -> u32;
+    fn add_log_text(&mut self, text: &[u8]);
+    fn put_debug_string(&mut self, text: &[u8]);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NationMonsterDamageOutcome {
+    AttackerMissing,
+    AttackerUnavailable,
+    MonsterMissing,
+    MonsterUnavailable,
+    MonsterPropertyMissing,
+    CountryOutsideNation,
+    SameCountry,
+    NoFirstHitNotice,
+    Notice(NationMonsterDamageNotice),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationMonsterDamageReport {
+    pub(crate) region_id: i32,
+    pub(crate) monster_id: i32,
+    pub(crate) attacker_player_id: i32,
+    pub(crate) outcome: NationMonsterDamageOutcome,
+    pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NationMonsterDeathOutcome {
     KillerMissing,
@@ -1000,6 +1035,18 @@ pub(crate) struct NationMonsterDeathReport {
     pub(crate) killer_player_id: i32,
     pub(crate) outcome: NationMonsterDeathOutcome,
     pub(crate) morale_delivery: Option<i32>,
+    pub(crate) first_guard_delivery: Option<i32>,
+    pub(crate) nation_fail_deliveries: Vec<Result<i32, SendMessageError>>,
+    pub(crate) yu_ying_shi_spawns: Vec<NationYuYingShiSpawnReport>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NationYuYingShiSpawnReport {
+    pub(crate) country: u8,
+    pub(crate) notify_country: u8,
+    pub(crate) spawn: Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock>,
+    pub(crate) region_delivery: Option<i32>,
+    pub(crate) country_deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1927,7 +1974,15 @@ impl CGame {
         self.four_nation_war_sys = owners.four_nation;
     }
 
-    pub(crate) fn add_region(&mut self, region: ServerRegionOwner) -> bool {
+    pub(crate) fn add_region(&mut self, mut region: ServerRegionOwner) -> bool {
+        if let ServerRegionOwner::Nation(nation) = &mut region {
+            nation.set_country_names(std::array::from_fn(|country| {
+                self.globe_setup
+                    .country_name(country as u8)
+                    .unwrap_or_default()
+                    .to_vec()
+            }));
+        }
         self.regions.insert(region.region_id(), region).is_some()
     }
 
@@ -2073,17 +2128,119 @@ impl CGame {
             .is_some()
     }
 
-    pub(crate) fn nation_monster_died(
+    /// Reached `CMonster::OnBeenHurted` branch: только player damage (`400`)
+    /// вызывает Nation first-hit owner.
+    pub(crate) fn monster_on_been_hurted(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        attacker_type: i32,
+        attacker_id: i32,
+    ) -> Option<NationMonsterDamageReport> {
+        (attacker_type == 400)
+            .then(|| self.nation_monster_damaged(region_id, monster_id, attacker_id))?
+    }
+
+    pub(crate) fn nation_monster_damaged(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        attacker_player_id: i32,
+    ) -> Option<NationMonsterDamageReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Nation(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+
+        let outcome = match region.war.base.find_monster_by_id(monster_id) {
+            None => NationMonsterDamageOutcome::MonsterMissing,
+            Some(monster) if !monster.can_trigger_nation_damage() => {
+                NationMonsterDamageOutcome::MonsterUnavailable
+            }
+            Some(monster) => {
+                let Some(race) = monster
+                    .base_property_key()
+                    .and_then(|key| self.find_monster_property_by_origin_name(key))
+                    .map(|property| property.race)
+                else {
+                    self.restore_region_owner(ServerRegionOwner::Nation(region));
+                    return Some(NationMonsterDamageReport {
+                        region_id,
+                        monster_id,
+                        attacker_player_id,
+                        outcome: NationMonsterDamageOutcome::MonsterPropertyMissing,
+                        world_delivery: None,
+                    });
+                };
+                let monster_original_name = monster.original_name().to_vec();
+                let Some(attacker) = self.find_player(attacker_player_id) else {
+                    self.restore_region_owner(ServerRegionOwner::Nation(region));
+                    return Some(NationMonsterDamageReport {
+                        region_id,
+                        monster_id,
+                        attacker_player_id,
+                        outcome: NationMonsterDamageOutcome::AttackerMissing,
+                        world_delivery: None,
+                    });
+                };
+                if !attacker.can_attack_nation_monster() {
+                    NationMonsterDamageOutcome::AttackerUnavailable
+                } else if u32::from(attacker.country()) == race {
+                    NationMonsterDamageOutcome::SameCountry
+                } else {
+                    match u8::try_from(race).ok().and_then(|defender_country| {
+                        region.register_monster_first_hit(
+                            &monster_original_name,
+                            defender_country,
+                            attacker.country(),
+                            |id| self.get_string_by_id(id).to_vec(),
+                        )
+                    }) {
+                        Some(notice) => NationMonsterDamageOutcome::Notice(notice),
+                        None if !(1..=4).contains(&race) => {
+                            NationMonsterDamageOutcome::CountryOutsideNation
+                        }
+                        None => NationMonsterDamageOutcome::NoFirstHitNotice,
+                    }
+                }
+            }
+        };
+        let world_delivery = match outcome {
+            NationMonsterDamageOutcome::Notice(notice) => Some(
+                self.nation_first_hit_notice_message(&region, notice)
+                    .send(self, false),
+            ),
+            _ => None,
+        };
+        self.restore_region_owner(ServerRegionOwner::Nation(region));
+        Some(NationMonsterDamageReport {
+            region_id,
+            monster_id,
+            attacker_player_id,
+            outcome,
+            world_delivery,
+        })
+    }
+
+    /// Reached `CMonster::OnDied` Nation callback. Context оставляет снаружи
+    /// только уже существующие spatial/AI callbacks полноценного `AddNpc` и
+    /// process log sinks; state и все client/World packets исполняются здесь.
+    pub(crate) fn monster_on_died<Context: NationCombatContext>(
         &mut self,
         region_id: i32,
         monster_id: i32,
         killer_player_id: i32,
+        context: &mut Context,
     ) -> Option<NationMonsterDeathReport> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
             self.restore_region_owner(owner);
             return None;
         };
+        if region.war.base.find_monster_by_id(monster_id).is_some() {
+            context.add_log_text(b"ServerNationRegion::OnMonsterDie");
+        }
         let outcome = if !region
             .war
             .base
@@ -2107,6 +2264,9 @@ impl CGame {
                             killer_player_id,
                             outcome: NationMonsterDeathOutcome::MonsterPropertyMissing,
                             morale_delivery: None,
+                            first_guard_delivery: None,
+                            nation_fail_deliveries: Vec::new(),
+                            yu_ying_shi_spawns: Vec::new(),
                         });
                     };
                     let target = classify_nation_morale_target(monster.original_name(), |id| {
@@ -2136,6 +2296,74 @@ impl CGame {
                 }
             }
         };
+        if matches!(outcome, NationMonsterDeathOutcome::KillerMissing) {
+            context.put_debug_string(self.get_string_by_id(b"GS1128"));
+        }
+
+        let mut first_guard_delivery = None;
+        let mut nation_fail_deliveries = Vec::new();
+        let mut yu_ying_shi_spawns = Vec::new();
+        if let NationMonsterDeathOutcome::MoraleChanged(mutation) = outcome {
+            if mutation.first_guard_notice {
+                let defender = region.country_name(mutation.defender_country);
+                let attacker = region.country_name(mutation.attacker_country);
+                let text = format_legacy_text_fields(
+                    self.get_string_by_id(b"GS1121"),
+                    &[defender, attacker, attacker],
+                    0xff,
+                );
+                first_guard_delivery = Some(
+                    nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
+                        .send_to_region(Some(&region.war.base), None, self),
+                );
+            }
+
+            if mutation.check_morale_spawn
+                && region.mark_yu_ying_shi_due_to_morale(mutation.defender_country)
+            {
+                yu_ying_shi_spawns.push(self.spawn_nation_yu_ying_shi(
+                    &mut region,
+                    mutation.defender_country,
+                    mutation.attacker_country,
+                    context,
+                ));
+            }
+            if mutation.check_admiral_spawn
+                && region.mark_yu_ying_shi_due_to_admiral(mutation.defender_country)
+            {
+                yu_ying_shi_spawns.push(self.spawn_nation_yu_ying_shi(
+                    &mut region,
+                    mutation.defender_country,
+                    mutation.defender_country,
+                    context,
+                ));
+            }
+
+            if mutation.nation_failed {
+                let defender = region.country_name(mutation.defender_country);
+                let attacker = region.country_name(mutation.attacker_country);
+                let (template, arguments): (&[u8], &[&[u8]]) =
+                    if mutation.defender_country == mutation.attacker_country {
+                        (self.get_string_by_id(b"GS1122"), &[defender])
+                    } else {
+                        (self.get_string_by_id(b"GS1123"), &[defender, attacker])
+                    };
+                let mut text = format_legacy_text_fields(template, arguments, 0xff);
+                if region.treasure_box_count(mutation.defender_country) != 0 {
+                    text.extend_from_slice(legacy_c_string_prefix(
+                        self.get_string_by_id(b"GS1124"),
+                    ));
+                    text.truncate(0xff);
+                }
+                nation_fail_deliveries.push(nation_world_notice_message(&text).send(self, false));
+                let mut failure = CMessage::new(0x6031d);
+                failure.add_long(i32::from(mutation.defender_country));
+                failure.add_long(i32::from(mutation.attacker_country));
+                nation_fail_deliveries.push(failure.send(self, false));
+            }
+
+            context.add_log_text(self.get_string_by_id(b"GS1129"));
+        }
         let morale_delivery =
             matches!(outcome, NationMonsterDeathOutcome::MoraleChanged(_)).then(|| {
                 self.four_nation_morale_snapshot(*region.morale(), *region.nation_failed())
@@ -2148,7 +2376,162 @@ impl CGame {
             killer_player_id,
             outcome,
             morale_delivery,
+            first_guard_delivery,
+            nation_fail_deliveries,
+            yu_ying_shi_spawns,
         })
+    }
+
+    fn nation_first_hit_notice_message(
+        &self,
+        region: &ServerNationRegion,
+        notice: NationMonsterDamageNotice,
+    ) -> CMessage {
+        let (defender_country, attacker_country, template_id, stone) = match notice {
+            NationMonsterDamageNotice::StoneGuard {
+                defender_country,
+                attacker_country,
+            } => (
+                defender_country,
+                attacker_country,
+                b"GS1125".as_slice(),
+                true,
+            ),
+            NationMonsterDamageNotice::JinWeiJun {
+                defender_country,
+                attacker_country,
+            } => (
+                defender_country,
+                attacker_country,
+                b"GS1126".as_slice(),
+                false,
+            ),
+            NationMonsterDamageNotice::MagicStone {
+                defender_country,
+                attacker_country,
+            } => (
+                defender_country,
+                attacker_country,
+                b"GS1127".as_slice(),
+                false,
+            ),
+        };
+        let defender = region.country_name(defender_country);
+        let attacker = region.country_name(attacker_country);
+        let arguments: &[&[u8]] = if stone {
+            &[defender, attacker]
+        } else {
+            &[attacker, defender, defender]
+        };
+        let text = format_legacy_text_fields(self.get_string_by_id(template_id), arguments, 0xff);
+        if stone {
+            let mut message = CMessage::new(0x5fd09);
+            message.add_byte(1);
+            message.add_byte(defender_country);
+            add_legacy_c_string(message.base_mut(), &text);
+            message
+        } else {
+            nation_world_notice_message(&text)
+        }
+    }
+
+    fn spawn_nation_yu_ying_shi<Context: NationCombatContext>(
+        &self,
+        region: &mut ServerNationRegion,
+        country: u8,
+        notify_country: u8,
+        context: &mut Context,
+    ) -> NationYuYingShiSpawnReport {
+        let (script, x, y, coordinates): (&[u8], i32, i32, &[u8]) = match country {
+            1 => (
+                b"scripts/npc/npc_siguoyuyingshi_11000.script",
+                214,
+                71,
+                b"[214,71]",
+            ),
+            2 => (
+                b"scripts/npc/npc_siguoyuyingshi_12000.script",
+                214,
+                434,
+                b"[214,434]",
+            ),
+            3 => (
+                b"scripts/npc/npc_siguoyuyingshi_13000.script",
+                50,
+                217,
+                b"[50,217]",
+            ),
+            4 => (
+                b"scripts/npc/npc_siguoyuyingshi_14000.script",
+                461,
+                290,
+                b"[461,290]",
+            ),
+            _ => unreachable!("YuYingShi gate принимает только страны 1..=4"),
+        };
+        let setup = ServerRegionNpcSetup {
+            show_list: true,
+            picture_id: 0x207,
+            left: x,
+            top: y,
+            right: x,
+            bottom: y,
+            count: 1,
+            direction: -1,
+            time: 3_600_000,
+            name: self.get_string_by_id(b"GS1136").to_vec(),
+            script: script.to_vec(),
+        };
+        let (area_width, area_height) = self.area_dimensions();
+        let spawn = region.war.base.add_npc(
+            &setup,
+            true,
+            true,
+            context.now_milliseconds(),
+            area_width,
+            area_height,
+            context,
+        );
+        if spawn.is_err() {
+            return NationYuYingShiSpawnReport {
+                country,
+                notify_country,
+                spawn,
+                region_delivery: None,
+                country_deliveries: Vec::new(),
+            };
+        }
+
+        let country_name = region.country_name(country);
+        let region_text = format_legacy_text_fields(
+            self.get_string_by_id(b"GS1137"),
+            &[country_name, country_name],
+            0xff,
+        );
+        let region_delivery = Some(
+            nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffa2_44ff, &region_text)
+                .send_to_region(Some(&region.war.base), None, self),
+        );
+        let country_text =
+            format_legacy_text_fields(self.get_string_by_id(b"GS1138"), &[coordinates], 0x7f);
+        let country_message =
+            nation_colored_text_message(0xbf811, 0xffff_ff00, 0xff00_0000, &country_text);
+        let country_deliveries = (0..3)
+            .map(|_| {
+                country_message.send_to_region_contry_player(
+                    Some(&region.war.base),
+                    i32::from(notify_country),
+                    self,
+                )
+            })
+            .collect();
+        NationYuYingShiSpawnReport {
+            country,
+            notify_country,
+            spawn,
+            region_delivery,
+            country_deliveries,
+        }
     }
 
     fn four_nation_morale_snapshot(&self, morale: [i32; 5], failed: [bool; 5]) -> CMessage {
@@ -4352,6 +4735,73 @@ fn resolve_billing_bind_ipv4(raw: &[u8]) -> Result<Ipv4Addr, GameClientInitializ
 fn add_legacy_c_string(message: &mut crate::nets::basemessage::CBaseMessage, value: &[u8]) {
     message.add(legacy_c_string_prefix(value));
     message.add_byte(0);
+}
+
+fn nation_colored_text_message(
+    message_type: i32,
+    first_color: u32,
+    second_color: u32,
+    text: &[u8],
+) -> CMessage {
+    let mut message = CMessage::new(message_type);
+    message.add_ulong(first_color);
+    message.add_ulong(second_color);
+    add_legacy_c_string(message.base_mut(), text);
+    message
+}
+
+fn nation_world_notice_message(text: &[u8]) -> CMessage {
+    let mut message = CMessage::new(0x5fd06);
+    message.add_long(0);
+    message.add_long(0);
+    message.add_ulong(0xffff_ffff);
+    message.add_ulong(0xff00_6ee1);
+    add_legacy_c_string(message.base_mut(), text);
+    message
+}
+
+/// Bounded replacement for the reached `__snprintf` `%s` subset. The EXE
+/// buffers reserve one byte for NUL (`0x100`/`0x80`), hence visible limits
+/// `0xff` and `0x7f` at callers.
+fn format_legacy_text_fields(
+    template: &[u8],
+    arguments: &[&[u8]],
+    maximum_bytes: usize,
+) -> Vec<u8> {
+    let template = legacy_c_string_prefix(template);
+    let mut output = Vec::with_capacity(template.len());
+    let mut argument_index = 0usize;
+    let mut offset = 0usize;
+    while offset < template.len() && output.len() < maximum_bytes {
+        if template[offset] != b'%' {
+            output.push(template[offset]);
+            offset += 1;
+            continue;
+        }
+        match template.get(offset + 1).copied() {
+            Some(b'%') => {
+                output.push(b'%');
+                offset += 2;
+            }
+            Some(b's') => {
+                let Some(argument) = arguments.get(argument_index) else {
+                    output.extend_from_slice(&template[offset..]);
+                    break;
+                };
+                let remaining = maximum_bytes.saturating_sub(output.len());
+                let argument = legacy_c_string_prefix(argument);
+                output.extend_from_slice(&argument[..argument.len().min(remaining)]);
+                argument_index += 1;
+                offset += 2;
+            }
+            _ => {
+                output.push(b'%');
+                offset += 1;
+            }
+        }
+    }
+    output.truncate(maximum_bytes);
+    output
 }
 
 fn game_kick_around_block(

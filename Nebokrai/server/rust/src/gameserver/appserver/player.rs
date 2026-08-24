@@ -1046,6 +1046,11 @@ impl CPlayer {
         self.shape().get_action() != 6 && !CMoveShape::is_died(self.base_properties.health)
     }
 
+    /// Тот же double guard использует `ServerNationRegion::OnMonsterDamage`.
+    pub(crate) fn can_attack_nation_monster(&self) -> bool {
+        self.shape().get_action() != 6 && !CMoveShape::is_died(self.base_properties.health)
+    }
+
     /// Focused same-region branch `ChangeRegion`, которую вызывает
     /// `ServerNationRegion::KickOutAllPlayerToReturnPoint`.
     pub(crate) fn prepare_nation_relive(&mut self) {
