@@ -303,6 +303,9 @@ use crate::gameserver::appserver::goodswarmember::{
     CGoodsWarMember, GameGoodsWarMessageError, GameGoodsWarMessageReport,
     dispatch_game_goods_war_message,
 };
+use crate::gameserver::appserver::message::containermessage::{
+    GameContainerMessageError, GameContainerMessageReport, dispatch_game_container_message,
+};
 use crate::gameserver::appserver::message::countrymessage::{
     CountryWarMessageDispatchError, GameCountryWarMessageReport, GameCountryWarRuntime,
     dispatch_game_country_war_message,
@@ -360,10 +363,11 @@ use crate::gameserver::appserver::player::{
     BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeDelivery,
     BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, CiQingContainerAddition,
     CiQingContainerConsumption, CiQingHandConsumption, CiQingPacketAddition,
-    CiQingPacketConsumption, PlayerCombatProperties, PlayerEquipmentAddEffect,
-    PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery,
-    PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
-    PlayerHonorResetReport, PlayerReliveMutation,
+    CiQingPacketConsumption, EnhancementSelectionBlock, EnhancementSelectionReport,
+    PlayerCombatProperties, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
+    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
+    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport,
+    PlayerReliveMutation,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -2101,6 +2105,8 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
         >,
     >,
     pub(crate) goods_war_messages: Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
+    pub(crate) container_messages:
+        Vec<Result<GameContainerMessageReport, GameContainerMessageError>>,
     pub(crate) goods_messages: Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
     pub(crate) skill_messages: Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
     pub(crate) server_messages:
@@ -2848,6 +2854,27 @@ impl CGame {
 
     pub(crate) const fn goods_factory_mut(&mut self) -> &mut CGoodsFactory {
         &mut self.goods_factory
+    }
+
+    pub(crate) fn select_player_enhancement_goods(
+        &mut self,
+        player_id: i32,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+    ) -> Result<EnhancementSelectionReport, EnhancementSelectionBlock> {
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        players
+            .get_mut(&player_id)
+            .ok_or(EnhancementSelectionBlock::MissingGoods)?
+            .select_enhancement_goods(
+                source_extend_id,
+                source_position,
+                goods_id,
+                amount,
+                goods_factory,
+            )
     }
 
     /// Создаёт достигнутый GameServer goods core; исходный код игнорировал
@@ -10048,6 +10075,7 @@ impl CGame {
         let mut organizing_war_messages = Vec::new();
         let mut country_war_messages = Vec::new();
         let mut goods_war_messages = Vec::new();
+        let mut container_messages = Vec::new();
         let mut goods_messages = Vec::new();
         let mut skill_messages = Vec::new();
         let mut server_messages = Vec::new();
@@ -10067,6 +10095,7 @@ impl CGame {
                 &mut organizing_war_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
+                &mut container_messages,
                 &mut goods_messages,
                 &mut skill_messages,
                 &mut server_messages,
@@ -10088,6 +10117,7 @@ impl CGame {
                 &mut organizing_war_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
+                &mut container_messages,
                 &mut goods_messages,
                 &mut skill_messages,
                 &mut server_messages,
@@ -10111,6 +10141,7 @@ impl CGame {
                         &mut organizing_war_messages,
                         &mut country_war_messages,
                         &mut goods_war_messages,
+                        &mut container_messages,
                         &mut goods_messages,
                         &mut skill_messages,
                         &mut server_messages,
@@ -10133,6 +10164,7 @@ impl CGame {
             organizing_war_messages,
             country_war_messages,
             goods_war_messages,
+            container_messages,
             goods_messages,
             skill_messages,
             server_messages,
@@ -10159,6 +10191,7 @@ impl CGame {
             >,
         >,
         goods_war_messages: &mut Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
+        container_messages: &mut Vec<Result<GameContainerMessageReport, GameContainerMessageError>>,
         goods_messages: &mut Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
         skill_messages: &mut Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
         server_messages: &mut Vec<
@@ -10185,6 +10218,8 @@ impl CGame {
             country_war_messages.push(report);
         } else if let Some(report) = dispatch_game_goods_war_message(message, self) {
             goods_war_messages.push(report);
+        } else if let Some(report) = dispatch_game_container_message(message, self, runtime) {
+            container_messages.push(report);
         } else if let Some(report) = dispatch_game_goods_message(message, self, runtime) {
             goods_messages.push(report);
         } else if let Some(report) = dispatch_game_skill_message(message, self, runtime) {

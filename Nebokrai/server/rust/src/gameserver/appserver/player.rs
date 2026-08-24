@@ -79,9 +79,10 @@
 //! `GetGoodsById` теперь сохраняет exact hand→packet→equipment→auction lookup;
 //! hand и auction являются owned containers и участвуют в owner refresh.
 //! Однослотовый `m_cEnhancementContainer` хранит shadow выбранного исходного
-//! goods и даёт script ID 9351 тот же живой предмет без копии. Входящее
-//! заполнение этого shadow остаётся у ещё RAW `CC2SContainerObjectMove::Move`;
-//! script-механика не подменяет его фиктивным выбором.
+//! goods и даёт script ID 9351 тот же живой предмет без копии. Входящий
+//! `0x90301` проверяет packet/equipment position, GUID, amount и stackability,
+//! затем записывает shadow без смены ownership исходного goods и сохраняет
+//! native last-operated source для последующих container-переходов.
 //! CiQing unlocked base-index set хранится ordered `BTreeSet`; его query не
 //! создаёт постоянные goods, а только передаёт snapshot CGame factory owner-у;
 //! make считает/удаляет packet stack-и в container order и сохраняет
@@ -1020,7 +1021,21 @@ pub(crate) struct CiQingHandConsumption {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EnhancementSelectionBlock {
     MissingGoods,
+    UnsupportedSourceContainer,
+    GoodsIdentityMismatch,
+    GoodsAmountMismatch,
+    StackableGoods,
+    MissingBaseProperties,
     Shadow(ShadowRecordBlock),
+}
+
+#[must_use = "selection report связывает source container и AddShadow effect"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EnhancementSelectionReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) source: PreviousContainer,
+    pub(crate) shadow: AmountShadowAdded,
+    pub(crate) previous_last_operated: (u32, u32),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1063,6 +1078,8 @@ pub(crate) struct CPlayer {
     depot: CDepot,
     hand: CAmountLimitGoodsContainer,
     enhancement: CAmountLimitGoodsShadowContainer,
+    last_operated_container: u32,
+    last_operated_goods_position: u32,
     packet: CVolumeLimitGoodsContainer,
     equipment: CEquipmentContainer,
     auction_goods: CVolumeLimitGoodsContainer,
@@ -1099,6 +1116,7 @@ impl CPlayer {
         let _empty_release = packet.set_container_dimensions(8, 12);
         let mut enhancement = CAmountLimitGoodsShadowContainer::new();
         enhancement.set_goods_amount_limit(1);
+        enhancement.base_mut().set_container_extend_id(10);
         let mut ci_qing = CVolumeLimitGoodsContainer::new();
         let _empty_release = ci_qing.set_container_volume(8);
         let mut ci_qing_compose = CVolumeLimitGoodsContainer::new();
@@ -1142,6 +1160,8 @@ impl CPlayer {
             depot: CDepot::new(),
             hand: CAmountLimitGoodsContainer::new(),
             enhancement,
+            last_operated_container: 0,
+            last_operated_goods_position: 0,
             packet,
             equipment: CEquipmentContainer::new(),
             auction_goods: CVolumeLimitGoodsContainer::new(),
@@ -1882,6 +1902,57 @@ impl CPlayer {
         self.enhancement
             .record_placed_goods(previous, placed)
             .map_err(EnhancementSelectionBlock::Shadow)
+    }
+
+    /// Exact player→enhancement часть `CC2SContainerObjectMove`: shadow не
+    /// владеет goods, поэтому успешный native remove→source add безопасно
+    /// свёрнут в проверку live source и атомарную запись metadata.
+    pub(crate) fn select_enhancement_goods(
+        &mut self,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        factory: &CGoodsFactory,
+    ) -> Result<EnhancementSelectionReport, EnhancementSelectionBlock> {
+        let goods = match source_extend_id {
+            1 => self.packet.get_goods(source_position),
+            2 => self.equipment.get_goods(source_position),
+            _ => return Err(EnhancementSelectionBlock::UnsupportedSourceContainer),
+        }
+        .ok_or(EnhancementSelectionBlock::MissingGoods)?;
+        if goods.identity().ex_id != goods_id {
+            return Err(EnhancementSelectionBlock::GoodsIdentityMismatch);
+        }
+        if goods.amount() != amount {
+            return Err(EnhancementSelectionBlock::GoodsAmountMismatch);
+        }
+        match goods.can_stack(factory) {
+            Ok(true) => return Err(EnhancementSelectionBlock::StackableGoods),
+            Ok(false) => {}
+            Err(_) => return Err(EnhancementSelectionBlock::MissingBaseProperties),
+        }
+
+        let goods = goods.identity();
+        let source = PreviousContainer {
+            container_type: PLAYER_TYPE,
+            container_id: self.player_id(),
+            container_extend_id: source_extend_id,
+            goods_position: source_position,
+        };
+        let shadow = self.record_enhancement_selection(goods_id, source, source_position)?;
+        let previous_last_operated = (
+            self.last_operated_container,
+            self.last_operated_goods_position,
+        );
+        self.last_operated_container = source_extend_id as u32;
+        self.last_operated_goods_position = source_position;
+        Ok(EnhancementSelectionReport {
+            goods,
+            source,
+            shadow,
+            previous_last_operated,
+        })
     }
 
     pub(crate) const fn packet_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
