@@ -8,8 +8,10 @@
 //! выбор позиции, stacking, lock visibility и partial remove остаются точным
 //! GameServer-адаптером.
 //!
-//! Constructor, volume reset, space/cell queries, add/remove и lifecycle
-//! материализованы. Базовый expansion получает setup-policy явно и сохраняет
+//! Constructor, volume reset, scalar и batch space/cell queries, add/remove и
+//! lifecycle материализованы. Batch query клонирует container для точной
+//! последовательной stack/cell simulation без изменения живого owner-а.
+//! Базовый expansion получает setup-policy явно и сохраняет
 //! exact release→resize→restore-owner order. Player packet checks, listener
 //! message assembly, codec, swap, clone и auction-scale mutation ниже остаются
 //! RAW до замыкания соответствующих setup/player/message/goods owners.
@@ -155,6 +157,31 @@ impl CVolumeLimitGoodsContainer {
 
     pub(crate) fn is_space_enough(&self, position: u32) -> bool {
         position < self.size && self.cells.get(position as usize) == Some(&VolumeCell::Available)
+    }
+
+    /// Exact vector-overload `IsSpaceEnough`: проверяет весь batch на временной
+    /// копии packet owner-а, поэтому учитывает существующие и уже размещённые
+    /// в этом batch stack-и, inactive cells и duplicate GUID до mutation.
+    pub(crate) fn is_space_enough_for_goods(
+        &self,
+        goods: &[CGoods],
+        factory: &CGoodsFactory,
+    ) -> bool {
+        let mut simulated = self.clone();
+        for goods in goods {
+            if simulated.base.find(goods.identity().ex_id).is_some() {
+                return false;
+            }
+            let mut incoming = Some(goods.clone());
+            match simulated.add_goods(&mut incoming, factory, true) {
+                VolumeGoodsAddOutcome::Added(_) => {}
+                VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { .. }) => {}
+                VolumeGoodsAddOutcome::Stack(_) | VolumeGoodsAddOutcome::Rejected(_) => {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
@@ -1010,20 +1037,6 @@ impl CVolumeLimitGoodsContainer {
 // RVA: 0x000DE2F0
 // ADDRESS: 004de2f0
 // PROTOTYPE: int __thiscall Expant(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CVolumeLimitGoodsContainer::IsSpaceEnough
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cvolumelimitgoodscontainer.cpp:140
-// RVA: 0x000DE360
-// ADDRESS: 004de360
-// PROTOTYPE: int __thiscall IsSpaceEnough(vector<CGoods*,std::allocator<CGoods*>_> param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

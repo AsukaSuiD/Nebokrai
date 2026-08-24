@@ -193,6 +193,11 @@
 //! `0xBF704`, а grow/implant/incubate/syncretize публикуют exact World
 //! `0x60210` с подтипами `0/2/3/4`. Внешними остаются только tick, old-client
 //! codec и недостающие property facts достигнутого player virtual owner-а.
+//! Synthesis `0x8FC17..0x8FC1B` продолжает packet/wallet owner: batch-space
+//! проверяется exact temporary container simulation, coins и ingredients — в
+//! исходной `uint64` арифметике, затем concrete wallet/packet remove/add wire
+//! предшествует result, notice и optional World broadcast. Только safe-cell,
+//! fight/team state открытия и old-client codec остаются runtime facts.
 //! GodsBattle runtime продолжает startup owner: player Add/Remove tail
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
@@ -1586,15 +1591,8 @@ pub(crate) struct SynthesisOpenFacts {
     pub(crate) has_team_state: bool,
 }
 
-pub(crate) trait SynthesisContext: CiQingMakeContext {
+pub(crate) trait SynthesisContext: OldClientGoodsCodec {
     fn synthesis_open_facts(&mut self, game: &CGame, player: &CPlayer) -> SynthesisOpenFacts;
-    fn publish_synthesis_money_change(
-        &mut self,
-        player_id: i32,
-        previous: u32,
-        current: u32,
-    ) -> Vec<i32>;
-    fn synthesis_result_fits_packet(&mut self, player: &CPlayer, goods: &[CGoods]) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -6648,7 +6646,7 @@ impl CGame {
             report.outcome = EquipmentComposeOutcome::PacketAddRejected;
             return report;
         }
-        let addition_deliveries = self.send_equipment_compose_packet_addition(&addition);
+        let addition_deliveries = self.send_player_packet_addition(&addition);
         report.packet_additions.push(addition);
         report.packet_addition_deliveries.push(addition_deliveries);
 
@@ -6776,10 +6774,7 @@ impl CGame {
         (removal, deliveries)
     }
 
-    fn send_equipment_compose_packet_addition(
-        &self,
-        addition: &CiQingPacketAddition,
-    ) -> Vec<i32> {
+    fn send_player_packet_addition(&self, addition: &CiQingPacketAddition) -> Vec<i32> {
         let Some(position) = addition.position else {
             return Vec::new();
         };
@@ -10936,6 +10931,14 @@ impl CGame {
         self.find_player_mut(player_id)?.close_synthesis()
     }
 
+    fn synthesis_result_fits_packet(&self, player_id: i32, goods: &[CGoods]) -> bool {
+        self.find_player(player_id).is_some_and(|player| {
+            player
+                .packet()
+                .is_space_enough_for_goods(goods, &self.goods_factory)
+        })
+    }
+
     pub(crate) fn compose_synthesis<Context: SynthesisContext>(
         &mut self,
         player_id: i32,
@@ -10971,12 +10974,12 @@ impl CGame {
         else {
             return Some(report);
         };
-        let required = |formula: &SynthesisFormula| formula.amount.wrapping_mul(amount);
+        let required = |formula: &SynthesisFormula| u64::from(formula.amount) * u64::from(amount);
         let (missing_ingredients, player_money, player_contribution) = {
             let player = self.find_player(player_id)?;
             (
                 recipe.formulas.iter().any(|formula| {
-                    player.check_item_in_packet(formula.goods_index) < required(formula)
+                    u64::from(player.check_item_in_packet(formula.goods_index)) < required(formula)
                 }),
                 player.money(),
                 player.contribution(),
@@ -10987,8 +10990,8 @@ impl CGame {
             report.result_delivery = Some(send_synthesis_result(self, player_id, 0));
             return Some(report);
         }
-        let total_coins = (recipe.coins as u32).wrapping_mul(amount);
-        if player_money < total_coins {
+        let total_coins = u64::from(recipe.coins as u32) * u64::from(amount);
+        if u64::from(player_money) < total_coins {
             report.outcome = SynthesisComposeOutcome::InsufficientMoney;
             report.result_delivery = Some(send_synthesis_result(self, player_id, 1));
             return Some(report);
@@ -11023,28 +11026,30 @@ impl CGame {
                 |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
             )
         };
-        if !created.is_empty()
-            && !context.synthesis_result_fits_packet(self.find_player(player_id)?, &created)
-        {
+        if !created.is_empty() && !self.synthesis_result_fits_packet(player_id, &created) {
             report.outcome = SynthesisComposeOutcome::InsufficientPacketSpace;
             report.result_delivery = Some(send_synthesis_result(self, player_id, 3));
             return Some(report);
         }
 
-        let previous_money = player_money;
-        let current_money = previous_money.wrapping_sub(total_coins);
-        self.find_player_mut(player_id)?
-            .set_money_snapshot(current_money);
-        report.money_delivery =
-            context.publish_synthesis_money_change(player_id, previous_money, current_money);
+        let money_change = {
+            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+            players
+                .get_mut(&player_id)?
+                .decrease_money(total_coins as u32, goods_factory)
+        };
+        report.money_delivery = self.send_player_money_decrease(player_id, &money_change.outcome);
         for formula in &recipe.formulas {
             let consumptions = self
                 .find_player_mut(player_id)?
-                .remove_item_in_packet(formula.goods_index, required(formula));
+                .remove_item_in_packet(
+                    formula.goods_index,
+                    required(formula).min(u64::from(u32::MAX)) as u32,
+                );
             for consumption in consumptions {
                 report
                     .consumption_deliveries
-                    .push(context.publish_ci_qing_packet_consumption(&consumption));
+                    .push(self.send_player_packet_consumption(&consumption));
                 report.consumptions.push(consumption);
             }
         }
@@ -11067,7 +11072,7 @@ impl CGame {
         for addition in additions {
             report
                 .addition_deliveries
-                .push(context.publish_ci_qing_packet_addition(&addition));
+                .push(self.send_player_packet_addition(&addition));
             report.additions.push(addition);
         }
         report.rejected_goods = rejected.iter().map(CGoods::identity).collect();
