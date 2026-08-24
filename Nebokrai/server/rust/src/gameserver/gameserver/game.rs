@@ -199,6 +199,8 @@
 //! region/area/block state и `GS0163`; quest route замыкает `BF605/BF738` и
 //! destination FIFO, оставляя runtime-у только current action/skill facts и
 //! фактическое хранение AI. Non-player relocation и serializers ещё внешние.
+//! Friend commands `0x8FA0D..0F` проходят main route через canonical player
+//! maps, owned ordered friend state, addressed client wire и WS `0x60501/02`.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -414,6 +416,9 @@ use crate::gameserver::appserver::message::onmsg_w2s_auction::{
 use crate::gameserver::appserver::message::organsysmessage::{
     GameOrganizingWarMessageError, GameOrganizingWarMessageReport, GameOrganizingWarRuntime,
     dispatch_game_organizing_war_message,
+};
+use crate::gameserver::appserver::message::playermessage::{
+    GamePlayerMessageError, GamePlayerMessageReport, dispatch_game_player_message,
 };
 use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
@@ -2549,6 +2554,7 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) goods_messages: Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
     pub(crate) skill_messages: Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
     pub(crate) shape_messages: Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
+    pub(crate) player_messages: Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
     pub(crate) server_messages:
         Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
 }
@@ -14073,6 +14079,7 @@ impl CGame {
         let mut goods_messages = Vec::new();
         let mut skill_messages = Vec::new();
         let mut shape_messages = Vec::new();
+        let mut player_messages = Vec::new();
         let mut server_messages = Vec::new();
         let world_messages = self
             .world_client
@@ -14096,6 +14103,7 @@ impl CGame {
                 &mut goods_messages,
                 &mut skill_messages,
                 &mut shape_messages,
+                &mut player_messages,
                 &mut server_messages,
             );
         }
@@ -14121,6 +14129,7 @@ impl CGame {
                 &mut goods_messages,
                 &mut skill_messages,
                 &mut shape_messages,
+                &mut player_messages,
                 &mut server_messages,
             );
         }
@@ -14148,6 +14157,7 @@ impl CGame {
                         &mut goods_messages,
                         &mut skill_messages,
                         &mut shape_messages,
+                        &mut player_messages,
                         &mut server_messages,
                     );
                 }
@@ -14174,6 +14184,7 @@ impl CGame {
             goods_messages,
             skill_messages,
             shape_messages,
+            player_messages,
             server_messages,
         }
     }
@@ -14208,6 +14219,7 @@ impl CGame {
         goods_messages: &mut Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
         skill_messages: &mut Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
         shape_messages: &mut Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
+        player_messages: &mut Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
         server_messages: &mut Vec<
             Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
         >,
@@ -14245,6 +14257,8 @@ impl CGame {
             skill_messages.push(report);
         } else if let Some(report) = dispatch_game_shape_message(message, self, runtime) {
             shape_messages.push(report);
+        } else if let Some(report) = dispatch_game_player_message(message, self) {
+            player_messages.push(report);
         } else {
             message.run(self, runtime);
         }

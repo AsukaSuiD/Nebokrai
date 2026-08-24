@@ -1,6 +1,251 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Player-message dispatcher GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/message/playermessage.cpp`. Материализован friend lifecycle
+//! `0x8FA0D..0x8FA0F`: byte-exact names, 40-entry ordered state, reciprocal
+//! accept mutation, addressed `0xBF719/71A/71B` и WorldServer
+//! `0x60501/0x60502`. Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+
+use crate::gameserver::appserver::player::PlayerFriendAddOutcome;
+use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
+use crate::nets::netserver::message::{CMessage, SendMessageError};
+
+const REQUEST_FRIEND: u32 = 0x0008_fa0d;
+const ANSWER_FRIEND: u32 = 0x0008_fa0e;
+const DELETE_FRIEND: u32 = 0x0008_fa0f;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerMessageError {
+    MissingField(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerMessageOutcome {
+    MissingContext,
+    TargetMissing,
+    FriendRequested,
+    FriendAnswered,
+    FriendMissing,
+    FriendDeleted,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerMessageDelivery {
+    Player(i32),
+    World(Result<i32, SendMessageError>),
+}
+
+#[must_use = "player-message report сохраняет friend state и network effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerMessageReport {
+    pub(crate) message_type: u32,
+    pub(crate) player_id: Option<i32>,
+    pub(crate) target_player_id: Option<i32>,
+    pub(crate) friend_name: Vec<u8>,
+    pub(crate) outcome: GamePlayerMessageOutcome,
+    pub(crate) deliveries: Vec<GamePlayerMessageDelivery>,
+}
+
+fn add_c_string(message: &mut CMessage, value: &[u8]) {
+    let value = value.split(|byte| *byte == 0).next().unwrap_or_default();
+    message.base_mut().add(value);
+    message.base_mut().add_byte(0);
+}
+
+fn publish_friend_add(
+    game: &CGame,
+    owner_id: i32,
+    friend_id: i32,
+) -> Result<i32, SendMessageError> {
+    let mut message = CMessage::new(0x0006_0501);
+    message.add_long(owner_id);
+    message.add_long(friend_id);
+    message.send(game, false)
+}
+
+fn publish_friend_delete(
+    game: &CGame,
+    owner_id: i32,
+    friend_id: i32,
+    friend_name: &[u8],
+) -> Result<i32, SendMessageError> {
+    let mut message = CMessage::new(0x0006_0502);
+    message.add_long(owner_id);
+    message.add_long(friend_id);
+    add_c_string(&mut message, friend_name);
+    message.send(game, false)
+}
+
+fn apply_friend_add(
+    game: &mut CGame,
+    owner_id: i32,
+    friend_name: &[u8],
+    online_friend_id: Option<i32>,
+    deliveries: &mut Vec<GamePlayerMessageDelivery>,
+) {
+    let Some(outcome) = game
+        .find_player_mut(owner_id)
+        .map(|player| player.add_friend_state(friend_name))
+    else {
+        return;
+    };
+    match outcome {
+        PlayerFriendAddOutcome::Added => {
+            if let Some(friend_id) = online_friend_id {
+                deliveries.push(GamePlayerMessageDelivery::World(publish_friend_add(
+                    game, owner_id, friend_id,
+                )));
+            }
+        }
+        PlayerFriendAddOutcome::AlreadyPresent => {}
+        PlayerFriendAddOutcome::LimitReached => {
+            let delivery =
+                colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0155"))
+                    .send_to_player(game.net_server(), owner_id);
+            deliveries.push(GamePlayerMessageDelivery::Player(delivery));
+        }
+    }
+}
+
+pub(crate) fn dispatch_game_player_message(
+    message: &mut CMessage,
+    game: &mut CGame,
+) -> Option<Result<GamePlayerMessageReport, GamePlayerMessageError>> {
+    let message_type = message.message_type() as u32;
+    if !matches!(message_type, REQUEST_FRIEND | ANSWER_FRIEND | DELETE_FRIEND) {
+        return None;
+    }
+    message.resolve_player_context(game);
+    let player_id = message.player_id();
+    let mut report = GamePlayerMessageReport {
+        message_type,
+        player_id,
+        target_player_id: None,
+        friend_name: Vec::new(),
+        outcome: GamePlayerMessageOutcome::MissingContext,
+        deliveries: Vec::new(),
+    };
+    let Some(player_id) = player_id else {
+        return Some(Ok(report));
+    };
+
+    match message_type {
+        REQUEST_FRIEND => {
+            let Some(target_id) = message.base_mut().get_long() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "target player id",
+                )));
+            };
+            report.target_player_id = Some(target_id);
+            let Some(requester_name) = game
+                .find_player(player_id)
+                .map(|player| player.player_name().to_vec())
+            else {
+                return Some(Ok(report));
+            };
+            if game.find_player(target_id).is_none() {
+                report.outcome = GamePlayerMessageOutcome::TargetMissing;
+                return Some(Ok(report));
+            }
+            let mut response = CMessage::new(0x000b_f719);
+            add_c_string(&mut response, &requester_name);
+            report.deliveries.push(GamePlayerMessageDelivery::Player(
+                response.send_to_player(game.net_server(), target_id),
+            ));
+            report.outcome = GamePlayerMessageOutcome::FriendRequested;
+        }
+        ANSWER_FRIEND => {
+            let friend_name = message.base_mut().get_str_bytes(0x32).unwrap_or_default();
+            let Some(accepted) = message.base_mut().get_char() else {
+                return Some(Err(GamePlayerMessageError::MissingField("friend answer")));
+            };
+            report.friend_name.clone_from(&friend_name);
+            let target_id = game
+                .find_player_by_name(&friend_name)
+                .map(|player| player.player_id());
+            report.target_player_id = target_id;
+            if accepted == 1 {
+                apply_friend_add(
+                    game,
+                    player_id,
+                    &friend_name,
+                    target_id,
+                    &mut report.deliveries,
+                );
+            }
+            let Some(target_id) = target_id else {
+                report.outcome = GamePlayerMessageOutcome::TargetMissing;
+                return Some(Ok(report));
+            };
+            let requester_name = game
+                .find_player(player_id)
+                .expect("friend answer requester сохранён после context lookup")
+                .player_name()
+                .to_vec();
+            let target_name = game
+                .find_player(target_id)
+                .expect("friend answer target сохранён после name lookup")
+                .player_name()
+                .to_vec();
+            if accepted == 1 {
+                apply_friend_add(
+                    game,
+                    target_id,
+                    &requester_name,
+                    Some(player_id),
+                    &mut report.deliveries,
+                );
+            }
+            let mut to_target = CMessage::new(0x000b_f71a);
+            add_c_string(&mut to_target, &requester_name);
+            to_target.base_mut().add_byte(accepted as u8);
+            report.deliveries.push(GamePlayerMessageDelivery::Player(
+                to_target.send_to_player(game.net_server(), target_id),
+            ));
+            let mut to_requester = CMessage::new(0x000b_f71a);
+            add_c_string(&mut to_requester, &target_name);
+            to_requester.base_mut().add_byte(accepted as u8);
+            report.deliveries.push(GamePlayerMessageDelivery::Player(
+                to_requester.send_to_player(game.net_server(), player_id),
+            ));
+            report.outcome = GamePlayerMessageOutcome::FriendAnswered;
+        }
+        DELETE_FRIEND => {
+            let friend_name = message.base_mut().get_str_bytes(0x32).unwrap_or_default();
+            report.friend_name.clone_from(&friend_name);
+            let online_friend_id = game
+                .find_player_by_name(&friend_name)
+                .map(|player| player.player_id());
+            report.target_player_id = online_friend_id;
+            let exists = game
+                .find_player(player_id)
+                .is_some_and(|player| player.has_friend(&friend_name));
+            if !exists {
+                report.outcome = GamePlayerMessageOutcome::FriendMissing;
+                return Some(Ok(report));
+            }
+            report
+                .deliveries
+                .push(GamePlayerMessageDelivery::World(publish_friend_delete(
+                    game,
+                    player_id,
+                    online_friend_id.unwrap_or(0),
+                    &friend_name,
+                )));
+            game.find_player_mut(player_id)
+                .expect("friend owner сохранён после existence lookup")
+                .delete_friend_state(&friend_name);
+            let mut response = CMessage::new(0x000b_f71b);
+            add_c_string(&mut response, &friend_name);
+            report.deliveries.push(GamePlayerMessageDelivery::Player(
+                response.send_to_player(game.net_server(), player_id),
+            ));
+            report.outcome = GamePlayerMessageOutcome::FriendDeleted;
+        }
+        _ => unreachable!("friend opcode отфильтрован до decode"),
+    }
+    Some(Ok(report))
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -21,20 +266,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

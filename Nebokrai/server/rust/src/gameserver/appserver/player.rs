@@ -129,6 +129,9 @@
 //! порядок и contend/symbol predicate, поэтому замещённый RAW удалён.
 //! Quest movement также использует concrete `OnCannotMove` wire с текущими
 //! tile coordinates; player-AI caller очищает emotion перед постановкой шага.
+//! Friend owner хранит исходный ordered список до 40 byte-exact имён и online
+//! flag; message caller замыкает reciprocal mutation, World persistence и
+//! addressed client result, поэтому `AddFriend/DelFriend` RAW удалён.
 //! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
 //! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
 //! полиморфные session End/plug Exit принадлежат caller runtime-у.
@@ -1066,6 +1069,19 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) szl: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerFriend {
+    pub(crate) name: Vec<u8>,
+    pub(crate) online: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerFriendAddOutcome {
+    Added,
+    AlreadyPresent,
+    LimitReached,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerConfirmedKillReport {
     pub(crate) player_id: i32,
@@ -1323,6 +1339,7 @@ pub(crate) struct CPlayer {
     recreate_carriage: bool,
     active_pet_count: u32,
     attempt_appellation_id: u32,
+    friends: Vec<PlayerFriend>,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
     ci_qing_open: bool,
@@ -1415,6 +1432,7 @@ impl CPlayer {
             recreate_carriage: false,
             active_pet_count: 0,
             attempt_appellation_id: 0,
+            friends: Vec::new(),
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
             ci_qing_open: false,
@@ -1463,6 +1481,43 @@ impl CPlayer {
 
     pub(crate) const fn player_id(&self) -> i32 {
         self.shape().identity().id
+    }
+
+    pub(crate) fn player_name(&self) -> &[u8] {
+        self.shape().base_object().get_name()
+    }
+
+    pub(crate) fn friends(&self) -> &[PlayerFriend] {
+        &self.friends
+    }
+
+    pub(crate) fn add_friend_state(&mut self, name: &[u8]) -> PlayerFriendAddOutcome {
+        let name = name.split(|byte| *byte == 0).next().unwrap_or_default();
+        if self.friends.len() >= 0x28 {
+            return PlayerFriendAddOutcome::LimitReached;
+        }
+        if self.friends.iter().any(|friend| friend.name == name) {
+            return PlayerFriendAddOutcome::AlreadyPresent;
+        }
+        self.friends.push(PlayerFriend {
+            name: name.to_vec(),
+            online: true,
+        });
+        PlayerFriendAddOutcome::Added
+    }
+
+    pub(crate) fn delete_friend_state(&mut self, name: &[u8]) -> bool {
+        let name = name.split(|byte| *byte == 0).next().unwrap_or_default();
+        let Some(index) = self.friends.iter().position(|friend| friend.name == name) else {
+            return false;
+        };
+        self.friends.remove(index);
+        true
+    }
+
+    pub(crate) fn has_friend(&self, name: &[u8]) -> bool {
+        let name = name.split(|byte| *byte == 0).next().unwrap_or_default();
+        self.friends.iter().any(|friend| friend.name == name)
     }
 
     pub(crate) const fn team_id(&self) -> i32 {
@@ -7573,20 +7628,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::DelFriend
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9163
-// RVA: 0x0003A1A0
-// ADDRESS: 0043a1a0
-// PROTOTYPE: bool __thiscall DelFriend(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::DeleteGoods
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -8337,20 +8378,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x00044E20
 // ADDRESS: 00444e20
 // PROTOTYPE: int __thiscall Mount(ulong param_1, ulong param_2, ulong param_3, char * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddFriend
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9110
-// RVA: 0x00044F80
-// ADDRESS: 00444f80
-// PROTOTYPE: void __thiscall AddFriend(char * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
