@@ -30,6 +30,10 @@
 //! material consumption, property callback и `0xC0111`.
 //! `0x8FC35` разрешает target по ID либо bounded имени и публикует exact
 //! `0xC010F` payload; неизвестный mode и отсутствующий target остаются silent.
+//! `0x8FC25` подключает process-owned session/plug registry: после exact
+//! owner lookup и plug-ID guard выполняются ordered session End, player
+//! progress/moveable release и plug Exit. Полиморфные End/Exit остаются
+//! обязательными runtime-effects до materialization concrete session типов.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -44,6 +48,7 @@ use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyC
 use crate::gameserver::appserver::player::{
     BattleFairyCombineReport, BattleFairyPotentialAllocationReport,
     BattleFairyPotentialResetReport, BattleFairySummonReport, BattleFairyUpgradeReport,
+    GoodsSessionPlayerRelease,
 };
 use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
@@ -71,6 +76,7 @@ const COMPOSE_CI_QING_NODE: u32 = 0x0008_fc32;
 const DELETE_CI_QING_GOODS: u32 = 0x0008_fc33;
 const MOUNT_CI_QING_FROM_HAND: u32 = 0x0008_fc34;
 const QUERY_CI_QING_OTHER_PERSON: u32 = 0x0008_fc35;
+const END_GOODS_SESSION: u32 = 0x0008_fc25;
 
 pub(crate) trait GameGoodsMessageRuntime:
     BattleFairyCombineContext
@@ -90,6 +96,10 @@ pub(crate) trait GameGoodsMessageRuntime:
     );
 
     fn update_battle_fairy_player_property(&mut self, game: &mut CGame, player_id: i32);
+
+    fn end_goods_session(&mut self, game: &mut CGame, session_id: i32, plug_id: i32);
+
+    fn exit_goods_session_plug(&mut self, game: &mut CGame, session_id: i32, plug_id: i32);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,6 +139,26 @@ pub(crate) struct BattleFairyPropertyRefreshReport {
     pub(crate) outcome: BattleFairyPropertyRefreshOutcome,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoodsSessionEndOutcome {
+    MissingSession,
+    MissingPlayerPlug,
+    PlugIdMismatch,
+    Ended,
+}
+
+#[must_use = "session end report сохраняет lookup, player release и ordered lifecycle effects"]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsSessionEndReport {
+    pub(crate) session_id: i32,
+    pub(crate) requested_plug_id: i32,
+    pub(crate) actual_plug_id: Option<i32>,
+    pub(crate) outcome: GoodsSessionEndOutcome,
+    pub(crate) player_release: Option<GoodsSessionPlayerRelease>,
+    pub(crate) session_end_dispatched: bool,
+    pub(crate) plug_exit_dispatched: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameGoodsMessageOutcome {
     MissingPlayer,
@@ -149,6 +179,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     CiQingDelete(CiQingDeleteReport),
     CiQingMount(CiQingMountReport),
     CiQingOtherPerson(CiQingOtherPersonReport),
+    GoodsSessionEnd(GoodsSessionEndReport),
 }
 
 #[must_use = "goods-message report содержит routing и полный gameplay result"]
@@ -169,7 +200,8 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
-        CHECK_BATTLE_FAIRY_COMBINE
+        END_GOODS_SESSION
+            | CHECK_BATTLE_FAIRY_COMBINE
             | COMBINE_BATTLE_FAIRY
             | UPGRADE_BATTLE_FAIRY
             | RESET_BATTLE_FAIRY_SKILLS
@@ -209,6 +241,47 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             .ok_or(GameGoodsMessageError::MissingField(field))
     };
     let outcome = match message_type {
+        END_GOODS_SESSION => {
+            let session_id = match read_long(message, "goods session ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let requested_plug_id = match read_long(message, "goods session plug ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let mut report = GoodsSessionEndReport {
+                session_id,
+                requested_plug_id,
+                actual_plug_id: None,
+                outcome: GoodsSessionEndOutcome::MissingSession,
+                player_release: None,
+                session_end_dispatched: false,
+                plug_exit_dispatched: false,
+            };
+            if game.session_factory().query_session(session_id).is_some() {
+                report.outcome = GoodsSessionEndOutcome::MissingPlayerPlug;
+                report.actual_plug_id = game
+                    .session_factory()
+                    .query_session_plug_by_owner(session_id, 400, player_id)
+                    .map(|plug| plug.id());
+                if let Some(actual_plug_id) = report.actual_plug_id {
+                    if actual_plug_id == requested_plug_id {
+                        runtime.end_goods_session(game, session_id, actual_plug_id);
+                        report.session_end_dispatched = true;
+                        report.player_release = game
+                            .find_player_mut(player_id)
+                            .map(|player| player.release_goods_session_state());
+                        runtime.exit_goods_session_plug(game, session_id, actual_plug_id);
+                        report.plug_exit_dispatched = true;
+                        report.outcome = GoodsSessionEndOutcome::Ended;
+                    } else {
+                        report.outcome = GoodsSessionEndOutcome::PlugIdMismatch;
+                    }
+                }
+            }
+            GameGoodsMessageOutcome::GoodsSessionEnd(report)
+        }
         CHECK_BATTLE_FAIRY_COMBINE => GameGoodsMessageOutcome::BattleFairyCombineCheck(
             game.check_battle_fairy_combine(player_id),
         ),

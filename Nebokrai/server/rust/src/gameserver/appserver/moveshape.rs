@@ -35,6 +35,8 @@
 //! player/monster owners.
 //! `GetCurrentSkill` получил только безопасный ID-view для caller-а
 //! `SummonBF`; virtual lifecycle skill остаётся у будущего skill owner-а.
+//! `SetMoveable` RVA `0x000CCEE0` хранит exact nesting counter и derived bool;
+//! goods-session `0x8FC25` снимает один запрет строго между session End и plug Exit.
 
 use std::collections::BTreeMap;
 
@@ -123,11 +125,25 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
     fn move_shape_is_alive(&self, identity: ShapeIdentity) -> Option<bool>;
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CMoveShape {
     shape: CShape,
     skills: BTreeMap<u32, MoveShapeSkill>,
     current_skill_id: Option<u32>,
+    moveable_count: i32,
+    moveable: bool,
+}
+
+impl Default for CMoveShape {
+    fn default() -> Self {
+        Self {
+            shape: CShape::default(),
+            skills: BTreeMap::new(),
+            current_skill_id: None,
+            moveable_count: 0,
+            moveable: true,
+        }
+    }
 }
 
 impl CMoveShape {
@@ -159,6 +175,29 @@ impl CMoveShape {
     /// записью ID и остаётся у соответствующего owner-а.
     pub(crate) const fn set_current_skill_id(&mut self, skill_id: Option<u32>) {
         self.current_skill_id = skill_id;
+    }
+
+    pub(crate) const fn is_moveable(&self) -> bool {
+        self.moveable
+    }
+
+    pub(crate) const fn moveable_count(&self) -> i32 {
+        self.moveable_count
+    }
+
+    /// Exact counter semantics `SetMoveable`: `false` ставит новый запрет,
+    /// `true` снимает один; отрицательный счётчик не нормализуется в ветви
+    /// снятия и потому сохраняется как наблюдаемая legacy-семантика.
+    pub(crate) const fn set_moveable(&mut self, moveable: bool) {
+        if !moveable {
+            if self.moveable_count < 0 {
+                self.moveable_count = 0;
+            }
+            self.moveable_count = self.moveable_count.wrapping_add(1);
+        } else {
+            self.moveable_count = self.moveable_count.wrapping_sub(1);
+        }
+        self.moveable = self.moveable_count < 1;
     }
 
     /// Exact `AddSkill(tagSkillID, long)` для already decoded factory registry:
@@ -664,22 +703,6 @@ fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CMoveShape::SetMoveable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:157
-// RVA: 0x000CCEE0
-// ADDRESS: 004ccee0
-// PROTOTYPE: void __thiscall SetMoveable(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CMoveShape::IsDied` материализован выше; покрытый raw-блок удалён.
 
 // ============================================================================
 // FUNCTION: CMoveShape::GetAtcInterval

@@ -15,6 +15,9 @@
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
 //! `CMyNetServer/CMyNetClient` остаются отдельными historical owners. Полный
+//! `CSessionFactory` также принадлежит `CGame`: его session/plug maps доступны
+//! живому goods dispatcher-у без process-static pointers, а concrete lifecycle
+//! пока остаётся typed runtime-границей.
 //! `ProcessMessage` RVA `0x00005830` атомарно забирает FIFO строго в порядке
 //! World, Billing, accepted clients и для каждого элемента вызывает
 //! `CMessage::Run`; это имеет статус `IMPLEMENTED`. `InitNetServer` RVA
@@ -380,6 +383,7 @@ use crate::gameserver::appserver::serverregion::{
     ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
+use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
 use crate::gameserver::appserver::shape::{
     CShape, MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
     ShapeView,
@@ -2427,6 +2431,7 @@ pub(crate) struct CGame {
     world_reconnect_task: Option<GameReconnectTask>,
     billing_reconnect_task: Option<GameReconnectTask>,
     net_session_manager: CNetSessionManager,
+    session_factory: CSessionFactory,
     players: BTreeMap<i32, CPlayer>,
     regions: BTreeMap<i32, ServerRegionOwner>,
     proxy_regions: BTreeMap<i32, CProxyServerRegion>,
@@ -2512,6 +2517,7 @@ impl CGame {
             world_reconnect_task: None,
             billing_reconnect_task: None,
             net_session_manager: CNetSessionManager::new(NetSessionManagerVariant::GameServer),
+            session_factory: CSessionFactory::default(),
             players: BTreeMap::new(),
             regions: BTreeMap::new(),
             proxy_regions: BTreeMap::new(),
@@ -4300,6 +4306,14 @@ impl CGame {
     /// Возвращает process-owned Game variant для async producer-ов.
     pub(crate) const fn net_session_manager(&self) -> &CNetSessionManager {
         &self.net_session_manager
+    }
+
+    pub(crate) const fn session_factory(&self) -> &CSessionFactory {
+        &self.session_factory
+    }
+
+    pub(crate) const fn session_factory_mut(&mut self) -> &mut CSessionFactory {
+        &mut self.session_factory
     }
 
     /// Exact `CGame::SetAuctionState`: false не меняет saved wall-clock,

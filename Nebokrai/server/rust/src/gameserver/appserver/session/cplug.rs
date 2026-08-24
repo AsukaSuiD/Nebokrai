@@ -46,6 +46,18 @@ impl CPlug {
         self.owner_id = owner_id;
     }
 
+    pub(crate) const fn set_id(&mut self, plug_id: i32) {
+        self.base_object.set_id(plug_id);
+    }
+
+    pub(crate) const fn id(&self) -> i32 {
+        self.base_object.get_id()
+    }
+
+    pub(crate) const fn has_owner(&self, owner_type: i32, owner_id: i32) -> bool {
+        self.owner_type == owner_type && self.owner_id == owner_id
+    }
+
     pub(crate) fn get_owner<'a>(&self, game: &'a CGame) -> Option<&'a CPlayer> {
         if self.owner_type != PLAYER_TYPE {
             return None;
@@ -162,7 +174,5 @@ impl CPlug {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
 
 // COMPONENT_VARIANT_END: GameServer

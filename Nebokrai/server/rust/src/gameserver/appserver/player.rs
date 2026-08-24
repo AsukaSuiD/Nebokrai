@@ -96,6 +96,9 @@
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
 //! monster registry передаются как explicit facts.
+//! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
+//! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
+//! полиморфные session End/plug Exit принадлежат caller runtime-у.
 //! Nation-war player lifecycle связывает exact `SetContendState`,
 //! `OnDied`/`OnRelive` и millisecond-tail `PeriodicalUpdate`: owned state
 //! хранит три PDB-поля `+0xBA5/+0xBA8/+0xBAC`, а конкретные self/around
@@ -937,6 +940,23 @@ pub(crate) enum PlayerProgress {
     #[default]
     None,
     Banking,
+    Trading,
+    Shopping,
+    OpenStall,
+    Increment,
+    Upgrade,
+    Synthesis,
+    Mailing,
+    DaKong,
+    Compose,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsSessionPlayerRelease {
+    pub(crate) previous_progress: PlayerProgress,
+    pub(crate) previous_moveable_count: i32,
+    pub(crate) resulting_moveable_count: i32,
+    pub(crate) moveable: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1191,6 +1211,19 @@ impl CPlayer {
 
     pub(crate) const fn set_current_progress_snapshot(&mut self, progress: PlayerProgress) {
         self.current_progress = progress;
+    }
+
+    pub(crate) fn release_goods_session_state(&mut self) -> GoodsSessionPlayerRelease {
+        let previous_progress = self.current_progress;
+        let previous_moveable_count = self.move_shape.moveable_count();
+        self.current_progress = PlayerProgress::None;
+        self.move_shape.set_moveable(true);
+        GoodsSessionPlayerRelease {
+            previous_progress,
+            previous_moveable_count,
+            resulting_moveable_count: self.move_shape.moveable_count(),
+            moveable: self.move_shape.is_moveable(),
+        }
     }
 
     pub(crate) fn depot_password(&self) -> &[u8] {

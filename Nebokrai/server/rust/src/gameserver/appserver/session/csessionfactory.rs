@@ -7,10 +7,12 @@
 //! две static `hash_map<long, CSession*/CPlug*>`; оба lookup возвращают null
 //! при отсутствии ключа.
 //!
-//! Один owned `CSessionFactory` заменяет две process-static maps, а `BTreeMap`
+//! Один owned `CSessionFactory`, подключённый к `CGame`, заменяет две
+//! process-static maps, а `BTreeMap`
 //! является deterministic replacement: hash iteration этими функциями не
 //! наблюдается, только exact-key lookup. `register_*`
-//! материализует достигнутый registry storage для будущего loader-а, но не
+//! материализует достигнутый registry storage; `goodsmessage 0x8FC25`
+//! выполняет ordered session plug lookup по owner type/ID. Но это не
 //! объявляет реализованными RAW `CreateSession/CreatePlug/InsertPlug`, их
 //! lifecycle и garbage collection ниже.
 
@@ -34,7 +36,8 @@ impl CSessionFactory {
         self.sessions.insert(session_id, session)
     }
 
-    pub(crate) fn register_plug(&mut self, plug_id: i32, plug: CPlug) -> Option<CPlug> {
+    pub(crate) fn register_plug(&mut self, plug_id: i32, mut plug: CPlug) -> Option<CPlug> {
+        plug.set_id(plug_id);
         self.plugs.insert(plug_id, plug)
     }
 
@@ -44,6 +47,23 @@ impl CSessionFactory {
 
     pub(crate) fn query_plug(&self, plug_id: i32) -> Option<&CPlug> {
         self.plugs.get(&plug_id)
+    }
+
+    pub(crate) fn query_session_plug_by_owner(
+        &self,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+    ) -> Option<&CPlug> {
+        self.sessions
+            .get(&session_id)?
+            .plug_ids_storage()
+            .iter()
+            .find_map(|plug_id| {
+                self.plugs
+                    .get(plug_id)
+                    .filter(|plug| plug.has_owner(owner_type, owner_id))
+            })
     }
 }
 
@@ -168,17 +188,5 @@ impl CSessionFactory {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
