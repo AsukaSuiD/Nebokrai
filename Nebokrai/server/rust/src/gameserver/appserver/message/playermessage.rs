@@ -9,13 +9,19 @@
 //! до server-trusted change-appellation script boundary. Client timing
 //! `0x8FA12/13/1A` замыкает quest countdown, heartbeat acknowledgement и exact
 //! 16-byte Windows `SYSTEMTIME`; wall/local clocks остаются runtime owner-ом.
+//! Общий outer guard сохраняет исходный запрет player-message во время смены
+//! сервера/региона; `0x8FA02` вызывает полный reached `CPlayer::OnRelive(0)`
+//! через concrete `CGame` relive owner со всеми state/region/wire effects.
 //! Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::PlayerFriendAddOutcome;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
-use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
+use crate::gameserver::gameserver::game::{
+    CGame, PlayerReliveContext, PlayerReliveReport, colored_player_notice_message,
+};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
+const REQUEST_RELIVE: u32 = 0x0008_fa02;
 const REQUEST_FRIEND: u32 = 0x0008_fa0d;
 const ANSWER_FRIEND: u32 = 0x0008_fa0e;
 const DELETE_FRIEND: u32 = 0x0008_fa0f;
@@ -26,7 +32,7 @@ const QUERY_HONOR_IDENTITY: u32 = 0x0008_fa17;
 const REQUEST_CHANGE_APPELLATION: u32 = 0x0008_fa18;
 const QUERY_LOCAL_TIME: u32 = 0x0008_fa1a;
 
-pub(crate) trait GamePlayerMessageRuntime {
+pub(crate) trait GamePlayerMessageRuntime: PlayerReliveContext {
     /// Выполняет concrete `PlayerRunScript` с server-trusted path; VM и
     /// script-data owner ещё не материализованы в `CGame`.
     fn run_change_appellation_script(&mut self, game: &mut CGame, player_id: i32, path: &[u8]);
@@ -46,7 +52,9 @@ pub(crate) enum GamePlayerMessageError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GamePlayerMessageOutcome {
     MissingContext,
+    ChangingLocation,
     TargetMissing,
+    Relived,
     FriendRequested,
     FriendAnswered,
     FriendMissing,
@@ -74,6 +82,7 @@ pub(crate) struct GamePlayerMessageReport {
     pub(crate) target_player_id: Option<i32>,
     pub(crate) friend_name: Vec<u8>,
     pub(crate) outcome: GamePlayerMessageOutcome,
+    pub(crate) relive: Option<PlayerReliveReport>,
     pub(crate) deliveries: Vec<GamePlayerMessageDelivery>,
 }
 
@@ -146,7 +155,8 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
-        REQUEST_FRIEND
+        REQUEST_RELIVE
+            | REQUEST_FRIEND
             | ANSWER_FRIEND
             | DELETE_FRIEND
             | SET_DISPLAY_HEAD_PIECE
@@ -166,13 +176,25 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         target_player_id: None,
         friend_name: Vec::new(),
         outcome: GamePlayerMessageOutcome::MissingContext,
+        relive: None,
         deliveries: Vec::new(),
     };
     let Some(player_id) = player_id else {
         return Some(Ok(report));
     };
+    if game
+        .find_player(player_id)
+        .is_some_and(|player| player.in_changing_server() || player.in_changing_region())
+    {
+        report.outcome = GamePlayerMessageOutcome::ChangingLocation;
+        return Some(Ok(report));
+    }
 
     match message_type {
+        REQUEST_RELIVE => {
+            report.relive = Some(game.relive_gods_battle_player(player_id, 0, runtime));
+            report.outcome = GamePlayerMessageOutcome::Relived;
+        }
         REQUEST_FRIEND => {
             let Some(target_id) = message.base_mut().get_long() else {
                 return Some(Err(GamePlayerMessageError::MissingField(
@@ -370,7 +392,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             ));
             report.outcome = GamePlayerMessageOutcome::LocalTimeSent;
         }
-        _ => unreachable!("friend opcode отфильтрован до decode"),
+        _ => unreachable!("player opcode отфильтрован до decode"),
     }
     Some(Ok(report))
 }

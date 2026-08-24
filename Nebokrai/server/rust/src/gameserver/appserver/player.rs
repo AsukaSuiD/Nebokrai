@@ -9283,20 +9283,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::OnRelive
-// STATUS: IMPLEMENTED_WITH_RUNTIME_CONTEXT, VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:1558
-// RVA: 0x00059BB0
-// ADDRESS: 00459bb0
-// PROTOTYPE: void __thiscall OnRelive(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::AI
 // STATUS: PARTIALLY_IMPLEMENTED_BATTLE_FAIRY_DEATH_PREFIX
 // COMPONENT: GameServer
