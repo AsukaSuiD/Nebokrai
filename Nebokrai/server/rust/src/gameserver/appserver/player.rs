@@ -39,6 +39,8 @@
 //! отвергает consumable до mutation.
 //! Enhancement/precious-box confirm хранит server-trusted container-script
 //! path у игрока; отмена очищает только shadow selection без переноса goods.
+//! Remote equipment inspection использует owned persisted head/face/mode и
+//! тот же live equipment container, не отдельный display snapshot.
 //! Depot-password vertical дополнительно материализует `m_eProgress`, оба
 //! changing-guard-а, password byte-string и owned `CBank/CDepot`; numeric
 //! значения внутреннего `eProgress` не выходят в wire и потому заменены typed
@@ -892,6 +894,9 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) vigour: u32,
     pub(crate) fairy_container_enabled: bool,
     pub(crate) hotkeys: [u32; 24],
+    pub(crate) mode: u32,
+    pub(crate) head_picture: i32,
+    pub(crate) face_picture: i32,
     pub(crate) health: u32,
     pub(crate) mana: u32,
     pub(crate) fetch_power: u32,
@@ -4216,6 +4221,25 @@ impl CPlayer {
     /// persisted player snapshot; default остаётся выключенным до decode.
     pub(crate) const fn set_fairy_container_enabled(&mut self, value: bool) {
         self.base_properties.fairy_container_enabled = value;
+    }
+
+    pub(crate) const fn restore_appearance_and_mode(
+        &mut self,
+        head_picture: i32,
+        face_picture: i32,
+        mode: u32,
+    ) {
+        self.base_properties.head_picture = head_picture;
+        self.base_properties.face_picture = face_picture;
+        self.base_properties.mode = mode;
+    }
+
+    pub(crate) const fn appearance_and_mode(&self) -> (i32, i32, u32) {
+        (
+            self.base_properties.head_picture,
+            self.base_properties.face_picture,
+            self.base_properties.mode,
+        )
     }
 
     pub(crate) const fn health(&self) -> u32 {

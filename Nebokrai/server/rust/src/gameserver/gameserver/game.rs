@@ -292,7 +292,9 @@ use crate::gameserver::appserver::container::cbattlefairycontainer::{
 };
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::ComposeEquipmentCell;
-use crate::gameserver::appserver::container::cequipmentcontainer::EquipmentRemoveOutcome;
+use crate::gameserver::appserver::container::cequipmentcontainer::{
+    EQUIPMENT_COLUMN_LIMIT, EquipmentRemoveOutcome,
+};
 use crate::gameserver::appserver::container::cfairycontainer::{
     FairyContainerAmountChange, FairyContainerGoodsUpdate, FairyHatcherEntry, FairyImplantDelivery,
     FairyImplantReport, FairyIncubateLog, FairyStateChangeEffect, FairyStateChangeOutcome,
@@ -1247,6 +1249,35 @@ pub(crate) trait ContainerScriptContext {
         script_name: &[u8],
         script_data: Option<&[u8]>,
     );
+}
+
+pub(crate) trait PlayerEquipmentInspectionContext: OldClientGoodsCodec {}
+
+impl<T: OldClientGoodsCodec> PlayerEquipmentInspectionContext for T {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerEquipmentInspectionOutcome {
+    MissingTarget,
+    ModeBlocked,
+    Sent,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerEquipmentInspectionEntry {
+    pub(crate) slot: u8,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) old_client_payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerEquipmentInspectionReport {
+    pub(crate) requester_id: i32,
+    pub(crate) target_id: i32,
+    pub(crate) outcome: PlayerEquipmentInspectionOutcome,
+    pub(crate) head_picture: Option<i32>,
+    pub(crate) face_picture: Option<i32>,
+    pub(crate) entries: Vec<PlayerEquipmentInspectionEntry>,
+    pub(crate) delivery: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8736,6 +8767,61 @@ impl CGame {
 
     pub(crate) const fn synthesis(&self) -> &CSynthesis {
         &self.synthesis
+    }
+
+    pub(crate) fn query_player_equipment<Context: PlayerEquipmentInspectionContext>(
+        &self,
+        requester_id: i32,
+        target_id: i32,
+        context: &mut Context,
+    ) -> PlayerEquipmentInspectionReport {
+        let mut report = PlayerEquipmentInspectionReport {
+            requester_id,
+            target_id,
+            outcome: PlayerEquipmentInspectionOutcome::MissingTarget,
+            head_picture: None,
+            face_picture: None,
+            entries: Vec::new(),
+            delivery: None,
+        };
+        let Some(target) = self.find_player(target_id) else {
+            return report;
+        };
+        let (head_picture, face_picture, mode) = target.appearance_and_mode();
+        report.head_picture = Some(head_picture);
+        report.face_picture = Some(face_picture);
+        if mode != 0 {
+            report.outcome = PlayerEquipmentInspectionOutcome::ModeBlocked;
+            report.delivery = Some(
+                colored_player_notice_message(0xffff_0000, 0, self.get_string_by_id(b"GSN0336"))
+                    .send_to_player(self.net_server(), requester_id),
+            );
+            return report;
+        }
+
+        let equipment_count = target.equipment().goods_amount(&self.goods_factory) as u8;
+        for slot in 0..EQUIPMENT_COLUMN_LIMIT {
+            let Some(goods) = target.equipment().get_goods(slot) else {
+                continue;
+            };
+            report.entries.push(PlayerEquipmentInspectionEntry {
+                slot: slot as u8,
+                goods: goods.identity(),
+                old_client_payload: context.encode_goods_for_old_client(goods),
+            });
+        }
+        let mut response = CMessage::new(0x0b_f911);
+        response.add_long(target_id);
+        response.add_long(head_picture);
+        response.add_long(face_picture);
+        response.add_byte(equipment_count);
+        for entry in &report.entries {
+            response.add_byte(entry.slot);
+            response.base_mut().add(&entry.old_client_payload);
+        }
+        report.delivery = Some(response.send_to_player(self.net_server(), requester_id));
+        report.outcome = PlayerEquipmentInspectionOutcome::Sent;
+        report
     }
 
     pub(crate) fn handle_container_script_action<Context: ContainerScriptContext>(

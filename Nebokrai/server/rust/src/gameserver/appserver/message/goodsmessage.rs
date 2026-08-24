@@ -55,6 +55,8 @@
 //! `0x8FC11/0x8FC12` используют только server-trusted last-container script:
 //! confirm запускает live VM с region/player context, cancel очищает owned
 //! enhancement shadow, precious-box tail повторяет тот же script dispatch.
+//! `0x8FC0B` замыкает просмотр чужой экипировки: target/mode guards, appearance
+//! snapshot, exact 17-slot iteration, old-client payload и отказ `GSN0336`.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -85,8 +87,8 @@ use crate::gameserver::gameserver::game::{
     ContainerScriptContext, EquipmentComposeContext, EquipmentDaKongContext, FairyContext,
     FairyHatchReport, FairyImplantResultReport, FairySetupQueryReport, FairySyncretizeResultReport,
     GoodsDestroyConfirmReport, GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport,
-    HotkeyChangeReport, HotkeyContext, HotkeyRemovalReport, SynthesisComposeReport,
-    SynthesisContext, SynthesisOpenReport,
+    HotkeyChangeReport, HotkeyContext, HotkeyRemovalReport, PlayerEquipmentInspectionReport,
+    SynthesisComposeReport, SynthesisContext, SynthesisOpenReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -95,6 +97,7 @@ const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
 const ASSIGN_HOTKEY: u32 = 0x0008_fc08;
 const REMOVE_HOTKEY: u32 = 0x0008_fc09;
 const CHANGE_HOTKEY: u32 = 0x0008_fc0a;
+const QUERY_PLAYER_EQUIPMENT: u32 = 0x0008_fc0b;
 const HANDLE_CONTAINER_SCRIPT_ACTION: u32 = 0x0008_fc11;
 const RUN_PRECIOUS_BOX_ITEM_SCRIPT: u32 = 0x0008_fc12;
 const UPDATE_FAIRY_HATCH: u32 = 0x0008_fc13;
@@ -231,6 +234,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     HotkeyAssignment(HotkeyAssignmentReport),
     HotkeyRemoval(HotkeyRemovalReport),
     HotkeyChange(HotkeyChangeReport),
+    PlayerEquipmentInspection(PlayerEquipmentInspectionReport),
     ContainerScriptAction(ContainerScriptActionReport),
     BattleFairyCombineCheck(BattleFairyCombineCheck),
     BattleFairyCombine(BattleFairyCombineReport),
@@ -291,6 +295,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
         ASSIGN_HOTKEY
             | REMOVE_HOTKEY
             | CHANGE_HOTKEY
+            | QUERY_PLAYER_EQUIPMENT
             | HANDLE_CONTAINER_SCRIPT_ACTION
             | RUN_PRECIOUS_BOX_ITEM_SCRIPT
             | UPDATE_FAIRY_HATCH
@@ -388,6 +393,15 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             GameGoodsMessageOutcome::HotkeyChange(
                 game.change_hotkey(player_id, slot, value)
                     .expect("resolved message player остаётся live во время hotkey change"),
+            )
+        }
+        QUERY_PLAYER_EQUIPMENT => {
+            let target_id = match read_long(message, "equipment target player ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            GameGoodsMessageOutcome::PlayerEquipmentInspection(
+                game.query_player_equipment(player_id, target_id, runtime),
             )
         }
         HANDLE_CONTAINER_SCRIPT_ACTION => {
