@@ -308,7 +308,8 @@ use crate::gameserver::appserver::player::{
     BattleFairyAuditLog, BattleFairyCombineDelivery, BattleFairyCombineEffect,
     BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationReport,
-    BattleFairyFollowReport, BattleFairyObjectMove, BattleFairyPotentialAllocationDelivery,
+    BattleFairyFollowDelivery, BattleFairyFollowEffect, BattleFairyFollowReport,
+    BattleFairyObjectMove, BattleFairyPotentialAllocationDelivery,
     BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetDelivery,
     BattleFairyPotentialResetEffect, BattleFairySkillAdded, BattleFairySkillDispatch,
     BattleFairySkillRequest, BattleFairySkillRequestDelivery, BattleFairySkillRequestEffect,
@@ -7205,10 +7206,11 @@ impl CGame {
     /// Завершает periodic `ComputeWarSoulXY` tick через тот же region area-map,
     /// который обслуживает summon/recall. Skill restored-state остаётся exact
     /// fact ещё не перенесённого concrete `CSkill`.
-    pub(crate) fn compute_war_soul_xy(
+    pub(crate) fn compute_war_soul_xy<Context: BattleFairyRuntimeContext>(
         &mut self,
         player_id: i32,
         current_war_soul_skill_restored: Option<bool>,
+        context: &mut Context,
     ) -> Option<BattleFairyFollowReport> {
         let mut report = self
             .players
@@ -7231,6 +7233,42 @@ impl CGame {
         report.spatial_applied = spatial_applied;
         if let Some(player) = self.players.get_mut(&player_id) {
             player.apply_war_soul_action(action, spatial_applied);
+        }
+        for effect in report.effects.clone() {
+            match effect {
+                BattleFairyFollowEffect::AroundMove {
+                    message_type,
+                    player_id,
+                    object_type,
+                    x,
+                    y,
+                } => {
+                    let mut message = CMessage::new(message_type as i32);
+                    message.add_long(player_id);
+                    message.add_long(object_type);
+                    message.add_ulong(x);
+                    message.add_ulong(y);
+                    let delivery = report
+                        .region_id
+                        .and_then(|region_id| self.take_region_owner(region_id))
+                        .map(|owner| {
+                            let player = self.find_player(player_id);
+                            let delivery = player.map(|player| {
+                                context.send_battle_fairy_around(
+                                    owner.base(),
+                                    player.shape(),
+                                    &message,
+                                )
+                            });
+                            self.restore_region_owner(owner);
+                            delivery
+                        })
+                        .flatten();
+                    report
+                        .deliveries
+                        .push(BattleFairyFollowDelivery::Around(delivery));
+                }
+            }
         }
         Some(report)
     }

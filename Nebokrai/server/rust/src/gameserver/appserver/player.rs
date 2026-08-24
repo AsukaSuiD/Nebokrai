@@ -332,6 +332,11 @@ pub(crate) enum BattleFairyFollowEffect {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyFollowDelivery {
+    Around(Option<Result<i32, ShapeCoordinateBlock>>),
+}
+
 #[must_use = "follow report содержит spatial tail и обязательный move broadcast"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyFollowReport {
@@ -343,6 +348,7 @@ pub(crate) struct BattleFairyFollowReport {
     pub(crate) spatial_action: Option<BattleFairyWarSoulAction>,
     pub(crate) spatial_applied: bool,
     pub(crate) effects: Vec<BattleFairyFollowEffect>,
+    pub(crate) deliveries: Vec<BattleFairyFollowDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1748,6 +1754,7 @@ impl CPlayer {
             spatial_action: None,
             spatial_applied: false,
             effects: Vec::new(),
+            deliveries: Vec::new(),
         };
         if current_war_soul_skill_restored == Some(false) {
             report.outcome = BattleFairyFollowOutcome::ActiveSkill;
@@ -1834,8 +1841,8 @@ impl CPlayer {
             message_type: BATTLE_FAIRY_MOVE_MESSAGE_TYPE,
             player_id,
             object_type: 700,
-            x: legacy_f32_to_u32(visual_x),
-            y: legacy_f32_to_u32(visual_y),
+            x: visual_x.to_bits(),
+            y: visual_y.to_bits(),
         });
         report
     }
@@ -3634,10 +3641,6 @@ fn push_battle_fairy_skill_reject(report: &mut BattleFairySkillRequestReport) {
             reason: SKILL_REJECT_WAR_SOUL_REASON,
             code: SKILL_REJECT_CODE,
         });
-}
-
-fn legacy_f32_to_u32(value: f32) -> u32 {
-    (value.trunc() as i64) as u32
 }
 
 /// Exact constructor map `m_UnPairSkills`, подтверждённый immediate-ами
