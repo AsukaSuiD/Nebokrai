@@ -2,7 +2,7 @@
 //!
 //! Весь dispatcher RVA `0x000895A0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме фазовых
 //! cases faction lifecycle `0x90101/05/06/1A/1B` и
-//! `0x7FE01/07/18/19/1E`,
+//! `0x7FE01/06/07/18/19/1E`,
 //! AttackCity `0x7FE1F..0x7FE25`, Village `0x7FE2F..0x7FE33`, faction
 //! update `0x7FE35/0x7FE36`, FourNation `0x7FE3C..0x7FE45` и control tail
 //! `0x7FE46..0x7FE4A` со статусом
@@ -19,6 +19,8 @@
 //! `0x6011F`, а terminal `0x7FE19` публикует клиенту `0xBFF31` после debit.
 //! World city-gate authorization `0x7FE2A` возвращается в concrete city owner,
 //! обновляет gate/build state и отправляет исходные `GS0042/GS0043` notices.
+//! `0x7FE06` декодирует полный organizing wire до owned-region tail, обновляет
+//! faction/master identity live player и только затем ретегирует `0xBFF06`.
 //!
 //! Каждый фазовый case читает ровно один signed war ID и передаёт его своему
 //! owner-у. Faction-update cases передают текущие payload/cursor соответствующему
@@ -439,6 +441,7 @@ pub(crate) fn dispatch_game_organizing_war_message<
             | 0x9011a
             | 0x9011b
             | 0x7fe01
+            | 0x7fe06
             | 0x7fe07
             | 0x7fe18
             | 0x7fe19
@@ -472,6 +475,7 @@ pub(crate) fn dispatch_game_organizing_war_message<
             | 0x9011a
             | 0x9011b
             | 0x7fe01
+            | 0x7fe06
             | 0x7fe07
             | 0x7fe18
             | 0x7fe19
@@ -647,6 +651,79 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 player_id,
                 correlated,
                 delivery: None,
+            })
+        }
+        0x7fe06 => {
+            let player_id = read_i32(message, "player ID")?;
+            let faction_id = read_i32(message, "faction ID")?;
+            let mut faction_master_id = 0;
+            if faction_id > 0 {
+                let _logo_id = read_i32(message, "faction logo ID")?;
+                let _level = message.base_mut().get_word().ok_or(
+                    FactionLifecycleDispatchError::UnexpectedEnd {
+                        field: "faction level",
+                    },
+                )?;
+                let _experience = read_i32(message, "faction experience")?;
+                let _force = read_i32(message, "faction force")?;
+                let _contribute = read_i32(message, "faction contribute")?;
+                let _name = message
+                    .base_mut()
+                    .get_str_bytes(0x100)
+                    .ok_or(FactionLifecycleDispatchError::InvalidPayload)?;
+                let _title = message
+                    .base_mut()
+                    .get_str_bytes(0x100)
+                    .ok_or(FactionLifecycleDispatchError::InvalidPayload)?;
+                faction_master_id = read_i32(message, "faction master ID")?;
+                let _union_id = read_i32(message, "union ID")?;
+                let _union_master_id = read_i32(message, "union master ID")?;
+                for field in ["enemy factions", "city-war enemy factions"] {
+                    let count = read_i32(message, field)?;
+                    if count < 0 {
+                        return Err(FactionLifecycleDispatchError::InvalidPayload);
+                    }
+                    for _ in 0..count {
+                        let _ = read_i32(message, field)?;
+                    }
+                }
+                let owned_count = read_i32(message, "owned regions")?;
+                if owned_count < 0 {
+                    return Err(FactionLifecycleDispatchError::InvalidPayload);
+                }
+                for _ in 0..owned_count {
+                    let _region_id = read_i32(message, "owned region ID")?;
+                    let _war_type = message.base_mut().get_word().ok_or(
+                        FactionLifecycleDispatchError::UnexpectedEnd {
+                            field: "owned region war type",
+                        },
+                    )?;
+                    let _reserved = message.base_mut().get_word().ok_or(
+                        FactionLifecycleDispatchError::UnexpectedEnd {
+                            field: "owned region reserved",
+                        },
+                    )?;
+                }
+            }
+            if !message.base_mut().unread_bytes().is_empty() {
+                return Err(FactionLifecycleDispatchError::InvalidPayload);
+            }
+            let correlated = if let Some(player) = game.find_player_mut(player_id) {
+                player.restore_faction_identity(faction_id, faction_master_id);
+                true
+            } else {
+                false
+            };
+            let delivery = correlated.then(|| {
+                message.set_message_type(0x000b_ff06);
+                let _ = game.send_player_shape_around(player_id, None, message);
+                message.send_to_player(game.net_server(), player_id)
+            });
+            Ok(FactionLifecycleDispatchReport {
+                opcode,
+                player_id,
+                correlated,
+                delivery,
             })
         }
         0x90105 => {

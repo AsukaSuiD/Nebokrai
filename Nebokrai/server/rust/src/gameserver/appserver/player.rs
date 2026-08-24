@@ -8,6 +8,9 @@
 //! после RTTI `CShape/CMoveShape -> CPlayer`. Эти достигнутые поля имеют статус
 //! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; исходники
 //! `server/gameserver/appserver/player.h/.cpp`.
+//! Organizing identity `m_lFactionID/m_lFacMasterID` обновляется из полного
+//! World `0x7FE06` wire; `IsFactionMaster` сохраняет exact positive-faction и
+//! player-ID equality contract.
 //! `CMessage::Run` RVA `0x000149D0` дополнительно читает inherited father
 //! `+0x40` как текущий `CServerRegion*`; удалённый raw pointer выражен
 //! `Option<i32>` region identity в assembly-проекции.
@@ -1575,6 +1578,7 @@ pub(crate) struct CPlayer {
     move_shape: CMoveShape,
     figure: ShapeFigure,
     faction_id: i32,
+    faction_master_id: i32,
     team_id: i32,
     country: u8,
     server_region_id: Option<i32>,
@@ -1706,6 +1710,7 @@ impl CPlayer {
             move_shape,
             figure,
             faction_id: 0,
+            faction_master_id: 0,
             team_id,
             country,
             server_region_id,
@@ -1863,6 +1868,10 @@ impl CPlayer {
         self.faction_id
     }
 
+    pub(crate) const fn is_faction_master(&self) -> bool {
+        self.faction_id > 0 && self.faction_master_id == self.player_id()
+    }
+
     pub(crate) const fn create_faction_operator(&self) -> bool {
         self.create_faction_operator
     }
@@ -1889,6 +1898,15 @@ impl CPlayer {
 
     pub(crate) const fn restore_faction_id(&mut self, faction_id: i32) {
         self.faction_id = faction_id;
+    }
+
+    pub(crate) const fn restore_faction_identity(
+        &mut self,
+        faction_id: i32,
+        faction_master_id: i32,
+    ) {
+        self.faction_id = faction_id;
+        self.faction_master_id = faction_master_id;
     }
 
     pub(crate) const fn country(&self) -> u8 {

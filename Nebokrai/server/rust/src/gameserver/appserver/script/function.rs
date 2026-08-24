@@ -2,7 +2,7 @@
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/script/function.cpp`. Из dense dispatcher-а
-//! faction menu `3012/6001/6002/6003/6011/6015/6030` проходит от вычисленных аргументов и
+//! faction menu `3012/6001/6002/6003/6011/6015/6017/6030` проходит от вычисленных аргументов и
 //! player/NPC distance gate в owned `CGame` session state; создание и заявка
 //! завершаются только через живой OrganSys client/World callback dispatcher;
 //! отмена заявки сохраняет тот же NPC distance gate и World `0x60109`.
@@ -13,6 +13,8 @@
 //! City-gate `6004/6019/6020` использует только local `CServerCityRegion`:
 //! state/footprint guards и `GS0197..GS0200` предшествуют direct mutation либо
 //! World-authorized `0x6012F`; каждый mutation публикует build update.
+//! Master query `6017` читает identity, обновляемую World `0x7FE06`, а не
+//! отдельный script shadow или всегда ложный placeholder.
 //! Также материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
 //! `9354 / OpenEquipmentCompose` и `2216 / OpenGoodsUpgrade`. Refresh вычисляет первую
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
@@ -171,6 +173,7 @@ pub(crate) const SCRIPT_FUNCTION_QUIT_JOIN_FACTION: i32 = 6003;
 pub(crate) const SCRIPT_FUNCTION_OPERATOR_CITY_GATE: i32 = 6004;
 pub(crate) const SCRIPT_FUNCTION_UPGRADE_FACTION: i32 = 6011;
 pub(crate) const SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME: i32 = 6015;
+pub(crate) const SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME: i32 = 6017;
 pub(crate) const SCRIPT_FUNCTION_GET_CITY_GATE_STATE: i32 = 6019;
 pub(crate) const SCRIPT_FUNCTION_OPERATE_CITY_GATE: i32 = 6020;
 pub(crate) const SCRIPT_FUNCTION_FACTION_DECLARE_WAR: i32 = 6030;
@@ -2471,12 +2474,12 @@ pub(crate) fn script_function_parameter_kind(
             1 => Integer,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_GET_MONEY_BY_NAME | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME => {
-            match index {
-                0 => String,
-                _ => Unused,
-            }
-        }
+        SCRIPT_FUNCTION_GET_MONEY_BY_NAME
+        | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME
+        | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => match index {
+            0 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_CREATE_FACTION => match index {
             0 | 2 | 3 => Integer,
             1 => String,
@@ -3232,7 +3235,9 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
-        SCRIPT_FUNCTION_GET_MONEY_BY_NAME | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME => {
+        SCRIPT_FUNCTION_GET_MONEY_BY_NAME
+        | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME
+        | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => {
             let Some(target_name) = string_arguments[0] else {
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };
@@ -3242,12 +3247,13 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 game.find_player_by_name(target_name)
             };
             Some(ScriptFunctionDispatchOutcome::Handled {
-                legacy_return: target.map_or(0, |player| {
-                    if function_id == SCRIPT_FUNCTION_GET_MONEY_BY_NAME {
-                        player.money() as i32
-                    } else {
-                        player.faction_id()
+                legacy_return: target.map_or(0, |player| match function_id {
+                    SCRIPT_FUNCTION_GET_MONEY_BY_NAME => player.money() as i32,
+                    SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME => player.faction_id(),
+                    SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => {
+                        i32::from(player.is_faction_master())
                     }
+                    _ => unreachable!("faction identity selector отфильтрован match-arm"),
                 }),
             })
         }
