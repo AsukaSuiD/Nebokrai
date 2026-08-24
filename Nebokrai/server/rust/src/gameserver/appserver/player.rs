@@ -7046,20 +7046,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::SendToGSBaiTan
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:15143
-// RVA: 0x0002F1C0
-// ADDRESS: 0042f1c0
-// PROTOTYPE: void __thiscall SendToGSBaiTan(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CountScoreAdd
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer

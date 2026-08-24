@@ -2623,6 +2623,14 @@ pub(crate) struct GameAuctionRunReport {
     pub(crate) state_request: Option<Result<i32, SendMessageError>>,
 }
 
+#[must_use = "recollection сохраняет signed player order и каждый World send"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PersonalShopRecollection {
+    pub(crate) player_id: i32,
+    pub(crate) client_ip: u32,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
 #[must_use = "ProcessMessage report сохраняет server и достигнутые gameplay effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
@@ -14082,6 +14090,27 @@ impl CGame {
         }
     }
 
+    /// Exact `ReCollectBaiTanInGs`: signed player-map order, null-free owned
+    /// traversal и `SendToGSBaiTan` progress gate перед каждым `0x60811`.
+    pub(crate) fn recollect_personal_shops(&self) -> Vec<PersonalShopRecollection> {
+        self.players
+            .values()
+            .filter(|player| player.current_progress() == PlayerProgress::OpenStall)
+            .map(|player| {
+                let player_id = player.player_id();
+                let client_ip = player.client_ip();
+                let mut request = CMessage::new(0x0006_0811);
+                request.base_mut().add_long(player_id);
+                request.base_mut().add_ulong(client_ip);
+                PersonalShopRecollection {
+                    player_id,
+                    client_ip,
+                    delivery: request.send(self, false),
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn start_region_clear_player(
         &mut self,
         region_id: i32,
@@ -15614,48 +15643,6 @@ fn shape_view(
 // RVA: 0x00003BE0
 // ADDRESS: 00403be0
 // PROTOTYPE: void __thiscall SendTopInfoToClient(long param_1, long param_2, long param_3, long param_4, basic_string<char,std::char_traits<char>,std::allocator<char>_> param_5)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGame::ReCollectBaiTanInGs
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1480
-// RVA: 0x00003CB0
-// ADDRESS: 00403cb0
-// PROTOTYPE: void __thiscall ReCollectBaiTanInGs(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00403cfa
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1493
-// RVA: 0x00003CFA
-// ADDRESS: 00403cfa
-// PROTOTYPE: undefined Catch@00403cfa()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: FUN_00403d13
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1483
-// RVA: 0x00003D13
-// ADDRESS: 00403d13
-// PROTOTYPE: undefined FUN_00403d13()
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

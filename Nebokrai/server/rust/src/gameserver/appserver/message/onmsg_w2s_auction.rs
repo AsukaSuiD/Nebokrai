@@ -2,7 +2,7 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/onmsg_w2s_auction.cpp` подтверждают
-//! selectors `0x80401..0x80403`, `0x80409..0x8040D`, `0x8040F` и `0x80410`:
+//! selectors `0x80401..0x80403`, `0x80409..0x80410`:
 //! добавление временного `CGoodsNode` в Game-specific owner map, reconciliation
 //! с World GUID-set, catalog/log/client relay, auction-state и полную YuanBao
 //! container/client mutation, а stall-result либо сообщает отказ, либо
@@ -17,7 +17,9 @@ use std::collections::BTreeMap;
 
 use crate::gameserver::appserver::message::unibillmessage::IncrementShopBillingContext;
 use crate::gameserver::appserver::player::PlayerYuanBaoChange;
-use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
+use crate::gameserver::gameserver::game::{
+    CGame, PersonalShopRecollection, colored_player_notice_message,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::SendMessageError;
 use crate::public::aucitionroom::GameAuctionRemoval;
@@ -32,6 +34,7 @@ const WORLD_AUCTION_PLAYER_RELAY_MESSAGE: i32 = 0x0008_040a;
 const WORLD_AUCTION_LOG_NOTICE_MESSAGE: i32 = 0x0008_040b;
 const WORLD_AUCTION_CONDITION_MESSAGE: i32 = 0x0008_040c;
 const WORLD_AUCTION_STALL_RESULT_MESSAGE: i32 = 0x0008_040d;
+const WORLD_AUCTION_RECOLLECT_STALLS_MESSAGE: i32 = 0x0008_040e;
 const WORLD_AUCTION_BROADCAST_MESSAGE: i32 = 0x0008_040f;
 const WORLD_AUCTION_YUAN_BAO_MESSAGE: i32 = 0x0008_0410;
 const CLIENT_AUCTION_GOODS_REMOVED_MESSAGE: i32 = 0x000c_0702;
@@ -135,6 +138,9 @@ pub(crate) enum WorldAuctionMessageReport {
         player_found: bool,
         notice_delivery: Option<i32>,
         local_open_queued: bool,
+    },
+    StallsRecollected {
+        recollections: Vec<PersonalShopRecollection>,
     },
 }
 
@@ -416,6 +422,12 @@ pub(crate) fn dispatch_world_auction_message<Runtime: WorldAuctionRuntime>(
                 player_found: true,
                 notice_delivery,
                 local_open_queued,
+            }))
+        }
+        WORLD_AUCTION_RECOLLECT_STALLS_MESSAGE => {
+            let recollections = game.recollect_personal_shops();
+            Some(Ok(WorldAuctionMessageReport::StallsRecollected {
+                recollections,
             }))
         }
         WORLD_AUCTION_YUAN_BAO_MESSAGE => {
