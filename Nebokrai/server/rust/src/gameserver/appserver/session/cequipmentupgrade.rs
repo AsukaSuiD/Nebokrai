@@ -10,9 +10,10 @@
 //! session/plug registry.
 //!
 //! MSVC listener/vtable plumbing заменён owned listener handle, concrete
-//! terminal session state и явными effect-report-ами. Полный property recompute, локализованные notification,
-//! World log и публикация container-removal остаются обязательной runtime-
-//! границей своих ещё не восстановленных владельцев.
+//! terminal session state и явными effect-report-ами. Локализованные notices,
+//! wallet/container packets и World audit исполняются живым `CGame`; полной
+//! runtime-границей остаются только combat property recompute и around effects
+//! снятого equipment.
 
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::{
@@ -93,6 +94,7 @@ pub(crate) struct EquipmentUpgradeConsumption {
     pub(crate) cell: UpgradeEquipmentCell,
     pub(crate) goods: ShapeIdentity,
     pub(crate) previous: PreviousContainer,
+    pub(crate) previous_amount: u32,
     pub(crate) removal: EquipmentUpgradeConsumptionRemoval,
     pub(crate) deliveries: Vec<i32>,
 }
@@ -143,6 +145,7 @@ pub(crate) struct EquipmentUpgradeReport {
     pub(crate) client_update_delivery: Option<i32>,
     pub(crate) audit: Option<EquipmentUpgradeAuditLog>,
     pub(crate) lost_audit: Option<EquipmentUpgradeLostAuditLog>,
+    pub(crate) world_deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

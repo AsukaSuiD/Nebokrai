@@ -1104,6 +1104,14 @@ pub(crate) struct PlayerYuanBaoChange {
     pub(crate) outcome: PlayerYuanBaoChangeOutcome,
 }
 
+#[must_use = "списание денег содержит wallet outcome для обязательного client effect"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerMoneyDecrease {
+    pub(crate) previous: u32,
+    pub(crate) current: u32,
+    pub(crate) outcome: CurrencyDecreaseOutcome,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerYuanBaoChangeOutcome {
     Unchanged,
@@ -2303,6 +2311,21 @@ impl CPlayer {
 
     pub(crate) const fn money(&self) -> u32 {
         self.money
+    }
+
+    pub(crate) fn decrease_money(
+        &mut self,
+        requested: u32,
+        factory: &CGoodsFactory,
+    ) -> PlayerMoneyDecrease {
+        let previous = self.wallet.currency_amount();
+        let outcome = self.wallet.decrease_currency(requested, factory);
+        self.money = self.wallet.currency_amount();
+        PlayerMoneyDecrease {
+            previous,
+            current: self.money,
+            outcome,
+        }
     }
 
     pub(crate) fn yuan_bao(&self) -> u32 {
@@ -3643,14 +3666,12 @@ impl CPlayer {
                 .get_goods(cell.position())
                 .map(BattleFairyUpgradeGoodsSnapshot::capture)
         });
-        let previous_money = self.wallet.currency_amount();
-        let money_outcome = self.wallet.decrease_currency(price, factory);
-        self.money = self.wallet.currency_amount();
+        let money = self.decrease_money(price, factory);
         report.effects.push(BattleFairyUpgradeEffect::MoneyChanged {
             player_id,
-            previous: previous_money,
-            current: self.money,
-            outcome: money_outcome,
+            previous: money.previous,
+            current: money.current,
+            outcome: money.outcome,
         });
 
         let audit_player = BattleFairyUpgradePlayerSnapshot {

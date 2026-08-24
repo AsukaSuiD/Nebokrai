@@ -1506,24 +1506,6 @@ pub(crate) trait EquipmentDaKongContext: OldClientGoodsCodec {
 pub(crate) trait EquipmentUpgradeContext:
     OldClientGoodsCodec + PlayerEquipmentContext
 {
-    fn publish_equipment_upgrade_notification(
-        &mut self,
-        player_id: i32,
-        string_id: &'static str,
-        format_values: &[u32],
-    ) -> i32;
-    fn publish_equipment_upgrade_money(
-        &mut self,
-        player_id: i32,
-        previous: u32,
-        current: u32,
-    ) -> Vec<i32>;
-    fn publish_equipment_upgrade_packet_consumption(
-        &mut self,
-        consumption: &CiQingPacketConsumption,
-    ) -> Vec<i32>;
-    fn record_equipment_upgrade_log(&mut self, log: &EquipmentUpgradeAuditLog);
-    fn record_equipment_upgrade_lost_log(&mut self, log: &EquipmentUpgradeLostAuditLog);
     fn equipment_upgrade_remove_facts(
         &mut self,
         player: &CPlayer,
@@ -5825,6 +5807,7 @@ impl CGame {
             client_update_delivery: None,
             audit: None,
             lost_audit: None,
+            world_deliveries: Vec::new(),
         };
         if self.session_factory.query_session(session_id).is_none() {
             return report;
@@ -5879,20 +5862,18 @@ impl CGame {
         });
         if player.money() < report.price {
             report.outcome = EquipmentUpgradeOutcome::InsufficientMoneyForValidation;
-            report
-                .notifications
-                .push(context.publish_equipment_upgrade_notification(
-                    player_id,
-                    "GS0250",
-                    &[report.price],
-                ));
+            report.notifications.push(self.send_equipment_upgrade_notification(
+                player_id,
+                "GS0250",
+                Some(report.price),
+            ));
             return report;
         }
         let Some(equipment_id) = plug.goods_id(UpgradeEquipmentCell::Equipment) else {
             report.outcome = EquipmentUpgradeOutcome::MissingOrInvalidEquipment;
-            report
-                .notifications
-                .push(context.publish_equipment_upgrade_notification(player_id, "GS0249", &[]));
+            report.notifications.push(self.send_equipment_upgrade_notification(
+                player_id, "GS0249", None,
+            ));
             return report;
         };
         let Some(equipment) = player.get_goods_by_id(equipment_id) else {
@@ -5901,9 +5882,9 @@ impl CGame {
         };
         if !equipment.can_upgraded(&self.goods_factory) {
             report.outcome = EquipmentUpgradeOutcome::MissingOrInvalidEquipment;
-            report
-                .notifications
-                .push(context.publish_equipment_upgrade_notification(player_id, "GS0249", &[]));
+            report.notifications.push(self.send_equipment_upgrade_notification(
+                player_id, "GS0249", None,
+            ));
             return report;
         }
         let current_level = equipment.addon_property_value(
@@ -5914,9 +5895,9 @@ impl CGame {
         report.previous_level = Some(current_level as u32);
         let Some(base_gem_id) = plug.goods_id(UpgradeEquipmentCell::BaseGem) else {
             report.outcome = EquipmentUpgradeOutcome::MissingBaseGem;
-            report
-                .notifications
-                .push(context.publish_equipment_upgrade_notification(player_id, "GS0248", &[]));
+            report.notifications.push(self.send_equipment_upgrade_notification(
+                player_id, "GS0248", None,
+            ));
             return report;
         };
         let Some(base_gem) = player.get_goods_by_id(base_gem_id) else {
@@ -5935,16 +5916,16 @@ impl CGame {
         ));
         if current_level < minimum_level || maximum_level < current_level {
             report.outcome = EquipmentUpgradeOutcome::EquipmentLevelOutsideGemRange;
-            report
-                .notifications
-                .push(context.publish_equipment_upgrade_notification(player_id, "GS0247", &[]));
+            report.notifications.push(self.send_equipment_upgrade_notification(
+                player_id, "GS0247", None,
+            ));
             return report;
         }
         if 98 < current_level as u32 {
             report.outcome = EquipmentUpgradeOutcome::MaximumLevel;
-            report
-                .notifications
-                .push(context.publish_equipment_upgrade_notification(player_id, "GS0257", &[]));
+            report.notifications.push(self.send_equipment_upgrade_notification(
+                player_id, "GS0257", None,
+            ));
             return report;
         }
         report.probability = plug.probability(|goods_id, property, value_id| {
@@ -5954,19 +5935,16 @@ impl CGame {
         });
         if player.money() < report.price {
             report.outcome = EquipmentUpgradeOutcome::InsufficientMoneyAtExecution;
-            report
-                .notifications
-                .push(context.publish_equipment_upgrade_notification(player_id, "GS0256", &[]));
+            report.notifications.push(self.send_equipment_upgrade_notification(
+                player_id, "GS0256", None,
+            ));
             return report;
         }
 
-        let previous_money = player.money();
-        let current_money = previous_money.wrapping_sub(report.price);
-        player.set_money_snapshot(current_money);
-        report.previous_money = Some(previous_money);
-        report.current_money = Some(current_money);
-        report.money_deliveries =
-            context.publish_equipment_upgrade_money(player_id, previous_money, current_money);
+        let money = player.decrease_money(report.price, &self.goods_factory);
+        report.previous_money = Some(money.previous);
+        report.current_money = Some(money.current);
+        report.money_deliveries = self.send_player_money_decrease(player_id, &money.outcome);
         let roll = game_legacy_random(&mut self.random_state, 100) as u32 + 1;
         report.roll = Some(roll);
 
@@ -6001,40 +5979,48 @@ impl CGame {
             }
             report.resulting_level = Some(target_level as u32);
             report.outcome = EquipmentUpgradeOutcome::Succeeded;
-            report
-                .notifications
-                .push(context.publish_equipment_upgrade_notification(player_id, "GS0251", &[]));
-            let audit = EquipmentUpgradeAuditLog {
-                reason: EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON,
-                player_id,
-                equipment: player
-                    .get_goods_by_id(equipment_id)
-                    .map(EquipmentUpgradeGoodsSnapshot::capture)
-                    .expect("успешный upgrade сохраняет equipment"),
-                gems,
-                region_id,
-                tile_x,
-                tile_y,
-            };
-            context.record_equipment_upgrade_log(&audit);
-            report.audit = Some(audit);
+            report.notifications.push(self.send_equipment_upgrade_notification(
+                player_id, "GS0251", None,
+            ));
+            if self.log_system.goods_upgrade_success_enabled() {
+                let audit = EquipmentUpgradeAuditLog {
+                    reason: EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON,
+                    player_id,
+                    equipment: player
+                        .get_goods_by_id(equipment_id)
+                        .map(EquipmentUpgradeGoodsSnapshot::capture)
+                        .expect("успешный upgrade сохраняет equipment"),
+                    gems,
+                    region_id,
+                    tile_x,
+                    tile_y,
+                };
+                report
+                    .world_deliveries
+                    .extend(self.send_equipment_upgrade_audit(&audit));
+                report.audit = Some(audit);
+            }
             self.publish_equipment_upgrade_update(player, equipment_id, &mut report, context);
         } else {
             let equipment_snapshot = player
                 .get_goods_by_id(equipment_id)
                 .map(EquipmentUpgradeGoodsSnapshot::capture)
                 .expect("equipment проверен до failure audit");
-            let audit = EquipmentUpgradeAuditLog {
-                reason: EQUIPMENT_UPGRADE_FAILURE_LOG_REASON,
-                player_id,
-                equipment: equipment_snapshot.clone(),
-                gems,
-                region_id,
-                tile_x,
-                tile_y,
-            };
-            context.record_equipment_upgrade_log(&audit);
-            report.audit = Some(audit);
+            if self.log_system.goods_upgrade_failure_enabled() {
+                let audit = EquipmentUpgradeAuditLog {
+                    reason: EQUIPMENT_UPGRADE_FAILURE_LOG_REASON,
+                    player_id,
+                    equipment: equipment_snapshot.clone(),
+                    gems,
+                    region_id,
+                    tile_x,
+                    tile_y,
+                };
+                report
+                    .world_deliveries
+                    .extend(self.send_equipment_upgrade_audit(&audit));
+                report.audit = Some(audit);
+            }
             match plug.failed_result(|goods_id, property, value_id| {
                 player.get_goods_by_id(goods_id).map_or(0, |goods| {
                     goods.addon_property_value(&self.goods_factory, property, value_id)
@@ -6043,13 +6029,9 @@ impl CGame {
                 1 => {
                     report.outcome = EquipmentUpgradeOutcome::FailedUnchanged;
                     report.resulting_level = Some(current_level as u32);
-                    report
-                        .notifications
-                        .push(context.publish_equipment_upgrade_notification(
-                            player_id,
-                            "GS0252",
-                            &[],
-                        ));
+                    report.notifications.push(self.send_equipment_upgrade_notification(
+                        player_id, "GS0252", None,
+                    ));
                 }
                 2 => {
                     let target_level = current_level.saturating_sub(1);
@@ -6061,13 +6043,9 @@ impl CGame {
                     }
                     report.outcome = EquipmentUpgradeOutcome::FailedLevelLost;
                     report.resulting_level = Some(target_level as u32);
-                    report
-                        .notifications
-                        .push(context.publish_equipment_upgrade_notification(
-                            player_id,
-                            "GS0253",
-                            &[],
-                        ));
+                    report.notifications.push(self.send_equipment_upgrade_notification(
+                        player_id, "GS0253", None,
+                    ));
                     self.publish_equipment_upgrade_update(
                         player,
                         equipment_id,
@@ -6084,13 +6062,9 @@ impl CGame {
                     }
                     report.outcome = EquipmentUpgradeOutcome::FailedReset;
                     report.resulting_level = Some(0);
-                    report
-                        .notifications
-                        .push(context.publish_equipment_upgrade_notification(
-                            player_id,
-                            "GS0254",
-                            &[],
-                        ));
+                    report.notifications.push(self.send_equipment_upgrade_notification(
+                        player_id, "GS0254", None,
+                    ));
                     self.publish_equipment_upgrade_update(
                         player,
                         equipment_id,
@@ -6100,28 +6074,28 @@ impl CGame {
                 }
                 _ => {
                     report.outcome = EquipmentUpgradeOutcome::FailedEquipmentLost;
-                    report
-                        .notifications
-                        .push(context.publish_equipment_upgrade_notification(
+                    report.notifications.push(self.send_equipment_upgrade_notification(
+                        player_id, "GS0255", None,
+                    ));
+                    if self.log_system.goods_lost_by_upgrade_enabled() {
+                        let lost = EquipmentUpgradeLostAuditLog {
+                            reason: EQUIPMENT_UPGRADE_LOST_LOG_REASON,
                             player_id,
-                            "GS0255",
-                            &[],
-                        ));
-                    let lost = EquipmentUpgradeLostAuditLog {
-                        reason: EQUIPMENT_UPGRADE_LOST_LOG_REASON,
-                        player_id,
-                        pk_count: player.pk_count(),
-                        money: player.money(),
-                        depot_money: player.depot_money(),
-                        equipment: equipment_snapshot,
-                        amount: 1,
-                        region_id,
-                        tile_x,
-                        tile_y,
-                        client_ip: player.client_ip(),
-                    };
-                    context.record_equipment_upgrade_lost_log(&lost);
-                    report.lost_audit = Some(lost);
+                            pk_count: player.pk_count(),
+                            money: player.money(),
+                            depot_money: player.depot_money(),
+                            equipment: equipment_snapshot,
+                            amount: 1,
+                            region_id,
+                            tile_x,
+                            tile_y,
+                            client_ip: player.client_ip(),
+                        };
+                        report
+                            .world_deliveries
+                            .extend(self.send_equipment_upgrade_lost_audit(&lost));
+                        report.lost_audit = Some(lost);
+                    }
                     self.consume_equipment_upgrade_cell(
                         player,
                         plug,
@@ -6137,6 +6111,102 @@ impl CGame {
             self.consume_equipment_upgrade_cell(player, plug, cell, &mut report, context);
         }
         report
+    }
+
+    fn send_equipment_upgrade_notification(
+        &self,
+        player_id: i32,
+        string_id: &str,
+        format_value: Option<u32>,
+    ) -> i32 {
+        let template = self.get_string_by_id(string_id.as_bytes());
+        let text = format_value.map_or_else(
+            || legacy_c_string_prefix(template).to_vec(),
+            |value| format_single_legacy_u32(template, value, 255),
+        );
+        colored_player_notice_message(0xffff_ffff, 0, &text)
+            .send_to_player(self.net_server(), player_id)
+    }
+
+    fn send_equipment_upgrade_audit(&self, audit: &EquipmentUpgradeAuditLog) -> Vec<i32> {
+        let mut message = CMessage::new(0x0006_0203);
+        message.add_byte(audit.reason);
+        message.add_long(audit.player_id);
+        add_equipment_upgrade_log_goods(&mut message, Some(&audit.equipment));
+        for gem in &audit.gems {
+            add_equipment_upgrade_log_goods(&mut message, gem.as_ref());
+        }
+        message.add_long(audit.region_id);
+        message.add_long(audit.tile_x);
+        message.add_long(audit.tile_y);
+        message.send(self, false).into_iter().collect()
+    }
+
+    fn send_equipment_upgrade_lost_audit(
+        &self,
+        audit: &EquipmentUpgradeLostAuditLog,
+    ) -> Vec<i32> {
+        let mut message = CMessage::new(0x0006_0202);
+        message.add_byte(audit.reason);
+        message.add_long(audit.player_id);
+        message.base_mut().add_short(audit.pk_count as i16);
+        message.add_ulong(audit.money);
+        message.add_ulong(audit.depot_money);
+        message.base_mut().add_guid(audit.equipment.identity.ex_id);
+        // Primary GameServer сохраняет этот legacy wire mismatch: equipment
+        // price занимает World-поле amount, literal amount — поле price.
+        message.add_ulong(audit.equipment.price);
+        add_legacy_c_string(message.base_mut(), &audit.equipment.name);
+        message.add_ulong(audit.amount);
+        message.add_long(audit.region_id);
+        message.add_long(audit.tile_x);
+        message.add_long(audit.tile_y);
+        message.add_ulong(audit.client_ip);
+        message.send(self, false).into_iter().collect()
+    }
+
+    fn send_equipment_upgrade_consumption(
+        &self,
+        previous: &crate::gameserver::appserver::container::ccontainer::PreviousContainer,
+        consumption: &CiQingPacketConsumption,
+    ) -> Vec<i32> {
+        if consumption.remaining_amount == 0 {
+            return vec![self.send_equipment_upgrade_delete(
+                consumption.player_id,
+                previous,
+                consumption.goods,
+                consumption.previous_amount,
+            )];
+        }
+        let mut message = CS2CContainerObjectAmountChange::default();
+        message.set_source_container(
+            previous.container_type,
+            previous.container_id,
+            previous.goods_position,
+        );
+        message.set_source_container_extend_id(previous.container_extend_id);
+        message.set_object(consumption.goods.object_type, consumption.goods.ex_id);
+        message.set_object_amount(consumption.remaining_amount);
+        vec![message.send_to_player(self, consumption.player_id)]
+    }
+
+    fn send_equipment_upgrade_delete(
+        &self,
+        player_id: i32,
+        previous: &crate::gameserver::appserver::container::ccontainer::PreviousContainer,
+        goods: ShapeIdentity,
+        amount: u32,
+    ) -> i32 {
+        let mut message = CS2CContainerObjectMove::default();
+        message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+        message.set_source_container(
+            previous.container_type,
+            previous.container_id,
+            previous.goods_position,
+        );
+        message.set_source_container_extend_id(previous.container_extend_id);
+        message.set_source_object(goods.object_type, goods.ex_id, amount);
+        message.send_to_player(self, player_id)
     }
 
     fn publish_equipment_upgrade_update<Context: EquipmentUpgradeContext>(
@@ -6189,11 +6259,14 @@ impl CGame {
                 id: 0,
                 ex_id: goods_id,
             });
+        let previous_amount = player
+            .get_goods_by_id(goods_id)
+            .map_or(0, CGoods::amount);
         let mut deliveries = Vec::new();
         let removal = if player.packet().base().find(goods_id).is_some() {
             match player.remove_packet_goods_by_id(goods_id, 1) {
                 Some(consumption) => {
-                    deliveries = context.publish_equipment_upgrade_packet_consumption(&consumption);
+                    deliveries = self.send_equipment_upgrade_consumption(&previous, &consumption);
                     EquipmentUpgradeConsumptionRemoval::Packet(consumption)
                 }
                 None => EquipmentUpgradeConsumptionRemoval::Missing,
@@ -6215,15 +6288,33 @@ impl CGame {
             );
             drop(recompute);
             self.publish_player_equipment_remove_report(&mut removal, context);
+            if matches!(removal.outcome, EquipmentRemoveOutcome::Removed(_)) {
+                deliveries.push(self.send_equipment_upgrade_delete(
+                    player.player_id(),
+                    &previous,
+                    identity,
+                    previous_amount,
+                ));
+            }
             EquipmentUpgradeConsumptionRemoval::Equipment(removal)
         } else {
             EquipmentUpgradeConsumptionRemoval::Missing
         };
-        let _ = plug.upgrade_container_mut().on_source_removed(goods_id, 1);
+        let source_removed = match &removal {
+            EquipmentUpgradeConsumptionRemoval::Packet(_) => true,
+            EquipmentUpgradeConsumptionRemoval::Equipment(removal) => {
+                matches!(removal.outcome, EquipmentRemoveOutcome::Removed(_))
+            }
+            EquipmentUpgradeConsumptionRemoval::Missing => false,
+        };
+        if source_removed {
+            let _ = plug.upgrade_container_mut().on_source_removed(goods_id, 1);
+        }
         report.consumptions.push(EquipmentUpgradeConsumption {
             cell,
             goods: identity,
             previous,
+            previous_amount,
             removal,
             deliveries,
         });
@@ -12290,7 +12381,7 @@ impl CGame {
                     player_id, outcome, ..
                 } => {
                     report.deliveries.push(BattleFairyUpgradeDelivery::Money(
-                        self.send_battle_fairy_money_change(player_id, &outcome),
+                        self.send_player_money_decrease(player_id, &outcome),
                     ));
                 }
                 BattleFairyUpgradeEffect::GoodsUpdated(update) => {
@@ -12318,7 +12409,7 @@ impl CGame {
         Some(report)
     }
 
-    fn send_battle_fairy_money_change(
+    fn send_player_money_decrease(
         &self,
         player_id: i32,
         outcome: &crate::gameserver::appserver::container::cwallet::CurrencyDecreaseOutcome,
@@ -13606,6 +13697,19 @@ fn add_legacy_c_string(message: &mut crate::nets::basemessage::CBaseMessage, val
 fn add_battle_fairy_upgrade_log_goods(
     message: &mut CMessage,
     goods: Option<&crate::gameserver::appserver::player::BattleFairyUpgradeGoodsSnapshot>,
+) {
+    if let Some(goods) = goods {
+        message.base_mut().add_guid(goods.identity.ex_id);
+        add_legacy_c_string(message.base_mut(), &goods.name);
+    } else {
+        message.base_mut().add_guid(CGuid::GUID_INVALID);
+        add_legacy_c_string(message.base_mut(), b"");
+    }
+}
+
+fn add_equipment_upgrade_log_goods(
+    message: &mut CMessage,
+    goods: Option<&EquipmentUpgradeGoodsSnapshot>,
 ) {
     if let Some(goods) = goods {
         message.base_mut().add_guid(goods.identity.ex_id);
