@@ -19,7 +19,8 @@
 //! старших 24 битах extend ID; selection/clear публикуют Add/DeleteShadow и
 //! self-move rollback, transfer использует тот же ownership/effects контракт.
 //! Auction-listing принимает полный предмет из packet/equipment/auction-return,
-//! сохраняет equipment callbacks и effects и публикует точный client move;
+//! а обратный маршрут возвращает его в packet/equipment после exact burden
+//! gate; оба сохраняют equipment callbacks, destination rollback и client move;
 //! полный persisted-player snapshot `0x6080E` остаётся у недоступного owner-а.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
@@ -156,6 +157,15 @@ pub(crate) enum GameContainerMessageOutcome {
         reason: AuctionListingTransferBlock,
         delivery: i32,
     },
+    AuctionListingWithdrawn {
+        withdrawal: AuctionListingWithdrawalReport,
+        move_delivery: i32,
+    },
+    AuctionListingWithdrawalRolledBack {
+        reason: AuctionListingWithdrawalBlock,
+        delivery: i32,
+        notification_delivery: Option<i32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,6 +177,7 @@ enum EnhancementMessageRoute {
     EquipmentSessionClear,
     EquipmentSessionTransfer,
     AuctionListingMove,
+    AuctionListingWithdrawal,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -198,6 +209,7 @@ pub(crate) struct AuctionListingTransferReport {
     pub(crate) removal: AuctionListingTransferRemoval,
     pub(crate) destination: VolumeGoodsAddOutcome,
     pub(crate) listing_slot_zero_was_empty: bool,
+    pub(crate) previous_last_operated: (u32, u32),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -210,6 +222,51 @@ pub(crate) enum AuctionListingTransferBlock {
     PacketRemovalFailed,
     AuctionGoodsRemovalFailed,
     EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuctionListingWithdrawalRemoval {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionListingWithdrawalOutcome {
+    Moved {
+        addition: EnhancementTransferAddition,
+        destination_goods: ShapeIdentity,
+        amount: u32,
+    },
+    RolledBack {
+        rejected: EnhancementTransferAddition,
+        restored: VolumeGoodsAddOutcome,
+    },
+    GoodsCollected {
+        rejected: EnhancementTransferAddition,
+        rollback: VolumeGoodsAddOutcome,
+        goods: ShapeIdentity,
+        notification_delivery: i32,
+    },
+}
+
+#[must_use = "withdrawal report сохраняет listing ownership, destination effects и rollback"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuctionListingWithdrawalReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) removal: AuctionListingWithdrawalRemoval,
+    pub(crate) outcome: AuctionListingWithdrawalOutcome,
+    pub(crate) previous_last_operated: Option<(u32, u32)>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionListingWithdrawalBlock {
+    UnsupportedDestinationContainer { extend_id: i32 },
+    MissingSourceGoods,
+    BurdenExceeded,
+    RemovalFailed,
 }
 
 #[must_use = "container report сохраняет request, mutation и ordered client effects"]
@@ -351,6 +408,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 && matches!(request.source_container_extend_id, 1 | 2 | 14)
             {
                 EnhancementMessageRoute::AuctionListingMove
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && request.source_container_extend_id == 13
+                && matches!(request.destination_container_extend_id, 1 | 2)
+            {
+                EnhancementMessageRoute::AuctionListingWithdrawal
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_extend_id == ENHANCEMENT_EXTEND_ID
@@ -530,6 +593,56 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 transfer,
                 move_delivery,
                 snapshot_refresh_required,
+            },
+        )));
+    }
+
+    if route == EnhancementMessageRoute::AuctionListingWithdrawal {
+        let withdrawal = game.withdraw_player_auction_listing_goods(
+            player_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_container_extend_id,
+            request.destination_position,
+            context,
+        );
+        let withdrawal = match withdrawal {
+            Ok(withdrawal) => withdrawal,
+            Err(reason) => {
+                let notification_delivery =
+                    (reason == AuctionListingWithdrawalBlock::BurdenExceeded).then(|| {
+                        send_notify(
+                            game,
+                            player_id,
+                            game.get_string_by_id(b"GS0259"),
+                            0xffff_ffff,
+                            0,
+                        )
+                    });
+                let delivery = send_rollback(game, player_id);
+                return Some(Ok(report(
+                    GameContainerMessageOutcome::AuctionListingWithdrawalRolledBack {
+                        reason,
+                        delivery,
+                        notification_delivery,
+                    },
+                )));
+            }
+        };
+        let move_delivery = match &withdrawal.outcome {
+            AuctionListingWithdrawalOutcome::Moved { .. } => {
+                send_auction_listing_withdrawal_moved(game, player_id, request, &withdrawal)
+            }
+            AuctionListingWithdrawalOutcome::RolledBack { .. }
+            | AuctionListingWithdrawalOutcome::GoodsCollected { .. } => {
+                send_rollback(game, player_id)
+            }
+        };
+        return Some(Ok(report(
+            GameContainerMessageOutcome::AuctionListingWithdrawn {
+                withdrawal,
+                move_delivery,
             },
         )));
     }
@@ -891,6 +1004,39 @@ fn send_auction_listing_move_moved(
     message.send_to_player(game.net_server(), player_id)
 }
 
+fn send_auction_listing_withdrawal_moved(
+    game: &CGame,
+    player_id: i32,
+    request: ContainerObjectMoveRequest,
+    withdrawal: &AuctionListingWithdrawalReport,
+) -> i32 {
+    let AuctionListingWithdrawalOutcome::Moved {
+        destination_goods,
+        amount,
+        ..
+    } = &withdrawal.outcome
+    else {
+        unreachable!("withdrawal move packet требует успешный destination add")
+    };
+    let mut message = CMessage::new(CLIENT_CONTAINER_OBJECT_MOVE);
+    message.add_byte(1);
+    message.add_long(request.source_container_type);
+    message.add_long(request.source_container_id);
+    message.add_long(request.source_container_extend_id);
+    message.add_ulong(request.source_position);
+    message.add_long(request.destination_container_type);
+    message.add_long(request.destination_container_id);
+    message.add_long(request.destination_container_extend_id);
+    message.add_ulong(request.destination_position);
+    message.add_long(GOODS_OBJECT_TYPE);
+    message.base_mut().add_guid(withdrawal.goods.ex_id);
+    message.add_ulong(request.amount);
+    message.add_long(GOODS_OBJECT_TYPE);
+    message.base_mut().add_guid(destination_goods.ex_id);
+    message.add_ulong(*amount);
+    message.send_to_player(game.net_server(), player_id)
+}
+
 pub(crate) fn send_enhancement_goods_collected(
     game: &CGame,
     player_id: i32,
@@ -995,7 +1141,7 @@ fn send_move_result(
 // ============================================================================
 // FUNCTION: OnContainerMessage
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: полные packet/equipment ↔ enhancement, equipment-session upgrade/DaKong/compose и auction-listing routes `0x90301`; остальные routes RAW ниже
+// MATERIALIZED: полные packet/equipment ↔ enhancement, equipment-session upgrade/DaKong/compose и двусторонние auction-listing routes `0x90301`; остальные routes RAW ниже
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\containermessage.cpp:14

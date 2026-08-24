@@ -127,7 +127,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::Move
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: полные packet/equipment ↔ enhancement/equipment-session select/clear/transfer и ordered AddShadow/DeleteShadow/move publications
+// MATERIALIZED: полные packet/equipment ↔ enhancement/equipment-session и двусторонние auction-listing transfers, включая burden/rollback/equipment effects; остальные container routes RAW ниже
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:1225

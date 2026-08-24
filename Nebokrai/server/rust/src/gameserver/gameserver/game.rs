@@ -359,7 +359,7 @@ use crate::gameserver::appserver::container::cbattlefairycontainer::{
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::ComposeEquipmentCell;
 use crate::gameserver::appserver::container::cequipmentcontainer::{
-    EQUIPMENT_COLUMN_LIMIT, EquipmentRemoveOutcome,
+    EQUIPMENT_COLUMN_LIMIT, EquipmentAddOutcome, EquipmentRemoveOutcome,
 };
 use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::UpgradeEquipmentCell;
 use crate::gameserver::appserver::container::cfairycontainer::{
@@ -394,10 +394,12 @@ use crate::gameserver::appserver::goodswarmember::{
 };
 use crate::gameserver::appserver::message::containermessage::{
     AuctionListingTransferBlock, AuctionListingTransferRemoval, AuctionListingTransferReport,
-    EnhancementTransferAddition, EnhancementTransferBlock, EnhancementTransferOutcome,
-    EnhancementTransferRemoval, EnhancementTransferReport, EquipmentSessionClearBlock,
-    EquipmentSessionSelectionBlock, EquipmentSessionSelectionReport, GameContainerMessageError,
-    GameContainerMessageReport, dispatch_game_container_message, send_enhancement_goods_collected,
+    AuctionListingWithdrawalBlock, AuctionListingWithdrawalOutcome,
+    AuctionListingWithdrawalRemoval, AuctionListingWithdrawalReport, EnhancementTransferAddition,
+    EnhancementTransferBlock, EnhancementTransferOutcome, EnhancementTransferRemoval,
+    EnhancementTransferReport, EquipmentSessionClearBlock, EquipmentSessionSelectionBlock,
+    EquipmentSessionSelectionReport, GameContainerMessageError, GameContainerMessageReport,
+    dispatch_game_container_message, send_enhancement_goods_collected,
     send_enhancement_shadow_deleted,
 };
 use crate::gameserver::appserver::message::countrymessage::{
@@ -3801,11 +3803,169 @@ impl CGame {
             incoming.is_none() && matches!(destination, VolumeGoodsAddOutcome::Added(_)),
             "предварительно проверенный пустой auction listing slot обязан принять goods"
         );
+        let previous_last_operated =
+            player.record_last_operated_goods(source_extend_id, source_position);
         Ok(AuctionListingTransferReport {
             goods: goods_identity,
             removal,
             destination,
             listing_slot_zero_was_empty: slot_zero_was_empty,
+            previous_last_operated,
+        })
+    }
+
+    /// Замыкает обратный direct `0x90301` из `m_cAuctionContainer` в
+    /// packet/equipment. Общий Move проверяет burden до source removal;
+    /// blocked destination возвращает предмет в исходную listing-ячейку.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn withdraw_player_auction_listing_goods<
+        Context: GameContainerMessageRuntime,
+    >(
+        &mut self,
+        player_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<AuctionListingWithdrawalReport, AuctionListingWithdrawalBlock> {
+        if !matches!(destination_extend_id, 1 | 2) {
+            return Err(
+                AuctionListingWithdrawalBlock::UnsupportedDestinationContainer {
+                    extend_id: destination_extend_id,
+                },
+            );
+        }
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .ok_or(AuctionListingWithdrawalBlock::MissingSourceGoods)?;
+        let result = self.withdraw_player_auction_listing_goods_inner(
+            &mut player,
+            source_position,
+            goods_id,
+            amount,
+            destination_extend_id,
+            destination_position,
+            context,
+        );
+        self.players.insert(player_id, player);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn withdraw_player_auction_listing_goods_inner<Context: GameContainerMessageRuntime>(
+        &self,
+        player: &mut CPlayer,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<AuctionListingWithdrawalReport, AuctionListingWithdrawalBlock> {
+        let goods = player
+            .auction_listing()
+            .get_goods(source_position)
+            .filter(|goods| goods.identity().ex_id == goods_id && goods.amount() == amount)
+            .ok_or(AuctionListingWithdrawalBlock::MissingSourceGoods)?;
+        let goods_identity = goods.identity();
+        if player
+            .current_burden(&self.goods_factory)
+            .wrapping_add(goods.weight(&self.goods_factory))
+            > u32::from(player.combat_properties().burden)
+        {
+            return Err(AuctionListingWithdrawalBlock::BurdenExceeded);
+        }
+
+        let removed = player
+            .auction_listing_mut()
+            .remove_goods(goods_id)
+            .ok_or(AuctionListingWithdrawalBlock::RemovalFailed)?;
+        let removed = match removed {
+            VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed)) => removed,
+            VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Split(_))
+            | VolumeGoodsRemoveOutcome::RemovedButCellMissing(_) => {
+                return Err(AuctionListingWithdrawalBlock::RemovalFailed);
+            }
+        };
+        let removal = AuctionListingWithdrawalRemoval {
+            owner_type: removed.owner_type,
+            owner_id: removed.owner_id,
+            position: removed.position.unwrap_or(source_position),
+            amount: removed.amount,
+            listeners: removed.listeners,
+        };
+        let mut incoming = Some(removed.goods);
+        let pack_add_enabled = self.globe_setup.pack_add_enabled();
+        let addition = self.add_enhancement_transfer_goods(
+            player,
+            destination_extend_id,
+            destination_position,
+            &mut incoming,
+            pack_add_enabled,
+            context,
+        );
+        let outcome = if incoming.is_none() {
+            let (destination_goods, amount) = match &addition {
+                EnhancementTransferAddition::Packet(VolumeGoodsAddOutcome::Added(added)) => {
+                    (added.identity, added.amount)
+                }
+                EnhancementTransferAddition::Packet(VolumeGoodsAddOutcome::Stack(
+                    GoodsStackMergeOutcome::Merged { target, amount },
+                )) => (*target, *amount),
+                EnhancementTransferAddition::Equipment(PlayerEquipmentAddReport {
+                    outcome: EquipmentAddOutcome::Added(added),
+                    ..
+                }) => (added.identity, added.amount),
+                _ => unreachable!("consumed destination goods требует successful add outcome"),
+            };
+            AuctionListingWithdrawalOutcome::Moved {
+                addition,
+                destination_goods,
+                amount,
+            }
+        } else {
+            let rejected = addition;
+            let owner_progress_allows = player.current_progress() == PlayerProgress::None;
+            let rollback = player.auction_listing_mut().add_goods_at(
+                source_position,
+                &mut incoming,
+                &self.goods_factory,
+                owner_progress_allows,
+            );
+            if incoming.is_none() {
+                AuctionListingWithdrawalOutcome::RolledBack {
+                    rejected,
+                    restored: rollback,
+                }
+            } else {
+                let goods = incoming
+                    .take()
+                    .expect("неуспешный auction-listing rollback сохраняет detached goods");
+                let notification_delivery = send_enhancement_goods_collected(
+                    self,
+                    player.player_id(),
+                    goods.name(),
+                    goods.amount(),
+                );
+                AuctionListingWithdrawalOutcome::GoodsCollected {
+                    rejected,
+                    rollback,
+                    goods: goods.identity(),
+                    notification_delivery,
+                }
+            }
+        };
+        let previous_last_operated =
+            matches!(&outcome, AuctionListingWithdrawalOutcome::Moved { .. })
+                .then(|| player.record_last_operated_goods(13, source_position));
+        Ok(AuctionListingWithdrawalReport {
+            goods: goods_identity,
+            removal,
+            outcome,
+            previous_last_operated,
         })
     }
 

@@ -104,6 +104,10 @@
 //! `0x90301` проверяет packet/equipment position, GUID, amount и stackability,
 //! затем записывает shadow без смены ownership исходного goods и сохраняет
 //! native last-operated source для последующих container-переходов.
+//! Двусторонний auction-listing route использует те же owned packet/equipment
+//! containers: обратный ход считает exact equipment+packet+hand burden,
+//! сохраняет last-operated только после успешного destination add и оставляет
+//! temporary auction/fairy/session goods вне весовой суммы, как исходный owner.
 //! CiQing unlocked base-index set хранится ordered `BTreeSet`; его query не
 //! создаёт постоянные goods, а только передаёт snapshot CGame factory owner-у;
 //! make считает/удаляет packet stack-и в container order и сохраняет
@@ -2247,6 +2251,15 @@ impl CPlayer {
         self.combat_properties
     }
 
+    /// Exact `GetCurBurden`: только equipment, packet и hand, в исходном
+    /// wrapping-порядке. Временные auction/fairy/session containers не входят.
+    pub(crate) fn current_burden(&self, factory: &CGoodsFactory) -> u32 {
+        self.equipment
+            .contents_weight(factory)
+            .wrapping_add(self.packet.base().contents_weight(factory))
+            .wrapping_add(self.hand.contents_weight(factory))
+    }
+
     pub(crate) const fn ci_qing_open(&self) -> bool {
         self.ci_qing_open
     }
@@ -2637,6 +2650,17 @@ impl CPlayer {
             self.last_operated_container,
             self.last_operated_goods_position,
         )
+    }
+
+    pub(crate) fn record_last_operated_goods(
+        &mut self,
+        source_extend_id: i32,
+        source_position: u32,
+    ) -> (u32, u32) {
+        let previous = self.last_operated_goods();
+        self.last_operated_container = source_extend_id as u32;
+        self.last_operated_goods_position = source_position;
+        previous
     }
 
     /// Storage core назначения hotkey из hand. Packet/hand/wallet/YuanBao
@@ -3150,12 +3174,8 @@ impl CPlayer {
             goods_position: source_position,
         };
         let shadow = self.record_enhancement_selection(goods_id, source, source_position)?;
-        let previous_last_operated = (
-            self.last_operated_container,
-            self.last_operated_goods_position,
-        );
-        self.last_operated_container = source_extend_id as u32;
-        self.last_operated_goods_position = source_position;
+        let previous_last_operated =
+            self.record_last_operated_goods(source_extend_id, source_position);
         Ok(EnhancementSelectionReport {
             goods,
             source,
@@ -6589,20 +6609,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0002B690
 // ADDRESS: 0042b690
 // PROTOTYPE: int __thiscall MountFuMoProperty(GOODS_ADDON_PROPERTIES param_1, int param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::GetCurBurden
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:8564
-// RVA: 0x0002C2D0
-// ADDRESS: 0042c2d0
-// PROTOTYPE: long __thiscall GetCurBurden(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
