@@ -79,12 +79,26 @@ impl CSession {
         self.plug_ids.clone()
     }
 
+    pub(crate) fn abort(&mut self) -> Vec<i32> {
+        self.aborted = true;
+        self.remove_requested = true;
+        self.plug_ids.clone()
+    }
+
     pub(crate) const fn is_ended(&self) -> bool {
         self.started && self.ended
     }
 
     pub(crate) const fn remove_requested(&self) -> bool {
         self.remove_requested
+    }
+
+    pub(crate) const fn is_available_prefix(&self) -> bool {
+        self.started && !self.ended && !self.aborted
+    }
+
+    pub(crate) const fn minimum_plugs(&self) -> u32 {
+        self.minimum_plugs
     }
 }
 

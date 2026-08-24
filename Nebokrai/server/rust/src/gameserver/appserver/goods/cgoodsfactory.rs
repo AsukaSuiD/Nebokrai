@@ -99,6 +99,25 @@ pub(crate) struct CGoodsFactory {
 }
 
 impl CGoodsFactory {
+    pub(crate) fn query_goods_max_stack_number(&self, goods_index: u32) -> u32 {
+        let Some(properties) = self.query_goods_base_properties(goods_index) else {
+            return 1;
+        };
+        if !matches!(
+            properties.goods_type(),
+            GOODS_TYPE_CONSUMABLE | GOODS_TYPE_USELESS
+        ) {
+            return 1;
+        }
+        properties
+            .get_addon_property_values(GAP_GOODS_STACKING_LIMIT)
+            .iter()
+            .find(|value| value.id == 1)
+            .map(|value| value.base_value)
+            .filter(|value| *value > 0)
+            .map_or(1, |value| value as u32)
+    }
+
     /// Exact ordinary `UpgradeEquipment`: каждый level step обходит instance
     /// addon-ы в insertion order. Upgrade-range выбирает increment общим RNG,
     /// correction modifier clamp-ится к `0..=65535`, а отсутствие level value

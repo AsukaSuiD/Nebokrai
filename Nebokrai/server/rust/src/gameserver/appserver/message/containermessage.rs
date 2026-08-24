@@ -18,6 +18,9 @@
 //! Equipment-session wire сохраняет настоящий session ID и кодирует plug в
 //! старших 24 битах extend ID; selection/clear публикуют Add/DeleteShadow и
 //! self-move rollback, transfer использует тот же ownership/effects контракт.
+//! Player trade использует тот же session-owned wire: три trader container-а,
+//! source metadata без раннего ownership transfer, Add/DeleteShadow обоим
+//! участникам и сброс обеих ready-state при каждом изменении предложения.
 //! Auction-listing принимает полный предмет из packet/equipment/auction-return,
 //! а обратный маршрут возвращает его в packet/equipment после exact burden
 //! gate; оба сохраняют equipment callbacks, destination rollback и client move;
@@ -33,6 +36,7 @@ use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
     ShadowPresenceReport, ShadowRemovedReport,
 };
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
+use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::message::containermessage::EnhancementMoveReceiveBlock::{
     InvalidExtendId, InvalidObjectType, SameContainer, ZeroAmount,
 };
@@ -45,6 +49,7 @@ use crate::gameserver::appserver::player::{
 use crate::gameserver::appserver::session::csessionfactory::{
     EquipmentSessionShadowAddBlock, EquipmentSessionShadowAdded, EquipmentSessionShadowRemoved,
 };
+use crate::gameserver::appserver::session::ctrader::{TraderOfferAdded, TraderOfferRemoved};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{CGame, GameContainerMessageRuntime};
 use crate::nets::netserver::message::CMessage;
@@ -166,6 +171,23 @@ pub(crate) enum GameContainerMessageOutcome {
         delivery: i32,
         notification_delivery: Option<i32>,
     },
+    TradeOfferAdded {
+        added: TraderOfferAdded,
+        add_shadow_deliveries: Vec<i32>,
+        replaced_shadow_deliveries: Vec<i32>,
+        ready_deliveries: Vec<i32>,
+        move_delivery: i32,
+    },
+    TradeOfferRemoved {
+        removed: TraderOfferRemoved,
+        delete_shadow_deliveries: Vec<i32>,
+        ready_deliveries: Vec<i32>,
+        move_delivery: i32,
+    },
+    TradeOfferRolledBack {
+        reason: crate::gameserver::gameserver::game::PlayerTradeOfferBlock,
+        delivery: i32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -178,6 +200,8 @@ enum EnhancementMessageRoute {
     EquipmentSessionTransfer,
     AuctionListingMove,
     AuctionListingWithdrawal,
+    TradeOfferAdd,
+    TradeOfferRemove,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -415,6 +439,22 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             {
                 EnhancementMessageRoute::AuctionListingWithdrawal
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == 10
+                && game
+                    .session_factory()
+                    .query_trader(request.destination_container_extend_id >> 8)
+                    .is_some()
+            {
+                EnhancementMessageRoute::TradeOfferAdd
+            } else if request.source_container_type == 10
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && game
+                    .session_factory()
+                    .query_trader(request.source_container_extend_id >> 8)
+                    .is_some()
+            {
+                EnhancementMessageRoute::TradeOfferRemove
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_extend_id == ENHANCEMENT_EXTEND_ID
             {
@@ -645,6 +685,123 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 move_delivery,
             },
         )));
+    }
+
+    if route == EnhancementMessageRoute::TradeOfferAdd {
+        let source_goods = game
+            .find_player(player_id)
+            .and_then(|player| {
+                player.trade_source_goods(
+                    request.source_container_extend_id,
+                    request.source_position,
+                    request.object_id,
+                )
+            })
+            .cloned();
+        let added = game.record_player_trade_offer(
+            player_id,
+            request.destination_container_id,
+            request.destination_container_extend_id,
+            request.destination_position,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+        );
+        let added = match added {
+            Ok(added) => added,
+            Err(reason) => {
+                let delivery = send_rollback(game, player_id);
+                return Some(Ok(report(
+                    GameContainerMessageOutcome::TradeOfferRolledBack { reason, delivery },
+                )));
+            }
+        };
+        let identity = source_goods
+            .as_ref()
+            .map(CGoods::identity)
+            .unwrap_or(ShapeIdentity {
+                object_type: GOODS_OBJECT_TYPE,
+                id: 0,
+                ex_id: request.object_id,
+            });
+        let payload = source_goods
+            .as_ref()
+            .map(|goods| context.encode_goods_for_old_client(goods))
+            .unwrap_or_default();
+        let owners = game.player_trade_owner_ids(request.destination_container_id);
+        let replaced_shadow_deliveries = added.replaced.as_ref().map_or_else(Vec::new, |removed| {
+            owners
+                .iter()
+                .map(|owner_id| send_enhancement_shadow_deleted(game, *owner_id, identity, removed))
+                .collect()
+        });
+        let add_shadow_deliveries = owners
+            .iter()
+            .map(|owner_id| {
+                send_shadow_presence(game, *owner_id, identity, &added.presence, &payload)
+            })
+            .collect();
+        let ready_deliveries = game.reset_player_trade_ready(request.destination_container_id);
+        let move_delivery = send_rollback(game, player_id);
+        return Some(Ok(report(GameContainerMessageOutcome::TradeOfferAdded {
+            added,
+            add_shadow_deliveries,
+            replaced_shadow_deliveries,
+            ready_deliveries,
+            move_delivery,
+        })));
+    }
+
+    if route == EnhancementMessageRoute::TradeOfferRemove {
+        let removed = game.remove_player_trade_offer(
+            player_id,
+            request.source_container_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.destination_container_extend_id,
+            request.destination_position,
+        );
+        let removed = match removed {
+            Ok(removed) => removed,
+            Err(reason) => {
+                let delivery = send_rollback(game, player_id);
+                return Some(Ok(report(
+                    GameContainerMessageOutcome::TradeOfferRolledBack { reason, delivery },
+                )));
+            }
+        };
+        let identity = game
+            .find_player(player_id)
+            .and_then(|player| {
+                player.trade_source_goods(
+                    request.destination_container_extend_id,
+                    request.destination_position,
+                    request.object_id,
+                )
+            })
+            .map(CGoods::identity)
+            .unwrap_or(ShapeIdentity {
+                object_type: GOODS_OBJECT_TYPE,
+                id: 0,
+                ex_id: request.object_id,
+            });
+        let owners = game.player_trade_owner_ids(request.source_container_id);
+        let delete_shadow_deliveries = owners
+            .iter()
+            .map(|owner_id| {
+                send_enhancement_shadow_deleted(game, *owner_id, identity, &removed.removed)
+            })
+            .collect();
+        let ready_deliveries = game.reset_player_trade_ready(request.source_container_id);
+        let move_delivery = send_rollback(game, player_id);
+        return Some(Ok(report(GameContainerMessageOutcome::TradeOfferRemoved {
+            removed,
+            delete_shadow_deliveries,
+            ready_deliveries,
+            move_delivery,
+        })));
     }
 
     if route == EnhancementMessageRoute::EquipmentSessionClear {
@@ -1094,7 +1251,7 @@ fn send_add_shadow(
     )
 }
 
-fn send_shadow_presence(
+pub(crate) fn send_shadow_presence(
     game: &CGame,
     player_id: i32,
     goods: ShapeIdentity,

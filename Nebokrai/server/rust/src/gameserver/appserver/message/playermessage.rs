@@ -15,21 +15,29 @@
 //! LeiTing claim `0x8FA19` сохраняет packet-space gate, exact thresholds,
 //! `BF73E -> 5FD10 -> reward script` ordering; `0x8FA10` использует тот же
 //! server-trusted script runtime для help script.
+//! Player trade `0x8FA06/07/0B/0C` замыкает invitation/answer guards,
+//! normal session с двумя trader plug-ами, ready toggle, синхронный commit,
+//! Billing-pending YuanBao tail и terminal End/Abort публикации.
 //! Equipment-state refresh `0x8FA16` сохраняет packed local-time decode,
 //! strict grace-minute comparison, addon mutation и around `0xBF928`.
 //! Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_EQUIP_STATE;
 use crate::gameserver::appserver::player::PlayerFriendAddOutcome;
+use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, OldClientGoodsCodec, PlayerReliveContext, PlayerReliveReport,
-    colored_player_notice_message,
+    CGame, GameContainerMessageRuntime, PlayerReliveContext, PlayerReliveReport,
+    PlayerTradeAbortReport, PlayerTradeReadyReport, colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
 
 const REQUEST_RELIVE: u32 = 0x0008_fa02;
+const REQUEST_TRADE: u32 = 0x0008_fa06;
+const ANSWER_TRADE: u32 = 0x0008_fa07;
+const TOGGLE_TRADE_READY: u32 = 0x0008_fa0b;
+const ABORT_TRADE: u32 = 0x0008_fa0c;
 const RUN_HELP_SCRIPT: u32 = 0x0008_fa10;
 const REQUEST_FRIEND: u32 = 0x0008_fa0d;
 const ANSWER_FRIEND: u32 = 0x0008_fa0e;
@@ -56,7 +64,7 @@ const LEI_TING_REWARD_SCRIPTS: [&[u8]; 9] = [
 ];
 
 pub(crate) trait GamePlayerMessageRuntime:
-    PlayerReliveContext + OldClientGoodsCodec
+    PlayerReliveContext + GameContainerMessageRuntime
 {
     /// Выполняет concrete `PlayerRunScript` с server-trusted path; VM и
     /// script-data owner ещё не материализованы в `CGame`.
@@ -98,6 +106,10 @@ pub(crate) enum GamePlayerMessageOutcome {
     TargetMissing,
     Relived,
     PlayerScriptRun,
+    TradeRequested,
+    TradeAnswered,
+    TradeStateChanged,
+    TradeAborted,
     FriendRequested,
     FriendAnswered,
     FriendMissing,
@@ -141,6 +153,9 @@ pub(crate) struct GamePlayerMessageReport {
     pub(crate) equipment_state_mutated: Option<bool>,
     pub(crate) outcome: GamePlayerMessageOutcome,
     pub(crate) relive: Option<PlayerReliveReport>,
+    pub(crate) trade_session: Option<(i32, i32, i32)>,
+    pub(crate) trade_ready: Option<PlayerTradeReadyReport>,
+    pub(crate) trade_abort: Option<PlayerTradeAbortReport>,
     pub(crate) deliveries: Vec<GamePlayerMessageDelivery>,
 }
 
@@ -148,6 +163,11 @@ fn add_c_string(message: &mut CMessage, value: &[u8]) {
     let value = value.split(|byte| *byte == 0).next().unwrap_or_default();
     message.base_mut().add(value);
     message.base_mut().add_byte(0);
+}
+
+fn send_trade_notice(game: &CGame, player_id: i32, string_id: &[u8]) -> i32 {
+    colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(string_id))
+        .send_to_player(game.net_server(), player_id)
 }
 
 fn publish_friend_add(
@@ -245,6 +265,10 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
     if !matches!(
         message_type,
         REQUEST_RELIVE
+            | REQUEST_TRADE
+            | ANSWER_TRADE
+            | TOGGLE_TRADE_READY
+            | ABORT_TRADE
             | RUN_HELP_SCRIPT
             | REQUEST_FRIEND
             | ANSWER_FRIEND
@@ -275,6 +299,9 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         equipment_state_mutated: None,
         outcome: GamePlayerMessageOutcome::MissingContext,
         relive: None,
+        trade_session: None,
+        trade_ready: None,
+        trade_abort: None,
         deliveries: Vec::new(),
     };
     let Some(player_id) = player_id else {
@@ -296,6 +323,185 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         RUN_HELP_SCRIPT => {
             runtime.run_player_script(game, player_id, b"scripts/help/help.script");
             report.outcome = GamePlayerMessageOutcome::PlayerScriptRun;
+        }
+        REQUEST_TRADE => {
+            let Some(target_id) = message.base_mut().get_long() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "trade target player id",
+                )));
+            };
+            report.target_player_id = Some(target_id);
+            let Some(requester) = game.find_player(player_id) else {
+                return Some(Ok(report));
+            };
+            let notice = if requester.is_dead() {
+                Some(b"GS0065".as_slice())
+            } else if target_id == player_id {
+                Some(b"GS0058".as_slice())
+            } else if requester.current_progress() != PlayerProgress::None {
+                Some(b"GS0059".as_slice())
+            } else {
+                match game.find_player(target_id) {
+                    None => Some(b"GS0064".as_slice()),
+                    Some(target) if target.is_dead() => Some(b"GS0063".as_slice()),
+                    Some(target) if target.current_progress() != PlayerProgress::None => {
+                        Some(b"GS0062".as_slice())
+                    }
+                    Some(_)
+                        if game
+                            .player_trade_distance(player_id, target_id)
+                            .unwrap_or(9)
+                            >= 9 =>
+                    {
+                        Some(b"GS0061".as_slice())
+                    }
+                    Some(_) => None,
+                }
+            };
+            if let Some(string_id) = notice {
+                report
+                    .deliveries
+                    .push(GamePlayerMessageDelivery::Player(send_trade_notice(
+                        game, player_id, string_id,
+                    )));
+                report.outcome = GamePlayerMessageOutcome::TradeRequested;
+                return Some(Ok(report));
+            }
+            let mut invitation = CMessage::new(0x000b_f70f);
+            invitation.add_long(player_id);
+            report.deliveries.push(GamePlayerMessageDelivery::Player(
+                invitation.send_to_player(game.net_server(), target_id),
+            ));
+            report
+                .deliveries
+                .push(GamePlayerMessageDelivery::Player(send_trade_notice(
+                    game, player_id, b"GS0060",
+                )));
+            report.outcome = GamePlayerMessageOutcome::TradeRequested;
+        }
+        ANSWER_TRADE => {
+            let Some(inviter_id) = message.base_mut().get_long() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "trade inviter player id",
+                )));
+            };
+            let Some(accepted) = message.base_mut().get_char() else {
+                return Some(Err(GamePlayerMessageError::MissingField("trade answer")));
+            };
+            report.target_player_id = Some(inviter_id);
+            if inviter_id == player_id {
+                report.outcome = GamePlayerMessageOutcome::TradeAnswered;
+                return Some(Ok(report));
+            }
+            let Some(answerer) = game.find_player(player_id) else {
+                return Some(Ok(report));
+            };
+            if answerer.is_dead() {
+                report
+                    .deliveries
+                    .push(GamePlayerMessageDelivery::Player(send_trade_notice(
+                        game, player_id, b"GS0065",
+                    )));
+                report.outcome = GamePlayerMessageOutcome::TradeAnswered;
+                return Some(Ok(report));
+            }
+            let inviter_exists = game.find_player(inviter_id).is_some();
+            if answerer.current_progress() != PlayerProgress::None {
+                for string_id in [b"GS0068".as_slice(), b"GS0071".as_slice()]
+                    .into_iter()
+                    .take(if inviter_exists { 2 } else { 1 })
+                {
+                    report
+                        .deliveries
+                        .push(GamePlayerMessageDelivery::Player(send_trade_notice(
+                            game, player_id, string_id,
+                        )));
+                }
+                report.outcome = GamePlayerMessageOutcome::TradeAnswered;
+                return Some(Ok(report));
+            }
+            let Some(inviter) = game.find_player(inviter_id) else {
+                report
+                    .deliveries
+                    .push(GamePlayerMessageDelivery::Player(send_trade_notice(
+                        game, player_id, b"GS0070",
+                    )));
+                report.outcome = GamePlayerMessageOutcome::TradeAnswered;
+                return Some(Ok(report));
+            };
+            let notices: &[&[u8]] = if inviter.is_dead() {
+                &[b"GS0069", b"GS0065"]
+            } else if inviter.current_progress() != PlayerProgress::None {
+                &[b"GS0067", b"GS0068"]
+            } else if game
+                .player_trade_distance(player_id, inviter_id)
+                .unwrap_or(9)
+                >= 9
+            {
+                &[b"GS0061", b"GS0061"]
+            } else if accepted == 0 {
+                &[b"GS0066"]
+            } else {
+                &[]
+            };
+            if !notices.is_empty() {
+                for string_id in notices {
+                    report
+                        .deliveries
+                        .push(GamePlayerMessageDelivery::Player(send_trade_notice(
+                            game, player_id, string_id,
+                        )));
+                }
+                report.outcome = GamePlayerMessageOutcome::TradeAnswered;
+                return Some(Ok(report));
+            }
+            game.find_player_mut(player_id)
+                .expect("trade answerer проверен")
+                .set_current_progress_snapshot(PlayerProgress::Trading);
+            game.find_player_mut(inviter_id)
+                .expect("trade inviter проверен")
+                .set_current_progress_snapshot(PlayerProgress::Trading);
+            let session = game.create_player_trade_session(inviter_id, player_id);
+            report.trade_session = session;
+            if let Some((session_id, inviter_plug_id, answerer_plug_id)) = session {
+                let mut opened = CMessage::new(0x000b_f710);
+                opened.add_long(session_id);
+                opened.add_long(inviter_id);
+                opened.add_long(inviter_plug_id);
+                opened.add_long(player_id);
+                opened.add_long(answerer_plug_id);
+                for owner_id in [inviter_id, player_id] {
+                    report.deliveries.push(GamePlayerMessageDelivery::Player(
+                        opened.send_to_player(game.net_server(), owner_id),
+                    ));
+                }
+            }
+            report.outcome = GamePlayerMessageOutcome::TradeAnswered;
+        }
+        TOGGLE_TRADE_READY => {
+            let Some(session_id) = message.base_mut().get_long() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "trade session id",
+                )));
+            };
+            let Some(plug_id) = message.base_mut().get_long() else {
+                return Some(Err(GamePlayerMessageError::MissingField("trade plug id")));
+            };
+            report.trade_ready =
+                Some(game.toggle_player_trade_ready(player_id, session_id, plug_id, runtime));
+            report.outcome = GamePlayerMessageOutcome::TradeStateChanged;
+        }
+        ABORT_TRADE => {
+            let Some(session_id) = message.base_mut().get_long() else {
+                return Some(Err(GamePlayerMessageError::MissingField(
+                    "trade session id",
+                )));
+            };
+            let Some(plug_id) = message.base_mut().get_long() else {
+                return Some(Err(GamePlayerMessageError::MissingField("trade plug id")));
+            };
+            report.trade_abort = Some(game.abort_player_trade(player_id, session_id, plug_id));
+            report.outcome = GamePlayerMessageOutcome::TradeAborted;
         }
         REQUEST_FRIEND => {
             let Some(target_id) = message.base_mut().get_long() else {

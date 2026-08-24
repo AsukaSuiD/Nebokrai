@@ -100,6 +100,7 @@ pub(crate) mod appserver {
         pub(crate) mod cpersonalshopseller;
         pub(crate) mod csession;
         pub(crate) mod csessionfactory;
+        pub(crate) mod ctrader;
     }
     pub(crate) mod script {
         pub(crate) mod script;

@@ -1,353 +1,308 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутый owner двусторонней торговли GameServer `CTrader`.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/session/ctrader.cpp`. Материализованы три trade-shadow
+//! container-а `(goods, Gold, YuanBao)`, ready-state, source metadata и
+//! terminal clear. `CSessionFactory` владеет plug-ами, а `CGame` выполняет
+//! достигнутую двухфазную проверку и ownership transaction: исходные goods
+//! остаются у player до commit, затем переходят в packet второго участника;
+//! при частичном отказе они удаляются у получателя и возвращаются в packet
+//! владельца, как исходный `RollBack`. Универсальный registry выражен
+//! существующими owned maps/containers без отдельного transaction framework.
+//!
+//! Подтверждённые goods/increment audit и container-listener следствия входят
+//! в тот же проход; замещённый RAW в owner-файле не дублируется.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp
+use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
+use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
+    GoodsShadow, PlacedShadowGoods, ShadowPresenceReport, ShadowRemovedReport,
+};
+use crate::gameserver::appserver::container::cshadowwallet::CShadowWallet;
+use crate::gameserver::appserver::container::cshadowyuanbao::CShadowYuanBao;
+use crate::gameserver::appserver::container::cvolumelimitgoodsshadowcontainer::CVolumeLimitGoodsShadowContainer;
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
+use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::public::guid::CGuid;
 
-// ============================================================================
-// FUNCTION: CTrader::IsPlugAvailable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:54
-// RVA: 0x001B71A0
-// ADDRESS: 005b71a0
-// PROTOTYPE: int __thiscall IsPlugAvailable(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const SESSION_OWNER_TYPE: i32 = 10;
+const TRADE_GOODS_CELLS: u32 = 32;
 
-// ============================================================================
-// FUNCTION: CTrader::Release
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:190
-// RVA: 0x001B71F0
-// ADDRESS: 005b71f0
-// PROTOTYPE: void __thiscall Release(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TraderContainerKind {
+    Goods,
+    Gold,
+    YuanBao,
+}
 
-// ============================================================================
-// FUNCTION: CTrader::GetContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:1026
-// RVA: 0x001B7240
-// ADDRESS: 005b7240
-// PROTOTYPE: CContainer * __thiscall GetContainer(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl TraderContainerKind {
+    pub(crate) const fn from_index(index: i32) -> Option<Self> {
+        match index {
+            0 => Some(Self::Goods),
+            1 => Some(Self::Gold),
+            2 => Some(Self::YuanBao),
+            _ => None,
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::SetTradeState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:1055
-// RVA: 0x001B7270
-// ADDRESS: 005b7270
-// PROTOTYPE: void __thiscall SetTradeState(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn index(self) -> i32 {
+        match self {
+            Self::Goods => 0,
+            Self::Gold => 1,
+            Self::YuanBao => 2,
+        }
+    }
+}
 
-// ============================================================================
-// FUNCTION: CTrader::CTrader
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:26
-// RVA: 0x001B7310
-// ADDRESS: 005b7310
-// PROTOTYPE: undefined __thiscall CTrader(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TraderOfferBlock {
+    InvalidContainer,
+    InvalidPosition,
+    MissingGoods,
+    CurrencyInGoodsContainer,
+    InvalidCurrency,
+    NoTrade,
+    Occupied,
+    ShadowRejected,
+}
 
-// ============================================================================
-// FUNCTION: CTrader::~CTrader
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:47
-// RVA: 0x001B73E0
-// ADDRESS: 005b73e0
-// PROTOTYPE: void __thiscall ~CTrader(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TraderOfferAdded {
+    pub(crate) plug_id: i32,
+    pub(crate) kind: TraderContainerKind,
+    pub(crate) position: u32,
+    pub(crate) record: GoodsShadow,
+    pub(crate) presence: ShadowPresenceReport,
+    pub(crate) replaced: Option<ShadowRemovedReport>,
+}
 
-// ============================================================================
-// FUNCTION: CTrader::OnPlugInserted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:97
-// RVA: 0x001B7490
-// ADDRESS: 005b7490
-// PROTOTYPE: int __thiscall OnPlugInserted(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TraderOfferRemoved {
+    pub(crate) plug_id: i32,
+    pub(crate) kind: TraderContainerKind,
+    pub(crate) position: u32,
+    pub(crate) removed: ShadowRemovedReport,
+}
 
-// ============================================================================
-// FUNCTION: CTrader::EndTrading
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:201
-// RVA: 0x001B75B0
-// ADDRESS: 005b75b0
-// PROTOTYPE: int __thiscall EndTrading(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CTrader {
+    plug_id: i32,
+    session_id: i32,
+    owner_id: i32,
+    goods: CVolumeLimitGoodsShadowContainer,
+    gold: CShadowWallet,
+    yuan_bao: CShadowYuanBao,
+    ready: bool,
+}
 
-// ============================================================================
-// FUNCTION: CTrader::OnSessionEnded
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:79
-// RVA: 0x001B7750
-// ADDRESS: 005b7750
-// PROTOTYPE: int __thiscall OnSessionEnded(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl CTrader {
+    pub(crate) fn inserted(plug_id: i32, session_id: i32, owner_id: i32) -> Self {
+        let mut goods = CVolumeLimitGoodsShadowContainer::new();
+        goods.set_container_volume(TRADE_GOODS_CELLS);
+        goods
+            .base_mut()
+            .base_mut()
+            .base_mut()
+            .set_owner(SESSION_OWNER_TYPE, session_id);
+        goods
+            .base_mut()
+            .base_mut()
+            .set_container_extend_id(plug_id.wrapping_shl(8));
 
-// ============================================================================
-// FUNCTION: CTrader::CalculateTotalWeight
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:275
-// RVA: 0x001B7790
-// ADDRESS: 005b7790
-// PROTOTYPE: ulong __thiscall CalculateTotalWeight(vector<CGoods*,std::allocator<CGoods*>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+        let mut gold = CShadowWallet::new();
+        gold.set_owner(SESSION_OWNER_TYPE, session_id);
+        gold.set_container_extend_id(plug_id.wrapping_shl(8) | 1);
+        let mut yuan_bao = CShadowYuanBao::new();
+        yuan_bao.set_owner(SESSION_OWNER_TYPE, session_id);
+        yuan_bao.set_container_extend_id(plug_id.wrapping_shl(8) | 2);
+        Self {
+            plug_id,
+            session_id,
+            owner_id,
+            goods,
+            gold,
+            yuan_bao,
+            ready: false,
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::GetContraryID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:1063
-// RVA: 0x001B77D0
-// ADDRESS: 005b77d0
-// PROTOTYPE: long __thiscall GetContraryID(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn plug_id(&self) -> i32 {
+        self.plug_id
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::OnObjectAdded
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:1184
-// RVA: 0x001B7830
-// ADDRESS: 005b7830
-// PROTOTYPE: int __thiscall OnObjectAdded(CContainer * param_1, CBaseObject * param_2, ulong param_3, void * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn session_id(&self) -> i32 {
+        self.session_id
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::GetClonePacket
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:226
-// RVA: 0x001B7920
-// ADDRESS: 005b7920
-// PROTOTYPE: int __thiscall GetClonePacket(CVolumeLimitGoodsContainer * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn owner_id(&self) -> i32 {
+        self.owner_id
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::GetContraryValumeOfTrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:999
-// RVA: 0x001B7A70
-// ADDRESS: 005b7a70
-// PROTOTYPE: ulong __thiscall GetContraryValumeOfTrade(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn ready(&self) -> bool {
+        self.ready
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::GetContraryYuanBaoOfTrade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:1011
-// RVA: 0x001B7AB0
-// ADDRESS: 005b7ab0
-// PROTOTYPE: ulong __thiscall GetContraryYuanBaoOfTrade(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn set_trade_state(&mut self, ready: bool) {
+        self.ready = ready;
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::RollBack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:1141
-// RVA: 0x001B7BA0
-// ADDRESS: 005b7ba0
-// PROTOTYPE: void __thiscall RollBack(vector<CGoods*,std::allocator<CGoods*>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn goods_offers(&self) -> Vec<GoodsShadow> {
+        self.goods
+            .base()
+            .base()
+            .shadows()
+            .values()
+            .copied()
+            .collect()
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::RollBack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:1092
-// RVA: 0x001B81F0
-// ADDRESS: 005b81f0
-// PROTOTYPE: void __thiscall RollBack(map<long,std::vector<CGoods*,std::allocator<CGoods*>_>,std::less<long>,std::allocator<std::pair<long_const_,std::vector<CGoods*,std::allocator<CGoods*>_>_>_>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn gold_amount(&self) -> u32 {
+        self.gold.currency_amount()
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::RemoveTradeGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:917
-// RVA: 0x001B8AB0
-// ADDRESS: 005b8ab0
-// PROTOTYPE: int __thiscall RemoveTradeGoods(vector<CGoods*,std::allocator<CGoods*>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn yuan_bao_amount(&self) -> u32 {
+        self.yuan_bao.currency_amount()
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::GetTradeGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:954
-// RVA: 0x001B8CB0
-// ADDRESS: 005b8cb0
-// PROTOTYPE: int __thiscall GetTradeGoods(vector<CGoods*,std::allocator<CGoods*>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn currency_offer(&self, kind: TraderContainerKind) -> Option<GoodsShadow> {
+        let container = match kind {
+            TraderContainerKind::Gold => self.gold.base(),
+            TraderContainerKind::YuanBao => self.yuan_bao.base(),
+            TraderContainerKind::Goods => return None,
+        };
+        container.base().shadows().values().next().copied()
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::GetContraryTradeGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:985
-// RVA: 0x001B8E10
-// ADDRESS: 005b8e10
-// PROTOTYPE: int __thiscall GetContraryTradeGoods(vector<CGoods*,std::allocator<CGoods*>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn record_offer(
+        &mut self,
+        kind: TraderContainerKind,
+        position: u32,
+        goods: &CGoods,
+        amount: u32,
+        previous: PreviousContainer,
+        factory: &CGoodsFactory,
+    ) -> Result<TraderOfferAdded, TraderOfferBlock> {
+        if amount == 0 || amount > goods.amount() {
+            return Err(TraderOfferBlock::MissingGoods);
+        }
+        let base_index = goods.base_properties_index();
+        let expected_gold = factory.get_gold_coin_index();
+        let expected_yuan_bao = factory.get_yuan_bao_index();
+        let placed = PlacedShadowGoods {
+            identity: goods.identity().ex_id,
+            position: previous.goods_position,
+            base_properties_index: base_index,
+            amount,
+        };
+        let (record, presence, replaced) = match kind {
+            TraderContainerKind::Goods => {
+                if base_index == expected_gold || base_index == expected_yuan_bao {
+                    return Err(TraderOfferBlock::CurrencyInGoodsContainer);
+                }
+                if goods.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1) & 0x20 != 0 {
+                    return Err(TraderOfferBlock::NoTrade);
+                }
+                if position >= self.goods.size() {
+                    return Err(TraderOfferBlock::InvalidPosition);
+                }
+                if !self.goods.is_space_enough(position) {
+                    return Err(TraderOfferBlock::Occupied);
+                }
+                let added = self
+                    .goods
+                    .base_mut()
+                    .record_placed_goods(previous, placed)
+                    .map_err(|_| TraderOfferBlock::ShadowRejected)?;
+                if !self
+                    .goods
+                    .occupy_cell(position, added.recorded.record.goods_id)
+                {
+                    let _ = self.goods.remove_shadow(added.recorded.record.goods_id);
+                    return Err(TraderOfferBlock::Occupied);
+                }
+                (added.recorded.record, added.presence, None)
+            }
+            TraderContainerKind::Gold | TraderContainerKind::YuanBao => {
+                let expected = if kind == TraderContainerKind::Gold {
+                    expected_gold
+                } else {
+                    expected_yuan_bao
+                };
+                if base_index != expected {
+                    return Err(TraderOfferBlock::InvalidCurrency);
+                }
+                if position != 0 {
+                    return Err(TraderOfferBlock::InvalidPosition);
+                }
+                let container = if kind == TraderContainerKind::Gold {
+                    self.gold.base_mut()
+                } else {
+                    self.yuan_bao.base_mut()
+                };
+                let replaced_id = container.base().shadows().keys().next().copied();
+                let replaced = replaced_id.and_then(|id| container.base_mut().remove_shadow(id));
+                container.clear();
+                container.set_goods_amount_limit(1);
+                let added = container
+                    .record_placed_goods(previous, placed)
+                    .map_err(|_| TraderOfferBlock::ShadowRejected)?;
+                (added.recorded.record, added.presence, replaced)
+            }
+        };
+        self.ready = false;
+        Ok(TraderOfferAdded {
+            plug_id: self.plug_id,
+            kind,
+            position,
+            record,
+            presence,
+            replaced,
+        })
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::GetTradeGoodsTotalWeight
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:264
-// RVA: 0x001B8EF0
-// ADDRESS: 005b8ef0
-// PROTOTYPE: ulong __thiscall GetTradeGoodsTotalWeight(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn remove_offer(
+        &mut self,
+        kind: TraderContainerKind,
+        position: u32,
+        goods_id: CGuid,
+    ) -> Option<TraderOfferRemoved> {
+        let removed = match kind {
+            TraderContainerKind::Goods => {
+                if self.goods.query_goods_position(goods_id)? != position {
+                    return None;
+                }
+                self.goods.remove_shadow(goods_id)?
+            }
+            TraderContainerKind::Gold => {
+                if position != 0 {
+                    return None;
+                }
+                self.gold.base_mut().base_mut().remove_shadow(goods_id)?
+            }
+            TraderContainerKind::YuanBao => {
+                if position != 0 {
+                    return None;
+                }
+                self.yuan_bao
+                    .base_mut()
+                    .base_mut()
+                    .remove_shadow(goods_id)?
+            }
+        };
+        self.ready = false;
+        Some(TraderOfferRemoved {
+            plug_id: self.plug_id,
+            kind,
+            position,
+            removed,
+        })
+    }
 
-// ============================================================================
-// FUNCTION: CTrader::Trade
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:530
-// RVA: 0x001B9470
-// ADDRESS: 005b9470
-// PROTOTYPE: int __thiscall Trade(long param_1, char * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn clear(&mut self) -> usize {
+        self.ready = false;
+        self.goods.clear() + self.gold.clear() + self.yuan_bao.clear()
+    }
+}
 
-// ============================================================================
-// FUNCTION: CTrader::CheckTradeCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:289
-// RVA: 0x001BA7F0
-// ADDRESS: 005ba7f0
-// PROTOTYPE: int __thiscall CheckTradeCondition(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTrader::OnChangeState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\session\ctrader.cpp:140
-// RVA: 0x001BB080
-// ADDRESS: 005bb080
-// PROTOTYPE: int __thiscall OnChangeState(long param_1, long param_2, uchar * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+// Полный достигнутый CTrader lifecycle исполняется typed owner-ами выше;
+// отдельной сохранённой RAW-копии замещённых функций в owner-файле нет.

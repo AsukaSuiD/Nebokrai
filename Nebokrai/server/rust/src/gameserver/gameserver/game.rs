@@ -550,7 +550,10 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
 };
 use crate::gameserver::appserver::session::csessionfactory::{
     CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved,
-    TerminalEquipmentSessionCollected,
+    SessionEndReport, TerminalEquipmentSessionCollected,
+};
+use crate::gameserver::appserver::session::ctrader::{
+    TraderContainerKind, TraderOfferAdded, TraderOfferBlock, TraderOfferRemoved,
 };
 use crate::gameserver::appserver::shape::{
     CShape, MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
@@ -1628,6 +1631,111 @@ pub(crate) enum SynthesisOpenOutcome {
     StallOpen = 4,
     TeamState = 5,
     Opened = 6,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerTradeOfferBlock {
+    MissingSessionOrPlug,
+    OwnerMismatch,
+    InvalidExtendId,
+    UnsupportedSource,
+    MissingSourceGoods,
+    SourceMismatch,
+    Trader(TraderOfferBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerTradeOfferMutation {
+    Added(TraderOfferAdded),
+    Removed(TraderOfferRemoved),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerTradeConditionBlock {
+    SessionUnavailable,
+    MissingPlayerOrPlug,
+    MissingOfferedGoods,
+    BurdenExceeded,
+    PacketSpace,
+    InsufficientGold,
+    GoldCapacity,
+    InsufficientYuanBao,
+    YuanBaoCapacity,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerTradeBillingRequest {
+    pub(crate) payer_id: i32,
+    pub(crate) receiver_id: i32,
+    pub(crate) amount: u32,
+    pub(crate) session_id: i32,
+    pub(crate) payer_plug_id: i32,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerTradeReadyOutcome {
+    MissingSessionOrPlug,
+    SessionUnavailable,
+    Changed { ready: bool },
+    ConditionBlocked(PlayerTradeConditionBlock),
+    BillingPending(PlayerTradeBillingRequest),
+    Completed,
+    RolledBack,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerTradeReadyReport {
+    pub(crate) session_id: i32,
+    pub(crate) plug_id: i32,
+    pub(crate) contrary_plug_id: Option<i32>,
+    pub(crate) ready_deliveries: Vec<i32>,
+    pub(crate) notification_deliveries: Vec<i32>,
+    pub(crate) packet_deliveries: Vec<Vec<i32>>,
+    pub(crate) equipment_removals: Vec<PlayerEquipmentRemoveReport>,
+    pub(crate) money_deliveries: Vec<i32>,
+    pub(crate) audit_deliveries: Vec<Result<i32, SendMessageError>>,
+    pub(crate) session_end: Option<SessionEndReport>,
+    pub(crate) terminal_deliveries: Vec<i32>,
+    pub(crate) collected_plug_ids: Vec<i32>,
+    pub(crate) outcome: PlayerTradeReadyOutcome,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerTradeAbortReport {
+    pub(crate) session_id: i32,
+    pub(crate) plug_id: i32,
+    pub(crate) session_abort: Option<SessionEndReport>,
+    pub(crate) terminal_deliveries: Vec<i32>,
+    pub(crate) collected_plug_ids: Vec<i32>,
+}
+
+#[derive(Clone, Debug)]
+struct PlayerTradePartySnapshot {
+    plug_id: i32,
+    owner_id: i32,
+    goods: Vec<crate::gameserver::appserver::container::cgoodsshadowcontainer::GoodsShadow>,
+    gold: u32,
+    yuan_bao: u32,
+}
+
+#[derive(Clone, Debug)]
+struct DeliveredPlayerTradeGoods {
+    source_plug_id: i32,
+    receiver_id: i32,
+    original: CGoods,
+    addition: CiQingPacketAddition,
+}
+
+#[derive(Clone, Debug)]
+struct PlayerTradeAuditParty {
+    owner_id: i32,
+    pk_count: u32,
+    money: u32,
+    tile_x: i32,
+    tile_y: i32,
+    client_ip: u32,
+    name: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5950,6 +6058,1194 @@ impl CGame {
 
     pub(crate) const fn session_factory_mut(&mut self) -> &mut CSessionFactory {
         &mut self.session_factory
+    }
+
+    pub(crate) fn player_trade_distance(&self, first_id: i32, second_id: i32) -> Option<i32> {
+        let first_player = self.players.get(&first_id)?;
+        let second_player = self.players.get(&second_id)?;
+        let first = first_player.shape();
+        let second = second_player.shape();
+        let dx = ((first.get_pos_x().round_ties_even() as i32)
+            .wrapping_sub(second.get_pos_x().round_ties_even() as i32)
+            .unsigned_abs() as i32)
+            .wrapping_sub(i32::from(first_player.figure().get(2)))
+            .wrapping_sub(i32::from(second_player.figure().get(2)));
+        let dy = ((first.get_pos_y().round_ties_even() as i32)
+            .wrapping_sub(second.get_pos_y().round_ties_even() as i32)
+            .unsigned_abs() as i32)
+            .wrapping_sub(i32::from(first_player.figure().get(0)))
+            .wrapping_sub(i32::from(second_player.figure().get(0)));
+        Some(dx.max(dy))
+    }
+
+    pub(crate) fn create_player_trade_session(
+        &mut self,
+        inviter_id: i32,
+        answerer_id: i32,
+    ) -> Option<(i32, i32, i32)> {
+        self.session_factory
+            .create_player_trade_session(inviter_id, answerer_id)
+    }
+
+    pub(crate) fn record_player_trade_offer(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        destination_extend_id: i32,
+        destination_position: u32,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+    ) -> Result<TraderOfferAdded, PlayerTradeOfferBlock> {
+        let plug_id = destination_extend_id >> 8;
+        let kind = TraderContainerKind::from_index(destination_extend_id & 0xff)
+            .ok_or(PlayerTradeOfferBlock::InvalidExtendId)?;
+        let actual_plug_id = self
+            .session_factory
+            .trader_plug_by_owner(session_id, player_id)
+            .ok_or(PlayerTradeOfferBlock::MissingSessionOrPlug)?;
+        if actual_plug_id != plug_id {
+            return Err(PlayerTradeOfferBlock::OwnerMismatch);
+        }
+        let expected_source = match kind {
+            TraderContainerKind::Goods => matches!(source_extend_id, 1 | 2),
+            TraderContainerKind::Gold => source_extend_id == 4,
+            TraderContainerKind::YuanBao => source_extend_id == 5,
+        };
+        if !expected_source {
+            return Err(PlayerTradeOfferBlock::UnsupportedSource);
+        }
+        let goods = self
+            .players
+            .get(&player_id)
+            .and_then(|player| {
+                player.trade_source_goods(source_extend_id, source_position, goods_id)
+            })
+            .cloned()
+            .ok_or(PlayerTradeOfferBlock::MissingSourceGoods)?;
+        let previous = crate::gameserver::appserver::container::ccontainer::PreviousContainer {
+            container_type: 400,
+            container_id: player_id,
+            container_extend_id: source_extend_id,
+            goods_position: source_position,
+        };
+        self.session_factory
+            .query_trader_mut(plug_id)
+            .ok_or(PlayerTradeOfferBlock::MissingSessionOrPlug)?
+            .record_offer(
+                kind,
+                destination_position,
+                &goods,
+                amount,
+                previous,
+                &self.goods_factory,
+            )
+            .map_err(PlayerTradeOfferBlock::Trader)
+    }
+
+    pub(crate) fn remove_player_trade_offer(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        destination_extend_id: i32,
+        destination_position: u32,
+    ) -> Result<TraderOfferRemoved, PlayerTradeOfferBlock> {
+        let plug_id = source_extend_id >> 8;
+        let kind = TraderContainerKind::from_index(source_extend_id & 0xff)
+            .ok_or(PlayerTradeOfferBlock::InvalidExtendId)?;
+        let actual_plug_id = self
+            .session_factory
+            .trader_plug_by_owner(session_id, player_id)
+            .ok_or(PlayerTradeOfferBlock::MissingSessionOrPlug)?;
+        if actual_plug_id != plug_id {
+            return Err(PlayerTradeOfferBlock::OwnerMismatch);
+        }
+        let expected_destination = match kind {
+            TraderContainerKind::Goods => matches!(destination_extend_id, 1 | 2),
+            TraderContainerKind::Gold => destination_extend_id == 4,
+            TraderContainerKind::YuanBao => destination_extend_id == 5,
+        };
+        if !expected_destination {
+            return Err(PlayerTradeOfferBlock::UnsupportedSource);
+        }
+        let original = self
+            .session_factory
+            .query_trader(plug_id)
+            .and_then(|trader| match kind {
+                TraderContainerKind::Goods => trader
+                    .goods_offers()
+                    .into_iter()
+                    .find(|record| record.goods_id == goods_id),
+                TraderContainerKind::Gold | TraderContainerKind::YuanBao => {
+                    trader.currency_offer(kind)
+                }
+            });
+        if let Some(original) = original
+            && (original.original_container_extend_id != destination_extend_id
+                || original.original_goods_position != destination_position)
+        {
+            return Err(PlayerTradeOfferBlock::SourceMismatch);
+        }
+        self.session_factory
+            .query_trader_mut(plug_id)
+            .and_then(|trader| trader.remove_offer(kind, source_position, goods_id))
+            .ok_or(PlayerTradeOfferBlock::MissingSourceGoods)
+    }
+
+    pub(crate) fn reset_player_trade_ready(&mut self, session_id: i32) -> Vec<i32> {
+        let plug_ids = self
+            .session_factory
+            .trade_session_plug_ids(session_id)
+            .unwrap_or_default();
+        for plug_id in &plug_ids {
+            if let Some(trader) = self.session_factory.query_trader_mut(*plug_id) {
+                trader.set_trade_state(false);
+            }
+        }
+        let mut deliveries = Vec::new();
+        for source_plug_id in &plug_ids {
+            for target_plug_id in &plug_ids {
+                if source_plug_id == target_plug_id {
+                    continue;
+                }
+                let Some(target) = self.session_factory.query_trader(*target_plug_id) else {
+                    continue;
+                };
+                let mut state = CMessage::new(0x000b_f716);
+                state.add_long(*source_plug_id);
+                state.add_byte(0);
+                deliveries.push(state.send_to_player(self.net_server(), target.owner_id()));
+            }
+        }
+        deliveries
+    }
+
+    pub(crate) fn player_trade_owner_ids(&self, session_id: i32) -> Vec<i32> {
+        self.session_factory
+            .trade_session_plug_ids(session_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|plug_id| {
+                self.session_factory
+                    .query_trader(plug_id)
+                    .map(|trader| trader.owner_id())
+            })
+            .collect()
+    }
+
+    fn finish_player_trade_session(
+        &mut self,
+        session_id: i32,
+        aborted: bool,
+    ) -> (Option<SessionEndReport>, Vec<i32>, Vec<i32>) {
+        let plug_ids = self
+            .session_factory
+            .trade_session_plug_ids(session_id)
+            .unwrap_or_default();
+        let owner_ids: Vec<_> = plug_ids
+            .iter()
+            .filter_map(|plug_id| {
+                let trader = self.session_factory.query_trader_mut(*plug_id)?;
+                let owner_id = trader.owner_id();
+                let _cleared = trader.clear();
+                Some(owner_id)
+            })
+            .collect();
+        let terminal = if aborted {
+            self.session_factory.abort_session(session_id)
+        } else {
+            self.session_factory.end_session(session_id)
+        };
+        let mut deliveries = Vec::new();
+        for owner_id in owner_ids {
+            if let Some(player) = self.players.get_mut(&owner_id) {
+                player.set_current_progress_snapshot(PlayerProgress::None);
+                deliveries.push(
+                    CMessage::new(0x000b_f717)
+                        .send_to_player(self.net_server(), owner_id),
+                );
+            }
+        }
+        let collected = self.session_factory.garbage_collect_session(session_id);
+        (terminal, deliveries, collected)
+    }
+
+    pub(crate) fn abort_player_trade(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        requested_plug_id: i32,
+    ) -> PlayerTradeAbortReport {
+        let actual = self
+            .session_factory
+            .trader_plug_by_owner(session_id, player_id);
+        if actual != Some(requested_plug_id)
+            || !self.session_factory.trade_session_available(session_id, |owner_id| {
+                self.players.get(&owner_id).is_some_and(|player| {
+                    !player.is_dead() && player.current_progress() == PlayerProgress::Trading
+                })
+            })
+        {
+            return PlayerTradeAbortReport {
+                session_id,
+                plug_id: requested_plug_id,
+                session_abort: None,
+                terminal_deliveries: Vec::new(),
+                collected_plug_ids: Vec::new(),
+            };
+        }
+        let (session_abort, terminal_deliveries, collected_plug_ids) =
+            self.finish_player_trade_session(session_id, true);
+        PlayerTradeAbortReport {
+            session_id,
+            plug_id: requested_plug_id,
+            session_abort,
+            terminal_deliveries,
+            collected_plug_ids,
+        }
+    }
+
+    fn player_trade_snapshots(
+        &self,
+        session_id: i32,
+    ) -> Result<[PlayerTradePartySnapshot; 2], PlayerTradeConditionBlock> {
+        let plug_ids = self
+            .session_factory
+            .trade_session_plug_ids(session_id)
+            .filter(|ids| ids.len() == 2)
+            .ok_or(PlayerTradeConditionBlock::MissingPlayerOrPlug)?;
+        let snapshot = |plug_id| {
+            let trader = self
+                .session_factory
+                .query_trader(plug_id)
+                .ok_or(PlayerTradeConditionBlock::MissingPlayerOrPlug)?;
+            Ok(PlayerTradePartySnapshot {
+                plug_id,
+                owner_id: trader.owner_id(),
+                goods: trader.goods_offers(),
+                gold: trader.gold_amount(),
+                yuan_bao: trader.yuan_bao_amount(),
+            })
+        };
+        Ok([snapshot(plug_ids[0])?, snapshot(plug_ids[1])?])
+    }
+
+    fn validate_player_trade(
+        &self,
+        session_id: i32,
+    ) -> Result<[PlayerTradePartySnapshot; 2], PlayerTradeConditionBlock> {
+        if !self.session_factory.trade_session_available(session_id, |owner_id| {
+            self.players.get(&owner_id).is_some_and(|player| {
+                !player.is_dead() && player.current_progress() == PlayerProgress::Trading
+            })
+        }) {
+            return Err(PlayerTradeConditionBlock::SessionUnavailable);
+        }
+        let parties = self.player_trade_snapshots(session_id)?;
+        let maximum_gold = self
+            .goods_factory
+            .query_goods_max_stack_number(self.goods_factory.get_gold_coin_index());
+        let maximum_yuan_bao = self
+            .goods_factory
+            .query_goods_max_stack_number(self.goods_factory.get_yuan_bao_index());
+        for index in 0..2 {
+            let party = &parties[index];
+            let contrary = &parties[1 - index];
+            let player = self
+                .players
+                .get(&party.owner_id)
+                .ok_or(PlayerTradeConditionBlock::MissingPlayerOrPlug)?;
+            let mut packet = player.packet().clone();
+            let mut own_weight = 0u32;
+            for offer in &party.goods {
+                let goods = player
+                    .trade_source_goods(
+                        offer.original_container_extend_id,
+                        offer.original_goods_position,
+                        offer.goods_id,
+                    )
+                    .filter(|goods| {
+                        if offer.original_container_extend_id == 1 {
+                            goods.amount() >= offer.goods_amount
+                        } else {
+                            goods.amount() == offer.goods_amount
+                        }
+                    })
+                    .ok_or(PlayerTradeConditionBlock::MissingOfferedGoods)?;
+                let mut offered_goods = goods.clone();
+                offered_goods.set_amount(offer.goods_amount);
+                own_weight = own_weight.wrapping_add(offered_goods.weight(&self.goods_factory));
+                if offer.original_container_extend_id == 1 {
+                    let mut split = Some(goods.clone());
+                    if packet
+                        .take_goods(
+                            offer.original_goods_position,
+                            offer.goods_amount,
+                            &self.goods_factory,
+                            |_| split.take(),
+                        )
+                        .is_none()
+                    {
+                        return Err(PlayerTradeConditionBlock::MissingOfferedGoods);
+                    }
+                }
+            }
+            let contrary_player = self
+                .players
+                .get(&contrary.owner_id)
+                .ok_or(PlayerTradeConditionBlock::MissingPlayerOrPlug)?;
+            let mut incoming_weight = 0u32;
+            for offer in &contrary.goods {
+                let goods = contrary_player
+                    .trade_source_goods(
+                        offer.original_container_extend_id,
+                        offer.original_goods_position,
+                        offer.goods_id,
+                    )
+                    .filter(|goods| {
+                        if offer.original_container_extend_id == 1 {
+                            goods.amount() >= offer.goods_amount
+                        } else {
+                            goods.amount() == offer.goods_amount
+                        }
+                    })
+                    .ok_or(PlayerTradeConditionBlock::MissingOfferedGoods)?;
+                let mut offered_goods = goods.clone();
+                offered_goods.set_amount(offer.goods_amount);
+                incoming_weight =
+                    incoming_weight.wrapping_add(offered_goods.weight(&self.goods_factory));
+                let mut incoming = Some(offered_goods);
+                let outcome = packet.add_goods(&mut incoming, &self.goods_factory, true);
+                if incoming.is_some() || matches!(outcome, VolumeGoodsAddOutcome::Rejected(_)) {
+                    return Err(PlayerTradeConditionBlock::PacketSpace);
+                }
+            }
+            let resulting_burden = player
+                .current_burden(&self.goods_factory)
+                .wrapping_sub(own_weight)
+                .wrapping_add(incoming_weight);
+            if u32::from(player.combat_properties().burden) < resulting_burden {
+                return Err(PlayerTradeConditionBlock::BurdenExceeded);
+            }
+            if player.money() < party.gold {
+                return Err(PlayerTradeConditionBlock::InsufficientGold);
+            }
+            if maximum_gold
+                < player
+                    .money()
+                    .wrapping_sub(party.gold)
+                    .wrapping_add(contrary.gold)
+            {
+                return Err(PlayerTradeConditionBlock::GoldCapacity);
+            }
+            if player.yuan_bao() < party.yuan_bao {
+                return Err(PlayerTradeConditionBlock::InsufficientYuanBao);
+            }
+            if maximum_yuan_bao
+                < player
+                    .yuan_bao()
+                    .wrapping_sub(party.yuan_bao)
+                    .wrapping_add(contrary.yuan_bao)
+            {
+                return Err(PlayerTradeConditionBlock::YuanBaoCapacity);
+            }
+        }
+        Ok(parties)
+    }
+
+    fn send_player_trade_billing_request(
+        &self,
+        payer: &PlayerTradePartySnapshot,
+        receiver: &PlayerTradePartySnapshot,
+        amount: u32,
+        session_id: i32,
+    ) -> Result<i32, SendMessageError> {
+        let payer_player = self
+            .players
+            .get(&payer.owner_id)
+            .expect("validated trade payer остаётся online");
+        let receiver_player = self
+            .players
+            .get(&receiver.owner_id)
+            .expect("validated trade receiver остаётся online");
+        let ip = |value: u32| {
+            format!(
+                "{}.{}.{}.{}",
+                value & 0xff,
+                value >> 8 & 0xff,
+                value >> 16 & 0xff,
+                value >> 24
+            )
+        };
+        let mut message = CMessage::new(0x000e_f203);
+        message.add_long(2);
+        message.add_long(payer.owner_id);
+        message.add_long(receiver.owner_id);
+        add_legacy_c_string(message.base_mut(), payer_player.account());
+        add_legacy_c_string(message.base_mut(), receiver_player.account());
+        add_legacy_c_string(message.base_mut(), ip(payer_player.client_ip()).as_bytes());
+        add_legacy_c_string(message.base_mut(), ip(receiver_player.client_ip()).as_bytes());
+        add_legacy_c_string(message.base_mut(), payer_player.player_name());
+        add_legacy_c_string(message.base_mut(), receiver_player.player_name());
+        message.add_ulong(amount);
+        message.add_long(1);
+        message.add_long(1);
+        message.add_long(session_id);
+        message.add_long(payer.plug_id);
+        message.add_long(self.login_server_id);
+        message.add_long(self.world_server_id);
+        message.base_mut().add_guid(CGuid::GUID_INVALID);
+        message.send(self, false)
+    }
+
+    fn send_trade_notice(&self, session_id: i32, string_id: &[u8]) -> Vec<i32> {
+        self.session_factory
+            .trade_session_plug_ids(session_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|plug_id| self.session_factory.query_trader(plug_id))
+            .map(|trader| {
+                colored_player_notice_message(
+                    0xffff_ffff,
+                    0,
+                    self.get_string_by_id(string_id),
+                )
+                .send_to_player(self.net_server(), trader.owner_id())
+            })
+            .collect()
+    }
+
+    fn trade_condition_notice(block: PlayerTradeConditionBlock) -> &'static [u8] {
+        match block {
+            PlayerTradeConditionBlock::PacketSpace => b"GS0267",
+            PlayerTradeConditionBlock::BurdenExceeded => b"GS0268",
+            PlayerTradeConditionBlock::MissingOfferedGoods => b"GS0269",
+            PlayerTradeConditionBlock::MissingPlayerOrPlug
+            | PlayerTradeConditionBlock::SessionUnavailable => b"GS0270",
+            PlayerTradeConditionBlock::InsufficientGold => b"GS0271",
+            PlayerTradeConditionBlock::GoldCapacity => b"GS0272",
+            PlayerTradeConditionBlock::InsufficientYuanBao => b"GS0273",
+            PlayerTradeConditionBlock::YuanBaoCapacity => b"GS0274",
+        }
+    }
+
+    pub(crate) fn toggle_player_trade_ready<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        requested_plug_id: i32,
+        context: &mut Context,
+    ) -> PlayerTradeReadyReport {
+        let mut report = PlayerTradeReadyReport {
+            session_id,
+            plug_id: requested_plug_id,
+            contrary_plug_id: None,
+            ready_deliveries: Vec::new(),
+            notification_deliveries: Vec::new(),
+            packet_deliveries: Vec::new(),
+            equipment_removals: Vec::new(),
+            money_deliveries: Vec::new(),
+            audit_deliveries: Vec::new(),
+            session_end: None,
+            terminal_deliveries: Vec::new(),
+            collected_plug_ids: Vec::new(),
+            outcome: PlayerTradeReadyOutcome::MissingSessionOrPlug,
+        };
+        let actual = self
+            .session_factory
+            .trader_plug_by_owner(session_id, player_id);
+        if actual != Some(requested_plug_id) {
+            return report;
+        }
+        if !self.session_factory.trade_session_available(session_id, |owner_id| {
+            self.players.get(&owner_id).is_some_and(|player| {
+                !player.is_dead() && player.current_progress() == PlayerProgress::Trading
+            })
+        }) {
+            report.outcome = PlayerTradeReadyOutcome::SessionUnavailable;
+            return report;
+        }
+        let ready = {
+            let trader = self
+                .session_factory
+                .query_trader_mut(requested_plug_id)
+                .expect("owner lookup подтвердил trader plug");
+            let ready = !trader.ready();
+            trader.set_trade_state(ready);
+            ready
+        };
+        let contrary_plug_id = self
+            .session_factory
+            .contrary_trader_id(session_id, requested_plug_id);
+        report.contrary_plug_id = contrary_plug_id;
+        if let Some(contrary_plug_id) = contrary_plug_id
+            && let Some(contrary) = self.session_factory.query_trader(contrary_plug_id)
+        {
+            let mut state = CMessage::new(0x000b_f716);
+            state.add_long(requested_plug_id);
+            state.add_byte(u8::from(ready));
+            report.ready_deliveries.push(
+                state.send_to_player(self.net_server(), contrary.owner_id()),
+            );
+        }
+        if !ready
+            || contrary_plug_id.is_none_or(|plug_id| {
+                !self
+                    .session_factory
+                    .query_trader(plug_id)
+                    .is_some_and(|trader| trader.ready())
+            })
+        {
+            report.outcome = PlayerTradeReadyOutcome::Changed { ready };
+            return report;
+        }
+        let parties = match self.validate_player_trade(session_id) {
+            Ok(parties) => parties,
+            Err(block) => {
+                report.notification_deliveries =
+                    self.send_trade_notice(session_id, Self::trade_condition_notice(block));
+                report.outcome = PlayerTradeReadyOutcome::ConditionBlocked(block);
+                return report;
+            }
+        };
+        let yuan_difference = i64::from(parties[0].yuan_bao) - i64::from(parties[1].yuan_bao);
+        if yuan_difference != 0 {
+            let (payer, receiver) = if yuan_difference > 0 {
+                (&parties[0], &parties[1])
+            } else {
+                (&parties[1], &parties[0])
+            };
+            let amount = yuan_difference.unsigned_abs() as u32;
+            let delivery = self.send_player_trade_billing_request(
+                payer,
+                receiver,
+                amount,
+                session_id,
+            );
+            report.outcome = PlayerTradeReadyOutcome::BillingPending(
+                PlayerTradeBillingRequest {
+                    payer_id: payer.owner_id,
+                    receiver_id: receiver.owner_id,
+                    amount,
+                    session_id,
+                    payer_plug_id: payer.plug_id,
+                    delivery,
+                },
+            );
+            return report;
+        }
+        let completed = self.commit_player_trade(parties, None, 0, &[], context, &mut report);
+        let (session_end, terminal_deliveries, collected_plug_ids) =
+            self.finish_player_trade_session(session_id, false);
+        report.session_end = session_end;
+        report.terminal_deliveries = terminal_deliveries;
+        report.collected_plug_ids = collected_plug_ids;
+        report.outcome = if completed {
+            PlayerTradeReadyOutcome::Completed
+        } else {
+            PlayerTradeReadyOutcome::RolledBack
+        };
+        report
+    }
+
+    fn commit_player_trade<Context: GameContainerMessageRuntime>(
+        &mut self,
+        parties: [PlayerTradePartySnapshot; 2],
+        billing_payer_id: Option<i32>,
+        billing_amount: u32,
+        transaction: &[u8],
+        context: &mut Context,
+        report: &mut PlayerTradeReadyReport,
+    ) -> bool {
+        let audit_parties = parties.each_ref().map(|party| {
+            let player = self
+                .players
+                .get(&party.owner_id)
+                .expect("validated trade party остаётся online");
+            PlayerTradeAuditParty {
+                owner_id: party.owner_id,
+                pk_count: u32::from(player.pk_count()),
+                money: player.money(),
+                tile_x: player.shape().get_tile_x().unwrap_or(0),
+                tile_y: player.shape().get_tile_y().unwrap_or(0),
+                client_ip: player.client_ip(),
+                name: player.player_name().to_vec(),
+            }
+        });
+        let mut removed_by_plug = BTreeMap::<i32, Vec<CGoods>>::new();
+        let mut delivered = Vec::<DeliveredPlayerTradeGoods>::new();
+        for party in &parties {
+            let mut packet_splits = BTreeMap::<CGuid, CGoods>::new();
+            for offer in &party.goods {
+                if offer.original_container_extend_id != 1 {
+                    continue;
+                }
+                let Some((source_amount, base_properties_index)) = self
+                    .players
+                    .get(&party.owner_id)
+                    .and_then(|player| {
+                        player.trade_source_goods(
+                            offer.original_container_extend_id,
+                            offer.original_goods_position,
+                            offer.goods_id,
+                        )
+                    })
+                    .map(|source| (source.amount(), source.base_properties_index()))
+                else {
+                    continue;
+                };
+                if offer.goods_amount < source_amount {
+                    let Some(split) = self.create_goods_core(base_properties_index) else {
+                        self.undo_delivered_trade_goods(&mut removed_by_plug, delivered, report);
+                        self.rollback_detached_trade_goods(
+                            &parties,
+                            removed_by_plug,
+                            context,
+                            report,
+                        );
+                        return false;
+                    };
+                    packet_splits.insert(offer.goods_id, split);
+                }
+            }
+            let Some(mut player) = self.players.remove(&party.owner_id) else {
+                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered, report);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug, context, report);
+                return false;
+            };
+            let mut removed_goods = Vec::new();
+            let mut failed = false;
+            for offer in &party.goods {
+                let source = player
+                    .trade_source_goods(
+                        offer.original_container_extend_id,
+                        offer.original_goods_position,
+                        offer.goods_id,
+                    )
+                    .filter(|goods| {
+                        if offer.original_container_extend_id == 1 {
+                            goods.amount() >= offer.goods_amount
+                        } else {
+                            goods.amount() == offer.goods_amount
+                        }
+                    })
+                    .cloned();
+                let Some(source) = source else {
+                    failed = true;
+                    break;
+                };
+                if offer.original_container_extend_id == 1 {
+                    let previous_amount = source.amount();
+                    let mut split = packet_splits.remove(&offer.goods_id);
+                    let Some(outcome) = player.packet_mut().take_goods(
+                        offer.original_goods_position,
+                        offer.goods_amount,
+                        &self.goods_factory,
+                        |_| split.take(),
+                    ) else {
+                        failed = true;
+                        break;
+                    };
+                    let taken = match outcome {
+                        VolumeGoodsRemoveOutcome::Removed(taken)
+                        | VolumeGoodsRemoveOutcome::RemovedButCellMissing(taken) => taken,
+                    };
+                    let (detached_goods, removed_position) = match taken {
+                        AmountLimitGoodsTaken::Removed(removed) => {
+                            (removed.goods, removed.position)
+                        }
+                        AmountLimitGoodsTaken::Split(split) => {
+                            (split.goods, split.position)
+                        }
+                    };
+                    let consumption = CiQingPacketConsumption {
+                        player_id: party.owner_id,
+                        goods: source.identity(),
+                        position: removed_position.unwrap_or(offer.original_goods_position),
+                        previous_amount,
+                        remaining_amount: previous_amount.wrapping_sub(offer.goods_amount),
+                        removal: None,
+                    };
+                    report
+                        .packet_deliveries
+                        .push(self.send_player_packet_consumption(&consumption));
+                    removed_goods.push(detached_goods);
+                } else if offer.original_container_extend_id == 2 {
+                    let facts = context.enhancement_equipment_remove_facts(
+                        &player,
+                        &source,
+                        self.globe_setup.pack_add_enabled(),
+                    );
+                    let mut recompute = |player: &CPlayer| {
+                        context.recompute_enhancement_player_properties(player)
+                    };
+                    let mut removal = player.remove_equipment_goods(
+                        offer.goods_id,
+                        &self.goods_factory,
+                        &self.skill_factory,
+                        facts,
+                        &mut recompute,
+                    );
+                    drop(recompute);
+                    self.publish_player_equipment_remove_report(&mut removal, context);
+                    report.equipment_removals.push(removal.clone());
+                    let outcome = std::mem::replace(
+                        &mut removal.outcome,
+                        EquipmentRemoveOutcome::Missing {
+                            partial_effects: Default::default(),
+                        },
+                    );
+                    match outcome {
+                        EquipmentRemoveOutcome::Removed(removed) => {
+                            let previous = crate::gameserver::appserver::container::ccontainer::PreviousContainer {
+                                container_type: 400,
+                                container_id: party.owner_id,
+                                container_extend_id: 2,
+                                goods_position: offer.original_goods_position,
+                            };
+                            report.packet_deliveries.push(vec![self.send_container_object_delete(
+                                party.owner_id,
+                                &previous,
+                                removed.goods.identity(),
+                                removed.goods.amount(),
+                            )]);
+                            removed_goods.push(removed.goods);
+                        }
+                        outcome => {
+                            removal.outcome = outcome;
+                            failed = true;
+                            break;
+                        }
+                    }
+                } else {
+                    failed = true;
+                    break;
+                }
+            }
+            self.players.insert(party.owner_id, player);
+            removed_by_plug.insert(party.plug_id, removed_goods);
+            if failed {
+                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered, report);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug, context, report);
+                return false;
+            }
+        }
+        let audit_goods_by_plug = removed_by_plug.clone();
+
+        for index in 0..2 {
+            let source = &parties[index];
+            let receiver = &parties[1 - index];
+            let goods = removed_by_plug
+                .remove(&source.plug_id)
+                .unwrap_or_default();
+            let Some(player) = self.players.get_mut(&receiver.owner_id) else {
+                removed_by_plug.insert(source.plug_id, goods);
+                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered, report);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug, context, report);
+                return false;
+            };
+            let originals = goods.clone();
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let (additions, rejected) = player.add_traded_goods_to_packet(
+                goods,
+                &self.goods_factory,
+                &mut encode,
+            );
+            for addition in &additions {
+                report
+                    .packet_deliveries
+                    .push(self.send_player_packet_addition(addition));
+            }
+            let failed = !rejected.is_empty()
+                || additions
+                    .iter()
+                    .any(|addition| addition.resulting_amount.is_none());
+            for (original, addition) in originals.into_iter().zip(additions.iter()) {
+                if addition.resulting_amount.is_some() {
+                    delivered.push(DeliveredPlayerTradeGoods {
+                        source_plug_id: source.plug_id,
+                        receiver_id: receiver.owner_id,
+                        original,
+                        addition: addition.clone(),
+                    });
+                }
+            }
+            if failed {
+                removed_by_plug.insert(source.plug_id, rejected);
+                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered, report);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug, context, report);
+                return false;
+            }
+        }
+
+        for index in 0..2 {
+            let party = &parties[index];
+            let contrary = &parties[1 - index];
+            let current = self
+                .players
+                .get(&party.owner_id)
+                .map_or(0, CPlayer::money);
+            let resulting = current
+                .wrapping_sub(party.gold)
+                .wrapping_add(contrary.gold);
+            if resulting < current {
+                let change = self
+                    .players
+                    .get_mut(&party.owner_id)
+                    .expect("trade party остаётся online")
+                    .decrease_money(current.wrapping_sub(resulting), &self.goods_factory);
+                report.money_deliveries.extend(
+                    self.send_player_money_decrease(party.owner_id, &change.outcome),
+                );
+            } else if current < resulting {
+                let delta = resulting.wrapping_sub(current);
+                let created = self.create_goods_batch(self.goods_factory.get_gold_coin_index(), delta);
+                let outcome = self
+                    .players
+                    .get_mut(&party.owner_id)
+                    .expect("trade party остаётся online")
+                    .increase_money(delta, &self.goods_factory, created);
+                report.money_deliveries.extend(
+                    self.send_player_money_increase(party.owner_id, &outcome, context),
+                );
+            }
+        }
+        report.audit_deliveries.extend(self.send_player_trade_audits(
+            &parties,
+            &audit_parties,
+            &audit_goods_by_plug,
+            billing_payer_id,
+            billing_amount,
+            transaction,
+        ));
+        true
+    }
+
+    fn send_player_trade_audits(
+        &self,
+        parties: &[PlayerTradePartySnapshot; 2],
+        audit_parties: &[PlayerTradeAuditParty; 2],
+        goods_by_plug: &BTreeMap<i32, Vec<CGoods>>,
+        billing_payer_id: Option<i32>,
+        billing_amount: u32,
+        transaction: &[u8],
+    ) -> Vec<Result<i32, SendMessageError>> {
+        let mut deliveries = Vec::new();
+        if self.log_system.goods_trade_log_enabled() {
+            for source_index in 0..2 {
+                let receiver_index = 1 - source_index;
+                let source = &audit_parties[source_index];
+                let receiver = &audit_parties[receiver_index];
+                for goods in goods_by_plug
+                    .get(&parties[source_index].plug_id)
+                    .into_iter()
+                    .flatten()
+                {
+                    deliveries.push(
+                        self.send_player_trade_goods_audit(
+                            source,
+                            receiver,
+                            goods.identity().ex_id,
+                            goods.price(),
+                            goods.amount(),
+                            goods.name(),
+                        ),
+                    );
+                }
+                let gold = parties[source_index].gold;
+                if gold != 0 {
+                    deliveries.push(self.send_player_trade_goods_audit(
+                        source,
+                        receiver,
+                        CGuid::GUID_INVALID,
+                        gold,
+                        gold,
+                        b"",
+                    ));
+                }
+            }
+        }
+        if self.log_system.increment_log_enabled()
+            && billing_amount != 0
+            && let Some(payer_id) = billing_payer_id
+            && let Some(payer_index) = audit_parties
+                .iter()
+                .position(|party| party.owner_id == payer_id)
+        {
+            let receiver_index = 1 - payer_index;
+            let payer = &audit_parties[payer_index];
+            let receiver = &audit_parties[receiver_index];
+            let payer_yuan_bao = self
+                .players
+                .get(&payer.owner_id)
+                .map_or(0, CPlayer::yuan_bao);
+            let receiver_yuan_bao = self
+                .players
+                .get(&receiver.owner_id)
+                .map_or(0, CPlayer::yuan_bao);
+            let payer_text = format_legacy_mixed(
+                self.get_string_by_id(b"GS0275"),
+                &[
+                    LegacyFormatArgument::Bytes(&receiver.name),
+                    LegacyFormatArgument::Signed(billing_amount as i32),
+                ],
+                0xff,
+            );
+            let receiver_text = format_legacy_mixed(
+                self.get_string_by_id(b"GS0276"),
+                &[
+                    LegacyFormatArgument::Bytes(&payer.name),
+                    LegacyFormatArgument::Signed(billing_amount as i32),
+                ],
+                0xff,
+            );
+            for (kind, party, balance, text) in [
+                (2u8, payer, payer_yuan_bao, payer_text),
+                (3u8, receiver, receiver_yuan_bao, receiver_text),
+            ] {
+                let mut audit = CMessage::new(0x0006_020d);
+                audit.add_byte(kind);
+                add_legacy_c_string(audit.base_mut(), transaction);
+                audit.add_ulong(billing_amount);
+                add_legacy_c_string(audit.base_mut(), &text);
+                audit.add_long(party.owner_id);
+                audit.add_ulong(balance);
+                deliveries.push(audit.send(self, false));
+            }
+        }
+        deliveries
+    }
+
+    fn send_player_trade_goods_audit(
+        &self,
+        source: &PlayerTradeAuditParty,
+        receiver: &PlayerTradeAuditParty,
+        goods_id: CGuid,
+        price: u32,
+        amount: u32,
+        goods_name: &[u8],
+    ) -> Result<i32, SendMessageError> {
+        let mut audit = CMessage::new(0x0006_0201);
+        audit.add_byte(0);
+        audit.add_long(receiver.owner_id);
+        audit.add_ulong(receiver.pk_count);
+        audit.add_ulong(receiver.money);
+        audit.add_long(receiver.tile_x);
+        audit.add_long(receiver.tile_y);
+        audit.add_long(source.owner_id);
+        audit.add_ulong(source.pk_count);
+        audit.add_ulong(source.money);
+        audit.add_long(source.tile_x);
+        audit.add_long(source.tile_y);
+        audit.base_mut().add_guid(goods_id);
+        audit.add_ulong(price);
+        audit.add_ulong(amount);
+        add_legacy_c_string(audit.base_mut(), goods_name);
+        audit.add_ulong(receiver.client_ip);
+        audit.add_ulong(source.client_ip);
+        audit.send(self, false)
+    }
+
+    fn undo_delivered_trade_goods(
+        &mut self,
+        detached_by_plug: &mut BTreeMap<i32, Vec<CGoods>>,
+        delivered: Vec<DeliveredPlayerTradeGoods>,
+        report: &mut PlayerTradeReadyReport,
+    ) {
+        for delivered in delivered.into_iter().rev() {
+            let Some(player) = self.players.get_mut(&delivered.receiver_id) else {
+                continue;
+            };
+            let Some(consumption) = player.rollback_traded_packet_addition(
+                &delivered.addition,
+                delivered.original.amount(),
+            ) else {
+                continue;
+            };
+            report
+                .packet_deliveries
+                .push(self.send_player_packet_consumption(&consumption));
+            detached_by_plug
+                .entry(delivered.source_plug_id)
+                .or_default()
+                .push(delivered.original);
+        }
+    }
+
+    fn rollback_detached_trade_goods<Context: GameContainerMessageRuntime>(
+        &mut self,
+        parties: &[PlayerTradePartySnapshot; 2],
+        mut goods_by_plug: BTreeMap<i32, Vec<CGoods>>,
+        context: &mut Context,
+        report: &mut PlayerTradeReadyReport,
+    ) {
+        for party in parties {
+            let goods = goods_by_plug.remove(&party.plug_id).unwrap_or_default();
+            if goods.is_empty() {
+                continue;
+            }
+            let Some(player) = self.players.get_mut(&party.owner_id) else {
+                continue;
+            };
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let (additions, unrecoverable) = player.add_traded_goods_to_packet(
+                goods,
+                &self.goods_factory,
+                &mut encode,
+            );
+            for addition in &additions {
+                report
+                    .packet_deliveries
+                    .push(self.send_player_packet_addition(addition));
+            }
+            if !unrecoverable.is_empty()
+                || additions
+                    .iter()
+                    .any(|addition| addition.resulting_amount.is_none())
+            {
+                report.notification_deliveries.push(
+                    colored_player_notice_message(
+                        0xffff_ffff,
+                        0,
+                        self.get_string_by_id(b"GS0277"),
+                    )
+                    .send_to_player(self.net_server(), party.owner_id),
+                );
+            }
+        }
+    }
+
+    fn send_player_money_increase<Context: OldClientGoodsCodec>(
+        &self,
+        player_id: i32,
+        outcome: &crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome,
+        context: &mut Context,
+    ) -> Vec<i32> {
+        use crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome;
+        match outcome {
+            CurrencyIncreaseOutcome::Created(added) => {
+                let Some(goods) = self
+                    .players
+                    .get(&player_id)
+                    .and_then(|player| player.trade_source_goods(4, 0, added.identity.ex_id))
+                else {
+                    return Vec::new();
+                };
+                let mut message = CS2CContainerObjectMove::default();
+                message.set_operation(ContainerObjectMoveOperation::NewObject);
+                message.set_destination_container(added.owner_type, added.owner_id, 0);
+                message.set_destination_container_extend_id(4);
+                message.set_destination_object(added.identity.object_type, added.identity.ex_id);
+                message.set_object_stream(context.encode_goods_for_old_client(goods));
+                vec![message.send_to_player(self, player_id)]
+            }
+            CurrencyIncreaseOutcome::Increased(change) => {
+                let mut message = CS2CContainerObjectAmountChange::default();
+                message.set_source_container(change.owner_type, change.owner_id, change.position);
+                message.set_source_container_extend_id(4);
+                message.set_object(change.identity.object_type, change.identity.ex_id);
+                message.set_object_amount(change.new_amount);
+                vec![message.send_to_player(self, player_id)]
+            }
+            CurrencyIncreaseOutcome::NoChange
+            | CurrencyIncreaseOutcome::CapacityExceeded { .. }
+            | CurrencyIncreaseOutcome::InvalidStoredCurrency { .. }
+            | CurrencyIncreaseOutcome::CreationFailed => Vec::new(),
+        }
+    }
+
+    pub(crate) fn complete_player_trade_after_billing<Context: GameContainerMessageRuntime>(
+        &mut self,
+        session_id: i32,
+        requested_plug_id: i32,
+        payer_id: i32,
+        billing_amount: u32,
+        transaction: &[u8],
+        context: &mut Context,
+    ) -> PlayerTradeReadyReport {
+        let selected_plug_id = self
+            .session_factory
+            .query_trader(requested_plug_id)
+            .filter(|trader| trader.session_id() == session_id)
+            .and_then(|trader| {
+                if trader.owner_id() == payer_id {
+                    Some(requested_plug_id)
+                } else {
+                    self.session_factory
+                        .contrary_trader_id(session_id, requested_plug_id)
+                        .filter(|contrary_id| {
+                            self.session_factory
+                                .query_trader(*contrary_id)
+                                .is_some_and(|contrary| contrary.owner_id() == payer_id)
+                        })
+                }
+            })
+            .unwrap_or(requested_plug_id);
+        let mut report = PlayerTradeReadyReport {
+            session_id,
+            plug_id: selected_plug_id,
+            contrary_plug_id: self
+                .session_factory
+                .contrary_trader_id(session_id, selected_plug_id),
+            ready_deliveries: Vec::new(),
+            notification_deliveries: Vec::new(),
+            packet_deliveries: Vec::new(),
+            equipment_removals: Vec::new(),
+            money_deliveries: Vec::new(),
+            audit_deliveries: Vec::new(),
+            session_end: None,
+            terminal_deliveries: Vec::new(),
+            collected_plug_ids: Vec::new(),
+            outcome: PlayerTradeReadyOutcome::MissingSessionOrPlug,
+        };
+        if self
+            .session_factory
+            .query_trader(selected_plug_id)
+            .is_none_or(|trader| trader.owner_id() != payer_id)
+            || !self.session_factory.trade_session_available(session_id, |owner_id| {
+                self.players.get(&owner_id).is_some_and(|player| {
+                    !player.is_dead() && player.current_progress() == PlayerProgress::Trading
+                })
+                })
+        {
+            if self.players.contains_key(&payer_id) {
+                report.notification_deliveries.push(
+                    colored_player_notice_message(
+                        0xffff_ffff,
+                        0,
+                        b"Personal Trade has been CANCELED",
+                    )
+                    .send_to_player(self.net_server(), payer_id),
+                );
+            }
+            return report;
+        }
+        let Ok(parties) = self.player_trade_snapshots(session_id) else {
+            return report;
+        };
+        let completed = self.commit_player_trade(
+            parties,
+            Some(payer_id),
+            billing_amount,
+            transaction,
+            context,
+            &mut report,
+        );
+        let (session_end, terminal_deliveries, collected_plug_ids) =
+            self.finish_player_trade_session(session_id, false);
+        report.session_end = session_end;
+        report.terminal_deliveries = terminal_deliveries;
+        report.collected_plug_ids = collected_plug_ids;
+        report.outcome = if completed {
+            PlayerTradeReadyOutcome::Completed
+        } else {
+            PlayerTradeReadyOutcome::RolledBack
+        };
+        report
     }
 
     fn detach_terminal_equipment_session_listeners(

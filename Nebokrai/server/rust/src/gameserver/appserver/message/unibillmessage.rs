@@ -4,7 +4,9 @@
 //! `appserver/message/unibillmessage.cpp`. Материализован связный Increment
 //! Shop response `0xFF002`: Billing balance, currency-container effect,
 //! повторная factory batch, packet new/stack updates, скидочное списание,
-//! `GS0082` и optional World audit `0x6020D`. Auction subset `0xFF003/type 3`
+//! `GS0082` и optional World audit `0x6020D`. Player trade subset
+//! `0xFF003/type 2` синхронизирует обе YuanBao wallet, возобновляет
+//! отложенный trader commit и завершает session. Auction subset `type 3`
 //! завершает pending `CGoodsNode`: логирует сделку, посылает success/self
 //! refresh, синхронизирует обе YuanBao wallet или `0x60814` offline seller.
 //! Остальные UniBill cases остаются ниже RAW до их session owners.
@@ -14,7 +16,7 @@ use crate::gameserver::appserver::player::{
     CiQingPacketAddition, CiQingPacketConsumption, PlayerYuanBaoChange,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, OldClientGoodsCodec, colored_player_notice_message,
+    CGame, GameContainerMessageRuntime, PlayerTradeReadyReport, colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
@@ -22,7 +24,7 @@ const INCREMENT_PURCHASE_RESPONSE: i32 = 0x000F_F002;
 const BILLING_TRADE_RESPONSE: i32 = 0x000F_F003;
 const INCREMENT_PURCHASE_AUDIT: i32 = 0x0006_020D;
 
-pub(crate) trait IncrementShopBillingContext: OldClientGoodsCodec {
+pub(crate) trait IncrementShopBillingContext: GameContainerMessageRuntime {
     fn publish_increment_shop_yuan_bao_change(&mut self, change: &PlayerYuanBaoChange) -> Vec<i32>;
     fn auction_billing_local_system_time(
         &mut self,
@@ -43,6 +45,8 @@ pub(crate) enum IncrementShopBillingOutcome {
     PacketRejected { notice_delivery: i32 },
     AuctionTradeCompleted { seller_id: i32, seller_online: bool },
     AuctionTradeRejected { seller_id: i32, result: i32 },
+    PlayerTradeCompleted { receiver_id: i32 },
+    PlayerTradeRejected { receiver_id: i32, result: i32 },
     Completed,
 }
 
@@ -65,6 +69,7 @@ pub(crate) struct IncrementShopBillingReport {
     pub(crate) consumption_deliveries: Vec<Vec<i32>>,
     pub(crate) audit_delivery: Option<Result<i32, SendMessageError>>,
     pub(crate) auction_world_deliveries: Vec<Result<i32, SendMessageError>>,
+    pub(crate) player_trade: Option<PlayerTradeReadyReport>,
     pub(crate) outcome: IncrementShopBillingOutcome,
 }
 
@@ -85,10 +90,13 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: IncrementShopBill
                 .try_into()
                 .expect("проверенный Billing trade prefix"),
         );
-        if trade_type != 3 {
-            return None;
+        if trade_type == 2 {
+            return Some(dispatch_player_billing_trade(message, game, context));
         }
-        return Some(dispatch_auction_billing_trade(message, game, context));
+        if trade_type == 3 {
+            return Some(dispatch_auction_billing_trade(message, game, context));
+        }
+        return None;
     }
     if message.message_type() != INCREMENT_PURCHASE_RESPONSE {
         return None;
@@ -120,6 +128,7 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: IncrementShopBill
         consumption_deliveries: Vec::new(),
         audit_delivery: None,
         auction_world_deliveries: Vec::new(),
+        player_trade: None,
         outcome: IncrementShopBillingOutcome::MissingPlayer,
     };
     if game.find_player(player_id).is_none() {
@@ -282,6 +291,7 @@ fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
         consumption_deliveries: Vec::new(),
         audit_delivery: None,
         auction_world_deliveries: Vec::new(),
+        player_trade: None,
         outcome: IncrementShopBillingOutcome::MissingPlayer,
     };
     if game.find_player(buyer_id).is_none() {
@@ -330,7 +340,7 @@ fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
         }
     }
 
-    let buyer_change = set_auction_yuan_bao(game, buyer_id, buyer_yuan_bao)
+    let buyer_change = set_billing_yuan_bao(game, buyer_id, buyer_yuan_bao)
         .expect("Billing auction buyer проверен перед balance");
     report
         .yuan_bao_deliveries
@@ -339,7 +349,7 @@ fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
 
     let seller_online = game.find_player(seller_id).is_some();
     if seller_online {
-        let seller_change = set_auction_yuan_bao(game, seller_id, seller_yuan_bao)
+        let seller_change = set_billing_yuan_bao(game, seller_id, seller_yuan_bao)
             .expect("online auction seller проверен перед mutation");
         report
             .yuan_bao_deliveries
@@ -360,6 +370,94 @@ fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
     Ok(report)
 }
 
+fn dispatch_player_billing_trade<Context: IncrementShopBillingContext>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    context: &mut Context,
+) -> Result<IncrementShopBillingReport, IncrementShopBillingMessageError> {
+    let payer_id = read_billing_long(message, "player trade payer id")?;
+    let receiver_id = read_billing_long(message, "player trade receiver id")?;
+    let result = read_billing_long(message, "player trade result")?;
+    let payer_yuan_bao = read_billing_long(message, "player trade payer yuan bao")? as u32;
+    let receiver_yuan_bao = read_billing_long(message, "player trade receiver yuan bao")? as u32;
+    let trade_type = read_billing_long(message, "player trade type")?;
+    debug_assert_eq!(trade_type, 2);
+    let mut report = empty_trade_report(payer_id, Vec::new());
+    if game.find_player(payer_id).is_none() || game.find_player(receiver_id).is_none() {
+        return Ok(report);
+    }
+    if result != 0 {
+        report.outcome = IncrementShopBillingOutcome::PlayerTradeRejected {
+            receiver_id,
+            result,
+        };
+        return Ok(report);
+    }
+
+    let payer_change = set_billing_yuan_bao(game, payer_id, payer_yuan_bao)
+        .expect("Billing trade payer проверен перед balance mutation");
+    report
+        .yuan_bao_deliveries
+        .extend(context.publish_increment_shop_yuan_bao_change(&payer_change));
+    report.yuan_bao_change = Some(payer_change);
+    let receiver_change = set_billing_yuan_bao(game, receiver_id, receiver_yuan_bao)
+        .expect("Billing trade receiver проверен перед balance mutation");
+    report
+        .yuan_bao_deliveries
+        .extend(context.publish_increment_shop_yuan_bao_change(&receiver_change));
+    report.auction_seller_change = Some(receiver_change);
+
+    let session_id = read_billing_long(message, "player trade session id")?;
+    let plug_id = read_billing_long(message, "player trade plug id")?;
+    let amount = read_billing_long(message, "player trade amount")? as u32;
+    let _goods_id =
+        message
+            .base_mut()
+            .get_guid()
+            .ok_or(IncrementShopBillingMessageError::MissingField(
+                "player trade goods guid",
+            ))?;
+    let transaction = message.base_mut().get_str_bytes(0x200).ok_or(
+        IncrementShopBillingMessageError::MissingField("player trade transaction"),
+    )?;
+    report.charged = Some(amount);
+    report.transaction.clone_from(&transaction);
+
+    report.player_trade = Some(game.complete_player_trade_after_billing(
+        session_id,
+        plug_id,
+        payer_id,
+        amount,
+        &transaction,
+        context,
+    ));
+    report.outcome = IncrementShopBillingOutcome::PlayerTradeCompleted { receiver_id };
+    Ok(report)
+}
+
+fn empty_trade_report(payer_id: i32, transaction: Vec<u8>) -> IncrementShopBillingReport {
+    IncrementShopBillingReport {
+        player_id: payer_id,
+        last_point: None,
+        charged: None,
+        goods_id: None,
+        goods_amount: None,
+        deduction_goods_id: None,
+        transaction,
+        yuan_bao_change: None,
+        auction_seller_change: None,
+        yuan_bao_deliveries: Vec::new(),
+        additions: Vec::new(),
+        addition_deliveries: Vec::new(),
+        consumptions: Vec::new(),
+        consumption_deliveries: Vec::new(),
+        audit_delivery: None,
+        auction_world_deliveries: Vec::new(),
+        player_trade: None,
+        outcome: IncrementShopBillingOutcome::MissingPlayer,
+    }
+}
+
 fn read_billing_long(
     message: &mut CMessage,
     field: &'static str,
@@ -370,7 +468,7 @@ fn read_billing_long(
         .ok_or(IncrementShopBillingMessageError::MissingField(field))
 }
 
-fn set_auction_yuan_bao(
+fn set_billing_yuan_bao(
     game: &mut CGame,
     player_id: i32,
     current: u32,

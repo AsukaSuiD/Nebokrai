@@ -35,6 +35,10 @@ impl Default for CLogSystem {
 }
 
 impl CLogSystem {
+    pub(crate) fn goods_trade_log_enabled(&self) -> bool {
+        self.setting(0)
+    }
+
     pub(crate) fn from_settings(settings: [u8; LOG_SETTINGS_LENGTH]) -> Self {
         Self {
             settings,

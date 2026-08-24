@@ -44,6 +44,7 @@ use super::cequipmentupgrade::CEquipmentUpgrade;
 use super::cpersonalshopseller::CPersonalShopSeller;
 use super::cplug::CPlug;
 use super::csession::CSession;
+use super::ctrader::CTrader;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EquipmentSessionPlugKind {
@@ -119,6 +120,7 @@ pub(crate) struct CSessionFactory {
     equipment_da_kong_plugs: BTreeMap<i32, CEquipmentDaKong>,
     equipment_upgrade_plugs: BTreeMap<i32, CEquipmentUpgrade>,
     personal_shop_seller_plugs: BTreeMap<i32, CPersonalShopSeller>,
+    trader_plugs: BTreeMap<i32, CTrader>,
     next_session_id: i32,
     next_plug_id: i32,
 }
@@ -132,6 +134,7 @@ impl Default for CSessionFactory {
             equipment_da_kong_plugs: BTreeMap::new(),
             equipment_upgrade_plugs: BTreeMap::new(),
             personal_shop_seller_plugs: BTreeMap::new(),
+            trader_plugs: BTreeMap::new(),
             next_session_id: 1,
             next_plug_id: 1,
         }
@@ -139,6 +142,120 @@ impl Default for CSessionFactory {
 }
 
 impl CSessionFactory {
+    /// Exact normal `(2, 2, 0)` player trade: первый plug принадлежит
+    /// пригласившему, второй — отвечающему, как два последовательных
+    /// `CreatePlug/InsertPlug` в `0x8FA07`.
+    pub(crate) fn create_player_trade_session(
+        &mut self,
+        inviter_id: i32,
+        answerer_id: i32,
+    ) -> Option<(i32, i32, i32)> {
+        let session_id = self.next_session_id;
+        let mut session = CSession::normal(2, 2, 0);
+        if !session.start() {
+            return None;
+        }
+        let inviter_plug_id = self.next_plug_id;
+        let answerer_plug_id = self.next_plug_id.wrapping_add(1);
+        let mut inviter = CPlug::new();
+        inviter.set_id(inviter_plug_id);
+        inviter.set_owner(400, inviter_id);
+        inviter.set_session(session_id);
+        inviter.set_plug_type(1);
+        let mut answerer = CPlug::new();
+        answerer.set_id(answerer_plug_id);
+        answerer.set_owner(400, answerer_id);
+        answerer.set_session(session_id);
+        answerer.set_plug_type(1);
+        if !session.insert_plug(inviter_plug_id) || !session.insert_plug(answerer_plug_id) {
+            return None;
+        }
+        self.next_session_id = self.next_session_id.wrapping_add(1);
+        self.next_plug_id = self.next_plug_id.wrapping_add(2);
+        self.sessions.insert(session_id, session);
+        self.plugs.insert(inviter_plug_id, inviter);
+        self.plugs.insert(answerer_plug_id, answerer);
+        self.trader_plugs.insert(
+            inviter_plug_id,
+            CTrader::inserted(inviter_plug_id, session_id, inviter_id),
+        );
+        self.trader_plugs.insert(
+            answerer_plug_id,
+            CTrader::inserted(answerer_plug_id, session_id, answerer_id),
+        );
+        Some((session_id, inviter_plug_id, answerer_plug_id))
+    }
+
+    pub(crate) fn query_trader(&self, plug_id: i32) -> Option<&CTrader> {
+        self.trader_plugs.get(&plug_id)
+    }
+
+    pub(crate) fn query_trader_mut(&mut self, plug_id: i32) -> Option<&mut CTrader> {
+        self.trader_plugs.get_mut(&plug_id)
+    }
+
+    pub(crate) fn trader_plug_by_owner(&self, session_id: i32, owner_id: i32) -> Option<i32> {
+        let plug = self.query_session_plug_by_owner(session_id, 400, owner_id)?;
+        self.trader_plugs
+            .contains_key(&plug.id())
+            .then_some(plug.id())
+    }
+
+    pub(crate) fn contrary_trader_id(&self, session_id: i32, plug_id: i32) -> Option<i32> {
+        self.sessions
+            .get(&session_id)?
+            .plug_ids_storage()
+            .iter()
+            .copied()
+            .find(|candidate| *candidate != plug_id && self.trader_plugs.contains_key(candidate))
+    }
+
+    pub(crate) fn trade_session_plug_ids(&self, session_id: i32) -> Option<Vec<i32>> {
+        let session = self.sessions.get(&session_id)?;
+        let ids: Vec<_> = session
+            .plug_ids_storage()
+            .iter()
+            .copied()
+            .filter(|plug_id| self.trader_plugs.contains_key(plug_id))
+            .collect();
+        (ids.len() == session.plug_ids_storage().len()).then_some(ids)
+    }
+
+    pub(crate) fn trade_session_available(
+        &self,
+        session_id: i32,
+        mut owner_available: impl FnMut(i32) -> bool,
+    ) -> bool {
+        let Some(session) = self.sessions.get(&session_id) else {
+            return false;
+        };
+        if !session.is_available_prefix() {
+            return false;
+        }
+        let available = session
+            .plug_ids_storage()
+            .iter()
+            .filter_map(|plug_id| self.trader_plugs.get(plug_id))
+            .filter(|trader| owner_available(trader.owner_id()))
+            .count();
+        session.minimum_plugs() as usize <= available
+    }
+
+    pub(crate) fn abort_session(&mut self, session_id: i32) -> Option<SessionEndReport> {
+        let callback_plug_ids = self.sessions.get_mut(&session_id)?.abort();
+        let callback_plug_ids = callback_plug_ids
+            .into_iter()
+            .filter(|plug_id| self.plugs.contains_key(plug_id))
+            .collect();
+        let session = self.sessions.get(&session_id)?;
+        Some(SessionEndReport {
+            session_id,
+            ended: session.is_ended(),
+            remove_requested: session.remove_requested(),
+            callback_plug_ids,
+        })
+    }
+
     /// Exact normal `(1, 20, 0)` session + personal-shop seller plug `(400,
     /// player)`. Свежая session всегда проходит `Start(0)` и первый insertion;
     /// поэтому safe atomic publication не меняет достижимый legacy outcome.
@@ -611,6 +728,7 @@ impl CSessionFactory {
             self.equipment_da_kong_plugs.remove(plug_id);
             self.equipment_upgrade_plugs.remove(plug_id);
             self.personal_shop_seller_plugs.remove(plug_id);
+            self.trader_plugs.remove(plug_id);
         }
         plug_ids
     }

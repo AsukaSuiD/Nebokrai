@@ -182,7 +182,8 @@
 
 use super::area::WarSoulPoint;
 use super::container::camountlimitgoodscontainer::{
-    AmountLimitGoodsAdded, AmountLimitGoodsRemoved, CAmountLimitGoodsContainer,
+    AmountLimitGoodsAdded, AmountLimitGoodsRemoved, AmountLimitGoodsTaken,
+    CAmountLimitGoodsContainer,
 };
 use super::container::camountlimitgoodsshadowcontainer::{
     AmountShadowAdded, CAmountLimitGoodsShadowContainer,
@@ -2235,6 +2236,10 @@ impl CPlayer {
         self.move_shape.shape_mut()
     }
 
+    pub(crate) const fn figure(&self) -> ShapeFigure {
+        self.figure
+    }
+
     pub(crate) const fn nation_relive_position_facts(
         &self,
         area_width: i32,
@@ -2445,6 +2450,73 @@ impl CPlayer {
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
         self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
+    }
+
+    /// `CTrader::Trade` добавляет contrary goods при
+    /// `PROGRESS_TRADING`; этот owner намеренно обходит общий progress-lock,
+    /// как прямой packet `Add` исходной функции.
+    pub(crate) fn add_traded_goods_to_packet(
+        &mut self,
+        goods: Vec<CGoods>,
+        factory: &CGoodsFactory,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+        self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
+    }
+
+    /// Обратная половина `CTrader::RollBack`: отменяет уже выполненный
+    /// contrary packet add, включая direct stack merge, и возвращает client
+    /// consumption fact. Сам исходный goods caller хранит отдельно до commit.
+    pub(crate) fn rollback_traded_packet_addition(
+        &mut self,
+        addition: &CiQingPacketAddition,
+        original_amount: u32,
+    ) -> Option<CiQingPacketConsumption> {
+        let position = addition.position?;
+        match &addition.outcome {
+            VolumeGoodsAddOutcome::Added(added) => {
+                let removed = self.packet.remove_goods(added.identity.ex_id)?;
+                let taken = match removed {
+                    VolumeGoodsRemoveOutcome::Removed(taken)
+                    | VolumeGoodsRemoveOutcome::RemovedButCellMissing(taken) => taken,
+                };
+                let removed = match taken {
+                    AmountLimitGoodsTaken::Removed(removed) => removed,
+                    AmountLimitGoodsTaken::Split(_) => return None,
+                };
+                Some(CiQingPacketConsumption {
+                    player_id: self.player_id(),
+                    goods: removed.goods.identity(),
+                    position,
+                    previous_amount: removed.amount,
+                    remaining_amount: 0,
+                    removal: None,
+                })
+            }
+            VolumeGoodsAddOutcome::Stack(
+                super::container::cgoodscontainer::GoodsStackMergeOutcome::Merged {
+                    target,
+                    amount,
+                },
+            ) if *amount == original_amount => {
+                let goods = self.packet.get_goods_mut(position)?;
+                if goods.identity() != *target || goods.amount() < original_amount {
+                    return None;
+                }
+                let previous_amount = goods.amount();
+                let remaining_amount = previous_amount.wrapping_sub(original_amount);
+                goods.set_amount(remaining_amount);
+                Some(CiQingPacketConsumption {
+                    player_id: self.player_id(),
+                    goods: *target,
+                    position,
+                    previous_amount,
+                    remaining_amount,
+                    removal: None,
+                })
+            }
+            _ => None,
+        }
     }
 
     fn add_goods_to_packet_with_progress(
@@ -2980,6 +3052,22 @@ impl CPlayer {
         }
     }
 
+    pub(crate) fn increase_money(
+        &mut self,
+        requested: u32,
+        factory: &CGoodsFactory,
+        created_currency: Vec<CGoods>,
+    ) -> super::container::cwallet::CurrencyIncreaseOutcome {
+        let mut created_currency = Some(created_currency);
+        let outcome = self
+            .wallet
+            .increase_currency(requested, factory, move |_, _| {
+                created_currency.take().unwrap_or_default()
+            });
+        self.money = self.wallet.currency_amount();
+        outcome
+    }
+
     pub(crate) fn yuan_bao(&self) -> u32 {
         self.yuan_bao.currency_amount()
     }
@@ -3095,6 +3183,22 @@ impl CPlayer {
 
     pub(crate) const fn packet(&self) -> &CVolumeLimitGoodsContainer {
         &self.packet
+    }
+
+    pub(crate) fn trade_source_goods(
+        &self,
+        extend_id: i32,
+        position: u32,
+        goods_id: CGuid,
+    ) -> Option<&CGoods> {
+        let goods = match extend_id {
+            1 => self.packet.get_goods(position),
+            2 => self.equipment.get_goods(position),
+            4 => self.wallet.get_goods(position),
+            5 => self.yuan_bao.get_goods(position),
+            _ => None,
+        }?;
+        (goods.identity().ex_id == goods_id).then_some(goods)
     }
 
     pub(crate) fn enhancement_selected_goods_id(&self) -> Option<CGuid> {
