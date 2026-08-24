@@ -438,7 +438,8 @@ use crate::gameserver::appserver::message::organsysmessage::{
     dispatch_game_organizing_war_message,
 };
 use crate::gameserver::appserver::message::othermessage::{
-    GameOtherMessageError, GameOtherMessageReport, dispatch_game_other_message,
+    GameOtherMessageError, GameOtherMessageReport, GameOtherMessageRuntime,
+    dispatch_game_other_message,
 };
 use crate::gameserver::appserver::message::playermessage::{
     GamePlayerMessageError, GamePlayerMessageReport, GamePlayerMessageRuntime,
@@ -2831,6 +2832,7 @@ pub(crate) trait GameMainLoopRuntime:
     + GameGoodsMessageRuntime
     + GameSkillMessageRuntime
     + GameShapeMessageRuntime
+    + GameOtherMessageRuntime
     + GamePlayerMessageRuntime
     + IncrementShopBillingContext
     + WorldAuctionRuntime
@@ -16453,9 +16455,7 @@ impl CGame {
             skill_messages.push(report);
         } else if let Some(report) = dispatch_game_shape_message(message, self, runtime) {
             shape_messages.push(report);
-        } else if let Some(report) =
-            dispatch_game_other_message(message, self, || runtime.get_tick_ms())
-        {
+        } else if let Some(report) = dispatch_game_other_message(message, self, runtime) {
             other_messages.push(report);
         } else if let Some(report) = dispatch_game_player_message(message, self, runtime) {
             player_messages.push(report);

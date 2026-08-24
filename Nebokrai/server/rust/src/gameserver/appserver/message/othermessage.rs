@@ -33,6 +33,8 @@
 //! `0xBF807` и переносит registered players в virtual return points.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
+//! Failed GameServer change `0x8FB04` условно пишет player error-log и всегда
+//! ставит concrete `QuitBySocketId`; GUI/file logger остаётся platform runtime.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::{
@@ -49,6 +51,7 @@ use crate::nets::netserver::message::{CMessage, SendMessageError};
 const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
 const PLAYER_CHAT_REQUEST: u32 = 0x0008_fb01;
 const PLAYER_GOODS_LINK_REQUEST: u32 = 0x0008_fb03;
+const CHANGE_GAME_SERVER_FAILED: u32 = 0x0008_fb04;
 const WORLD_GOODS_LINK_RESPONSE: u32 = 0x0007_fa07;
 const WORLD_GOODS_LINK_PUBLISH: u32 = 0x0007_fa06;
 const WORLD_GM_FEEDBACK: u32 = 0x0007_fa05;
@@ -78,6 +81,12 @@ const WORLD_HONOR_ELIMINATE_ACKNOWLEDGEMENT: u32 = 0x0007_fa16;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameOtherMessageOutcome {
     PlayerMissing,
+    ChangeGameServerFailed {
+        socket_id: i32,
+        player_id: Option<i32>,
+        error_logged: bool,
+        quit_result: i32,
+    },
     ChatIgnored {
         status: i8,
     },
@@ -166,6 +175,19 @@ pub(crate) enum GameOtherMessageOutcome {
     LeiTingUpdated {
         client_delivery: i32,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameOtherErrorLog {
+    ChangeGameServerFailed {
+        player_id: i32,
+        player_name: Vec<u8>,
+    },
+}
+
+pub(crate) trait GameOtherMessageRuntime {
+    fn other_now_milliseconds(&mut self) -> u32;
+    fn add_other_error_log(&mut self, event: GameOtherErrorLog);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -917,16 +939,48 @@ fn dispatch_public_talk(
     })
 }
 
-pub(crate) fn dispatch_game_other_message(
+pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
-    mut now_milliseconds: impl FnMut() -> u32,
+    runtime: &mut Runtime,
 ) -> Option<Result<GameOtherMessageReport, GameOtherMessageError>> {
     let message_type = message.message_type() as u32;
+    if message_type == CHANGE_GAME_SERVER_FAILED {
+        message.resolve_player_context(game);
+        let player = message.player_id().and_then(|player_id| {
+            game.find_player(player_id)
+                .map(|player| (player_id, player.player_name().to_vec()))
+        });
+        if let Some((player_id, player_name)) = &player {
+            runtime.add_other_error_log(GameOtherErrorLog::ChangeGameServerFailed {
+                player_id: *player_id,
+                player_name: player_name.clone(),
+            });
+        }
+        let socket_id = message.socket_id();
+        let quit_result = game
+            .net_server()
+            .command_handle()
+            .quit_by_socket_id(socket_id);
+        let resolved_player_id = player.as_ref().map(|(player_id, _)| *player_id);
+        let error_logged = player.is_some();
+        return Some(Ok(GameOtherMessageReport {
+            message_type,
+            player_id: resolved_player_id.unwrap_or(0),
+            outcome: GameOtherMessageOutcome::ChangeGameServerFailed {
+                socket_id,
+                player_id: resolved_player_id,
+                error_logged,
+                quit_result,
+            },
+        }));
+    }
     if message_type == PLAYER_CHAT_REQUEST {
         let channel = peek_long(message)?;
         if matches!(channel, 0 | 1 | 2 | 4) {
-            return Some(dispatch_player_chat(message, game, now_milliseconds));
+            return Some(dispatch_player_chat(message, game, || {
+                runtime.other_now_milliseconds()
+            }));
         }
         return None;
     }
@@ -992,7 +1046,7 @@ pub(crate) fn dispatch_game_other_message(
             message_type,
             message,
             game,
-            &mut now_milliseconds,
+            &mut || runtime.other_now_milliseconds(),
         ));
     }
     if message_type == PLAYER_RENAME_REQUEST {
@@ -1246,8 +1300,12 @@ pub(crate) fn dispatch_game_other_message(
             let region_id = read_long(message, "clear-player region id")?;
             let buffer_seconds = read_long(message, "clear-player buffer seconds")?;
             let start = game.find_region(region_id).is_some().then(|| {
-                game.start_region_clear_player(region_id, buffer_seconds, now_milliseconds())
-                    .expect("clear-player region проверен до timer mutation")
+                game.start_region_clear_player(
+                    region_id,
+                    buffer_seconds,
+                    runtime.other_now_milliseconds(),
+                )
+                .expect("clear-player region проверен до timer mutation")
             });
             Ok(GameOtherMessageReport {
                 message_type,
