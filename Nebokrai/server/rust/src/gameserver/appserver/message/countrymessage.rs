@@ -17,6 +17,11 @@
 //! живой FIFO: `CountryWarSys`, country regions/results и canonical player
 //! traversal принадлежат `CGame`, а gate/guard/kick и virtual contender
 //! effects остаются обязательной runtime-границей concrete owners.
+//! Client governance `0x90502..0x90509` проверяет caller/target changing state,
+//! сохраняет selector-specific `GS/WS` ошибки через `0xC030D` и пересылает
+//! исходный payload с caller ID/country в достигнутые WorldServer
+//! `0x60306..0x6030D`. `0x9050A -> 0x6030F` остаётся отдельно названной
+//! границей до materialization соответствующего World permission owner-а.
 
 use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,
@@ -92,8 +97,31 @@ pub(crate) enum CountryWarBroadcastOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameCountryWarMessageReport {
-    pub(crate) dispatched: CountryWarMessageDispatchReport,
+    pub(crate) dispatched: Option<CountryWarMessageDispatchReport>,
+    pub(crate) governance: Option<CountryGovernanceReport>,
     pub(crate) broadcast: Option<CountryWarBroadcastOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryGovernanceOutcome {
+    MissingPlayer,
+    Forwarded {
+        world_type: u32,
+        target_id: Option<i32>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    Rejected {
+        string_id: &'static [u8],
+        delivery: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountryGovernanceReport {
+    pub(crate) opcode: u32,
+    pub(crate) player_id: Option<i32>,
+    pub(crate) country: Option<u8>,
+    pub(crate) outcome: CountryGovernanceOutcome,
 }
 
 pub(crate) fn dispatch_country_war_message<Context: CountryWarMessageContext>(
@@ -182,6 +210,14 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
     Result<GameCountryWarMessageReport, CountryWarMessageDispatchError<CountryBattleStateBlock>>,
 > {
     let opcode = message.message_type() as u32;
+    if matches!(opcode, 0x90502..=0x90509) {
+        let governance = dispatch_country_governance_message(message, game, opcode);
+        return Some(Ok(GameCountryWarMessageReport {
+            dispatched: None,
+            governance: Some(governance),
+            broadcast: None,
+        }));
+    }
     if !matches!(opcode, 0x7ff17..=0x7ff1f | 0x7ff22) {
         return None;
     }
@@ -225,9 +261,99 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
         }
     });
     Some(Ok(GameCountryWarMessageReport {
-        dispatched,
+        dispatched: Some(dispatched),
+        governance: None,
         broadcast,
     }))
+}
+
+fn dispatch_country_governance_message(
+    message: &mut CMessage,
+    game: &CGame,
+    opcode: u32,
+) -> CountryGovernanceReport {
+    message.resolve_player_context(game);
+    let player_id = message.player_id();
+    let Some(player_id) = player_id else {
+        return CountryGovernanceReport {
+            opcode,
+            player_id,
+            country: None,
+            outcome: CountryGovernanceOutcome::MissingPlayer,
+        };
+    };
+    let Some(player) = game.find_player(player_id) else {
+        return CountryGovernanceReport {
+            opcode,
+            player_id: Some(player_id),
+            country: None,
+            outcome: CountryGovernanceOutcome::MissingPlayer,
+        };
+    };
+    let country = player.country();
+    let target_id = match opcode {
+        0x90504..=0x90507 | 0x90509 => Some(message.base_mut().get_long().unwrap_or(0)),
+        0x90508 => Some(player_id),
+        _ => None,
+    };
+    let target = target_id.and_then(|target_id| game.find_player(target_id));
+    let rejection = match opcode {
+        0x90504 if target.is_none() => Some(b"GS0047".as_slice()),
+        0x90504 if target.is_some_and(changing_location) => Some(b"GS0017".as_slice()),
+        0x90505 if target.is_none() => Some(b"WS0063".as_slice()),
+        0x90505 if target.is_some_and(changing_location) => Some(b"GS0018".as_slice()),
+        0x90506 if target.is_some_and(changing_location) => Some(b"GS0019".as_slice()),
+        0x90507 if target.is_none() => Some(b"WS0084".as_slice()),
+        0x90507 if target.is_some_and(changing_location) => Some(b"GS0020".as_slice()),
+        0x90508 if target.is_none() => Some(b"WS0080".as_slice()),
+        0x90508 if target.is_some_and(changing_location) => Some(b"GS0021".as_slice()),
+        0x90509 if target.is_none() => Some(b"WS0072".as_slice()),
+        0x90509 if target.is_some_and(changing_location) => Some(b"GS0021".as_slice()),
+        _ => None,
+    };
+    if let Some(string_id) = rejection {
+        let mut response = CMessage::new(0x000c_030d);
+        response.base_mut().add(game.get_string_by_id(string_id));
+        response.add_byte(0);
+        return CountryGovernanceReport {
+            opcode,
+            player_id: Some(player_id),
+            country: Some(country),
+            outcome: CountryGovernanceOutcome::Rejected {
+                string_id,
+                delivery: response.send_to_player(game.net_server(), player_id),
+            },
+        };
+    }
+
+    let world_type = match opcode {
+        0x90502 => 0x0006_0306,
+        0x90503 => 0x0006_0307,
+        0x90504 => 0x0006_0308,
+        0x90505 => 0x0006_0309,
+        0x90506 => 0x0006_030a,
+        0x90507 => 0x0006_030b,
+        0x90508 => 0x0006_030c,
+        0x90509 => 0x0006_030d,
+        _ => unreachable!("governance opcode проверен перед dispatcher-ом"),
+    };
+    message.set_message_type(world_type);
+    message.add_long(player_id);
+    message.add_byte(country);
+    CountryGovernanceReport {
+        opcode,
+        player_id: Some(player_id),
+        country: Some(country),
+        outcome: CountryGovernanceOutcome::Forwarded {
+            world_type: world_type as u32,
+            target_id,
+            delivery: message.send(game, false),
+        },
+    }
+}
+
+fn changing_location(player: &crate::gameserver::appserver::player::CPlayer) -> bool {
+    player.in_changing_region() || player.in_changing_server()
 }
 
 struct GameCountryWarContext<'a, Runtime> {
