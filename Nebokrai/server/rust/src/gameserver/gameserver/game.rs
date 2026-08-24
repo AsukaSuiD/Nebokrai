@@ -305,9 +305,10 @@ use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
 };
 use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::gameserver::appserver::player::{
+    BattleFairyAuditLog, BattleFairyCombineDelivery, BattleFairyCombineEffect,
     BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationReport,
-    BattleFairyFollowReport, BattleFairyPotentialAllocationDelivery,
+    BattleFairyFollowReport, BattleFairyObjectMove, BattleFairyPotentialAllocationDelivery,
     BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetDelivery,
     BattleFairyPotentialResetEffect, BattleFairySkillAdded, BattleFairySkillRequest,
     BattleFairySkillRequestFacts, BattleFairySkillRequestReport, BattleFairySkillResetDelivery,
@@ -1098,6 +1099,12 @@ pub(crate) trait BattleFairyRuntimeContext: BattleFairyDeathContext {
         origin: &CShape,
         message: &CMessage,
     ) -> Result<i32, ShapeCoordinateBlock>;
+}
+
+pub(crate) trait BattleFairyCombineContext {
+    fn publish_battle_fairy_object_move(&mut self, object_move: &BattleFairyObjectMove)
+    -> Vec<i32>;
+    fn record_battle_fairy_audit(&mut self, audit: &BattleFairyAuditLog);
 }
 
 pub(crate) trait BattleFairyPotentialResetContext: BattleFairyDeathContext {
@@ -6403,10 +6410,11 @@ impl CGame {
     /// Отсутствующий player, как и исходный outer lookup, не посылает packet.
     /// Old-client serializer остаётся explicit transport boundary: его нельзя
     /// заменить пустым payload без изменения `OT_NEW_OBJECT/0xbf918`.
-    pub(crate) fn combine_battle_fairy(
+    pub(crate) fn combine_battle_fairy<Context: BattleFairyCombineContext>(
         &mut self,
         player_id: i32,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+        context: &mut Context,
     ) -> Option<BattleFairyCombineReport> {
         let battle_fairy_enabled = self.globe_setup.battle_fairy_enabled();
         let maximum_fetch_power = self.globe_setup.maximum_fetch_power();
@@ -6438,7 +6446,7 @@ impl CGame {
                 |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
             )
         };
-        Some(player.combine_battle_fairy(
+        let mut report = player.combine_battle_fairy(
             battle_fairy_enabled,
             maximum_fetch_power,
             goods_factory,
@@ -6447,7 +6455,74 @@ impl CGame {
             &mut random,
             &mut create_goods,
             encode_old_client,
-        ))
+        );
+        for effect in report.effects.clone() {
+            match effect {
+                BattleFairyCombineEffect::Notification {
+                    player_id,
+                    string_id,
+                    color,
+                } => {
+                    let delivery = colored_player_notice_message(
+                        color,
+                        0,
+                        self.get_string_by_id(string_id.as_bytes()),
+                    )
+                    .send_to_player(self.net_server(), player_id);
+                    report
+                        .deliveries
+                        .push(BattleFairyCombineDelivery::Player(delivery));
+                }
+                BattleFairyCombineEffect::FetchPowerChanged {
+                    message_type,
+                    player_id,
+                    subject_id,
+                    property_name,
+                    value,
+                } => {
+                    let mut message = CMessage::new(message_type as i32);
+                    message.add_long(PLAYER_TYPE);
+                    message.add_long(subject_id);
+                    add_legacy_c_string(message.base_mut(), property_name.as_bytes());
+                    message.add_ulong(value);
+                    report
+                        .deliveries
+                        .push(BattleFairyCombineDelivery::FetchPower(
+                            message.send_to_player(self.net_server(), player_id),
+                        ));
+                }
+                BattleFairyCombineEffect::ObjectMove(object_move) => {
+                    report
+                        .deliveries
+                        .push(BattleFairyCombineDelivery::ObjectMove(
+                            context.publish_battle_fairy_object_move(&object_move),
+                        ));
+                }
+                BattleFairyCombineEffect::SkillAdded(skill) => {
+                    if let Some(message) =
+                        battle_fairy_skill_learned_message(&skill, &self.skill_factory, false)
+                    {
+                        report
+                            .deliveries
+                            .push(BattleFairyCombineDelivery::SkillAdded(
+                                message.send_to_player(self.net_server(), skill.player_id),
+                            ));
+                    }
+                }
+                BattleFairyCombineEffect::GoodsUpdated(update) => {
+                    report
+                        .deliveries
+                        .push(BattleFairyCombineDelivery::GoodsUpdated(
+                            self.send_battle_fairy_goods_update(&update),
+                        ));
+                }
+                BattleFairyCombineEffect::Audit(audit) => {
+                    context.record_battle_fairy_audit(&audit);
+                    report.deliveries.push(BattleFairyCombineDelivery::Audit);
+                }
+            }
+        }
+        Some(report)
     }
 
     /// Исполняемый entry point для `goodsmessage` opcode `0x8FC2C/0x8FC2D`.

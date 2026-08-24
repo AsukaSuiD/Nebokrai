@@ -226,6 +226,16 @@ pub(crate) enum BattleFairyCombineOutcome {
     Created,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyCombineDelivery {
+    Player(i32),
+    FetchPower(i32),
+    ObjectMove(Vec<i32>),
+    SkillAdded(i32),
+    GoodsUpdated(i32),
+    Audit,
+}
+
 #[must_use = "combine report содержит последовательность адресных packet/log effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyCombineReport {
@@ -233,6 +243,7 @@ pub(crate) struct BattleFairyCombineReport {
     pub(crate) outcome: BattleFairyCombineOutcome,
     pub(crate) removed_inputs: Vec<BattleFairyCombineRemovedInput>,
     pub(crate) effects: Vec<BattleFairyCombineEffect>,
+    pub(crate) deliveries: Vec<BattleFairyCombineDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3284,6 +3295,7 @@ impl CPlayer {
             outcome: BattleFairyCombineOutcome::Rejected,
             removed_inputs: Vec::with_capacity(3),
             effects: Vec::new(),
+            deliveries: Vec::new(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairyCombineOutcome::FeatureDisabled;
