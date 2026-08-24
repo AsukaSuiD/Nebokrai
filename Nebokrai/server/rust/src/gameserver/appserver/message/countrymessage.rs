@@ -39,6 +39,8 @@
 //! маршруты: `0xBF806` по стране/всем и `0xC030D` выбранному player ID.
 //! `0x7FF14` сбрасывает jobs `1..7` всех существующих стран: каждый exact
 //! `SetQuestSwitch(false)` сначала отправляет World `0x60315`, затем меняет map.
+//! Ответ объявления войны `0x7FF16` декодирует World result `0x60317`, выполняет
+//! исходный player lookup и намеренно не публикует client/state side effects.
 
 use super::super::country::country::{
     CountryExileMutationReport, CountryInformationMutationReport, CountryKingIdMutationReport,
@@ -162,7 +164,20 @@ pub(crate) struct GameCountryWarMessageReport {
     pub(crate) exile: Option<GameCountryExileReport>,
     pub(crate) notice: Option<GameCountryNoticeReport>,
     pub(crate) quest_reset: Option<GameCountryQuestResetReport>,
+    pub(crate) declaration_response: Option<GameCountryWarDeclarationResponseReport>,
     pub(crate) broadcast: Option<CountryWarBroadcastOutcome>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameCountryWarDeclarationResponseReport {
+    pub(crate) opcode: u32,
+    pub(crate) accepted: i8,
+    pub(crate) accepted_complete: bool,
+    pub(crate) player_id: i32,
+    pub(crate) player_id_complete: bool,
+    pub(crate) target_country: i32,
+    pub(crate) target_country_complete: bool,
+    pub(crate) player_found: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -492,6 +507,24 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
     Result<GameCountryWarMessageReport, CountryWarMessageDispatchError<CountryBattleStateBlock>>,
 > {
     let opcode = message.message_type() as u32;
+    if opcode == 0x7ff16 {
+        let declaration_response =
+            dispatch_country_war_declaration_response(message, game, opcode);
+        return Some(Ok(GameCountryWarMessageReport {
+            dispatched: None,
+            governance: None,
+            entry: None,
+            player_country_change: None,
+            country_information_change: None,
+            direct_response: None,
+            governance_effect: None,
+            exile: None,
+            notice: None,
+            quest_reset: None,
+            declaration_response: Some(declaration_response),
+            broadcast: None,
+        }));
+    }
     if opcode == 0x7ff14 {
         let quest_reset = dispatch_country_quest_reset_message(game, opcode);
         return Some(Ok(GameCountryWarMessageReport {
@@ -505,6 +538,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             exile: None,
             notice: None,
             quest_reset: Some(quest_reset),
+            declaration_response: None,
             broadcast: None,
         }));
     }
@@ -521,6 +555,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             exile: None,
             notice: Some(notice),
             quest_reset: None,
+            declaration_response: None,
             broadcast: None,
         }));
     }
@@ -537,6 +572,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             exile: Some(exile),
             notice: None,
             quest_reset: None,
+            declaration_response: None,
             broadcast: None,
         }));
     }
@@ -554,6 +590,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             exile: None,
             notice: None,
             quest_reset: None,
+            declaration_response: None,
             broadcast: None,
         }));
     }
@@ -570,6 +607,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             exile: None,
             notice: None,
             quest_reset: None,
+            declaration_response: None,
             broadcast: None,
         }));
     }
@@ -586,6 +624,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             exile: None,
             notice: None,
             quest_reset: None,
+            declaration_response: None,
             broadcast: None,
         }));
     }
@@ -602,6 +641,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             exile: None,
             notice: None,
             quest_reset: None,
+            declaration_response: None,
             broadcast: None,
         }));
     }
@@ -618,6 +658,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             exile: None,
             notice: None,
             quest_reset: None,
+            declaration_response: None,
             broadcast: None,
         }));
     }
@@ -634,6 +675,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
             exile: None,
             notice: None,
             quest_reset: None,
+            declaration_response: None,
             broadcast: None,
         }));
     }
@@ -690,8 +732,32 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
         exile: None,
         notice: None,
         quest_reset: None,
+        declaration_response: None,
         broadcast,
     }))
+}
+
+fn dispatch_country_war_declaration_response(
+    message: &mut CMessage,
+    game: &CGame,
+    opcode: u32,
+) -> GameCountryWarDeclarationResponseReport {
+    let decoded_accepted = message.base_mut().get_char();
+    let accepted = decoded_accepted.unwrap_or(0);
+    let decoded_player_id = message.base_mut().get_long();
+    let player_id = decoded_player_id.unwrap_or(0);
+    let decoded_target_country = message.base_mut().get_long();
+    let target_country = decoded_target_country.unwrap_or(0);
+    GameCountryWarDeclarationResponseReport {
+        opcode,
+        accepted,
+        accepted_complete: decoded_accepted.is_some(),
+        player_id,
+        player_id_complete: decoded_player_id.is_some(),
+        target_country,
+        target_country_complete: decoded_target_country.is_some(),
+        player_found: game.find_player(player_id).is_some(),
+    }
 }
 
 fn dispatch_country_quest_reset_message(
