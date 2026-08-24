@@ -343,6 +343,8 @@
 //! Script `2249 / FairyExpUp` связывает reached dispatcher с enhancement
 //! shadow, live packet/equipment owner, fairy grow-log, replacement factory,
 //! GoodsAI registration и concrete client container wire.
+//! Enhancement/precious-box confirm теперь также запускают сохранённый
+//! server-trusted path прямо через тот же CScript player/region context.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CString;
@@ -518,7 +520,10 @@ use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionReturnPoint,
 };
-use crate::gameserver::appserver::script::script::CScriptFunctionRegistry;
+use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
+use crate::gameserver::appserver::script::script::{
+    CScriptFunctionRegistry, ScriptExecutionContext,
+};
 use crate::gameserver::appserver::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
     GameVariableSnapshotReport,
@@ -1339,19 +1344,6 @@ pub(crate) struct FairyImplantationLog {
 
 pub(crate) trait FairyContext: BattleFairyDeathContext {
     fn current_fairy_tick(&mut self) -> u32;
-}
-
-pub(crate) trait ContainerScriptContext {
-    /// Полный expression/script VM остаётся своим runtime owner-ом; caller
-    /// передаёт server-trusted path, nullable script data и live region/player.
-    fn run_last_container_script(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        region_id: Option<i32>,
-        script_name: &[u8],
-        script_data: Option<&[u8]>,
-    );
 }
 
 pub(crate) trait PlayerEquipmentInspectionContext: OldClientGoodsCodec {}
@@ -12819,12 +12811,12 @@ impl CGame {
         report
     }
 
-    pub(crate) fn handle_container_script_action<Context: ContainerScriptContext>(
+    pub(crate) fn handle_container_script_action<Runtime: ScriptFunctionRuntime>(
         &mut self,
         player_id: i32,
         region_id: Option<i32>,
         action: i8,
-        context: &mut Context,
+        runtime: &mut Runtime,
     ) -> Option<ContainerScriptActionReport> {
         if action == 0 {
             let shadows = self
@@ -12843,24 +12835,24 @@ impl CGame {
                 outcome: ContainerScriptActionOutcome::InvalidAction,
             });
         }
-        self.run_last_container_script(player_id, region_id, Some(action), context)
+        self.run_last_container_script(player_id, region_id, Some(action), runtime)
     }
 
-    pub(crate) fn run_precious_box_item_script<Context: ContainerScriptContext>(
+    pub(crate) fn run_precious_box_item_script<Runtime: ScriptFunctionRuntime>(
         &mut self,
         player_id: i32,
         region_id: Option<i32>,
-        context: &mut Context,
+        runtime: &mut Runtime,
     ) -> Option<ContainerScriptActionReport> {
-        self.run_last_container_script(player_id, region_id, None, context)
+        self.run_last_container_script(player_id, region_id, None, runtime)
     }
 
-    fn run_last_container_script<Context: ContainerScriptContext>(
+    fn run_last_container_script<Runtime: ScriptFunctionRuntime>(
         &mut self,
         player_id: i32,
         region_id: Option<i32>,
         action: Option<i8>,
-        context: &mut Context,
+        runtime: &mut Runtime,
     ) -> Option<ContainerScriptActionReport> {
         let script_name = self
             .find_player(player_id)?
@@ -12873,14 +12865,15 @@ impl CGame {
                 outcome: ContainerScriptActionOutcome::EmptyScript,
             });
         }
-        let script_data = self.script_file_data(&script_name).map(<[u8]>::to_vec);
-        let script_data_found = script_data.is_some();
-        context.run_last_container_script(
-            self,
-            player_id,
-            region_id,
+        let script_data_found = self.script_file_data(&script_name).is_some();
+        let _ = self.run_script_file(
             &script_name,
-            script_data.as_deref(),
+            ScriptExecutionContext {
+                player_id: Some(player_id),
+                region_id,
+                ..ScriptExecutionContext::default()
+            },
+            runtime,
         );
         Some(ContainerScriptActionReport {
             action,

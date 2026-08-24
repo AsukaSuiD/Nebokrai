@@ -92,12 +92,12 @@ use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptSkillAttachReport, CGame, CiQingComposeContext,
     CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport, CiQingMakeReport,
     CiQingMountReport, CiQingOtherPersonReport, CiQingOtherPersonTarget, CiQingSetupQueryReport,
-    ContainerScriptActionReport, ContainerScriptContext, EquipmentComposeContext,
-    EquipmentDaKongContext, EquipmentUpgradeContext, FairyContext, FairyHatchReport,
-    FairyImplantResultReport, FairySetupQueryReport, FairySyncretizeResultReport,
-    GoodsDestroyConfirmReport, GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport,
-    HotkeyChangeReport, HotkeyRemovalReport, PlayerEquipmentInspectionReport,
-    SynthesisComposeReport, SynthesisContext, SynthesisOpenReport,
+    ContainerScriptActionReport, EquipmentComposeContext, EquipmentDaKongContext,
+    EquipmentUpgradeContext, FairyContext, FairyHatchReport, FairyImplantResultReport,
+    FairySetupQueryReport, FairySyncretizeResultReport, GoodsDestroyConfirmReport,
+    GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport, HotkeyChangeReport,
+    HotkeyRemovalReport, PlayerEquipmentInspectionReport, SynthesisComposeReport, SynthesisContext,
+    SynthesisOpenReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -155,7 +155,6 @@ pub(crate) trait GameGoodsMessageRuntime:
     + EquipmentUpgradeContext
     + GoodsDestroyContext
     + FairyContext
-    + ContainerScriptContext
     + SynthesisContext
 {
     fn update_battle_fairy_player_property(&mut self, game: &mut CGame, player_id: i32);
