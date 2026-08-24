@@ -6,7 +6,9 @@
 //! повторная factory batch, packet new/stack updates, скидочное списание,
 //! `GS0082` и optional World audit `0x6020D`. Player trade subset
 //! `0xFF003/type 2` синхронизирует обе YuanBao wallet, возобновляет
-//! отложенный trader commit и завершает session. Auction subset `type 3`
+//! отложенный trader commit и завершает session. Personal-shop `type 1`
+//! синхронизирует обе wallet и продолжает отложенный transfer товара через
+//! seller/buyer plugs. Auction subset `type 3`
 //! завершает pending `CGoodsNode`: логирует сделку, посылает success/self
 //! refresh, синхронизирует обе YuanBao wallet или `0x60814` offline seller.
 //! Остальные UniBill cases остаются ниже RAW до их session owners.
@@ -16,7 +18,8 @@ use crate::gameserver::appserver::player::{
     CiQingPacketAddition, CiQingPacketConsumption, PlayerYuanBaoChange,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, GameContainerMessageRuntime, PlayerTradeReadyReport, colored_player_notice_message,
+    CGame, GameContainerMessageRuntime, PersonalShopPurchaseReport, PlayerTradeReadyReport,
+    colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
@@ -47,6 +50,8 @@ pub(crate) enum IncrementShopBillingOutcome {
     AuctionTradeRejected { seller_id: i32, result: i32 },
     PlayerTradeCompleted { receiver_id: i32 },
     PlayerTradeRejected { receiver_id: i32, result: i32 },
+    PersonalShopCompleted { seller_id: i32 },
+    PersonalShopRejected { seller_id: i32, result: i32 },
     Completed,
 }
 
@@ -70,6 +75,7 @@ pub(crate) struct IncrementShopBillingReport {
     pub(crate) audit_delivery: Option<Result<i32, SendMessageError>>,
     pub(crate) auction_world_deliveries: Vec<Result<i32, SendMessageError>>,
     pub(crate) player_trade: Option<PlayerTradeReadyReport>,
+    pub(crate) personal_shop: Option<PersonalShopPurchaseReport>,
     pub(crate) outcome: IncrementShopBillingOutcome,
 }
 
@@ -92,6 +98,9 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: IncrementShopBill
         );
         if trade_type == 2 {
             return Some(dispatch_player_billing_trade(message, game, context));
+        }
+        if trade_type == 1 {
+            return Some(dispatch_personal_shop_billing_trade(message, game, context));
         }
         if trade_type == 3 {
             return Some(dispatch_auction_billing_trade(message, game, context));
@@ -129,6 +138,7 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: IncrementShopBill
         audit_delivery: None,
         auction_world_deliveries: Vec::new(),
         player_trade: None,
+        personal_shop: None,
         outcome: IncrementShopBillingOutcome::MissingPlayer,
     };
     if game.find_player(player_id).is_none() {
@@ -292,6 +302,7 @@ fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
         audit_delivery: None,
         auction_world_deliveries: Vec::new(),
         player_trade: None,
+        personal_shop: None,
         outcome: IncrementShopBillingOutcome::MissingPlayer,
     };
     if game.find_player(buyer_id).is_none() {
@@ -435,6 +446,71 @@ fn dispatch_player_billing_trade<Context: IncrementShopBillingContext>(
     Ok(report)
 }
 
+fn dispatch_personal_shop_billing_trade<Context: IncrementShopBillingContext>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    context: &mut Context,
+) -> Result<IncrementShopBillingReport, IncrementShopBillingMessageError> {
+    let buyer_id = read_billing_long(message, "personal-shop buyer id")?;
+    let seller_id = read_billing_long(message, "personal-shop seller id")?;
+    let result = read_billing_long(message, "personal-shop trade result")?;
+    let buyer_yuan_bao = read_billing_long(message, "personal-shop buyer yuan bao")? as u32;
+    let seller_yuan_bao = read_billing_long(message, "personal-shop seller yuan bao")? as u32;
+    let trade_type = read_billing_long(message, "personal-shop trade type")?;
+    debug_assert_eq!(trade_type, 1);
+    let mut report = empty_trade_report(buyer_id, Vec::new());
+    if game.find_player(buyer_id).is_none() || game.find_player(seller_id).is_none() {
+        return Ok(report);
+    }
+    if result != 0 {
+        report.outcome = IncrementShopBillingOutcome::PersonalShopRejected { seller_id, result };
+        return Ok(report);
+    }
+    let buyer_change = set_billing_yuan_bao(game, buyer_id, buyer_yuan_bao)
+        .expect("Billing personal-shop buyer проверен перед balance");
+    report
+        .yuan_bao_deliveries
+        .extend(context.publish_increment_shop_yuan_bao_change(&buyer_change));
+    report.yuan_bao_change = Some(buyer_change);
+    let seller_change = set_billing_yuan_bao(game, seller_id, seller_yuan_bao)
+        .expect("Billing personal-shop seller проверен перед balance");
+    report
+        .yuan_bao_deliveries
+        .extend(context.publish_increment_shop_yuan_bao_change(&seller_change));
+    report.auction_seller_change = Some(seller_change);
+
+    let session_id = read_billing_long(message, "personal-shop session id")?;
+    let buyer_plug_id = read_billing_long(message, "personal-shop buyer plug id")?;
+    let amount = read_billing_long(message, "personal-shop trade amount")? as u32;
+    let goods_id =
+        message
+            .base_mut()
+            .get_guid()
+            .ok_or(IncrementShopBillingMessageError::MissingField(
+                "personal-shop goods guid",
+            ))?;
+    let transaction = message.base_mut().get_str_bytes(0x200).ok_or(
+        IncrementShopBillingMessageError::MissingField("personal-shop transaction"),
+    )?;
+    report.charged = Some(amount);
+    report.transaction.clone_from(&transaction);
+    let purchase =
+        game.complete_personal_shop_billing_goods(session_id, buyer_plug_id, goods_id, context);
+    if matches!(
+        purchase.outcome,
+        crate::gameserver::gameserver::game::PersonalShopPurchaseOutcome::MissingSessionOrPlug
+            | crate::gameserver::gameserver::game::PersonalShopPurchaseOutcome::ShopClosed
+    ) {
+        report.yuan_bao_deliveries.push(
+            colored_player_notice_message(0xffff_ffff, 0, b"Personal Shop has been CLOSED")
+                .send_to_player(game.net_server(), buyer_id),
+        );
+    }
+    report.personal_shop = Some(purchase);
+    report.outcome = IncrementShopBillingOutcome::PersonalShopCompleted { seller_id };
+    Ok(report)
+}
+
 fn empty_trade_report(payer_id: i32, transaction: Vec<u8>) -> IncrementShopBillingReport {
     IncrementShopBillingReport {
         player_id: payer_id,
@@ -454,6 +530,7 @@ fn empty_trade_report(payer_id: i32, transaction: Vec<u8>) -> IncrementShopBilli
         audit_delivery: None,
         auction_world_deliveries: Vec::new(),
         player_trade: None,
+        personal_shop: None,
         outcome: IncrementShopBillingOutcome::MissingPlayer,
     }
 }

@@ -20,9 +20,9 @@
 //! compose shadows с исходным player slot. Terminal `End/Exit` хранится здесь,
 //! а ended equipment-session GC сохраняет session/plug order и owner identity
 //! для listener detach на MainLoop session-stage. Достигнутый personal-shop
-//! open создаёт normal `(1, 20, 0)` session и typed seller plug с exact owner,
-//! shadow metadata и insertion. Team/trader/buyer варианты и дальнейший
-//! polymorphic shop lifecycle ниже этим не объявляются реализованными.
+//! lifecycle создаёт normal `(1, 20, 0)` session, typed seller/buyer plugs,
+//! exact owner/session relations и personal-shop shadow metadata. Team и
+//! остальные polymorphic session-варианты ниже этим не объявляются готовыми.
 
 use std::collections::BTreeMap;
 
@@ -33,7 +33,9 @@ use crate::gameserver::appserver::container::cequipmentdakongcontainer::{
     DaKongAddBlock, DaKongAddOutcome,
 };
 use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::UpgradeShadowAddBlock;
-use crate::gameserver::appserver::container::cgoodsshadowcontainer::ShadowRemovedReport;
+use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
+    PlacedShadowGoods, ShadowRecordBlock, ShadowRemovedReport,
+};
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::public::guid::CGuid;
@@ -41,6 +43,7 @@ use crate::public::guid::CGuid;
 use super::cequipmentcompose::CEquipmentCompose;
 use super::cequipmentdakong::CEquipmentDaKong;
 use super::cequipmentupgrade::CEquipmentUpgrade;
+use super::cpersonalshopbuyer::CPersonalShopBuyer;
 use super::cpersonalshopseller::CPersonalShopSeller;
 use super::cplug::CPlug;
 use super::csession::CSession;
@@ -76,6 +79,31 @@ pub(crate) struct EquipmentSessionShadowAdded {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct EquipmentSessionShadowRemoved {
     pub(crate) kind: EquipmentSessionPlugKind,
+    pub(crate) plug_id: i32,
+    pub(crate) original: PreviousContainer,
+    pub(crate) removed: ShadowRemovedReport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PersonalShopShadowAddBlock {
+    MissingSessionOrPlug,
+    OwnerMismatch,
+    InvalidContainerIndex,
+    PositionUnavailable,
+    Shadow(ShadowRecordBlock),
+}
+
+#[must_use = "personal-shop add сохраняет actual cell и AddShadow publication data"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PersonalShopShadowAdded {
+    pub(crate) plug_id: i32,
+    pub(crate) position: u32,
+    pub(crate) shadow: AmountShadowAdded,
+}
+
+#[must_use = "personal-shop remove сохраняет original source и delete publication"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PersonalShopShadowRemoved {
     pub(crate) plug_id: i32,
     pub(crate) original: PreviousContainer,
     pub(crate) removed: ShadowRemovedReport,
@@ -120,6 +148,7 @@ pub(crate) struct CSessionFactory {
     equipment_da_kong_plugs: BTreeMap<i32, CEquipmentDaKong>,
     equipment_upgrade_plugs: BTreeMap<i32, CEquipmentUpgrade>,
     personal_shop_seller_plugs: BTreeMap<i32, CPersonalShopSeller>,
+    personal_shop_buyer_plugs: BTreeMap<i32, CPersonalShopBuyer>,
     trader_plugs: BTreeMap<i32, CTrader>,
     next_session_id: i32,
     next_plug_id: i32,
@@ -134,6 +163,7 @@ impl Default for CSessionFactory {
             equipment_da_kong_plugs: BTreeMap::new(),
             equipment_upgrade_plugs: BTreeMap::new(),
             personal_shop_seller_plugs: BTreeMap::new(),
+            personal_shop_buyer_plugs: BTreeMap::new(),
             trader_plugs: BTreeMap::new(),
             next_session_id: 1,
             next_plug_id: 1,
@@ -290,6 +320,235 @@ impl CSessionFactory {
 
     pub(crate) fn personal_shop_seller(&self, plug_id: i32) -> Option<&CPersonalShopSeller> {
         self.personal_shop_seller_plugs.get(&plug_id)
+    }
+
+    pub(crate) fn personal_shop_seller_mut(
+        &mut self,
+        plug_id: i32,
+    ) -> Option<&mut CPersonalShopSeller> {
+        self.personal_shop_seller_plugs.get_mut(&plug_id)
+    }
+
+    pub(crate) fn personal_shop_buyer(&self, plug_id: i32) -> Option<&CPersonalShopBuyer> {
+        self.personal_shop_buyer_plugs.get(&plug_id)
+    }
+
+    pub(crate) fn personal_shop_seller_plug_id(&self, session_id: i32) -> Option<i32> {
+        self.sessions
+            .get(&session_id)?
+            .plug_ids_storage()
+            .iter()
+            .copied()
+            .find(|plug_id| self.personal_shop_seller_plugs.contains_key(plug_id))
+    }
+
+    pub(crate) fn personal_shop_session_available(&self, session_id: i32) -> bool {
+        self.sessions
+            .get(&session_id)
+            .is_some_and(CSession::is_available_prefix)
+    }
+
+    pub(crate) fn insert_personal_shop_buyer(
+        &mut self,
+        session_id: i32,
+        owner_id: i32,
+    ) -> Option<i32> {
+        let session = self.sessions.get_mut(&session_id)?;
+        if !session.is_available_prefix() {
+            return None;
+        }
+        let plug_id = self.next_plug_id;
+        let mut base = CPlug::new();
+        base.set_id(plug_id);
+        base.set_owner(400, owner_id);
+        base.set_session(session_id);
+        base.set_plug_type(3);
+        if !session.insert_plug(plug_id) {
+            return None;
+        }
+        self.next_plug_id = self.next_plug_id.wrapping_add(1);
+        self.plugs.insert(plug_id, base);
+        self.personal_shop_buyer_plugs.insert(
+            plug_id,
+            CPersonalShopBuyer::inserted(plug_id, session_id, owner_id),
+        );
+        Some(plug_id)
+    }
+
+    pub(crate) fn remove_personal_shop_buyer(
+        &mut self,
+        session_id: i32,
+        plug_id: i32,
+    ) -> Option<CPersonalShopBuyer> {
+        let buyer = self.personal_shop_buyer_plugs.remove(&plug_id)?;
+        if buyer.session_id() != session_id {
+            self.personal_shop_buyer_plugs.insert(plug_id, buyer);
+            return None;
+        }
+        let _ = self.sessions.get_mut(&session_id)?.remove_plug(plug_id);
+        self.plugs.remove(&plug_id);
+        Some(buyer)
+    }
+
+    pub(crate) fn personal_shop_participants(
+        &self,
+        session_id: i32,
+    ) -> Option<(i32, i32, Vec<CPersonalShopBuyer>)> {
+        let seller_plug_id = self.personal_shop_seller_plug_id(session_id)?;
+        let seller_owner_id = self.plugs.get(&seller_plug_id)?.owner_id();
+        let buyers = self
+            .sessions
+            .get(&session_id)?
+            .plug_ids_storage()
+            .iter()
+            .filter_map(|plug_id| self.personal_shop_buyer_plugs.get(plug_id).copied())
+            .collect();
+        Some((seller_plug_id, seller_owner_id, buyers))
+    }
+
+    fn resolve_personal_shop_seller_plug(
+        &self,
+        session_id: i32,
+        extend_id: i32,
+        player_id: i32,
+    ) -> Result<i32, PersonalShopShadowAddBlock> {
+        if extend_id & 0xff != 0 {
+            return Err(PersonalShopShadowAddBlock::InvalidContainerIndex);
+        }
+        let plug_id = extend_id >> 8;
+        let plug = self
+            .query_session_plug_by_owner(session_id, 400, player_id)
+            .ok_or(PersonalShopShadowAddBlock::MissingSessionOrPlug)?;
+        if plug.id() != plug_id {
+            return Err(PersonalShopShadowAddBlock::OwnerMismatch);
+        }
+        self.personal_shop_seller_plugs
+            .contains_key(&plug_id)
+            .then_some(plug_id)
+            .ok_or(PersonalShopShadowAddBlock::MissingSessionOrPlug)
+    }
+
+    pub(crate) fn is_personal_shop_seller_container(
+        &self,
+        session_id: i32,
+        extend_id: i32,
+        player_id: i32,
+    ) -> bool {
+        self.resolve_personal_shop_seller_plug(session_id, extend_id, player_id)
+            .is_ok()
+    }
+
+    pub(crate) fn record_personal_shop_shadow(
+        &mut self,
+        session_id: i32,
+        extend_id: i32,
+        player_id: i32,
+        requested_position: u32,
+        goods: &CGoods,
+        previous: PreviousContainer,
+    ) -> Result<PersonalShopShadowAdded, PersonalShopShadowAddBlock> {
+        let plug_id = self.resolve_personal_shop_seller_plug(session_id, extend_id, player_id)?;
+        let seller = self
+            .personal_shop_seller_plugs
+            .get_mut(&plug_id)
+            .expect("personal-shop plug проверен по concrete registry");
+        let position = if requested_position == u32::MAX {
+            seller
+                .goods()
+                .query_goods_position(goods.identity().ex_id)
+                .or_else(|| {
+                    (0..seller.goods().size())
+                        .find(|position| seller.goods().is_space_enough(*position))
+                })
+                .ok_or(PersonalShopShadowAddBlock::PositionUnavailable)?
+        } else {
+            requested_position
+        };
+        if seller.goods().query_goods_position(goods.identity().ex_id) != Some(position)
+            && !seller.goods().is_space_enough(position)
+        {
+            return Err(PersonalShopShadowAddBlock::PositionUnavailable);
+        }
+        let placed = PlacedShadowGoods {
+            identity: goods.identity().ex_id,
+            position,
+            base_properties_index: goods.base_properties_index(),
+            amount: goods.amount(),
+        };
+        let shadow = seller
+            .goods_mut()
+            .base_mut()
+            .record_placed_goods(previous, placed)
+            .map_err(PersonalShopShadowAddBlock::Shadow)?;
+        if !seller
+            .goods_mut()
+            .occupy_cell(position, goods.identity().ex_id)
+            && seller.goods().query_goods_position(goods.identity().ex_id) != Some(position)
+        {
+            let _ = seller.goods_mut().remove_shadow(goods.identity().ex_id);
+            return Err(PersonalShopShadowAddBlock::PositionUnavailable);
+        }
+        Ok(PersonalShopShadowAdded {
+            plug_id,
+            position,
+            shadow,
+        })
+    }
+
+    pub(crate) fn personal_shop_shadow_original(
+        &self,
+        session_id: i32,
+        extend_id: i32,
+        player_id: i32,
+        goods_id: CGuid,
+    ) -> Option<PreviousContainer> {
+        let plug_id = self
+            .resolve_personal_shop_seller_plug(session_id, extend_id, player_id)
+            .ok()?;
+        self.personal_shop_seller_plugs
+            .get(&plug_id)?
+            .goods()
+            .base()
+            .base()
+            .original_container_information(goods_id)
+    }
+
+    pub(crate) fn personal_shop_shadow_position(
+        &self,
+        session_id: i32,
+        extend_id: i32,
+        player_id: i32,
+        goods_id: CGuid,
+    ) -> Option<u32> {
+        let plug_id = self
+            .resolve_personal_shop_seller_plug(session_id, extend_id, player_id)
+            .ok()?;
+        self.personal_shop_seller_plugs
+            .get(&plug_id)?
+            .goods()
+            .query_goods_position(goods_id)
+    }
+
+    pub(crate) fn remove_personal_shop_shadow(
+        &mut self,
+        session_id: i32,
+        extend_id: i32,
+        player_id: i32,
+        goods_id: CGuid,
+    ) -> Option<PersonalShopShadowRemoved> {
+        let plug_id = self
+            .resolve_personal_shop_seller_plug(session_id, extend_id, player_id)
+            .ok()?;
+        let original =
+            self.personal_shop_shadow_original(session_id, extend_id, player_id, goods_id)?;
+        let seller = self.personal_shop_seller_plugs.get_mut(&plug_id)?;
+        seller.remove_goods_price(goods_id);
+        let removed = seller.goods_mut().remove_shadow(goods_id)?;
+        Some(PersonalShopShadowRemoved {
+            plug_id,
+            original,
+            removed,
+        })
     }
 
     fn resolve_equipment_plug(
@@ -728,6 +987,7 @@ impl CSessionFactory {
             self.equipment_da_kong_plugs.remove(plug_id);
             self.equipment_upgrade_plugs.remove(plug_id);
             self.personal_shop_seller_plugs.remove(plug_id);
+            self.personal_shop_buyer_plugs.remove(plug_id);
             self.trader_plugs.remove(plug_id);
         }
         plug_ids

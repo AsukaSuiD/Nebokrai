@@ -399,6 +399,7 @@ use crate::gameserver::appserver::message::containermessage::{
     EnhancementTransferBlock, EnhancementTransferOutcome, EnhancementTransferRemoval,
     EnhancementTransferReport, EquipmentSessionClearBlock, EquipmentSessionSelectionBlock,
     EquipmentSessionSelectionReport, GameContainerMessageError, GameContainerMessageReport,
+    PersonalShopClearBlock, PersonalShopSelectionBlock, PersonalShopSelectionReport,
     dispatch_game_container_message, send_enhancement_goods_collected,
     send_enhancement_shadow_deleted,
 };
@@ -2081,6 +2082,10 @@ pub(crate) trait GameContainerMessageRuntime:
     ) -> PlayerCombatProperties;
 
     fn register_enhancement_goods_ai(&mut self, goods: &CGoods);
+
+    /// Concrete `CMoveShape::DoesStateExist(0x186A4)` остаётся у ещё сырого
+    /// state owner-а; personal-shop availability требует именно этот факт.
+    fn personal_shop_mount_state_exists(&mut self, player: &CPlayer) -> bool;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2748,6 +2753,49 @@ pub(crate) struct PersonalShopRecollection {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PersonalShopPurchaseOutcome {
+    MissingSessionOrPlug,
+    ShopClosed,
+    MissingGoods,
+    UnsupportedPriceType { price_type: u32 },
+    InsufficientMoney { notice_delivery: i32 },
+    PacketFull { notice_delivery: i32 },
+    BurdenExceeded { notice_delivery: i32 },
+    SellerMoneyCapacity { notice_delivery: i32 },
+    SourceRemovalFailed,
+    BuyerAddFailed,
+    Completed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PersonalShopPurchaseReport {
+    pub(crate) session_id: i32,
+    pub(crate) buyer_plug_id: i32,
+    pub(crate) seller_plug_id: Option<i32>,
+    pub(crate) buyer_id: Option<i32>,
+    pub(crate) seller_id: Option<i32>,
+    pub(crate) goods_id: CGuid,
+    pub(crate) price: Option<u32>,
+    pub(crate) seller_delete_delivery: Option<i32>,
+    pub(crate) buyer_packet_deliveries: Vec<Vec<i32>>,
+    pub(crate) money_deliveries: Vec<i32>,
+    pub(crate) audit_delivery: Option<Result<i32, SendMessageError>>,
+    pub(crate) outcome: PersonalShopPurchaseOutcome,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PersonalShopTerminalReport {
+    pub(crate) session_id: i32,
+    pub(crate) seller_plug_id: Option<i32>,
+    pub(crate) seller_id: Option<i32>,
+    pub(crate) buyer_plug_ids: Vec<i32>,
+    pub(crate) buyer_ids: Vec<i32>,
+    pub(crate) deliveries: Vec<i32>,
+    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) collected_plug_ids: Vec<i32>,
+}
+
 #[must_use = "ProcessMessage report сохраняет server и достигнутые gameplay effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
@@ -3206,6 +3254,513 @@ pub(crate) struct CGame {
 }
 
 impl CGame {
+    pub(crate) fn personal_shop_session_available<Context: GameContainerMessageRuntime>(
+        &self,
+        session_id: i32,
+        context: &mut Context,
+    ) -> bool {
+        if !self.session_factory.personal_shop_session_available(session_id) {
+            return false;
+        }
+        let Some(seller_plug_id) = self
+            .session_factory
+            .personal_shop_seller_plug_id(session_id)
+        else {
+            return false;
+        };
+        let Some(player) = self
+            .session_factory
+            .query_plug(seller_plug_id)
+            .and_then(|plug| self.players.get(&plug.owner_id()))
+        else {
+            return false;
+        };
+        if player.is_dead() || context.personal_shop_mount_state_exists(player) {
+            return false;
+        }
+        let Some(region_id) = player.server_region_id() else {
+            return false;
+        };
+        let Some(region) = self.find_region(region_id) else {
+            return false;
+        };
+        let (Ok(tile_x), Ok(tile_y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        else {
+            return false;
+        };
+        region
+            .base()
+            .region
+            .get_block(tile_x, tile_y)
+            .is_ok_and(|block| block == 2)
+    }
+
+    pub(crate) fn purchase_personal_shop_goods<Context: GameContainerMessageRuntime>(
+        &mut self,
+        session_id: i32,
+        buyer_plug_id: i32,
+        goods_id: CGuid,
+        context: &mut Context,
+    ) -> PersonalShopPurchaseReport {
+        self.transact_personal_shop_goods(
+            session_id,
+            buyer_plug_id,
+            goods_id,
+            false,
+            context,
+        )
+    }
+
+    pub(crate) fn complete_personal_shop_billing_goods<
+        Context: GameContainerMessageRuntime,
+    >(
+        &mut self,
+        session_id: i32,
+        buyer_plug_id: i32,
+        goods_id: CGuid,
+        context: &mut Context,
+    ) -> PersonalShopPurchaseReport {
+        self.transact_personal_shop_goods(
+            session_id,
+            buyer_plug_id,
+            goods_id,
+            true,
+            context,
+        )
+    }
+
+    fn transact_personal_shop_goods<Context: GameContainerMessageRuntime>(
+        &mut self,
+        session_id: i32,
+        buyer_plug_id: i32,
+        goods_id: CGuid,
+        billing_completion: bool,
+        context: &mut Context,
+    ) -> PersonalShopPurchaseReport {
+        let mut report = PersonalShopPurchaseReport {
+            session_id,
+            buyer_plug_id,
+            seller_plug_id: None,
+            buyer_id: None,
+            seller_id: None,
+            goods_id,
+            price: None,
+            seller_delete_delivery: None,
+            buyer_packet_deliveries: Vec::new(),
+            money_deliveries: Vec::new(),
+            audit_delivery: None,
+            outcome: PersonalShopPurchaseOutcome::MissingSessionOrPlug,
+        };
+        if !self.personal_shop_session_available(session_id, context) {
+            return report;
+        }
+        let Some(buyer) = self
+            .session_factory
+            .personal_shop_buyer(buyer_plug_id)
+            .filter(|buyer| buyer.session_id() == session_id)
+            .copied()
+        else {
+            return report;
+        };
+        let Some(seller_plug_id) = self
+            .session_factory
+            .personal_shop_seller_plug_id(session_id)
+        else {
+            return report;
+        };
+        let Some(seller_id) = self
+            .session_factory
+            .query_plug(seller_plug_id)
+            .map(|plug| plug.owner_id())
+        else {
+            return report;
+        };
+        report.seller_plug_id = Some(seller_plug_id);
+        report.buyer_id = Some(buyer.owner_id());
+        report.seller_id = Some(seller_id);
+        let Some(seller) = self
+            .session_factory
+            .personal_shop_seller(seller_plug_id)
+            .filter(|seller| seller.shop_opened())
+        else {
+            report.outcome = PersonalShopPurchaseOutcome::ShopClosed;
+            return report;
+        };
+        let Some(price) = seller.goods_price(goods_id) else {
+            report.outcome = PersonalShopPurchaseOutcome::MissingGoods;
+            return report;
+        };
+        report.price = Some(price.price);
+        if price.price == 0 {
+            report.outcome = PersonalShopPurchaseOutcome::MissingGoods;
+            return report;
+        }
+        if !billing_completion && price.price_type != 0 {
+            report.outcome = PersonalShopPurchaseOutcome::UnsupportedPriceType {
+                price_type: price.price_type,
+            };
+            return report;
+        }
+        let Some(previous) = seller
+            .goods()
+            .base()
+            .base()
+            .original_container_information(goods_id)
+        else {
+            report.outcome = PersonalShopPurchaseOutcome::MissingGoods;
+            return report;
+        };
+        let Some(goods) = self
+            .players
+            .get(&seller_id)
+            .and_then(|player| {
+                player.trade_source_goods(
+                    previous.container_extend_id,
+                    previous.goods_position,
+                    goods_id,
+                )
+            })
+            .cloned()
+        else {
+            report.outcome = PersonalShopPurchaseOutcome::MissingGoods;
+            return report;
+        };
+        let Some(buyer_player) = self.players.get(&buyer.owner_id()) else {
+            return report;
+        };
+        if !billing_completion && buyer_player.money() < price.price {
+            report.outcome = PersonalShopPurchaseOutcome::InsufficientMoney {
+                notice_delivery: colored_player_notice_message(
+                    0xffff_ffff,
+                    0,
+                    self.get_string_by_id(b"GS0261"),
+                )
+                .send_to_player(self.net_server(), buyer.owner_id()),
+            };
+            return report;
+        }
+        if buyer_player.packet().is_full(&self.goods_factory) {
+            report.outcome = PersonalShopPurchaseOutcome::PacketFull {
+                notice_delivery: colored_player_notice_message(
+                    0xffff_ffff,
+                    0,
+                    self.get_string_by_id(b"GS0260"),
+                )
+                .send_to_player(self.net_server(), buyer.owner_id()),
+            };
+            return report;
+        }
+        let burden = buyer_player.current_burden(&self.goods_factory);
+        if u32::from(buyer_player.combat_properties().burden)
+            < burden.wrapping_add(goods.weight(&self.goods_factory))
+        {
+            report.outcome = PersonalShopPurchaseOutcome::BurdenExceeded {
+                notice_delivery: colored_player_notice_message(
+                    0xffff_ffff,
+                    0,
+                    self.get_string_by_id(b"GS0259"),
+                )
+                .send_to_player(self.net_server(), buyer.owner_id()),
+            };
+            return report;
+        }
+        let maximum_gold = self
+            .goods_factory
+            .query_goods_max_stack_number(self.goods_factory.get_gold_coin_index());
+        if !billing_completion
+            && maximum_gold
+            < self
+                .players
+                .get(&seller_id)
+                .map_or(0, CPlayer::money)
+                .wrapping_add(price.price)
+        {
+            report.outcome = PersonalShopPurchaseOutcome::SellerMoneyCapacity {
+                notice_delivery: colored_player_notice_message(
+                    0xffff_ffff,
+                    0,
+                    self.get_string_by_id(b"GS0258"),
+                )
+                .send_to_player(self.net_server(), buyer.owner_id()),
+            };
+            return report;
+        }
+        let mut packet_probe = buyer_player.packet().clone();
+        let mut probe_goods = Some(goods.clone());
+        let probe = packet_probe.add_goods(&mut probe_goods, &self.goods_factory, true);
+        if probe_goods.is_some() || matches!(probe, VolumeGoodsAddOutcome::Rejected(_)) {
+            report.outcome = PersonalShopPurchaseOutcome::PacketFull {
+                notice_delivery: colored_player_notice_message(
+                    0xffff_ffff,
+                    0,
+                    self.get_string_by_id(b"GS0260"),
+                )
+                .send_to_player(self.net_server(), buyer.owner_id()),
+            };
+            return report;
+        }
+        let audit = {
+            let seller = self.players.get(&seller_id).expect("seller проверен");
+            let buyer = self
+                .players
+                .get(&buyer.owner_id())
+                .expect("buyer проверен");
+            (
+                u32::from(seller.pk_count()),
+                seller.money(),
+                seller.shape().get_tile_x().unwrap_or(0),
+                seller.shape().get_tile_y().unwrap_or(0),
+                seller.client_ip(),
+                u32::from(buyer.pk_count()),
+                buyer.money(),
+                buyer.shape().get_tile_x().unwrap_or(0),
+                buyer.shape().get_tile_y().unwrap_or(0),
+                buyer.client_ip(),
+                goods.amount(),
+                goods.name().to_vec(),
+            )
+        };
+        let mut seller_player = self
+            .players
+            .remove(&seller_id)
+            .expect("seller проверен перед source removal");
+        let removed = if previous.container_extend_id == 1 {
+            seller_player
+                .packet_mut()
+                .take_goods(
+                    previous.goods_position,
+                    goods.amount(),
+                    &self.goods_factory,
+                    |_| None,
+                )
+                .and_then(|outcome| match outcome {
+                    VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed))
+                    | VolumeGoodsRemoveOutcome::RemovedButCellMissing(
+                        AmountLimitGoodsTaken::Removed(removed),
+                    ) => Some(removed.goods),
+                    _ => None,
+                })
+        } else if previous.container_extend_id == 2 {
+            let facts = context.enhancement_equipment_remove_facts(
+                &seller_player,
+                &goods,
+                self.globe_setup.pack_add_enabled(),
+            );
+            let mut recompute = |player: &CPlayer| {
+                context.recompute_enhancement_player_properties(player)
+            };
+            let mut removal = seller_player.remove_equipment_goods(
+                goods_id,
+                &self.goods_factory,
+                &self.skill_factory,
+                facts,
+                &mut recompute,
+            );
+            drop(recompute);
+            self.publish_player_equipment_remove_report(&mut removal, context);
+            match removal.outcome {
+                EquipmentRemoveOutcome::Removed(removed) => Some(removed.goods),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        self.players.insert(seller_id, seller_player);
+        let Some(removed) = removed else {
+            report.outcome = PersonalShopPurchaseOutcome::SourceRemovalFailed;
+            return report;
+        };
+        self.session_factory
+            .personal_shop_seller_mut(seller_plug_id)
+            .expect("seller plug проверен")
+            .remove_goods(goods_id);
+        report.seller_delete_delivery = Some(self.send_container_object_delete(
+            seller_id,
+            &previous,
+            removed.identity(),
+            removed.amount(),
+        ));
+
+        let original = removed.clone();
+        let (additions, rejected) = {
+            let buyer_player = self
+                .players
+                .get_mut(&buyer.owner_id())
+                .expect("buyer проверен перед packet add");
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            buyer_player.add_traded_goods_to_packet(
+                vec![removed],
+                &self.goods_factory,
+                &mut encode,
+            )
+        };
+        for addition in &additions {
+            report
+                .buyer_packet_deliveries
+                .push(self.send_player_packet_addition(addition));
+        }
+        if !rejected.is_empty()
+            || additions
+                .iter()
+                .any(|addition| addition.resulting_amount.is_none())
+        {
+            let seller_player = self
+                .players
+                .get_mut(&seller_id)
+                .expect("seller остаётся online для legacy packet rollback");
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let (rollback, _) = seller_player.add_traded_goods_to_packet(
+                if rejected.is_empty() { vec![original] } else { rejected },
+                &self.goods_factory,
+                &mut encode,
+            );
+            for addition in &rollback {
+                report
+                    .buyer_packet_deliveries
+                    .push(self.send_player_packet_addition(addition));
+            }
+            report.outcome = PersonalShopPurchaseOutcome::BuyerAddFailed;
+            return report;
+        }
+
+        if !billing_completion {
+            let buyer_change = self
+                .players
+                .get_mut(&buyer.owner_id())
+                .expect("buyer остаётся online")
+                .decrease_money(price.price, &self.goods_factory);
+            report.money_deliveries.extend(
+                self.send_player_money_decrease(buyer.owner_id(), &buyer_change.outcome),
+            );
+            let created =
+                self.create_goods_batch(self.goods_factory.get_gold_coin_index(), price.price);
+            let seller_increase = self
+                .players
+                .get_mut(&seller_id)
+                .expect("seller остаётся online")
+                .increase_money(price.price, &self.goods_factory, created);
+            report.money_deliveries.extend(
+                self.send_player_money_increase(seller_id, &seller_increase, context),
+            );
+        }
+        if !billing_completion && self.log_system.goods_trade_log_enabled() {
+            let mut message = CMessage::new(0x0006_0201);
+            message.add_byte(1);
+            message.add_long(seller_id);
+            message.add_ulong(audit.0);
+            message.add_ulong(audit.1);
+            message.add_long(audit.2);
+            message.add_long(audit.3);
+            message.add_long(buyer.owner_id());
+            message.add_ulong(audit.5);
+            message.add_ulong(audit.6);
+            message.add_long(audit.7);
+            message.add_long(audit.8);
+            message.base_mut().add_guid(goods_id);
+            message.add_ulong(price.price);
+            message.add_ulong(audit.10);
+            add_legacy_c_string(message.base_mut(), &audit.11);
+            message.add_ulong(audit.9);
+            message.add_ulong(audit.4);
+            report.audit_delivery = Some(message.send(self, false));
+        }
+        report.outcome = PersonalShopPurchaseOutcome::Completed;
+        report
+    }
+
+    pub(crate) fn finish_personal_shop_session(
+        &mut self,
+        session_id: i32,
+    ) -> PersonalShopTerminalReport {
+        let mut report = PersonalShopTerminalReport {
+            session_id,
+            seller_plug_id: None,
+            seller_id: None,
+            buyer_plug_ids: Vec::new(),
+            buyer_ids: Vec::new(),
+            deliveries: Vec::new(),
+            around_delivery: None,
+            collected_plug_ids: Vec::new(),
+        };
+        let Some((seller_plug_id, seller_id, buyers)) = self
+            .session_factory
+            .personal_shop_participants(session_id)
+        else {
+            return report;
+        };
+        report.seller_plug_id = Some(seller_plug_id);
+        report.seller_id = Some(seller_id);
+        if let Some(seller) = self.session_factory.personal_shop_seller_mut(seller_plug_id) {
+            seller.close_down();
+        }
+        if let Some(player) = self.players.get_mut(&seller_id) {
+            player.set_personal_shop_flag(0, 0);
+            player.detach_equipment_session_listener(seller_plug_id);
+            player.set_current_progress_snapshot(PlayerProgress::None);
+        }
+        let mut around = CMessage::new(0x000c_0007);
+        around.add_long(seller_id);
+        around.add_long(seller_plug_id);
+        report.around_delivery = self.send_player_shape_around(seller_id, None, &around);
+        for buyer in buyers {
+            report.buyer_plug_ids.push(buyer.plug_id());
+            report.buyer_ids.push(buyer.owner_id());
+            if let Some(player) = self.players.get_mut(&buyer.owner_id()) {
+                player.set_current_progress_snapshot(PlayerProgress::None);
+                let mut message = CMessage::new(0x000c_0008);
+                message.add_long(session_id);
+                report
+                    .deliveries
+                    .push(message.send_to_player(self.net_server(), buyer.owner_id()));
+            }
+        }
+        let _ = self.session_factory.end_session(session_id);
+        report.collected_plug_ids = self.session_factory.garbage_collect_session(session_id);
+        report
+    }
+
+    pub(crate) fn exit_personal_shop_buyer(
+        &mut self,
+        session_id: i32,
+        plug_id: i32,
+    ) -> PersonalShopTerminalReport {
+        let mut report = PersonalShopTerminalReport {
+            session_id,
+            seller_plug_id: self
+                .session_factory
+                .personal_shop_seller_plug_id(session_id),
+            seller_id: None,
+            buyer_plug_ids: Vec::new(),
+            buyer_ids: Vec::new(),
+            deliveries: Vec::new(),
+            around_delivery: None,
+            collected_plug_ids: Vec::new(),
+        };
+        report.seller_id = report.seller_plug_id.and_then(|seller_plug_id| {
+            self.session_factory
+                .query_plug(seller_plug_id)
+                .map(|plug| plug.owner_id())
+        });
+        let Some(buyer) = self
+            .session_factory
+            .remove_personal_shop_buyer(session_id, plug_id)
+        else {
+            return report;
+        };
+        report.buyer_plug_ids.push(plug_id);
+        report.buyer_ids.push(buyer.owner_id());
+        report.collected_plug_ids.push(plug_id);
+        if let Some(player) = self.players.get_mut(&buyer.owner_id()) {
+            player.set_current_progress_snapshot(PlayerProgress::None);
+            let mut message = CMessage::new(0x000c_0008);
+            message.add_long(session_id);
+            report
+                .deliveries
+                .push(message.send_to_player(self.net_server(), buyer.owner_id()));
+        }
+        report
+    }
+
     /// Создаёт достигнутую process-owned проекцию `CGame` с подтверждёнными
     /// setup defaults; ещё не материализованные gameplay owners не подменяет.
     pub(crate) fn new() -> Self {
@@ -3689,6 +4244,122 @@ impl CGame {
         self.session_factory
             .remove_equipment_session_shadow(session_id, session_extend_id, player_id, goods_id)
             .ok_or(EquipmentSessionClearBlock::MissingShadow)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn select_player_personal_shop_goods(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        session_extend_id: i32,
+        requested_position: u32,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+    ) -> Result<PersonalShopSelectionReport, PersonalShopSelectionBlock> {
+        if !matches!(source_extend_id, 1 | 2) {
+            return Err(PersonalShopSelectionBlock::UnsupportedSourceContainer {
+                extend_id: source_extend_id,
+            });
+        }
+        let seller_plug_id = session_extend_id >> 8;
+        if self
+            .session_factory
+            .personal_shop_seller(seller_plug_id)
+            .is_some_and(|seller| seller.shop_opened())
+        {
+            return Err(PersonalShopSelectionBlock::ShopOpened);
+        }
+        let player = self
+            .players
+            .get(&player_id)
+            .ok_or(PersonalShopSelectionBlock::MissingPlayer)?;
+        let goods = match source_extend_id {
+            1 => player.packet().get_goods(source_position),
+            2 => player.equipment().get_goods(source_position),
+            _ => unreachable!("source extend проверен выше"),
+        }
+        .ok_or(PersonalShopSelectionBlock::MissingGoods)?;
+        if goods.identity().ex_id != goods_id || goods.amount() != amount {
+            return Err(PersonalShopSelectionBlock::SourceMismatch);
+        }
+        let goods = goods.clone();
+        let source = crate::gameserver::appserver::container::ccontainer::PreviousContainer {
+            container_type: 400,
+            container_id: player_id,
+            container_extend_id: source_extend_id,
+            goods_position: source_position,
+        };
+        let added = self
+            .session_factory
+            .record_personal_shop_shadow(
+                session_id,
+                session_extend_id,
+                player_id,
+                requested_position,
+                &goods,
+                source,
+            )
+            .map_err(PersonalShopSelectionBlock::Shadow)?;
+        Ok(PersonalShopSelectionReport {
+            goods: goods.identity(),
+            source,
+            added,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn clear_player_personal_shop_selection(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        session_extend_id: i32,
+        shadow_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+    ) -> Result<crate::gameserver::appserver::session::csessionfactory::PersonalShopShadowRemoved, PersonalShopClearBlock> {
+        let seller_plug_id = session_extend_id >> 8;
+        if self
+            .session_factory
+            .personal_shop_seller(seller_plug_id)
+            .is_some_and(|seller| seller.shop_opened())
+        {
+            return Err(PersonalShopClearBlock::ShopOpened);
+        }
+        let original = self
+            .session_factory
+            .personal_shop_shadow_original(session_id, session_extend_id, player_id, goods_id)
+            .ok_or(PersonalShopClearBlock::MissingShadow)?;
+        let recorded_position = self
+            .session_factory
+            .personal_shop_shadow_position(session_id, session_extend_id, player_id, goods_id)
+            .ok_or(PersonalShopClearBlock::MissingShadow)?;
+        if recorded_position != shadow_position
+            || original.container_type != 400
+            || original.container_id != player_id
+            || original.container_extend_id != destination_extend_id
+            || original.goods_position != destination_position
+        {
+            return Err(PersonalShopClearBlock::SourceMismatch);
+        }
+        let player = self
+            .players
+            .get(&player_id)
+            .ok_or(PersonalShopClearBlock::MissingPlayer)?;
+        let goods = match original.container_extend_id {
+            1 => player.packet().get_goods(original.goods_position),
+            2 => player.equipment().get_goods(original.goods_position),
+            _ => None,
+        }
+        .filter(|goods| goods.identity().ex_id == goods_id && goods.amount() == amount)
+        .ok_or(PersonalShopClearBlock::SourceMismatch)?;
+        let _ = goods;
+        self.session_factory
+            .remove_personal_shop_shadow(session_id, session_extend_id, player_id, goods_id)
+            .ok_or(PersonalShopClearBlock::MissingShadow)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -16515,7 +17186,7 @@ impl CGame {
             dispatch_world_auction_message(message, self, runtime, |runtime| runtime.get_tick_ms())
         {
             auction_messages.push(report);
-        } else if let Some(report) = dispatch_player_shop_message(message, self) {
+        } else if let Some(report) = dispatch_player_shop_message(message, self, runtime) {
             player_shop_messages.push(report);
         } else if let Some(report) = dispatch_shop_message(message, self, runtime) {
             shop_messages.push(report);

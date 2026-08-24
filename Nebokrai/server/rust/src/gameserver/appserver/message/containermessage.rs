@@ -48,6 +48,7 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::session::csessionfactory::{
     EquipmentSessionShadowAddBlock, EquipmentSessionShadowAdded, EquipmentSessionShadowRemoved,
+    PersonalShopShadowAddBlock, PersonalShopShadowAdded, PersonalShopShadowRemoved,
 };
 use crate::gameserver::appserver::session::ctrader::{TraderOfferAdded, TraderOfferRemoved};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -153,6 +154,25 @@ pub(crate) enum GameContainerMessageOutcome {
         transfer: EnhancementTransferReport,
         move_delivery: i32,
     },
+    PersonalShopSelected {
+        selection: PersonalShopSelectionReport,
+        old_client_payload: Vec<u8>,
+        add_shadow_delivery: i32,
+        move_delivery: i32,
+    },
+    PersonalShopSelectRolledBack {
+        reason: PersonalShopSelectionBlock,
+        delivery: i32,
+    },
+    PersonalShopCleared {
+        removed: PersonalShopShadowRemoved,
+        delete_shadow_delivery: i32,
+        move_delivery: i32,
+    },
+    PersonalShopClearRolledBack {
+        reason: PersonalShopClearBlock,
+        delivery: i32,
+    },
     AuctionListingMoved {
         transfer: AuctionListingTransferReport,
         move_delivery: i32,
@@ -198,6 +218,8 @@ enum EnhancementMessageRoute {
     EquipmentSessionSelect,
     EquipmentSessionClear,
     EquipmentSessionTransfer,
+    PersonalShopSelect,
+    PersonalShopClear,
     AuctionListingMove,
     AuctionListingWithdrawal,
     TradeOfferAdd,
@@ -387,6 +409,31 @@ pub(crate) enum EquipmentSessionClearBlock {
     SourceMismatch,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PersonalShopSelectionReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) source: PreviousContainer,
+    pub(crate) added: PersonalShopShadowAdded,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PersonalShopSelectionBlock {
+    MissingPlayer,
+    MissingGoods,
+    UnsupportedSourceContainer { extend_id: i32 },
+    SourceMismatch,
+    ShopOpened,
+    Shadow(PersonalShopShadowAddBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PersonalShopClearBlock {
+    MissingPlayer,
+    MissingShadow,
+    SourceMismatch,
+    ShopOpened,
+}
+
 pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
@@ -482,6 +529,42 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 }) && matches!(request.destination_container_extend_id, 1 | 2)
                 {
                     EnhancementMessageRoute::EnhancementTransfer
+                } else {
+                    let (_, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+                    *cursor = start_cursor;
+                    return None;
+                }
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == 10
+                && matches!(request.source_container_extend_id, 1 | 2)
+                && game.session_factory().is_personal_shop_seller_container(
+                    request.destination_container_id,
+                    request.destination_container_extend_id,
+                    player_id,
+                )
+            {
+                EnhancementMessageRoute::PersonalShopSelect
+            } else if request.source_container_type == 10
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && game.session_factory().is_personal_shop_seller_container(
+                    request.source_container_id,
+                    request.source_container_extend_id,
+                    player_id,
+                )
+            {
+                let original = game.session_factory().personal_shop_shadow_original(
+                    request.source_container_id,
+                    request.source_container_extend_id,
+                    player_id,
+                    request.object_id,
+                );
+                if original.is_some_and(|original| {
+                    original.container_type == PLAYER_CONTAINER_TYPE
+                        && original.container_id == player_id
+                        && original.container_extend_id == request.destination_container_extend_id
+                        && original.goods_position == request.destination_position
+                }) {
+                    EnhancementMessageRoute::PersonalShopClear
                 } else {
                     let (_, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
                     *cursor = start_cursor;
@@ -847,6 +930,46 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         )));
     }
 
+    if route == EnhancementMessageRoute::PersonalShopClear {
+        let goods_identity = game
+            .find_player(player_id)
+            .and_then(|player| player.get_goods_by_id(request.object_id))
+            .map(CGoods::identity);
+        let removed = game.clear_player_personal_shop_selection(
+            player_id,
+            request.source_container_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_container_extend_id,
+            request.destination_position,
+        );
+        let removed = match removed {
+            Ok(removed) => removed,
+            Err(reason) => {
+                let delivery = send_rollback(game, player_id);
+                return Some(Ok(report(
+                    GameContainerMessageOutcome::PersonalShopClearRolledBack { reason, delivery },
+                )));
+            }
+        };
+        let delete_shadow_delivery = send_enhancement_shadow_deleted(
+            game,
+            player_id,
+            goods_identity.expect("shop clear validation сохраняет live source goods"),
+            &removed.removed,
+        );
+        let move_delivery = send_rollback(game, player_id);
+        return Some(Ok(report(
+            GameContainerMessageOutcome::PersonalShopCleared {
+                removed,
+                delete_shadow_delivery,
+                move_delivery,
+            },
+        )));
+    }
+
     if route == EnhancementMessageRoute::EquipmentSessionTransfer {
         let transfer = game.transfer_player_equipment_session_goods(
             player_id,
@@ -988,6 +1111,49 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         let move_delivery = send_rollback(game, player_id);
         return Some(Ok(report(
             GameContainerMessageOutcome::EquipmentSessionSelected {
+                selection,
+                old_client_payload,
+                add_shadow_delivery,
+                move_delivery,
+            },
+        )));
+    }
+
+    if route == EnhancementMessageRoute::PersonalShopSelect {
+        let selection = game.select_player_personal_shop_goods(
+            player_id,
+            request.destination_container_id,
+            request.destination_container_extend_id,
+            request.destination_position,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+        );
+        let selection = match selection {
+            Ok(selection) => selection,
+            Err(reason) => {
+                let delivery = send_rollback(game, player_id);
+                return Some(Ok(report(
+                    GameContainerMessageOutcome::PersonalShopSelectRolledBack { reason, delivery },
+                )));
+            }
+        };
+        let goods = game
+            .find_player(player_id)
+            .and_then(|player| player.get_goods_by_id(selection.goods.ex_id))
+            .expect("personal-shop shadow сохраняет live source goods");
+        let old_client_payload = context.encode_goods_for_old_client(goods);
+        let add_shadow_delivery = send_shadow_presence(
+            game,
+            player_id,
+            selection.goods,
+            &selection.added.shadow.presence,
+            &old_client_payload,
+        );
+        let move_delivery = send_rollback(game, player_id);
+        return Some(Ok(report(
+            GameContainerMessageOutcome::PersonalShopSelected {
                 selection,
                 old_client_payload,
                 add_shadow_delivery,

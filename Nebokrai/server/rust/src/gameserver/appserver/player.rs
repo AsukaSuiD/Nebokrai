@@ -1557,6 +1557,8 @@ pub(crate) struct CPlayer {
     in_changing_server: bool,
     in_changing_region: bool,
     current_progress: PlayerProgress,
+    personal_shop_session_id: i32,
+    personal_shop_plug_id: i32,
     war_soul_state: u32,
     war_soul_point: WarSoulPoint,
     war_soul_visual_x_bits: u32,
@@ -1680,6 +1682,8 @@ impl CPlayer {
             in_changing_server: false,
             in_changing_region: false,
             current_progress: PlayerProgress::None,
+            personal_shop_session_id: 0,
+            personal_shop_plug_id: 0,
             war_soul_state: 0,
             war_soul_point: WarSoulPoint::default(),
             war_soul_visual_x_bits: 0.0f32.to_bits(),
@@ -1871,6 +1875,19 @@ impl CPlayer {
 
     pub(crate) const fn set_current_progress_snapshot(&mut self, progress: PlayerProgress) {
         self.current_progress = progress;
+    }
+
+    pub(crate) const fn set_personal_shop_flag(&mut self, session_id: i32, plug_id: i32) {
+        self.personal_shop_session_id = session_id;
+        self.personal_shop_plug_id = plug_id;
+    }
+
+    pub(crate) const fn personal_shop_flag(&self) -> Option<(i32, i32)> {
+        if self.personal_shop_session_id == 0 || self.personal_shop_plug_id == 0 {
+            None
+        } else {
+            Some((self.personal_shop_session_id, self.personal_shop_plug_id))
+        }
     }
 
     pub(crate) fn begin_equipment_session(

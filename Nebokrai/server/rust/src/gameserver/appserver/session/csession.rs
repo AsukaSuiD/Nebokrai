@@ -69,6 +69,14 @@ impl CSession {
         true
     }
 
+    pub(crate) fn remove_plug(&mut self, plug_id: i32) -> bool {
+        let Some(position) = self.plug_ids.iter().position(|id| *id == plug_id) else {
+            return false;
+        };
+        self.plug_ids.remove(position);
+        true
+    }
+
     pub(crate) fn plug_ids_storage(&self) -> &[i32] {
         &self.plug_ids
     }
