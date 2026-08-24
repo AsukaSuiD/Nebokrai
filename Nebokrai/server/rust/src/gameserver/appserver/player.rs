@@ -1479,6 +1479,13 @@ pub(crate) struct CPlayer {
     auction_goods: CVolumeLimitGoodsContainer,
     auction_wallet: CWallet,
     auction_open: bool,
+    auction_search_name: Vec<u8>,
+    auction_search_lower_level: i32,
+    auction_search_upper_level: i32,
+    auction_search_use_self: i32,
+    auction_search_money_type: i32,
+    auction_search_weapon_type: i32,
+    auction_current_page: i32,
     last_auction_option_tick_ms: u32,
     ci_qing: CVolumeLimitGoodsContainer,
     ci_qing_compose: CVolumeLimitGoodsContainer,
@@ -1586,6 +1593,13 @@ impl CPlayer {
             auction_goods,
             auction_wallet: CWallet::new(),
             auction_open: false,
+            auction_search_name: Vec::new(),
+            auction_search_lower_level: 0,
+            auction_search_upper_level: 0,
+            auction_search_use_self: 0,
+            auction_search_money_type: 0,
+            auction_search_weapon_type: 0,
+            auction_current_page: 0,
             last_auction_option_tick_ms: 0,
             ci_qing,
             ci_qing_compose,
@@ -3246,6 +3260,25 @@ impl CPlayer {
                 .map(|goods| goods.identity().ex_id)
                 .collect()
         })
+    }
+
+    pub(crate) fn begin_auction_search(
+        &mut self,
+        name: &[u8],
+        lower_level: i32,
+        upper_level: i32,
+        use_self: i32,
+        money_type: i32,
+        weapon_type: i32,
+    ) {
+        self.auction_search_name.clear();
+        self.auction_search_name.extend_from_slice(name);
+        self.auction_search_lower_level = lower_level;
+        self.auction_search_upper_level = upper_level;
+        self.auction_search_use_self = use_self;
+        self.auction_search_money_type = money_type;
+        self.auction_search_weapon_type = weapon_type;
+        self.auction_current_page = 0;
     }
 
     /// Exact `ReFlushSelfGoods`: strict wrapping `last + 5000 < first sample`,
@@ -9449,19 +9482,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::SetSeaGoodsName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.h:1438
-// RVA: 0x00087780
-// ADDRESS: 00487780
-// PROTOTYPE: void __thiscall SetSeaGoodsName(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CPlayer::GetLastContainerScript

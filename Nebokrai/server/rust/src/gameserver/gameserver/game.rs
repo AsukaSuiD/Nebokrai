@@ -422,7 +422,7 @@ use crate::gameserver::appserver::message::incrementshopmessage::{
 use crate::gameserver::appserver::message::logmessage::{
     GameLogMessageError, GameLogMessageReport, dispatch_game_log_message,
 };
-use crate::gameserver::appserver::message::onmsg_c2s_auction::dispatch_client_auction_lifecycle;
+use crate::gameserver::appserver::message::onmsg_c2s_auction::dispatch_client_auction_message;
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
     WorldAuctionMessageError, WorldAuctionMessageReport, WorldAuctionRuntime,
     dispatch_world_auction_message,
@@ -14723,7 +14723,11 @@ impl CGame {
             dispatch_server_message(message, self, runtime, |runtime| runtime.get_tick_ms())
         {
             server_messages.push(report);
-        } else if dispatch_client_auction_lifecycle(message, self).is_some() {
+        } else if dispatch_client_auction_message(message, self, runtime, |runtime| {
+            runtime.get_tick_ms()
+        })
+        .is_some()
+        {
         } else if let Some(report) =
             dispatch_world_auction_message(message, self, runtime, |runtime| runtime.get_tick_ms())
         {
