@@ -11698,6 +11698,35 @@ impl CGame {
         message.send_to_around_position(region, effect.tile_x, effect.tile_y, None, &runtime)
     }
 
+    /// `5404 / PlayEffect`: region-point effect использует тот же canonical
+    /// around runtime, что equipment effects, но координаты принадлежат
+    /// script expression либо текущей клетке player-а.
+    pub(crate) fn script_play_region_effect(
+        &self,
+        player_id: i32,
+        region_id: i32,
+        effect_id: i32,
+        coordinates: Option<(i32, i32)>,
+    ) -> Option<i32> {
+        let player = self.find_player(player_id)?;
+        let (tile_x, tile_y) = coordinates.unwrap_or((
+            player.shape().get_tile_x().ok()?,
+            player.shape().get_tile_y().ok()?,
+        ));
+        let region = self.find_region(region_id)?.base();
+        let runtime = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        )?;
+        let mut message = CMessage::new(0x000b_f50a);
+        message.add_long(effect_id);
+        message.add_ulong((tile_x as f32 + 0.5).to_bits());
+        message.add_ulong((tile_y as f32 + 0.5).to_bits());
+        Some(message.send_to_around_position(Some(region), tile_x, tile_y, None, &runtime))
+    }
+
     fn equipment_da_kong_run_script<Context: ScriptFunctionRuntime>(
         &mut self,
         report: &mut EquipmentDaKongReport,

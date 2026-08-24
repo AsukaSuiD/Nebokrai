@@ -133,6 +133,9 @@
 //! PostCountryInfo`. Named write сохраняет byte narrowing, `UpdateProperty`,
 //! адресные `BF80C/BF721`; notice проходит существующий строгий маршрут
 //! `0x5FF16 → 0x7FC13 → 0xBF806` только игрокам выбранной страны.
+//! Его terminal `5404 / PlayEffect` проверяет live player/local region до
+//! вычисления аргументов, выбирает explicit либо player tile и публикует
+//! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -236,6 +239,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
 pub(crate) const SCRIPT_FUNCTION_ADD_INCREMENT_LOG: i32 = 2570;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
 pub(crate) const SCRIPT_FUNCTION_GET_AREA_ID: i32 = 5413;
+pub(crate) const SCRIPT_FUNCTION_PLAY_EFFECT: i32 = 5404;
 pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
 pub(crate) const SCRIPT_FUNCTION_POST_WORLD_INFO: i32 = 5202;
 pub(crate) const SCRIPT_FUNCTION_POST_COUNTRY_INFO: i32 = 5203;
@@ -3101,6 +3105,10 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_PLAY_EFFECT => match index {
+            0..=2 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_RELOAD => match index {
             0 => String,
             _ => Unused,
@@ -4683,6 +4691,25 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     integer_arguments: [Option<i32>; 7],
     string_arguments: [Option<&[u8]>; 7],
 ) -> ScriptFunctionDispatchOutcome {
+    if function_id == SCRIPT_FUNCTION_PLAY_EFFECT {
+        let (Some(player_id), Some(region_id)) = (script_player_id, script_region_id) else {
+            return ScriptFunctionDispatchOutcome::Invalid;
+        };
+        let effect_id = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+        let coordinates = match (integer_arguments[1], integer_arguments[2]) {
+            (Some(tile_x), Some(tile_y))
+                if tile_x != SCRIPT_INT_PARAMETER_ERROR && tile_y != SCRIPT_INT_PARAMETER_ERROR =>
+            {
+                Some((tile_x, tile_y))
+            }
+            _ => None,
+        };
+        return game
+            .script_play_region_effect(player_id, region_id, effect_id, coordinates)
+            .map_or(ScriptFunctionDispatchOutcome::Invalid, |_| {
+                ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
+            });
+    }
     if let Some(outcome) = run_village_war_menu_script_function(
         game,
         script_player_id,
