@@ -189,6 +189,10 @@
 //! emotion state: optional `GS0090`, concrete around `0xBF611`, self/point/
 //! object resolution и `0xBFE01` сохраняют native order до внешней очереди
 //! ещё не материализованного `CPlayerAI`.
+//! Остальная skill family `0x90002..04` сохраняет current-skill End gate,
+//! script-data lookup/three path formats и item-skill state перед тем же AI
+//! dispatch; concrete `CSkill`, `RunScript` VM и `CPlayerAI` названы отдельными
+//! обязательными runtime owners, а не подменены синхронными заглушками.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -8086,6 +8090,10 @@ impl CGame {
                 .is_some_and(CPlayer::ci_qing_open)
     }
 
+    pub(crate) fn battle_fairy_enabled(&self) -> bool {
+        self.globe_setup.battle_fairy_enabled()
+    }
+
     /// Полный `CPlayer::MakeCiQingNode` и его `goodsmessage 0x8FC31` tail.
     /// Resource logs предшествуют каждому DeleteGoods-effect; финальный
     /// positive log сохраняет странный native count оставшихся в vector-е
@@ -13372,9 +13380,34 @@ impl CGame {
         facts: PlayerSkillRequestFacts,
         context: &mut Context,
     ) -> Option<PlayerSkillRequestReport> {
-        let mut report = self.players.get_mut(&player_id).map(|player| {
+        let report = self.players.get_mut(&player_id).map(|player| {
             player.request_player_skill(request, facts, &self.skill_factory)
         })?;
+        Some(self.deliver_player_skill_report(player_id, socket_id, report, context))
+    }
+
+    pub(crate) fn request_item_skill<Context: PlayerSkillRequestContext>(
+        &mut self,
+        player_id: i32,
+        socket_id: i32,
+        request: PlayerSkillRequest,
+        skill_level: i32,
+        facts: PlayerSkillRequestFacts,
+        context: &mut Context,
+    ) -> Option<PlayerSkillRequestReport> {
+        let report = self.players.get_mut(&player_id).map(|player| {
+            player.request_item_skill(request, skill_level, facts, &self.skill_factory)
+        })?;
+        Some(self.deliver_player_skill_report(player_id, socket_id, report, context))
+    }
+
+    fn deliver_player_skill_report<Context: PlayerSkillRequestContext>(
+        &mut self,
+        player_id: i32,
+        socket_id: i32,
+        mut report: PlayerSkillRequestReport,
+        context: &mut Context,
+    ) -> PlayerSkillRequestReport {
         for effect in report.effects.clone() {
             match effect {
                 PlayerSkillRequestEffect::Notification {
@@ -13439,7 +13472,7 @@ impl CGame {
                 }
             }
         }
-        Some(report)
+        report
     }
 
     fn send_player_around_excluding_self(

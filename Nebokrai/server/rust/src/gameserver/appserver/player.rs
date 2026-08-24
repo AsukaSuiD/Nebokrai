@@ -119,6 +119,8 @@
 //! socket reject; `0x90005` добавляет feature/HP guards и странный fallback
 //! `546/547`. Concrete `CPlayerAI`, region symbol rule и полный region object
 //! registry передаются как explicit facts.
+//! Item-skill `0x90004` использует тот же player route с client-provided level
+//! и добавляет ID в owned ordered `CMoveShape` vector только перед AI dispatch.
 //! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
 //! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
 //! полиморфные session End/plug Exit принадлежат caller runtime-у.
@@ -2790,6 +2792,10 @@ impl CPlayer {
         self.move_shape.set_current_skill_id(skill_id);
     }
 
+    pub(crate) const fn current_skill_id(&self) -> Option<u32> {
+        self.move_shape.current_skill_id()
+    }
+
     pub(crate) const fn war_soul_state(&self) -> u32 {
         self.war_soul_state
     }
@@ -4427,6 +4433,29 @@ impl CPlayer {
         facts: PlayerSkillRequestFacts,
         skill_factory: &CSkillFactory,
     ) -> PlayerSkillRequestReport {
+        self.request_player_skill_core(request, facts, None, "GS0090", skill_factory)
+    }
+
+    /// Item-skill `0x90004` использует переданный client level, а успешная
+    /// ветвь добавляет ID в native ordered item-skill vector перед AI effect.
+    pub(crate) fn request_item_skill(
+        &mut self,
+        request: PlayerSkillRequest,
+        skill_level: i32,
+        facts: PlayerSkillRequestFacts,
+        skill_factory: &CSkillFactory,
+    ) -> PlayerSkillRequestReport {
+        self.request_player_skill_core(request, facts, Some(skill_level), "GS1039", skill_factory)
+    }
+
+    fn request_player_skill_core(
+        &mut self,
+        request: PlayerSkillRequest,
+        facts: PlayerSkillRequestFacts,
+        item_skill_level: Option<i32>,
+        contend_string_id: &'static str,
+        skill_factory: &CSkillFactory,
+    ) -> PlayerSkillRequestReport {
         let player_id = self.player_id();
         let skill_id = request.skill_id();
         let mut report = PlayerSkillRequestReport {
@@ -4445,7 +4474,7 @@ impl CPlayer {
         if self.contend_state && facts.symbol_attackable {
             report.effects.push(PlayerSkillRequestEffect::Notification {
                 player_id,
-                string_id: "GS0090",
+                string_id: contend_string_id,
                 color: 0xffff_ffff,
                 message_type: 0xffff_0000,
             });
@@ -4455,17 +4484,18 @@ impl CPlayer {
         self.emotion_timestamp_ms = 0;
         report.effects.push(PlayerSkillRequestEffect::ClearEmotion);
 
-        let Some(skill) = self.move_shape.skill(skill_id) else {
-            push_player_skill_reject(&mut report);
-            return report;
-        };
-        report.skill_level = skill.level();
-        if skill.level() == 0 {
+        let skill_level = item_skill_level.unwrap_or_else(|| {
+            self.move_shape
+                .skill(skill_id)
+                .map_or(0, MoveShapeSkill::level)
+        });
+        report.skill_level = skill_level;
+        if skill_level == 0 {
             push_player_skill_reject(&mut report);
             return report;
         }
         if skill_factory
-            .query_skill_base_properties(skill_id, skill.level())
+            .query_skill_base_properties(skill_id, skill_level)
             .is_some_and(|properties| properties.is_target_self() != 0)
         {
             let (target_x, target_y) = match (self.shape().get_tile_x(), self.shape().get_tile_y())
@@ -4516,6 +4546,9 @@ impl CPlayer {
             }
             PlayerSkillDispatch::Object { skill_id, target }
         };
+        if item_skill_level.is_some() {
+            self.move_shape.set_item_skill(skill_id);
+        }
         report
             .effects
             .push(PlayerSkillRequestEffect::AiDispatch(dispatch));

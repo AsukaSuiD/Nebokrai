@@ -130,6 +130,7 @@ pub(crate) struct CMoveShape {
     shape: CShape,
     skills: BTreeMap<u32, MoveShapeSkill>,
     current_skill_id: Option<u32>,
+    item_skill_ids: Vec<u32>,
     moveable_count: i32,
     moveable: bool,
 }
@@ -140,6 +141,7 @@ impl Default for CMoveShape {
             shape: CShape::default(),
             skills: BTreeMap::new(),
             current_skill_id: None,
+            item_skill_ids: Vec::new(),
             moveable_count: 0,
             moveable: true,
         }
@@ -175,6 +177,12 @@ impl CMoveShape {
     /// записью ID и остаётся у соответствующего owner-а.
     pub(crate) const fn set_current_skill_id(&mut self, skill_id: Option<u32>) {
         self.current_skill_id = skill_id;
+    }
+
+    /// Exact `SetItemSkill`: native owner только добавляет ID в ordered vector
+    /// непосредственно перед передачей item-skill в `CPlayerAI`.
+    pub(crate) fn set_item_skill(&mut self, skill_id: u32) {
+        self.item_skill_ids.push(skill_id);
     }
 
     pub(crate) const fn is_moveable(&self) -> bool {
@@ -1650,20 +1658,6 @@ fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
 // RVA: 0x000D2360
 // ADDRESS: 004d2360
 // PROTOTYPE: void __thiscall prison_check(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMoveShape::SetItemSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:3494
-// RVA: 0x000D2570
-// ADDRESS: 004d2570
-// PROTOTYPE: void __thiscall SetItemSkill(tagSkillID param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
