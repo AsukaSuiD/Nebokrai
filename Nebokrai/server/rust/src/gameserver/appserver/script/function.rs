@@ -140,6 +140,11 @@
 //! до выражения, затем передают limit и один clock sample в owned
 //! `CPlayerRanks`: двухсекундный per-player cooldown и `0xBFF30` client wire
 //! остаются у snapshot owner-а, загруженного startup/timer цепочкой World.
+//! Honor NPC family `2625..2630/2634..2637` читает соседний авторитетный
+//! `CHonorRanks` snapshot, публикует type-3 список `0xBFF35` и связывает
+//! attempt-appellation с настоящим `CNotDisappearAfterDead` lifecycle:
+//! skill-registry lookup, replacement по type/ID, around `0xBFE03/04` и
+//! адресный player state `0xBFE02` выполняются из того же script caller-а.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
@@ -227,6 +232,15 @@ pub(crate) const SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME: i32 = 6045;
 pub(crate) const SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME: i32 = 6046;
 pub(crate) const SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID: i32 = 6047;
 pub(crate) const SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS: i32 = 6051;
+pub(crate) const SCRIPT_FUNCTION_GET_DAYS_HONOR_RANK: i32 = 2625;
+pub(crate) const SCRIPT_FUNCTION_GET_WEEKS_HONOR_RANK: i32 = 2626;
+pub(crate) const SCRIPT_FUNCTION_GET_MONTHS_HONOR_RANK: i32 = 2627;
+pub(crate) const SCRIPT_FUNCTION_GET_TOTAL_HONOR_RANK: i32 = 2628;
+pub(crate) const SCRIPT_FUNCTION_GET_ATTEMPT_APPELLATION_ID: i32 = 2630;
+pub(crate) const SCRIPT_FUNCTION_SEND_TOTAL_HONOR_RANKS: i32 = 2634;
+pub(crate) const SCRIPT_FUNCTION_ADD_APPELLATION_STATE: i32 = 2635;
+pub(crate) const SCRIPT_FUNCTION_DEL_APPELLATION_STATE: i32 = 2636;
+pub(crate) const SCRIPT_FUNCTION_GET_APPELLATION_STATE: i32 = 2637;
 pub(crate) const SCRIPT_FUNCTION_GET_WAR_REGION_STATE: i32 = 6054;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_OWNING_REGION: i32 = 6055;
 pub(crate) const SCRIPT_FUNCTION_GET_WAR_START_TIME: i32 = 6056;
@@ -3141,6 +3155,18 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_DAYS_HONOR_RANK
+        | SCRIPT_FUNCTION_GET_WEEKS_HONOR_RANK
+        | SCRIPT_FUNCTION_GET_MONTHS_HONOR_RANK
+        | SCRIPT_FUNCTION_GET_TOTAL_HONOR_RANK
+        | SCRIPT_FUNCTION_GET_ATTEMPT_APPELLATION_ID
+        | SCRIPT_FUNCTION_SEND_TOTAL_HONOR_RANKS => Unused,
+        SCRIPT_FUNCTION_ADD_APPELLATION_STATE
+        | SCRIPT_FUNCTION_DEL_APPELLATION_STATE
+        | SCRIPT_FUNCTION_GET_APPELLATION_STATE => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_RELOAD => match index {
             0 => String,
             _ => Unused,
@@ -4723,6 +4749,73 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     integer_arguments: [Option<i32>; 7],
     string_arguments: [Option<&[u8]>; 7],
 ) -> ScriptFunctionDispatchOutcome {
+    if matches!(
+        function_id,
+        SCRIPT_FUNCTION_GET_DAYS_HONOR_RANK
+            | SCRIPT_FUNCTION_GET_WEEKS_HONOR_RANK
+            | SCRIPT_FUNCTION_GET_MONTHS_HONOR_RANK
+            | SCRIPT_FUNCTION_GET_TOTAL_HONOR_RANK
+    ) {
+        let legacy_return = script_player_id.map_or(0, |player_id| {
+            game.script_honor_rank_position(
+                player_id,
+                function_id - SCRIPT_FUNCTION_GET_DAYS_HONOR_RANK,
+            )
+        });
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+    }
+    if function_id == SCRIPT_FUNCTION_SEND_TOTAL_HONOR_RANKS {
+        let legacy_return =
+            script_player_id.map_or(0, |player_id| game.send_script_total_honor_ranks(player_id));
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+    }
+    if function_id == SCRIPT_FUNCTION_GET_ATTEMPT_APPELLATION_ID {
+        if argument_count != 0 {
+            return ScriptFunctionDispatchOutcome::Invalid;
+        }
+        let Some(legacy_return) = script_player_id
+            .and_then(|player_id| game.script_attempt_appellation_id(player_id))
+            .map(|value| value as i32)
+        else {
+            return ScriptFunctionDispatchOutcome::Invalid;
+        };
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+    }
+    if matches!(
+        function_id,
+        SCRIPT_FUNCTION_ADD_APPELLATION_STATE
+            | SCRIPT_FUNCTION_DEL_APPELLATION_STATE
+            | SCRIPT_FUNCTION_GET_APPELLATION_STATE
+    ) {
+        if argument_count != 1 {
+            return ScriptFunctionDispatchOutcome::Invalid;
+        }
+        let (Some(player_id), Some(state_id)) = (
+            script_player_id.filter(|player_id| game.find_player(*player_id).is_some()),
+            integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+        ) else {
+            return ScriptFunctionDispatchOutcome::Invalid;
+        };
+        let result = match function_id {
+            SCRIPT_FUNCTION_ADD_APPELLATION_STATE => {
+                game.add_script_appellation_state(player_id, state_id as u32, || {
+                    runtime.country_contend_now_milliseconds()
+                })
+            }
+            SCRIPT_FUNCTION_DEL_APPELLATION_STATE => {
+                game.delete_script_appellation_state(player_id, state_id as u32)
+            }
+            SCRIPT_FUNCTION_GET_APPELLATION_STATE => {
+                game.get_script_appellation_state(player_id, state_id as u32)
+            }
+            _ => unreachable!("appellation selector уже проверен"),
+        };
+        return result.map_or(ScriptFunctionDispatchOutcome::Invalid, |legacy_return| {
+            ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: legacy_return as i32,
+            }
+        });
+    }
     if function_id == SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS {
         if !script_player_npc_caller_exists(game, script_player_id, script_npc_id) {
             return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };

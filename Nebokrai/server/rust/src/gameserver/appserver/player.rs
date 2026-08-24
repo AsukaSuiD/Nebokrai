@@ -2339,6 +2339,29 @@ impl CPlayer {
         self.attempt_appellation_id = appellation_id;
     }
 
+    pub(crate) fn add_appellation_state<Now>(
+        &mut self,
+        state_id: u32,
+        factory: &CSkillFactory,
+        now_ms: Now,
+    ) -> super::moveshape::UndeadStateMutation
+    where
+        Now: FnOnce() -> u32,
+    {
+        self.move_shape.add_undead_state(state_id, factory, now_ms)
+    }
+
+    pub(crate) fn delete_appellation_state(
+        &mut self,
+        state_id: u32,
+    ) -> super::moveshape::UndeadStateMutation {
+        self.move_shape.delete_undead_state(state_id)
+    }
+
+    pub(crate) fn get_appellation_state(&self, state_id: u32) -> u32 {
+        self.move_shape.get_undead_state(state_id)
+    }
+
     pub(crate) const fn gods_battle_faction(&self) -> i32 {
         self.base_properties.gods_battle_faction
     }

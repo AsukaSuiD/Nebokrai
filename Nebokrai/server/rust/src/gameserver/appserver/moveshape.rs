@@ -38,6 +38,10 @@
 //! `SummonBF`; virtual lifecycle skill остаётся у будущего skill owner-а.
 //! `SetMoveable` RVA `0x000CCEE0` хранит exact nesting counter и derived bool;
 //! goods-session `0x8FC25` снимает один запрет строго между session End и plug Exit.
+//! Reached appellation scripts материализуют `Add/Del/GetUndeadState` RVA
+//! `0x000D1780/0x000CDE80/0x000CDEF0`: свойства берутся из skill `(56, ID)`,
+//! активные state заменяются по usage type либо ID, а полный usage snapshot
+//! остаётся у state для общего property owner-а.
 
 use std::collections::BTreeMap;
 
@@ -60,6 +64,9 @@ const SKILL_TYPE_ATTACK: u32 = 0;
 const SKILL_TYPE_DEFENSE: u32 = 1;
 const SKILL_TYPE_STATE: u32 = 2;
 const SKILL_TYPE_SUMMON: u32 = 3;
+const SKILL_NOT_DISAPPEAR_AFTER_DEAD: u32 = 56;
+const SKILL_USAGE_CONST: u32 = 20_010;
+const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 
 /// Достигнутая common-проекция `CSkill`: identity, level, category и name.
 /// Исполнение concrete attack/defense/state/summon owners остаётся у самих
@@ -70,6 +77,44 @@ pub(crate) struct MoveShapeSkill {
     level: i32,
     skill_type: u32,
     name: Vec<u8>,
+}
+
+/// Достигнутая identity/lifecycle-проекция `CNotDisappearAfterDead`.
+/// Полная usage-map сохраняется вместе со state, чтобы последующий общий
+/// property owner мог применить те же модификаторы без повторного lookup-а.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UndeadState {
+    state_id: u32,
+    state_type: u16,
+    keep_time_ms: u32,
+    started_ms: u32,
+    properties: BTreeMap<u32, u32>,
+}
+
+impl UndeadState {
+    pub(crate) const fn state_id(&self) -> u32 {
+        self.state_id
+    }
+
+    pub(crate) const fn keep_time_ms(&self) -> u32 {
+        self.keep_time_ms
+    }
+
+    pub(crate) const fn started_ms(&self) -> u32 {
+        self.started_ms
+    }
+
+    pub(crate) const fn properties(&self) -> &BTreeMap<u32, u32> {
+        &self.properties
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UndeadStateMutation {
+    pub(crate) removed: Vec<UndeadState>,
+    pub(crate) added: Option<UndeadState>,
+    pub(crate) legacy_return: u32,
+    pub(crate) state_list_changed: bool,
 }
 
 impl MoveShapeSkill {
@@ -132,6 +177,7 @@ pub(crate) struct CMoveShape {
     skills: BTreeMap<u32, MoveShapeSkill>,
     current_skill_id: Option<u32>,
     item_skill_ids: Vec<u32>,
+    undead_states: Vec<UndeadState>,
     moveable_count: i32,
     moveable: bool,
 }
@@ -143,6 +189,7 @@ impl Default for CMoveShape {
             skills: BTreeMap::new(),
             current_skill_id: None,
             item_skill_ids: Vec::new(),
+            undead_states: Vec::new(),
             moveable_count: 0,
             moveable: true,
         }
@@ -160,6 +207,100 @@ impl CMoveShape {
 
     pub(crate) const fn skills(&self) -> &BTreeMap<u32, MoveShapeSkill> {
         &self.skills
+    }
+
+    pub(crate) fn undead_states(&self) -> &[UndeadState] {
+        &self.undead_states
+    }
+
+    /// Exact `AddUndeadState`: registry key `(56, stateID)`, затем удаление
+    /// всех state того же type либо ID, после чего ID `0` оставляет только
+    /// removal tail. Успешный Begin хранит state и возвращает `1`.
+    pub(crate) fn add_undead_state<Now>(
+        &mut self,
+        state_id: u32,
+        factory: &CSkillFactory,
+        now_ms: Now,
+    ) -> UndeadStateMutation
+    where
+        Now: FnOnce() -> u32,
+    {
+        let Some(properties) =
+            factory.query_skill_base_properties(SKILL_NOT_DISAPPEAR_AFTER_DEAD, state_id as i32)
+        else {
+            return UndeadStateMutation {
+                removed: Vec::new(),
+                added: None,
+                legacy_return: 0,
+                state_list_changed: false,
+            };
+        };
+        let state_type = properties.query_property(SKILL_USAGE_CONST) as u16;
+        let mut removed = Vec::new();
+        let mut index = 0;
+        while index < self.undead_states.len() {
+            if self.undead_states[index].state_type == state_type
+                || self.undead_states[index].state_id == state_id
+            {
+                removed.push(self.undead_states.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        if state_id == 0 {
+            return UndeadStateMutation {
+                state_list_changed: !removed.is_empty(),
+                removed,
+                added: None,
+                legacy_return: 0,
+            };
+        }
+        let state = UndeadState {
+            state_id,
+            state_type,
+            keep_time_ms: properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME),
+            started_ms: now_ms(),
+            properties: properties.properties().clone(),
+        };
+        self.undead_states.push(state.clone());
+        UndeadStateMutation {
+            removed,
+            added: Some(state),
+            legacy_return: 1,
+            state_list_changed: true,
+        }
+    }
+
+    /// Exact first-match `DelUndeadState`; native `End` удаляет найденный
+    /// state и возвращает его ID, отсутствующий state возвращает ноль.
+    pub(crate) fn delete_undead_state(&mut self, state_id: u32) -> UndeadStateMutation {
+        let Some(index) = self
+            .undead_states
+            .iter()
+            .position(|state| state.state_id == state_id)
+        else {
+            return UndeadStateMutation {
+                removed: Vec::new(),
+                added: None,
+                legacy_return: 0,
+                state_list_changed: false,
+            };
+        };
+        let removed = self.undead_states.remove(index);
+        UndeadStateMutation {
+            removed: vec![removed],
+            added: None,
+            legacy_return: state_id,
+            state_list_changed: true,
+        }
+    }
+
+    pub(crate) fn get_undead_state(&self, state_id: u32) -> u32 {
+        self.undead_states
+            .iter()
+            .any(|state| state.state_id == state_id)
+            .then_some(state_id)
+            .unwrap_or(0)
     }
 
     pub(crate) fn skill(&self, skill_id: u32) -> Option<&MoveShapeSkill> {

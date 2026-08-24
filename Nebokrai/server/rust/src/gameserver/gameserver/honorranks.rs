@@ -4,6 +4,9 @@
 //! country lists. Для country `-1` списки очищаются и декодируются по порядку;
 //! каждый record содержит player ID, level byte, NUL-name, occupation byte,
 //! appellation ID и eliminate count. Non-positive count означает пустой list.
+//! Reached honor NPC scripts материализуют также `GetPlayerPosition` и
+//! `AddToByteArray`: первый сохраняет 1-based snapshot order, второй — exact
+//! count/record payload для адресного client `0xBFF35`.
 //! Точная пара и исходный owner указаны ниже.
 //!
 //! `Vec` заменяет только `std::list`; уже очищенные списки и полностью
@@ -43,6 +46,53 @@ impl CHonorRanks {
         let rank_type = valid_index(rank_type, RANK_TYPE_COUNT)?;
         let country = valid_index(country, COUNTRY_COUNT)?;
         Some(&self.history[rank_type][country])
+    }
+
+    /// Exact `GetPlayerPosition`: порядок World snapshot уже является местом
+    /// игрока, поэтому GameServer только возвращает 1-based index либо ноль.
+    pub(crate) fn player_position(&self, rank_type: i32, country: i32, player_id: i32) -> i32 {
+        self.history(rank_type, country)
+            .and_then(|ranks| ranks.iter().position(|rank| rank.player_id == player_id))
+            .and_then(|position| i32::try_from(position + 1).ok())
+            .unwrap_or(0)
+    }
+
+    /// Exact payload `AddToByteArray` для client honor-list: signed count,
+    /// byte level, NUL-name, byte occupation и два DWORD следуют без padding.
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+        rank_type: i32,
+        country: i32,
+    ) -> bool {
+        if valid_index(rank_type, RANK_TYPE_COUNT).is_none() {
+            return false;
+        }
+        if country == -1 {
+            for country in 0..COUNTRY_COUNT as i32 {
+                if !self.add_to_byte_array(destination, rank_type, country) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        let Some(ranks) = self.history(rank_type, country) else {
+            return false;
+        };
+        let Ok(count) = i32::try_from(ranks.len()) else {
+            return false;
+        };
+        destination.extend_from_slice(&count.to_le_bytes());
+        for rank in ranks {
+            destination.extend_from_slice(&rank.player_id.to_le_bytes());
+            destination.push(rank.level);
+            destination.extend_from_slice(&rank.name);
+            destination.push(0);
+            destination.push(rank.occupation_id);
+            destination.extend_from_slice(&rank.appellation_id.to_le_bytes());
+            destination.extend_from_slice(&rank.eliminate_count.to_le_bytes());
+        }
+        true
     }
 
     pub(crate) fn decord_from_byte_array(
@@ -334,7 +384,7 @@ fn read_c_string(
 
 // ============================================================================
 // FUNCTION: CHonorRanks::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED ABOVE; DECOMPILER STORED LOCALLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\honorranks.cpp:67

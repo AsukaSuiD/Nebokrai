@@ -502,7 +502,7 @@ use crate::gameserver::appserver::message::unibillmessage::{
     dispatch_increment_shop_billing_message,
 };
 use crate::gameserver::appserver::monster::CMonster;
-use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::moveshape::{CMoveShape, UndeadState};
 use crate::gameserver::appserver::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationRect,
@@ -15975,6 +15975,142 @@ impl CGame {
             now_ms,
             net_server.as_ref()?,
         ))
+    }
+
+    /// Scalar honor-rank selector читает тот же startup/timer snapshot, который
+    /// WorldServer обновляет через `CHonorRanks::DecordFromByteArray`.
+    pub(crate) fn script_honor_rank_position(&self, player_id: i32, rank_type: i32) -> i32 {
+        let Some(player) = self.find_player(player_id) else {
+            return 0;
+        };
+        self.honor_ranks.player_position(
+            rank_type,
+            i32::from(player.country()).wrapping_sub(1),
+            player_id,
+        )
+    }
+
+    /// Exact `SendTotalHonorRanks`: country DWORD precedes type-3 country
+    /// payload, а malformed country останавливает отправку целиком.
+    pub(crate) fn send_script_total_honor_ranks(&self, player_id: i32) -> i32 {
+        let Some(player) = self.find_player(player_id) else {
+            return 0;
+        };
+        let country = i32::from(player.country());
+        let mut payload = Vec::new();
+        if !self
+            .honor_ranks
+            .add_to_byte_array(&mut payload, 3, country.wrapping_sub(1))
+        {
+            return 0;
+        }
+        let mut message = CMessage::new(0x0b_ff35);
+        message.add_long(country);
+        message.base_mut().add(&payload);
+        let _ = message.send_to_player(self.net_server(), player_id);
+        0
+    }
+
+    pub(crate) fn script_attempt_appellation_id(&self, player_id: i32) -> Option<u32> {
+        self.find_player(player_id)
+            .map(CPlayer::attempt_appellation_id)
+    }
+
+    pub(crate) fn add_script_appellation_state<Now>(
+        &mut self,
+        player_id: i32,
+        state_id: u32,
+        now_ms: Now,
+    ) -> Option<u32>
+    where
+        Now: FnOnce() -> u32,
+    {
+        let mutation = {
+            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+            players
+                .get_mut(&player_id)?
+                .add_appellation_state(state_id, skill_factory, now_ms)
+        };
+        for state in &mutation.removed {
+            self.send_appellation_visual(player_id, state, false);
+        }
+        if let Some(state) = &mutation.added {
+            self.send_appellation_visual(player_id, state, true);
+            self.send_script_player_state_changed(player_id);
+        }
+        Some(mutation.legacy_return)
+    }
+
+    pub(crate) fn delete_script_appellation_state(
+        &mut self,
+        player_id: i32,
+        state_id: u32,
+    ) -> Option<u32> {
+        let mutation = self
+            .players
+            .get_mut(&player_id)?
+            .delete_appellation_state(state_id);
+        for state in &mutation.removed {
+            self.send_appellation_visual(player_id, state, false);
+        }
+        if mutation.state_list_changed {
+            self.send_script_player_state_changed(player_id);
+        }
+        Some(mutation.legacy_return)
+    }
+
+    pub(crate) fn get_script_appellation_state(
+        &self,
+        player_id: i32,
+        state_id: u32,
+    ) -> Option<u32> {
+        self.find_player(player_id)
+            .map(|player| player.get_appellation_state(state_id))
+    }
+
+    fn send_appellation_visual(&self, player_id: i32, state: &UndeadState, begin: bool) {
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        let Some(region) = player
+            .server_region_id()
+            .and_then(|region_id| self.find_region(region_id))
+            .map(ServerRegionOwner::base)
+        else {
+            return;
+        };
+        let Some(runtime) = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        ) else {
+            return;
+        };
+        let mut message = CMessage::new(if begin { 0x0b_fe03 } else { 0x0b_fe04 });
+        message.add_long(player.shape().identity().object_type);
+        message.add_long(player_id);
+        message.add_long(56);
+        message.add_long(state.state_id() as i32);
+        if begin {
+            message.add_long(state.keep_time_ms() as i32);
+            message.add_long(0);
+        }
+        let _ = message.send_to_around(Some(region), player.shape(), None, &runtime);
+    }
+
+    fn send_script_player_state_changed(&self, player_id: i32) {
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        let mut message = CMessage::new(0x0b_fe02);
+        message.add_long(player.shape().identity().object_type);
+        message.add_long(player_id);
+        message.add_ulong(player.health());
+        message.add_ulong(player.mana());
+        message.base_mut().add_short(0);
+        message.base_mut().add_short(0);
+        let _ = message.send_to_player(self.net_server(), player_id);
     }
 
     pub(crate) const fn honor_ranks(&self) -> &CHonorRanks {

@@ -15,15 +15,17 @@
 use std::collections::BTreeMap;
 
 use super::function::{
-    SCRIPT_FUNCTION_ADD_INCREMENT_LOG, SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR,
-    SCRIPT_FUNCTION_CITY_WAR_DECLARE, SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID,
-    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME,
-    SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME,
-    SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS,
-    ScriptFunctionDispatchOutcome, ScriptFunctionParameterKind, ScriptFunctionRuntime,
-    ScriptStringFunctionDispatchOutcome, dispatch_script_function, dispatch_script_string_function,
-    owned_region_script_caller_is_live, script_function_parameter_kind,
-    script_player_npc_caller_exists, village_war_script_caller_is_live,
+    SCRIPT_FUNCTION_ADD_APPELLATION_STATE, SCRIPT_FUNCTION_ADD_INCREMENT_LOG,
+    SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR, SCRIPT_FUNCTION_CITY_WAR_DECLARE,
+    SCRIPT_FUNCTION_DEL_APPELLATION_STATE, SCRIPT_FUNCTION_GET_APPELLATION_STATE,
+    SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME,
+    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME,
+    SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME, SCRIPT_FUNCTION_PLAY_EFFECT,
+    SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
+    ScriptFunctionParameterKind, ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome,
+    dispatch_script_function, dispatch_script_string_function, owned_region_script_caller_is_live,
+    script_function_parameter_kind, script_player_npc_caller_exists,
+    village_war_script_caller_is_live,
 };
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
@@ -549,6 +551,18 @@ impl<'a> CScript<'a> {
                 function_id,
                 legacy_return: 0,
             };
+        }
+        if matches!(
+            function_id,
+            SCRIPT_FUNCTION_ADD_APPELLATION_STATE
+                | SCRIPT_FUNCTION_DEL_APPELLATION_STATE
+                | SCRIPT_FUNCTION_GET_APPELLATION_STATE
+        ) && !self
+            .context
+            .player_id
+            .is_some_and(|player_id| game.find_player(player_id).is_some())
+        {
+            return ScriptCommandOutcome::InvalidExpression;
         }
         let mut integer_arguments = [None; 7];
         let mut string_arguments: [Option<Vec<u8>>; 7] = std::array::from_fn(|_| None);
