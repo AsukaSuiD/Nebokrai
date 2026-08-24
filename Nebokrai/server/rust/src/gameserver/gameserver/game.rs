@@ -406,10 +406,10 @@ use crate::gameserver::appserver::session::cequipmentcompose::{
 };
 use crate::gameserver::appserver::session::cequipmentdakong::{
     CEquipmentDaKong, DA_KONG_USE_SINKER_INDEX, EquipmentDaKongAroundEffect,
-    EquipmentDaKongAuditLog, EquipmentDaKongClientUpdate, EquipmentDaKongEnchaseEvent,
-    EquipmentDaKongExternalRefreshOutcome, EquipmentDaKongExternalRefreshReport,
-    EquipmentDaKongGemSnapshot, EquipmentDaKongGoodsSnapshot, EquipmentDaKongOperation,
-    EquipmentDaKongOutcome, EquipmentDaKongReport, deal_enchase_gems,
+    EquipmentDaKongAuditLog, EquipmentDaKongClientUpdate, EquipmentDaKongCloseOutcome,
+    EquipmentDaKongCloseReport, EquipmentDaKongEnchaseEvent, EquipmentDaKongExternalRefreshOutcome,
+    EquipmentDaKongExternalRefreshReport, EquipmentDaKongGemSnapshot, EquipmentDaKongGoodsSnapshot,
+    EquipmentDaKongOperation, EquipmentDaKongOutcome, EquipmentDaKongReport, deal_enchase_gems,
     deal_with_da_kong_external_attributes, deal_with_da_kong_seven, equipment_da_kong_condition,
 };
 use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
@@ -5232,6 +5232,82 @@ impl CGame {
         );
         report.script_dispatched = true;
         report.outcome = EquipmentComposeOutcome::Completed;
+        report
+    }
+
+    pub(crate) fn close_equipment_da_kong<Runtime: GameGoodsMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        session_id: i32,
+        requested_plug_id: i32,
+        runtime: &mut Runtime,
+    ) -> EquipmentDaKongCloseReport {
+        let mut report = EquipmentDaKongCloseReport {
+            session_id,
+            requested_plug_id,
+            actual_plug_id: None,
+            last_equipment_id: None,
+            outcome: EquipmentDaKongCloseOutcome::MissingSessionOrPlug,
+            session_end_dispatched: false,
+            previous_progress: None,
+            plug_exit_dispatched: false,
+            client_update: None,
+            client_update_delivery: None,
+        };
+        if self.session_factory.query_session(session_id).is_none() {
+            return report;
+        }
+        report.actual_plug_id = self
+            .session_factory
+            .query_session_plug_by_owner(session_id, 400, player_id)
+            .map(|plug| plug.id());
+        let Some(actual_plug_id) = report.actual_plug_id else {
+            return report;
+        };
+        if actual_plug_id != requested_plug_id {
+            report.outcome = EquipmentDaKongCloseOutcome::PlugIdMismatch;
+            return report;
+        }
+        let Some(last_equipment_id) = self
+            .session_factory
+            .query_equipment_da_kong_plug(actual_plug_id)
+            .map(CEquipmentDaKong::last_equipment_id)
+        else {
+            return report;
+        };
+        report.last_equipment_id = Some(last_equipment_id);
+
+        runtime.end_goods_session(self, session_id, actual_plug_id);
+        report.session_end_dispatched = true;
+        report.previous_progress = self.find_player_mut(player_id).map(|player| {
+            let previous = player.current_progress();
+            player.set_current_progress_snapshot(PlayerProgress::None);
+            previous
+        });
+        runtime.exit_goods_session_plug(self, session_id, actual_plug_id);
+        report.plug_exit_dispatched = true;
+
+        let Some(goods) = self
+            .find_player(player_id)
+            .and_then(|player| player.get_goods_by_id(last_equipment_id))
+        else {
+            report.outcome = EquipmentDaKongCloseOutcome::ClosedWithoutEquipment;
+            return report;
+        };
+        let update = EquipmentDaKongClientUpdate {
+            player_id,
+            goods: goods.identity(),
+            old_client_payload: runtime.encode_goods_for_old_client(goods),
+        };
+        let mut message = CMessage::new(0x0b_f918);
+        message.add_long(update.player_id);
+        message.base_mut().add_guid(update.goods.ex_id);
+        message.add_ulong(update.old_client_payload.len() as u32);
+        message.base_mut().add(&update.old_client_payload);
+        report.client_update_delivery =
+            Some(message.send_to_player(self.net_server(), update.player_id));
+        report.client_update = Some(update);
+        report.outcome = EquipmentDaKongCloseOutcome::ClosedAndUpdated;
         report
     }
 

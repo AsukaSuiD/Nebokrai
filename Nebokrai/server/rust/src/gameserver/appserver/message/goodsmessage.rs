@@ -37,9 +37,10 @@
 //! `0x8FC24` соседним route-ом замыкает equipment compose: session/plug
 //! identity, validation, необратимое удаление двух equipment и камня,
 //! universal upgrade, packet ownership, result-shadow и announcement script.
-//! `0x8FC1F..0x8FC23` ведут единый equipment DaKong plug: создание отверстия,
-//! вставку камней, смену цвета, preview и уничтожение камня с общими addon,
-//! расходными, audit, script и `0xBF918` effects.
+//! `0x8FC1E..0x8FC23` ведут единый equipment DaKong plug: terminal close
+//! сохраняет last-equipment до ordered End/progress/Exit и итогового `0xBF918`;
+//! остальные routes выполняют создание отверстия, вставку камней, смену цвета,
+//! preview и уничтожение камня с общими addon, расходными, audit и script effects.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -58,7 +59,7 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::session::cequipmentcompose::EquipmentComposeReport;
 use crate::gameserver::appserver::session::cequipmentdakong::{
-    EquipmentDaKongOperation, EquipmentDaKongReport,
+    EquipmentDaKongCloseReport, EquipmentDaKongOperation, EquipmentDaKongReport,
 };
 use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
@@ -72,6 +73,7 @@ use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
 
 const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
+const CLOSE_EQUIPMENT_DA_KONG: u32 = 0x0008_fc1e;
 const EQUIPMENT_DA_KONG: u32 = 0x0008_fc1f;
 const EQUIPMENT_ENCHASE_GEM: u32 = 0x0008_fc20;
 const EQUIPMENT_CHANGE_ROLE_COLOR: u32 = 0x0008_fc21;
@@ -199,6 +201,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     CiQingMount(CiQingMountReport),
     CiQingOtherPerson(CiQingOtherPersonReport),
     EquipmentCompose(EquipmentComposeReport),
+    EquipmentDaKongClose(EquipmentDaKongCloseReport),
     EquipmentDaKong(EquipmentDaKongReport),
     GoodsSessionEnd(GoodsSessionEndReport),
 }
@@ -221,7 +224,8 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
-        EQUIPMENT_DA_KONG
+        CLOSE_EQUIPMENT_DA_KONG
+            | EQUIPMENT_DA_KONG
             | EQUIPMENT_ENCHASE_GEM
             | EQUIPMENT_CHANGE_ROLE_COLOR
             | EQUIPMENT_QUERY_DA_KONG_RESULT
@@ -268,6 +272,22 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             .ok_or(GameGoodsMessageError::MissingField(field))
     };
     let outcome = match message_type {
+        CLOSE_EQUIPMENT_DA_KONG => {
+            let session_id = match read_long(message, "equipment DaKong close session ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let requested_plug_id = match read_long(message, "equipment DaKong close plug ID") {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            GameGoodsMessageOutcome::EquipmentDaKongClose(game.close_equipment_da_kong(
+                player_id,
+                session_id,
+                requested_plug_id,
+                runtime,
+            ))
+        }
         EQUIPMENT_DA_KONG
         | EQUIPMENT_ENCHASE_GEM
         | EQUIPMENT_CHANGE_ROLE_COLOR
