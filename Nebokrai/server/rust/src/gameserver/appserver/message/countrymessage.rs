@@ -42,8 +42,9 @@
 //! маршруты: `0xBF806` по стране/всем и `0xC030D` выбранному player ID.
 //! `0x7FF14` сбрасывает jobs `1..7` всех существующих стран: каждый exact
 //! `SetQuestSwitch(false)` сначала отправляет World `0x60315`, затем меняет map.
-//! Ответ объявления войны `0x7FF16` декодирует World result `0x60317`, выполняет
-//! исходный player lookup и намеренно не публикует client/state side effects.
+//! Script `9100` формирует World request `0x60317`; ответ `0x7FF16` декодирует
+//! его result, выполняет исходный player lookup и намеренно не публикует
+//! client/state side effects.
 
 use super::super::country::country::{
     CountryExileMutationReport, CountryInformationMutationReport, CountryKingIdMutationReport,
