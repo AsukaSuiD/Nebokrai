@@ -69,14 +69,13 @@ use super::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
     RegionSecurity,
 };
-use super::servercityregion::{CityGateRuntimeContext, city_gate_footprint_is_clear};
+use super::servercityregion::{city_gate_footprint_is_clear, CityGateRuntimeContext};
 use super::serverregion::{
     CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError, ServerReturnPlayer,
     ServerReturnSetupBlock,
 };
 use super::serverwarregion::{
-    ContendArithmeticBlock, ContendPlayerState, ContendState, RegionDecodeInputBlock,
-    read_region_array,
+    read_region_array, ContendArithmeticBlock, ContendState, RegionDecodeInputBlock,
 };
 
 const WC_DEFEND: i32 = 0;
@@ -201,15 +200,9 @@ pub(crate) trait CountryCampContext {
     fn country_player_country(&mut self, player_id: i32) -> Option<u8>;
 }
 
-pub(crate) trait CountryContendContext {
-    /// Выполняет исходный `CServerRegion::AI` до contender-tick.
-    fn run_base_region_ai(&mut self, region: &mut CServerRegion);
-
+pub(crate) trait CountryContendEntryContext {
     /// Возвращает младшие 32 бита монотонного миллисекундного счётчика.
     fn now_millis(&mut self) -> u32;
-
-    /// Имитирует lookup non-null player-а в глобальном `s_mapPlayer`.
-    fn find_global_player(&mut self, player_id: i32) -> Option<ContendPlayerState>;
 
     /// Шлёт player-у `0xBFF29` с одним signed значением времени.
     fn send_contend_time(&mut self, player_id: i32, time: i32);
@@ -217,11 +210,19 @@ pub(crate) trait CountryContendContext {
     /// Меняет contend-state у уже известного non-null player pointer.
     fn set_known_player_contend_state(&mut self, player_id: i32, state: bool);
 
-    /// Меняет contend-state найденного global player-а.
-    fn set_global_player_contend_state(&mut self, player_id: i32, state: bool);
-
     /// Шлёт player-localized `GS0228/GS0229` с исходным красным цветом.
     fn notify_player(&mut self, player_id: i32, string_id: &'static str);
+}
+
+pub(crate) trait CountryContendContext: CountryContendEntryContext {
+    /// Выполняет исходный `CServerRegion::AI` до contender-tick.
+    fn run_base_region_ai(&mut self, region: &mut CServerRegion);
+
+    /// Имитирует lookup non-null player-а в глобальном `s_mapPlayer`.
+    fn find_global_player(&mut self, player_id: i32) -> Option<CountryContendPlayer>;
+
+    /// Меняет contend-state найденного global player-а.
+    fn set_global_player_contend_state(&mut self, player_id: i32, state: bool);
 
     /// Concrete virtual slot `+0x10C`: `(country, symbol_id)`.
     fn on_country_win_one_symbol(&mut self, country: i32, symbol_id: i32);
@@ -237,6 +238,15 @@ pub(crate) trait CountryContendContext {
         region_name: &str,
         symbol_name: &str,
     );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryContendPlayer {
+    pub(crate) player_id: i32,
+    pub(crate) faction_id: i32,
+    pub(crate) country: u8,
+    pub(crate) shape_type: i32,
+    pub(crate) is_dead: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -598,7 +608,7 @@ impl CServerCountryRegion {
 
     pub(crate) fn cancel_contend_by_player(
         &mut self,
-        player: Option<&ContendPlayerState>,
+        player: Option<&CountryContendPlayer>,
     ) -> Result<bool, CountryNullPlayerCancelBlock> {
         // VERIFIED_DISASSEMBLY RVA 0x001CCAC0: условие оригинала инвертировано;
         // любой реальный player немедленно получает `false` без side effects.
@@ -608,9 +618,9 @@ impl CServerCountryRegion {
         Err(CountryNullPlayerCancelBlock)
     }
 
-    pub(crate) fn on_enter_contend<Context: CountryContendContext>(
+    pub(crate) fn on_enter_contend<Context: CountryContendEntryContext>(
         &mut self,
-        player: Option<&ContendPlayerState>,
+        player: Option<&CountryContendPlayer>,
         symbol_id: i32,
         symbol_name: &str,
         max_time: i32,
@@ -636,9 +646,9 @@ impl CServerCountryRegion {
         Ok(())
     }
 
-    pub(crate) fn add_contend<Context: CountryContendContext>(
+    pub(crate) fn add_contend<Context: CountryContendEntryContext>(
         &mut self,
-        player: Option<&ContendPlayerState>,
+        player: Option<&CountryContendPlayer>,
         symbol_id: i32,
         symbol_name: &str,
         max_time: i32,

@@ -29,14 +29,22 @@
 //! Соседняя read-only family `9101..9104/9106..9109/9111` одним dispatcher-ом
 //! читает phase flags, declaration membership, country-region win symbols,
 //! ordered war region/camp/opponent и сохранённый country result.
+//! Action family `9105/9110` сохраняет war/distance/argument ordering, вызывает
+//! concrete `ServerCountryRegion::OnEnterContend` с миллисекундным duration,
+//! публикует player state `0xBFF28`, timer `0xBFF29`, localized result и
+//! отправляет byte-narrowed победу World сообщением `0x60318`.
 //! Полный expression evaluator и остальные function ID ниже пока остаются RAW.
 
 use crate::gameserver::appserver::country::country::{
     CountryExileRestTimeReport, CountryScalarMutationReport,
 };
+use crate::gameserver::appserver::servercountryregion::{
+    CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
+};
+use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongExternalRefreshReport;
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
-use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver};
+use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
     colored_player_notice_message, CGame, EquipmentDaKongContext, EquipmentSessionOpenContext,
     EquipmentSessionOpenReport, ServerRegionOwner,
@@ -72,14 +80,359 @@ pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_WAR_DECLARE: i32 = 9101;
 pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_DECLARED: i32 = 9102;
 pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_WAR_PREPARE: i32 = 9103;
 pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_WAR: i32 = 9104;
+pub(crate) const SCRIPT_FUNCTION_ENTER_COUNTRY_CONTEND: i32 = 9105;
 pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_WIN_SYMBOL: i32 = 9106;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_WAR_REGION: i32 = 9107;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_WAR_CAMP: i32 = 9108;
 pub(crate) const SCRIPT_FUNCTION_GET_OTHER_WAR_COUNTRY: i32 = 9109;
+pub(crate) const SCRIPT_FUNCTION_COUNTRY_WAR_VICTORY: i32 = 9110;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_WAR_RESULT: i32 = 9111;
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
 const SCRIPT_PLAYER_TYPE: i32 = 400;
 const SCRIPT_NPC_TYPE: i32 = 500;
+
+pub(crate) trait CountryWarActionScriptRuntime {
+    /// Exact lower DWORD process tick, sampled only when a contender is added.
+    fn country_contend_now_milliseconds(&mut self) -> u32;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarActionKind {
+    EnterContend,
+    PublishVictory,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarContendEffect {
+    PlayerState {
+        player_id: i32,
+        state: bool,
+        changed: bool,
+        around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    },
+    Time {
+        player_id: i32,
+        percentage: i32,
+        delivery: i32,
+    },
+    Notice {
+        player_id: i32,
+        string_id: &'static str,
+        delivery: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarActionScriptDisposition {
+    CallerMissing,
+    CallerShapeMissing,
+    WarClosed {
+        delivery: i32,
+    },
+    TooFar {
+        distance: i32,
+        maximum: i32,
+        delivery: i32,
+    },
+    ArgumentMissing {
+        argument: usize,
+    },
+    RegionMissing {
+        region_id: Option<i32>,
+    },
+    RegionNotCountry {
+        region_id: i32,
+    },
+    NpcMissing {
+        region_id: i32,
+        npc_id: i32,
+    },
+    ContendInvoked {
+        region_id: i32,
+        player_id: i32,
+        symbol_id: i32,
+        duration_ms: i32,
+        result: Result<(), CountryNullPlayerCancelBlock>,
+        effects: Vec<CountryWarContendEffect>,
+    },
+    VictoryNotPublished,
+    VictoryPublished {
+        country: u8,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryWarActionScriptFunctionOutcome {
+    DifferentFunction,
+    Handled {
+        function_id: i32,
+        kind: CountryWarActionKind,
+        legacy_return: i32,
+        disposition: CountryWarActionScriptDisposition,
+    },
+}
+
+struct GameCountryContendEntryContext<'a, Runtime> {
+    game: &'a mut CGame,
+    runtime: &'a mut Runtime,
+    region: CServerRegion,
+    effects: Vec<CountryWarContendEffect>,
+}
+
+impl<Runtime: CountryWarActionScriptRuntime> CountryContendEntryContext
+    for GameCountryContendEntryContext<'_, Runtime>
+{
+    fn now_millis(&mut self) -> u32 {
+        self.runtime.country_contend_now_milliseconds()
+    }
+
+    fn send_contend_time(&mut self, player_id: i32, time: i32) {
+        let mut message = CMessage::new(0x000b_ff29);
+        message.base_mut().add_long(time);
+        let delivery = message.send_to_player(self.game.net_server(), player_id);
+        self.effects.push(CountryWarContendEffect::Time {
+            player_id,
+            percentage: time,
+            delivery,
+        });
+    }
+
+    fn set_known_player_contend_state(&mut self, player_id: i32, state: bool) {
+        let around_delivery =
+            self.game
+                .publish_country_player_contend_state(&self.region, player_id, state);
+        self.effects.push(CountryWarContendEffect::PlayerState {
+            player_id,
+            state,
+            changed: around_delivery.is_some(),
+            around_delivery,
+        });
+    }
+
+    fn notify_player(&mut self, player_id: i32, string_id: &'static str) {
+        let delivery = send_country_war_script_notice(self.game, player_id, string_id.as_bytes());
+        self.effects.push(CountryWarContendEffect::Notice {
+            player_id,
+            string_id,
+            delivery,
+        });
+    }
+}
+
+pub(crate) fn run_country_war_action_script_function<Runtime: CountryWarActionScriptRuntime>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    script_player_id: Option<i32>,
+    script_npc_id: Option<i32>,
+    script_region_id: Option<i32>,
+    function_id: i32,
+    evaluated_arguments: [Option<i32>; 2],
+) -> CountryWarActionScriptFunctionOutcome {
+    if function_id == SCRIPT_FUNCTION_COUNTRY_WAR_VICTORY {
+        let country = evaluated_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+        if country == SCRIPT_INT_PARAMETER_ERROR {
+            return country_war_action_handled(
+                function_id,
+                CountryWarActionKind::PublishVictory,
+                -1,
+                CountryWarActionScriptDisposition::ArgumentMissing { argument: 0 },
+            );
+        }
+        if country == 0 {
+            return country_war_action_handled(
+                function_id,
+                CountryWarActionKind::PublishVictory,
+                0,
+                CountryWarActionScriptDisposition::VictoryNotPublished,
+            );
+        }
+        let country = country as u8;
+        let mut request = CMessage::new(0x0006_0318);
+        request.base_mut().add_byte(country);
+        let delivery = request.send(game, false);
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::PublishVictory,
+            0,
+            CountryWarActionScriptDisposition::VictoryPublished { country, delivery },
+        );
+    }
+    if function_id != SCRIPT_FUNCTION_ENTER_COUNTRY_CONTEND {
+        return CountryWarActionScriptFunctionOutcome::DifferentFunction;
+    }
+
+    let (Some(player_id), Some(npc_id)) = (script_player_id, script_npc_id) else {
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::EnterContend,
+            0,
+            CountryWarActionScriptDisposition::CallerMissing,
+        );
+    };
+    let player_shape = game.resolve_shape(ShapeIdentity {
+        object_type: SCRIPT_PLAYER_TYPE,
+        id: player_id,
+        ex_id: CGuid::GUID_INVALID,
+    });
+    let npc_shape = game.resolve_shape(ShapeIdentity {
+        object_type: SCRIPT_NPC_TYPE,
+        id: npc_id,
+        ex_id: CGuid::GUID_INVALID,
+    });
+    let (Some(player_shape), Some(npc_shape)) = (player_shape, npc_shape) else {
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::EnterContend,
+            0,
+            CountryWarActionScriptDisposition::CallerShapeMissing,
+        );
+    };
+    if !game.country_war_sys().state_war {
+        let delivery = send_country_war_script_notice(game, player_id, b"GS0219");
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::EnterContend,
+            0,
+            CountryWarActionScriptDisposition::WarClosed { delivery },
+        );
+    }
+    let distance = npc_shape.distance(player_shape);
+    if distance > 2 {
+        let delivery = send_country_war_script_notice(game, player_id, b"GS0208");
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::EnterContend,
+            0,
+            CountryWarActionScriptDisposition::TooFar {
+                distance,
+                maximum: 2,
+                delivery,
+            },
+        );
+    }
+    let symbol_id = evaluated_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    if symbol_id == SCRIPT_INT_PARAMETER_ERROR {
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::EnterContend,
+            0,
+            CountryWarActionScriptDisposition::ArgumentMissing { argument: 0 },
+        );
+    }
+    let duration = evaluated_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+    if duration == SCRIPT_INT_PARAMETER_ERROR {
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::EnterContend,
+            0,
+            CountryWarActionScriptDisposition::ArgumentMissing { argument: 1 },
+        );
+    }
+    let Some(region_id) = script_region_id else {
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::EnterContend,
+            0,
+            CountryWarActionScriptDisposition::RegionMissing { region_id: None },
+        );
+    };
+    let Some(owner) = game.take_region_owner(region_id) else {
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::EnterContend,
+            0,
+            CountryWarActionScriptDisposition::RegionMissing {
+                region_id: Some(region_id),
+            },
+        );
+    };
+    let ServerRegionOwner::Country(mut region) = owner else {
+        game.restore_region_owner(owner);
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::EnterContend,
+            0,
+            CountryWarActionScriptDisposition::RegionNotCountry { region_id },
+        );
+    };
+    let Some(symbol_name) = region
+        .base
+        .find_npc_by_id(npc_id)
+        .map(|npc| String::from_utf8_lossy(npc.name()).into_owned())
+    else {
+        game.restore_region_owner(ServerRegionOwner::Country(region));
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::EnterContend,
+            0,
+            CountryWarActionScriptDisposition::NpcMissing { region_id, npc_id },
+        );
+    };
+    let Some(player) = game
+        .find_player(player_id)
+        .map(|player| CountryContendPlayer {
+            player_id,
+            faction_id: player.faction_id(),
+            country: player.country(),
+            shape_type: player_shape.identity.object_type,
+            is_dead: player.is_dead(),
+        })
+    else {
+        game.restore_region_owner(ServerRegionOwner::Country(region));
+        return country_war_action_handled(
+            function_id,
+            CountryWarActionKind::EnterContend,
+            0,
+            CountryWarActionScriptDisposition::CallerMissing,
+        );
+    };
+    let duration_ms = duration.wrapping_mul(1_000);
+    let region_projection = region.base.clone();
+    let mut context = GameCountryContendEntryContext {
+        game,
+        runtime,
+        region: region_projection,
+        effects: Vec::new(),
+    };
+    let result = region.on_enter_contend(
+        Some(&player),
+        symbol_id,
+        &symbol_name,
+        duration_ms,
+        &mut context,
+    );
+    let effects = std::mem::take(&mut context.effects);
+    drop(context);
+    game.restore_region_owner(ServerRegionOwner::Country(region));
+    country_war_action_handled(
+        function_id,
+        CountryWarActionKind::EnterContend,
+        0,
+        CountryWarActionScriptDisposition::ContendInvoked {
+            region_id,
+            player_id,
+            symbol_id,
+            duration_ms,
+            result,
+            effects,
+        },
+    )
+}
+
+fn country_war_action_handled(
+    function_id: i32,
+    kind: CountryWarActionKind,
+    legacy_return: i32,
+    disposition: CountryWarActionScriptDisposition,
+) -> CountryWarActionScriptFunctionOutcome {
+    CountryWarActionScriptFunctionOutcome::Handled {
+        function_id,
+        kind,
+        legacy_return,
+        disposition,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CountryWarQueryKind {

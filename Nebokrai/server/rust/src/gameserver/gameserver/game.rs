@@ -6007,6 +6007,36 @@ impl CGame {
         Some(context.send_nation_player_around(region, player.shape(), None, &message))
     }
 
+    /// Concrete `CPlayer::SetContendState` effect для country-symbol entry:
+    /// unchanged state ничего не публикует, mutation идёт до exact `0xBFF28`
+    /// вокруг текущей позиции player-а.
+    pub(crate) fn publish_country_player_contend_state(
+        &mut self,
+        region: &CServerRegion,
+        player_id: i32,
+        contend_state: bool,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let player = self.find_player_mut(player_id)?;
+        if !player.set_contend_state(contend_state) {
+            return None;
+        }
+        let mut message = CMessage::new(0xbff28);
+        message.add_long(player_id);
+        message.add_byte(u8::from(contend_state));
+        let player = self
+            .find_player(player_id)
+            .expect("country contender сохранён до synchronous around-send");
+        let Some(runtime) = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        ) else {
+            return Some(Ok(0));
+        };
+        Some(message.send_to_around(Some(region), player.shape(), None, &runtime))
+    }
+
     fn publish_player_died_state<Context: NationCombatContext>(
         &mut self,
         region: &CServerRegion,
