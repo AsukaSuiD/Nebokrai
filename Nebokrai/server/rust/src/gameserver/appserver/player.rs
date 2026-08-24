@@ -81,7 +81,8 @@
 //! CiQing unlocked base-index set хранится ordered `BTreeSet`; его query не
 //! создаёт постоянные goods, а только передаёт snapshot CGame factory owner-у;
 //! make считает/удаляет packet stack-и в container order и сохраняет
-//! new-object/stack ownership для caller network adapter-а.
+//! new-object/stack ownership для caller network adapter-а. Owned CiQing
+//! containers имеют exact volumes `8/3`; compose slots удаляются по позиции.
 //! `skillmessage 0x90005` доведён до authorization и AI dispatch: feature/HP
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
@@ -945,6 +946,27 @@ pub(crate) struct CiQingPacketAddition {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingContainerAddition {
+    pub(crate) player_id: i32,
+    pub(crate) container_extend_id: u32,
+    pub(crate) position: u32,
+    pub(crate) source: super::shape::ShapeIdentity,
+    pub(crate) outcome: VolumeGoodsAddOutcome,
+    pub(crate) old_client_payload: Option<Vec<u8>>,
+    pub(crate) resulting_amount: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingContainerConsumption {
+    pub(crate) player_id: i32,
+    pub(crate) container_extend_id: u32,
+    pub(crate) position: u32,
+    pub(crate) goods: super::shape::ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) removal: VolumeGoodsRemoveOutcome,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
     figure: ShapeFigure,
@@ -983,6 +1005,8 @@ pub(crate) struct CPlayer {
     packet: CVolumeLimitGoodsContainer,
     equipment: CEquipmentContainer,
     auction_goods: CVolumeLimitGoodsContainer,
+    ci_qing: CVolumeLimitGoodsContainer,
+    ci_qing_compose: CVolumeLimitGoodsContainer,
     battle_fairy_container: CBattleFairyContainer,
 }
 
@@ -1012,6 +1036,10 @@ impl CPlayer {
         let owner_id = move_shape.shape().identity().id;
         let mut packet = CVolumeLimitGoodsContainer::new();
         let _empty_release = packet.set_container_dimensions(8, 12);
+        let mut ci_qing = CVolumeLimitGoodsContainer::new();
+        let _empty_release = ci_qing.set_container_volume(8);
+        let mut ci_qing_compose = CVolumeLimitGoodsContainer::new();
+        let _empty_release = ci_qing_compose.set_container_volume(3);
         let mut player = Self {
             move_shape,
             figure,
@@ -1050,6 +1078,8 @@ impl CPlayer {
             packet,
             equipment: CEquipmentContainer::new(),
             auction_goods: CVolumeLimitGoodsContainer::new(),
+            ci_qing,
+            ci_qing_compose,
             battle_fairy_container: CBattleFairyContainer::new(),
         };
         player.refresh_reached_container_owners(owner_id);
@@ -1422,6 +1452,85 @@ impl CPlayer {
             }
         }
         (additions, remaining)
+    }
+
+    pub(crate) fn ci_qing_compose_goods(&self, position: u32) -> Option<&CGoods> {
+        self.ci_qing_compose.get_goods(position)
+    }
+
+    pub(crate) fn add_goods_to_ci_qing(
+        &mut self,
+        goods: CGoods,
+        position: u32,
+        compose_container: bool,
+        factory: &CGoodsFactory,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> (CiQingContainerAddition, Option<CGoods>) {
+        let player_id = self.player_id();
+        let source = goods.identity();
+        let container_extend_id = if compose_container { 2 } else { 1 };
+        let container = if compose_container {
+            &mut self.ci_qing_compose
+        } else {
+            &mut self.ci_qing
+        };
+        let mut incoming = Some(goods);
+        let outcome = container.add_goods_at(
+            position,
+            &mut incoming,
+            factory,
+            self.current_progress == PlayerProgress::None,
+        );
+        let (old_client_payload, resulting_amount) = match &outcome {
+            VolumeGoodsAddOutcome::Added(added) => {
+                let stored = container
+                    .base()
+                    .find(added.identity.ex_id)
+                    .expect("успешный CiQing add сохранил goods");
+                (Some(encode_old_client(stored)), Some(stored.amount()))
+            }
+            VolumeGoodsAddOutcome::Stack(stack) => {
+                let target = match stack {
+                    super::container::cgoodscontainer::GoodsStackMergeOutcome::Merged {
+                        target,
+                        ..
+                    } => container.base().find(target.ex_id),
+                    _ => None,
+                };
+                (None, target.map(CGoods::amount))
+            }
+            VolumeGoodsAddOutcome::Rejected(_) => (None, None),
+        };
+        (
+            CiQingContainerAddition {
+                player_id,
+                container_extend_id,
+                position,
+                source,
+                outcome,
+                old_client_payload,
+                resulting_amount,
+            },
+            incoming,
+        )
+    }
+
+    pub(crate) fn remove_ci_qing_compose_goods(
+        &mut self,
+        position: u32,
+    ) -> Option<CiQingContainerConsumption> {
+        let goods = self.ci_qing_compose.get_goods(position)?;
+        let identity = goods.identity();
+        let amount = goods.amount();
+        let removal = self.ci_qing_compose.remove_goods(identity.ex_id)?;
+        Some(CiQingContainerConsumption {
+            player_id: self.player_id(),
+            container_extend_id: 2,
+            position,
+            goods: identity,
+            amount,
+            removal,
+        })
     }
 
     pub(crate) const fn contend_state(&self) -> bool {
@@ -3330,6 +3439,10 @@ impl CPlayer {
         self.packet.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.equipment.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.auction_goods
+            .base_mut()
+            .set_owner(PLAYER_TYPE, player_id);
+        self.ci_qing.base_mut().set_owner(PLAYER_TYPE, player_id);
+        self.ci_qing_compose
             .base_mut()
             .set_owner(PLAYER_TYPE, player_id);
         self.battle_fairy_container
@@ -7116,20 +7229,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x000466A0
 // ADDRESS: 004466a0
 // PROTOTYPE: void __thiscall AutoAddAuctionGoods(long param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::ComposeCiQingNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:15901
-// RVA: 0x00046A40
-// ADDRESS: 00446a40
-// PROTOTYPE: bool __thiscall ComposeCiQingNode(ulong param_1, ulong param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

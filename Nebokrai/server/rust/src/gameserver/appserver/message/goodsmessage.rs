@@ -21,6 +21,8 @@
 //! `0x8FC31` продолжает тот же owner полным make-проходом: оба feature gate-а
 //! стоят до decode, ресурсы расходуются в audit/delete order, factory и packet
 //! add сохраняют stacking/ownership effects, затем отправляется `0xBF932`.
+//! `0x8FC32` замыкает compose slots `0/1/2`, exact fallback без оплаты,
+//! recipe payment/RNG, source deletion, unlock/query и `0xBF81B` tail.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -39,7 +41,8 @@ use crate::gameserver::appserver::player::{
 use crate::gameserver::gameserver::game::{
     BattleFairyCombineContext, BattleFairyDeathContext, BattleFairyPotentialResetContext,
     BattleFairyRuntimeContext, BattleFairyScriptSkillAttachReport, BattleFairyUpgradeContext,
-    CGame, CiQingGoodsQueryReport, CiQingMakeContext, CiQingMakeReport, CiQingSetupQueryReport,
+    CGame, CiQingComposeContext, CiQingComposeReport, CiQingGoodsQueryReport, CiQingMakeContext,
+    CiQingMakeReport, CiQingSetupQueryReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -56,6 +59,7 @@ const REFRESH_BATTLE_FAIRY_PROPERTY: u32 = 0x0008_fc2e;
 const QUERY_CI_QING_GOODS: u32 = 0x0008_fc2f;
 const QUERY_CI_QING_SETUP: u32 = 0x0008_fc30;
 const MAKE_CI_QING_NODE: u32 = 0x0008_fc31;
+const COMPOSE_CI_QING_NODE: u32 = 0x0008_fc32;
 
 pub(crate) trait GameGoodsMessageRuntime:
     BattleFairyCombineContext
@@ -64,6 +68,7 @@ pub(crate) trait GameGoodsMessageRuntime:
     + BattleFairyPotentialResetContext
     + BattleFairyRuntimeContext
     + CiQingMakeContext
+    + CiQingComposeContext
 {
     fn run_battle_fairy_reset_script(
         &mut self,
@@ -128,6 +133,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     CiQingSetup(CiQingSetupQueryReport),
     CiQingUnavailable,
     CiQingMake(CiQingMakeReport),
+    CiQingCompose(CiQingComposeReport),
 }
 
 #[must_use = "goods-message report содержит routing и полный gameplay result"]
@@ -160,6 +166,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             | QUERY_CI_QING_GOODS
             | QUERY_CI_QING_SETUP
             | MAKE_CI_QING_NODE
+            | COMPOSE_CI_QING_NODE
     ) {
         return None;
     }
@@ -329,6 +336,17 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                         .expect(
                             "resolved message player остаётся в CGame во время synchronous dispatch",
                         ),
+                )
+            }
+        }
+        COMPOSE_CI_QING_NODE => {
+            if !game.ci_qing_message_enabled(player_id) {
+                GameGoodsMessageOutcome::CiQingUnavailable
+            } else {
+                GameGoodsMessageOutcome::CiQingCompose(
+                    game.compose_ci_qing_node(player_id, runtime).expect(
+                        "resolved message player остаётся в CGame во время synchronous dispatch",
+                    ),
                 )
             }
         }

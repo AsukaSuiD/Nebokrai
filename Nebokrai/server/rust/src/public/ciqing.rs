@@ -3,8 +3,9 @@
 //! `CCiQingSetup::ReadSetupFile/AddByteToArray` подтверждены точными
 //! World/Game EXE/PDB, а `DeByteFromArray` —
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`. Исходный owner:
-//! `e:\svn\fengyun_russia_dev\public\ciqing.cpp/.h`. Queries, RNG и применение
-//! к player в этот проход не входят.
+//! `e:\svn\fengyun_russia_dev\public\ciqing.cpp/.h`. Exact compose lookup и
+//! `RandChoise` используют insertion order и отдельный `random(0x2711)`;
+//! применение к player остаётся у GameServer owner-а.
 //!
 //! Wire содержит три insertion-order секции: make records по шесть `u32`,
 //! compose records и improve records по три `u32`; все counts signed `i32`.
@@ -71,7 +72,7 @@ pub(crate) struct CCiQingSetup {
 }
 
 impl CCiQingSetup {
- /// Перечитывает три секции из уже выбранного caller-ом resource backend-а.
+    /// Перечитывает три секции из уже выбранного caller-ом resource backend-а.
     pub(crate) fn read_setup_file(
         &mut self,
         source: Option<&[u8]>,
@@ -184,6 +185,31 @@ impl CCiQingSetup {
         &self.compose
     }
 
+    pub(crate) fn compute_node(&self, source_a: u32, source_b: u32) -> Option<CiQingComposeNode> {
+        self.compose
+            .iter()
+            .find(|node| {
+                node.source_a_base_index == source_a && node.source_b_base_index == source_b
+            })
+            .cloned()
+    }
+
+    /// Exact `RandChoise`: отдельный `random(0x2711)`, затем signed
+    /// cumulative subtraction и first result при остатке `< 1`.
+    pub(crate) fn random_choice(
+        node: &CiQingComposeNode,
+        mut random: impl FnMut(i32) -> i32,
+    ) -> u32 {
+        let mut roll = i64::from(random(0x2711));
+        for &(probability, result) in &node.results {
+            roll -= i64::from(probability);
+            if roll < 1 {
+                return result;
+            }
+        }
+        0
+    }
+
     pub(crate) fn improve(&self) -> &[CiQingImproveNode] {
         &self.improve
     }
@@ -266,37 +292,22 @@ impl CCiQingSetup {
                     cursor,
                     "make destination base index",
                 )?,
-                equipment_position: read_wire_u32(
-                    source,
-                    cursor,
-                    "make equipment position",
-                )?,
-                source_a_base_index: read_wire_u32(
-                    source,
-                    cursor,
-                    "make source A base index",
-                )?,
+                equipment_position: read_wire_u32(source, cursor, "make equipment position")?,
+                source_a_base_index: read_wire_u32(source, cursor, "make source A base index")?,
                 source_a_count: read_wire_u32(source, cursor, "make source A count")?,
-                source_b_base_index: read_wire_u32(
-                    source,
-                    cursor,
-                    "make source B base index",
-                )?,
+                source_b_base_index: read_wire_u32(source, cursor, "make source B base index")?,
                 source_b_count: read_wire_u32(source, cursor, "make source B count")?,
             });
         }
 
         let compose_count = read_wire_i32(source, cursor, "compose count")?;
         for _ in 0..compose_count.max(0) {
-            let source_a_base_index =
-                read_wire_u32(source, cursor, "compose source A base index")?;
+            let source_a_base_index = read_wire_u32(source, cursor, "compose source A base index")?;
             let _duplicated_source_a =
                 read_wire_u32(source, cursor, "compose duplicated source A")?;
-            let source_b_base_index =
-                read_wire_u32(source, cursor, "compose source B base index")?;
+            let source_b_base_index = read_wire_u32(source, cursor, "compose source B base index")?;
             let money = read_wire_u32(source, cursor, "compose money")?;
-            let compose_probability =
-                read_wire_u32(source, cursor, "compose probability")?;
+            let compose_probability = read_wire_u32(source, cursor, "compose probability")?;
             let crystal_count = read_wire_u32(source, cursor, "compose crystal count")?;
             let result_count = read_wire_i32(source, cursor, "compose result count")?;
             let mut results = Vec::new();
@@ -392,9 +403,7 @@ fn read_wire_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, CiQingDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(
-        source, cursor, field,
-    )?))
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor, field)?))
 }
 
 fn read_wire_u32(
@@ -402,9 +411,7 @@ fn read_wire_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, CiQingDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(
-        source, cursor, field,
-    )?))
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor, field)?))
 }
 
 fn read_wire_array<const N: usize>(
@@ -423,9 +430,7 @@ fn read_wire_array<const N: usize>(
         });
     };
     *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер CiQing scalar уже проверен"))
+    Ok(bytes.try_into().expect("размер CiQing scalar уже проверен"))
 }
 
 fn write_ciqing_count(
@@ -518,7 +523,9 @@ fn parse_legacy_u32(token: &[u8]) -> Option<u32> {
         if !digit.is_ascii_digit() {
             return None;
         }
-        value = value.checked_mul(10)?.checked_add(u64::from(digit - b'0'))?;
+        value = value
+            .checked_mul(10)?
+            .checked_add(u64::from(digit - b'0'))?;
     }
     if negative {
         (value <= u64::from(u32::MAX) + 1).then(|| (value as u32).wrapping_neg())
