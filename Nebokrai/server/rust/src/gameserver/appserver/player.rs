@@ -121,6 +121,9 @@
 //! registry передаются как explicit facts.
 //! Item-skill `0x90004` использует тот же player route с client-provided level
 //! и добавляет ID в owned ordered `CMoveShape` vector только перед AI dispatch.
+//! Shape commands сохраняют owned direction и emotion index/timestamp:
+//! ClearEmotion всегда обнуляет оба поля, PerformEmotion делает это до guards
+//! и запоминает repeated ID/time только при разрешённом живом AI owner-е.
 //! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
 //! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
 //! полиморфные session End/plug Exit принадлежат caller runtime-у.
@@ -2364,6 +2367,40 @@ impl CPlayer {
 
     pub(crate) const fn contend_state(&self) -> bool {
         self.contend_state
+    }
+
+    pub(crate) fn apply_client_direction(&mut self, direction: u8) -> i32 {
+        self.move_shape
+            .shape_mut()
+            .set_direction(i32::from(direction));
+        self.move_shape.shape().get_direction()
+    }
+
+    pub(crate) fn clear_emotion_state(&mut self) {
+        self.emotion_index = 0;
+        self.emotion_timestamp_ms = 0;
+    }
+
+    /// Exact reached `PerformEmotion` state: state очищается до guards;
+    /// repeated emotion запоминается, но around publication выполняется для
+    /// любого разрешённого AI/жизни вызова.
+    pub(crate) fn perform_emotion_state(
+        &mut self,
+        emotion_id: i32,
+        repeated: bool,
+        now_ms: u32,
+        ai_available: bool,
+        ai_has_target: bool,
+    ) -> bool {
+        self.clear_emotion_state();
+        if self.is_dead() || !ai_available || ai_has_target {
+            return false;
+        }
+        if repeated {
+            self.emotion_index = emotion_id;
+            self.emotion_timestamp_ms = now_ms;
+        }
+        true
     }
 
     /// State-часть exact `SetContendState`: unchanged setter не публикуется.

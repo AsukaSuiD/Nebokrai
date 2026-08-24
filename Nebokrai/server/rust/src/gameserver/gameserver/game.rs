@@ -193,6 +193,10 @@
 //! script-data lookup/three path formats и item-skill state перед тем же AI
 //! dispatch; concrete `CSkill`, `RunScript` VM и `CPlayerAI` названы отдельными
 //! обязательными runtime owners, а не подменены синхронными заглушками.
+//! Shape commands `0x8F901..05` подключены к main message route: exact payload
+//! lengths, direction/emotion state, `0xBF601/03/502/611/738`, region lookup и
+//! effect ordering принадлежат `CGame`; polymorphic relocation, quest AI и
+//! полные shape serializers остаются конкретно названными runtime owners.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -420,6 +424,10 @@ use crate::gameserver::appserver::message::servermessage::{
 use crate::gameserver::appserver::message::skillmessage::{
     GameSkillMessageError, GameSkillMessageReport, GameSkillMessageRuntime,
     dispatch_game_skill_message,
+};
+use crate::gameserver::appserver::message::shapemessage::{
+    GameShapeMessageError, GameShapeMessageReport, GameShapeMessageRuntime,
+    dispatch_game_shape_message,
 };
 use crate::gameserver::appserver::message::unibillmessage::{
     IncrementShopBillingContext, IncrementShopBillingMessageError, IncrementShopBillingReport,
@@ -2538,6 +2546,7 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
         Vec<Result<GameContainerMessageReport, GameContainerMessageError>>,
     pub(crate) goods_messages: Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
     pub(crate) skill_messages: Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
+    pub(crate) shape_messages: Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
     pub(crate) server_messages:
         Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
 }
@@ -2594,6 +2603,7 @@ pub(crate) trait GameMainLoopRuntime:
     + GameContainerMessageRuntime
     + GameGoodsMessageRuntime
     + GameSkillMessageRuntime
+    + GameShapeMessageRuntime
     + IncrementShopBillingContext
 {
     fn exit_requested(&self) -> bool;
@@ -13493,6 +13503,73 @@ impl CGame {
         message.send_to_around(Some(region), origin, Some(player_id), &runtime)
     }
 
+    pub(crate) fn send_player_shape_around(
+        &mut self,
+        player_id: i32,
+        excluded_player_id: Option<i32>,
+        message: &CMessage,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let region_id = self.find_player(player_id)?.server_region_id()?;
+        let owner = self.take_region_owner(region_id)?;
+        let delivery = self.find_player(player_id).map(|player| {
+            let Some(runtime) = GameServerAroundRuntime::new(
+                self,
+                &self.session_factory,
+                self.globe_setup.area_width(),
+                self.globe_setup.area_height(),
+            ) else {
+                return Ok(0);
+            };
+            message.send_to_around(
+                Some(owner.base()),
+                player.shape(),
+                excluded_player_id,
+                &runtime,
+            )
+        });
+        self.restore_region_owner(owner);
+        delivery
+    }
+
+    pub(crate) fn send_shape_position_around(
+        &mut self,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        message: &CMessage,
+    ) -> Option<i32> {
+        let owner = self.take_region_owner(region_id)?;
+        let delivery = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        )
+        .map(|runtime| {
+            message.send_to_around_position(Some(owner.base()), tile_x, tile_y, None, &runtime)
+        })
+        .unwrap_or(0);
+        self.restore_region_owner(owner);
+        Some(delivery)
+    }
+
+    pub(crate) fn find_shape_in_region(
+        &self,
+        region_id: i32,
+        identity: ShapeIdentity,
+    ) -> Option<ShapeView> {
+        self.regions.get(&region_id)?.base().find_child_object(
+            identity.object_type,
+            identity.id,
+            identity.ex_id,
+            self,
+        )
+    }
+
+    pub(crate) fn emotion_repeated(&self, emotion_id: i32) -> bool {
+        self.emotion.repeated(emotion_id) != 0
+    }
+
     /// Runtime entry point уже декодированного `skillmessage 0x90005`.
     /// Facts оставляют explicit boundaries для ещё сырого `CPlayerAI`,
     /// `SymbolIsAttackAble` и monster registry, не выдавая player-only resolver
@@ -13966,6 +14043,7 @@ impl CGame {
         let mut container_messages = Vec::new();
         let mut goods_messages = Vec::new();
         let mut skill_messages = Vec::new();
+        let mut shape_messages = Vec::new();
         let mut server_messages = Vec::new();
         let world_messages = self
             .world_client
@@ -13988,6 +14066,7 @@ impl CGame {
                 &mut container_messages,
                 &mut goods_messages,
                 &mut skill_messages,
+                &mut shape_messages,
                 &mut server_messages,
             );
         }
@@ -14012,6 +14091,7 @@ impl CGame {
                 &mut container_messages,
                 &mut goods_messages,
                 &mut skill_messages,
+                &mut shape_messages,
                 &mut server_messages,
             );
         }
@@ -14038,6 +14118,7 @@ impl CGame {
                         &mut container_messages,
                         &mut goods_messages,
                         &mut skill_messages,
+                        &mut shape_messages,
                         &mut server_messages,
                     );
                 }
@@ -14063,6 +14144,7 @@ impl CGame {
             container_messages,
             goods_messages,
             skill_messages,
+            shape_messages,
             server_messages,
         }
     }
@@ -14096,6 +14178,7 @@ impl CGame {
         container_messages: &mut Vec<Result<GameContainerMessageReport, GameContainerMessageError>>,
         goods_messages: &mut Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
         skill_messages: &mut Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
+        shape_messages: &mut Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
         server_messages: &mut Vec<
             Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
         >,
@@ -14131,6 +14214,8 @@ impl CGame {
             goods_messages.push(report);
         } else if let Some(report) = dispatch_game_skill_message(message, self, runtime) {
             skill_messages.push(report);
+        } else if let Some(report) = dispatch_game_shape_message(message, self, runtime) {
+            shape_messages.push(report);
         } else {
             message.run(self, runtime);
         }

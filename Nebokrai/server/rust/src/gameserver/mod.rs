@@ -60,6 +60,7 @@ pub(crate) mod appserver {
         pub(crate) mod organsysmessage;
         pub(crate) mod sequencestring;
         pub(crate) mod servermessage;
+        pub(crate) mod shapemessage;
         pub(crate) mod skillmessage;
         pub(crate) mod unibillmessage;
     }
