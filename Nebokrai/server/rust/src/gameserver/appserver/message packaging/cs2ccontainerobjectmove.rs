@@ -108,6 +108,10 @@ impl CS2CContainerObjectMove {
         self.destination_object_id = object_id;
     }
 
+    pub(crate) fn set_destination_object_amount(&mut self, amount: u32) {
+        self.destination_object_amount = amount;
+    }
+
     pub(crate) fn set_object_stream(&mut self, object_stream: Vec<u8>) {
         self.object_stream = object_stream;
     }

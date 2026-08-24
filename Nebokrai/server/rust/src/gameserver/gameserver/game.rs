@@ -202,6 +202,10 @@
 //! exact LogSystem byte `55`, World `0x60202` с bank/region/IP facts и client
 //! result. Только произвольный extend-ID `CPlayer::DeleteGoods` из open-route
 //! остаётся polymorphic границей до единого dispatcher-а всех containers.
+//! Hotkey `0x8FC08..0A` замыкает все 24 slots и возврат hand consumable:
+//! concrete `0xC0101` сохраняет move/rollback/delete, фактическую destination
+//! position/identity/amount и self-move normalization; success `0xBF908`
+//! предшествует move, а terminal `'.'` отправляется только до hand removal.
 //! GodsBattle runtime продолжает startup owner: player Add/Remove tail
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
@@ -1277,10 +1281,6 @@ pub(crate) struct FairyImplantationLog {
 
 pub(crate) trait FairyContext: BattleFairyDeathContext {
     fn current_fairy_tick(&mut self) -> u32;
-}
-
-pub(crate) trait HotkeyContext {
-    fn publish_hotkey_hand_transfer(&mut self, transfer: &HotkeyHandTransferReport) -> Vec<i32>;
 }
 
 pub(crate) trait ContainerScriptContext {
@@ -10161,12 +10161,92 @@ impl CGame {
         })
     }
 
-    pub(crate) fn assign_hotkey<Context: HotkeyContext>(
+    fn send_hotkey_hand_transfer(
+        &self,
+        player: &CPlayer,
+        transfer: &HotkeyHandTransferReport,
+    ) -> Vec<i32> {
+        use crate::gameserver::appserver::container::cwallet::CurrencyGoodsAddOutcome;
+
+        let (Some(goods), Some(removal)) = (transfer.goods, transfer.hand_removal.as_ref()) else {
+            return Vec::new();
+        };
+        let mut message = CS2CContainerObjectMove::default();
+        message.set_source_container(removal.owner_type, removal.owner_id, 0);
+        message.set_source_container_extend_id(3);
+        message.set_source_object(goods.object_type, goods.ex_id, removal.amount);
+        match transfer.outcome {
+            HotkeyHandTransferOutcome::Moved => {
+                let destination = match transfer.source_container_extend_id {
+                    1 => transfer.packet_adds.iter().rev().find_map(|outcome| match outcome {
+                        VolumeGoodsAddOutcome::Added(added) => {
+                            let position = added.position?;
+                            let stored = player.packet().base().find(added.identity.ex_id)?;
+                            Some((position, added.identity, stored.amount()))
+                        }
+                        VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
+                            target,
+                            ..
+                        }) => {
+                            let position = player.packet().query_goods_position(target.ex_id)?;
+                            let stored = player.packet().base().find(target.ex_id)?;
+                            Some((position, *target, stored.amount()))
+                        }
+                        _ => None,
+                    }),
+                    3 => transfer.hand_rollback.as_ref().and_then(|added| {
+                        Some((added.position?, added.identity, added.amount))
+                    }),
+                    4 | 5 => transfer.currency_adds.iter().rev().find_map(|outcome| {
+                        match outcome {
+                            CurrencyGoodsAddOutcome::Added(added) => {
+                                Some((added.position, added.identity, added.amount))
+                            }
+                            CurrencyGoodsAddOutcome::Stack(
+                                GoodsStackMergeOutcome::Merged { target, .. },
+                            ) => Some((
+                                0,
+                                *target,
+                                if transfer.source_container_extend_id == 4 {
+                                    player.money()
+                                } else {
+                                    player.yuan_bao()
+                                },
+                            )),
+                            _ => None,
+                        }
+                    }),
+                    _ => None,
+                };
+                let Some((position, identity, amount)) = destination else {
+                    return Vec::new();
+                };
+                message.set_operation(ContainerObjectMoveOperation::MoveObject);
+                message.set_destination_container(PLAYER_TYPE, player.player_id(), position);
+                message.set_destination_container_extend_id(
+                    transfer.source_container_extend_id as i32,
+                );
+                message.set_destination_object(identity.object_type, identity.ex_id);
+                message.set_destination_object_amount(amount);
+            }
+            HotkeyHandTransferOutcome::RolledBack => {
+                message.set_operation(ContainerObjectMoveOperation::RollBack);
+            }
+            HotkeyHandTransferOutcome::GarbageCollected => {
+                message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+            }
+            HotkeyHandTransferOutcome::MissingHandGoods
+            | HotkeyHandTransferOutcome::NotConsumable
+            | HotkeyHandTransferOutcome::UnsupportedSource => return Vec::new(),
+        }
+        vec![message.send_to_player(self, player.player_id())]
+    }
+
+    pub(crate) fn assign_hotkey(
         &mut self,
         player_id: i32,
         slot: u8,
         value: u32,
-        context: &mut Context,
     ) -> Option<HotkeyAssignmentReport> {
         let mut report = HotkeyAssignmentReport {
             slot,
@@ -10231,11 +10311,16 @@ impl CGame {
             report.outcome = HotkeyAssignmentOutcome::HandMoveFailed;
         }
         if transfer.hand_removal.is_some() || transfer.outcome == HotkeyHandTransferOutcome::Moved {
-            report.transfer_deliveries = context.publish_hotkey_hand_transfer(&transfer);
+            report.transfer_deliveries = self
+                .find_player(player_id)
+                .map(|player| self.send_hotkey_hand_transfer(player, &transfer))
+                .unwrap_or_default();
         }
-        report
-            .response_deliveries
-            .push(send_hotkey_response(self, player_id, 0x0b_f908, b'.', None));
+        if transfer.hand_removal.is_none() {
+            report
+                .response_deliveries
+                .push(send_hotkey_response(self, player_id, 0x0b_f908, b'.', None));
+        }
         report.transfer = Some(transfer);
         Some(report)
     }

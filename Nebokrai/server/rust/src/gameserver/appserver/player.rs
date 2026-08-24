@@ -38,8 +38,8 @@
 //! его numeric ID. Ordinary fairy получает exact volume 14 и persisted
 //! enable/vigour/experience; periodic hatcher caller замкнут через `CGame`;
 //! Hotkey owner хранит exact 24 DWORD и связывает назначение с возвратом
-//! consumable из hand в packet/hand/wallet/YuanBao; equipment доказательно
-//! отвергает consumable до mutation.
+//! consumable из hand в packet/hand/wallet/YuanBao; equipment destination
+//! проходит исходный remove→failed add→hand rollback без потери ownership.
 //! Enhancement/precious-box confirm хранит server-trusted container-script
 //! path у игрока; отмена очищает только shadow selection без переноса goods.
 //! Remote equipment inspection использует owned persisted head/face/mode и

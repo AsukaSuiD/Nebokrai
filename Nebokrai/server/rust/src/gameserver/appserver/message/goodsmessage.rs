@@ -86,16 +86,15 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
 };
 use crate::gameserver::appserver::session::csessionfactory::{PlugExitReport, SessionEndReport};
 use crate::gameserver::gameserver::game::{
-    BattleFairyDeathContext, BattleFairyScriptSkillAttachReport, CGame,
-    CiQingComposeContext, CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport,
-    CiQingMakeContext, CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport,
-    CiQingOtherPersonTarget, CiQingSetupQueryReport, ContainerScriptActionReport,
-    ContainerScriptContext, EquipmentComposeContext, EquipmentDaKongContext,
-    EquipmentUpgradeContext, FairyContext, FairyHatchReport, FairyImplantResultReport,
-    FairySetupQueryReport, FairySyncretizeResultReport, GoodsDestroyConfirmReport,
-    GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport, HotkeyChangeReport,
-    HotkeyContext, HotkeyRemovalReport, PlayerEquipmentInspectionReport, SynthesisComposeReport,
-    SynthesisContext, SynthesisOpenReport,
+    BattleFairyDeathContext, BattleFairyScriptSkillAttachReport, CGame, CiQingComposeContext,
+    CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport, CiQingMakeContext,
+    CiQingMakeReport, CiQingMountReport, CiQingOtherPersonReport, CiQingOtherPersonTarget,
+    CiQingSetupQueryReport, ContainerScriptActionReport, ContainerScriptContext,
+    EquipmentComposeContext, EquipmentDaKongContext, EquipmentUpgradeContext, FairyContext,
+    FairyHatchReport, FairyImplantResultReport, FairySetupQueryReport, FairySyncretizeResultReport,
+    GoodsDestroyConfirmReport, GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport,
+    HotkeyChangeReport, HotkeyRemovalReport, PlayerEquipmentInspectionReport,
+    SynthesisComposeReport, SynthesisContext, SynthesisOpenReport,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -153,7 +152,6 @@ pub(crate) trait GameGoodsMessageRuntime:
     + EquipmentUpgradeContext
     + GoodsDestroyContext
     + FairyContext
-    + HotkeyContext
     + ContainerScriptContext
     + SynthesisContext
 {
@@ -373,7 +371,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Err(error) => return Some(Err(error)),
             };
             GameGoodsMessageOutcome::HotkeyAssignment(
-                game.assign_hotkey(player_id, slot, value, runtime)
+                game.assign_hotkey(player_id, slot, value)
                     .expect("resolved message player остаётся live во время hotkey assignment"),
             )
         }
