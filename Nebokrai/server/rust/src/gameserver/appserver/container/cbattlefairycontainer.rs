@@ -166,6 +166,7 @@ pub(crate) struct BattleFairyCombineCheck {
     pub(crate) player_id: Option<i32>,
     pub(crate) notification: Option<BattleFairyCombineNotification>,
     pub(crate) availability: Option<BattleFairyCombineAvailability>,
+    pub(crate) deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

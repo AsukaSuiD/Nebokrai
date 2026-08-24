@@ -53,6 +53,7 @@ pub(crate) mod appserver {
         pub(crate) mod depotmessage;
         pub(crate) mod gmamessage;
         pub(crate) mod gmmessage;
+        pub(crate) mod goodsmessage;
         pub(crate) mod onmsg_w2s_auction;
         pub(crate) mod organsysmessage;
         pub(crate) mod sequencestring;

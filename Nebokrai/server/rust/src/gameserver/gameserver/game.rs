@@ -282,6 +282,9 @@ use crate::gameserver::appserver::message::gmamessage::{
 use crate::gameserver::appserver::message::gmmessage::{
     GmMessageError, GmMessageReport, dispatch_gm_message,
 };
+use crate::gameserver::appserver::message::goodsmessage::{
+    GameGoodsMessageReport, GameGoodsMessageRuntime, dispatch_game_goods_message,
+};
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
     WorldAuctionStateMessageError, WorldAuctionStateMessageReport, dispatch_world_auction_state,
 };
@@ -1108,7 +1111,11 @@ pub(crate) trait BattleFairyRuntimeContext: BattleFairyDeathContext {
     ) -> Result<i32, ShapeCoordinateBlock>;
 }
 
-pub(crate) trait BattleFairyCombineContext {
+pub(crate) trait BattleFairyOldClientCodec {
+    fn encode_battle_fairy_old_client(&mut self, goods: &CGoods) -> Vec<u8>;
+}
+
+pub(crate) trait BattleFairyCombineContext: BattleFairyOldClientCodec {
     fn publish_battle_fairy_object_move(&mut self, object_move: &BattleFairyObjectMove)
     -> Vec<i32>;
     fn record_battle_fairy_audit(&mut self, audit: &BattleFairyAuditLog);
@@ -1755,6 +1762,7 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
         >,
     >,
     pub(crate) goods_war_messages: Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
+    pub(crate) goods_messages: Vec<GameGoodsMessageReport>,
     pub(crate) skill_messages: Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
     pub(crate) server_messages:
         Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
@@ -1810,6 +1818,7 @@ pub(crate) trait GameMainLoopRuntime:
     + InitialRegionStartupContext
     + GameOrganizingWarRuntime
     + GameCountryWarRuntime
+    + GameGoodsMessageRuntime
     + GameSkillMessageRuntime
 {
     fn exit_requested(&self) -> bool;
@@ -6432,13 +6441,32 @@ impl CGame {
     /// Отсутствующий player не создаёт уведомления или пакет, как outer
     /// lookup исходного `CheckBattleFairyCombine`.
     pub(crate) fn check_battle_fairy_combine(&self, player_id: i32) -> BattleFairyCombineCheck {
-        self.find_player(player_id)
-            .map_or_else(BattleFairyCombineCheck::default, |player| {
-                player.check_battle_fairy_combine(
-                    &self.goods_factory,
-                    self.battle_fairy_property.compose(),
-                )
-            })
+        let mut check =
+            self.find_player(player_id)
+                .map_or_else(BattleFairyCombineCheck::default, |player| {
+                    player.check_battle_fairy_combine(
+                        &self.goods_factory,
+                        self.battle_fairy_property.compose(),
+                    )
+                });
+        if let Some(notification) = check.notification {
+            let delivery = colored_player_notice_message(
+                0xffff_ffff,
+                0,
+                self.get_string_by_id(notification.string_id().as_bytes()),
+            )
+            .send_to_player(self.net_server(), player_id);
+            check.deliveries.push(delivery);
+        }
+        if let Some(availability) = check.availability {
+            let mut message = CMessage::new(availability.message_type as i32);
+            message.add_ulong(availability.deplete_fetch);
+            message.add_ulong(availability.truncated_success_rate);
+            check
+                .deliveries
+                .push(message.send_to_player(self.net_server(), player_id));
+        }
+        check
     }
 
     /// Исполняемый caller combine из `goodsmessage` после lookup player-а.
@@ -6448,7 +6476,6 @@ impl CGame {
     pub(crate) fn combine_battle_fairy<Context: BattleFairyCombineContext>(
         &mut self,
         player_id: i32,
-        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
         context: &mut Context,
     ) -> Option<BattleFairyCombineReport> {
         let battle_fairy_enabled = self.globe_setup.battle_fairy_enabled();
@@ -6481,16 +6508,20 @@ impl CGame {
                 |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
             )
         };
-        let mut report = player.combine_battle_fairy(
-            battle_fairy_enabled,
-            maximum_fetch_power,
-            goods_factory,
-            battle_fairy_property.compose(),
-            skill_factory,
-            &mut random,
-            &mut create_goods,
-            encode_old_client,
-        );
+        let mut report = {
+            let mut encode_old_client =
+                |goods: &CGoods| context.encode_battle_fairy_old_client(goods);
+            player.combine_battle_fairy(
+                battle_fairy_enabled,
+                maximum_fetch_power,
+                goods_factory,
+                battle_fairy_property.compose(),
+                skill_factory,
+                &mut random,
+                &mut create_goods,
+                &mut encode_old_client,
+            )
+        };
         for effect in report.effects.clone() {
             match effect {
                 BattleFairyCombineEffect::Notification {
@@ -7587,6 +7618,7 @@ impl CGame {
         let mut organizing_war_messages = Vec::new();
         let mut country_war_messages = Vec::new();
         let mut goods_war_messages = Vec::new();
+        let mut goods_messages = Vec::new();
         let mut skill_messages = Vec::new();
         let mut server_messages = Vec::new();
         let world_messages = self
@@ -7605,6 +7637,7 @@ impl CGame {
                 &mut organizing_war_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
+                &mut goods_messages,
                 &mut skill_messages,
                 &mut server_messages,
             );
@@ -7625,6 +7658,7 @@ impl CGame {
                 &mut organizing_war_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
+                &mut goods_messages,
                 &mut skill_messages,
                 &mut server_messages,
             );
@@ -7647,6 +7681,7 @@ impl CGame {
                         &mut organizing_war_messages,
                         &mut country_war_messages,
                         &mut goods_war_messages,
+                        &mut goods_messages,
                         &mut skill_messages,
                         &mut server_messages,
                     );
@@ -7668,6 +7703,7 @@ impl CGame {
             organizing_war_messages,
             country_war_messages,
             goods_war_messages,
+            goods_messages,
             skill_messages,
             server_messages,
         }
@@ -7693,6 +7729,7 @@ impl CGame {
             >,
         >,
         goods_war_messages: &mut Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
+        goods_messages: &mut Vec<GameGoodsMessageReport>,
         skill_messages: &mut Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
         server_messages: &mut Vec<
             Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
@@ -7718,6 +7755,8 @@ impl CGame {
             country_war_messages.push(report);
         } else if let Some(report) = dispatch_game_goods_war_message(message, self) {
             goods_war_messages.push(report);
+        } else if let Some(report) = dispatch_game_goods_message(message, self, runtime) {
+            goods_messages.push(report);
         } else if let Some(report) = dispatch_game_skill_message(message, self, runtime) {
             skill_messages.push(report);
         } else {

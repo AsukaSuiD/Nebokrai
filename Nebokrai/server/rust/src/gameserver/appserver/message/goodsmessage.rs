@@ -1,12 +1,91 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Входные goods-сообщения GameServer.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
+//! `server/gameserver/appserver/message/goodsmessage.cpp`. Материализован
+//! полный combine-проход боевой феи: `0x8FC26` проверяет состав и публикует
+//! notification либо `0xBF92C`, а `0x8FC27` исполняет player/container/game
+//! mutations, old-client codec, сетевые результаты и аудит.
+//!
+//! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
+//! прежнюю общую handler-границу.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\goodsmessage.cpp
+
+use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyCombineCheck;
+use crate::gameserver::appserver::player::BattleFairyCombineReport;
+use crate::gameserver::gameserver::game::{BattleFairyCombineContext, CGame};
+use crate::nets::netserver::message::CMessage;
+
+const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
+const COMBINE_BATTLE_FAIRY: u32 = 0x0008_fc27;
+
+pub(crate) trait GameGoodsMessageRuntime: BattleFairyCombineContext {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameGoodsMessageOutcome {
+    MissingPlayer,
+    BattleFairyCombineCheck(BattleFairyCombineCheck),
+    BattleFairyCombine(BattleFairyCombineReport),
+}
+
+#[must_use = "goods-message report содержит routing и полный gameplay result"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameGoodsMessageReport {
+    pub(crate) message_type: u32,
+    pub(crate) socket_id: i32,
+    pub(crate) player_id: Option<i32>,
+    pub(crate) region_id: Option<i32>,
+    pub(crate) outcome: GameGoodsMessageOutcome,
+}
+
+pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    runtime: &mut Runtime,
+) -> Option<GameGoodsMessageReport> {
+    let message_type = message.message_type() as u32;
+    if !matches!(
+        message_type,
+        CHECK_BATTLE_FAIRY_COMBINE | COMBINE_BATTLE_FAIRY
+    ) {
+        return None;
+    }
+
+    message.resolve_player_context(game);
+    let socket_id = message.socket_id();
+    let player_id = message.player_id();
+    let region_id = message.region_id();
+    let Some(player_id) = player_id else {
+        return Some(GameGoodsMessageReport {
+            message_type,
+            socket_id,
+            player_id: None,
+            region_id,
+            outcome: GameGoodsMessageOutcome::MissingPlayer,
+        });
+    };
+    let outcome = match message_type {
+        CHECK_BATTLE_FAIRY_COMBINE => GameGoodsMessageOutcome::BattleFairyCombineCheck(
+            game.check_battle_fairy_combine(player_id),
+        ),
+        COMBINE_BATTLE_FAIRY => GameGoodsMessageOutcome::BattleFairyCombine(
+            game.combine_battle_fairy(player_id, runtime)
+                .expect("resolved message player остаётся в CGame во время synchronous dispatch"),
+        ),
+        _ => unreachable!("opcode отфильтрован перед dispatch"),
+    };
+    Some(GameGoodsMessageReport {
+        message_type,
+        socket_id,
+        player_id: Some(player_id),
+        region_id,
+        outcome,
+    })
+}
 
 // ============================================================================
 // FUNCTION: OnGoodsMessage
@@ -21,16 +100,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
