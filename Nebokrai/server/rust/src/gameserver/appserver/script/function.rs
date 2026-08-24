@@ -2,12 +2,14 @@
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/script/function.cpp`. Из dense dispatcher-а
-//! faction menu `3012/6001/6002/6003/6011/6015` проходит от вычисленных аргументов и
+//! faction menu `3012/6001/6002/6003/6011/6015/6030` проходит от вычисленных аргументов и
 //! player/NPC distance gate в owned `CGame` session state; создание и заявка
 //! завершаются только через живой OrganSys client/World callback dispatcher;
 //! отмена заявки сохраняет тот же NPC distance gate и World `0x60109`.
 //! Upgrade `6011` добавляет exact player GameSave в `0x60126`; авторитетный
 //! World charge `0x7FE1E` возвращается через тот же organizing dispatcher.
+//! Declare-war `6030` держит `2000` ms operator session между World page,
+//! client selection и авторитетным result/debit, включая player GameSave.
 //! Также материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
 //! `9354 / OpenEquipmentCompose` и `2216 / OpenGoodsUpgrade`. Refresh вычисляет первую
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
@@ -164,6 +166,7 @@ pub(crate) const SCRIPT_FUNCTION_APPLY_JOIN_FACTION: i32 = 6002;
 pub(crate) const SCRIPT_FUNCTION_QUIT_JOIN_FACTION: i32 = 6003;
 pub(crate) const SCRIPT_FUNCTION_UPGRADE_FACTION: i32 = 6011;
 pub(crate) const SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME: i32 = 6015;
+pub(crate) const SCRIPT_FUNCTION_FACTION_DECLARE_WAR: i32 = 6030;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_REGION: i32 = 2304;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
 pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS: i32 = 2201;
@@ -3140,6 +3143,19 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                         let _ = request.send(game, false);
                     }
                 }
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_FACTION_DECLARE_WAR => {
+            if country_war_script_caller_gate(game, script_player_id, script_npc_id).is_ok()
+                && game
+                    .find_player(player_id)
+                    .is_some_and(|player| player.faction_id() > 0)
+            {
+                game.start_script_faction_war_declaration(
+                    player_id,
+                    runtime.country_contend_now_milliseconds(),
+                );
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }

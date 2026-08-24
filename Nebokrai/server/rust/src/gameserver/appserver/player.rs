@@ -1592,6 +1592,7 @@ pub(crate) struct CPlayer {
     recreate_carriage: bool,
     create_faction_operator: bool,
     apply_join_faction_operator: bool,
+    faction_declare_operator: bool,
     active_pet_count: u32,
     attempt_appellation_id: u32,
     heart_request_sent: i32,
@@ -1722,6 +1723,7 @@ impl CPlayer {
             recreate_carriage: false,
             create_faction_operator: false,
             apply_join_faction_operator: false,
+            faction_declare_operator: false,
             active_pet_count: 0,
             attempt_appellation_id: 0,
             heart_request_sent: 0,
@@ -1875,6 +1877,14 @@ impl CPlayer {
 
     pub(crate) const fn set_apply_join_faction_operator(&mut self, value: bool) {
         self.apply_join_faction_operator = value;
+    }
+
+    pub(crate) const fn faction_declare_operator(&self) -> bool {
+        self.faction_declare_operator
+    }
+
+    pub(crate) const fn set_faction_declare_operator(&mut self, value: bool) {
+        self.faction_declare_operator = value;
     }
 
     pub(crate) const fn restore_faction_id(&mut self, faction_id: i32) {

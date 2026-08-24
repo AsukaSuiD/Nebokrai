@@ -1,7 +1,8 @@
 //! Владелец GameServer dispatcher-а organizing messages `OnOrgasysMessage`.
 //!
 //! Весь dispatcher RVA `0x000895A0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме фазовых
-//! cases faction lifecycle `0x90101/0x90105/0x90106/0x7FE01/0x7FE07/0x7FE1E`,
+//! cases faction lifecycle `0x90101/05/06/1A/1B` и
+//! `0x7FE01/07/18/19/1E`,
 //! AttackCity `0x7FE1F..0x7FE25`, Village `0x7FE2F..0x7FE33`, faction
 //! update `0x7FE35/0x7FE36`, FourNation `0x7FE3C..0x7FE45` и control tail
 //! `0x7FE46..0x7FE4A` со статусом
@@ -14,6 +15,8 @@
 //! минимальным owned state в `CGame` с теми же timeout и operator-флагами.
 //! Upgrade charge `0x7FE1E` списывает World-authoritative money/goods через
 //! canonical wallet и packet-container effects живого игрока.
+//! Declare-war pages ретегируются в `0xBFF19`, selection несёт snapshot в
+//! `0x6011F`, а terminal `0x7FE19` публикует клиенту `0xBFF31` после debit.
 //!
 //! Каждый фазовый case читает ровно один signed war ID и передаёт его своему
 //! owner-у. Faction-update cases передают текущие payload/cursor соответствующему
@@ -418,8 +421,12 @@ pub(crate) fn dispatch_game_organizing_war_message<
         0x90101
             | 0x90105
             | 0x90106
+            | 0x9011a
+            | 0x9011b
             | 0x7fe01
             | 0x7fe07
+            | 0x7fe18
+            | 0x7fe19
             | 0x7fe1e
             | 0x7fe1f..=0x7fe25
             | 0x7fe2f..=0x7fe33
@@ -435,7 +442,16 @@ pub(crate) fn dispatch_game_organizing_war_message<
 
     if matches!(
         opcode,
-        0x90101 | 0x90105 | 0x90106 | 0x7fe01 | 0x7fe07 | 0x7fe1e
+        0x90101
+            | 0x90105
+            | 0x90106
+            | 0x9011a
+            | 0x9011b
+            | 0x7fe01
+            | 0x7fe07
+            | 0x7fe18
+            | 0x7fe19
+            | 0x7fe1e
     ) {
         return Some(
             dispatch_faction_lifecycle_message(opcode, message, game, runtime)
@@ -666,6 +682,113 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 player_id,
                 correlated,
                 delivery: None,
+            })
+        }
+        0x9011a => {
+            message.resolve_player_context(game);
+            let player_id = message
+                .player_id()
+                .ok_or(FactionLifecycleDispatchError::MissingPlayer)?;
+            let session_id = read_i64(message, "session ID")?;
+            let password = read_i32(message, "password")?;
+            if !message.base_mut().unread_bytes().is_empty() {
+                return Err(FactionLifecycleDispatchError::InvalidPayload);
+            }
+            let correlated = game.continue_script_faction_war_page(player_id, session_id, password);
+            Ok(FactionLifecycleDispatchReport {
+                opcode,
+                player_id,
+                correlated,
+                delivery: None,
+            })
+        }
+        0x9011b => {
+            message.resolve_player_context(game);
+            let player_id = message
+                .player_id()
+                .ok_or(FactionLifecycleDispatchError::MissingPlayer)?;
+            let session_id = read_i64(message, "session ID")?;
+            let password = read_i32(message, "password")?;
+            let target_faction_id = read_i32(message, "target faction ID")?;
+            let war_type = if target_faction_id > 0 {
+                read_i32(message, "war type")?
+            } else {
+                0
+            };
+            if !message.base_mut().unread_bytes().is_empty() {
+                return Err(FactionLifecycleDispatchError::InvalidPayload);
+            }
+            let correlated = if target_faction_id > 0 {
+                game.select_script_faction_war_target(
+                    player_id,
+                    session_id,
+                    password,
+                    target_faction_id,
+                    war_type,
+                    runtime,
+                )
+            } else {
+                game.close_script_faction_war_declaration(player_id, session_id, password)
+            };
+            Ok(FactionLifecycleDispatchReport {
+                opcode,
+                player_id,
+                correlated,
+                delivery: None,
+            })
+        }
+        0x7fe18 => {
+            let player_id = read_i32(message, "player ID")?;
+            let total = read_i32(message, "total factions")?;
+            let session_id = read_i64(message, "session ID")?;
+            let password = read_i32(message, "password")?;
+            if total < 0 {
+                return Err(FactionLifecycleDispatchError::InvalidPayload);
+            }
+            if total == 0 {
+                if !message.base_mut().unread_bytes().is_empty() {
+                    return Err(FactionLifecycleDispatchError::InvalidPayload);
+                }
+                let correlated =
+                    game.close_script_faction_war_declaration(player_id, session_id, password);
+                return Ok(FactionLifecycleDispatchReport {
+                    opcode,
+                    player_id,
+                    correlated,
+                    delivery: None,
+                });
+            }
+            let correlated = game.script_faction_war_is_active(player_id, session_id, password);
+            let delivery = correlated.then(|| {
+                message.set_message_type(0x000b_ff19);
+                message.send_to_player(game.net_server(), player_id)
+            });
+            Ok(FactionLifecycleDispatchReport {
+                opcode,
+                player_id,
+                correlated,
+                delivery,
+            })
+        }
+        0x7fe19 => {
+            let session_id = read_i64(message, "session ID")?;
+            let password = read_i32(message, "password")?;
+            let player_id = read_i32(message, "player ID")?;
+            let money = read_i32(message, "money")?;
+            if money < 0 || !message.base_mut().unread_bytes().is_empty() {
+                return Err(FactionLifecycleDispatchError::InvalidPayload);
+            }
+            let delivery = game.finish_script_faction_war_result(
+                player_id,
+                session_id,
+                password,
+                money as u32,
+            );
+            Ok(FactionLifecycleDispatchReport {
+                opcode,
+                player_id,
+                correlated: delivery.is_some(),
+                delivery,
             })
         }
         _ => unreachable!("faction lifecycle opcode проверен caller-ом"),
