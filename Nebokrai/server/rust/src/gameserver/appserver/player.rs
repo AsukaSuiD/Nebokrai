@@ -31,6 +31,10 @@
 //! инъецируемому wrapping `timeGetTime`-значению; GM `0x7FC0B/0x7FC0E`
 //! замыкают name lookup, mutation, двухпроходный ordered query и World
 //! responses, поэтому отдельный scheduler не требуется.
+//! Client allocation `0x8FA01` владеет sex/occupation, remaining point,
+//! четырьмя base stat и base HP/MP maxima. Сохранены общий STR gate для всех
+//! `Add*`, безусловный расход очка и отдельный 0x9c-byte `m_Property` wire:
+//! reached recompute заменяет только подтверждённые поля, не обнуляя хвост.
 //! Cross-Game progression `0x7FA08..0B` использует owned skill map и level/exp:
 //! name-overload-ы делегируют factory ID lookup, а `SetLevel` возвращает
 //! faction side effect caller-у до exact client progression packet.
@@ -1066,6 +1070,14 @@ impl BattleFairyGearAddons {
 pub(crate) struct PlayerBaseProperties {
     pub(crate) level: u8,
     pub(crate) occupation: u8,
+    pub(crate) sex: u8,
+    pub(crate) remain_point: u16,
+    pub(crate) base_maximum_hp: u32,
+    pub(crate) base_maximum_mp: u32,
+    pub(crate) base_strength: u32,
+    pub(crate) base_dexterity: u32,
+    pub(crate) base_constitution: u32,
+    pub(crate) base_intelligence: u32,
     pub(crate) pk_count: u16,
     pub(crate) kill_count: u32,
     pub(crate) experience: u32,
@@ -1236,6 +1248,30 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) blast_defense_scale_bits: u32,
     pub(crate) full_miss_scale_bits: u32,
     pub(crate) critical_rate_bits: u32,
+}
+
+pub(crate) const PLAYER_COMBAT_PROPERTY_WIRE_SIZE: usize = 0x9c;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerStatAllocationState {
+    pub(crate) sex: u8,
+    pub(crate) occupation: u8,
+    pub(crate) remain_point: u16,
+    pub(crate) base_maximum_hp: u32,
+    pub(crate) base_maximum_mp: u32,
+    pub(crate) base_strength: u32,
+    pub(crate) base_dexterity: u32,
+    pub(crate) base_constitution: u32,
+    pub(crate) base_intelligence: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerStatAllocationMutation {
+    pub(crate) player_id: i32,
+    pub(crate) selector: u8,
+    pub(crate) stat_changed: bool,
+    pub(crate) previous: PlayerStatAllocationState,
+    pub(crate) current: PlayerStatAllocationState,
 }
 
 impl PlayerCombatProperties {
@@ -1492,6 +1528,7 @@ pub(crate) struct CPlayer {
     lei_ting_things: VecDeque<PlayerLeiTingThing>,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
+    combat_property_wire: [u8; PLAYER_COMBAT_PROPERTY_WIRE_SIZE],
     ci_qing_open: bool,
     ci_qing_list: BTreeSet<u32>,
     ci_qing_add_values: BTreeMap<u32, u32>,
@@ -1613,6 +1650,7 @@ impl CPlayer {
             lei_ting_things: VecDeque::new(),
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
+            combat_property_wire: [0; PLAYER_COMBAT_PROPERTY_WIRE_SIZE],
             ci_qing_open: false,
             ci_qing_list: BTreeSet::new(),
             ci_qing_add_values: BTreeMap::new(),
@@ -2254,6 +2292,172 @@ impl CPlayer {
 
     pub(crate) const fn combat_properties(&self) -> PlayerCombatProperties {
         self.combat_properties
+    }
+
+    pub(crate) const fn combat_property_wire(&self) -> &[u8; PLAYER_COMBAT_PROPERTY_WIRE_SIZE] {
+        &self.combat_property_wire
+    }
+
+    /// Граница восстановления exact `m_Property` из persisted player state.
+    /// Последующие reached-пересчёты заменяют только известные поля layout.
+    pub(crate) const fn restore_combat_property_wire(
+        &mut self,
+        wire: [u8; PLAYER_COMBAT_PROPERTY_WIRE_SIZE],
+    ) {
+        self.combat_property_wire = wire;
+    }
+
+    /// Применяет результат виртуального `UpdateProperty` и синхронизирует
+    /// подтверждённые поля 0x9c-byte `tagProperty`, сохраняя неизвестные байты.
+    pub(crate) fn apply_recomputed_combat_properties(
+        &mut self,
+        properties: PlayerCombatProperties,
+    ) {
+        self.combat_properties = properties;
+        let write_u16 = |wire: &mut [u8], offset: usize, value: u16| {
+            wire[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        };
+        let write_u32 = |wire: &mut [u8], offset: usize, value: u32| {
+            wire[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        };
+        write_u32(&mut self.combat_property_wire, 0x00, properties.maximum_hp);
+        write_u32(&mut self.combat_property_wire, 0x04, properties.maximum_mp);
+        write_u32(&mut self.combat_property_wire, 0x0c, properties.strength);
+        write_u32(&mut self.combat_property_wire, 0x10, properties.dexterity);
+        write_u32(
+            &mut self.combat_property_wire,
+            0x14,
+            properties.constitution,
+        );
+        write_u32(
+            &mut self.combat_property_wire,
+            0x18,
+            properties.intelligence,
+        );
+        write_u32(
+            &mut self.combat_property_wire,
+            0x1c,
+            properties.minimum_attack,
+        );
+        write_u32(
+            &mut self.combat_property_wire,
+            0x20,
+            properties.maximum_attack,
+        );
+        write_u16(&mut self.combat_property_wire, 0x26, properties.burden);
+        write_u32(&mut self.combat_property_wire, 0x2c, properties.defense);
+        write_u32(
+            &mut self.combat_property_wire,
+            0x34,
+            properties.element_resistance,
+        );
+        write_u32(
+            &mut self.combat_property_wire,
+            0x48,
+            properties.element_modify as u32,
+        );
+        write_u16(&mut self.combat_property_wire, 0x4c, properties.reank);
+        write_u32(
+            &mut self.combat_property_wire,
+            0x5c,
+            properties.blast_defense_scale_bits,
+        );
+        write_u32(
+            &mut self.combat_property_wire,
+            0x68,
+            properties.full_miss_scale_bits,
+        );
+        write_u32(
+            &mut self.combat_property_wire,
+            0x6c,
+            properties.critical_rate_bits,
+        );
+    }
+
+    pub(crate) const fn stat_allocation_state(&self) -> PlayerStatAllocationState {
+        PlayerStatAllocationState {
+            sex: self.base_properties.sex,
+            occupation: self.base_properties.occupation,
+            remain_point: self.base_properties.remain_point,
+            base_maximum_hp: self.base_properties.base_maximum_hp,
+            base_maximum_mp: self.base_properties.base_maximum_mp,
+            base_strength: self.base_properties.base_strength,
+            base_dexterity: self.base_properties.base_dexterity,
+            base_constitution: self.base_properties.base_constitution,
+            base_intelligence: self.base_properties.base_intelligence,
+        }
+    }
+
+    /// Восстанавливает owned поля `m_BaseProperty`, участвующие в client
+    /// allocation `0x8FA01`; полный decoder игрока остаётся отдельным owner-ом.
+    pub(crate) const fn restore_stat_allocation_state(&mut self, state: PlayerStatAllocationState) {
+        self.base_properties.sex = state.sex;
+        self.base_properties.occupation = state.occupation;
+        self.base_properties.remain_point = state.remain_point;
+        self.base_properties.base_maximum_hp = state.base_maximum_hp;
+        self.base_properties.base_maximum_mp = state.base_maximum_mp;
+        self.base_properties.base_strength = state.base_strength;
+        self.base_properties.base_dexterity = state.base_dexterity;
+        self.base_properties.base_constitution = state.base_constitution;
+        self.base_properties.base_intelligence = state.base_intelligence;
+    }
+
+    /// Exact mutation-tail `0x8FA01`: DEX/CON/INT используют legacy STR gate;
+    /// неизвестный selector всё равно расходует одно очко и ведёт к recompute.
+    pub(crate) fn allocate_stat_point(
+        &mut self,
+        selector: u8,
+        constitution_hp: u16,
+        intelligence_mp: u16,
+    ) -> Option<PlayerStatAllocationMutation> {
+        if self.base_properties.remain_point == 0 {
+            return None;
+        }
+        let previous = self.stat_allocation_state();
+        let strength_gate = self.base_properties.base_strength < i32::MAX as u32;
+        let stat_changed = match selector {
+            0 if strength_gate => {
+                self.base_properties.base_strength =
+                    self.base_properties.base_strength.wrapping_add(1);
+                true
+            }
+            1 if strength_gate => {
+                self.base_properties.base_dexterity =
+                    self.base_properties.base_dexterity.wrapping_add(1);
+                true
+            }
+            2 => {
+                if strength_gate {
+                    self.base_properties.base_constitution =
+                        self.base_properties.base_constitution.wrapping_add(1);
+                }
+                self.base_properties.base_maximum_hp = self
+                    .base_properties
+                    .base_maximum_hp
+                    .wrapping_add(u32::from(constitution_hp));
+                strength_gate
+            }
+            3 => {
+                if strength_gate {
+                    self.base_properties.base_intelligence =
+                        self.base_properties.base_intelligence.wrapping_add(1);
+                }
+                self.base_properties.base_maximum_mp = self
+                    .base_properties
+                    .base_maximum_mp
+                    .wrapping_add(u32::from(intelligence_mp));
+                strength_gate
+            }
+            _ => false,
+        };
+        self.base_properties.remain_point = self.base_properties.remain_point.wrapping_sub(1);
+        Some(PlayerStatAllocationMutation {
+            player_id: self.player_id(),
+            selector,
+            stat_changed,
+            previous,
+            current: self.stat_allocation_state(),
+        })
     }
 
     /// Exact `GetCurBurden`: только equipment, packet и hand, в исходном
@@ -3945,7 +4149,8 @@ impl CPlayer {
                 }
             }
             if player_effects.recompute_without_removed_slot {
-                self.combat_properties = recompute_properties(self);
+                let properties = recompute_properties(self);
+                self.apply_recomputed_combat_properties(properties);
                 effects.push(
                     PlayerEquipmentRemoveEffect::PropertiesChangedWithoutRemovedSlot {
                         column: removed.event.column,
@@ -4028,7 +4233,8 @@ impl CPlayer {
                 }
             }
             if player_effects.recompute_properties {
-                self.combat_properties = recompute_properties(self);
+                let properties = recompute_properties(self);
+                self.apply_recomputed_combat_properties(properties);
                 effects.push(PlayerEquipmentAddEffect::PropertiesChanged {
                     combat_properties: self.combat_properties,
                 });
@@ -9657,62 +9863,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x000AF1E0
 // ADDRESS: 004af1e0
 // PROTOTYPE: void __thiscall PushItemToCiQingList(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddStr
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.h:511
-// RVA: 0x000FA9E0
-// ADDRESS: 004fa9e0
-// PROTOTYPE: void __thiscall AddStr(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddDex
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.h:512
-// RVA: 0x000FAA00
-// ADDRESS: 004faa00
-// PROTOTYPE: void __thiscall AddDex(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddCon
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.h:513
-// RVA: 0x000FAA20
-// ADDRESS: 004faa20
-// PROTOTYPE: void __thiscall AddCon(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddInt
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.h:514
-// RVA: 0x000FAA40
-// ADDRESS: 004faa40
-// PROTOTYPE: void __thiscall AddInt(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

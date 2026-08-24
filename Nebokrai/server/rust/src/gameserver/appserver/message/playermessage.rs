@@ -18,13 +18,17 @@
 //! Player trade `0x8FA06/07/0B/0C` замыкает invitation/answer guards,
 //! normal session с двумя trader plug-ами, ready toggle, синхронный commit,
 //! Billing-pending YuanBao tail и terminal End/Abort публикации.
+//! Stat allocation `0x8FA01` сохраняет no-point/no-read guard, legacy STR gate,
+//! occupation/sex HP/MP increments, virtual property recompute и exact
+//! `0xBF702 = m_Property[0x9c] + base max HP/MP` response.
 //! Equipment-state refresh `0x8FA16` сохраняет packed local-time decode,
 //! strict grace-minute comparison, addon mutation и around `0xBF928`.
 //! Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_EQUIP_STATE;
-use crate::gameserver::appserver::player::PlayerFriendAddOutcome;
-use crate::gameserver::appserver::player::PlayerProgress;
+use crate::gameserver::appserver::player::{
+    PlayerFriendAddOutcome, PlayerProgress, PlayerStatAllocationMutation,
+};
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, PlayerReliveContext, PlayerReliveReport,
@@ -33,6 +37,7 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
 
+const ALLOCATE_STAT_POINT: u32 = 0x0008_fa01;
 const REQUEST_RELIVE: u32 = 0x0008_fa02;
 const REQUEST_TRADE: u32 = 0x0008_fa06;
 const ANSWER_TRADE: u32 = 0x0008_fa07;
@@ -104,6 +109,8 @@ pub(crate) enum GamePlayerMessageOutcome {
     MissingContext,
     ChangingLocation,
     TargetMissing,
+    StatPointUnavailable,
+    StatPointAllocated,
     Relived,
     PlayerScriptRun,
     TradeRequested,
@@ -152,6 +159,7 @@ pub(crate) struct GamePlayerMessageReport {
     pub(crate) equipment_elapsed_seconds: Option<i32>,
     pub(crate) equipment_state_mutated: Option<bool>,
     pub(crate) outcome: GamePlayerMessageOutcome,
+    pub(crate) stat_allocation: Option<PlayerStatAllocationMutation>,
     pub(crate) relive: Option<PlayerReliveReport>,
     pub(crate) trade_session: Option<(i32, i32, i32)>,
     pub(crate) trade_ready: Option<PlayerTradeReadyReport>,
@@ -264,7 +272,8 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
-        REQUEST_RELIVE
+        ALLOCATE_STAT_POINT
+            | REQUEST_RELIVE
             | REQUEST_TRADE
             | ANSWER_TRADE
             | TOGGLE_TRADE_READY
@@ -298,6 +307,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
         equipment_elapsed_seconds: None,
         equipment_state_mutated: None,
         outcome: GamePlayerMessageOutcome::MissingContext,
+        stat_allocation: None,
         relive: None,
         trade_session: None,
         trade_ready: None,
@@ -316,6 +326,61 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
     }
 
     match message_type {
+        ALLOCATE_STAT_POINT => {
+            let Some(state) = game
+                .find_player(player_id)
+                .map(|player| player.stat_allocation_state())
+            else {
+                return Some(Ok(report));
+            };
+            if state.remain_point == 0 {
+                report.outcome = GamePlayerMessageOutcome::StatPointUnavailable;
+                return Some(Ok(report));
+            }
+            let Some(selector) = message.base_mut().get_char() else {
+                return Some(Err(GamePlayerMessageError::MissingField("stat selector")));
+            };
+            let (constitution_hp, intelligence_mp) = if matches!(selector, 2 | 3) {
+                let properties = game
+                    .player_list_mut()
+                    .creation_properties(state.sex, state.occupation)
+                    .properties;
+                (
+                    properties.constitution_to_maximum_hp,
+                    properties.intelligence_to_maximum_mp,
+                )
+            } else {
+                (0, 0)
+            };
+            report.stat_allocation = game
+                .find_player_mut(player_id)
+                .expect("stat-allocation player сохранён после context lookup")
+                .allocate_stat_point(selector as u8, constitution_hp, intelligence_mp);
+            let properties = runtime.recompute_enhancement_player_properties(
+                game.find_player(player_id)
+                    .expect("stat-allocation player сохранён после mutation"),
+            );
+            let (wire, base_maximum_hp, base_maximum_mp) = {
+                let player = game
+                    .find_player_mut(player_id)
+                    .expect("stat-allocation player сохранён до property response");
+                player.apply_recomputed_combat_properties(properties);
+                let state = player.stat_allocation_state();
+                (
+                    *player.combat_property_wire(),
+                    state.base_maximum_hp,
+                    state.base_maximum_mp,
+                )
+            };
+            let mut response = CMessage::new(0x000b_f702);
+            response.base_mut().add(&wire);
+            response.base_mut().add_ulong(base_maximum_hp);
+            response.base_mut().add_ulong(base_maximum_mp);
+            report.deliveries.push(GamePlayerMessageDelivery::Player(
+                response.send_to_player(game.net_server(), player_id),
+            ));
+            report.outcome = GamePlayerMessageOutcome::StatPointAllocated;
+        }
         REQUEST_RELIVE => {
             report.relive = Some(game.relive_gods_battle_player(player_id, 0, runtime));
             report.outcome = GamePlayerMessageOutcome::Relived;
