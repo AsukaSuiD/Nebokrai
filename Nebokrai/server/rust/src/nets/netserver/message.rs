@@ -537,6 +537,24 @@ impl CMessage {
         ))
     }
 
+    pub(crate) fn send_to_around_position(
+        &self,
+        server_region: Option<&CServerRegion>,
+        tile_x: i32,
+        tile_y: i32,
+        excluded_player_id: Option<i32>,
+        runtime: &GameServerAroundRuntime<'_>,
+    ) -> i32 {
+        self.send_to_around_at(
+            server_region,
+            tile_x,
+            tile_y,
+            None,
+            excluded_player_id,
+            runtime,
+        )
+    }
+
     fn send_to_around_at(
         &self,
         server_region: Option<&CServerRegion>,

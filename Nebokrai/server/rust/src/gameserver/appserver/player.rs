@@ -1081,6 +1081,7 @@ pub(crate) struct GoodsSessionPlayerRelease {
 pub(crate) struct CiQingPacketConsumption {
     pub(crate) player_id: i32,
     pub(crate) goods: super::shape::ShapeIdentity,
+    pub(crate) position: u32,
     pub(crate) previous_amount: u32,
     pub(crate) remaining_amount: u32,
     pub(crate) removal: Option<VolumeGoodsRemoveOutcome>,
@@ -1763,6 +1764,10 @@ impl CPlayer {
             if remaining_request == 0 {
                 break;
             }
+            let position = self
+                .packet
+                .query_goods_position(identity.ex_id)
+                .unwrap_or_default();
             let consumed = previous_amount.min(remaining_request);
             if consumed == 0 {
                 continue;
@@ -1783,6 +1788,7 @@ impl CPlayer {
             consumptions.push(CiQingPacketConsumption {
                 player_id,
                 goods: identity,
+                position,
                 previous_amount,
                 remaining_amount,
                 removal,
@@ -1801,6 +1807,7 @@ impl CPlayer {
         }
         let goods = self.packet.base().find(goods_id)?;
         let identity = goods.identity();
+        let position = self.packet.query_goods_position(goods_id)?;
         let previous_amount = goods.amount();
         let consumed = previous_amount.min(requested);
         let remaining_amount = previous_amount.wrapping_sub(consumed);
@@ -1816,6 +1823,7 @@ impl CPlayer {
         Some(CiQingPacketConsumption {
             player_id: self.player_id(),
             goods: identity,
+            position,
             previous_amount,
             remaining_amount,
             removal,

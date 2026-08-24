@@ -7,6 +7,8 @@
 //! goods factory и общий MSVCRT RNG. Listener/session lifecycle связан через
 //! equipment-session factory и MainLoop; script-only external-refresh caller `9351` использует тот же external-attribute
 //! алгоритм, обязательный reason `4`, расход, area effect `11` и item update.
+//! Уведомления, packet consumption, `0xBF918`, `0xBF50A` и World `0x60212`
+//! исполняются `CGame`; внешней границей остаётся только script VM.
 
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentdakongcontainer::{
@@ -142,6 +144,7 @@ pub(crate) struct EquipmentDaKongExternalRefreshReport {
     pub(crate) consumption: Option<CiQingPacketConsumption>,
     pub(crate) consumption_deliveries: Vec<i32>,
     pub(crate) log: Option<EquipmentDaKongAuditLog>,
+    pub(crate) log_deliveries: Vec<i32>,
     pub(crate) effect: Option<EquipmentDaKongAroundEffect>,
     pub(crate) effect_delivery: Option<i32>,
     pub(crate) client_update: Option<EquipmentDaKongClientUpdate>,
@@ -162,6 +165,7 @@ pub(crate) struct EquipmentDaKongReport {
     pub(crate) packet_consumption_deliveries: Vec<Vec<i32>>,
     pub(crate) gem_consumptions: Vec<EquipmentDaKongGemConsumption>,
     pub(crate) logs: Vec<EquipmentDaKongAuditLog>,
+    pub(crate) world_deliveries: Vec<i32>,
     pub(crate) client_updates: Vec<EquipmentDaKongClientUpdate>,
     pub(crate) client_update_deliveries: Vec<Vec<i32>>,
     pub(crate) scripts: Vec<Vec<u8>>,

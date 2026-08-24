@@ -1479,24 +1479,6 @@ pub(crate) trait EquipmentComposeContext: OldClientGoodsCodec {
 }
 
 pub(crate) trait EquipmentDaKongContext: OldClientGoodsCodec {
-    fn publish_equipment_da_kong_notification(
-        &mut self,
-        player_id: i32,
-        string_id: &'static str,
-    ) -> i32;
-    fn record_equipment_da_kong_log(&mut self, player: &CPlayer, log: &EquipmentDaKongAuditLog);
-    fn publish_equipment_da_kong_consumption(
-        &mut self,
-        consumption: &CiQingPacketConsumption,
-    ) -> Vec<i32>;
-    fn publish_equipment_da_kong_update(
-        &mut self,
-        update: &EquipmentDaKongClientUpdate,
-    ) -> Vec<i32>;
-    fn publish_equipment_da_kong_around_effect(
-        &mut self,
-        effect: &EquipmentDaKongAroundEffect,
-    ) -> i32;
     fn run_equipment_da_kong_script(
         &mut self,
         game: &mut CGame,
@@ -6782,6 +6764,7 @@ impl CGame {
             packet_consumption_deliveries: Vec::new(),
             gem_consumptions: Vec::new(),
             logs: Vec::new(),
+            world_deliveries: Vec::new(),
             client_updates: Vec::new(),
             client_update_deliveries: Vec::new(),
             scripts: Vec::new(),
@@ -6832,6 +6815,7 @@ impl CGame {
             consumption: None,
             consumption_deliveries: Vec::new(),
             log: None,
+            log_deliveries: Vec::new(),
             effect: None,
             effect_delivery: None,
             client_update: None,
@@ -6946,7 +6930,9 @@ impl CGame {
                             &self.goods_factory,
                         ),
                     };
-                    context.record_equipment_da_kong_log(player, &log);
+                    report
+                        .log_deliveries
+                        .extend(self.send_equipment_da_kong_log(player, &log));
                     report.log = Some(log);
                 }
                 if let Some(consumption) = player
@@ -6955,7 +6941,7 @@ impl CGame {
                     .next()
                 {
                     report.consumption_deliveries =
-                        context.publish_equipment_da_kong_consumption(&consumption);
+                        self.send_equipment_da_kong_consumption(&consumption);
                     report.consumption = Some(consumption);
                 }
                 if let (Some(region_id), Ok(tile_x), Ok(tile_y)) = (
@@ -6970,7 +6956,7 @@ impl CGame {
                         tile_y,
                     };
                     report.effect_delivery =
-                        Some(context.publish_equipment_da_kong_around_effect(&effect));
+                        Some(self.send_equipment_da_kong_around_effect(&effect));
                     report.effect = Some(effect);
                 }
                 refreshed = true;
@@ -6995,7 +6981,7 @@ impl CGame {
             goods: equipment.identity(),
             old_client_payload: context.encode_goods_for_old_client(equipment),
         };
-        report.client_update_deliveries = context.publish_equipment_da_kong_update(&update);
+        report.client_update_deliveries = vec![self.send_equipment_da_kong_update(&update)];
         report.client_update = Some(update);
         report.outcome = if refreshed {
             EquipmentDaKongExternalRefreshOutcome::Refreshed
@@ -7082,18 +7068,21 @@ impl CGame {
         })
     }
 
-    fn equipment_da_kong_notify<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_notify(
+        &self,
         report: &mut EquipmentDaKongReport,
-        context: &mut Context,
         player_id: i32,
         string_id: &'static str,
     ) {
-        report
-            .notifications
-            .push(context.publish_equipment_da_kong_notification(player_id, string_id));
+        let text = self.get_string_by_id(string_id.as_bytes());
+        report.notifications.push(
+            colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                .send_to_player(self.net_server(), player_id),
+        );
     }
 
     fn equipment_da_kong_publish_update<Context: EquipmentDaKongContext>(
+        &self,
         report: &mut EquipmentDaKongReport,
         context: &mut Context,
         player_id: i32,
@@ -7104,28 +7093,27 @@ impl CGame {
             goods: goods.identity(),
             old_client_payload: context.encode_goods_for_old_client(goods),
         };
-        let deliveries = context.publish_equipment_da_kong_update(&update);
+        let deliveries = vec![self.send_equipment_da_kong_update(&update)];
         report.client_updates.push(update);
         report.client_update_deliveries.push(deliveries);
     }
 
-    fn equipment_da_kong_consume_packet<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_consume_packet(
+        &self,
         report: &mut EquipmentDaKongReport,
-        context: &mut Context,
         player: &mut CPlayer,
         base_index: u32,
     ) {
         for consumption in player.remove_item_in_packet(base_index, 1) {
-            let deliveries = context.publish_equipment_da_kong_consumption(&consumption);
+            let deliveries = self.send_equipment_da_kong_consumption(&consumption);
             report.packet_consumptions.push(consumption);
             report.packet_consumption_deliveries.push(deliveries);
         }
     }
 
-    fn equipment_da_kong_log<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_log(
         &self,
         report: &mut EquipmentDaKongReport,
-        context: &mut Context,
         player: &CPlayer,
         reason: u8,
         cost_base_index: u32,
@@ -7133,7 +7121,6 @@ impl CGame {
     ) {
         self.equipment_da_kong_log_snapshot(
             report,
-            context,
             player,
             reason,
             cost_base_index,
@@ -7141,10 +7128,9 @@ impl CGame {
         );
     }
 
-    fn equipment_da_kong_log_snapshot<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_log_snapshot(
         &self,
         report: &mut EquipmentDaKongReport,
-        context: &mut Context,
         player: &CPlayer,
         reason: u8,
         cost_base_index: u32,
@@ -7167,8 +7153,94 @@ impl CGame {
             cost_name: cost.name().to_vec(),
             equipment,
         };
-        context.record_equipment_da_kong_log(player, &log);
+        report
+            .world_deliveries
+            .extend(self.send_equipment_da_kong_log(player, &log));
         report.logs.push(log);
+    }
+
+    fn send_equipment_da_kong_update(&self, update: &EquipmentDaKongClientUpdate) -> i32 {
+        let mut message = CMessage::new(0x0b_f918);
+        message.add_long(update.player_id);
+        message.base_mut().add_guid(update.goods.ex_id);
+        message.add_ulong(update.old_client_payload.len() as u32);
+        message.base_mut().add(&update.old_client_payload);
+        message.send_to_player(self.net_server(), update.player_id)
+    }
+
+    fn send_equipment_da_kong_consumption(
+        &self,
+        consumption: &CiQingPacketConsumption,
+    ) -> Vec<i32> {
+        if consumption.remaining_amount == 0 {
+            let mut message = CS2CContainerObjectMove::default();
+            message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+            message.set_source_container(
+                PLAYER_TYPE,
+                consumption.player_id,
+                consumption.position,
+            );
+            message.set_source_container_extend_id(1);
+            message.set_source_object(
+                consumption.goods.object_type,
+                consumption.goods.ex_id,
+                consumption.previous_amount,
+            );
+            return vec![message.send_to_player(self, consumption.player_id)];
+        }
+        let mut message = CS2CContainerObjectAmountChange::default();
+        message.set_source_container(
+            PLAYER_TYPE,
+            consumption.player_id,
+            consumption.position,
+        );
+        message.set_source_container_extend_id(1);
+        message.set_object(consumption.goods.object_type, consumption.goods.ex_id);
+        message.set_object_amount(consumption.remaining_amount);
+        vec![message.send_to_player(self, consumption.player_id)]
+    }
+
+    fn send_equipment_da_kong_log(
+        &self,
+        player: &CPlayer,
+        log: &EquipmentDaKongAuditLog,
+    ) -> Vec<i32> {
+        let mut message = CMessage::new(0x0006_0212);
+        message.add_byte(log.reason);
+        message.add_long(log.player_id);
+        message.base_mut().add_short(player.pk_count() as i16);
+        message.add_ulong(player.money());
+        message.add_ulong(player.depot_money());
+        add_legacy_c_string(message.base_mut(), &log.equipment.description);
+        message.base_mut().add_guid(log.equipment.identity.ex_id);
+        message.add_ulong(log.cost_price);
+        add_legacy_c_string(message.base_mut(), &log.cost_name);
+        message.add_ulong(1);
+        message.add_long(player.server_region_id().unwrap_or_default());
+        message.add_ulong(player.shape().get_tile_x().unwrap_or_default() as u32);
+        message.add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
+        message.add_ulong(player.client_ip());
+        for &(_, _, value) in &log.equipment.socket_and_external_values {
+            message.add_ulong(value as u32);
+        }
+        message.send(self, false).into_iter().collect()
+    }
+
+    fn send_equipment_da_kong_around_effect(&self, effect: &EquipmentDaKongAroundEffect) -> i32 {
+        let mut message = CMessage::new(0x000b_f50a);
+        message.add_long(effect.effect_id);
+        message.add_ulong((effect.tile_x as f32 + 0.5).to_bits());
+        message.add_ulong((effect.tile_y as f32 + 0.5).to_bits());
+        let Some(runtime) = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        ) else {
+            return 0;
+        };
+        let region = self.find_region(effect.region_id).map(ServerRegionOwner::base);
+        message.send_to_around_position(region, effect.tile_x, effect.tile_y, None, &runtime)
     }
 
     fn equipment_da_kong_run_script<Context: EquipmentDaKongContext>(
@@ -7218,7 +7290,7 @@ impl CGame {
                 1,
             ) != 1
         {
-            Self::equipment_da_kong_notify(report, context, player_id, "GS1166");
+            self.equipment_da_kong_notify(report, player_id, "GS1166");
             report.outcome = EquipmentDaKongOutcome::MissingResource;
             return;
         }
@@ -7290,15 +7362,15 @@ impl CGame {
                 let _ = equipment.set_addon_property_value_first_core(property, 1, external_type);
                 let _ = equipment.set_addon_property_modifier_core(property, 2, external_value);
             }
-            Self::equipment_da_kong_notify(report, context, player_id, "GS1164");
+            self.equipment_da_kong_notify(report, player_id, "GS1164");
         } else {
-            Self::equipment_da_kong_notify(report, context, player_id, "GS1165");
+            self.equipment_da_kong_notify(report, player_id, "GS1165");
         }
         let equipment = player
             .get_goods_by_id(equipment_id)
             .expect("DaKong equipment сохраняется до audit");
-        self.equipment_da_kong_log(report, context, player, 1, stone_index, equipment);
-        Self::equipment_da_kong_consume_packet(report, context, player, stone_index);
+        self.equipment_da_kong_log(report, player, 1, stone_index, equipment);
+        self.equipment_da_kong_consume_packet(report, player, stone_index);
         let _ = self.equipment_da_kong_publish_preview(player, plug, report, context);
         report.return_value = 1;
         report.outcome = EquipmentDaKongOutcome::Completed;
@@ -7319,7 +7391,7 @@ impl CGame {
         };
         let gems = self.equipment_da_kong_gems(player, plug);
         let _ = deal_enchase_gems(&mut preview, &gems, &self.goods_factory, false);
-        Self::equipment_da_kong_publish_update(report, context, player.player_id(), &preview);
+        self.equipment_da_kong_publish_update(report, context, player.player_id(), &preview);
         true
     }
 
@@ -7349,7 +7421,7 @@ impl CGame {
         let color = equipment.addon_property_value(&self.goods_factory, property, 1);
         let gem_index = equipment.addon_property_value(&self.goods_factory, property, 2);
         if !(2..=8).contains(&color) || gem_index != 0 {
-            Self::equipment_da_kong_notify(report, context, player_id, "GS1170");
+            self.equipment_da_kong_notify(report, player_id, "GS1170");
             report.return_value = 1;
             report.outcome = EquipmentDaKongOutcome::ConditionRejected;
             return;
@@ -7358,19 +7430,19 @@ impl CGame {
             .goods_factory
             .query_goods_id_by_original_name(Some(b"FZ1049"));
         if player.check_item_in_packet(stone_index) == 0 {
-            Self::equipment_da_kong_notify(report, context, player_id, "GS1171");
+            self.equipment_da_kong_notify(report, player_id, "GS1171");
             report.return_value = 1;
             report.outcome = EquipmentDaKongOutcome::MissingResource;
             return;
         }
-        Self::equipment_da_kong_consume_packet(report, context, player, stone_index);
+        self.equipment_da_kong_consume_packet(report, player, stone_index);
         if player
             .get_goods_by_id(equipment_id)
             .is_some_and(|equipment| {
                 equipment.addon_property_value(&self.goods_factory, property, 2) >= 1
             })
         {
-            Self::equipment_da_kong_notify(report, context, player_id, "GS1172");
+            self.equipment_da_kong_notify(report, player_id, "GS1172");
             report.return_value = 1;
             report.outcome = EquipmentDaKongOutcome::ConditionRejected;
             return;
@@ -7388,19 +7460,19 @@ impl CGame {
             .get_goods_by_id_mut(equipment_id)
             .expect("color equipment проверен до mutation");
         let _ = equipment.set_addon_property_modifier_core(property, 1, new_color.wrapping_add(1));
-        Self::equipment_da_kong_notify(report, context, player_id, "GS1173");
+        self.equipment_da_kong_notify(report, player_id, "GS1173");
         let equipment = player
             .get_goods_by_id(equipment_id)
             .expect("color equipment сохраняется до audit/update");
-        self.equipment_da_kong_log(report, context, player, 0, stone_index, equipment);
-        Self::equipment_da_kong_publish_update(report, context, player_id, equipment);
+        self.equipment_da_kong_log(report, player, 0, stone_index, equipment);
+        self.equipment_da_kong_publish_update(report, context, player_id, equipment);
         report.return_value = 1;
         report.outcome = EquipmentDaKongOutcome::Completed;
     }
 
-    fn equipment_da_kong_consume_shadow_gems<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_consume_shadow_gems(
+        &self,
         report: &mut EquipmentDaKongReport,
-        context: &mut Context,
         player: &mut CPlayer,
         plug: &mut CEquipmentDaKong,
     ) {
@@ -7432,7 +7504,7 @@ impl CGame {
                 });
             let mut external_deliveries = Vec::new();
             if let Some(consumption) = player.remove_packet_goods_by_id(goods_id, 1) {
-                external_deliveries = context.publish_equipment_da_kong_consumption(&consumption);
+                external_deliveries = self.send_equipment_da_kong_consumption(&consumption);
                 report.packet_consumptions.push(consumption);
                 report
                     .packet_consumption_deliveries
@@ -7486,7 +7558,7 @@ impl CGame {
         for event in effects.events {
             match event {
                 EquipmentDaKongEnchaseEvent::Notification(string_id) => {
-                    Self::equipment_da_kong_notify(report, context, player_id, string_id);
+                    self.equipment_da_kong_notify(report, player_id, string_id);
                 }
                 EquipmentDaKongEnchaseEvent::GemApplied {
                     gem,
@@ -7496,7 +7568,6 @@ impl CGame {
                     if audit {
                         self.equipment_da_kong_log_snapshot(
                             report,
-                            context,
                             player,
                             2,
                             gem.base_index,
@@ -7510,13 +7581,13 @@ impl CGame {
             }
         }
         if changed {
-            Self::equipment_da_kong_notify(report, context, player_id, "GS1167");
+            self.equipment_da_kong_notify(report, player_id, "GS1167");
         }
-        Self::equipment_da_kong_consume_shadow_gems(report, context, player, plug);
+        self.equipment_da_kong_consume_shadow_gems(report, player, plug);
         let equipment = player
             .get_goods_by_id(equipment_id)
             .expect("enchase equipment сохраняется после gem consumption");
-        Self::equipment_da_kong_publish_update(report, context, player_id, equipment);
+        self.equipment_da_kong_publish_update(report, context, player_id, equipment);
         report.return_value = 1;
         report.outcome = EquipmentDaKongOutcome::Completed;
     }
@@ -7535,7 +7606,7 @@ impl CGame {
             return;
         };
         if player.check_item_in_packet(DA_KONG_USE_SINKER_INDEX) == 0 {
-            Self::equipment_da_kong_notify(report, context, player_id, "GS1174");
+            self.equipment_da_kong_notify(report, player_id, "GS1174");
             report.outcome = EquipmentDaKongOutcome::MissingResource;
             return;
         }
@@ -7556,7 +7627,7 @@ impl CGame {
                 })
                 .unwrap_or_default();
             if !(2..=8).contains(&socket_color) || gem_index == 0 {
-                Self::equipment_da_kong_notify(report, context, player_id, "GS1175");
+                self.equipment_da_kong_notify(report, player_id, "GS1175");
             } else {
                 let slot_seven = gems[6].or_else(|| {
                     player.get_goods_by_id(equipment_id).and_then(|equipment| {
@@ -7641,12 +7712,7 @@ impl CGame {
             }
         }
         if removed {
-            Self::equipment_da_kong_consume_packet(
-                report,
-                context,
-                player,
-                DA_KONG_USE_SINKER_INDEX,
-            );
+            self.equipment_da_kong_consume_packet(report, player, DA_KONG_USE_SINKER_INDEX);
             let equipment = player
                 .get_goods_by_id_mut(equipment_id)
                 .expect("destroy equipment сохраняется до extern restore");
@@ -7661,7 +7727,6 @@ impl CGame {
                 .expect("destroy equipment сохраняется до audit");
             self.equipment_da_kong_log(
                 report,
-                context,
                 player,
                 3,
                 DA_KONG_USE_SINKER_INDEX,
@@ -7673,7 +7738,7 @@ impl CGame {
             .expect("destroy equipment сохраняется до preview")
             .clone();
         let _ = deal_enchase_gems(&mut preview, &gems, &self.goods_factory, false);
-        Self::equipment_da_kong_publish_update(report, context, player_id, &preview);
+        self.equipment_da_kong_publish_update(report, context, player_id, &preview);
         report.return_value = 1;
         report.outcome = EquipmentDaKongOutcome::Completed;
     }
