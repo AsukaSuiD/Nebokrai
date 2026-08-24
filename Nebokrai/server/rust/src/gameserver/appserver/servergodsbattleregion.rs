@@ -11,7 +11,9 @@
 //! Безразмерный pointer и 256-байтный временный C-string buffer заменены
 //! bounded slice/cursor и owned bytes; обрыв возвращает typed error после уже
 //! завершённого prefix-а вместо неназначаемого legacy UB. Gameplay lifecycle
-//! и остальные методы manager-а пока остаются RAW ниже.
+//! и остальные методы manager-а пока остаются RAW ниже. Top-ten SZL exchange
+//! хранит единственный overwrite-able requester, exact World request и
+//! terminal-marker decoder; client publication выполняет dispatcher-owner.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -24,6 +26,8 @@ use crate::setup::godsbattleconf::{
     CGodsBattleConf, GodsBattleDecodeError, GodsBattleDecodeReport,
 };
 use std::collections::BTreeSet;
+use std::error::Error;
+use std::fmt;
 
 use super::serverregion::ServerRegionDecodeError;
 use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError};
@@ -38,7 +42,46 @@ const EMPTY_DIE_BACK_CONFIGURATION: &[u8] =
 pub(crate) struct CGodsBattleMgr {
     configuration: CGodsBattleConf,
     region_set: BTreeSet<i32>,
+    pending_top_ten_player_id: i32,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleTopTenEntry {
+    pub(crate) faction: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) szl: u32,
+    pub(crate) level: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleTopTenDecodeError {
+    UnexpectedEnd { offset: usize, field: &'static str },
+    MissingNameTerminator { offset: usize },
+    NameOutsideLegacyBuffer { offset: usize, length: usize },
+}
+
+impl fmt::Display for GodsBattleTopTenDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEnd { offset, field } => {
+                write!(
+                    formatter,
+                    "GodsBattle top-ten обрывается на {offset} в поле {field}"
+                )
+            }
+            Self::MissingNameTerminator { offset } => write!(
+                formatter,
+                "GodsBattle top-ten name с {offset} не имеет NUL-терминатора"
+            ),
+            Self::NameOutsideLegacyBuffer { offset, length } => write!(
+                formatter,
+                "GodsBattle top-ten name с {offset} длиной {length} не помещается в 260 байт"
+            ),
+        }
+    }
+}
+
+impl Error for GodsBattleTopTenDecodeError {}
 
 impl CGodsBattleMgr {
     pub(crate) const fn configuration(&self) -> &CGodsBattleConf {
@@ -51,6 +94,60 @@ impl CGodsBattleMgr {
 
     pub(crate) fn contains_region(&self, region_id: i32) -> bool {
         self.region_set.contains(&region_id)
+    }
+
+    pub(crate) const fn pending_top_ten_player_id(&self) -> i32 {
+        self.pending_top_ten_player_id
+    }
+
+    /// Exact post-send assignment `GetTopTenSZL`: concurrent request
+    /// перезаписывает единственный legacy requester без sequence ID.
+    pub(crate) const fn record_top_ten_request(&mut self, player_id: i32) {
+        self.pending_top_ten_player_id = player_id;
+    }
+
+    pub(crate) fn decode_top_ten(
+        &self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<Vec<GodsBattleTopTenEntry>, GodsBattleTopTenDecodeError> {
+        let mut entries = Vec::new();
+        loop {
+            let marker = read_top_ten_i32(source, cursor, "marker")?;
+            if marker == 0 {
+                return Ok(entries);
+            }
+            let faction = read_top_ten_i32(source, cursor, "faction")?;
+            let name_offset = *cursor;
+            let remaining =
+                source
+                    .get(name_offset..)
+                    .ok_or(GodsBattleTopTenDecodeError::UnexpectedEnd {
+                        offset: name_offset,
+                        field: "name",
+                    })?;
+            let length = remaining.iter().position(|byte| *byte == 0).ok_or(
+                GodsBattleTopTenDecodeError::MissingNameTerminator {
+                    offset: name_offset,
+                },
+            )?;
+            if length >= 260 {
+                return Err(GodsBattleTopTenDecodeError::NameOutsideLegacyBuffer {
+                    offset: name_offset,
+                    length,
+                });
+            }
+            let name = remaining[..length].to_vec();
+            *cursor = cursor.wrapping_add(length + 1);
+            let szl = read_top_ten_i32(source, cursor, "szl")? as u32;
+            let level = read_top_ten_i32(source, cursor, "level")? as u32;
+            entries.push(GodsBattleTopTenEntry {
+                faction,
+                name,
+                szl,
+                level,
+            });
+        }
     }
 
     /// Воспроизводит `CGodsBattleMgr::DecordFromByteArray`, включая оба
@@ -73,6 +170,23 @@ impl CGodsBattleMgr {
             || put_string_to_file("godsbattleLog", EMPTY_DIE_BACK_CONFIGURATION),
         )
     }
+}
+
+fn read_top_ten_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, GodsBattleTopTenDecodeError> {
+    let offset = *cursor;
+    let bytes = source
+        .get(offset..offset.saturating_add(4))
+        .ok_or(GodsBattleTopTenDecodeError::UnexpectedEnd { offset, field })?;
+    *cursor = cursor.wrapping_add(4);
+    Ok(i32::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("проверенный четырёхбайтовый GodsBattle scalar"),
+    ))
 }
 
 /// Startup-часть concrete GodsBattle region. Constructor подтверждает
@@ -121,20 +235,6 @@ impl CServerGodsBattleRegion {
 // RVA: 0x000A5B70
 // ADDRESS: 004a5b70
 // PROTOTYPE: void __thiscall UpdateXYD(uchar param_1, int param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodsBattleMgr::GetTopTenSZL
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:969
-// RVA: 0x000A5C00
-// ADDRESS: 004a5c00
-// PROTOTYPE: void __thiscall GetTopTenSZL(long param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -519,20 +619,6 @@ impl CServerGodsBattleRegion {
 //
 
 // ============================================================================
-// FUNCTION: CGodsBattleMgr::DecordTopTenFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1054
-// RVA: 0x000AA4B0
-// ADDRESS: 004aa4b0
-// PROTOTYPE: bool __thiscall DecordTopTenFromByteArray(uchar * param_1, long * param_2, vector<_TOPTEN,std::allocator<_TOPTEN>_> * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CGodsBattleMgr::OnEnterContend
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -713,181 +799,5 @@ impl CServerGodsBattleRegion {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

@@ -1005,6 +1005,12 @@ pub(crate) struct GameWarStartupOwners {
     pub(crate) four_nation: CFourNationWarSys,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GodsBattleTopTenRequestReport {
+    pub(crate) player_id: i32,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
 pub(crate) trait NationCombatContext: ServerRegionNpcContext {
     fn now_milliseconds(&mut self) -> u32;
     fn add_log_text(&mut self, text: &[u8]);
@@ -3847,6 +3853,21 @@ impl CGame {
 
     pub(crate) const fn gods_battle_mgr_mut(&mut self) -> &mut CGodsBattleMgr {
         &mut self.gods_battle_mgr
+    }
+
+    /// Script primitive at call-site `0x4C3D96`: пустой `0x5FA10` сначала
+    /// уходит WorldServer-у, затем single pending requester перезаписывается.
+    pub(crate) fn request_gods_battle_top_ten(
+        &mut self,
+        player_id: i32,
+    ) -> GodsBattleTopTenRequestReport {
+        let request = CMessage::new(0x5fa10);
+        let delivery = request.send(self, false);
+        self.gods_battle_mgr.record_top_ten_request(player_id);
+        GodsBattleTopTenRequestReport {
+            player_id,
+            delivery,
+        }
     }
 
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {

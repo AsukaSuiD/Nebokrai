@@ -60,6 +60,9 @@
 //! World-event setup `0x36/0x39` публикует Leiting things и GodsBattle manager
 //! одним FIFO pass; dynamic log, decoder-local warning, file audit и финальный
 //! startup log остаются на исходных позициях.
+//! Runtime GodsBattle response `0x7F80F` тем же живым FIFO декодирует оба
+//! faction top-ten списка до terminal marker и адресно публикует `0xBF740`
+//! последнему requester-у manager-а.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -138,7 +141,9 @@ use crate::gameserver::appserver::servercityregion::{
 use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryRegionDecodeContext, CountryRegionDecodeError,
 };
-use crate::gameserver::appserver::servergodsbattleregion::CServerGodsBattleRegion;
+use crate::gameserver::appserver::servergodsbattleregion::{
+    CServerGodsBattleRegion, GodsBattleTopTenDecodeError, GodsBattleTopTenEntry,
+};
 use crate::gameserver::appserver::servernationregion::ServerNationRegion;
 use crate::gameserver::appserver::serverregion::ServerRegionSetupDecodeError;
 use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionDecodeError};
@@ -194,6 +199,8 @@ const PLAYER_COUNT_IF_WORLD_CONNECTED_MESSAGE: i32 = 0x0007_F809;
 const PLAYER_COUNT_MESSAGE: i32 = 0x0007_F80B;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_RESPONSE: i32 = 0x0005_FA0A;
 const PLAYER_COUNT_RESPONSE: i32 = 0x0005_FA0C;
+const GODS_BATTLE_TOP_TEN_RESPONSE: i32 = 0x0007_F80F;
+const GODS_BATTLE_TOP_TEN_CLIENT: i32 = 0x000B_F740;
 const CLIENT_SERVER_START_SELECTOR: i32 = 0x3b;
 const GOODS_LIST_SELECTOR: i32 = 0x00;
 const PLAYER_LIST_SELECTOR: i32 = 0x01;
@@ -994,6 +1001,7 @@ pub(crate) enum GameServerMessageReport {
     ClientServerStart(GameClientServerStartReport),
     StringTable(GameStringTableMessageReport),
     PlayerCount(GamePlayerCountResponseReport),
+    GodsBattleTopTen(GameGodsBattleTopTenReport),
     BattleFairyStartup(GameBattleFairyStartupMessageReport),
     CombatRegistryStartup(GameCombatRegistryStartupMessageReport),
     PlayerEconomyStartup(GamePlayerEconomyStartupMessageReport),
@@ -1014,9 +1022,17 @@ pub(crate) enum GameServerMessageReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameGodsBattleTopTenReport {
+    pub(crate) player_id: i32,
+    pub(crate) entries: Vec<GodsBattleTopTenEntry>,
+    pub(crate) delivery: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageError<RegionRuntimeError> {
     StartupSelector(GameClientServerStartPayloadError),
     StringTable(MyStringTableDecodeError),
+    GodsBattleTopTen(GodsBattleTopTenDecodeError),
     BattleFairyStartup(GameBattleFairyStartupError),
     CombatRegistryStartup(GameCombatRegistryStartupError),
     PlayerEconomyStartup(GamePlayerEconomyStartupError),
@@ -1057,6 +1073,35 @@ where
     }
     if let Some(report) = dispatch_player_count_message(message.message_type(), game) {
         return Some(Ok(GameServerMessageReport::PlayerCount(report)));
+    }
+    if message.message_type() == GODS_BATTLE_TOP_TEN_RESPONSE {
+        let entries = {
+            let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
+            match game.gods_battle_mgr().decode_top_ten(source, cursor) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    return Some(Err(GameServerMessageError::GodsBattleTopTen(error)));
+                }
+            }
+        };
+        let player_id = game.gods_battle_mgr().pending_top_ten_player_id();
+        let mut response = CMessage::new(GODS_BATTLE_TOP_TEN_CLIENT);
+        response.add_ulong(entries.len() as u32);
+        for entry in &entries {
+            response.add_ulong(entry.faction as u32);
+            response.base_mut().add(&entry.name);
+            response.base_mut().add_byte(0);
+            response.add_ulong(entry.szl);
+            response.add_ulong(entry.level);
+        }
+        let delivery = response.send_to_player(game.net_server(), player_id);
+        return Some(Ok(GameServerMessageReport::GodsBattleTopTen(
+            GameGodsBattleTopTenReport {
+                player_id,
+                entries,
+                delivery,
+            },
+        )));
     }
     if message.message_type() != SERVER_STARTUP_MESSAGE {
         return None;
