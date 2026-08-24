@@ -69,6 +69,8 @@
 //! skills/AI Init и around serialization остаются concrete context callbacks.
 //! Exact EXE подтверждает legacy quirk: его пятый bool не читается, enter
 //! message отправляется всегда, а шестой bool подавляет ранний guard-hook.
+//! Clock-вариант `AddNpc` получает отдельный tick на каждый объект batch-а:
+//! он одновременно питает born-time и concrete spatial membership owner.
 //! One-second AI fragment сохраняет wrapping respawn deadline, сначала пишет
 //! last-reset и затем восполняет только deficit `count-living_count`.
 //! `BTreeMap` используется только для identity lookup: observable обход
@@ -896,6 +898,27 @@ impl CServerRegion {
         area_height: i32,
         context: &mut Context,
     ) -> Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock> {
+        self.add_npc_with_clock(
+            setup,
+            remember_setup,
+            send_around,
+            area_width,
+            area_height,
+            context,
+            |_| now_ms,
+        )
+    }
+
+    pub(crate) fn add_npc_with_clock<Context: ServerRegionNpcContext>(
+        &mut self,
+        setup: &ServerRegionNpcSetup,
+        remember_setup: bool,
+        send_around: bool,
+        area_width: i32,
+        area_height: i32,
+        context: &mut Context,
+        mut now_ms: impl FnMut(&mut Context) -> u32,
+    ) -> Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock> {
         if remember_setup {
             self.npc_setups.push(setup.clone());
         }
@@ -934,8 +957,9 @@ impl CServerRegion {
             npc.set_show_list(setup.show_list);
             npc.set_script_file(&setup.script);
             npc.set_live_time(setup.time as u32);
+            let spawn_tick = now_ms(context);
             if setup.time != 0 {
-                npc.set_born_time(now_ms);
+                npc.set_born_time(spawn_tick);
             }
 
             context.npc_spawned();
@@ -950,7 +974,7 @@ impl CServerRegion {
                 facts,
                 area_width,
                 area_height,
-                now_ms,
+                spawn_tick,
                 context,
             )
             .map_err(ServerRegionNpcSpawnBlock::Membership)?;

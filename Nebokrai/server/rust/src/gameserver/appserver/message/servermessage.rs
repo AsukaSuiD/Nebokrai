@@ -75,6 +75,10 @@
 //! Kill confirmation `0x7F806` сохраняет три ignored long и player ID; missing
 //! player переиспользует вход как World `0x5FA06`, success мутирует murderer
 //! state и публикует around `0xBF70E` через concrete region/session owners.
+//! Runtime spawn `0x7F80A` полностью читает monster/NPC wire, сохраняет лишний
+//! первый monster RNG-вызов, concrete membership/enter effects, script и NPC
+//! lifetime. Единственный безопасный отход: неинициализированный legacy
+//! `tagNpc::bShowList` детерминированно заменён нулём вместо stack garbage.
 //! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
 //! публикует runtime repeated-emotion lookup до финального startup log.
 //! Goods list `0x00` заменяет ID/original-name/name registry из парного
@@ -147,6 +151,7 @@ use crate::gameserver::appserver::goods::cgoodsfactory::{
 };
 use crate::gameserver::appserver::player::{PlayerConfirmedKillReport, PlayerHonorResetReport};
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
+use crate::gameserver::appserver::region::{RegionCellAccessBlock, RegionRandomPosition};
 use crate::gameserver::appserver::script::variablelist::{
     GameVariableMutationOutcome, GameVariableSnapshotError, GameVariableSnapshotReport,
 };
@@ -160,8 +165,10 @@ use crate::gameserver::appserver::servergodsbattleregion::{
     CServerGodsBattleRegion, GodsBattleTopTenDecodeError, GodsBattleTopTenEntry,
 };
 use crate::gameserver::appserver::servernationregion::ServerNationRegion;
-use crate::gameserver::appserver::serverregion::ServerRegionSetupDecodeError;
-use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionDecodeError};
+use crate::gameserver::appserver::serverregion::{
+    CServerRegion, RegionMembershipBlock, ServerRegionDecodeError, ServerRegionNpcSetup,
+    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport, ServerRegionSetupDecodeError,
+};
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
@@ -215,6 +222,7 @@ const SERVER_STARTUP_MESSAGE: i32 = 0x0007_F801;
 const WORLD_PLAYER_NOTICE_RESPONSE: i32 = 0x0007_F804;
 const GENERAL_VARIABLE_UPDATE_RESPONSE: i32 = 0x0007_F805;
 const MURDERER_UPDATE_RESPONSE: i32 = 0x0007_F806;
+const RUNTIME_SPAWN_RESPONSE: i32 = 0x0007_F80A;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_MESSAGE: i32 = 0x0007_F809;
 const PLAYER_COUNT_MESSAGE: i32 = 0x0007_F80B;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_RESPONSE: i32 = 0x0005_FA0A;
@@ -1031,6 +1039,7 @@ pub(crate) enum GameServerMessageReport {
     GeneralVariableUpdate(GameGeneralVariableUpdateReport),
     WorldPlayerNotice(GameWorldPlayerNoticeReport),
     MurdererUpdate(GameMurdererUpdateReport),
+    RuntimeSpawn(GameRuntimeSpawnReport),
     BattleFairyStartup(GameBattleFairyStartupMessageReport),
     CombatRegistryStartup(GameCombatRegistryStartupMessageReport),
     PlayerEconomyStartup(GamePlayerEconomyStartupMessageReport),
@@ -1108,6 +1117,46 @@ pub(crate) struct GameMurdererUpdateReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameRuntimeMonsterSpawnOutcome {
+    MissingProperty {
+        position: RegionRandomPosition,
+    },
+    SpawnBlocked {
+        position: RegionRandomPosition,
+        block: RegionMembershipBlock,
+    },
+    Spawned {
+        position: RegionRandomPosition,
+        monster_id: i32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameRuntimeMonsterSpawnReport {
+    pub(crate) region_id: i32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) requested_count: i32,
+    pub(crate) script: Vec<u8>,
+    pub(crate) initial_position: Result<RegionRandomPosition, RegionCellAccessBlock>,
+    pub(crate) spawns: Vec<Result<GameRuntimeMonsterSpawnOutcome, RegionCellAccessBlock>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameRuntimeNpcSpawnReport {
+    pub(crate) region_id: i32,
+    pub(crate) setup: ServerRegionNpcSetup,
+    pub(crate) spawn: Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameRuntimeSpawnReport {
+    IgnoredKind { kind: i8 },
+    RegionMissing { kind: i8, region_id: i32 },
+    Monster(GameRuntimeMonsterSpawnReport),
+    Npc(GameRuntimeNpcSpawnReport),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameGodsBattleTopTenReport {
     pub(crate) player_id: i32,
     pub(crate) entries: Vec<GodsBattleTopTenEntry>,
@@ -1129,6 +1178,7 @@ pub(crate) enum GameServerMessageError<RegionRuntimeError> {
     GeneralVariableUpdateUnexpectedEnd { field: &'static str },
     WorldPlayerNoticeUnexpectedEnd { field: &'static str },
     MurdererUpdateUnexpectedEnd { field: &'static str },
+    RuntimeSpawnUnexpectedEnd { field: &'static str },
     BattleFairyStartup(GameBattleFairyStartupError),
     CombatRegistryStartup(GameCombatRegistryStartupError),
     PlayerEconomyStartup(GamePlayerEconomyStartupError),
@@ -1160,6 +1210,226 @@ pub(crate) fn dispatch_server_message<Context>(
 where
     Context: InitialRegionStartupContext,
 {
+    if message.message_type() == RUNTIME_SPAWN_RESPONSE {
+        let Some(kind) = message.base_mut().get_char() else {
+            return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
+                field: "spawn kind",
+            }));
+        };
+        if kind != 0 && kind != 1 {
+            return Some(Ok(GameServerMessageReport::RuntimeSpawn(
+                GameRuntimeSpawnReport::IgnoredKind { kind },
+            )));
+        }
+        let Some(region_id) = message.base_mut().get_long() else {
+            return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
+                field: "region id",
+            }));
+        };
+
+        if kind == 0 {
+            let name = message
+                .base_mut()
+                .get_str_bytes(0x100)
+                .expect("0x100 не достигает zero-size GetStr boundary");
+            let Some(requested_count) = message.base_mut().get_long() else {
+                return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
+                    field: "monster count",
+                }));
+            };
+            let Some(left) = message.base_mut().get_long() else {
+                return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
+                    field: "monster range left",
+                }));
+            };
+            let Some(top) = message.base_mut().get_long() else {
+                return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
+                    field: "monster range top",
+                }));
+            };
+            let Some(right) = message.base_mut().get_long() else {
+                return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
+                    field: "monster range right",
+                }));
+            };
+            let Some(bottom) = message.base_mut().get_long() else {
+                return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
+                    field: "monster range bottom",
+                }));
+            };
+            let Some(has_script) = message.base_mut().get_char() else {
+                return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
+                    field: "monster script marker",
+                }));
+            };
+            let script = if has_script != 0 {
+                message
+                    .base_mut()
+                    .get_str_bytes(0x100)
+                    .expect("0x100 не достигает zero-size GetStr boundary")
+            } else {
+                Vec::new()
+            };
+            let Some(mut owner) = game.take_region_owner(region_id) else {
+                return Some(Ok(GameServerMessageReport::RuntimeSpawn(
+                    GameRuntimeSpawnReport::RegionMissing { kind, region_id },
+                )));
+            };
+            let range_width = right.wrapping_sub(left);
+            let range_height = bottom.wrapping_sub(top);
+            // Exact case вызывает GetRandomPosInRange один раз до проверки
+            // count и отбрасывает результат, сохраняя расход RNG.
+            let initial_position = owner.base().region.get_random_pos_in_range(
+                left,
+                top,
+                range_width,
+                range_height,
+                script_context,
+            );
+            let (area_width, area_height) = game.area_dimensions();
+            let mut spawns = Vec::new();
+            if initial_position.is_ok() {
+                let mut remaining = requested_count;
+                while remaining > 0 {
+                    let position = match owner.base().region.get_random_pos_in_range(
+                        left,
+                        top,
+                        range_width,
+                        range_height,
+                        script_context,
+                    ) {
+                        Ok(position) => position,
+                        Err(block) => {
+                            spawns.push(Err(block));
+                            break;
+                        }
+                    };
+                    let outcome = match script_context.monster_property(&name) {
+                        None => GameRuntimeMonsterSpawnOutcome::MissingProperty { position },
+                        Some(property) => match owner.base_mut().add_monster(
+                            &property,
+                            position.x,
+                            position.y,
+                            -1,
+                            true,
+                            false,
+                            now_ms(script_context),
+                            area_width,
+                            area_height,
+                            script_context,
+                        ) {
+                            Ok(monster_id) => {
+                                owner
+                                    .base_mut()
+                                    .find_monster_by_id_mut(monster_id)
+                                    .expect("успешный AddMonster публикует owned monster")
+                                    .set_script_file(&script);
+                                GameRuntimeMonsterSpawnOutcome::Spawned {
+                                    position,
+                                    monster_id,
+                                }
+                            }
+                            Err(block) => {
+                                GameRuntimeMonsterSpawnOutcome::SpawnBlocked { position, block }
+                            }
+                        },
+                    };
+                    spawns.push(Ok(outcome));
+                    remaining = remaining.wrapping_sub(1);
+                }
+            }
+            game.restore_region_owner(owner);
+            return Some(Ok(GameServerMessageReport::RuntimeSpawn(
+                GameRuntimeSpawnReport::Monster(GameRuntimeMonsterSpawnReport {
+                    region_id,
+                    name,
+                    requested_count,
+                    script,
+                    initial_position,
+                    spawns,
+                }),
+            )));
+        }
+
+        let name = message
+            .base_mut()
+            .get_str_bytes(0x100)
+            .expect("0x100 не достигает zero-size GetStr boundary");
+        let fields = [
+            "NPC picture id",
+            "NPC count",
+            "NPC range left",
+            "NPC range top",
+            "NPC range right",
+            "NPC range bottom",
+            "NPC direction",
+        ];
+        let mut values = [0_i32; 7];
+        for (index, value) in values.iter_mut().enumerate() {
+            let Some(decoded) = message.base_mut().get_long() else {
+                return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
+                    field: fields[index],
+                }));
+            };
+            *value = decoded;
+        }
+        let Some(has_script) = message.base_mut().get_char() else {
+            return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
+                field: "NPC script marker",
+            }));
+        };
+        let script = if has_script != 0 {
+            message
+                .base_mut()
+                .get_str_bytes(0x100)
+                .expect("0x100 не достигает zero-size GetStr boundary")
+        } else {
+            Vec::new()
+        };
+        let Some(time) = message.base_mut().get_long() else {
+            return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
+                field: "NPC lifetime",
+            }));
+        };
+        let setup = ServerRegionNpcSetup {
+            // Exact tagNpc ctor не инициализирует этот прочитанный AddNpc-ом
+            // byte. Safe Rust не воспроизводит stack garbage и выбирает zero.
+            show_list: false,
+            picture_id: values[0],
+            count: values[1],
+            left: values[2],
+            top: values[3],
+            right: values[4],
+            bottom: values[5],
+            direction: values[6],
+            time,
+            name,
+            script,
+        };
+        let Some(mut owner) = game.take_region_owner(region_id) else {
+            return Some(Ok(GameServerMessageReport::RuntimeSpawn(
+                GameRuntimeSpawnReport::RegionMissing { kind, region_id },
+            )));
+        };
+        let (area_width, area_height) = game.area_dimensions();
+        let spawn = owner.base_mut().add_npc_with_clock(
+            &setup,
+            true,
+            true,
+            area_width,
+            area_height,
+            script_context,
+            |context| now_ms(context),
+        );
+        game.restore_region_owner(owner);
+        return Some(Ok(GameServerMessageReport::RuntimeSpawn(
+            GameRuntimeSpawnReport::Npc(GameRuntimeNpcSpawnReport {
+                region_id,
+                setup,
+                spawn,
+            }),
+        )));
+    }
     if message.message_type() == MURDERER_UPDATE_RESPONSE {
         let mut ignored_prefix = [0_i32; 3];
         for (index, field) in ignored_prefix.iter_mut().enumerate() {
