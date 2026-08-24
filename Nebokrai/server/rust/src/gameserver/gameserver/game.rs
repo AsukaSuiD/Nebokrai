@@ -198,6 +198,10 @@
 //! исходной `uint64` арифметике, затем concrete wallet/packet remove/add wire
 //! предшествует result, notice и optional World broadcast. Только safe-cell,
 //! fight/team state открытия и old-client codec остаются runtime facts.
+//! Goods destruction `0x8FC1C/1D` замыкает hand mutation и `0xC0101/0xC0102`,
+//! exact LogSystem byte `55`, World `0x60202` с bank/region/IP facts и client
+//! result. Только произвольный extend-ID `CPlayer::DeleteGoods` из open-route
+//! остаётся polymorphic границей до единого dispatcher-а всех containers.
 //! GodsBattle runtime продолжает startup owner: player Add/Remove tail
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
@@ -1571,17 +1575,6 @@ pub(crate) trait GoodsDestroyContext {
         game: &mut CGame,
         request: GoodsDestroyDeleteRequest,
     ) -> GoodsDestroyDeleteReport;
-
-    fn publish_goods_destroy_hand_consumption(
-        &mut self,
-        consumption: &GoodsDestroyHandConsumption,
-    ) -> Vec<i32>;
-
-    fn goods_destroy_logging_enabled(&mut self) -> bool;
-
-    /// Дополняет audit принадлежащими process/runtime значениями depot money
-    /// и client IP и отправляет точный World `0x60202`.
-    fn record_goods_destroy_log(&mut self, player: &CPlayer, log: &GoodsDestroyAuditLog);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1687,6 +1680,7 @@ pub(crate) struct GoodsDestroyConfirmReport {
     pub(crate) notice_delivery: Option<i32>,
     pub(crate) audit: Option<GoodsDestroyAuditLog>,
     pub(crate) audit_dispatched: bool,
+    pub(crate) world_deliveries: Vec<i32>,
     pub(crate) result_delivery: Option<i32>,
 }
 
@@ -11096,6 +11090,55 @@ impl CGame {
         &mut self.goods_destroy_setup
     }
 
+    fn send_goods_destroy_hand_consumption(
+        &self,
+        consumption: &GoodsDestroyHandConsumption,
+    ) -> Vec<i32> {
+        if consumption.removed_amount == 0 {
+            return Vec::new();
+        }
+        if consumption.remaining_amount == 0 {
+            let mut message = CS2CContainerObjectMove::default();
+            message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+            message.set_source_container(PLAYER_TYPE, consumption.player_id, 0);
+            message.set_source_container_extend_id(3);
+            message.set_source_object(
+                consumption.goods.object_type,
+                consumption.goods.ex_id,
+                consumption.previous_amount,
+            );
+            return vec![message.send_to_player(self, consumption.player_id)];
+        }
+        let mut message = CS2CContainerObjectAmountChange::default();
+        message.set_source_container(PLAYER_TYPE, consumption.player_id, 0);
+        message.set_source_container_extend_id(3);
+        message.set_object(consumption.goods.object_type, consumption.goods.ex_id);
+        message.set_object_amount(consumption.remaining_amount);
+        vec![message.send_to_player(self, consumption.player_id)]
+    }
+
+    fn send_goods_destroy_log(
+        &self,
+        player: &CPlayer,
+        log: &GoodsDestroyAuditLog,
+    ) -> Vec<i32> {
+        let mut message = CMessage::new(0x0006_0202);
+        message.add_byte(log.reason);
+        message.add_long(log.player_id);
+        message.base_mut().add_short(log.pk_count as i16);
+        message.add_ulong(log.money);
+        message.add_ulong(player.depot_money());
+        message.base_mut().add_guid(log.goods.ex_id);
+        message.add_ulong(log.price);
+        add_legacy_c_string(message.base_mut(), &log.name);
+        message.add_ulong(log.removed_amount);
+        message.add_long(log.region_id.unwrap_or_default());
+        message.add_ulong(log.tile_x.unwrap_or_default() as u32);
+        message.add_ulong(log.tile_y.unwrap_or_default() as u32);
+        message.add_ulong(player.client_ip());
+        message.send(self, false).into_iter().collect()
+    }
+
     pub(crate) fn open_goods_destroy<Context: GoodsDestroyContext>(
         &mut self,
         player_id: i32,
@@ -11151,7 +11194,7 @@ impl CGame {
     pub(crate) fn confirm_goods_destroy<Context: GoodsDestroyContext>(
         &mut self,
         player_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> GoodsDestroyConfirmReport {
         let mut report = GoodsDestroyConfirmReport {
             player_id,
@@ -11166,6 +11209,7 @@ impl CGame {
             notice_delivery: None,
             audit: None,
             audit_dispatched: false,
+            world_deliveries: Vec::new(),
             result_delivery: None,
         };
         if !self.goods_destroy_setup.enabled() {
@@ -11239,12 +11283,11 @@ impl CGame {
             .and_then(|player| player.destroy_hand_goods(identity.ex_id, amount));
         if let Some(consumption) = consumption {
             report.removed_amount = consumption.removed_amount;
-            report.consumption_deliveries =
-                context.publish_goods_destroy_hand_consumption(&consumption);
+            report.consumption_deliveries = self.send_goods_destroy_hand_consumption(&consumption);
             report.consumption = Some(consumption);
         }
 
-        if report.removed_amount != 0 && context.goods_destroy_logging_enabled() {
+        if report.removed_amount != 0 && self.log_system.goods_destroy_enabled() {
             let player = self
                 .find_player(player_id)
                 .expect("player с hand goods остаётся в CGame после synchronous удаления");
@@ -11261,7 +11304,7 @@ impl CGame {
                 tile_x: player.shape().get_tile_x(),
                 tile_y: player.shape().get_tile_y(),
             };
-            context.record_goods_destroy_log(player, &audit);
+            report.world_deliveries = self.send_goods_destroy_log(player, &audit);
             report.audit = Some(audit);
             report.audit_dispatched = true;
         }
