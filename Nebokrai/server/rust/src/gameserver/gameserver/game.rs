@@ -164,16 +164,21 @@
 //! сохраняют ранний return первого непустого payload.
 //! Make `0x8FC31` использует тот же setup/player owner: глобальный `bCiQing`,
 //! session gate, recipe, packet resources/space, batch factory, container
-//! ownership, audit и адресный result проходят одним synchronous сценарием.
+//! ownership, World audit `0x60218`, packet `0xC0101/02` и адресный result
+//! проходят одним synchronous сценарием.
 //! Compose `0x8FC32` продолжает те же containers: exact/fallback recipe,
-//! wallet/crystal payment, два RNG, source/result ownership, unlock/query и
-//! странный append result-index после отправки `0xBF81B` сохранены буквально.
+//! реальный wallet/crystal payment с money/packet wire, два RNG,
+//! source/result ownership с `0xC0101/02`, unlock/query и странный append
+//! result-index после отправки `0xBF81B` сохранены буквально.
 //! Delete `0x8FC33` продолжает container owner с reset-item audit/removal,
-//! удалением одной единицы, обязательным `UpdateProperty` и отказом
-//! `PLAYER001004`; position gate остаётся во входном message owner-е.
+//! удалением одной единицы и concrete packet/CiQing wire, обязательным
+//! `UpdateProperty` и отказом `PLAYER001004`; position gate остаётся во
+//! входном message owner-е.
 //! Mount `0x8FC34` сохраняет read-before-gate wire, addon-driven slot/chance,
-//! failure destruction и success Clone→hand delete→CiQing add; полный native
-//! Clone остаётся обязательной runtime-границей, поскольку `CGoods` ещё partial.
+//! failure destruction и success Clone→hand delete→CiQing add с hand/packet/
+//! CiQing `0xC0101/02`; полный native Clone, old-client codec и addon/property
+//! recompute остаются обязательными runtime-границами, поскольку их owners
+//! ещё не материализованы полностью.
 //! Other-person `0x8FC35` объединяет ordered CiQing/TaoZhuang property maps,
 //! сериализует target identity, values-only sequence, owned CiQing goods и
 //! TaoZhuang ID в адресный `0xC010F`. Delete/mount property tail получает от
@@ -1239,32 +1244,7 @@ pub(crate) trait OldClientGoodsCodec {
     fn encode_goods_for_old_client(&mut self, goods: &CGoods) -> Vec<u8>;
 }
 
-pub(crate) trait CiQingMakeContext: OldClientGoodsCodec {
-    fn record_ci_qing_log(&mut self, log: &CiQingLog);
-    fn publish_ci_qing_packet_consumption(
-        &mut self,
-        consumption: &CiQingPacketConsumption,
-    ) -> Vec<i32>;
-    fn publish_ci_qing_packet_addition(&mut self, addition: &CiQingPacketAddition) -> Vec<i32>;
-}
-
-pub(crate) trait CiQingComposeContext: CiQingMakeContext {
-    fn publish_ci_qing_money_change(
-        &mut self,
-        player_id: i32,
-        previous: u32,
-        current: u32,
-    ) -> Vec<i32>;
-    fn publish_ci_qing_container_consumption(
-        &mut self,
-        consumption: &CiQingContainerConsumption,
-    ) -> Vec<i32>;
-    fn publish_ci_qing_container_addition(
-        &mut self,
-        addition: &CiQingContainerAddition,
-    ) -> Vec<i32>;
-    fn publish_ci_qing_hand_consumption(&mut self, consumption: &CiQingHandConsumption)
-    -> Vec<i32>;
+pub(crate) trait CiQingComposeContext: OldClientGoodsCodec {
     fn clone_ci_qing_hand_goods(&mut self, goods: &CGoods) -> Option<CGoods>;
     fn mount_ci_qing_equipment(
         &mut self,
@@ -1749,6 +1729,7 @@ pub(crate) enum CiQingMakeOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CiQingMakeDelivery {
+    Audit(Vec<i32>),
     Consumption(Vec<i32>),
     Addition(Vec<i32>),
     Result(i32),
@@ -1780,6 +1761,7 @@ pub(crate) enum CiQingComposeOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CiQingComposeDelivery {
+    Audit(Vec<i32>),
     Player(i32),
     Money(Vec<i32>),
     PacketConsumption(Vec<i32>),
@@ -1813,6 +1795,7 @@ pub(crate) enum CiQingDeleteOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CiQingDeleteDelivery {
+    Audit(Vec<i32>),
     Player(i32),
     PacketConsumption(Vec<i32>),
     ContainerConsumption(Vec<i32>),
@@ -1840,6 +1823,7 @@ pub(crate) enum CiQingMountOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CiQingMountDelivery {
+    Audit(Vec<i32>),
     HandConsumption(Vec<i32>),
     PacketConsumption(Vec<i32>),
     ContainerAddition(Vec<i32>),
@@ -6773,7 +6757,10 @@ impl CGame {
         (removal, deliveries)
     }
 
-    fn send_player_packet_addition(&self, addition: &CiQingPacketAddition) -> Vec<i32> {
+    pub(crate) fn send_player_packet_addition(
+        &self,
+        addition: &CiQingPacketAddition,
+    ) -> Vec<i32> {
         let Some(position) = addition.position else {
             return Vec::new();
         };
@@ -7300,7 +7287,7 @@ impl CGame {
         message.send_to_player(self.net_server(), update.player_id)
     }
 
-    fn send_player_packet_consumption(
+    pub(crate) fn send_player_packet_consumption(
         &self,
         consumption: &CiQingPacketConsumption,
     ) -> Vec<i32> {
@@ -7327,6 +7314,103 @@ impl CGame {
             consumption.position,
         );
         message.set_source_container_extend_id(1);
+        message.set_object(consumption.goods.object_type, consumption.goods.ex_id);
+        message.set_object_amount(consumption.remaining_amount);
+        vec![message.send_to_player(self, consumption.player_id)]
+    }
+
+    fn send_ci_qing_log(&self, log: &CiQingLog) -> Vec<i32> {
+        let mut message = CMessage::new(0x0006_0218);
+        message.add_long(log.player_id);
+        message.add_long(log.delta);
+        message.add_ulong(log.operation);
+        message.add_ulong(log.base_index);
+        message.add_ulong(log.amount);
+        message.send(self, false).into_iter().collect()
+    }
+
+    fn send_ci_qing_container_consumption(
+        &self,
+        consumption: &CiQingContainerConsumption,
+    ) -> Vec<i32> {
+        if consumption.remaining_amount == 0 {
+            let mut message = CS2CContainerObjectMove::default();
+            message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+            message.set_source_container(
+                PLAYER_TYPE,
+                consumption.player_id,
+                consumption.position,
+            );
+            message.set_source_container_extend_id(consumption.container_extend_id as i32);
+            message.set_source_object(
+                consumption.goods.object_type,
+                consumption.goods.ex_id,
+                consumption.previous_amount,
+            );
+            return vec![message.send_to_player(self, consumption.player_id)];
+        }
+        let mut message = CS2CContainerObjectAmountChange::default();
+        message.set_source_container(
+            PLAYER_TYPE,
+            consumption.player_id,
+            consumption.position,
+        );
+        message.set_source_container_extend_id(consumption.container_extend_id as i32);
+        message.set_object(consumption.goods.object_type, consumption.goods.ex_id);
+        message.set_object_amount(consumption.remaining_amount);
+        vec![message.send_to_player(self, consumption.player_id)]
+    }
+
+    fn send_ci_qing_container_addition(&self, addition: &CiQingContainerAddition) -> Vec<i32> {
+        match &addition.outcome {
+            VolumeGoodsAddOutcome::Added(added) => {
+                let mut message = CS2CContainerObjectMove::default();
+                message.set_operation(ContainerObjectMoveOperation::NewObject);
+                message.set_destination_container(
+                    PLAYER_TYPE,
+                    addition.player_id,
+                    addition.position,
+                );
+                message.set_destination_container_extend_id(addition.container_extend_id as i32);
+                message.set_destination_object(added.identity.object_type, added.identity.ex_id);
+                message.set_object_stream(addition.old_client_payload.clone().unwrap_or_default());
+                vec![message.send_to_player(self, addition.player_id)]
+            }
+            VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { target, .. }) => {
+                let Some(amount) = addition.resulting_amount else {
+                    return Vec::new();
+                };
+                let mut message = CS2CContainerObjectAmountChange::default();
+                message.set_source_container(
+                    PLAYER_TYPE,
+                    addition.player_id,
+                    addition.position,
+                );
+                message.set_source_container_extend_id(addition.container_extend_id as i32);
+                message.set_object(target.object_type, target.ex_id);
+                message.set_object_amount(amount);
+                vec![message.send_to_player(self, addition.player_id)]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn send_ci_qing_hand_consumption(&self, consumption: &CiQingHandConsumption) -> Vec<i32> {
+        if consumption.remaining_amount == 0 {
+            let mut message = CS2CContainerObjectMove::default();
+            message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+            message.set_source_container(PLAYER_TYPE, consumption.player_id, 0);
+            message.set_source_container_extend_id(3);
+            message.set_source_object(
+                consumption.goods.object_type,
+                consumption.goods.ex_id,
+                consumption.previous_amount,
+            );
+            return vec![message.send_to_player(self, consumption.player_id)];
+        }
+        let mut message = CS2CContainerObjectAmountChange::default();
+        message.set_source_container(PLAYER_TYPE, consumption.player_id, 0);
+        message.set_source_container_extend_id(3);
         message.set_object(consumption.goods.object_type, consumption.goods.ex_id);
         message.set_object_amount(consumption.remaining_amount);
         vec![message.send_to_player(self, consumption.player_id)]
@@ -7996,7 +8080,7 @@ impl CGame {
     /// Resource logs предшествуют каждому DeleteGoods-effect; финальный
     /// positive log сохраняет странный native count оставшихся в vector-е
     /// (то есть не добавленных), после чего всегда отправляется `0xBF932`.
-    pub(crate) fn make_ci_qing_node<Context: CiQingMakeContext>(
+    pub(crate) fn make_ci_qing_node<Context: OldClientGoodsCodec>(
         &mut self,
         player_id: i32,
         base_index: u32,
@@ -8059,7 +8143,9 @@ impl CGame {
                 base_index: source_base_index,
                 amount: required,
             };
-            context.record_ci_qing_log(&log);
+            report
+                .deliveries
+                .push(CiQingMakeDelivery::Audit(self.send_ci_qing_log(&log)));
             report.logs.push(log);
             let consumptions = self
                 .players
@@ -8068,7 +8154,7 @@ impl CGame {
                 .remove_item_in_packet(source_base_index, required);
             for consumption in consumptions {
                 report.deliveries.push(CiQingMakeDelivery::Consumption(
-                    context.publish_ci_qing_packet_consumption(&consumption),
+                    self.send_player_packet_consumption(&consumption),
                 ));
                 report.consumptions.push(consumption);
             }
@@ -8103,7 +8189,7 @@ impl CGame {
         for addition in additions {
             if addition.resulting_amount.is_some() {
                 report.deliveries.push(CiQingMakeDelivery::Addition(
-                    context.publish_ci_qing_packet_addition(&addition),
+                    self.send_player_packet_addition(&addition),
                 ));
             }
             report.additions.push(addition);
@@ -8116,7 +8202,9 @@ impl CGame {
             base_index: recipe.destination_base_index,
             amount: rejected.len() as u32,
         };
-        context.record_ci_qing_log(&log);
+        report
+            .deliveries
+            .push(CiQingMakeDelivery::Audit(self.send_ci_qing_log(&log)));
         report.logs.push(log);
         report.result_base_index = recipe.destination_base_index;
         report.outcome = CiQingMakeOutcome::Completed;
@@ -8227,17 +8315,15 @@ impl CGame {
         report.roll = Some(roll);
         let mut result_index = None;
         if let Some(recipe) = recipe.as_ref() {
-            let previous = self
-                .find_player(player_id)
-                .expect("player проверен до CiQing money mutation")
-                .money();
-            let current = previous.wrapping_sub(required_money);
-            self.players
-                .get_mut(&player_id)
-                .expect("player проверен до CiQing money mutation")
-                .set_money_snapshot(current);
+            let money_change = {
+                let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+                players
+                    .get_mut(&player_id)
+                    .expect("player проверен до CiQing money mutation")
+                    .decrease_money(required_money, goods_factory)
+            };
             report.deliveries.push(CiQingComposeDelivery::Money(
-                context.publish_ci_qing_money_change(player_id, previous, current),
+                self.send_player_money_decrease(player_id, &money_change.outcome),
             ));
             let crystal_log = CiQingLog {
                 player_id,
@@ -8246,7 +8332,9 @@ impl CGame {
                 base_index: crystal_index,
                 amount: required_crystal,
             };
-            context.record_ci_qing_log(&crystal_log);
+            report.deliveries.push(CiQingComposeDelivery::Audit(
+                self.send_ci_qing_log(&crystal_log),
+            ));
             report.logs.push(crystal_log);
             let consumptions = self
                 .players
@@ -8257,7 +8345,7 @@ impl CGame {
                 report
                     .deliveries
                     .push(CiQingComposeDelivery::PacketConsumption(
-                        context.publish_ci_qing_packet_consumption(&consumption),
+                        self.send_player_packet_consumption(&consumption),
                     ));
                 report.crystal_consumptions.push(consumption);
             }
@@ -8307,7 +8395,7 @@ impl CGame {
                     report
                         .deliveries
                         .push(CiQingComposeDelivery::ContainerAddition(
-                            context.publish_ci_qing_container_addition(&addition),
+                            self.send_ci_qing_container_addition(&addition),
                         ));
                 }
                 report.rejected_result = rejected.as_ref().map(CGoods::identity);
@@ -8323,7 +8411,9 @@ impl CGame {
                 base_index: source.0,
                 amount: source.1,
             };
-            context.record_ci_qing_log(&log);
+            report
+                .deliveries
+                .push(CiQingComposeDelivery::Audit(self.send_ci_qing_log(&log)));
             report.logs.push(log);
             if let Some(consumption) = self
                 .players
@@ -8334,7 +8424,7 @@ impl CGame {
                 report
                     .deliveries
                     .push(CiQingComposeDelivery::ContainerConsumption(
-                        context.publish_ci_qing_container_consumption(&consumption),
+                        self.send_ci_qing_container_consumption(&consumption),
                     ));
                 report.source_consumptions.push(consumption);
             }
@@ -8377,7 +8467,9 @@ impl CGame {
                 base_index: result_index,
                 amount: result_amount,
             };
-            context.record_ci_qing_log(&log);
+            report
+                .deliveries
+                .push(CiQingComposeDelivery::Audit(self.send_ci_qing_log(&log)));
             report.logs.push(log);
             report.outcome = CiQingComposeOutcome::Succeeded;
         } else {
@@ -8427,7 +8519,9 @@ impl CGame {
             base_index: reset_index,
             amount: 1,
         };
-        context.record_ci_qing_log(&reset_log);
+        report.deliveries.push(CiQingDeleteDelivery::Audit(
+            self.send_ci_qing_log(&reset_log),
+        ));
         report.logs.push(reset_log);
         let reset_consumptions = self
             .players
@@ -8438,7 +8532,7 @@ impl CGame {
             report
                 .deliveries
                 .push(CiQingDeleteDelivery::PacketConsumption(
-                    context.publish_ci_qing_packet_consumption(&consumption),
+                    self.send_player_packet_consumption(&consumption),
                 ));
             report.reset_consumptions.push(consumption);
         }
@@ -8451,7 +8545,7 @@ impl CGame {
             report
                 .deliveries
                 .push(CiQingDeleteDelivery::ContainerConsumption(
-                    context.publish_ci_qing_container_consumption(&consumption),
+                    self.send_ci_qing_container_consumption(&consumption),
                 ));
             report.goods_consumption = Some(consumption);
         }
@@ -8527,7 +8621,9 @@ impl CGame {
                 base_index: hand_base_index,
                 amount: 1,
             };
-            context.record_ci_qing_log(&log);
+            report
+                .deliveries
+                .push(CiQingMountDelivery::Audit(self.send_ci_qing_log(&log)));
             report.logs.push(log);
         }
         if let Some(consumption) = self
@@ -8537,7 +8633,7 @@ impl CGame {
             .remove_ci_qing_hand_goods()
         {
             report.deliveries.push(CiQingMountDelivery::HandConsumption(
-                context.publish_ci_qing_hand_consumption(&consumption),
+                self.send_ci_qing_hand_consumption(&consumption),
             ));
             report.hand_consumption = Some(consumption);
         }
@@ -8562,7 +8658,7 @@ impl CGame {
                 report
                     .deliveries
                     .push(CiQingMountDelivery::ContainerAddition(
-                        context.publish_ci_qing_container_addition(&addition),
+                        self.send_ci_qing_container_addition(&addition),
                     ));
             }
             report.rejected_clone = rejected.as_ref().map(CGoods::identity);
@@ -8579,7 +8675,9 @@ impl CGame {
             base_index: node.base_index,
             amount,
         };
-        context.record_ci_qing_log(&material_log);
+        report.deliveries.push(CiQingMountDelivery::Audit(
+            self.send_ci_qing_log(&material_log),
+        ));
         report.logs.push(material_log);
         let consumptions = self
             .players
@@ -8590,7 +8688,7 @@ impl CGame {
             report
                 .deliveries
                 .push(CiQingMountDelivery::PacketConsumption(
-                    context.publish_ci_qing_packet_consumption(&consumption),
+                    self.send_player_packet_consumption(&consumption),
                 ));
             report.material_consumptions.push(consumption);
         }

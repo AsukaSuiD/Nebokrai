@@ -12,14 +12,14 @@ use crate::gameserver::appserver::player::{
     CiQingPacketAddition, CiQingPacketConsumption, PlayerYuanBaoChange,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, CiQingMakeContext, colored_player_notice_message,
+    CGame, OldClientGoodsCodec, colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const INCREMENT_PURCHASE_RESPONSE: i32 = 0x000F_F002;
 const INCREMENT_PURCHASE_AUDIT: i32 = 0x0006_020D;
 
-pub(crate) trait IncrementShopBillingContext: CiQingMakeContext {
+pub(crate) trait IncrementShopBillingContext: OldClientGoodsCodec {
     fn publish_increment_shop_yuan_bao_change(&mut self, change: &PlayerYuanBaoChange) -> Vec<i32>;
 }
 
@@ -182,7 +182,7 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: IncrementShopBill
         if addition.resulting_amount.is_some() {
             report
                 .addition_deliveries
-                .push(context.publish_ci_qing_packet_addition(&addition));
+                .push(game.send_player_packet_addition(&addition));
         }
         report.additions.push(addition);
     }
@@ -200,7 +200,7 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: IncrementShopBill
         for consumption in consumptions {
             report
                 .consumption_deliveries
-                .push(context.publish_ci_qing_packet_consumption(&consumption));
+                .push(game.send_player_packet_consumption(&consumption));
             report.consumptions.push(consumption);
         }
     }

@@ -102,8 +102,9 @@
 //! CiQing unlocked base-index set хранится ordered `BTreeSet`; его query не
 //! создаёт постоянные goods, а только передаёт snapshot CGame factory owner-у;
 //! make считает/удаляет packet stack-и в container order и сохраняет
-//! new-object/stack ownership для caller network adapter-а. Owned CiQing
-//! containers имеют exact volumes `8/3`; compose slots удаляются по позиции.
+//! new-object/stack ownership; `CGame` публикует concrete `0xC0101/02` и
+//! World audit `0x60218`. Owned CiQing containers имеют exact volumes `8/3`;
+//! compose slots удаляются по позиции.
 //! Основной CiQing delete сохраняет partial-amount семантику `DeleteGoods`.
 //! Hand mount читает exact addon `243/244`; hand consumption также сохраняет
 //! partial amount и не выдаёт reached `CGoods` projection за полный Clone.
@@ -6498,34 +6499,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0002F360
 // ADDRESS: 0042f360
 // PROTOTYPE: void __thiscall AddPreItemToPlayer(ulong param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddGoodsToCiQing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:16045
-// RVA: 0x0002F920
-// ADDRESS: 0042f920
-// PROTOTYPE: bool __thiscall AddGoodsToCiQing(CGoods * param_1, ulong param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::WriteCiQingLog
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:16333
-// RVA: 0x0002FAA0
-// ADDRESS: 0042faa0
-// PROTOTYPE: void __thiscall WriteCiQingLog(ulong param_1, ulong param_2, ulong param_3, ulong param_4)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
