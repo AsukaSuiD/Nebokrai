@@ -423,7 +423,8 @@ use crate::gameserver::appserver::message::logmessage::{
     GameLogMessageError, GameLogMessageReport, dispatch_game_log_message,
 };
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
-    WorldAuctionMessageError, WorldAuctionMessageReport, dispatch_world_auction_message,
+    WorldAuctionMessageError, WorldAuctionMessageReport, WorldAuctionRuntime,
+    dispatch_world_auction_message,
 };
 use crate::gameserver::appserver::message::organsysmessage::{
     GameOrganizingWarMessageError, GameOrganizingWarMessageReport, GameOrganizingWarRuntime,
@@ -2707,6 +2708,7 @@ pub(crate) trait GameMainLoopRuntime:
     + GameShapeMessageRuntime
     + GamePlayerMessageRuntime
     + IncrementShopBillingContext
+    + WorldAuctionRuntime
     + CountryReturnPointContext
 {
     fn exit_requested(&self) -> bool;
@@ -14650,7 +14652,7 @@ impl CGame {
         {
             server_messages.push(report);
         } else if let Some(report) =
-            dispatch_world_auction_message(message, self, || runtime.wall_time_seconds())
+            dispatch_world_auction_message(message, self, runtime)
         {
             auction_messages.push(report);
         } else if let Some(report) = dispatch_gm_message(message, self, || runtime.get_tick_ms()) {

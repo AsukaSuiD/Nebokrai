@@ -2,9 +2,10 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/onmsg_w2s_auction.cpp` подтверждают
-//! selectors `0x80401..0x80403`: добавление временного `CGoodsNode` в
+//! selectors `0x80401..0x80403` и `0x80410`: добавление временного `CGoodsNode` в
 //! Game-specific owner map, reconciliation с World GUID-set и публикацию
-//! stale owner/GUID клиентам, а также auction-state. GameServer primary map
+//! stale owner/GUID клиентам, auction-state и полную YuanBao container/client
+//! mutation. GameServer primary map
 //! хранит `GUID -> owner id`, а не MiscServer-owned node; это исключает
 //! исходный stack-pointer lifetime без изменения наблюдаемого результата.
 //! Обрезанный payload заменяет небезопасное чтение за буфером typed error-ом
@@ -13,6 +14,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::gameserver::appserver::message::unibillmessage::IncrementShopBillingContext;
+use crate::gameserver::appserver::player::PlayerYuanBaoChange;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::SendMessageError;
@@ -22,7 +25,12 @@ use crate::public::auctionnode::{CGoodsNode, GoodsNodeUnserializeError};
 const WORLD_AUCTION_ADD_ITEM_MESSAGE: i32 = 0x0008_0401;
 const WORLD_AUCTION_UNITY_MESSAGE: i32 = 0x0008_0402;
 const WORLD_AUCTION_STATE_MESSAGE: i32 = 0x0008_0403;
+const WORLD_AUCTION_YUAN_BAO_MESSAGE: i32 = 0x0008_0410;
 const CLIENT_AUCTION_GOODS_REMOVED_MESSAGE: i32 = 0x000c_0702;
+
+pub(crate) trait WorldAuctionRuntime: IncrementShopBillingContext {
+    fn auction_wall_time_seconds(&mut self) -> u32;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldAuctionMessageError {
@@ -34,6 +42,8 @@ pub(crate) enum WorldAuctionMessageError {
         available: usize,
     },
     MissingEnabledLong,
+    MissingYuanBaoPlayerId,
+    MissingYuanBaoAmount,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,14 +67,20 @@ pub(crate) enum WorldAuctionMessageReport {
         enabled: bool,
         last_check_seconds: u32,
     },
+    YuanBaoChanged {
+        player_id: i32,
+        requested: u32,
+        change: Option<PlayerYuanBaoChange>,
+        deliveries: Vec<i32>,
+    },
 }
 
-/// Материализует exact `0x80401..0x80403`-ветви большого handler-а.
+/// Материализует exact `0x80401..0x80403` и `0x80410`-ветви handler-а.
 /// `None` означает, что сообщение должен идти в оставшийся auction owner.
-pub(crate) fn dispatch_world_auction_message(
+pub(crate) fn dispatch_world_auction_message<Runtime: WorldAuctionRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
-    wall_time_seconds: impl FnOnce() -> u32,
+    runtime: &mut Runtime,
 ) -> Option<Result<WorldAuctionMessageReport, WorldAuctionMessageError>> {
     match message.message_type() {
         WORLD_AUCTION_ADD_ITEM_MESSAGE => {
@@ -142,7 +158,7 @@ pub(crate) fn dispatch_world_auction_message(
             };
             let enabled = enabled != 0;
             let last_check_seconds = if enabled {
-                wall_time_seconds()
+                runtime.auction_wall_time_seconds()
             } else {
                 game.auction_last_check_seconds()
             };
@@ -150,6 +166,41 @@ pub(crate) fn dispatch_world_auction_message(
             Some(Ok(WorldAuctionMessageReport::StateChanged {
                 enabled,
                 last_check_seconds,
+            }))
+        }
+        WORLD_AUCTION_YUAN_BAO_MESSAGE => {
+            let Some(player_id) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingYuanBaoPlayerId));
+            };
+            let Some(requested) = message.base_mut().get_long() else {
+                return Some(Err(WorldAuctionMessageError::MissingYuanBaoAmount));
+            };
+            let requested = requested as u32;
+            let Some(previous) = game.find_player(player_id).map(|player| player.yuan_bao()) else {
+                return Some(Ok(WorldAuctionMessageReport::YuanBaoChanged {
+                    player_id,
+                    requested,
+                    change: None,
+                    deliveries: Vec::new(),
+                }));
+            };
+            let created_currency = if previous < requested {
+                game.create_goods_batch(
+                    game.goods_factory().get_yuan_bao_index(),
+                    requested.wrapping_sub(previous),
+                )
+            } else {
+                Vec::new()
+            };
+            let change = game
+                .set_player_yuan_bao(player_id, requested, created_currency)
+                .expect("auction YuanBao player проверен перед mutation");
+            let deliveries = runtime.publish_increment_shop_yuan_bao_change(&change);
+            Some(Ok(WorldAuctionMessageReport::YuanBaoChanged {
+                player_id,
+                requested,
+                change: Some(change),
+                deliveries,
             }))
         }
         _ => None,
