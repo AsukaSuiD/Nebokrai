@@ -14,6 +14,8 @@
 //! region spatial map, around packets и пересчёт player properties. `0x8FC29`
 //! сохраняет два `long`, detach → live script → attach и World ack; сам script
 //! остаётся явной runtime-границей, а не подменяется упрощённым reset helper-ом.
+//! `0x8FC2E` читает два GUID, выполняет exact four-container lookup и только
+//! для найденного goods вызывает обязательный virtual property runtime.
 //!
 //! Остальные opcodes owner-а остаются RAW ниже и продолжают проходить через
 //! прежнюю общую handler-границу.
@@ -35,6 +37,7 @@ use crate::gameserver::gameserver::game::{
     CGame,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::public::guid::CGuid;
 
 const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
 const COMBINE_BATTLE_FAIRY: u32 = 0x0008_fc27;
@@ -44,6 +47,7 @@ const ALLOCATE_BATTLE_FAIRY_POTENTIAL: u32 = 0x0008_fc2a;
 const RESET_BATTLE_FAIRY_POTENTIAL: u32 = 0x0008_fc2b;
 const SUMMON_BATTLE_FAIRY: u32 = 0x0008_fc2c;
 const RECALL_BATTLE_FAIRY: u32 = 0x0008_fc2d;
+const REFRESH_BATTLE_FAIRY_PROPERTY: u32 = 0x0008_fc2e;
 
 pub(crate) trait GameGoodsMessageRuntime:
     BattleFairyCombineContext
@@ -59,6 +63,8 @@ pub(crate) trait GameGoodsMessageRuntime:
         region_id: Option<i32>,
         script_path: &[u8],
     );
+
+    fn update_battle_fairy_player_property(&mut self, game: &mut CGame, player_id: i32);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,6 +90,20 @@ pub(crate) struct BattleFairyScriptResetReport {
     pub(crate) world_ack: Option<Result<i32, SendMessageError>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyPropertyRefreshOutcome {
+    MissingGoods,
+    UpdateDispatched,
+}
+
+#[must_use = "property refresh report сохраняет оба GUID и virtual update result"]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyPropertyRefreshReport {
+    pub(crate) ignored_guid: CGuid,
+    pub(crate) goods_guid: CGuid,
+    pub(crate) outcome: BattleFairyPropertyRefreshOutcome,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameGoodsMessageOutcome {
     MissingPlayer,
@@ -94,6 +114,7 @@ pub(crate) enum GameGoodsMessageOutcome {
     BattleFairyPotentialAllocation(BattleFairyPotentialAllocationReport),
     BattleFairyPotentialReset(BattleFairyPotentialResetReport),
     BattleFairySummon(BattleFairySummonReport),
+    BattleFairyPropertyRefresh(BattleFairyPropertyRefreshReport),
 }
 
 #[must_use = "goods-message report содержит routing и полный gameplay result"]
@@ -122,6 +143,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             | RESET_BATTLE_FAIRY_POTENTIAL
             | SUMMON_BATTLE_FAIRY
             | RECALL_BATTLE_FAIRY
+            | REFRESH_BATTLE_FAIRY_PROPERTY
     ) {
         return None;
     }
@@ -242,6 +264,30 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     "resolved message player остаётся в CGame во время synchronous dispatch",
                 ),
             )
+        }
+        REFRESH_BATTLE_FAIRY_PROPERTY => {
+            let ignored_guid = match message.base_mut().get_guid() {
+                Some(guid) => guid,
+                None => return Some(Err(GameGoodsMessageError::MissingField("ignored GUID"))),
+            };
+            let goods_guid = match message.base_mut().get_guid() {
+                Some(guid) => guid,
+                None => return Some(Err(GameGoodsMessageError::MissingField("goods GUID"))),
+            };
+            let goods_exists = game
+                .find_player(player_id)
+                .is_some_and(|player| player.get_goods_by_id(goods_guid).is_some());
+            let outcome = if goods_exists {
+                runtime.update_battle_fairy_player_property(game, player_id);
+                BattleFairyPropertyRefreshOutcome::UpdateDispatched
+            } else {
+                BattleFairyPropertyRefreshOutcome::MissingGoods
+            };
+            GameGoodsMessageOutcome::BattleFairyPropertyRefresh(BattleFairyPropertyRefreshReport {
+                ignored_guid,
+                goods_guid,
+                outcome,
+            })
         }
         _ => unreachable!("opcode отфильтрован перед dispatch"),
     };

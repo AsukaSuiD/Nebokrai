@@ -76,6 +76,8 @@
 //! Goods-message `0x8FC29` использует отдельный script reset: player owner
 //! сохраняет native detach/attach девяти addon skills вокруг live script,
 //! не подменяя его внутренней random-веткой `ResetSkill`.
+//! `GetGoodsById` теперь сохраняет exact hand→packet→equipment→auction lookup;
+//! hand и auction являются owned containers и участвуют в owner refresh.
 //! `skillmessage 0x90005` доведён до authorization и AI dispatch: feature/HP
 //! guards, странный special-skill fallback `546/547`, self-target rewrite и
 //! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
@@ -108,6 +110,7 @@
 //! `0xBF720` с исключением owner-а и отражает даже zero-delta `PackExpand` log.
 
 use super::area::WarSoulPoint;
+use super::container::camountlimitgoodscontainer::CAmountLimitGoodsContainer;
 use super::container::cbank::CBank;
 use super::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck, BattleFairyCombineRemovedInput,
@@ -953,8 +956,10 @@ pub(crate) struct CPlayer {
     depot_password: Vec<u8>,
     bank: CBank,
     depot: CDepot,
+    hand: CAmountLimitGoodsContainer,
     packet: CVolumeLimitGoodsContainer,
     equipment: CEquipmentContainer,
+    auction_goods: CVolumeLimitGoodsContainer,
     battle_fairy_container: CBattleFairyContainer,
 }
 
@@ -1017,8 +1022,10 @@ impl CPlayer {
             depot_password: Vec::new(),
             bank: CBank::new(),
             depot: CDepot::new(),
+            hand: CAmountLimitGoodsContainer::new(),
             packet,
             equipment: CEquipmentContainer::new(),
+            auction_goods: CVolumeLimitGoodsContainer::new(),
             battle_fairy_container: CBattleFairyContainer::new(),
         };
         player.refresh_reached_container_owners(owner_id);
@@ -1389,6 +1396,25 @@ impl CPlayer {
         self.equipment
             .get_goods(10)
             .filter(|goods| goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) == 1)
+    }
+
+    /// Exact `GetGoodsById` lookup order для goods-message `0x8FC2E`.
+    /// Locked hand/packet/auction goods скрываются container `find`, equipment
+    /// использует собственный positional storage.
+    pub(crate) fn get_goods_by_id(&self, goods_id: CGuid) -> Option<&CGoods> {
+        self.hand
+            .find(goods_id)
+            .or_else(|| self.packet.base().find(goods_id))
+            .or_else(|| self.equipment.find(goods_id))
+            .or_else(|| self.auction_goods.base().find(goods_id))
+    }
+
+    pub(crate) const fn hand_mut(&mut self) -> &mut CAmountLimitGoodsContainer {
+        &mut self.hand
+    }
+
+    pub(crate) const fn auction_goods_mut(&mut self) -> &mut CVolumeLimitGoodsContainer {
+        &mut self.auction_goods
     }
 
     /// Exact derived `bHasPet`: отдельный pet owner materializes list later;
@@ -3151,8 +3177,12 @@ impl CPlayer {
             .base_mut()
             .base_mut()
             .set_owner(PLAYER_TYPE, player_id);
+        self.hand.set_owner(PLAYER_TYPE, player_id);
         self.packet.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.equipment.base_mut().set_owner(PLAYER_TYPE, player_id);
+        self.auction_goods
+            .base_mut()
+            .set_owner(PLAYER_TYPE, player_id);
         self.battle_fairy_container
             .base_mut()
             .base_mut()
@@ -4319,20 +4349,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0002CB50
 // ADDRESS: 0042cb50
 // PROTOTYPE: void __thiscall EnterCombatState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::GetGoodsById
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9478
-// RVA: 0x0002CC00
-// ADDRESS: 0042cc00
-// PROTOTYPE: CGoods * __thiscall GetGoodsById(CGUID * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -140,6 +140,9 @@
 //! Skill reset `0x8FC29` сохраняет два входных long, player detach, live
 //! script callback с canonical game/player/region, повторный attach и World
 //! ack `0xBF931`; произвольный script не удерживает raw equipment pointer.
+//! Refresh-property `0x8FC2E` доведён через exact player container lookup до
+//! обязательного runtime `UpdateProperty`; неизвестная формула не заменяется
+//! текущим cached combat snapshot.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
