@@ -2,7 +2,7 @@
 //!
 //! Точная пара GameServer EXE/PDB и исходный owner
 //! `server/gameserver/appserver/message/onmsg_c2s_auction.cpp` подтверждают
-//! close `0x90A01`, refresh/browse `0x90A05..08` и open `0x90A0B`: поиск сохраняет
+//! close `0x90A01`, refresh/browse/relay `0x90A05..0A` и open `0x90A0B`: поиск сохраняет
 //! player criteria и сбрасывает page, browse/self запросы уходят в World,
 //! клиент открытия получает `0xC0706`, player-open меняется до World `0x60810`,
 //! а выключенный аукцион возвращает `GPM013` до чтения payload.
@@ -17,12 +17,16 @@ const CLIENT_AUCTION_REFRESH_MESSAGE: i32 = 0x0009_0A05;
 const CLIENT_AUCTION_SEARCH_MESSAGE: i32 = 0x0009_0A06;
 const CLIENT_AUCTION_PAGE_MESSAGE: i32 = 0x0009_0A07;
 const CLIENT_AUCTION_SELF_MESSAGE: i32 = 0x0009_0A08;
+const CLIENT_AUCTION_RELAY_MESSAGE: i32 = 0x0009_0A09;
+const CLIENT_AUCTION_CELL_MESSAGE: i32 = 0x0009_0A0A;
 const CLIENT_AUCTION_OPEN_MESSAGE: i32 = 0x0009_0A0B;
 const CLIENT_AUCTION_OPEN_SETUP_MESSAGE: i32 = 0x000C_0706;
 const WORLD_AUCTION_PAGE_MESSAGE: i32 = 0x0006_0803;
 const WORLD_AUCTION_REFRESH_MESSAGE: i32 = 0x0006_080A;
 const WORLD_AUCTION_SELF_MESSAGE: i32 = 0x0006_0802;
 const WORLD_AUCTION_SEARCH_MESSAGE: i32 = 0x0006_080F;
+const WORLD_AUCTION_RELAY_MESSAGE: i32 = 0x0006_080B;
+const WORLD_AUCTION_CELL_MESSAGE: i32 = 0x0006_080C;
 const WORLD_AUCTION_OPEN_MESSAGE: i32 = 0x0006_0810;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +61,10 @@ pub(crate) enum ClientAuctionMessageReport {
         refresh: AuctionSelfGoodsRefresh,
         world_delivery: Option<Result<i32, SendMessageError>>,
     },
+    GoodsMissing {
+        player_id: i32,
+        position: u32,
+    },
 }
 
 pub(crate) fn dispatch_client_auction_message<Runtime, Tick>(
@@ -76,6 +84,8 @@ where
             | CLIENT_AUCTION_SEARCH_MESSAGE
             | CLIENT_AUCTION_PAGE_MESSAGE
             | CLIENT_AUCTION_SELF_MESSAGE
+            | CLIENT_AUCTION_RELAY_MESSAGE
+            | CLIENT_AUCTION_CELL_MESSAGE
             | CLIENT_AUCTION_OPEN_MESSAGE
     ) {
         return None;
@@ -204,6 +214,45 @@ where
             selector,
             player_id,
             world_selector: WORLD_AUCTION_SELF_MESSAGE,
+            world_delivery,
+        });
+    }
+    if selector == CLIENT_AUCTION_RELAY_MESSAGE {
+        message.set_message_type(WORLD_AUCTION_RELAY_MESSAGE);
+        let world_delivery = message.send(game, false);
+        return Some(ClientAuctionMessageReport::Forwarded {
+            selector,
+            player_id,
+            world_selector: WORLD_AUCTION_RELAY_MESSAGE,
+            world_delivery,
+        });
+    }
+    if selector == CLIENT_AUCTION_CELL_MESSAGE {
+        let Some(position) = message.base_mut().get_long() else {
+            return Some(ClientAuctionMessageReport::Truncated {
+                selector,
+                field: "auction position",
+            });
+        };
+        let position = position as u32;
+        let Some(goods) = game
+            .find_player(player_id)
+            .and_then(|player| player.auction_goods_identity_at(position))
+        else {
+            return Some(ClientAuctionMessageReport::GoodsMissing {
+                player_id,
+                position,
+            });
+        };
+        let mut world = CMessage::new(WORLD_AUCTION_CELL_MESSAGE);
+        world.base_mut().add_ulong(position);
+        world.base_mut().add_long(player_id);
+        world.base_mut().add_guid(goods.ex_id);
+        let world_delivery = world.send(game, false);
+        return Some(ClientAuctionMessageReport::Forwarded {
+            selector,
+            player_id,
+            world_selector: WORLD_AUCTION_CELL_MESSAGE,
             world_delivery,
         });
     }

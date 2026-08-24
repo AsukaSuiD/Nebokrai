@@ -3262,6 +3262,10 @@ impl CPlayer {
         })
     }
 
+    pub(crate) fn auction_goods_identity_at(&self, position: u32) -> Option<ShapeIdentity> {
+        self.auction_goods.get_goods(position).map(CGoods::identity)
+    }
+
     pub(crate) fn begin_auction_search(
         &mut self,
         name: &[u8],
@@ -9481,7 +9485,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // ============================================================================
 // FUNCTION: CPlayer::GetLastContainerScript
