@@ -185,6 +185,10 @@
 //! обязательного runtime-а полные combat snapshots до/после универсальных
 //! equipment/addon формул, а `CPlayer` сам вычисляет и сохраняет CiQing delta,
 //! объединяет TaoZhuang values и при изменении шлёт values-only `0xC0110`.
+//! Обычный skill request `0x90001` проходит через owned learned skills и
+//! emotion state: optional `GS0090`, concrete around `0xBF611`, self/point/
+//! object resolution и `0xBFE01` сохраняют native order до внешней очереди
+//! ещё не материализованного `CPlayerAI`.
 //! Potential allocation `0x8FC2A` теперь тем же dispatcher-ом исполняет каждую
 //! ordered notification/property/goods публикацию и безусловный outer
 //! `0xBF918`, сохраняя first-key-wins и wrapping `points * 10000` player owner-а.
@@ -444,7 +448,9 @@ use crate::gameserver::appserver::player::{
     PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
     PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
     PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerProgress,
-    PlayerReliveMutation, PlayerYuanBaoChange,
+    PlayerReliveMutation, PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery,
+    PlayerSkillRequestEffect, PlayerSkillRequestFacts, PlayerSkillRequestReport,
+    PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1677,6 +1683,10 @@ pub(crate) trait BattleFairySkillResetContext {
 
 pub(crate) trait BattleFairySkillRequestContext {
     fn queue_battle_fairy_skill(&mut self, player_id: i32, dispatch: BattleFairySkillDispatch);
+}
+
+pub(crate) trait PlayerSkillRequestContext {
+    fn queue_player_skill(&mut self, player_id: i32, dispatch: PlayerSkillDispatch);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -13348,6 +13358,106 @@ impl CGame {
             })
             .collect();
         BattleFairyScriptSkillAttachReport { skills, deliveries }
+    }
+
+    /// Runtime entry point уже декодированного `skillmessage 0x90001`.
+    /// Player mutation и effects сохраняют native order: optional contend
+    /// notice, безусловный `ClearEmotion 0xBF611`, authorization, socket
+    /// reject либо очередь concrete `CPlayerAI`.
+    pub(crate) fn request_player_skill<Context: PlayerSkillRequestContext>(
+        &mut self,
+        player_id: i32,
+        socket_id: i32,
+        request: PlayerSkillRequest,
+        facts: PlayerSkillRequestFacts,
+        context: &mut Context,
+    ) -> Option<PlayerSkillRequestReport> {
+        let mut report = self.players.get_mut(&player_id).map(|player| {
+            player.request_player_skill(request, facts, &self.skill_factory)
+        })?;
+        for effect in report.effects.clone() {
+            match effect {
+                PlayerSkillRequestEffect::Notification {
+                    player_id,
+                    string_id,
+                    color,
+                    message_type,
+                } => {
+                    let delivery = colored_player_notice_message(
+                        color,
+                        message_type,
+                        self.get_string_by_id(string_id.as_bytes()),
+                    )
+                    .send_to_player(self.net_server(), player_id);
+                    report
+                        .deliveries
+                        .push(PlayerSkillRequestDelivery::Player(delivery));
+                }
+                PlayerSkillRequestEffect::ClearEmotion => {
+                    let delivery = report
+                        .region_id
+                        .and_then(|region_id| self.take_region_owner(region_id))
+                        .and_then(|owner| {
+                            let delivery = self.find_player(player_id).map(|player| {
+                                let mut message = CMessage::new(0x0b_f611);
+                                message.add_long(player.shape().identity().object_type);
+                                message.add_long(player_id);
+                                message.add_long(0);
+                                self.send_player_around_excluding_self(
+                                    owner.base(),
+                                    player.shape(),
+                                    player_id,
+                                    &message,
+                                )
+                            });
+                            self.restore_region_owner(owner);
+                            delivery
+                        });
+                    report
+                        .deliveries
+                        .push(PlayerSkillRequestDelivery::EmotionAround(delivery));
+                }
+                PlayerSkillRequestEffect::SocketReject {
+                    message_type,
+                    reason,
+                    code,
+                } => {
+                    let mut message = CMessage::new(message_type as i32);
+                    message.base_mut().add_byte(reason as u8);
+                    message.base_mut().add_byte(code);
+                    report
+                        .deliveries
+                        .push(PlayerSkillRequestDelivery::SocketReject(
+                            message.send_to_socket(self.net_server(), socket_id),
+                        ));
+                }
+                PlayerSkillRequestEffect::AiDispatch(dispatch) => {
+                    context.queue_player_skill(player_id, dispatch);
+                    report
+                        .deliveries
+                        .push(PlayerSkillRequestDelivery::AiQueued);
+                }
+            }
+        }
+        Some(report)
+    }
+
+    fn send_player_around_excluding_self(
+        &self,
+        region: &CServerRegion,
+        origin: &CShape,
+        player_id: i32,
+        message: &CMessage,
+    ) -> Result<i32, ShapeCoordinateBlock> {
+        let Some(runtime) = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        ) else {
+            return Ok(0);
+        };
+        message.send_to_around(Some(region), origin, Some(player_id), &runtime)
     }
 
     /// Runtime entry point уже декодированного `skillmessage 0x90005`.

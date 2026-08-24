@@ -114,10 +114,11 @@
 //! wrapping addition. Other-person snapshot читает это состояние и те же
 //! восемь owned CiQing slots без копий. Универсальные equipment/addon формулы
 //! остаются обязательной runtime-границей до materialization всех combat scalar-ов.
-//! `skillmessage 0x90005` доведён до authorization и AI dispatch: feature/HP
-//! guards, странный special-skill fallback `546/547`, self-target rewrite и
-//! socket reject сохранены; concrete `CPlayerAI`, region symbol rule и полный
-//! monster registry передаются как explicit facts.
+//! `skillmessage 0x90001` сохраняет learned-skill authorization, contend
+//! notice, безусловное обнуление emotion state, self/point/object target и
+//! socket reject; `0x90005` добавляет feature/HP guards и странный fallback
+//! `546/547`. Concrete `CPlayerAI`, region symbol rule и полный region object
+//! registry передаются как explicit facts.
 //! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
 //! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
 //! полиморфные session End/plug Exit принадлежат caller runtime-у.
@@ -215,6 +216,7 @@ const BATTLE_FAIRY_SUMMON_MESSAGE_TYPE: u32 = 0x0b_f92e;
 const BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE: u32 = 0x0b_f71e;
 const BATTLE_FAIRY_SKILL_RESET_ITEM_MISSING: &str = "ZHGS0022";
 const SKILL_EFFECT_MESSAGE_TYPE: u32 = 0x0b_fe01;
+const SKILL_REJECT_REASON: u32 = 0;
 const SKILL_REJECT_WAR_SOUL_REASON: u32 = 4;
 const SKILL_REJECT_CODE: u8 = 0x0c;
 const SKILL_POJIA: u32 = 530;
@@ -810,6 +812,98 @@ pub(crate) struct BattleFairySkillResetReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerSkillRequest {
+    pub(crate) raw_skill_id: i32,
+    pub(crate) target_type: i32,
+    pub(crate) target_id: i32,
+    pub(crate) target_x: i32,
+    pub(crate) target_y: i32,
+}
+
+impl PlayerSkillRequest {
+    pub(crate) const fn skill_id(self) -> u32 {
+        self.raw_skill_id as u32 & SKILL_ID_MASK
+    }
+}
+
+/// Facts ещё сырых virtual owner-ов `CServerRegion::SymbolIsAttackAble`,
+/// `CPlayer::GetAI` и полного player/monster region registry.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerSkillRequestFacts {
+    pub(crate) symbol_attackable: bool,
+    pub(crate) player_ai_available: bool,
+    pub(crate) object_target_available: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerSkillDispatch {
+    SelfTarget {
+        skill_id: u32,
+        player_id: i32,
+    },
+    Point {
+        skill_id: u32,
+        x: i32,
+        y: i32,
+    },
+    Object {
+        skill_id: u32,
+        target: super::shape::ShapeIdentity,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerSkillRequestOutcome {
+    Unauthorized,
+    CoordinateBlocked(ShapeCoordinateBlock),
+    AiUnavailable,
+    MissingRegion,
+    MissingTarget,
+    Queued,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerSkillRequestEffect {
+    Notification {
+        player_id: i32,
+        string_id: &'static str,
+        color: u32,
+        message_type: u32,
+    },
+    ClearEmotion,
+    SocketReject {
+        message_type: u32,
+        reason: u32,
+        code: u8,
+    },
+    AiDispatch(PlayerSkillDispatch),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerSkillRequestDelivery {
+    Player(i32),
+    EmotionAround(Option<Result<i32, ShapeCoordinateBlock>>),
+    SocketReject(i32),
+    AiQueued,
+}
+
+#[must_use = "skill report содержит emotion, authorization, target и dispatch effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerSkillRequestReport {
+    pub(crate) player_id: i32,
+    pub(crate) region_id: Option<i32>,
+    pub(crate) skill_id: u32,
+    pub(crate) skill_level: i32,
+    pub(crate) target_type: i32,
+    pub(crate) target_id: i32,
+    pub(crate) target_x: i32,
+    pub(crate) target_y: i32,
+    pub(crate) outcome: PlayerSkillRequestOutcome,
+    pub(crate) effects: Vec<PlayerSkillRequestEffect>,
+    pub(crate) deliveries: Vec<PlayerSkillRequestDelivery>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairySkillRequest {
     pub(crate) raw_skill_id: i32,
     pub(crate) target_type: i32,
@@ -1227,6 +1321,8 @@ pub(crate) struct CPlayer {
     ci_qing_tao_zhuang_add_values: BTreeMap<u32, u32>,
     tao_zhuang_id: u32,
     contend_state: bool,
+    emotion_index: i32,
+    emotion_timestamp_ms: u32,
     city_war_died_state: bool,
     city_war_died_state_time_ms: i32,
     died_state_start_time_ms: u32,
@@ -1317,6 +1413,8 @@ impl CPlayer {
             ci_qing_tao_zhuang_add_values: BTreeMap::new(),
             tao_zhuang_id: 0,
             contend_state: false,
+            emotion_index: 0,
+            emotion_timestamp_ms: 0,
             city_war_died_state: false,
             city_war_died_state_time_ms: 0,
             died_state_start_time_ms: 0,
@@ -4320,6 +4418,111 @@ impl CPlayer {
         war_soul_skill_entries_from_goods(goods, factory)
     }
 
+    /// Полный player-side `skillmessage 0x90001` после успешного decoder-а.
+    /// Contend notification не блокирует запрос; `ClearEmotion` всегда
+    /// предшествует authorization и AI dispatch.
+    pub(crate) fn request_player_skill(
+        &mut self,
+        request: PlayerSkillRequest,
+        facts: PlayerSkillRequestFacts,
+        skill_factory: &CSkillFactory,
+    ) -> PlayerSkillRequestReport {
+        let player_id = self.player_id();
+        let skill_id = request.skill_id();
+        let mut report = PlayerSkillRequestReport {
+            player_id,
+            region_id: self.server_region_id,
+            skill_id,
+            skill_level: 0,
+            target_type: request.target_type,
+            target_id: request.target_id,
+            target_x: request.target_x,
+            target_y: request.target_y,
+            outcome: PlayerSkillRequestOutcome::Unauthorized,
+            effects: Vec::new(),
+            deliveries: Vec::new(),
+        };
+        if self.contend_state && facts.symbol_attackable {
+            report.effects.push(PlayerSkillRequestEffect::Notification {
+                player_id,
+                string_id: "GS0090",
+                color: 0xffff_ffff,
+                message_type: 0xffff_0000,
+            });
+        }
+
+        self.emotion_index = 0;
+        self.emotion_timestamp_ms = 0;
+        report.effects.push(PlayerSkillRequestEffect::ClearEmotion);
+
+        let Some(skill) = self.move_shape.skill(skill_id) else {
+            push_player_skill_reject(&mut report);
+            return report;
+        };
+        report.skill_level = skill.level();
+        if skill.level() == 0 {
+            push_player_skill_reject(&mut report);
+            return report;
+        }
+        if skill_factory
+            .query_skill_base_properties(skill_id, skill.level())
+            .is_some_and(|properties| properties.is_target_self() != 0)
+        {
+            let (target_x, target_y) = match (self.shape().get_tile_x(), self.shape().get_tile_y())
+            {
+                (Ok(x), Ok(y)) => (x, y),
+                (Err(error), _) | (_, Err(error)) => {
+                    report.outcome = PlayerSkillRequestOutcome::CoordinateBlocked(error);
+                    return report;
+                }
+            };
+            report.target_type = self.shape().identity().object_type;
+            report.target_id = player_id;
+            report.target_x = target_x;
+            report.target_y = target_y;
+        }
+        if !facts.player_ai_available {
+            report.outcome = PlayerSkillRequestOutcome::AiUnavailable;
+            return report;
+        }
+
+        let dispatch = if report.target_type == 0 || report.target_id == 0 {
+            if report.target_x == 0 || report.target_y == 0 {
+                PlayerSkillDispatch::SelfTarget {
+                    skill_id,
+                    player_id,
+                }
+            } else {
+                PlayerSkillDispatch::Point {
+                    skill_id,
+                    x: report.target_x,
+                    y: report.target_y,
+                }
+            }
+        } else {
+            if self.server_region_id.is_none() {
+                report.outcome = PlayerSkillRequestOutcome::MissingRegion;
+                return report;
+            }
+            let target = ShapeIdentity {
+                object_type: report.target_type,
+                id: report.target_id,
+                ex_id: CGuid::GUID_INVALID,
+            };
+            if !facts.object_target_available {
+                report.outcome = PlayerSkillRequestOutcome::MissingTarget;
+                push_player_skill_reject(&mut report);
+                return report;
+            }
+            PlayerSkillDispatch::Object { skill_id, target }
+        };
+        report
+            .effects
+            .push(PlayerSkillRequestEffect::AiDispatch(dispatch));
+        report.outcome = PlayerSkillRequestOutcome::Queued;
+        report
+    }
+
     /// Полный player-side `skillmessage` opcode `0x90005` после успешного
     /// packet decode. Contend notification намеренно не блокирует запрос.
     pub(crate) fn request_battle_fairy_skill(
@@ -5051,6 +5254,14 @@ fn push_battle_fairy_skill_reject(report: &mut BattleFairySkillRequestReport) {
             reason: SKILL_REJECT_WAR_SOUL_REASON,
             code: SKILL_REJECT_CODE,
         });
+}
+
+fn push_player_skill_reject(report: &mut PlayerSkillRequestReport) {
+    report.effects.push(PlayerSkillRequestEffect::SocketReject {
+        message_type: SKILL_EFFECT_MESSAGE_TYPE,
+        reason: SKILL_REJECT_REASON,
+        code: SKILL_REJECT_CODE,
+    });
 }
 
 /// Exact constructor map `m_UnPairSkills`, подтверждённый immediate-ами
@@ -5953,20 +6164,6 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
 // RVA: 0x0002D590
 // ADDRESS: 0042d590
 // PROTOTYPE: void __thiscall PerformEmotion(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::ClearEmotion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11083
-// RVA: 0x0002D680
-// ADDRESS: 0042d680
-// PROTOTYPE: void __thiscall ClearEmotion(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -2,9 +2,10 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/message/skillmessage.cpp`. Достигнутый
-//! исполняемый контракт `0x90005` строго читает шесть Windows `long`, маскирует
-//! skill ID уже в player owner-е, получает region/AI/target facts у runtime и
-//! доводит запрос до адресного socket reject либо очереди `CPlayerAI`.
+//! исполняемый контракт `0x90001` строго читает пять Windows `long`, сохраняет
+//! contend notice, безусловный ClearEmotion, learned-skill authorization,
+//! self/point/object target и адресный socket reject либо очередь `CPlayerAI`.
+//! `0x90005` тем же route читает шесть `long` и добавляет battle-fairy gates.
 //!
 //! Безопасный decoder отклоняет оборванный payload вместо исходного чтения за
 //! границей буфера. Остальные opcodes owner-а остаются RAW ниже и продолжают
@@ -18,13 +19,27 @@
 
 use crate::gameserver::appserver::player::{
     BattleFairySkillRequest, BattleFairySkillRequestFacts, BattleFairySkillRequestReport,
+    PlayerSkillRequest, PlayerSkillRequestFacts, PlayerSkillRequestReport,
 };
-use crate::gameserver::gameserver::game::{BattleFairySkillRequestContext, CGame};
+use crate::gameserver::gameserver::game::{
+    BattleFairySkillRequestContext, CGame, PlayerSkillRequestContext,
+};
 use crate::nets::netserver::message::CMessage;
 
+const USE_PLAYER_SKILL: u32 = 0x0009_0001;
 const USE_BATTLE_FAIRY_SKILL: u32 = 0x0009_0005;
 
-pub(crate) trait GameSkillMessageRuntime: BattleFairySkillRequestContext {
+pub(crate) trait GameSkillMessageRuntime:
+    BattleFairySkillRequestContext + PlayerSkillRequestContext
+{
+    fn player_skill_request_facts(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+        region_id: Option<i32>,
+        request: PlayerSkillRequest,
+    ) -> PlayerSkillRequestFacts;
+
     fn battle_fairy_skill_request_facts(
         &mut self,
         game: &CGame,
@@ -42,6 +57,7 @@ pub(crate) enum GameSkillMessageError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameSkillMessageOutcome {
     MissingPlayer,
+    PlayerSkill(PlayerSkillRequestReport),
     BattleFairy(BattleFairySkillRequestReport),
 }
 
@@ -61,7 +77,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
     runtime: &mut Runtime,
 ) -> Option<Result<GameSkillMessageReport, GameSkillMessageError>> {
     let message_type = message.message_type() as u32;
-    if message_type != USE_BATTLE_FAIRY_SKILL {
+    if !matches!(message_type, USE_PLAYER_SKILL | USE_BATTLE_FAIRY_SKILL) {
         return None;
     }
 
@@ -75,38 +91,73 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
             .get_long()
             .ok_or(GameSkillMessageError::MissingField(field))
     };
-    let request = match (|| {
-        Ok(BattleFairySkillRequest {
-            raw_skill_id: read_long(message, "skill id")?,
-            target_type: read_long(message, "target type")?,
-            target_id: read_long(message, "target id")?,
-            property_offset: read_long(message, "property offset")?,
-            target_x: read_long(message, "target x")?,
-            target_y: read_long(message, "target y")?,
-        })
-    })() {
-        Ok(request) => request,
-        Err(error) => return Some(Err(error)),
+    let outcome = match message_type {
+        USE_PLAYER_SKILL => {
+            let request = match (|| {
+                Ok(PlayerSkillRequest {
+                    raw_skill_id: read_long(message, "skill id")?,
+                    target_type: read_long(message, "target type")?,
+                    target_id: read_long(message, "target id")?,
+                    target_x: read_long(message, "target x")?,
+                    target_y: read_long(message, "target y")?,
+                })
+            })() {
+                Ok(request) => request,
+                Err(error) => return Some(Err(error)),
+            };
+            let Some(player_id) = player_id else {
+                return Some(Ok(GameSkillMessageReport {
+                    message_type,
+                    socket_id,
+                    player_id: None,
+                    region_id,
+                    outcome: GameSkillMessageOutcome::MissingPlayer,
+                }));
+            };
+            let facts = runtime.player_skill_request_facts(game, player_id, region_id, request);
+            let report = game
+                .request_player_skill(player_id, socket_id, request, facts, runtime)
+                .expect("resolved message player остаётся в CGame во время synchronous dispatch");
+            GameSkillMessageOutcome::PlayerSkill(report)
+        }
+        USE_BATTLE_FAIRY_SKILL => {
+            let request = match (|| {
+                Ok(BattleFairySkillRequest {
+                    raw_skill_id: read_long(message, "skill id")?,
+                    target_type: read_long(message, "target type")?,
+                    target_id: read_long(message, "target id")?,
+                    property_offset: read_long(message, "property offset")?,
+                    target_x: read_long(message, "target x")?,
+                    target_y: read_long(message, "target y")?,
+                })
+            })() {
+                Ok(request) => request,
+                Err(error) => return Some(Err(error)),
+            };
+            let Some(player_id) = player_id else {
+                return Some(Ok(GameSkillMessageReport {
+                    message_type,
+                    socket_id,
+                    player_id: None,
+                    region_id,
+                    outcome: GameSkillMessageOutcome::MissingPlayer,
+                }));
+            };
+            let facts =
+                runtime.battle_fairy_skill_request_facts(game, player_id, region_id, request);
+            let report = game
+                .request_battle_fairy_skill(player_id, socket_id, request, facts, runtime)
+                .expect("resolved message player остаётся в CGame во время synchronous dispatch");
+            GameSkillMessageOutcome::BattleFairy(report)
+        }
+        _ => unreachable!("unsupported skill message отфильтрован до decode"),
     };
-    let Some(player_id) = player_id else {
-        return Some(Ok(GameSkillMessageReport {
-            message_type,
-            socket_id,
-            player_id: None,
-            region_id,
-            outcome: GameSkillMessageOutcome::MissingPlayer,
-        }));
-    };
-    let facts = runtime.battle_fairy_skill_request_facts(game, player_id, region_id, request);
-    let report = game
-        .request_battle_fairy_skill(player_id, socket_id, request, facts, runtime)
-        .expect("resolved message player остаётся в CGame во время synchronous dispatch");
     Some(Ok(GameSkillMessageReport {
         message_type,
         socket_id,
-        player_id: Some(player_id),
+        player_id,
         region_id,
-        outcome: GameSkillMessageOutcome::BattleFairy(report),
+        outcome,
     }))
 }
 
