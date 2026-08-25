@@ -244,6 +244,10 @@ pub(crate) const SCRIPT_FUNCTION_GET_STRING_BY_ID: i32 = 2000;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
 pub(crate) const SCRIPT_FUNCTION_GET_NAME: i32 = 2998;
+pub(crate) const SCRIPT_FUNCTION_CHANGE_BODY_CHECK: i32 = 2517;
+pub(crate) const SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE: i32 = 2518;
+pub(crate) const SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE: i32 = 2519;
+pub(crate) const SCRIPT_FUNCTION_GET_CHANGE_BODY_STATE: i32 = 2520;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
@@ -3221,6 +3225,13 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE
+        | SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE
+        | SCRIPT_FUNCTION_GET_CHANGE_BODY_STATE => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_CHANGE_BODY_CHECK => Unused,
         SCRIPT_FUNCTION_CREATE_NPC => match index {
             0 | 8 => String,
             1..=7 | 9..=11 => Integer,
@@ -4337,6 +4348,43 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let _ = player.set_integer_variable(b"$m_Temp", 0, position.x);
             let _ = player.set_integer_variable(b"$m_Temp", 1, position.y);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
+        }
+        SCRIPT_FUNCTION_CHANGE_BODY_CHECK => {
+            let Some(player_id) = script_player_id else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.script_change_body_check(player_id, true),
+            })
+        }
+        SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE
+        | SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE
+        | SCRIPT_FUNCTION_GET_CHANGE_BODY_STATE => {
+            let Some(state_id) = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .map(|value| value as u32)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let Some(player_id) = script_player_id else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let legacy_return = match function_id {
+                SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE => {
+                    let now_ms = runtime.country_contend_now_milliseconds();
+                    game.add_script_change_body_state(player_id, state_id, now_ms, runtime)
+                }
+                SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE => {
+                    game.delete_script_change_body_state(player_id, state_id, runtime)
+                }
+                SCRIPT_FUNCTION_GET_CHANGE_BODY_STATE => game
+                    .find_player(player_id)
+                    .map_or(0, |player| player.get_change_body_state(state_id)),
+                _ => unreachable!("ChangeBody selector проверен"),
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: legacy_return as i32,
+            })
         }
         SCRIPT_FUNCTION_CREATE_NPC => {
             if argument_count < 8 || argument_count > 12 || game.find_player(player_id).is_none() {

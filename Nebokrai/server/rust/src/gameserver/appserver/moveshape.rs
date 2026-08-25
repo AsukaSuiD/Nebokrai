@@ -46,6 +46,7 @@
 use std::collections::BTreeMap;
 
 use super::ai::baseai::{AiShapeAction, CBaseAI};
+use super::chbystate::{ChangeBodyMutation, ChangeBodyState};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::shape::{
@@ -178,6 +179,7 @@ pub(crate) struct CMoveShape {
     current_skill_id: Option<u32>,
     item_skill_ids: Vec<u32>,
     ex_states: Vec<u8>,
+    change_body_states: Vec<ChangeBodyState>,
     undead_states: Vec<UndeadState>,
     moveable_count: i32,
     moveable: bool,
@@ -191,6 +193,7 @@ impl Default for CMoveShape {
             current_skill_id: None,
             item_skill_ids: Vec::new(),
             ex_states: Vec::new(),
+            change_body_states: Vec::new(),
             undead_states: Vec::new(),
             moveable_count: 0,
             moveable: true,
@@ -219,7 +222,16 @@ impl CMoveShape {
         &self.ex_states
     }
 
+    pub(crate) fn serialized_ex_states(&self, now_ms: u32) -> Vec<u8> {
+        let mut payload = self.ex_states.clone();
+        for state in &self.change_body_states {
+            state.update_serialized_runtime(&mut payload, now_ms);
+        }
+        payload
+    }
+
     pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>) {
+        self.change_body_states = ChangeBodyState::decode_all(&states, 0);
         self.ex_states = states;
     }
 
@@ -228,6 +240,7 @@ impl CMoveShape {
         self.current_skill_id = None;
         self.item_skill_ids.clear();
         self.ex_states.clear();
+        self.change_body_states.clear();
         self.undead_states.clear();
     }
 
@@ -319,6 +332,133 @@ impl CMoveShape {
             .any(|state| state.state_id == state_id)
             .then_some(state_id)
             .unwrap_or(0)
+    }
+
+    pub(crate) fn add_change_body_state(
+        &mut self,
+        state_id: u32,
+        factory: &CSkillFactory,
+        now_ms: u32,
+        old_hotkeys: [u32; 12],
+    ) -> ChangeBodyMutation {
+        let Some(mut added) = ChangeBodyState::from_factory(state_id, factory, now_ms) else {
+            return ChangeBodyMutation {
+                removed: None,
+                added: None,
+                legacy_return: 0,
+            };
+        };
+        added.old_hotkeys = old_hotkeys;
+        let removed = self
+            .change_body_states
+            .iter()
+            .position(|state| state.level == state_id)
+            .map(|index| {
+                let removed = self.change_body_states.remove(index);
+                removed.remove_serialized(&mut self.ex_states);
+                removed
+            });
+        if self.ex_states.len() < 4 {
+            self.ex_states.clear();
+            self.ex_states.extend_from_slice(&0_u32.to_le_bytes());
+        }
+        let count = u32::from_le_bytes(self.ex_states[..4].try_into().expect("state count"));
+        self.ex_states[..4].copy_from_slice(&count.wrapping_add(1).to_le_bytes());
+        let offset = self.ex_states.len();
+        self.ex_states
+            .extend_from_slice(&super::chbystate::CHANGE_BODY_STATE_ID.to_le_bytes());
+        self.ex_states.resize(offset + 124, 0);
+        added.write_serialized(&mut self.ex_states, offset);
+        self.change_body_states.push(added.clone());
+        ChangeBodyMutation {
+            removed,
+            added: Some(added),
+            legacy_return: 1,
+        }
+    }
+
+    pub(crate) fn delete_change_body_state(&mut self, state_id: u32) -> ChangeBodyMutation {
+        let Some(index) = self
+            .change_body_states
+            .iter()
+            .position(|state| state.level == state_id)
+        else {
+            return ChangeBodyMutation {
+                removed: None,
+                added: None,
+                legacy_return: 0,
+            };
+        };
+        let removed = self.change_body_states.remove(index);
+        removed.remove_serialized(&mut self.ex_states);
+        ChangeBodyMutation {
+            removed: Some(removed),
+            added: None,
+            legacy_return: state_id,
+        }
+    }
+
+    pub(crate) fn get_change_body_state(&self, state_id: u32) -> u32 {
+        self.change_body_states
+            .iter()
+            .any(|state| state.level == state_id)
+            .then_some(state_id)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn active_change_body_state(&self) -> Option<&ChangeBodyState> {
+        self.change_body_states.last()
+    }
+
+    pub(crate) fn activate_loaded_change_body_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<ChangeBodyState> {
+        for state in &mut self.change_body_states {
+            state.activate_loaded(now_ms);
+            state.update_serialized_runtime(&mut self.ex_states, now_ms);
+        }
+        self.change_body_states.clone()
+    }
+
+    pub(crate) fn expired_change_body_state_ids(&self, now_ms: u32) -> Vec<u32> {
+        self.change_body_states
+            .iter()
+            .filter(|state| state.expired(now_ms))
+            .map(|state| state.level)
+            .collect()
+    }
+
+    pub(crate) fn change_body_region_transition_end_ids(&mut self) -> Vec<u32> {
+        let mut ended = Vec::new();
+        for state in &mut self.change_body_states {
+            if state.on_change_region() {
+                ended.push(state.level);
+            } else {
+                state.update_serialized_runtime(&mut self.ex_states, state.started_ms);
+            }
+        }
+        ended
+    }
+
+    pub(crate) fn change_body_player_lost_end_ids(&mut self) -> Vec<u32> {
+        let mut ended = Vec::new();
+        for state in &mut self.change_body_states {
+            if state.on_player_lost() {
+                ended.push(state.level);
+            } else {
+                state.update_serialized_runtime(&mut self.ex_states, state.started_ms);
+            }
+        }
+        ended
+    }
+
+    pub(crate) fn change_body_death_end_ids(&self) -> Vec<u32> {
+        self.change_body_states
+            .iter()
+            .filter(|state| !state.continue_after_death)
+            .map(|state| state.level)
+            .collect()
     }
 
     pub(crate) fn skill(&self, skill_id: u32) -> Option<&MoveShapeSkill> {

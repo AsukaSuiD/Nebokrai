@@ -241,12 +241,10 @@ use super::container::cequipmentcontainer::{
     EquipmentColumn, EquipmentContainerCodecError, EquipmentOwnerPlayerFacts,
     EquipmentRemoveOutcome, EquipmentRemoveRuntimeFacts, EquipmentUnserializedEntry,
 };
-use super::container::cfairycontainer::{
-    CFairyContainer, FairyContainerCodecError,
-};
-use super::container::cjifen::CJiFen;
+use super::container::cfairycontainer::{CFairyContainer, FairyContainerCodecError};
 use super::container::cgoodscontainer::GoodsStackMergeOutcome;
 use super::container::cgoodsshadowcontainer::{PlacedShadowGoods, ShadowRecordBlock};
+use super::container::cjifen::CJiFen;
 use super::container::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsCodecError,
     VolumeGoodsRemoveOutcome,
@@ -1490,11 +1488,14 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) minimum_attack: u32,
     pub(crate) maximum_attack: u32,
     pub(crate) attack_speed: u16,
+    pub(crate) cch: u16,
     pub(crate) defense: u32,
     pub(crate) element_resistance: u32,
     pub(crate) burden: u16,
     pub(crate) reank: u16,
     pub(crate) element_modify: i32,
+    pub(crate) blast_attack: u16,
+    pub(crate) blast_element_attack: u16,
     pub(crate) blast_defense_scale_bits: u32,
     pub(crate) full_miss_scale_bits: u32,
     pub(crate) critical_rate_bits: u32,
@@ -2123,8 +2124,7 @@ impl CPlayer {
                 player.realm_appellation_skill_level = level;
             }
         }
-        let ex_state_length =
-            read_player_game_save_count(source, cursor, "m_vExStates length")?;
+        let ex_state_length = read_player_game_save_count(source, cursor, "m_vExStates length")?;
         player.move_shape.replace_ex_states(
             read_player_game_save_slice(source, cursor, "m_vExStates", ex_state_length)?.to_vec(),
         );
@@ -2183,9 +2183,8 @@ impl CPlayer {
             &mut |_| {},
             &mut |_, _, _| {},
         );
-        let equipment = equipment.map_err(|failure| {
-            PlayerGameSaveCodecError::Equipment(failure.error)
-        })?;
+        let equipment =
+            equipment.map_err(|failure| PlayerGameSaveCodecError::Equipment(failure.error))?;
         if let Some(position) = equipment.entries.iter().find_map(|entry| match entry {
             EquipmentUnserializedEntry::Rejected { position, .. }
             | EquipmentUnserializedEntry::DecoderReturnedNull { position } => Some(*position),
@@ -2202,7 +2201,9 @@ impl CPlayer {
             &mut *ordinary_threshold,
             &mut *battle_threshold,
         )?;
-        player.packet.apply_player_expansion_limit(player.equipment.expanded_package_num());
+        player
+            .packet
+            .apply_player_expansion_limit(player.equipment.expanded_package_num());
 
         let _released = player.auction_goods.set_container_volume(0x12);
         player.auction_goods.unserialize(
@@ -2307,23 +2308,19 @@ impl CPlayer {
             &mut *battle_threshold,
         )?;
 
-        player.variable_list.decode_world_snapshot(
-            variable_definitions,
-            source,
-            cursor,
-        )?;
+        player
+            .variable_list
+            .decode_world_snapshot(variable_definitions, source, cursor)?;
         player.silence_minutes = read_player_game_save_i32(source, cursor, "m_lSilenceTime")?;
         let murderer_state = read_player_game_save_u8(source, cursor, "murderer state")? != 0;
-        let murderer_remain =
-            read_player_game_save_u32(source, cursor, "murderer remain time")?;
+        let murderer_remain = read_player_game_save_u32(source, cursor, "murderer remain time")?;
         player.restore_murderer_timestamp(
             murderer_state,
             murderer_remain,
             now_ms,
             one_pk_count_time_ms,
         );
-        player.fight_state_count =
-            read_player_game_save_i32(source, cursor, "m_lFightStateCount")?;
+        player.fight_state_count = read_player_game_save_i32(source, cursor, "m_lFightStateCount")?;
 
         player.uncreated_pets.clear();
         let pet_count = read_player_game_save_count(source, cursor, "m_vUncreatedPets")?;
@@ -2366,8 +2363,8 @@ impl CPlayer {
             read_player_game_save_i32(source, cursor, "m_lCityWarDiedStateTime")?;
         player.died_state_start_time_ms =
             u32::from(player.city_war_died_state_time_ms > 0).wrapping_mul(now_ms);
-        player.city_war_died_state = player.city_war_died_state_time_ms > 0
-            && player.base_properties.occupation != 6;
+        player.city_war_died_state =
+            player.city_war_died_state_time_ms > 0 && player.base_properties.occupation != 6;
 
         player.quest_states.clear();
         let quest_count = read_player_game_save_count(source, cursor, "m_PlayerQuests")?;
@@ -2381,8 +2378,7 @@ impl CPlayer {
         player.jjc_data = read_player_game_save_array(source, cursor, "m_jjcdata[0x10]")?;
         player.jjc_pk_state = read_player_game_save_u8(source, cursor, "bJJcPkState")? != 0;
         player.decode_organizing_snapshot(source, cursor)?;
-        player.session_id =
-            read_player_game_save_string(source, cursor, "m_strSessionID", 0x40)?;
+        player.session_id = read_player_game_save_string(source, cursor, "m_strSessionID", 0x40)?;
         player.refresh_reached_container_owners(player.player_id());
 
         Ok((
@@ -2429,12 +2425,9 @@ impl CPlayer {
             let packed = (skill.id() & 0xffff) | ((skill.level() as u32 & 0xffff) << 16);
             destination.extend_from_slice(&packed.to_le_bytes());
         }
-        append_player_game_save_count(
-            destination,
-            "m_vExStates length",
-            self.move_shape.ex_states().len(),
-        )?;
-        destination.extend_from_slice(self.move_shape.ex_states());
+        let ex_states = self.move_shape.serialized_ex_states(now_ms);
+        append_player_game_save_count(destination, "m_vExStates length", ex_states.len())?;
+        destination.extend_from_slice(&ex_states);
         append_player_game_save_count(destination, "m_listFriend", self.friends.len())?;
         for friend in &self.friends {
             append_player_game_save_string(destination, "tagFriend.strName", &friend.name, 0x94)?;
@@ -2464,7 +2457,10 @@ impl CPlayer {
                 }
             };
         }
-        serialize_container!("m_cPacket", self.packet.serialize(destination, goods_factory));
+        serialize_container!(
+            "m_cPacket",
+            self.packet.serialize(destination, goods_factory)
+        );
         serialize_container!(
             "m_cAuctionGoodsContainer",
             self.auction_goods.serialize(destination, goods_factory)
@@ -2497,7 +2493,10 @@ impl CPlayer {
             self.battle_fairy_container
                 .serialize(destination, goods_factory)
         );
-        serialize_container!("m_cCiQing", self.ci_qing.serialize(destination, goods_factory));
+        serialize_container!(
+            "m_cCiQing",
+            self.ci_qing.serialize(destination, goods_factory)
+        );
         serialize_container!(
             "m_cComposeCiQing",
             self.ci_qing_compose.serialize(destination, goods_factory)
@@ -2564,14 +2563,30 @@ impl CPlayer {
     fn synchronized_base_property_wire(&self) -> [u8; PLAYER_BASE_PROPERTY_WIRE_SIZE] {
         let mut wire = self.base_property_wire;
         wire[BASE_LEVEL_OFFSET] = self.base_properties.level;
-        write_player_wire_u32(&mut wire, BASE_EXPERIENCE_OFFSET, self.base_properties.experience);
+        write_player_wire_u32(
+            &mut wire,
+            BASE_EXPERIENCE_OFFSET,
+            self.base_properties.experience,
+        );
         wire[BASE_HEAD_PICTURE_OFFSET] = self.base_properties.head_picture as u8;
         wire[BASE_FACE_PICTURE_OFFSET] = self.base_properties.face_picture as u8;
         wire[BASE_OCCUPATION_OFFSET] = self.base_properties.occupation;
         wire[BASE_SEX_OFFSET] = self.base_properties.sex;
-        write_player_wire_u16(&mut wire, BASE_PK_COUNT_OFFSET, self.base_properties.pk_count);
-        write_player_wire_u32(&mut wire, BASE_KILL_COUNT_OFFSET, self.base_properties.kill_count);
-        write_player_wire_u16(&mut wire, BASE_REMAIN_POINT_OFFSET, self.base_properties.remain_point);
+        write_player_wire_u16(
+            &mut wire,
+            BASE_PK_COUNT_OFFSET,
+            self.base_properties.pk_count,
+        );
+        write_player_wire_u32(
+            &mut wire,
+            BASE_KILL_COUNT_OFFSET,
+            self.base_properties.kill_count,
+        );
+        write_player_wire_u16(
+            &mut wire,
+            BASE_REMAIN_POINT_OFFSET,
+            self.base_properties.remain_point,
+        );
         for (index, hotkey) in self.base_properties.hotkeys.iter().copied().enumerate() {
             write_player_wire_u32(&mut wire, BASE_HOTKEY_OFFSET + index * 4, hotkey);
         }
@@ -2585,8 +2600,14 @@ impl CPlayer {
                 BASE_FAIRY_CONTAINER_ENABLED_OFFSET,
                 self.base_properties.fairy_container_enabled,
             ),
-            (BASE_DISPLAY_HEAD_PIECE_OFFSET, self.base_properties.display_head_piece),
-            (BASE_BATTLE_FAIRY_SUMMONED_OFFSET, self.battle_fairy_summoned),
+            (
+                BASE_DISPLAY_HEAD_PIECE_OFFSET,
+                self.base_properties.display_head_piece,
+            ),
+            (
+                BASE_BATTLE_FAIRY_SUMMONED_OFFSET,
+                self.battle_fairy_summoned,
+            ),
             (
                 BASE_BATTLE_FAIRY_RECALL_OFFSET,
                 self.base_properties.battle_fairy_recall,
@@ -2595,7 +2616,10 @@ impl CPlayer {
                 BASE_BATTLE_FAIRY_DIED_OFFSET,
                 self.base_properties.battle_fairy_died,
             ),
-            (BASE_QUEST_ENABLED_OFFSET, self.base_properties.quest_enabled),
+            (
+                BASE_QUEST_ENABLED_OFFSET,
+                self.base_properties.quest_enabled,
+            ),
         ] {
             wire[offset] = u8::from(value);
         }
@@ -2606,23 +2630,53 @@ impl CPlayer {
             (BASE_MAXIMUM_MP_OFFSET, self.base_properties.base_maximum_mp),
             (BASE_STRENGTH_OFFSET, self.base_properties.base_strength),
             (BASE_DEXTERITY_OFFSET, self.base_properties.base_dexterity),
-            (BASE_CONSTITUTION_OFFSET, self.base_properties.base_constitution),
-            (BASE_INTELLIGENCE_OFFSET, self.base_properties.base_intelligence),
+            (
+                BASE_CONSTITUTION_OFFSET,
+                self.base_properties.base_constitution,
+            ),
+            (
+                BASE_INTELLIGENCE_OFFSET,
+                self.base_properties.base_intelligence,
+            ),
             (BASE_VIGOUR_OFFSET, self.base_properties.vigour),
             (BASE_CREDIT_OFFSET, self.base_properties.credit),
-            (BASE_QUEST_TIME_BEGIN_OFFSET, self.base_properties.quest_time_begin as u32),
-            (BASE_QUEST_TIME_LIMIT_OFFSET, self.base_properties.quest_time_limit as u32),
+            (
+                BASE_QUEST_TIME_BEGIN_OFFSET,
+                self.base_properties.quest_time_begin as u32,
+            ),
+            (
+                BASE_QUEST_TIME_LIMIT_OFFSET,
+                self.base_properties.quest_time_limit as u32,
+            ),
             (BASE_EXPLOIT_OFFSET, self.base_properties.exploit),
-            (BASE_DAYS_HONOR_OFFSET, self.base_properties.days_honor_eliminate),
-            (BASE_WEEKS_HONOR_OFFSET, self.base_properties.weeks_honor_eliminate),
-            (BASE_MONTHS_HONOR_OFFSET, self.base_properties.months_honor_eliminate),
-            (BASE_TOTAL_HONOR_OFFSET, self.base_properties.total_honor_eliminate),
-            (BASE_RANK_OF_NOBILITY_OFFSET, self.base_properties.rank_of_nobility_id),
+            (
+                BASE_DAYS_HONOR_OFFSET,
+                self.base_properties.days_honor_eliminate,
+            ),
+            (
+                BASE_WEEKS_HONOR_OFFSET,
+                self.base_properties.weeks_honor_eliminate,
+            ),
+            (
+                BASE_MONTHS_HONOR_OFFSET,
+                self.base_properties.months_honor_eliminate,
+            ),
+            (
+                BASE_TOTAL_HONOR_OFFSET,
+                self.base_properties.total_honor_eliminate,
+            ),
+            (
+                BASE_RANK_OF_NOBILITY_OFFSET,
+                self.base_properties.rank_of_nobility_id,
+            ),
             (BASE_APPELLATION_OFFSET, self.base_properties.appellation_id),
             (BASE_MODE_OFFSET, self.base_properties.mode),
             (BASE_FETCH_POWER_OFFSET, self.base_properties.fetch_power),
             (BASE_FY_ENERGY_OFFSET, self.base_properties.fy_energy),
-            (BASE_FY_ENABLE_FLAGS_OFFSET, self.base_properties.fy_enable_flags),
+            (
+                BASE_FY_ENABLE_FLAGS_OFFSET,
+                self.base_properties.fy_enable_flags,
+            ),
             (BASE_LT_60_STAMP_OFFSET, self.base_properties.lt_60_stamp),
             (BASE_SZL_OFFSET, self.base_properties.szl),
             (
@@ -2723,8 +2777,10 @@ impl CPlayer {
         self.base_properties.battle_fairy_recall = wire[BASE_BATTLE_FAIRY_RECALL_OFFSET] != 0;
         self.base_properties.battle_fairy_died = wire[BASE_BATTLE_FAIRY_DIED_OFFSET] != 0;
         self.base_properties.fy_energy = read_player_wire_u32(wire, BASE_FY_ENERGY_OFFSET);
-        self.base_properties.fy_enable_flags = read_player_wire_u32(wire, BASE_FY_ENABLE_FLAGS_OFFSET);
-        self.base_properties.lt_up_60_count = read_player_wire_u16(wire, BASE_LT_UP_60_COUNT_OFFSET);
+        self.base_properties.fy_enable_flags =
+            read_player_wire_u32(wire, BASE_FY_ENABLE_FLAGS_OFFSET);
+        self.base_properties.lt_up_60_count =
+            read_player_wire_u16(wire, BASE_LT_UP_60_COUNT_OFFSET);
         self.base_properties.remain_jing_li_dan_count =
             read_player_wire_u16(wire, BASE_REMAIN_JING_LI_DAN_COUNT_OFFSET);
         self.base_properties.lt_60_stamp = read_player_wire_u32(wire, BASE_LT_60_STAMP_OFFSET);
@@ -2745,11 +2801,14 @@ impl CPlayer {
             minimum_attack: read_player_wire_u32(wire, 0x1c),
             maximum_attack: read_player_wire_u32(wire, 0x20),
             attack_speed: read_player_wire_u16(wire, 0x24),
+            cch: read_player_wire_u16(wire, 0x28),
             burden: read_player_wire_u16(wire, 0x26),
             defense: read_player_wire_u32(wire, 0x2c),
             element_resistance: read_player_wire_u32(wire, 0x34),
             element_modify: read_player_wire_u32(wire, 0x48) as i32,
             reank: read_player_wire_u16(wire, 0x4c),
+            blast_attack: read_player_wire_u16(wire, 0x54),
+            blast_element_attack: read_player_wire_u16(wire, 0x56),
             blast_defense_scale_bits: read_player_wire_u32(wire, 0x5c),
             full_miss_scale_bits: read_player_wire_u32(wire, 0x68),
             critical_rate_bits: read_player_wire_u32(wire, 0x6c),
@@ -2771,13 +2830,11 @@ impl CPlayer {
             let _contribute = read_player_game_save_u32(source, cursor, "m_bFactionContribute")?;
             self.faction_name =
                 read_player_game_save_string(source, cursor, "m_strFactionName", 0x100)?;
-            let _title =
-                read_player_game_save_string(source, cursor, "m_strFactionTitle", 0x100)?;
+            let _title = read_player_game_save_string(source, cursor, "m_strFactionTitle", 0x100)?;
             self.faction_master_id =
                 read_player_game_save_i32(source, cursor, "m_lFactionMasterID")?;
             self.union_id = read_player_game_save_i32(source, cursor, "m_lUnionID")?;
-            let _union_master =
-                read_player_game_save_i32(source, cursor, "m_lUnionMasterID")?;
+            let _union_master = read_player_game_save_i32(source, cursor, "m_lUnionMasterID")?;
             for field in ["m_EnemyFactions", "m_CityWarEnemyFactions"] {
                 let count = read_player_game_save_count(source, cursor, field)?;
                 let _ = read_player_game_save_slice(source, cursor, field, count * 4)?;
@@ -3233,8 +3290,7 @@ impl CPlayer {
     }
 
     pub(crate) const fn quest_time_remaining(&self, now_seconds: i32) -> i32 {
-        if self.base_properties.quest_time_begin == 0
-            || self.base_properties.quest_time_limit == 0
+        if self.base_properties.quest_time_begin == 0 || self.base_properties.quest_time_limit == 0
         {
             return 0;
         }
@@ -3243,11 +3299,7 @@ impl CPlayer {
             .quest_time_begin
             .wrapping_add(self.base_properties.quest_time_limit)
             .wrapping_sub(now_seconds);
-        if remaining < 0 {
-            0
-        } else {
-            remaining
-        }
+        if remaining < 0 { 0 } else { remaining }
     }
 
     pub(crate) const fn acknowledge_heartbeat(&mut self) {
@@ -3484,6 +3536,114 @@ impl CPlayer {
 
     pub(crate) fn get_appellation_state(&self, state_id: u32) -> u32 {
         self.move_shape.get_undead_state(state_id)
+    }
+
+    pub(crate) fn change_body_check(&self) -> bool {
+        self.base_properties.mode == 0
+            && !matches!(
+                self.current_progress,
+                PlayerProgress::Trading | PlayerProgress::OpenStall
+            )
+            && self.team_id == 0
+            && !self.has_pet()
+            && self.uncreated_carriage.original_name.is_empty()
+    }
+
+    pub(crate) fn add_change_body_state(
+        &mut self,
+        state_id: u32,
+        factory: &CSkillFactory,
+        now_ms: u32,
+    ) -> super::chbystate::ChangeBodyMutation {
+        let old_hotkeys = std::array::from_fn(|index| self.base_properties.hotkeys[index + 12]);
+        let mutation =
+            self.move_shape
+                .add_change_body_state(state_id, factory, now_ms, old_hotkeys);
+        let Some(state) = mutation.added.as_ref() else {
+            return mutation;
+        };
+        self.clear_emotion_state();
+        self.base_properties.mode = state.mode;
+        for slot in 12..24 {
+            self.base_properties.hotkeys[slot] = 0;
+        }
+        for (index, (skill_id, level)) in state.skills.iter().copied().enumerate() {
+            if skill_id != 0 {
+                let _ = self
+                    .move_shape
+                    .add_skill(u32::from(skill_id), i32::from(level), factory);
+                self.base_properties.hotkeys[index + 12] = u32::from(skill_id) | 0x8000_0000;
+            }
+        }
+        self.base_properties.hotkeys[17] = 0x8000_031f;
+        mutation
+    }
+
+    pub(crate) fn delete_change_body_state(
+        &mut self,
+        state_id: u32,
+        factory: &CSkillFactory,
+    ) -> super::chbystate::ChangeBodyMutation {
+        let mutation = self.move_shape.delete_change_body_state(state_id);
+        if let Some(state) = mutation.removed.as_ref() {
+            self.base_properties.mode = 0;
+            for (index, hotkey) in state.old_hotkeys.iter().copied().enumerate() {
+                self.base_properties.hotkeys[index + 12] = hotkey;
+            }
+            for (skill_id, _) in state.skills {
+                if skill_id != 0 {
+                    let _ = self.move_shape.delete_skill(u32::from(skill_id), factory);
+                }
+            }
+        }
+        mutation
+    }
+
+    pub(crate) fn get_change_body_state(&self, state_id: u32) -> u32 {
+        self.move_shape.get_change_body_state(state_id)
+    }
+
+    pub(crate) fn activate_loaded_change_body_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::chbystate::ChangeBodyState> {
+        self.move_shape.activate_loaded_change_body_states(now_ms)
+    }
+
+    pub(crate) fn expired_change_body_state_ids(&self, now_ms: u32) -> Vec<u32> {
+        self.move_shape.expired_change_body_state_ids(now_ms)
+    }
+
+    pub(crate) fn change_body_region_transition_end_ids(&mut self) -> Vec<u32> {
+        self.move_shape.change_body_region_transition_end_ids()
+    }
+
+    pub(crate) fn change_body_player_lost_end_ids(&mut self) -> Vec<u32> {
+        self.move_shape.change_body_player_lost_end_ids()
+    }
+
+    pub(crate) fn change_body_death_end_ids(&self) -> Vec<u32> {
+        self.move_shape.change_body_death_end_ids()
+    }
+
+    pub(crate) fn apply_change_body_properties(&mut self, mut properties: PlayerCombatProperties) {
+        if let Some(state) = self.move_shape.active_change_body_state() {
+            let add = |target: &mut u32, value: u32| {
+                *target = u32::min((*target).saturating_add(value), i32::MAX as u32);
+            };
+            add(&mut properties.maximum_hp, state.maximum_hp);
+            add(&mut properties.maximum_mp, state.maximum_mp);
+            add(&mut properties.minimum_attack, state.minimum_attack);
+            add(&mut properties.maximum_attack, state.maximum_attack);
+            add(&mut properties.defense, state.defense);
+            add(&mut properties.element_resistance, state.element_resistance);
+            properties.cch = properties.cch.wrapping_add(state.cch);
+            properties.blast_attack = properties.blast_attack.wrapping_add(state.blast_attack);
+            properties.blast_element_attack = properties
+                .blast_element_attack
+                .wrapping_add(state.blast_element_attack);
+        }
+        self.apply_recomputed_combat_properties(properties);
     }
 
     pub(crate) fn realm_appellation_bonus_identity(
@@ -4008,6 +4168,7 @@ impl CPlayer {
             0x24,
             properties.attack_speed,
         );
+        write_u16(&mut self.combat_property_wire, 0x28, properties.cch);
         write_u16(&mut self.combat_property_wire, 0x26, properties.burden);
         write_u32(&mut self.combat_property_wire, 0x2c, properties.defense);
         write_u32(
@@ -4021,6 +4182,16 @@ impl CPlayer {
             properties.element_modify as u32,
         );
         write_u16(&mut self.combat_property_wire, 0x4c, properties.reank);
+        write_u16(
+            &mut self.combat_property_wire,
+            0x54,
+            properties.blast_attack,
+        );
+        write_u16(
+            &mut self.combat_property_wire,
+            0x56,
+            properties.blast_element_attack,
+        );
         write_u32(
             &mut self.combat_property_wire,
             0x5c,

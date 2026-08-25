@@ -387,6 +387,7 @@ use std::time::Duration;
 
 use rustix::system::uname;
 
+use crate::gameserver::appserver::chbystate::ChangeBodyState;
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::AmountLimitGoodsTaken;
 use crate::gameserver::appserver::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck,
@@ -400,10 +401,9 @@ use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::U
 use crate::gameserver::appserver::container::cfairycontainer::{
     FairyContainerAmountChange, FairyContainerGoodsUpdate, FairyContainerMoveOperation,
     FairyHatcherEntry, FairyImplantDelivery, FairyImplantReport, FairyIncubateLog,
-    FairyStateChangeEffect, FairyStateChangeOutcome, FairySyncreticProperty,
-    FairySyncretizeConfig, FairySyncretizeFragmentEffect, FairySyncretizeLog,
-    FairySyncretizePlayer, FairySyncretizePlayerUpdate, FairySyncretizeRemoval,
-    FairySyncretizeReport,
+    FairyStateChangeEffect, FairyStateChangeOutcome, FairySyncreticProperty, FairySyncretizeConfig,
+    FairySyncretizeFragmentEffect, FairySyncretizeLog, FairySyncretizePlayer,
+    FairySyncretizePlayerUpdate, FairySyncretizeRemoval, FairySyncretizeReport,
 };
 use crate::gameserver::appserver::container::cgoodscontainer::GoodsStackMergeOutcome;
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::{
@@ -421,10 +421,10 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::{
 };
 use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
-    GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE, GAP_BF_CURRENT_MAX_EXP, GAP_BF_DEFUALT_SKLL,
-    GAP_BF_HP, GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL,
-    GAP_BF_MAX_MP, GAP_BF_MODULE, GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH,
-    GAP_EQUIP_STATE, GAP_PARTICULAR_ATTRIBUTE, GOODS_TYPE_EQUIPMENT,
+    GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE, GAP_BF_CURRENT_MAX_EXP, GAP_BF_DEFUALT_SKLL, GAP_BF_HP,
+    GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAX_MP, GAP_BF_MODULE,
+    GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_EQUIP_STATE, GAP_PARTICULAR_ATTRIBUTE,
+    GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goods::fairyproperties::{
@@ -473,9 +473,6 @@ use crate::gameserver::appserver::message::onmsg_w2s_auction::{
     WorldAuctionMessageError, WorldAuctionMessageReport, WorldAuctionRuntime,
     dispatch_world_auction_message,
 };
-use crate::gameserver::appserver::message::playershopmessage::{
-    PlayerShopMessageError, PlayerShopMessageReport, dispatch_player_shop_message,
-};
 use crate::gameserver::appserver::message::organsysmessage::{
     GameOrganizingMessageError, GameOrganizingMessageReport, GameOrganizingWarRuntime,
     dispatch_game_organizing_message,
@@ -488,6 +485,9 @@ use crate::gameserver::appserver::message::playermessage::{
     GamePlayerMessageError, GamePlayerMessageReport, GamePlayerMessageRuntime,
     dispatch_game_player_message,
 };
+use crate::gameserver::appserver::message::playershopmessage::{
+    PlayerShopMessageError, PlayerShopMessageReport, dispatch_player_shop_message,
+};
 use crate::gameserver::appserver::message::regionmessage::dispatch_game_region_message;
 use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, SequenceRegistryInitializationError,
@@ -497,16 +497,16 @@ use crate::gameserver::appserver::message::servermessage::{
     GameRegionChangeResponseContext, GameServerMessageError, GameServerMessageReport,
     InitialRegionStartupContext, WarScheduleSetupContext, dispatch_server_message,
 };
+use crate::gameserver::appserver::message::shapemessage::{
+    GameShapeMessageError, GameShapeMessageReport, GameShapeMessageRuntime,
+    dispatch_game_shape_message,
+};
 use crate::gameserver::appserver::message::shopmessage::{
     ShopMessageError, ShopMessageReport, dispatch_shop_message,
 };
 use crate::gameserver::appserver::message::skillmessage::{
     GameSkillMessageError, GameSkillMessageReport, GameSkillMessageRuntime,
     dispatch_game_skill_message,
-};
-use crate::gameserver::appserver::message::shapemessage::{
-    GameShapeMessageError, GameShapeMessageReport, GameShapeMessageRuntime,
-    dispatch_game_shape_message,
 };
 use crate::gameserver::appserver::message::unibillmessage::{
     IncrementShopBillingContext, IncrementShopBillingMessageError, IncrementShopBillingReport,
@@ -521,8 +521,7 @@ use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
 use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::gameserver::appserver::player::{
     AuctionSelfGoodsRefresh, BattleFairyCombineDelivery, BattleFairyCombineEffect,
-    BattleFairyCombineReport,
-    BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
+    BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationReport,
     BattleFairyFollowDelivery, BattleFairyFollowEffect, BattleFairyFollowReport,
     BattleFairyObjectMove, BattleFairyObjectMoveOperation, BattleFairyPotentialAllocationDelivery,
@@ -536,15 +535,15 @@ use crate::gameserver::appserver::player::{
     CiQingContainerConsumption, CiQingHandConsumption, CiQingPacketAddition,
     CiQingPacketConsumption, EnhancementDeselectionBlock, EnhancementDeselectionReport,
     EnhancementSelectionBlock, EnhancementSelectionReport, GoodsDestroyHandConsumption,
-    HotkeyHandTransferOutcome, HotkeyHandTransferReport, PlayerCombatProperties,
-    PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
-    PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
-    PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
-    PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerProgress,
-    PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange, PlayerReliveMutation, PlayerSkillDispatch,
+    HotkeyHandTransferOutcome, HotkeyHandTransferReport, PlayerAuctionGoodsReturn,
+    PlayerAuctionMoneyChange, PlayerCombatProperties, PlayerEquipmentAddEffect,
+    PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery,
+    PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
+    PlayerGameSaveCodecError, PlayerGameSaveDecodeReport, PlayerHonorResetReport,
+    PlayerLoginGoodsLocation, PlayerProgress, PlayerReliveMutation, PlayerSkillDispatch,
     PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
-    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage,
-    PlayerLoginGoodsLocation, PlayerUncreatedPet, PlayerYuanBaoChange,
+    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet,
+    PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -576,9 +575,9 @@ use crate::gameserver::appserver::servernationregion::{
     classify_nation_morale_target,
 };
 use crate::gameserver::appserver::serverregion::{
-    CServerRegion, RegionMembershipBlock, ServerRegionMonsterContext, ServerRegionNpcContext,
-    ServerRegionNpcSetup, ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport,
-    ServerRegionClearPlayerTick, ServerReturnPlayer, ServerReturnSetupBlock,
+    CServerRegion, RegionMembershipBlock, ServerRegionClearPlayerTick, ServerRegionMonsterContext,
+    ServerRegionNpcContext, ServerRegionNpcSetup, ServerRegionNpcSpawnBlock,
+    ServerRegionNpcSpawnReport, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::session::cequipmentcompose::{
@@ -603,8 +602,8 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
     EquipmentUpgradeLostAuditLog, EquipmentUpgradeOutcome, EquipmentUpgradeReport,
 };
 use crate::gameserver::appserver::session::csessionfactory::{
-    CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved,
-    SessionEndReport, TerminalEquipmentSessionCollected,
+    CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved, SessionEndReport,
+    TerminalEquipmentSessionCollected,
 };
 use crate::gameserver::appserver::session::ctrader::{
     TraderContainerKind, TraderOfferAdded, TraderOfferBlock, TraderOfferRemoved,
@@ -1539,7 +1538,9 @@ pub(crate) struct FairySetupQueryReport {
     pub(crate) delivery: Option<i32>,
 }
 
-pub(crate) trait EquipmentComposeContext: OldClientGoodsCodec + PlayerEquipmentContext {
+pub(crate) trait EquipmentComposeContext:
+    OldClientGoodsCodec + PlayerEquipmentContext
+{
     fn equipment_compose_remove_facts(
         &mut self,
         player: &CPlayer,
@@ -2015,21 +2016,34 @@ pub(crate) enum BattleFairyScriptAction {
         skill_level: i32,
         position: Option<i32>,
     },
-    GetFetchPower { player_name: Vec<u8> },
+    GetFetchPower {
+        player_name: Vec<u8>,
+    },
     SetAttribute {
         player_name: Vec<u8>,
         attribute: i32,
         value: i32,
     },
-    ResetSkill { player_name: Vec<u8>, position: i32 },
-    Revive { player_name: Vec<u8> },
+    ResetSkill {
+        player_name: Vec<u8>,
+        position: i32,
+    },
+    Revive {
+        player_name: Vec<u8>,
+    },
     GetSkillValue {
         player_name: Vec<u8>,
         position: i32,
         value_id: u32,
     },
-    AddExperience { player_name: Vec<u8>, experience: i32 },
-    GetAttribute { player_name: Vec<u8>, attribute: i32 },
+    AddExperience {
+        player_name: Vec<u8>,
+        experience: i32,
+    },
+    GetAttribute {
+        player_name: Vec<u8>,
+        attribute: i32,
+    },
     RecreateAttributes {
         player_name: Vec<u8>,
         mode: i32,
@@ -2916,11 +2930,15 @@ struct CityReturnPointFacts {
 
 impl CityReturnPointContext for CityReturnPointFacts {
     fn read_city_player_tile_y(&mut self, player_id: i32) -> i32 {
-        (player_id == self.player_id).then_some(self.tile_y).unwrap_or(0)
+        (player_id == self.player_id)
+            .then_some(self.tile_y)
+            .unwrap_or(0)
     }
 
     fn read_city_player_tile_x(&mut self, player_id: i32) -> i32 {
-        (player_id == self.player_id).then_some(self.tile_x).unwrap_or(0)
+        (player_id == self.player_id)
+            .then_some(self.tile_x)
+            .unwrap_or(0)
     }
 }
 
@@ -3504,7 +3522,10 @@ impl CGame {
         session_id: i32,
         context: &mut Context,
     ) -> bool {
-        if !self.session_factory.personal_shop_session_available(session_id) {
+        if !self
+            .session_factory
+            .personal_shop_session_available(session_id)
+        {
             return false;
         }
         let Some(seller_plug_id) = self
@@ -3547,31 +3568,17 @@ impl CGame {
         goods_id: CGuid,
         context: &mut Context,
     ) -> PersonalShopPurchaseReport {
-        self.transact_personal_shop_goods(
-            session_id,
-            buyer_plug_id,
-            goods_id,
-            false,
-            context,
-        )
+        self.transact_personal_shop_goods(session_id, buyer_plug_id, goods_id, false, context)
     }
 
-    pub(crate) fn complete_personal_shop_billing_goods<
-        Context: GameContainerMessageRuntime,
-    >(
+    pub(crate) fn complete_personal_shop_billing_goods<Context: GameContainerMessageRuntime>(
         &mut self,
         session_id: i32,
         buyer_plug_id: i32,
         goods_id: CGuid,
         context: &mut Context,
     ) -> PersonalShopPurchaseReport {
-        self.transact_personal_shop_goods(
-            session_id,
-            buyer_plug_id,
-            goods_id,
-            true,
-            context,
-        )
+        self.transact_personal_shop_goods(session_id, buyer_plug_id, goods_id, true, context)
     }
 
     fn transact_personal_shop_goods<Context: GameContainerMessageRuntime>(
@@ -3714,11 +3721,11 @@ impl CGame {
             .query_goods_max_stack_number(self.goods_factory.get_gold_coin_index());
         if !billing_completion
             && maximum_gold
-            < self
-                .players
-                .get(&seller_id)
-                .map_or(0, CPlayer::money)
-                .wrapping_add(price.price)
+                < self
+                    .players
+                    .get(&seller_id)
+                    .map_or(0, CPlayer::money)
+                    .wrapping_add(price.price)
         {
             report.outcome = PersonalShopPurchaseOutcome::SellerMoneyCapacity {
                 notice_delivery: colored_player_notice_message(
@@ -3746,10 +3753,7 @@ impl CGame {
         }
         let audit = {
             let seller = self.players.get(&seller_id).expect("seller проверен");
-            let buyer = self
-                .players
-                .get(&buyer.owner_id())
-                .expect("buyer проверен");
+            let buyer = self.players.get(&buyer.owner_id()).expect("buyer проверен");
             (
                 u32::from(seller.pk_count()),
                 seller.money(),
@@ -3791,9 +3795,8 @@ impl CGame {
                 &goods,
                 self.globe_setup.pack_add_enabled(),
             );
-            let mut recompute = |player: &CPlayer| {
-                context.recompute_enhancement_player_properties(player)
-            };
+            let mut recompute =
+                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
             let mut removal = seller_player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -3833,11 +3836,7 @@ impl CGame {
                 .get_mut(&buyer.owner_id())
                 .expect("buyer проверен перед packet add");
             let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
-            buyer_player.add_traded_goods_to_packet(
-                vec![removed],
-                &self.goods_factory,
-                &mut encode,
-            )
+            buyer_player.add_traded_goods_to_packet(vec![removed], &self.goods_factory, &mut encode)
         };
         for addition in &additions {
             report
@@ -3855,7 +3854,11 @@ impl CGame {
                 .expect("seller остаётся online для legacy packet rollback");
             let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             let (rollback, _) = seller_player.add_traded_goods_to_packet(
-                if rejected.is_empty() { vec![original] } else { rejected },
+                if rejected.is_empty() {
+                    vec![original]
+                } else {
+                    rejected
+                },
                 &self.goods_factory,
                 &mut encode,
             );
@@ -3874,9 +3877,9 @@ impl CGame {
                 .get_mut(&buyer.owner_id())
                 .expect("buyer остаётся online")
                 .decrease_money(price.price, &self.goods_factory);
-            report.money_deliveries.extend(
-                self.send_player_money_decrease(buyer.owner_id(), &buyer_change.outcome),
-            );
+            report
+                .money_deliveries
+                .extend(self.send_player_money_decrease(buyer.owner_id(), &buyer_change.outcome));
             let created =
                 self.create_goods_batch(self.goods_factory.get_gold_coin_index(), price.price);
             let seller_increase = self
@@ -3884,9 +3887,9 @@ impl CGame {
                 .get_mut(&seller_id)
                 .expect("seller остаётся online")
                 .increase_money(price.price, &self.goods_factory, created);
-            report.money_deliveries.extend(
-                self.send_player_money_increase(seller_id, &seller_increase, context),
-            );
+            report
+                .money_deliveries
+                .extend(self.send_player_money_increase(seller_id, &seller_increase, context));
         }
         if !billing_completion && self.log_system.goods_trade_log_enabled() {
             let mut message = CMessage::new(0x0006_0201);
@@ -3927,15 +3930,17 @@ impl CGame {
             around_delivery: None,
             collected_plug_ids: Vec::new(),
         };
-        let Some((seller_plug_id, seller_id, buyers)) = self
-            .session_factory
-            .personal_shop_participants(session_id)
+        let Some((seller_plug_id, seller_id, buyers)) =
+            self.session_factory.personal_shop_participants(session_id)
         else {
             return report;
         };
         report.seller_plug_id = Some(seller_plug_id);
         report.seller_id = Some(seller_id);
-        if let Some(seller) = self.session_factory.personal_shop_seller_mut(seller_plug_id) {
+        if let Some(seller) = self
+            .session_factory
+            .personal_shop_seller_mut(seller_plug_id)
+        {
             seller.close_down();
         }
         if let Some(player) = self.players.get_mut(&seller_id) {
@@ -4349,10 +4354,7 @@ impl CGame {
         &mut self.goods_factory
     }
 
-    pub(crate) fn decode_auction_goods(
-        &self,
-        source: &[u8],
-    ) -> Result<CGoods, GoodsDecodeError> {
+    pub(crate) fn decode_auction_goods(&self, source: &[u8]) -> Result<CGoods, GoodsDecodeError> {
         let mut goods = CGoods::default();
         let mut cursor = 0;
         goods.unserialize(
@@ -4361,10 +4363,7 @@ impl CGame {
             true,
             &self.goods_factory,
             |equip_level, level| self.fairy_exp_conf.dw_exp_up(equip_level, level),
-            |equip_level, level| {
-                self.battle_fairy_exp_config
-                    .dw_exp_up(equip_level, level)
-            },
+            |equip_level, level| self.battle_fairy_exp_config.dw_exp_up(equip_level, level),
         )?;
         Ok(goods)
     }
@@ -4377,10 +4376,8 @@ impl CGame {
     ) -> Result<(CPlayer, PlayerGameSaveDecodeReport), PlayerGameSaveCodecError> {
         let mut ordinary_threshold =
             |equip_level, level| self.fairy_exp_conf.dw_exp_up(equip_level, level);
-        let mut battle_threshold = |equip_level, level| {
-            self.battle_fairy_exp_config
-                .dw_exp_up(equip_level, level)
-        };
+        let mut battle_threshold =
+            |equip_level, level| self.battle_fairy_exp_config.dw_exp_up(equip_level, level);
         CPlayer::decode_game_save(
             source,
             cursor,
@@ -4400,8 +4397,7 @@ impl CGame {
         destination: &mut Vec<u8>,
         context: &mut Context,
     ) -> bool {
-        let (pets, carriage, recreate_carriage) =
-            context.snapshot_script_player_summons(player);
+        let (pets, carriage, recreate_carriage) = context.snapshot_script_player_summons(player);
         player
             .encode_game_save(
                 destination,
@@ -4624,7 +4620,10 @@ impl CGame {
         amount: u32,
         destination_extend_id: i32,
         destination_position: u32,
-    ) -> Result<crate::gameserver::appserver::session::csessionfactory::PersonalShopShadowRemoved, PersonalShopClearBlock> {
+    ) -> Result<
+        crate::gameserver::appserver::session::csessionfactory::PersonalShopShadowRemoved,
+        PersonalShopClearBlock,
+    > {
         let seller_plug_id = session_extend_id >> 8;
         if self
             .session_factory
@@ -4907,9 +4906,7 @@ impl CGame {
     /// packet/equipment. Общий Move проверяет burden до source removal;
     /// blocked destination возвращает предмет в исходную listing-ячейку.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn withdraw_player_auction_listing_goods<
-        Context: GameContainerMessageRuntime,
-    >(
+    pub(crate) fn withdraw_player_auction_listing_goods<Context: GameContainerMessageRuntime>(
         &mut self,
         player_id: i32,
         source_position: u32,
@@ -6411,11 +6408,14 @@ impl CGame {
     /// Полный достигнутый Nation-prefix `CPlayer::OnDied`: закрывает active
     /// war clock, исполняет virtual contend cancel, затем устанавливает
     /// половину global death penalty без setter-wire.
-    pub(crate) fn player_died_in_nation_region<Context: NationCombatContext>(
+    pub(crate) fn player_died_in_nation_region<
+        Context: NationCombatContext + RealmAppellationScriptContext,
+    >(
         &mut self,
         player_id: i32,
         context: &mut Context,
     ) -> Option<NationPlayerDeathReport> {
+        self.change_body_after_player_death(player_id, context);
         let region_id = self.find_player(player_id)?.server_region_id()?;
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
@@ -7305,10 +7305,8 @@ impl CGame {
         for owner_id in owner_ids {
             if let Some(player) = self.players.get_mut(&owner_id) {
                 player.set_current_progress_snapshot(PlayerProgress::None);
-                deliveries.push(
-                    CMessage::new(0x000b_f717)
-                        .send_to_player(self.net_server(), owner_id),
-                );
+                deliveries
+                    .push(CMessage::new(0x000b_f717).send_to_player(self.net_server(), owner_id));
             }
         }
         let collected = self.session_factory.garbage_collect_session(session_id);
@@ -7325,11 +7323,13 @@ impl CGame {
             .session_factory
             .trader_plug_by_owner(session_id, player_id);
         if actual != Some(requested_plug_id)
-            || !self.session_factory.trade_session_available(session_id, |owner_id| {
-                self.players.get(&owner_id).is_some_and(|player| {
-                    !player.is_dead() && player.current_progress() == PlayerProgress::Trading
+            || !self
+                .session_factory
+                .trade_session_available(session_id, |owner_id| {
+                    self.players.get(&owner_id).is_some_and(|player| {
+                        !player.is_dead() && player.current_progress() == PlayerProgress::Trading
+                    })
                 })
-            })
         {
             return PlayerTradeAbortReport {
                 session_id,
@@ -7379,11 +7379,14 @@ impl CGame {
         &self,
         session_id: i32,
     ) -> Result<[PlayerTradePartySnapshot; 2], PlayerTradeConditionBlock> {
-        if !self.session_factory.trade_session_available(session_id, |owner_id| {
-            self.players.get(&owner_id).is_some_and(|player| {
-                !player.is_dead() && player.current_progress() == PlayerProgress::Trading
+        if !self
+            .session_factory
+            .trade_session_available(session_id, |owner_id| {
+                self.players.get(&owner_id).is_some_and(|player| {
+                    !player.is_dead() && player.current_progress() == PlayerProgress::Trading
+                })
             })
-        }) {
+        {
             return Err(PlayerTradeConditionBlock::SessionUnavailable);
         }
         let parties = self.player_trade_snapshots(session_id)?;
@@ -7529,7 +7532,10 @@ impl CGame {
         add_legacy_c_string(message.base_mut(), payer_player.account());
         add_legacy_c_string(message.base_mut(), receiver_player.account());
         add_legacy_c_string(message.base_mut(), ip(payer_player.client_ip()).as_bytes());
-        add_legacy_c_string(message.base_mut(), ip(receiver_player.client_ip()).as_bytes());
+        add_legacy_c_string(
+            message.base_mut(),
+            ip(receiver_player.client_ip()).as_bytes(),
+        );
         add_legacy_c_string(message.base_mut(), payer_player.player_name());
         add_legacy_c_string(message.base_mut(), receiver_player.player_name());
         message.add_ulong(amount);
@@ -7550,12 +7556,8 @@ impl CGame {
             .into_iter()
             .filter_map(|plug_id| self.session_factory.query_trader(plug_id))
             .map(|trader| {
-                colored_player_notice_message(
-                    0xffff_ffff,
-                    0,
-                    self.get_string_by_id(string_id),
-                )
-                .send_to_player(self.net_server(), trader.owner_id())
+                colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(string_id))
+                    .send_to_player(self.net_server(), trader.owner_id())
             })
             .collect()
     }
@@ -7602,11 +7604,14 @@ impl CGame {
         if actual != Some(requested_plug_id) {
             return report;
         }
-        if !self.session_factory.trade_session_available(session_id, |owner_id| {
-            self.players.get(&owner_id).is_some_and(|player| {
-                !player.is_dead() && player.current_progress() == PlayerProgress::Trading
+        if !self
+            .session_factory
+            .trade_session_available(session_id, |owner_id| {
+                self.players.get(&owner_id).is_some_and(|player| {
+                    !player.is_dead() && player.current_progress() == PlayerProgress::Trading
+                })
             })
-        }) {
+        {
             report.outcome = PlayerTradeReadyOutcome::SessionUnavailable;
             return report;
         }
@@ -7629,9 +7634,9 @@ impl CGame {
             let mut state = CMessage::new(0x000b_f716);
             state.add_long(requested_plug_id);
             state.add_byte(u8::from(ready));
-            report.ready_deliveries.push(
-                state.send_to_player(self.net_server(), contrary.owner_id()),
-            );
+            report
+                .ready_deliveries
+                .push(state.send_to_player(self.net_server(), contrary.owner_id()));
         }
         if !ready
             || contrary_plug_id.is_none_or(|plug_id| {
@@ -7661,22 +7666,16 @@ impl CGame {
                 (&parties[1], &parties[0])
             };
             let amount = yuan_difference.unsigned_abs() as u32;
-            let delivery = self.send_player_trade_billing_request(
-                payer,
-                receiver,
+            let delivery =
+                self.send_player_trade_billing_request(payer, receiver, amount, session_id);
+            report.outcome = PlayerTradeReadyOutcome::BillingPending(PlayerTradeBillingRequest {
+                payer_id: payer.owner_id,
+                receiver_id: receiver.owner_id,
                 amount,
                 session_id,
-            );
-            report.outcome = PlayerTradeReadyOutcome::BillingPending(
-                PlayerTradeBillingRequest {
-                    payer_id: payer.owner_id,
-                    receiver_id: receiver.owner_id,
-                    amount,
-                    session_id,
-                    payer_plug_id: payer.plug_id,
-                    delivery,
-                },
-            );
+                payer_plug_id: payer.plug_id,
+                delivery,
+            });
             return report;
         }
         let completed = self.commit_player_trade(parties, None, 0, &[], context, &mut report);
@@ -7799,9 +7798,7 @@ impl CGame {
                         AmountLimitGoodsTaken::Removed(removed) => {
                             (removed.goods, removed.position)
                         }
-                        AmountLimitGoodsTaken::Split(split) => {
-                            (split.goods, split.position)
-                        }
+                        AmountLimitGoodsTaken::Split(split) => (split.goods, split.position),
                     };
                     let consumption = CiQingPacketConsumption {
                         player_id: party.owner_id,
@@ -7821,9 +7818,8 @@ impl CGame {
                         &source,
                         self.globe_setup.pack_add_enabled(),
                     );
-                    let mut recompute = |player: &CPlayer| {
-                        context.recompute_enhancement_player_properties(player)
-                    };
+                    let mut recompute =
+                        |player: &CPlayer| context.recompute_enhancement_player_properties(player);
                     let mut removal = player.remove_equipment_goods(
                         offer.goods_id,
                         &self.goods_factory,
@@ -7848,12 +7844,14 @@ impl CGame {
                                 container_extend_id: 2,
                                 goods_position: offer.original_goods_position,
                             };
-                            report.packet_deliveries.push(vec![self.send_container_object_delete(
-                                party.owner_id,
-                                &previous,
-                                removed.goods.identity(),
-                                removed.goods.amount(),
-                            )]);
+                            report
+                                .packet_deliveries
+                                .push(vec![self.send_container_object_delete(
+                                    party.owner_id,
+                                    &previous,
+                                    removed.goods.identity(),
+                                    removed.goods.amount(),
+                                )]);
                             removed_goods.push(removed.goods);
                         }
                         outcome => {
@@ -7880,9 +7878,7 @@ impl CGame {
         for index in 0..2 {
             let source = &parties[index];
             let receiver = &parties[1 - index];
-            let goods = removed_by_plug
-                .remove(&source.plug_id)
-                .unwrap_or_default();
+            let goods = removed_by_plug.remove(&source.plug_id).unwrap_or_default();
             let Some(player) = self.players.get_mut(&receiver.owner_id) else {
                 removed_by_plug.insert(source.plug_id, goods);
                 self.undo_delivered_trade_goods(&mut removed_by_plug, delivered, report);
@@ -7891,11 +7887,8 @@ impl CGame {
             };
             let originals = goods.clone();
             let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
-            let (additions, rejected) = player.add_traded_goods_to_packet(
-                goods,
-                &self.goods_factory,
-                &mut encode,
-            );
+            let (additions, rejected) =
+                player.add_traded_goods_to_packet(goods, &self.goods_factory, &mut encode);
             for addition in &additions {
                 report
                     .packet_deliveries
@@ -7926,43 +7919,41 @@ impl CGame {
         for index in 0..2 {
             let party = &parties[index];
             let contrary = &parties[1 - index];
-            let current = self
-                .players
-                .get(&party.owner_id)
-                .map_or(0, CPlayer::money);
-            let resulting = current
-                .wrapping_sub(party.gold)
-                .wrapping_add(contrary.gold);
+            let current = self.players.get(&party.owner_id).map_or(0, CPlayer::money);
+            let resulting = current.wrapping_sub(party.gold).wrapping_add(contrary.gold);
             if resulting < current {
                 let change = self
                     .players
                     .get_mut(&party.owner_id)
                     .expect("trade party остаётся online")
                     .decrease_money(current.wrapping_sub(resulting), &self.goods_factory);
-                report.money_deliveries.extend(
-                    self.send_player_money_decrease(party.owner_id, &change.outcome),
-                );
+                report
+                    .money_deliveries
+                    .extend(self.send_player_money_decrease(party.owner_id, &change.outcome));
             } else if current < resulting {
                 let delta = resulting.wrapping_sub(current);
-                let created = self.create_goods_batch(self.goods_factory.get_gold_coin_index(), delta);
+                let created =
+                    self.create_goods_batch(self.goods_factory.get_gold_coin_index(), delta);
                 let outcome = self
                     .players
                     .get_mut(&party.owner_id)
                     .expect("trade party остаётся online")
                     .increase_money(delta, &self.goods_factory, created);
-                report.money_deliveries.extend(
-                    self.send_player_money_increase(party.owner_id, &outcome, context),
-                );
+                report
+                    .money_deliveries
+                    .extend(self.send_player_money_increase(party.owner_id, &outcome, context));
             }
         }
-        report.audit_deliveries.extend(self.send_player_trade_audits(
-            &parties,
-            &audit_parties,
-            &audit_goods_by_plug,
-            billing_payer_id,
-            billing_amount,
-            transaction,
-        ));
+        report
+            .audit_deliveries
+            .extend(self.send_player_trade_audits(
+                &parties,
+                &audit_parties,
+                &audit_goods_by_plug,
+                billing_payer_id,
+                billing_amount,
+                transaction,
+            ));
         true
     }
 
@@ -7986,16 +7977,14 @@ impl CGame {
                     .into_iter()
                     .flatten()
                 {
-                    deliveries.push(
-                        self.send_player_trade_goods_audit(
-                            source,
-                            receiver,
-                            goods.identity().ex_id,
-                            goods.price(),
-                            goods.amount(),
-                            goods.name(),
-                        ),
-                    );
+                    deliveries.push(self.send_player_trade_goods_audit(
+                        source,
+                        receiver,
+                        goods.identity().ex_id,
+                        goods.price(),
+                        goods.amount(),
+                        goods.name(),
+                    ));
                 }
                 let gold = parties[source_index].gold;
                 if gold != 0 {
@@ -8101,10 +8090,9 @@ impl CGame {
             let Some(player) = self.players.get_mut(&delivered.receiver_id) else {
                 continue;
             };
-            let Some(consumption) = player.rollback_traded_packet_addition(
-                &delivered.addition,
-                delivered.original.amount(),
-            ) else {
+            let Some(consumption) = player
+                .rollback_traded_packet_addition(&delivered.addition, delivered.original.amount())
+            else {
                 continue;
             };
             report
@@ -8133,11 +8121,8 @@ impl CGame {
                 continue;
             };
             let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
-            let (additions, unrecoverable) = player.add_traded_goods_to_packet(
-                goods,
-                &self.goods_factory,
-                &mut encode,
-            );
+            let (additions, unrecoverable) =
+                player.add_traded_goods_to_packet(goods, &self.goods_factory, &mut encode);
             for addition in &additions {
                 report
                     .packet_deliveries
@@ -8149,12 +8134,8 @@ impl CGame {
                     .any(|addition| addition.resulting_amount.is_none())
             {
                 report.notification_deliveries.push(
-                    colored_player_notice_message(
-                        0xffff_ffff,
-                        0,
-                        self.get_string_by_id(b"GS0277"),
-                    )
-                    .send_to_player(self.net_server(), party.owner_id),
+                    colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0277"))
+                        .send_to_player(self.net_server(), party.owner_id),
                 );
             }
         }
@@ -8247,10 +8228,12 @@ impl CGame {
             .session_factory
             .query_trader(selected_plug_id)
             .is_none_or(|trader| trader.owner_id() != payer_id)
-            || !self.session_factory.trade_session_available(session_id, |owner_id| {
-                self.players.get(&owner_id).is_some_and(|player| {
-                    !player.is_dead() && player.current_progress() == PlayerProgress::Trading
-                })
+            || !self
+                .session_factory
+                .trade_session_available(session_id, |owner_id| {
+                    self.players.get(&owner_id).is_some_and(|player| {
+                        !player.is_dead() && player.current_progress() == PlayerProgress::Trading
+                    })
                 })
         {
             if self.players.contains_key(&payer_id) {
@@ -8557,7 +8540,8 @@ impl CGame {
                     let _ = self.send_player_packet_consumption(&consumption);
                 }
             }
-            if let Some(change) = self.decrease_player_money(player_id, pending.required_money as u32)
+            if let Some(change) =
+                self.decrease_player_money(player_id, pending.required_money as u32)
             {
                 let _ = self.send_player_money_decrease(player_id, &change.outcome);
             }
@@ -8698,16 +8682,10 @@ impl CGame {
     ) -> bool {
         self.pending_faction_applications
             .get(&session_id)
-            .is_some_and(|pending| {
-                pending.player_id == player_id && pending.password == password
-            })
+            .is_some_and(|pending| pending.player_id == player_id && pending.password == password)
     }
 
-    pub(crate) fn start_script_faction_war_declaration(
-        &mut self,
-        player_id: i32,
-        now_ms: u32,
-    ) {
+    pub(crate) fn start_script_faction_war_declaration(&mut self, player_id: i32, now_ms: u32) {
         let Some(player) = self.find_player(player_id) else {
             return;
         };
@@ -8833,9 +8811,7 @@ impl CGame {
     ) -> bool {
         self.pending_faction_war_declarations
             .get(&session_id)
-            .is_some_and(|pending| {
-                pending.player_id == player_id && pending.password == password
-            })
+            .is_some_and(|pending| pending.player_id == player_id && pending.password == password)
     }
 
     pub(crate) fn finish_script_faction_war_result(
@@ -9073,9 +9049,10 @@ impl CGame {
         (current_script_id != 0
             && current_script_path == path
             && self.find_player(player_id).is_some())
-            || self.active_scripts.values().any(|script| {
-                script.player_id() == Some(player_id) && script.path == path
-            })
+            || self
+                .active_scripts
+                .values()
+                .any(|script| script.player_id() == Some(player_id) && script.path == path)
     }
 
     /// Safe `RemovePlayerScripts`: registry entries удаляются сразу, а
@@ -9088,9 +9065,8 @@ impl CGame {
         current_script_id: i32,
         current_script_path: &[u8],
     ) -> bool {
-        self.active_scripts.retain(|_, script| {
-            script.player_id() != Some(player_id) || script.path != path
-        });
+        self.active_scripts
+            .retain(|_, script| script.player_id() != Some(player_id) || script.path != path);
         current_script_id != 0
             && current_script_path == path
             && self.find_player(player_id).is_some()
@@ -9109,8 +9085,7 @@ impl CGame {
         else {
             return false;
         };
-        let should_close = close_talk_box
-            && matches!(script.waiting_function(), Some(2307 | 2324));
+        let should_close = close_talk_box && matches!(script.waiting_function(), Some(2307 | 2324));
         self.active_scripts.remove(&script_id);
         if should_close {
             let mut message = CMessage::new(0x000b_f805);
@@ -9168,12 +9143,8 @@ impl CGame {
             changed.add_long(identity.id);
             add_legacy_c_string(changed.base_mut(), property);
             changed.add_long(value);
-            let _ = context.send_nation_player_around(
-                region.base(),
-                player.shape(),
-                None,
-                &changed,
-            );
+            let _ =
+                context.send_nation_player_around(region.base(), player.shape(), None, &changed);
         }
         let recomputed = {
             let player = self.players.get_mut(&player_id)?;
@@ -9261,7 +9232,8 @@ impl CGame {
         let target_id = if target_name.is_empty() {
             self.find_player(script_player_id).map(CPlayer::player_id)
         } else {
-            self.find_player_by_name(target_name).map(CPlayer::player_id)
+            self.find_player_by_name(target_name)
+                .map(CPlayer::player_id)
         };
         let Some(target_id) = target_id else {
             let mut request = CMessage::new(0x0005_fc04);
@@ -9301,7 +9273,8 @@ impl CGame {
         let target_id = if target_name.is_empty() {
             self.find_player(script_player_id).map(CPlayer::player_id)
         } else {
-            self.find_player_by_name(target_name).map(CPlayer::player_id)
+            self.find_player_by_name(target_name)
+                .map(CPlayer::player_id)
         };
         let Some(target_id) = target_id else {
             let mut request = CMessage::new(0x0005_fc02);
@@ -9329,7 +9302,8 @@ impl CGame {
         let target_id = if target_name.is_empty() {
             self.find_player(script_player_id).map(CPlayer::player_id)
         } else {
-            self.find_player_by_name(target_name).map(CPlayer::player_id)
+            self.find_player_by_name(target_name)
+                .map(CPlayer::player_id)
         };
         let Some(target_id) = target_id else {
             let mut request = CMessage::new(0x0005_fc01);
@@ -9396,7 +9370,8 @@ impl CGame {
         let target_id = if target_name.is_empty() {
             self.find_player(script_player_id).map(CPlayer::player_id)
         } else {
-            self.find_player_by_name(target_name).map(CPlayer::player_id)
+            self.find_player_by_name(target_name)
+                .map(CPlayer::player_id)
         };
         let Some(target_id) = target_id else {
             return -1;
@@ -9597,7 +9572,9 @@ impl CGame {
     /// performs session/player state, spatial randomization and exact client /
     /// World wire in the original order.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn change_script_player_region<Context: ScriptRegionChangeContext>(
+    pub(crate) fn change_script_player_region<
+        Context: ScriptRegionChangeContext + RealmAppellationScriptContext,
+    >(
         &mut self,
         player_id: i32,
         target_region_id: i32,
@@ -9628,6 +9605,13 @@ impl CGame {
             world_delivery: None,
             player_snapshot_size: None,
         };
+        if self
+            .find_player(player_id)
+            .and_then(CPlayer::server_region_id)
+            .is_some_and(|source_region_id| source_region_id != target_region_id)
+        {
+            self.change_body_after_region_transition(player_id, context);
+        }
         let Some(mut player) = self.players.remove(&player_id) else {
             return report;
         };
@@ -9793,7 +9777,9 @@ impl CGame {
             ));
 
             player.stage_local_region_change(target_region_id, tile_x, tile_y, direction);
-            let _ = source_owner.base_mut().stage_region_transition(player.shape());
+            let _ = source_owner
+                .base_mut()
+                .stage_region_transition(player.shape());
             if player.faction_id() > 0 {
                 let mut faction = CMessage::new(0x0006_012a);
                 faction.add_long(player.faction_id());
@@ -9922,7 +9908,12 @@ impl CGame {
             player.shape().get_tile_x().unwrap_or_default(),
             player.shape().get_tile_y().unwrap_or_default(),
         );
-        if owner.base().region.get_block(current.0, current.1).unwrap_or_default() != 0
+        if owner
+            .base()
+            .region
+            .get_block(current.0, current.1)
+            .unwrap_or_default()
+            != 0
             && let Ok(position) = owner
                 .base()
                 .region
@@ -9937,7 +9928,11 @@ impl CGame {
             moved.add_long(position.x);
             moved.add_long(position.y);
             moved.add_long(0);
-            relocation = Some((position.x, position.y, moved.send_to_socket(self.net_server(), socket_id)));
+            relocation = Some((
+                position.x,
+                position.y,
+                moved.send_to_socket(self.net_server(), socket_id),
+            ));
         }
         let facts = ShapeRuntimeFacts {
             is_player: true,
@@ -10298,18 +10293,20 @@ impl CGame {
         });
         if player.money() < report.price {
             report.outcome = EquipmentUpgradeOutcome::InsufficientMoneyForValidation;
-            report.notifications.push(self.send_equipment_upgrade_notification(
-                player_id,
-                "GS0250",
-                Some(report.price),
-            ));
+            report
+                .notifications
+                .push(self.send_equipment_upgrade_notification(
+                    player_id,
+                    "GS0250",
+                    Some(report.price),
+                ));
             return report;
         }
         let Some(equipment_id) = plug.goods_id(UpgradeEquipmentCell::Equipment) else {
             report.outcome = EquipmentUpgradeOutcome::MissingOrInvalidEquipment;
-            report.notifications.push(self.send_equipment_upgrade_notification(
-                player_id, "GS0249", None,
-            ));
+            report
+                .notifications
+                .push(self.send_equipment_upgrade_notification(player_id, "GS0249", None));
             return report;
         };
         let Some(equipment) = player.get_goods_by_id(equipment_id) else {
@@ -10318,9 +10315,9 @@ impl CGame {
         };
         if !equipment.can_upgraded(&self.goods_factory) {
             report.outcome = EquipmentUpgradeOutcome::MissingOrInvalidEquipment;
-            report.notifications.push(self.send_equipment_upgrade_notification(
-                player_id, "GS0249", None,
-            ));
+            report
+                .notifications
+                .push(self.send_equipment_upgrade_notification(player_id, "GS0249", None));
             return report;
         }
         let current_level = equipment.addon_property_value(
@@ -10331,9 +10328,9 @@ impl CGame {
         report.previous_level = Some(current_level as u32);
         let Some(base_gem_id) = plug.goods_id(UpgradeEquipmentCell::BaseGem) else {
             report.outcome = EquipmentUpgradeOutcome::MissingBaseGem;
-            report.notifications.push(self.send_equipment_upgrade_notification(
-                player_id, "GS0248", None,
-            ));
+            report
+                .notifications
+                .push(self.send_equipment_upgrade_notification(player_id, "GS0248", None));
             return report;
         };
         let Some(base_gem) = player.get_goods_by_id(base_gem_id) else {
@@ -10352,16 +10349,16 @@ impl CGame {
         ));
         if current_level < minimum_level || maximum_level < current_level {
             report.outcome = EquipmentUpgradeOutcome::EquipmentLevelOutsideGemRange;
-            report.notifications.push(self.send_equipment_upgrade_notification(
-                player_id, "GS0247", None,
-            ));
+            report
+                .notifications
+                .push(self.send_equipment_upgrade_notification(player_id, "GS0247", None));
             return report;
         }
         if 98 < current_level as u32 {
             report.outcome = EquipmentUpgradeOutcome::MaximumLevel;
-            report.notifications.push(self.send_equipment_upgrade_notification(
-                player_id, "GS0257", None,
-            ));
+            report
+                .notifications
+                .push(self.send_equipment_upgrade_notification(player_id, "GS0257", None));
             return report;
         }
         report.probability = plug.probability(|goods_id, property, value_id| {
@@ -10371,9 +10368,9 @@ impl CGame {
         });
         if player.money() < report.price {
             report.outcome = EquipmentUpgradeOutcome::InsufficientMoneyAtExecution;
-            report.notifications.push(self.send_equipment_upgrade_notification(
-                player_id, "GS0256", None,
-            ));
+            report
+                .notifications
+                .push(self.send_equipment_upgrade_notification(player_id, "GS0256", None));
             return report;
         }
 
@@ -10415,9 +10412,9 @@ impl CGame {
             }
             report.resulting_level = Some(target_level as u32);
             report.outcome = EquipmentUpgradeOutcome::Succeeded;
-            report.notifications.push(self.send_equipment_upgrade_notification(
-                player_id, "GS0251", None,
-            ));
+            report
+                .notifications
+                .push(self.send_equipment_upgrade_notification(player_id, "GS0251", None));
             if self.log_system.goods_upgrade_success_enabled() {
                 let audit = EquipmentUpgradeAuditLog {
                     reason: EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON,
@@ -10465,9 +10462,9 @@ impl CGame {
                 1 => {
                     report.outcome = EquipmentUpgradeOutcome::FailedUnchanged;
                     report.resulting_level = Some(current_level as u32);
-                    report.notifications.push(self.send_equipment_upgrade_notification(
-                        player_id, "GS0252", None,
-                    ));
+                    report
+                        .notifications
+                        .push(self.send_equipment_upgrade_notification(player_id, "GS0252", None));
                 }
                 2 => {
                     let target_level = current_level.saturating_sub(1);
@@ -10479,9 +10476,9 @@ impl CGame {
                     }
                     report.outcome = EquipmentUpgradeOutcome::FailedLevelLost;
                     report.resulting_level = Some(target_level as u32);
-                    report.notifications.push(self.send_equipment_upgrade_notification(
-                        player_id, "GS0253", None,
-                    ));
+                    report
+                        .notifications
+                        .push(self.send_equipment_upgrade_notification(player_id, "GS0253", None));
                     self.publish_equipment_upgrade_update(
                         player,
                         equipment_id,
@@ -10498,9 +10495,9 @@ impl CGame {
                     }
                     report.outcome = EquipmentUpgradeOutcome::FailedReset;
                     report.resulting_level = Some(0);
-                    report.notifications.push(self.send_equipment_upgrade_notification(
-                        player_id, "GS0254", None,
-                    ));
+                    report
+                        .notifications
+                        .push(self.send_equipment_upgrade_notification(player_id, "GS0254", None));
                     self.publish_equipment_upgrade_update(
                         player,
                         equipment_id,
@@ -10510,9 +10507,9 @@ impl CGame {
                 }
                 _ => {
                     report.outcome = EquipmentUpgradeOutcome::FailedEquipmentLost;
-                    report.notifications.push(self.send_equipment_upgrade_notification(
-                        player_id, "GS0255", None,
-                    ));
+                    report
+                        .notifications
+                        .push(self.send_equipment_upgrade_notification(player_id, "GS0255", None));
                     if self.log_system.goods_lost_by_upgrade_enabled() {
                         let lost = EquipmentUpgradeLostAuditLog {
                             reason: EQUIPMENT_UPGRADE_LOST_LOG_REASON,
@@ -10578,10 +10575,7 @@ impl CGame {
         message.send(self, false).into_iter().collect()
     }
 
-    fn send_equipment_upgrade_lost_audit(
-        &self,
-        audit: &EquipmentUpgradeLostAuditLog,
-    ) -> Vec<i32> {
+    fn send_equipment_upgrade_lost_audit(&self, audit: &EquipmentUpgradeLostAuditLog) -> Vec<i32> {
         let mut message = CMessage::new(0x0006_0202);
         message.add_byte(audit.reason);
         message.add_long(audit.player_id);
@@ -10695,9 +10689,7 @@ impl CGame {
                 id: 0,
                 ex_id: goods_id,
             });
-        let previous_amount = player
-            .get_goods_by_id(goods_id)
-            .map_or(0, CGoods::amount);
+        let previous_amount = player.get_goods_by_id(goods_id).map_or(0, CGoods::amount);
         let mut deliveries = Vec::new();
         let removal = if player.packet().base().find(goods_id).is_some() {
             match player.remove_packet_goods_by_id(goods_id, 1) {
@@ -10871,9 +10863,9 @@ impl CGame {
             .goods_id(ComposeEquipmentCell::BaseEquipment)
         else {
             report.outcome = EquipmentComposeOutcome::MissingBase;
-            report.notifications.push(
-                self.send_equipment_compose_notification(player_id, "GS1156", &[]),
-            );
+            report
+                .notifications
+                .push(self.send_equipment_compose_notification(player_id, "GS1156", &[]));
             return report;
         };
         let Some(sub_id) = plug
@@ -10881,9 +10873,9 @@ impl CGame {
             .goods_id(ComposeEquipmentCell::SubEquipment)
         else {
             report.outcome = EquipmentComposeOutcome::MissingSub;
-            report.notifications.push(
-                self.send_equipment_compose_notification(player_id, "GS1157", &[]),
-            );
+            report
+                .notifications
+                .push(self.send_equipment_compose_notification(player_id, "GS1157", &[]));
             return report;
         };
         let Some(base_source) = player
@@ -10902,16 +10894,16 @@ impl CGame {
         };
         if player.check_item_in_packet(COMPOSE_STONE_GOODS_INDEX) == 0 {
             report.outcome = EquipmentComposeOutcome::MissingStone;
-            report.notifications.push(
-                self.send_equipment_compose_notification(player_id, "GS1158", &[]),
-            );
+            report
+                .notifications
+                .push(self.send_equipment_compose_notification(player_id, "GS1158", &[]));
             return report;
         }
         if base_source.base_index == 0 || base_source.base_index != sub_source.base_index {
             report.outcome = EquipmentComposeOutcome::DifferentEquipment;
-            report.notifications.push(
-                self.send_equipment_compose_notification(player_id, "GS1159", &[]),
-            );
+            report
+                .notifications
+                .push(self.send_equipment_compose_notification(player_id, "GS1159", &[]));
             return report;
         }
         let first = self
@@ -10929,9 +10921,9 @@ impl CGame {
         report.required_level = required_level;
         if result_index == 0 {
             report.outcome = EquipmentComposeOutcome::MissingRecipe;
-            report.notifications.push(
-                self.send_equipment_compose_notification(player_id, "GS1160", &[]),
-            );
+            report
+                .notifications
+                .push(self.send_equipment_compose_notification(player_id, "GS1160", &[]));
             return report;
         }
         if base_source.weapon_level < required_level || sub_source.weapon_level < required_level {
@@ -10939,25 +10931,27 @@ impl CGame {
                 step,
                 required: required_level,
             };
-            report.notifications.push(self.send_equipment_compose_notification(
-                player_id,
-                "GS1161",
-                &[step, required_level],
-            ));
+            report
+                .notifications
+                .push(self.send_equipment_compose_notification(
+                    player_id,
+                    "GS1161",
+                    &[step, required_level],
+                ));
             return report;
         }
         if base_source.anima_bind != 1 || sub_source.anima_bind != 1 {
             report.outcome = EquipmentComposeOutcome::NotBound;
-            report.notifications.push(
-                self.send_equipment_compose_notification(player_id, "GS1162", &[]),
-            );
+            report
+                .notifications
+                .push(self.send_equipment_compose_notification(player_id, "GS1162", &[]));
             return report;
         }
         if base_source.quality != sub_source.quality {
             report.outcome = EquipmentComposeOutcome::DifferentQuality;
-            report.notifications.push(
-                self.send_equipment_compose_notification(player_id, "GS1163", &[]),
-            );
+            report
+                .notifications
+                .push(self.send_equipment_compose_notification(player_id, "GS1163", &[]));
             return report;
         }
 
@@ -11229,9 +11223,8 @@ impl CGame {
                 goods,
                 self.globe_setup.pack_add_enabled(),
             );
-            let mut recompute = |player: &CPlayer| {
-                context.recompute_equipment_compose_player_properties(player)
-            };
+            let mut recompute =
+                |player: &CPlayer| context.recompute_equipment_compose_player_properties(player);
             let mut equipment = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -11257,10 +11250,7 @@ impl CGame {
         (removal, deliveries)
     }
 
-    pub(crate) fn send_player_packet_addition(
-        &self,
-        addition: &CiQingPacketAddition,
-    ) -> Vec<i32> {
+    pub(crate) fn send_player_packet_addition(&self, addition: &CiQingPacketAddition) -> Vec<i32> {
         let Some(position) = addition.position else {
             return Vec::new();
         };
@@ -11794,11 +11784,7 @@ impl CGame {
         if consumption.remaining_amount == 0 {
             let mut message = CS2CContainerObjectMove::default();
             message.set_operation(ContainerObjectMoveOperation::DeleteObject);
-            message.set_source_container(
-                PLAYER_TYPE,
-                consumption.player_id,
-                consumption.position,
-            );
+            message.set_source_container(PLAYER_TYPE, consumption.player_id, consumption.position);
             message.set_source_container_extend_id(1);
             message.set_source_object(
                 consumption.goods.object_type,
@@ -11808,11 +11794,7 @@ impl CGame {
             return vec![message.send_to_player(self, consumption.player_id)];
         }
         let mut message = CS2CContainerObjectAmountChange::default();
-        message.set_source_container(
-            PLAYER_TYPE,
-            consumption.player_id,
-            consumption.position,
-        );
+        message.set_source_container(PLAYER_TYPE, consumption.player_id, consumption.position);
         message.set_source_container_extend_id(1);
         message.set_object(consumption.goods.object_type, consumption.goods.ex_id);
         message.set_object_amount(consumption.remaining_amount);
@@ -11880,9 +11862,8 @@ impl CGame {
                     goods,
                     self.globe_setup.pack_add_enabled(),
                 );
-                let mut recompute = |player: &CPlayer| {
-                    runtime.recompute_enhancement_player_properties(player)
-                };
+                let mut recompute =
+                    |player: &CPlayer| runtime.recompute_enhancement_player_properties(player);
                 let mut report = player.remove_equipment_goods(
                     identity.ex_id,
                     &self.goods_factory,
@@ -11930,11 +11911,7 @@ impl CGame {
         if consumption.remaining_amount == 0 {
             let mut message = CS2CContainerObjectMove::default();
             message.set_operation(ContainerObjectMoveOperation::DeleteObject);
-            message.set_source_container(
-                PLAYER_TYPE,
-                consumption.player_id,
-                consumption.position,
-            );
+            message.set_source_container(PLAYER_TYPE, consumption.player_id, consumption.position);
             message.set_source_container_extend_id(consumption.container_extend_id as i32);
             message.set_source_object(
                 consumption.goods.object_type,
@@ -11944,11 +11921,7 @@ impl CGame {
             return vec![message.send_to_player(self, consumption.player_id)];
         }
         let mut message = CS2CContainerObjectAmountChange::default();
-        message.set_source_container(
-            PLAYER_TYPE,
-            consumption.player_id,
-            consumption.position,
-        );
+        message.set_source_container(PLAYER_TYPE, consumption.player_id, consumption.position);
         message.set_source_container_extend_id(consumption.container_extend_id as i32);
         message.set_object(consumption.goods.object_type, consumption.goods.ex_id);
         message.set_object_amount(consumption.remaining_amount);
@@ -11975,11 +11948,7 @@ impl CGame {
                     return Vec::new();
                 };
                 let mut message = CS2CContainerObjectAmountChange::default();
-                message.set_source_container(
-                    PLAYER_TYPE,
-                    addition.player_id,
-                    addition.position,
-                );
+                message.set_source_container(PLAYER_TYPE, addition.player_id, addition.position);
                 message.set_source_container_extend_id(addition.container_extend_id as i32);
                 message.set_object(target.object_type, target.ex_id);
                 message.set_object_amount(amount);
@@ -12049,7 +12018,9 @@ impl CGame {
         ) else {
             return 0;
         };
-        let region = self.find_region(effect.region_id).map(ServerRegionOwner::base);
+        let region = self
+            .find_region(effect.region_id)
+            .map(ServerRegionOwner::base);
         message.send_to_around_position(region, effect.tile_x, effect.tile_y, None, &runtime)
     }
 
@@ -12588,13 +12559,7 @@ impl CGame {
             let equipment = player
                 .get_goods_by_id(equipment_id)
                 .expect("destroy equipment сохраняется до audit");
-            self.equipment_da_kong_log(
-                report,
-                player,
-                3,
-                DA_KONG_USE_SINKER_INDEX,
-                equipment,
-            );
+            self.equipment_da_kong_log(report, player, 3, DA_KONG_USE_SINKER_INDEX, equipment);
         }
         let mut preview = player
             .get_goods_by_id(equipment_id)
@@ -14613,12 +14578,15 @@ impl CGame {
     }
 
     /// Достигнутый GodsBattle-tail `CPlayer::OnDied` после общих death effects.
-    pub(crate) fn apply_gods_battle_death_szl<Context: GodsBattleDeathContext>(
+    pub(crate) fn apply_gods_battle_death_szl<
+        Context: GodsBattleDeathContext + RealmAppellationScriptContext,
+    >(
         &mut self,
         killer_id: i32,
         victim_id: i32,
         context: &mut Context,
     ) -> Option<GodsBattleDeathSzlReport> {
+        self.change_body_after_player_death(victim_id, context);
         let (killer_level, killer_szl, killer_faction, killer_team, killer_region) =
             self.find_player(killer_id).map(|player| {
                 (
@@ -15065,44 +15033,54 @@ impl CGame {
         match transfer.outcome {
             HotkeyHandTransferOutcome::Moved => {
                 let destination = match transfer.source_container_extend_id {
-                    1 => transfer.packet_adds.iter().rev().find_map(|outcome| match outcome {
-                        VolumeGoodsAddOutcome::Added(added) => {
-                            let position = added.position?;
-                            let stored = player.packet().base().find(added.identity.ex_id)?;
-                            Some((position, added.identity, stored.amount()))
-                        }
-                        VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
-                            target,
-                            ..
-                        }) => {
-                            let position = player.packet().query_goods_position(target.ex_id)?;
-                            let stored = player.packet().base().find(target.ex_id)?;
-                            Some((position, *target, stored.amount()))
-                        }
-                        _ => None,
-                    }),
-                    3 => transfer.hand_rollback.as_ref().and_then(|added| {
-                        Some((added.position?, added.identity, added.amount))
-                    }),
-                    4 | 5 => transfer.currency_adds.iter().rev().find_map(|outcome| {
-                        match outcome {
-                            CurrencyGoodsAddOutcome::Added(added) => {
-                                Some((added.position, added.identity, added.amount))
+                    1 => transfer
+                        .packet_adds
+                        .iter()
+                        .rev()
+                        .find_map(|outcome| match outcome {
+                            VolumeGoodsAddOutcome::Added(added) => {
+                                let position = added.position?;
+                                let stored = player.packet().base().find(added.identity.ex_id)?;
+                                Some((position, added.identity, stored.amount()))
                             }
-                            CurrencyGoodsAddOutcome::Stack(
-                                GoodsStackMergeOutcome::Merged { target, .. },
-                            ) => Some((
-                                0,
-                                *target,
-                                if transfer.source_container_extend_id == 4 {
-                                    player.money()
-                                } else {
-                                    player.yuan_bao()
-                                },
-                            )),
+                            VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
+                                target,
+                                ..
+                            }) => {
+                                let position =
+                                    player.packet().query_goods_position(target.ex_id)?;
+                                let stored = player.packet().base().find(target.ex_id)?;
+                                Some((position, *target, stored.amount()))
+                            }
                             _ => None,
-                        }
-                    }),
+                        }),
+                    3 => transfer
+                        .hand_rollback
+                        .as_ref()
+                        .and_then(|added| Some((added.position?, added.identity, added.amount))),
+                    4 | 5 => {
+                        transfer
+                            .currency_adds
+                            .iter()
+                            .rev()
+                            .find_map(|outcome| match outcome {
+                                CurrencyGoodsAddOutcome::Added(added) => {
+                                    Some((added.position, added.identity, added.amount))
+                                }
+                                CurrencyGoodsAddOutcome::Stack(
+                                    GoodsStackMergeOutcome::Merged { target, .. },
+                                ) => Some((
+                                    0,
+                                    *target,
+                                    if transfer.source_container_extend_id == 4 {
+                                        player.money()
+                                    } else {
+                                        player.yuan_bao()
+                                    },
+                                )),
+                                _ => None,
+                            })
+                    }
                     _ => None,
                 };
                 let Some((position, identity, amount)) = destination else {
@@ -15307,12 +15285,9 @@ impl CGame {
                     object_move.owner_id,
                     position,
                 );
+                message.set_destination_container_extend_id(object_move.container_extend_id as i32);
                 message
-                    .set_destination_container_extend_id(object_move.container_extend_id as i32);
-                message.set_destination_object(
-                    object_move.goods.object_type,
-                    object_move.goods.ex_id,
-                );
+                    .set_destination_object(object_move.goods.object_type, object_move.goods.ex_id);
                 message.set_object_stream(object_move.old_client_payload.clone());
             }
         }
@@ -15511,11 +15486,7 @@ impl CGame {
             let mut state_effect_deliveries = Vec::new();
             let mut world_deliveries = Vec::new();
             for entry in &entries {
-                deliver_fairy_state_change(
-                    &entry.transition,
-                    self,
-                    &mut state_effect_deliveries,
-                );
+                deliver_fairy_state_change(&entry.transition, self, &mut state_effect_deliveries);
                 if let Some(log) = &entry.incubate_log {
                     world_deliveries.push(self.send_fairy_incubate_log(log));
                 }
@@ -15795,8 +15766,7 @@ impl CGame {
             let player = players.get_mut(&player_id)?;
             player.set_experience(update.experience);
             player.set_vigour(update.vigour);
-            let decrease =
-                player.decrease_money(money.wrapping_sub(update.money), goods_factory);
+            let decrease = player.decrease_money(money.wrapping_sub(update.money), goods_factory);
             update.money = decrease.current;
             report.player_update = Some(update);
             Some(decrease)
@@ -16006,12 +15976,10 @@ impl CGame {
         };
         report.money_delivery = self.send_player_money_decrease(player_id, &money_change.outcome);
         for formula in &recipe.formulas {
-            let consumptions = self
-                .find_player_mut(player_id)?
-                .remove_item_in_packet(
-                    formula.goods_index,
-                    required(formula).min(u64::from(u32::MAX)) as u32,
-                );
+            let consumptions = self.find_player_mut(player_id)?.remove_item_in_packet(
+                formula.goods_index,
+                required(formula).min(u64::from(u32::MAX)) as u32,
+            );
             for consumption in consumptions {
                 report
                     .consumption_deliveries
@@ -16089,11 +16057,7 @@ impl CGame {
         vec![message.send_to_player(self, consumption.player_id)]
     }
 
-    fn send_goods_destroy_log(
-        &self,
-        player: &CPlayer,
-        log: &GoodsDestroyAuditLog,
-    ) -> Vec<i32> {
+    fn send_goods_destroy_log(&self, player: &CPlayer, log: &GoodsDestroyAuditLog) -> Vec<i32> {
         let mut message = CMessage::new(0x0006_0202);
         message.add_byte(log.reason);
         message.add_long(log.player_id);
@@ -16419,6 +16383,247 @@ impl CGame {
     ) -> Option<u32> {
         self.find_player(player_id)
             .map(|player| player.get_appellation_state(state_id))
+    }
+
+    pub(crate) fn script_change_body_check(&self, player_id: i32, explain_failure: bool) -> i32 {
+        let Some(player) = self.find_player(player_id) else {
+            return 0;
+        };
+        let allowed = player.change_body_check();
+        if !allowed {
+            if player.appearance_and_mode().2 != 0 {
+                let text = self.get_string_by_id(b"GS1042");
+                let _ = colored_player_notice_message(0xffff_ffff, 0, text)
+                    .send_to_player(self.net_server(), player_id);
+            }
+            if explain_failure {
+                let text = self.get_string_by_id(b"GS1063");
+                let _ = colored_player_notice_message(0xffff_0000, 0, text)
+                    .send_to_player(self.net_server(), player_id);
+            }
+        }
+        i32::from(allowed)
+    }
+
+    pub(crate) fn add_script_change_body_state<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        state_id: u32,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> u32 {
+        if self.script_change_body_check(player_id, false) == 0 {
+            return 0;
+        }
+        let mutation = {
+            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+            let Some(player) = players.get_mut(&player_id) else {
+                return 0;
+            };
+            player.add_change_body_state(state_id, skill_factory, now_ms)
+        };
+        if let Some(removed) = mutation.removed.as_ref() {
+            self.send_change_body_visual(player_id, removed, false);
+        }
+        let Some(added) = mutation.added.as_ref() else {
+            return mutation.legacy_return;
+        };
+        self.send_change_body_visual(player_id, added, true);
+        self.send_change_body_hotkeys(
+            player_id,
+            added
+                .skills
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (skill_id, _))| (*skill_id != 0).then_some(index + 12))
+                .chain(std::iter::once(17)),
+        );
+        self.refresh_script_change_body_properties(player_id, context);
+        self.send_script_player_state_changed(player_id);
+        mutation.legacy_return
+    }
+
+    pub(crate) fn delete_script_change_body_state<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        state_id: u32,
+        context: &mut Context,
+    ) -> u32 {
+        let mutation = {
+            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+            let Some(player) = players.get_mut(&player_id) else {
+                return 0;
+            };
+            player.delete_change_body_state(state_id, skill_factory)
+        };
+        let Some(removed) = mutation.removed.as_ref() else {
+            return mutation.legacy_return;
+        };
+        self.send_change_body_visual(player_id, removed, false);
+        self.send_change_body_hotkeys(player_id, 12..=23);
+        self.refresh_script_change_body_properties(player_id, context);
+        self.send_script_player_state_changed(player_id);
+        mutation.legacy_return
+    }
+
+    fn end_change_body_states<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        state_ids: Vec<u32>,
+        notice_id: Option<&[u8]>,
+        context: &mut Context,
+    ) {
+        for state_id in state_ids {
+            if let Some(notice_id) = notice_id {
+                let text = self.get_string_by_id(notice_id);
+                let _ = colored_player_notice_message(0xffff_ffff, 0, text)
+                    .send_to_player(self.net_server(), player_id);
+            }
+            let _ = self.delete_script_change_body_state(player_id, state_id, context);
+        }
+    }
+
+    fn expire_change_body_states<Context: RealmAppellationScriptContext>(
+        &mut self,
+        now_ms: u32,
+        context: &mut Context,
+    ) {
+        let expired: Vec<_> = self
+            .players
+            .iter()
+            .flat_map(|(&player_id, player)| {
+                player
+                    .expired_change_body_state_ids(now_ms)
+                    .into_iter()
+                    .map(move |state_id| (player_id, state_id))
+            })
+            .collect();
+        for (player_id, state_id) in expired {
+            self.end_change_body_states(player_id, vec![state_id], Some(b"GS1145"), context);
+        }
+        let dead_players: Vec<_> = self
+            .players
+            .iter()
+            .filter(|(_, player)| {
+                player.is_dead() && !player.change_body_death_end_ids().is_empty()
+            })
+            .map(|(&player_id, _)| player_id)
+            .collect();
+        for player_id in dead_players {
+            self.change_body_after_player_death(player_id, context);
+        }
+    }
+
+    pub(crate) fn change_body_after_region_transition<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) {
+        let state_ids = self
+            .find_player_mut(player_id)
+            .map(CPlayer::change_body_region_transition_end_ids)
+            .unwrap_or_default();
+        self.end_change_body_states(player_id, state_ids, Some(b"GS1146"), context);
+    }
+
+    pub(crate) fn change_body_after_player_lost<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) {
+        let state_ids = self
+            .find_player_mut(player_id)
+            .map(CPlayer::change_body_player_lost_end_ids)
+            .unwrap_or_default();
+        self.end_change_body_states(player_id, state_ids, None, context);
+    }
+
+    fn change_body_after_player_death<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) {
+        let state_ids = self
+            .find_player(player_id)
+            .map(CPlayer::change_body_death_end_ids)
+            .unwrap_or_default();
+        self.end_change_body_states(player_id, state_ids, None, context);
+    }
+
+    fn refresh_script_change_body_properties<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) {
+        let properties = match self.find_player(player_id) {
+            Some(player) => context.recompute_realm_appellation_player_properties(player),
+            None => return,
+        };
+        self.find_player_mut(player_id)
+            .expect("ChangeBody recompute сохраняет player")
+            .apply_change_body_properties(properties);
+        let external = context.player_properties_external_facts(player_id);
+        if let Some(player) = self.find_player(player_id) {
+            let _ = self.send_player_properties_changed(player, external);
+        }
+    }
+
+    fn send_change_body_hotkeys(&self, player_id: i32, slots: impl IntoIterator<Item = usize>) {
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        for slot in slots {
+            let Some(value) = player.hotkey(slot as u8) else {
+                continue;
+            };
+            let mut message = CMessage::new(0x0b_f908);
+            message.add_byte(b'-');
+            message.add_byte(slot as u8);
+            message.add_ulong(value);
+            let _ = message.send_to_player(self.net_server(), player_id);
+        }
+    }
+
+    fn send_change_body_visual(&mut self, player_id: i32, state: &ChangeBodyState, begin: bool) {
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        let identity = player.shape().identity();
+        let mut message = CMessage::new(if begin { 0x0b_fe03 } else { 0x0b_fe04 });
+        message.add_long(identity.object_type);
+        message.add_long(player_id);
+        message.add_long(0x37);
+        if begin {
+            message.add_ulong(state.keep_time_ms);
+            message.add_long(0);
+            message.add_ulong(state.mode);
+            message.add_ulong(state.level);
+            message.add_ulong(u32::from(state.visual_effect));
+            message.add_byte(u8::from(state.continue_after_death));
+            for (skill_id, level) in state.skills {
+                message.base_mut().add_short(skill_id as i16);
+                message
+                    .base_mut()
+                    .add_short(if skill_id == 0 { 0 } else { level as i16 });
+                let properties = self
+                    .skill_factory
+                    .query_skill_base_properties(u32::from(skill_id), i32::from(level));
+                message.add_long(properties.map_or(0, |p| p.query_property(10_005) as i32));
+                message.add_long(properties.map_or(0, |p| {
+                    let range = p.query_property(5_003) as i32;
+                    if range > 0 { range } else { 1 }
+                }));
+                message.add_long(properties.map_or(0, |p| p.query_property(2) as i32));
+                message.add_long(properties.map_or(0, |p| p.query_property(10_001) as i32));
+            }
+        } else {
+            message.add_long(0);
+            message.add_ulong(state.level);
+            for (skill_id, _) in state.skills {
+                message.base_mut().add_short(skill_id as i16);
+            }
+        }
+        let _ = self.send_player_shape_around(player_id, None, &message);
     }
 
     /// Reached `AddJingJieBuff` tail: hidden skill и max-HP/max-MP mutation
@@ -16815,9 +17020,10 @@ impl CGame {
         let total_players = player_ids.len();
         for (index, player_id) in player_ids.into_iter().enumerate() {
             let mut snapshot = Vec::new();
-            let encoded = self.players.get(&player_id).is_some_and(|player| {
-                self.encode_player_game_save(player, &mut snapshot, runtime)
-            });
+            let encoded = self
+                .players
+                .get(&player_id)
+                .is_some_and(|player| self.encode_player_game_save(player, &mut snapshot, runtime));
             let saved = encoded
                 && runtime.publish_player_save(
                     player_id,
@@ -17124,6 +17330,16 @@ impl CGame {
         self.players.insert(expected_player_id, player);
         membership.map_err(GamePlayerLoginBlock::Membership)?;
 
+        let login_tick_ms = context.now_milliseconds();
+        let loaded_change_body_states = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_change_body_states(login_tick_ms);
+        for state in &loaded_change_body_states {
+            self.send_change_body_visual(expected_player_id, state, true);
+        }
+
         let first_login = self
             .players
             .get_mut(&expected_player_id)
@@ -17151,12 +17367,9 @@ impl CGame {
         self.players
             .get_mut(&expected_player_id)
             .expect("login property callback не удаляет player owner")
-            .apply_recomputed_combat_properties(recomputed);
-        let client_deliveries = context.publish_initial_player_client_snapshot(
-            self,
-            expected_player_id,
-            first_login,
-        );
+            .apply_change_body_properties(recomputed);
+        let client_deliveries =
+            context.publish_initial_player_client_snapshot(self, expected_player_id, first_login);
         let mut billing = CMessage::new(0x000e_f201);
         add_legacy_c_string(
             billing.base_mut(),
@@ -17308,9 +17521,9 @@ impl CGame {
         created_currency: Vec<CGoods>,
     ) -> Option<PlayerAuctionMoneyChange> {
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
-        players.get_mut(&player_id).map(|player| {
-            player.increase_auction_money(requested, goods_factory, created_currency)
-        })
+        players
+            .get_mut(&player_id)
+            .map(|player| player.increase_auction_money(requested, goods_factory, created_currency))
     }
 
     pub(crate) fn return_player_auction_goods(
@@ -17354,11 +17567,16 @@ impl CGame {
         player_id: i32,
         amount: u32,
         context: &mut Context,
-    ) -> Option<(crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome, Vec<i32>)> {
+    ) -> Option<(
+        crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome,
+        Vec<i32>,
+    )> {
         let created = self.create_goods_batch(self.goods_factory.get_gold_coin_index(), amount);
         let outcome = {
             let (players, goods_factory) = (&mut self.players, &self.goods_factory);
-            players.get_mut(&player_id)?.increase_money(amount, goods_factory, created)
+            players
+                .get_mut(&player_id)?
+                .increase_money(amount, goods_factory, created)
         };
         let deliveries = self.send_player_money_increase(player_id, &outcome, context);
         Some((outcome, deliveries))
@@ -17392,7 +17610,10 @@ impl CGame {
                 continue;
             };
             updates.push(stage);
-            if let Some(parent_id) = stage.superior_region_id.filter(|_| stage.superior_share != 0) {
+            if let Some(parent_id) = stage
+                .superior_region_id
+                .filter(|_| stage.superior_share != 0)
+            {
                 if self.find_region(parent_id).is_some() && !visited.contains(&parent_id) {
                     pending.push((parent_id, stage.superior_share));
                 } else {
@@ -17794,17 +18015,15 @@ impl CGame {
                         .push(BattleFairyCombineDelivery::ObjectMove(vec![delivery]));
                 }
                 BattleFairyCombineEffect::SkillAdded(skill) => {
-                    if let Some(message) =
-                        player_skill_learned_message(
-                            skill.message_type,
-                            skill.skill_id,
-                            skill.skill_level,
-                            skill.skill_level,
-                            &skill.skill_name,
-                            &self.skill_factory,
-                            false,
-                        )
-                    {
+                    if let Some(message) = player_skill_learned_message(
+                        skill.message_type,
+                        skill.skill_id,
+                        skill.skill_level,
+                        skill.skill_level,
+                        &skill.skill_name,
+                        &self.skill_factory,
+                        false,
+                    ) {
                         report
                             .deliveries
                             .push(BattleFairyCombineDelivery::SkillAdded(
@@ -18103,17 +18322,15 @@ impl CGame {
             match effect {
                 PlayerEquipmentAddEffect::WarSoulSkillAttached { .. } => {}
                 PlayerEquipmentAddEffect::SkillAdded(skill) => {
-                    if let Some(message) =
-                        player_skill_learned_message(
-                            skill.message_type,
-                            skill.skill_id,
-                            skill.skill_level,
-                            skill.skill_level,
-                            &skill.skill_name,
-                            &self.skill_factory,
-                            true,
-                        )
-                    {
+                    if let Some(message) = player_skill_learned_message(
+                        skill.message_type,
+                        skill.skill_id,
+                        skill.skill_level,
+                        skill.skill_level,
+                        &skill.skill_name,
+                        &self.skill_factory,
+                        true,
+                    ) {
                         report.deliveries.push(PlayerEquipmentDelivery::SkillAdded(
                             message.send_to_player(self.net_server(), skill.player_id),
                         ));
@@ -18373,7 +18590,11 @@ impl CGame {
         amount: u32,
     ) -> Option<crate::gameserver::appserver::player::PlayerMoneyDecrease> {
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
-        Some(players.get_mut(&player_id)?.decrease_money(amount, goods_factory))
+        Some(
+            players
+                .get_mut(&player_id)?
+                .decrease_money(amount, goods_factory),
+        )
     }
 
     /// World `0x7FE34/0x7FE37` повторяет старый `GetMoney - signed fee`, затем
@@ -18674,17 +18895,15 @@ impl CGame {
                         ));
                 }
                 BattleFairySkillResetEffect::SkillAdded(skill) => {
-                    if let Some(message) =
-                        player_skill_learned_message(
-                            skill.message_type,
-                            skill.skill_id,
-                            skill.skill_level,
-                            skill.skill_level,
-                            &skill.skill_name,
-                            &self.skill_factory,
-                            true,
-                        )
-                    {
+                    if let Some(message) = player_skill_learned_message(
+                        skill.message_type,
+                        skill.skill_id,
+                        skill.skill_level,
+                        skill.skill_level,
+                        &skill.skill_name,
+                        &self.skill_factory,
+                        true,
+                    ) {
                         report
                             .deliveries
                             .push(BattleFairySkillResetDelivery::SkillAdded(
@@ -18693,17 +18912,15 @@ impl CGame {
                     }
                 }
                 BattleFairySkillResetEffect::SelectedSkillLearned(skill) => {
-                    if let Some(message) =
-                        player_skill_learned_message(
-                            skill.message_type,
-                            skill.skill_id,
-                            skill.skill_level,
-                            skill.skill_level,
-                            &skill.skill_name,
-                            &self.skill_factory,
-                            false,
-                        )
-                    {
+                    if let Some(message) = player_skill_learned_message(
+                        skill.message_type,
+                        skill.skill_id,
+                        skill.skill_level,
+                        skill.skill_level,
+                        &skill.skill_name,
+                        &self.skill_factory,
+                        false,
+                    ) {
                         report.deliveries.push(
                             BattleFairySkillResetDelivery::SelectedSkillLearned(
                                 message.send_to_player(self.net_server(), skill.player_id),
@@ -18768,7 +18985,7 @@ impl CGame {
                     &self.skill_factory,
                     true,
                 )
-                    .map(|message| message.send_to_player(self.net_server(), skill.player_id))
+                .map(|message| message.send_to_player(self.net_server(), skill.player_id))
             })
             .collect();
         BattleFairyScriptSkillAttachReport { skills, deliveries }
@@ -18789,11 +19006,7 @@ impl CGame {
             let goods_id = player.enhancement_selected_goods_id()?;
             let source = player.enhancement_original_container(0, goods_id)?;
             player
-                .trade_source_goods(
-                    source.container_extend_id,
-                    source.goods_position,
-                    goods_id,
-                )
+                .trade_source_goods(source.container_extend_id, source.goods_position, goods_id)
                 .map(|_| (goods_id, source))
         }) else {
             return false;
@@ -18824,9 +19037,11 @@ impl CGame {
                 egg_max_level,
                 upgrade_rate,
             };
-            let Ok(Some(exp)) = goods.fairy_exp_up(&mut remaining, runtime, |equip_level, level| {
-                exp_config.dw_exp_up(equip_level, level)
-            }) else {
+            let Ok(Some(exp)) =
+                goods.fairy_exp_up(&mut remaining, runtime, |equip_level, level| {
+                    exp_config.dw_exp_up(equip_level, level)
+                })
+            else {
                 return false;
             };
             if exp.result <= FairyExpUpResult::None {
@@ -18841,12 +19056,9 @@ impl CGame {
                     .expect("successful fairy state change сохраняет property owner")
                     .ripe_id
             });
-            let update = ripe_id.is_none().then(|| {
-                (
-                    goods.identity(),
-                    context.encode_goods_for_old_client(goods),
-                )
-            });
+            let update = ripe_id
+                .is_none()
+                .then(|| (goods.identity(), context.encode_goods_for_old_client(goods)));
             (exp, ripe_id, update)
         };
 
@@ -18878,9 +19090,7 @@ impl CGame {
                     .copy_fairy_addon_properties_from(
                         goods,
                         &self.goods_factory,
-                        |equip_level, level| {
-                            self.fairy_exp_conf.dw_exp_up(equip_level, level)
-                        },
+                        |equip_level, level| self.fairy_exp_conf.dw_exp_up(equip_level, level),
                     )
                     .is_ok_and(|loaded| loaded)
             });
@@ -18913,7 +19123,9 @@ impl CGame {
         let removed = if source.container_extend_id == 1 {
             matches!(
                 player.packet_mut().remove_goods(goods_id),
-                Some(VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(_)))
+                Some(VolumeGoodsRemoveOutcome::Removed(
+                    AmountLimitGoodsTaken::Removed(_)
+                ))
             )
         } else if source.container_extend_id == 2 {
             let facts = {
@@ -18942,12 +19154,9 @@ impl CGame {
             false
         };
         if !removed {
-            let update = player.get_goods_by_id(goods_id).map(|goods| {
-                (
-                    goods.identity(),
-                    context.encode_goods_for_old_client(goods),
-                )
-            });
+            let update = player
+                .get_goods_by_id(goods_id)
+                .map(|goods| (goods.identity(), context.encode_goods_for_old_client(goods)));
             self.players.insert(player_id, player);
             if let Some((goods, payload)) = update {
                 let mut message = CMessage::new(0x0b_f918);
@@ -18998,7 +19207,8 @@ impl CGame {
             if player_name.is_empty() {
                 script_player_id.filter(|player_id| game.find_player(*player_id).is_some())
             } else {
-                game.find_player_by_name(player_name).map(CPlayer::player_id)
+                game.find_player_by_name(player_name)
+                    .map(CPlayer::player_id)
             }
         };
         match action {
@@ -19045,7 +19255,11 @@ impl CGame {
                 let Some(player_id) = target_id(self, &player_name) else {
                     return -1;
                 };
-                let skill_level = if skill_level == 0x09ff_fff9 { 1 } else { skill_level };
+                let skill_level = if skill_level == 0x09ff_fff9 {
+                    1
+                } else {
+                    skill_level
+                };
                 let skill_id = self.skill_factory.query_skill_id(Some(&skill_name));
                 if skill_id == 0
                     || !self.find_player(player_id).is_some_and(|player| {
@@ -19056,11 +19270,9 @@ impl CGame {
                 {
                     return -1;
                 }
-                let Some(mutation) = self.add_remote_player_skill(
-                    player_id,
-                    &skill_name,
-                    skill_level as u16,
-                ) else {
+                let Some(mutation) =
+                    self.add_remote_player_skill(player_id, &skill_name, skill_level as u16)
+                else {
                     return -1;
                 };
                 let legacy_return = i32::from(mutation.legacy_result);
@@ -19113,7 +19325,11 @@ impl CGame {
                         let skill_level_text = skill_level.to_string();
                         let text = format_legacy_text_fields(
                             self.get_string_by_id(b"ZHGS0039"),
-                            &[account, skill_id_text.as_bytes(), skill_level_text.as_bytes()],
+                            &[
+                                account,
+                                skill_id_text.as_bytes(),
+                                skill_level_text.as_bytes(),
+                            ],
                             0xff,
                         );
                         put_string_to_file("BattleFairy", &text);
@@ -19144,17 +19360,12 @@ impl CGame {
                         } else {
                             let scaled = i64::from(value).wrapping_mul(10_000);
                             if (GAP_BF_BRAVE..=GAP_BF_STRENGH).contains(&attribute) {
-                                let balanced = i64::from(goods.addon_property_value(
-                                    factory,
-                                    attribute,
-                                    1,
-                                ))
-                                .wrapping_add(scaled)
-                                .wrapping_sub(i64::from(goods.addon_property_value(
-                                    factory,
-                                    attribute,
-                                    2,
-                                )));
+                                let balanced =
+                                    i64::from(goods.addon_property_value(factory, attribute, 1))
+                                        .wrapping_add(scaled)
+                                        .wrapping_sub(i64::from(
+                                            goods.addon_property_value(factory, attribute, 2),
+                                        ));
                                 let _ = goods.set_addon_property_value_core(attribute, 1, 0);
                                 let _ = goods.set_addon_property_value_core(attribute, 2, 0);
                                 let _ = goods.set_addon_property_value_core(
@@ -19168,12 +19379,9 @@ impl CGame {
                                     scaled as i32,
                                 );
                             } else {
-                                let changed = i64::from(goods.addon_property_value(
-                                    factory,
-                                    attribute,
-                                    1,
-                                ))
-                                .wrapping_add(scaled);
+                                let changed =
+                                    i64::from(goods.addon_property_value(factory, attribute, 1))
+                                        .wrapping_add(scaled);
                                 let _ = goods.set_addon_property_value_core(
                                     attribute,
                                     1,
@@ -19196,7 +19404,11 @@ impl CGame {
                         let value_text = value.to_string();
                         let text = format_legacy_text_fields(
                             self.get_string_by_id(b"ZHGS0040"),
-                            &[player.account(), attribute_text.as_bytes(), value_text.as_bytes()],
+                            &[
+                                player.account(),
+                                attribute_text.as_bytes(),
+                                value_text.as_bytes(),
+                            ],
                             0xff,
                         );
                         put_string_to_file("BattleFairy", &text);
@@ -19204,7 +19416,10 @@ impl CGame {
                 }
                 0
             }
-            BattleFairyScriptAction::ResetSkill { player_name, position } => {
+            BattleFairyScriptAction::ResetSkill {
+                player_name,
+                position,
+            } => {
                 let Some(player_id) = target_id(self, &player_name) else {
                     return 0;
                 };
@@ -19215,12 +19430,7 @@ impl CGame {
                 {
                     return 0;
                 }
-                let _ = self.reset_battle_fairy_skill(
-                    player_id,
-                    position,
-                    false,
-                    context,
-                );
+                let _ = self.reset_battle_fairy_skill(player_id, position, false, context);
                 0
             }
             BattleFairyScriptAction::Revive { player_name } => {
@@ -19397,9 +19607,10 @@ impl CGame {
         facts: PlayerSkillRequestFacts,
         context: &mut Context,
     ) -> Option<PlayerSkillRequestReport> {
-        let report = self.players.get_mut(&player_id).map(|player| {
-            player.request_player_skill(request, facts, &self.skill_factory)
-        })?;
+        let report = self
+            .players
+            .get_mut(&player_id)
+            .map(|player| player.request_player_skill(request, facts, &self.skill_factory))?;
         Some(self.deliver_player_skill_report(player_id, socket_id, report, context))
     }
 
@@ -19483,9 +19694,7 @@ impl CGame {
                 }
                 PlayerSkillRequestEffect::AiDispatch(dispatch) => {
                     context.queue_player_skill(player_id, dispatch);
-                    report
-                        .deliveries
-                        .push(PlayerSkillRequestDelivery::AiQueued);
+                    report.deliveries.push(PlayerSkillRequestDelivery::AiQueued);
                 }
             }
         }
@@ -19925,7 +20134,10 @@ impl CGame {
 
     /// Exact `CGame::AI`: signed region-map order и virtual region AI,
     /// после которого выполняется base-tail `ClearPlayerAI` того же owner-а.
-    pub(crate) fn ai<Runtime: GameMainLoopRuntime>(&mut self, runtime: &mut Runtime) -> GameAiReport {
+    pub(crate) fn ai<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        runtime: &mut Runtime,
+    ) -> GameAiReport {
         if self.net_server.is_none() {
             return GameAiReport {
                 legacy_return: 1,
@@ -19947,7 +20159,7 @@ impl CGame {
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 continue;
             };
-            let region_changes = owner
+            let region_changes: Vec<GameLocalRegionChange> = owner
                 .base_mut()
                 .take_staged_region_transitions()
                 .into_iter()
@@ -20006,6 +20218,9 @@ impl CGame {
                     ServerRegionClearPlayerTick::Expired => {
                         let player_ids = owner.base().registered_player_ids();
                         self.restore_region_owner(owner);
+                        for change in &region_changes {
+                            self.change_body_after_region_transition(change.player_id, runtime);
+                        }
                         let players = player_ids
                             .into_iter()
                             .map(|player_id| {
@@ -20025,6 +20240,9 @@ impl CGame {
                 None
             };
             self.restore_region_owner(owner);
+            for change in &region_changes {
+                self.change_body_after_region_transition(change.player_id, runtime);
+            }
             regions.push(GameRegionAiReport {
                 region_id,
                 gods_battle,
@@ -20176,6 +20394,7 @@ impl CGame {
 
         state.current_tick_ms = runtime.get_tick_ms();
         self.expire_script_faction_sessions(state.current_tick_ms);
+        self.expire_change_body_states(state.current_tick_ms, runtime);
         state.calls_since_runtime_log = state.calls_since_runtime_log.wrapping_add(1);
         let mut stages = Vec::new();
 

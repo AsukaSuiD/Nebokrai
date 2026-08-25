@@ -8,6 +8,8 @@ pub(crate) mod appserver {
     pub(crate) mod area;
     pub(crate) mod baseobject;
     pub(crate) mod build;
+    #[path = "other states/chbystate.rs"]
+    pub(crate) mod chbystate;
     pub(crate) mod citygate;
     pub(crate) mod container {
         pub(crate) mod camountlimitgoodscontainer;
@@ -51,8 +53,8 @@ pub(crate) mod appserver {
         pub(crate) mod skillfactory;
     }
     pub(crate) mod message {
-        pub(crate) mod countrymessage;
         pub(crate) mod containermessage;
+        pub(crate) mod countrymessage;
         pub(crate) mod depotmessage;
         pub(crate) mod gmamessage;
         pub(crate) mod gmmessage;
@@ -61,22 +63,22 @@ pub(crate) mod appserver {
         pub(crate) mod logmessage;
         pub(crate) mod onmsg_c2s_auction;
         pub(crate) mod onmsg_w2s_auction;
-        pub(crate) mod playershopmessage;
         pub(crate) mod organsysmessage;
         pub(crate) mod othermessage;
         pub(crate) mod playermessage;
+        pub(crate) mod playershopmessage;
         pub(crate) mod regionmessage;
         pub(crate) mod sequencestring;
         pub(crate) mod servermessage;
-        pub(crate) mod shopmessage;
         pub(crate) mod shapemessage;
+        pub(crate) mod shopmessage;
         pub(crate) mod skillmessage;
         pub(crate) mod unibillmessage;
     }
-    #[path = "message packaging/cs2ccontainerobjectmove.rs"]
-    pub(crate) mod cs2ccontainerobjectmove;
     #[path = "message packaging/cs2ccontainerobjectamountchange.rs"]
     pub(crate) mod cs2ccontainerobjectamountchange;
+    #[path = "message packaging/cs2ccontainerobjectmove.rs"]
+    pub(crate) mod cs2ccontainerobjectmove;
     pub(crate) mod monster;
     pub(crate) mod moveshape;
     pub(crate) mod npc;
@@ -99,9 +101,9 @@ pub(crate) mod appserver {
         pub(crate) mod cequipmentcompose;
         pub(crate) mod cequipmentdakong;
         pub(crate) mod cequipmentupgrade;
-        pub(crate) mod cplug;
         pub(crate) mod cpersonalshopbuyer;
         pub(crate) mod cpersonalshopseller;
+        pub(crate) mod cplug;
         pub(crate) mod csession;
         pub(crate) mod csessionfactory;
         pub(crate) mod ctrader;

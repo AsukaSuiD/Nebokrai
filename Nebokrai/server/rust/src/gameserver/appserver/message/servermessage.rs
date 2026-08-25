@@ -152,7 +152,9 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyCompos
 use crate::gameserver::appserver::goods::cgoodsfactory::{
     GoodsFactoryDecodeError, GoodsFactoryDecodeReport,
 };
-use crate::gameserver::appserver::player::{CPlayer, PlayerConfirmedKillReport, PlayerHonorResetReport};
+use crate::gameserver::appserver::player::{
+    CPlayer, PlayerConfirmedKillReport, PlayerHonorResetReport,
+};
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
 use crate::gameserver::appserver::region::{RegionCellAccessBlock, RegionRandomPosition};
 use crate::gameserver::appserver::script::variablelist::{
@@ -180,8 +182,8 @@ use crate::gameserver::appserver::skills::skillfactory::{
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameNetworkInitializationError, GameSingleFilePublication, GodsBattleXydApplyReport,
-    MonsterBasePropertyRefreshReport, ServerRegionOwner, colored_player_notice_message,
-    format_legacy_text_fields,
+    MonsterBasePropertyRefreshReport, RealmAppellationScriptContext, ServerRegionOwner,
+    colored_player_notice_message, format_legacy_text_fields,
 };
 use crate::gameserver::gameserver::honorranks::{HonorRanksDecodeError, HonorRanksDecodeReport};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
@@ -1247,7 +1249,9 @@ pub(crate) fn dispatch_server_message<Context>(
     mut now_ms: impl FnMut(&mut Context) -> u32,
 ) -> Option<Result<GameServerMessageReport, GameServerMessageError<Context::RuntimeError>>>
 where
-    Context: InitialRegionStartupContext + GameRegionChangeResponseContext,
+    Context: InitialRegionStartupContext
+        + GameRegionChangeResponseContext
+        + RealmAppellationScriptContext,
 {
     if message.message_type() == WORLD_REGION_CHANGE_RESPONSE {
         let Some(accepted) = message.base_mut().get_char() else {
@@ -1312,6 +1316,7 @@ where
         response.add_byte(u8::from(captain));
         response.add_long(team_id);
         let client_delivery = response.send_to_player(game.net_server(), player_id);
+        game.change_body_after_player_lost(player_id, script_context);
         script_context.before_script_server_region_departure(
             game.find_player_mut(player_id)
                 .expect("client send не удаляет region-change player"),
