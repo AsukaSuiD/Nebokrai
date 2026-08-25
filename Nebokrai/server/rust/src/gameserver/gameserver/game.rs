@@ -30,6 +30,8 @@
 //! reached проходом с morale, player-state, network и NPC spawn effects.
 //! Для concrete Base owner-а секундный monster refresh уже выполняется самим
 //! `CGame`; runtime сохраняет только ещё не материализованный region-AI tail.
+//! После virtual region AI тот же caller применяет ordered `CS_CHANGEAREA` для
+//! canonical players и owned monsters/NPC до change-region/ClearPlayer tail.
 //!
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
@@ -615,10 +617,11 @@ use crate::gameserver::appserver::servernationregion::{
     classify_nation_morale_target,
 };
 use crate::gameserver::appserver::serverregion::{
-    CServerRegion, RegionMembershipBlock, ServerRegionClearPlayerTick, ServerRegionMonsterContext,
-    ServerRegionMonsterRectBlock, ServerRegionMonsterRefreshReport, ServerRegionNpcContext,
-    ServerRegionNpcSetup, ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport,
-    ServerReturnPlayer, ServerReturnSetupBlock,
+    AreaTransitionBlock, CServerRegion, RegionMembershipBlock, ServerRegionAreaTransitionContext,
+    ServerRegionClearPlayerTick, ServerRegionMonsterContext, ServerRegionMonsterRectBlock,
+    ServerRegionMonsterRefreshReport, ServerRegionNpcContext, ServerRegionNpcSetup,
+    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport, ServerReturnPlayer,
+    ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
@@ -2977,8 +2980,15 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) village_contend: Option<VillageRegionAiReport>,
     pub(crate) country_contend: Option<CountryRegionAiReport>,
     pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
+    pub(crate) area_transitions: Vec<GameAreaTransitionReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameAreaTransitionReport {
+    pub(crate) identity: ShapeIdentity,
+    pub(crate) result: Option<Result<bool, AreaTransitionBlock>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3988,6 +3998,7 @@ pub(crate) trait GameMainLoopRuntime:
     + CountryReturnPointContext
     + NationContendContext
     + GodsBattleNpcContendContext
+    + ServerRegionAreaTransitionContext
 {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
@@ -22331,9 +22342,63 @@ impl CGame {
                 runtime.region_ai_before_clear_player(self, region_id);
                 (None, None, None, None, None, None)
             };
+            let mut area_resolver = RegionBlockRefreshResolver::default();
+            if let Some(region) = self.find_region(region_id) {
+                for identity in region.base().registered_shape_identities() {
+                    if let Some(shape) = self.resolve_shape(identity) {
+                        area_resolver.facts.insert(identity, (shape, true));
+                    }
+                }
+            }
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 continue;
             };
+            let staged_area_transitions = owner.base().staged_area_transitions();
+            let mut area_transitions = Vec::with_capacity(staged_area_transitions.len());
+            for identity in staged_area_transitions {
+                let now_ms = runtime.get_tick_ms();
+                let result = match identity.object_type {
+                    PLAYER_TYPE => self.players.remove(&identity.id).map(|mut player| {
+                        let facts = ShapeRuntimeFacts {
+                            is_player: true,
+                            is_move_shape: true,
+                            figure: player.figure(),
+                            ..ShapeRuntimeFacts::default()
+                        };
+                        let result = owner.base_mut().apply_area_transition(
+                            player.movement_shape_mut(),
+                            facts,
+                            now_ms,
+                            &area_resolver,
+                            runtime,
+                        );
+                        self.players.insert(identity.id, player);
+                        result
+                    }),
+                    MONSTER_TYPE => {
+                        let figure = area_resolver
+                            .resolve_shape(identity)
+                            .map(|shape| shape.figure)
+                            .unwrap_or_default();
+                        owner.base_mut().apply_owned_monster_area_transition(
+                            identity.id,
+                            figure,
+                            now_ms,
+                            &area_resolver,
+                            runtime,
+                        )
+                    }
+                    NPC_TYPE => owner.base_mut().apply_owned_npc_area_transition(
+                        identity.id,
+                        now_ms,
+                        &area_resolver,
+                        runtime,
+                    ),
+                    _ => None,
+                };
+                area_transitions.push(GameAreaTransitionReport { identity, result });
+            }
+            owner.base_mut().clear_staged_area_transitions();
             let region_changes: Vec<GameLocalRegionChange> = owner
                 .base_mut()
                 .take_staged_region_transitions()
@@ -22414,6 +22479,7 @@ impl CGame {
                             village_contend,
                             country_contend,
                             gods_battle,
+                            area_transitions,
                             region_changes,
                             clear_player: Some(GameRegionClearPlayerOutcome::Expired { players }),
                         });
@@ -22439,6 +22505,7 @@ impl CGame {
                 village_contend,
                 country_contend,
                 gods_battle,
+                area_transitions,
                 region_changes,
                 clear_player,
             });

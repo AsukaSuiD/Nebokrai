@@ -48,6 +48,9 @@
 //! delete/remove queues. `OnShapeChangeArea` строит old/new девяти-area
 //! neighborhoods, шлёт create/snapshot только в new-exclusive areas, затем
 //! делает old `RemoveObject -> new AddObject -> m_pArea` и player-enter wake.
+//! Реальный `CGame::AI` теперь забирает эту ordered очередь после virtual AI,
+//! временно проецируя canonical player/monster/NPC storage и очищая её только
+//! после попытки каждого `OnShapeChangeArea`.
 //! Message serialization/send остаются явным context-owner-ом; area storage и
 //! deferred queue принадлежат `CServerRegion`. `RefeashBlock` сначала снимает
 //! все block `3`, затем возвращает single-cell block живым `CMoveShape` и NPC.
@@ -1961,6 +1964,60 @@ impl CServerRegion {
             }
         }
         Ok(true)
+    }
+
+    pub(crate) fn apply_owned_monster_area_transition<
+        Resolver: ShapeResolver,
+        Context: ServerRegionAreaTransitionContext,
+    >(
+        &mut self,
+        monster_id: i32,
+        figure: super::shape::ShapeFigure,
+        now_ms: u32,
+        resolver: &Resolver,
+        context: &mut Context,
+    ) -> Option<Result<bool, AreaTransitionBlock>> {
+        let mut monster = self.owned_monsters.remove(&monster_id)?;
+        let result = self.apply_area_transition(
+            monster.move_shape_mut().shape_mut(),
+            ShapeRuntimeFacts {
+                monster: Some(super::shape::MonsterAreaClass::Active),
+                is_move_shape: true,
+                figure,
+                ..ShapeRuntimeFacts::default()
+            },
+            now_ms,
+            resolver,
+            context,
+        );
+        self.owned_monsters.insert(monster_id, monster);
+        Some(result)
+    }
+
+    pub(crate) fn apply_owned_npc_area_transition<
+        Resolver: ShapeResolver,
+        Context: ServerRegionAreaTransitionContext,
+    >(
+        &mut self,
+        npc_id: i32,
+        now_ms: u32,
+        resolver: &Resolver,
+        context: &mut Context,
+    ) -> Option<Result<bool, AreaTransitionBlock>> {
+        let mut npc = self.owned_npcs.remove(&npc_id)?;
+        let result = self.apply_area_transition(
+            npc.move_shape_mut().shape_mut(),
+            ShapeRuntimeFacts {
+                is_npc: true,
+                is_move_shape: true,
+                ..ShapeRuntimeFacts::default()
+            },
+            now_ms,
+            resolver,
+            context,
+        );
+        self.owned_npcs.insert(npc_id, npc);
+        Some(result)
     }
 
     pub(crate) fn refresh_blocks<Resolver: MoveShapeResolver>(
