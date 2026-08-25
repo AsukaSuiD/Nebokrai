@@ -11,16 +11,18 @@
 //! VERIFIED_DISASSEMBLY`; точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, исходники
 //! `server/gameserver/gameserver/game.h/.cpp`.
-//! `CGame::AI` RVA `0x00005080` сохраняет signed region-map order, reached
-//! `CPlayer::AI` pass и virtual region AI с base-tail clear countdown.
-//! Внутри player pass exact `PeriodicalUpdate` tail выполняет ping `0xBF809`,
-//! Nation died countdown и fairy hatcher до `CMoveShape::AI`; внешний runtime
-//! остаётся только у ещё не материализованных virtual owners. Достигнутый
-//! `CPlayerAI::Run` tail начисляет faction auto-exp/vigour через полный
-//! multi-level `CheckLevel` (scripts, properties, `6012A/BF704/BF705/60206`),
-//! затем восстанавливает persisted energy и публикует `0xBF72C`. Legacy
-//! disconnect timer доказательно process-dead: EXE содержит только constructor
-//! zeroing и AI read/clear, но ни одного runtime writer-а обоих полей.
+//! `CGame::AI` RVA `0x00005080` сохраняет знаковый порядок карты регионов,
+//! достигнутый проход `CPlayer::AI` и виртуальный вызов ИИ региона с очисткой
+//! обратного отсчёта в базовом завершении. Внутри прохода игрока завершение
+//! `PeriodicalUpdate` выполняет проверку связи `0xBF809`, отсчёт смерти в
+//! войне стран и инкубатор феи до `CMoveShape::AI`; внешняя среда остаётся
+//! только у ещё не материализованных виртуальных владельцев. Достигнутое
+//! завершение `CPlayerAI::Run` начисляет автоматические опыт и бодрость фракции
+//! через полный многоуровневый `CheckLevel` со сценариями, свойствами и
+//! сообщениями `6012A/BF704/BF705/60206`, затем восстанавливает сохранённую
+//! энергию и публикует `0xBF72C`. Старый таймер отключения доказательно мёртв:
+//! EXE содержит только обнуление в конструкторе и чтение с очисткой в ИИ, но
+//! ни одного места записи во время исполнения для обоих полей.
 //! После live/dead war-soul ветви тот же caller сохраняет GoodsAI/delete,
 //! wrapping ticket, packet expansion, Flash и инвертированный TaoZhuang gate.
 //! `MountAllEquip` обновляет две exact 17-DWORD flash-таблицы при каждом
@@ -16699,6 +16701,32 @@ impl CGame {
             let _ = result.send_to_player(self.net_server(), player_id);
         }
         Some(value)
+    }
+
+    /// Сценарные `SetEnergy/SetMaxEnergy` сохраняют исходное преобразование
+    /// `int32 -> DWORD`; ограничение выполняет `CPlayer`, после чего клиент
+    /// получает только соответствующее итоговое поле.
+    pub(crate) fn set_script_player_energy(
+        &mut self,
+        player_id: i32,
+        requested_energy: i32,
+        maximum: bool,
+    ) -> Option<u32> {
+        let energy = requested_energy as u32;
+        let applied = {
+            let player = self.find_player_mut(player_id)?;
+            if maximum {
+                player.set_maximum_energy(energy);
+                player.maximum_energy()
+            } else {
+                player.set_energy(energy);
+                player.energy()
+            }
+        };
+        let mut message = CMessage::new(if maximum { 0x000b_f72d } else { 0x000b_f72c });
+        message.add_ulong(applied);
+        let _ = message.send_to_player(self.net_server(), player_id);
+        Some(applied)
     }
 
     /// `ChangePlayer` меняет локальное named property, затем исполняет
@@ -36132,7 +36160,7 @@ impl CGame {
         })
     }
 
-    fn recompute_player_level_properties<Runtime: GameMainLoopRuntime>(
+    fn recompute_player_level_properties<Runtime: PlayerPropertyContext>(
         &mut self,
         player_id: i32,
         refill_mana: bool,
@@ -36156,10 +36184,11 @@ impl CGame {
         true
     }
 
-    /// Exact `CPlayer::CheckLevel` из reached auto-exp caller-а. Разность EXP
-    /// намеренно остаётся wrapping DWORD с signed-проверкой; Linux-донор менял
-    /// её на `i64`, но целевой EXE этого исправления не содержит.
-    fn finish_player_auto_progress<Runtime: GameMainLoopRuntime>(
+    /// Точный `CPlayer::CheckLevel` из достигнутого вызова автоматического
+    /// опыта. Разность опыта намеренно остаётся переполняющимся `DWORD` со
+    /// знаковой проверкой; донор Linux менял её на `i64`, но целевой EXE этого
+    /// исправления не содержит.
+    fn finish_player_auto_progress<Runtime: PlayerPropertyContext>(
         &mut self,
         mutation: PlayerAutoProgress,
         runtime: &mut Runtime,
@@ -36331,6 +36360,35 @@ impl CGame {
             around_delivery,
             level_log_delivery,
         })
+    }
+
+    /// Сценарный `CheckLevel` передаёт исходному владельцу нулевые приросты,
+    /// но сохраняет весь многоуровневый проход, пересчёт свойств и публикации.
+    pub(crate) fn check_script_player_level<Runtime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> i32
+    where
+        Runtime: PlayerPropertyContext,
+    {
+        let Some(player) = self.find_player(player_id) else {
+            return 0;
+        };
+        let mutation = PlayerAutoProgress {
+            player_id,
+            sampled_at_ms: 0,
+            experience_gain: 0,
+            vigour_gain: 0,
+            previous_experience: player.experience(),
+            current_experience: player.experience(),
+            previous_vigour: player.vigour(),
+            current_vigour: player.vigour(),
+        };
+        i32::from(
+            self.finish_player_auto_progress(mutation, runtime)
+                .is_some(),
+        )
     }
 
     /// Полный `CPlayer::DoneTaoZhuang`: live equipment/CiQing state идёт через

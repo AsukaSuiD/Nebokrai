@@ -4991,6 +4991,13 @@ impl CPlayer {
         self.base_properties.energy = energy.min(self.base_properties.maximum_energy);
     }
 
+    /// `CPlayer::SetMaxEnergy` сохраняет новый максимум и сразу ограничивает
+    /// им текущее значение энергии.
+    pub(crate) fn set_maximum_energy(&mut self, energy: u32) {
+        self.base_properties.maximum_energy = energy;
+        self.base_properties.energy = self.base_properties.energy.min(energy);
+    }
+
     pub(crate) const fn occupation(&self) -> u8 {
         self.base_properties.occupation
     }

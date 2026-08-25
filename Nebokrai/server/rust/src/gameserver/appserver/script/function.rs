@@ -167,6 +167,9 @@
 //! `GetMe/SetMe` той же ветви читают level/occupation/experience, а DWORD write
 //! сохраняет pre-mutation `BF80C`, `UpdateProperty`, `BF721` и reached
 //! `CheckLevel` terminal result.
+//! Группа `2004..2008` вызывает того же владельца `CPlayer::CheckLevel` с
+//! нулевыми приростами, а текущая и максимальная энергия изменяются у живого
+//! игрока с точными ограничениями и ответами `0xBF72C/0xBF72D`.
 //! Достигнутый `xinlian/hy_pg.script` расширяет этот owner до `GetMe(lID/
 //! btCountry/lPos)`, named family `2999..3001` и `5203 / PostCountryInfo`.
 //! `ChangePlayer` замыкает shipped `Experience` alias без отдельного client
@@ -344,6 +347,11 @@ pub(crate) const SCRIPT_FUNCTION_SECOND: i32 = 23;
 pub(crate) const SCRIPT_FUNCTION_GET_STRING_BY_ID: i32 = 2000;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
+pub(crate) const SCRIPT_FUNCTION_CHECK_LEVEL: i32 = 2004;
+pub(crate) const SCRIPT_FUNCTION_SET_ENERGY: i32 = 2005;
+pub(crate) const SCRIPT_FUNCTION_SET_MAXIMUM_ENERGY: i32 = 2006;
+pub(crate) const SCRIPT_FUNCTION_GET_ENERGY: i32 = 2007;
+pub(crate) const SCRIPT_FUNCTION_GET_MAXIMUM_ENERGY: i32 = 2008;
 pub(crate) const SCRIPT_FUNCTION_RE_LIVE: i32 = 2400;
 pub(crate) const SCRIPT_FUNCTION_GET_STATES_NUMBER: i32 = 2322;
 pub(crate) const SCRIPT_FUNCTION_ADD_STATE: i32 = 2323;
@@ -3299,6 +3307,13 @@ pub(crate) fn script_function_parameter_kind(
             1 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_SET_ENERGY | SCRIPT_FUNCTION_SET_MAXIMUM_ENERGY => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_CHECK_LEVEL
+        | SCRIPT_FUNCTION_GET_ENERGY
+        | SCRIPT_FUNCTION_GET_MAXIMUM_ENERGY => Unused,
         SCRIPT_FUNCTION_GET_NAME => match index {
             0 => Integer,
             _ => Unused,
@@ -5447,6 +5462,45 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                         ScriptFunctionDispatchOutcome::Handled { legacy_return }
                     }),
             )
+        }
+        SCRIPT_FUNCTION_CHECK_LEVEL => {
+            if argument_count != 0 || game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.check_script_player_level(player_id, runtime),
+            })
+        }
+        SCRIPT_FUNCTION_SET_ENERGY | SCRIPT_FUNCTION_SET_MAXIMUM_ENERGY => {
+            if argument_count != 1 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(energy) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let maximum = function_id == SCRIPT_FUNCTION_SET_MAXIMUM_ENERGY;
+            Some(
+                game.set_script_player_energy(player_id, energy, maximum)
+                    .map_or(ScriptFunctionDispatchOutcome::Invalid, |_| {
+                        ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 }
+                    }),
+            )
+        }
+        SCRIPT_FUNCTION_GET_ENERGY | SCRIPT_FUNCTION_GET_MAXIMUM_ENERGY => {
+            if argument_count != 0 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(player) = game.find_player(player_id) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let legacy_return = if function_id == SCRIPT_FUNCTION_GET_ENERGY {
+                player.energy() as i32
+            } else {
+                player.maximum_energy() as i32
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }
         SCRIPT_FUNCTION_SET_PLAYER_LEVEL => {
             let (Some(target_name), Some(level)) = (string_arguments[0], integer_arguments[1])
