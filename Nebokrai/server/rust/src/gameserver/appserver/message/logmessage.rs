@@ -18,8 +18,10 @@
 //! успешный `0x7F901` выдаёт optional validate `0xBF402` и sequence `0xBF403`,
 //! а `0x6FA01` теперь проходит полный reached `OnLost` lifecycle: team/JJC,
 //! scripts, nation timing, particular goods/states, immediate либо delayed
-//! fight-state departure и region/map cleanup. Ещё polymorphic эффекты
-//! выражены узкими owner-callback-ами с live `CGame/player_id`. LoginServer kick
+//! fight-state departure и region/map cleanup. Reached `OnExit` корректирует
+//! silence, публикует позиционный `0xBF504`, исполняет узкий spatial/AI tail и
+//! при обычном logout отправляет полный GameSave в World `0x5FB02`.
+//! LoginServer kick
 //! `0x7F903` полностью различает live, pending, orphan-region и missing player:
 //! публикует `GS0041`, transport close либо World `0x5FB02` и очищает route.
 
@@ -27,7 +29,7 @@ use crate::gameserver::appserver::player::PlayerGameSaveCodecError;
 use crate::gameserver::appserver::player::{PlayerLostDelayStarted, PlayerParticularGoodsDrop};
 use crate::gameserver::appserver::serverregion::RegionMembershipBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerBusinessEndReport, GamePlayerLoginBlock,
+    CGame, GameMainLoopRuntime, GamePlayerExitReport, GamePlayerLoginBlock,
     GamePlayerLoginPreludeError, GamePlayerLoginPreludeReport, GamePlayerLoginReport,
     GroundGoodsMoveBlock, GroundGoodsMoveReport, colored_player_notice_message,
 };
@@ -58,8 +60,9 @@ pub(crate) enum GameLogMessageOutcome {
 pub(crate) trait GamePlayerLostRuntime {
     fn detach_player_from_team_on_lost(&mut self, game: &mut CGame, player_id: i32) -> bool;
     fn quit_player_jjc_on_lost(&mut self, game: &mut CGame, player_id: i32) -> bool;
-    /// Исполняет оставшийся `OnExit` tail после owned `end_business`.
-    fn player_on_exit_after_business(
+    /// Исполняет оставшийся polymorphic spatial/AI tail `OnExit` между
+    /// owned around-publication и World-save.
+    fn player_on_exit_spatial_tail(
         &mut self,
         game: &mut CGame,
         player_id: i32,
@@ -94,7 +97,7 @@ pub(crate) struct GamePlayerLostReport {
     pub(crate) nation_timing_finished: bool,
     pub(crate) particular_goods: Vec<GamePlayerLostParticularGoodsDrop>,
     pub(crate) change_body_states_ended: usize,
-    pub(crate) business: Option<GamePlayerBusinessEndReport>,
+    pub(crate) exit: Option<GamePlayerExitReport>,
     pub(crate) delay: Option<PlayerLostDelayStarted>,
     pub(crate) departure: Option<Result<(), RegionMembershipBlock>>,
     pub(crate) route_command: Option<i32>,

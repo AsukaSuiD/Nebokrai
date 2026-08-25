@@ -50,7 +50,9 @@
 //! nobility rank: reset меняет owned state, а пока RAW `PlayerRunScript`
 //! выражен точным typed AdjustHonorRank script-effect-ом.
 //! Silence-timeout, как и оригинал, проверяется лениво при query по
-//! инъецируемому wrapping `timeGetTime`-значению; GM `0x7FC0B/0x7FC0E`
+//! инъецируемому wrapping `timeGetTime`-значению; reached `OnExit` отдельно
+//! сохраняет исходные один либо три clock-read и пересчитывает остаток перед
+//! GameSave. GM `0x7FC0B/0x7FC0E`
 //! замыкают name lookup, mutation, двухпроходный ordered query и World
 //! responses, поэтому отдельный scheduler не требуется.
 //! Client allocation `0x8FA01` владеет sex/occupation, remaining point,
@@ -1443,6 +1445,15 @@ pub(crate) struct PlayerLostDelayStarted {
     pub(crate) player_id: i32,
     pub(crate) fight_state_count: i32,
     pub(crate) timestamp_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerExitSilenceUpdate {
+    pub(crate) previous_minutes: i32,
+    pub(crate) previous_timestamp_minutes: u32,
+    pub(crate) sampled_minutes: [Option<u32>; 3],
+    pub(crate) remaining_minutes: i32,
+    pub(crate) timestamp_minutes: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -10488,6 +10499,44 @@ impl CPlayer {
         false
     }
 
+    /// Точная мутация `CPlayer::OnExit`: legacy owner отдельно считывает
+    /// `timeGetTime` перед deadline, перед уменьшением остатка и перед новой
+    /// отметкой. Поэтому caller передаёт часы как callback, а не один snapshot.
+    pub(crate) fn update_silence_on_exit(
+        &mut self,
+        mut now_milliseconds: impl FnMut() -> u32,
+    ) -> PlayerExitSilenceUpdate {
+        let previous_minutes = self.silence_minutes;
+        let previous_timestamp_minutes = self.silence_timestamp_minutes;
+        let mut sampled_minutes = [None; 3];
+        if self.silence_minutes != 0 {
+            let first = now_milliseconds() / 60_000;
+            sampled_minutes[0] = Some(first);
+            let deadline =
+                (self.silence_timestamp_minutes as i32).wrapping_add(self.silence_minutes) as u32;
+            if deadline < first {
+                self.silence_timestamp_minutes = 0;
+                self.silence_minutes = 0;
+            } else {
+                let second = now_milliseconds() / 60_000;
+                sampled_minutes[1] = Some(second);
+                self.silence_minutes = self.silence_minutes.wrapping_add(
+                    (self.silence_timestamp_minutes as i32).wrapping_sub(second as i32),
+                );
+                let third = now_milliseconds() / 60_000;
+                sampled_minutes[2] = Some(third);
+                self.silence_timestamp_minutes = third;
+            }
+        }
+        PlayerExitSilenceUpdate {
+            previous_minutes,
+            previous_timestamp_minutes,
+            sampled_minutes,
+            remaining_minutes: self.silence_minutes,
+            timestamp_minutes: self.silence_timestamp_minutes,
+        }
+    }
+
     /// Player caller `CheckBattleFairyCombine` всегда передаёт собственный ID
     /// в исходный owner; global compose configuration остаётся явным входом.
     pub(crate) fn check_battle_fairy_combine(
@@ -13063,34 +13112,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x00040DC0
 // ADDRESS: 00440dc0
 // PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::OnExit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:1692
-// RVA: 0x00041460
-// ADDRESS: 00441460
-// PROTOTYPE: void __thiscall OnExit(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0044156e
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:1712
-// RVA: 0x0004156E
-// ADDRESS: 0044156e
-// PROTOTYPE: undefined Catch@0044156e()
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

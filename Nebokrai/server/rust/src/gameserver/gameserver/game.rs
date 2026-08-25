@@ -616,10 +616,10 @@ use crate::gameserver::appserver::player::{
     PlayerBankCurrencyAddOutcome, PlayerCombatProperties, PlayerEquipmentAddEffect,
     PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery,
     PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
-    PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
-    PlayerGoodsAiDeletion, PlayerHonorResetReport, PlayerLoginGoodsLocation,
-    PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation, PlayerSkillDispatch,
-    PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
+    PlayerExitSilenceUpdate, PlayerFightStateTransition, PlayerGameSaveCodecError,
+    PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion, PlayerHonorResetReport,
+    PlayerLoginGoodsLocation, PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation,
+    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
     PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet,
     PlayerYuanBaoChange,
 };
@@ -3861,8 +3861,19 @@ pub(crate) struct GameRegionAiReport {
 pub(crate) struct GamePlayerLostTimeoutReport {
     pub(crate) player_id: i32,
     pub(crate) sampled_at_ms: u32,
-    pub(crate) business: Option<GamePlayerBusinessEndReport>,
+    pub(crate) exit: GamePlayerExitReport,
     pub(crate) staged_for_delete: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerExitReport {
+    pub(crate) player_id: i32,
+    pub(crate) changing_server: bool,
+    pub(crate) business: Option<GamePlayerBusinessEndReport>,
+    pub(crate) silence: PlayerExitSilenceUpdate,
+    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) player_snapshot_size: Option<usize>,
+    pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16711,8 +16722,9 @@ impl CGame {
 
     /// Exact live `0x6FA01 -> CPlayer::OnLost` lifecycle. Общий caller
     /// владеет validation/script/map/spatial и delayed-fight timestamp;
-    /// JJC/team/OnExit остаются узкими virtual owner-ами
-    /// с canonical `CGame + player_id`, а не generic message fallback-ом.
+    /// JJC/team и оставшаяся polymorphic середина `OnExit` остаются узкими
+    /// virtual owner-ами с canonical `CGame + player_id`, а не generic
+    /// message fallback-ом.
     pub(crate) fn on_player_lost<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -16742,7 +16754,7 @@ impl CGame {
                 nation_timing_finished: false,
                 particular_goods: Vec::new(),
                 change_body_states_ended: 0,
-                business: None,
+                exit: None,
                 delay: None,
                 departure: None,
                 route_command,
@@ -16797,15 +16809,14 @@ impl CGame {
                 nation_timing_finished,
                 particular_goods,
                 change_body_states_ended,
-                business: None,
+                exit: None,
                 delay,
                 departure: None,
                 route_command: None,
             };
         }
 
-        let business = self.finish_player_business(player_id);
-        runtime.player_on_exit_after_business(self, player_id, changing_server);
+        let exit = self.finish_player_exit(player_id, changing_server, runtime);
         let departure = self.remove_lost_player(player_id);
         GamePlayerLostReport {
             player_id,
@@ -16818,7 +16829,7 @@ impl CGame {
             nation_timing_finished,
             particular_goods,
             change_body_states_ended,
-            business,
+            exit: Some(exit),
             delay: None,
             departure,
             route_command: None,
@@ -16874,6 +16885,67 @@ impl CGame {
                 source,
             })
             .collect()
+    }
+
+    /// Достигнутый `CPlayer::OnExit`: business уже принадлежит canonical
+    /// session owner-у; затем legacy silence, `0xBF504`, оставшийся
+    /// polymorphic spatial tail и необязательный World `0x5FB02` исполняются
+    /// в исходном порядке. Changing-server ветвь намеренно не сохраняется.
+    fn finish_player_exit<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        changing_server: bool,
+        runtime: &mut Runtime,
+    ) -> GamePlayerExitReport {
+        let business = self.finish_player_business(player_id);
+        let silence = self
+            .find_player_mut(player_id)
+            .expect("OnExit player проверен reached caller-ом")
+            .update_silence_on_exit(|| runtime.get_tick_ms());
+        let (pos_x_bits, pos_y_bits) = self
+            .find_player(player_id)
+            .map(|player| {
+                (
+                    player.shape().get_pos_x().to_bits(),
+                    player.shape().get_pos_y().to_bits(),
+                )
+            })
+            .expect("OnExit player остаётся canonical owner-ом до departure");
+        let mut around = CMessage::new(0x000b_f504);
+        around.add_long(player_id);
+        around.add_long(player_id);
+        around.add_long(0);
+        around.add_ulong(pos_x_bits);
+        around.add_ulong(pos_y_bits);
+        let around_delivery = self.send_player_shape_around(player_id, Some(player_id), &around);
+
+        runtime.player_on_exit_spatial_tail(self, player_id, changing_server);
+
+        let mut player_snapshot_size = None;
+        let mut world_delivery = None;
+        if !changing_server {
+            let mut snapshot = Vec::new();
+            if self
+                .find_player(player_id)
+                .is_some_and(|player| self.encode_player_game_save(player, &mut snapshot, runtime))
+            {
+                let mut save = CMessage::new(0x0005_fb02);
+                save.add_long(player_id);
+                save.add_long(1);
+                save.base_mut().add(&snapshot);
+                player_snapshot_size = Some(snapshot.len());
+                world_delivery = Some(save.send(self, false));
+            }
+        }
+        GamePlayerExitReport {
+            player_id,
+            changing_server,
+            business,
+            silence,
+            around_delivery,
+            player_snapshot_size,
+            world_delivery,
+        }
     }
 
     /// Reached `CPlayer::end_business`: session lookup/end остаётся в factory,
@@ -28638,7 +28710,7 @@ impl CGame {
     }
 
     /// Delayed branch `CPlayer::AI`: clock читается только при ненулевом lost
-    /// timestamp; due вызывает тот же virtual `OnExit(false)` и ставит
+    /// timestamp; due вызывает тот же reached `OnExit(false)` и ставит
     /// `CS_DELETE`, который reached region queue удалит после player pass.
     fn run_player_lost_timeout<Runtime: GameMainLoopRuntime>(
         &mut self,
@@ -28659,8 +28731,7 @@ impl CGame {
         {
             return None;
         }
-        let business = self.finish_player_business(player_id);
-        runtime.player_on_exit_after_business(self, player_id, false);
+        let exit = self.finish_player_exit(player_id, false, runtime);
         let staged_for_delete = self.find_player_mut(player_id).is_some_and(|player| {
             player
                 .movement_shape_mut()
@@ -28670,7 +28741,7 @@ impl CGame {
         Some(GamePlayerLostTimeoutReport {
             player_id,
             sampled_at_ms,
-            business,
+            exit,
             staged_for_delete,
         })
     }
