@@ -132,6 +132,18 @@ impl CProxyServerRegion {
         &self.param
     }
 
+    /// Применяет авторитетный налоговый снимок World без локальной публикации.
+    pub(crate) const fn set_tax_snapshot(
+        &mut self,
+        today_total_tax: u32,
+        total_tax: u32,
+        current_tax_rate: i32,
+    ) {
+        self.param.today_total_tax = today_total_tax;
+        self.param.total_tax = total_tax;
+        self.param.current_tax_rate = current_tax_rate;
+    }
+
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],

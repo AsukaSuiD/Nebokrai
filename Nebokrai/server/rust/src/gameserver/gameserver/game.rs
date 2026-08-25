@@ -727,11 +727,13 @@ use crate::gameserver::appserver::servernationregion::{
     classify_nation_morale_target,
 };
 use crate::gameserver::appserver::serverregion::{
-    AreaTransitionBlock, CServerRegion, RegionMembershipBlock, ServerRegionAreaTransitionContext,
-    ServerRegionClearPlayerTick, ServerRegionMembershipContext, ServerRegionMonsterContext,
-    ServerRegionMonsterRectBlock, ServerRegionMonsterRefreshReport, ServerRegionNpcContext,
-    ServerRegionNpcSetup, ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport,
-    ServerRegionWeather, ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
+    AreaTransitionBlock, CServerRegion, RegionMembershipBlock, RegionTaxSessionBegin,
+    RegionTaxSessionEffect, RegionTaxSessionEffects, RegionTaxSessionEndpoint,
+    RegionTaxSessionKind, ServerRegionAreaTransitionContext, ServerRegionClearPlayerTick,
+    ServerRegionMembershipContext, ServerRegionMonsterContext, ServerRegionMonsterRectBlock,
+    ServerRegionMonsterRefreshReport, ServerRegionNpcContext, ServerRegionNpcSetup,
+    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport, ServerRegionWeather,
+    ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
@@ -811,7 +813,7 @@ use crate::public::mystringtable::{
     MyStringTable, MyStringTableDecodeError, MyStringTableDecodeReport,
 };
 use crate::public::netsessionmanager::{
-    CNetSessionManager, NetSessionManagerVariant, NetSessionRunReport,
+    CNetSessionManager, NetSessionCallbackOutcome, NetSessionManagerVariant, NetSessionRunReport,
 };
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::public::tools::{
@@ -6035,6 +6037,7 @@ pub(crate) struct CGame {
     world_reconnect_task: Option<GameReconnectTask>,
     billing_reconnect_task: Option<GameReconnectTask>,
     net_session_manager: CNetSessionManager,
+    region_tax_session_effects: RegionTaxSessionEffects,
     session_factory: CSessionFactory,
     players: BTreeMap<i32, CPlayer>,
     regions: BTreeMap<i32, ServerRegionOwner>,
@@ -6657,6 +6660,7 @@ impl CGame {
             world_reconnect_task: None,
             billing_reconnect_task: None,
             net_session_manager: CNetSessionManager::new(NetSessionManagerVariant::GameServer),
+            region_tax_session_effects: Arc::new(parking_lot::Mutex::new(Vec::new())),
             session_factory: CSessionFactory::default(),
             players: BTreeMap::new(),
             regions: BTreeMap::new(),
@@ -30285,6 +30289,366 @@ impl CGame {
             deliveries.push(update.send(self, false));
         }
         deliveries
+    }
+
+    pub(crate) fn request_script_region_tax_operation(
+        &self,
+        player_id: i32,
+        region_id: i32,
+        kind: RegionTaxSessionKind,
+    ) -> Option<Result<i32, SendMessageError>> {
+        let player = self.find_player(player_id)?;
+        if player.server_region_id() != Some(region_id) {
+            return None;
+        }
+        let region = self.find_region(region_id)?.base();
+        let owned_faction_id = region.owned_faction_id();
+        if owned_faction_id == 0 || player.faction_id() != owned_faction_id {
+            return None;
+        }
+        let mut request = CMessage::new(match kind {
+            RegionTaxSessionKind::ObtainPayment => 0x0006_012b,
+            RegionTaxSessionKind::AdjustRate => 0x0006_012c,
+        });
+        request.add_long(player_id);
+        request.add_long(region_id);
+        Some(request.send(self, false))
+    }
+
+    pub(crate) fn start_region_tax_session(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        kind: RegionTaxSessionKind,
+        mut random_below: impl FnMut(i32) -> i32,
+    ) -> Option<i64> {
+        let player = self.find_player(player_id)?;
+        if player.server_region_id() != Some(region_id) {
+            return None;
+        }
+        let region = self.find_region(region_id)?.base();
+        let owned_faction_id = region.owned_faction_id();
+        if owned_faction_id != 0 && player.faction_id() != owned_faction_id {
+            return None;
+        }
+        let begin = RegionTaxSessionBegin {
+            player_id,
+            total_tax: region.total_tax_payment(),
+            player_money: player.money(),
+            current_tax_rate: region.tax_rate(),
+            max_tax_rate: region.max_tax_rate(),
+        };
+        let created = self
+            .net_session_manager
+            .create_session(player_id, 0, &mut random_below)
+            .ok()?;
+        let endpoint = Box::new(RegionTaxSessionEndpoint::new(
+            kind,
+            player_id,
+            region_id,
+            Arc::clone(&self.region_tax_session_effects),
+        ));
+        if self
+            .net_session_manager
+            .set_callback_handle(created.id, endpoint)
+            .is_err()
+        {
+            return None;
+        }
+        if self
+            .net_session_manager
+            .beging(created.id, 2_000, &begin)
+            .is_err()
+        {
+            return None;
+        }
+        self.apply_region_tax_session_effects_no_result();
+        Some(created.id)
+    }
+
+    pub(crate) fn submit_region_tax_session_result<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        session_id: i64,
+        password: i32,
+        value: i32,
+        context: &mut Context,
+    ) -> NetSessionCallbackOutcome {
+        let outcome = self
+            .net_session_manager
+            .on_sync_callback_result(session_id, player_id, password, &value);
+        self.apply_region_tax_session_effects(context);
+        outcome
+    }
+
+    pub(crate) fn apply_proxy_region_tax_snapshot(
+        &mut self,
+        region_id: i32,
+        today_total_tax: u32,
+        total_tax: u32,
+        current_tax_rate: i32,
+    ) -> bool {
+        let Some(region) = self.find_proxy_region_mut(region_id) else {
+            return false;
+        };
+        region.set_tax_snapshot(today_total_tax, total_tax, current_tax_rate);
+        true
+    }
+
+    pub(crate) fn script_region_tax_value(&self, region_id: i32, today: bool) -> Option<u32> {
+        self.find_region(region_id).map(|region| {
+            if today {
+                region.base().today_tax_payment()
+            } else {
+                region.base().total_tax_payment()
+            }
+        })
+    }
+
+    pub(crate) fn set_script_region_tax_value(
+        &mut self,
+        region_id: i32,
+        today: bool,
+        value: u32,
+    ) -> bool {
+        let Some(region) = self.find_region_mut(region_id) else {
+            return false;
+        };
+        if today {
+            region.base_mut().set_today_tax_payment(value);
+        } else {
+            region.base_mut().set_total_tax_payment(value);
+        }
+        true
+    }
+
+    fn take_region_tax_session_effects(&self) -> Vec<RegionTaxSessionEffect> {
+        std::mem::take(&mut *self.region_tax_session_effects.lock())
+    }
+
+    fn apply_region_tax_session_effects_no_result(&self) {
+        let mut deferred = Vec::new();
+        for effect in self.take_region_tax_session_effects() {
+            let RegionTaxSessionEffect::Prompt {
+                kind,
+                player_id,
+                session_id,
+                password,
+                first_value,
+                second_value,
+            } = effect
+            else {
+                deferred.push(effect);
+                continue;
+            };
+            self.send_region_tax_prompt(
+                kind,
+                player_id,
+                session_id,
+                password,
+                first_value,
+                second_value,
+            );
+        }
+        self.region_tax_session_effects.lock().extend(deferred);
+    }
+
+    fn send_region_tax_prompt(
+        &self,
+        kind: RegionTaxSessionKind,
+        player_id: i32,
+        session_id: i64,
+        password: i32,
+        first_value: u32,
+        second_value: Option<u32>,
+    ) {
+        let mut prompt = CMessage::new(match kind {
+            RegionTaxSessionKind::ObtainPayment => 0x000b_ff24,
+            RegionTaxSessionKind::AdjustRate => 0x000b_ff25,
+        });
+        prompt.base_mut().add_long64(session_id);
+        prompt.add_long(password);
+        prompt.add_ulong(first_value);
+        if let Some(second_value) = second_value {
+            prompt.add_ulong(second_value);
+        }
+        let _ = prompt.send_to_player(self.net_server(), player_id);
+    }
+
+    fn apply_region_tax_session_effects<Context: OldClientGoodsCodec>(
+        &mut self,
+        context: &mut Context,
+    ) {
+        let effects = self.take_region_tax_session_effects();
+        for effect in effects {
+            match effect {
+                RegionTaxSessionEffect::Prompt {
+                    kind,
+                    player_id,
+                    session_id,
+                    password,
+                    first_value,
+                    second_value,
+                } => self.send_region_tax_prompt(
+                    kind,
+                    player_id,
+                    session_id,
+                    password,
+                    first_value,
+                    second_value,
+                ),
+                RegionTaxSessionEffect::Result {
+                    kind: RegionTaxSessionKind::ObtainPayment,
+                    player_id,
+                    region_id,
+                    value,
+                } => self.apply_region_tax_payment(player_id, region_id, value, context),
+                RegionTaxSessionEffect::Result {
+                    kind: RegionTaxSessionKind::AdjustRate,
+                    player_id,
+                    region_id,
+                    value,
+                } => self.apply_region_tax_rate(player_id, region_id, value),
+            }
+        }
+    }
+
+    fn apply_region_tax_payment<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        value: i32,
+        context: &mut Context,
+    ) {
+        let amount = value as u32;
+        let Some((total_tax, region_name)) = self.find_region(region_id).map(|region| {
+            (
+                region.base().total_tax_payment(),
+                region.base().name.as_bytes().to_vec(),
+            )
+        }) else {
+            return;
+        };
+        if amount == 0 || amount > total_tax {
+            return;
+        }
+        let Some((money, faction_name, player_name)) =
+            self.find_player(player_id).and_then(|player| {
+                (player.server_region_id() == Some(region_id)).then(|| {
+                    (
+                        player.money(),
+                        player.faction_name().to_vec(),
+                        player.player_name().to_vec(),
+                    )
+                })
+            })
+        else {
+            return;
+        };
+        let resulting_money = money.wrapping_add(amount);
+        if resulting_money >= 999_999_999 {
+            return;
+        }
+        let Some((_outcome, _deliveries)) = self.increase_player_money(player_id, amount, context)
+        else {
+            return;
+        };
+        if self.find_player(player_id).map(CPlayer::money) != Some(resulting_money) {
+            return;
+        }
+        let Some(region) = self.find_region_mut(region_id) else {
+            return;
+        };
+        region
+            .base_mut()
+            .set_total_tax_payment(total_tax.wrapping_sub(amount));
+        self.send_region_tax_snapshot(region_id);
+
+        let amount_text = amount.to_string().into_bytes();
+        let text = format_legacy_text_fields(
+            self.get_string_by_id(b"GS0237"),
+            &[&faction_name, &player_name, &region_name, &amount_text],
+            0xff,
+        );
+        put_string_to_file("war", &text);
+        let mut world_log = CMessage::new(0x0005_fd06);
+        world_log.add_long(0);
+        world_log.add_long(0);
+        world_log.add_long(-1);
+        world_log.add_ulong(0xff00_6ee1);
+        world_log.base_mut().add(&text);
+        world_log.add_byte(0);
+        let _ = world_log.send(self, false);
+    }
+
+    fn apply_region_tax_rate(&mut self, player_id: i32, region_id: i32, value: i32) {
+        let Some((max_tax_rate, region_name)) = self.find_region(region_id).map(|region| {
+            (
+                region.base().max_tax_rate(),
+                region.base().name.as_bytes().to_vec(),
+            )
+        }) else {
+            return;
+        };
+        if value < 0 || value > max_tax_rate {
+            return;
+        }
+        let changed = self
+            .find_region(region_id)
+            .is_some_and(|region| region.base().tax_rate() != value);
+        if changed {
+            if let Some(region) = self.find_region_mut(region_id) {
+                region.base_mut().set_tax_rate(value);
+            }
+            let mut update = CMessage::new(0x000b_ff26);
+            update.add_long(region_id);
+            update.add_long(value);
+            if let Some(region) = self.find_region(region_id) {
+                let _ = update.send_to_region(Some(region.base()), None, self);
+            }
+            self.send_region_tax_snapshot(region_id);
+        }
+
+        let value_text = value.to_string().into_bytes();
+        let notice = format_legacy_text_fields(
+            self.get_string_by_id(b"GS0234"),
+            &[&region_name, &value_text],
+            0xff,
+        );
+        let message = colored_player_notice_message(0xffda_edfe, 0, &notice);
+        if let Some(region) = self.find_region(region_id) {
+            let _ = message.send_to_region(Some(region.base()), None, self);
+        }
+
+        let Some((faction_name, player_name)) = self.find_player(player_id).and_then(|player| {
+            (player.server_region_id() == Some(region_id)).then(|| {
+                (
+                    player.faction_name().to_vec(),
+                    player.player_name().to_vec(),
+                )
+            })
+        }) else {
+            return;
+        };
+        let text = format_legacy_text_fields(
+            self.get_string_by_id(b"GS0235"),
+            &[&faction_name, &player_name, &region_name, &value_text],
+            0xff,
+        );
+        put_string_to_file("war", &text);
+    }
+
+    fn send_region_tax_snapshot(&self, region_id: i32) {
+        let Some(region) = self.find_region(region_id) else {
+            return;
+        };
+        let region = region.base();
+        let mut update = CMessage::new(0x0006_012d);
+        update.add_long(region_id);
+        update.add_ulong(region.today_tax_payment());
+        update.add_ulong(region.total_tax_payment());
+        update.add_long(region.tax_rate());
+        let _ = update.send(self, false);
     }
 
     pub(crate) fn add_goods_to_player_packet(

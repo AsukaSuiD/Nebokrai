@@ -1,20 +1,26 @@
 //! Диспетчер сценарных функций исторического GameServer.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `server/gameserver/appserver/script/function.cpp`. Из dense dispatcher-а
-//! faction menu `3012/6001/6002/6003/6011/6015/6017/6030` проходит от вычисленных аргументов и
-//! player/NPC distance gate в owned `CGame` session state; создание и заявка
-//! завершаются только через живой OrganSys client/World callback dispatcher;
-//! отмена заявки сохраняет тот же NPC distance gate и World `0x60109`.
-//! Upgrade `6011` добавляет exact player GameSave в `0x60126`; авторитетный
-//! World charge `0x7FE1E` возвращается через тот же organizing dispatcher.
-//! Declare-war `6030` держит `2000` ms operator session между World page,
-//! client selection и авторитетным result/debit, включая player GameSave.
-//! City-gate `6004/6019/6020` использует только local `CServerCityRegion`:
-//! state/footprint guards и `GS0197..GS0200` предшествуют direct mutation либо
-//! World-authorized `0x6012F`; каждый mutation публикует build update.
-//! Master query `6017` читает identity, обновляемую World `0x7FE06`, а не
-//! отдельный script shadow или всегда ложный placeholder.
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец —
+//! `server/gameserver/appserver/script/function.cpp`. Из плотного диспетчера
+//! семейство фракционных меню `3012/6001/6002/6003/6011/6015/6017/6030`
+//! проходит от вычисленных аргументов и проверки расстояния между игроком и
+//! NPC в принадлежащее `CGame` состояние сеанса; создание и заявка завершаются
+//! только через действующий диспетчер ответов OrganSys от клиента и World.
+//! Отмена заявки сохраняет ту же проверку расстояния и World `0x60109`.
+//! Функция `6011` добавляет точный GameSave игрока в `0x60126`; авторитетное
+//! списание World `0x7FE1E` возвращается через тот же диспетчер OrganSys.
+//! Объявление войны `6030` держит операторский сеанс `2000` мс между страницей
+//! World, выбором клиента и авторитетным результатом со списанием.
+//! Городские ворота `6004/6019/6020` используют только локальный
+//! `CServerCityRegion`: проверки состояния и геометрии предшествуют прямому
+//! изменению либо авторизации World `0x6012F`; каждое изменение публикует
+//! обновление постройки.
+//! Запрос главы `6017` читает идентичность, обновляемую World `0x7FE06`, а не
+//! отдельную сценарную копию или постоянную заглушку `false`.
+//! Налоговые функции `6005/6006/6049/6050/6052/6053` используют текущий
+//! регион сценария. Меню проходит авторизацию World `0x6012B/0x6012C`, затем
+//! реальный `CNetSession`, клиентские ответы `0x90122/0x90123`, изменение
+//! кошелька или ставки и обратный снимок `0x6012D`.
 //! `6043 / EnterContendState` сохраняет разговорный distance gate, вычисляет
 //! два числа и четыре строки до faction/region checks и входит в concrete
 //! City/Village `CServerWarRegion`; общий owner выполняет membership/goods,
@@ -363,7 +369,7 @@ use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
 };
 use crate::gameserver::appserver::serverregion::{
-    CServerRegion, ServerRegionMonsterContext, ServerRegionNpcSetup,
+    CServerRegion, RegionTaxSessionKind, ServerRegionMonsterContext, ServerRegionNpcSetup,
 };
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, WarContendEntryContext, WarRegionContext,
@@ -490,6 +496,8 @@ pub(crate) const SCRIPT_FUNCTION_CREATE_FACTION: i32 = 6001;
 pub(crate) const SCRIPT_FUNCTION_APPLY_JOIN_FACTION: i32 = 6002;
 pub(crate) const SCRIPT_FUNCTION_QUIT_JOIN_FACTION: i32 = 6003;
 pub(crate) const SCRIPT_FUNCTION_OPERATOR_CITY_GATE: i32 = 6004;
+pub(crate) const SCRIPT_FUNCTION_OBTAIN_TAX_PAYMENT: i32 = 6005;
+pub(crate) const SCRIPT_FUNCTION_ADJUST_TAX_RATE: i32 = 6006;
 pub(crate) const SCRIPT_FUNCTION_UPGRADE_FACTION: i32 = 6011;
 pub(crate) const SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME: i32 = 6015;
 pub(crate) const SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME: i32 = 6017;
@@ -504,7 +512,11 @@ pub(crate) const SCRIPT_FUNCTION_CITY_WAR_DECLARE: i32 = 6044;
 pub(crate) const SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME: i32 = 6045;
 pub(crate) const SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME: i32 = 6046;
 pub(crate) const SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID: i32 = 6047;
+pub(crate) const SCRIPT_FUNCTION_GET_TOTAL_TAX_PAYMENT: i32 = 6049;
+pub(crate) const SCRIPT_FUNCTION_GET_TODAY_TAX_PAYMENT: i32 = 6050;
 pub(crate) const SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS: i32 = 6051;
+pub(crate) const SCRIPT_FUNCTION_SET_TOTAL_TAX_PAYMENT: i32 = 6052;
+pub(crate) const SCRIPT_FUNCTION_SET_TODAY_TAX_PAYMENT: i32 = 6053;
 pub(crate) const SCRIPT_FUNCTION_GET_DAYS_HONOR_RANK: i32 = 2625;
 pub(crate) const SCRIPT_FUNCTION_GET_WEEKS_HONOR_RANK: i32 = 2626;
 pub(crate) const SCRIPT_FUNCTION_GET_MONTHS_HONOR_RANK: i32 = 2627;
@@ -5142,9 +5154,9 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             })
         }
         SCRIPT_FUNCTION_CHECK_MODE => Some(ScriptFunctionDispatchOutcome::Handled {
-            // Exact selector читает `m_eProgress` напрямую. Native без player
-            // разыменовывал null; safe runtime не воспроизводит UB и оставляет
-            // начальный `PROGRESS_NONE`.
+            // Точный селектор читает `m_eProgress` напрямую. Исходная ветвь
+            // без игрока разыменовывала null; типизированная среда не повторяет
+            // неопределённое поведение и оставляет начальный `PROGRESS_NONE`.
             legacy_return: game
                 .find_player(player_id)
                 .map_or(0, |player| player.current_progress() as i32),
@@ -6250,6 +6262,48 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let mut request = CMessage::new(0x0006_0109);
                 request.add_long(player_id);
                 let _ = request.send(game, false);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_OBTAIN_TAX_PAYMENT | SCRIPT_FUNCTION_ADJUST_TAX_RATE => {
+            if let Ok((_, _)) =
+                country_war_script_caller_gate(game, script_player_id, script_npc_id)
+                && let Some(region_id) = game
+                    .find_player(player_id)
+                    .and_then(CPlayer::server_region_id)
+            {
+                let kind = if function_id == SCRIPT_FUNCTION_OBTAIN_TAX_PAYMENT {
+                    RegionTaxSessionKind::ObtainPayment
+                } else {
+                    RegionTaxSessionKind::AdjustRate
+                };
+                let _ = game.request_script_region_tax_operation(player_id, region_id, kind);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GET_TOTAL_TAX_PAYMENT | SCRIPT_FUNCTION_GET_TODAY_TAX_PAYMENT => {
+            let value = script_region_id
+                .and_then(|region_id| {
+                    game.script_region_tax_value(
+                        region_id,
+                        function_id == SCRIPT_FUNCTION_GET_TODAY_TAX_PAYMENT,
+                    )
+                })
+                .unwrap_or_default();
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: value as i32,
+            })
+        }
+        SCRIPT_FUNCTION_SET_TOTAL_TAX_PAYMENT | SCRIPT_FUNCTION_SET_TODAY_TAX_PAYMENT => {
+            if let (Some(region_id), Some(value)) = (
+                script_region_id,
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) {
+                let _ = game.set_script_region_tax_value(
+                    region_id,
+                    function_id == SCRIPT_FUNCTION_SET_TODAY_TAX_PAYMENT,
+                    value as u32,
+                );
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }

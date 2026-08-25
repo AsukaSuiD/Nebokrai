@@ -26,6 +26,9 @@
 //! `0x7FE06` декодирует полный organizing wire до owned-region tail, обновляет
 //! faction/master/name/union identity live player и только затем ретегирует
 //! `0xBFF06`; name/union входят в последующий war-contender lifecycle.
+//! Налоговая цепочка принимает авторизацию World `0x7FE28/0x7FE29`, создаёт
+//! управляемый `CNetSession`, коррелирует ответы клиента `0x90122/0x90123` и
+//! применяет авторитетный снимок прокси-региона `0x7FE2E`.
 //!
 //! Каждый фазовый case читает ровно один signed war ID и передаёт его своему
 //! owner-у. Faction-update cases передают текущие payload/cursor соответствующему
@@ -67,7 +70,7 @@ use super::super::organizingsystem::villagewarsys::{
 };
 use super::super::region::{RegionCellAccessBlock, RegionRandomContext};
 use super::super::servercityregion::CityRegionContext;
-use super::super::serverregion::{CServerRegion, RegionMembershipBlock};
+use super::super::serverregion::{CServerRegion, RegionMembershipBlock, RegionTaxSessionKind};
 use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
@@ -78,6 +81,7 @@ use crate::gameserver::gameserver::game::{
     format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::public::netsessionmanager::NetSessionCallbackOutcome;
 use crate::public::tools::add_game_error_log_text;
 
 pub(crate) trait GameOrganizingWarRuntime:
@@ -230,6 +234,7 @@ pub(crate) enum GameOrganizingMessageReport {
     FourNationPhase(FourNationPhaseDispatchReport),
     Control(OrganizingControlDispatchReport),
     PlayerQuest(GamePlayerQuestCommandReport),
+    RegionTax(RegionTaxDispatchReport),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -242,6 +247,17 @@ pub(crate) enum GameOrganizingMessageError {
     Phase(WarPhaseDispatchError),
     Control(OrganizingControlDispatchError),
     PlayerQuest(GamePlayerQuestCommandError),
+    RegionTax(FactionLifecycleDispatchError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegionTaxDispatchReport {
+    pub(crate) opcode: u32,
+    pub(crate) player_id: Option<i32>,
+    pub(crate) region_id: Option<i32>,
+    pub(crate) session_id: Option<i64>,
+    pub(crate) callback: Option<NetSessionCallbackOutcome>,
+    pub(crate) applied: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -510,6 +526,8 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x90106
             | 0x9011a
             | 0x9011b
+            | 0x90122
+            | 0x90123
             | 0x7fe01
             | 0x7fe06
             | 0x7fe07
@@ -517,6 +535,9 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x7fe19
             | 0x7fe1e
             | 0x7fe2a
+            | 0x7fe28
+            | 0x7fe29
+            | 0x7fe2e
             | 0x7fe1f..=0x7fe25
             | 0x7fe2f..=0x7fe33
             | 0x7fe34
@@ -538,6 +559,14 @@ pub(crate) fn dispatch_game_organizing_message<
             dispatch_game_player_quest_command(opcode, message, game)
                 .map(GameOrganizingMessageReport::PlayerQuest)
                 .map_err(GameOrganizingMessageError::PlayerQuest),
+        );
+    }
+
+    if matches!(opcode, 0x90122 | 0x90123 | 0x7fe28 | 0x7fe29 | 0x7fe2e) {
+        return Some(
+            dispatch_region_tax_message(opcode, message, game, runtime)
+                .map(GameOrganizingMessageReport::RegionTax)
+                .map_err(GameOrganizingMessageError::RegionTax),
         );
     }
 
@@ -637,6 +666,106 @@ pub(crate) fn dispatch_game_organizing_message<
     };
     game.restore_war_startup_owners(owners);
     Some(result)
+}
+
+fn dispatch_region_tax_message<Runtime: RegionRandomContext + OldClientGoodsCodec>(
+    opcode: u32,
+    message: &mut CMessage,
+    game: &mut CGame,
+    runtime: &mut Runtime,
+) -> Result<RegionTaxDispatchReport, FactionLifecycleDispatchError> {
+    let read_i32 = |message: &mut CMessage, field| {
+        message
+            .base_mut()
+            .get_long()
+            .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field })
+    };
+    let read_u32 = |message: &mut CMessage, field| {
+        message
+            .base_mut()
+            .get_long()
+            .map(|value| value as u32)
+            .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field })
+    };
+    let read_i64 = |message: &mut CMessage, field| {
+        message
+            .base_mut()
+            .get_long64()
+            .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field })
+    };
+    match opcode {
+        0x90122 | 0x90123 => {
+            message.resolve_player_context(game);
+            let player_id = message
+                .player_id()
+                .ok_or(FactionLifecycleDispatchError::MissingPlayer)?;
+            let session_id = read_i64(message, "session ID")?;
+            let password = read_i32(message, "password")?;
+            let value = read_i32(message, "tax value")?;
+            if !message.base_mut().unread_bytes().is_empty() {
+                return Err(FactionLifecycleDispatchError::InvalidPayload);
+            }
+            let callback = game
+                .submit_region_tax_session_result(player_id, session_id, password, value, runtime);
+            Ok(RegionTaxDispatchReport {
+                opcode,
+                player_id: Some(player_id),
+                region_id: game
+                    .find_player(player_id)
+                    .and_then(|player| player.server_region_id()),
+                session_id: Some(session_id),
+                callback: Some(callback),
+                applied: callback == NetSessionCallbackOutcome::Delivered,
+            })
+        }
+        0x7fe28 | 0x7fe29 => {
+            let player_id = read_i32(message, "player ID")?;
+            let region_id = read_i32(message, "region ID")?;
+            if !message.base_mut().unread_bytes().is_empty() {
+                return Err(FactionLifecycleDispatchError::InvalidPayload);
+            }
+            let kind = if opcode == 0x7fe28 {
+                RegionTaxSessionKind::ObtainPayment
+            } else {
+                RegionTaxSessionKind::AdjustRate
+            };
+            let session_id = game.start_region_tax_session(player_id, region_id, kind, |bound| {
+                runtime.random_below(bound)
+            });
+            Ok(RegionTaxDispatchReport {
+                opcode,
+                player_id: Some(player_id),
+                region_id: Some(region_id),
+                session_id,
+                callback: None,
+                applied: session_id.is_some(),
+            })
+        }
+        0x7fe2e => {
+            let region_id = read_i32(message, "region ID")?;
+            let today_total_tax = read_u32(message, "today tax")?;
+            let total_tax = read_u32(message, "total tax")?;
+            let current_tax_rate = read_i32(message, "current tax rate")?;
+            if !message.base_mut().unread_bytes().is_empty() {
+                return Err(FactionLifecycleDispatchError::InvalidPayload);
+            }
+            let applied = game.apply_proxy_region_tax_snapshot(
+                region_id,
+                today_total_tax,
+                total_tax,
+                current_tax_rate,
+            );
+            Ok(RegionTaxDispatchReport {
+                opcode,
+                player_id: None,
+                region_id: Some(region_id),
+                session_id: None,
+                callback: None,
+                applied,
+            })
+        }
+        _ => unreachable!("налоговый opcode проверен перед разбором"),
+    }
 }
 
 fn dispatch_village_war_application_response<Runtime: OldClientGoodsCodec>(
@@ -887,8 +1016,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 .player_id()
                 .ok_or(FactionLifecycleDispatchError::MissingPlayer)?;
             let session_id = read_i64(message, "session ID")?;
-            // Exact `0x90105` advances past password, but `OnDo` correlates
-            // continuation only by managed session ID and current player.
+            // В точной ветви `0x90105` пароль пропускается: `OnDo` связывает
+            // продолжение только по ID управляемого сеанса и текущему игроку.
             let _password = read_i32(message, "password")?;
             if !message.base_mut().unread_bytes().is_empty() {
                 return Err(FactionLifecycleDispatchError::InvalidPayload);

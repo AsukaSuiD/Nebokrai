@@ -17,8 +17,11 @@
 //! исходники `serverregion.h/.cpp`. PDB фиксирует
 //! `m_listChangeAreaShape +0x1D0`, поля `m_Param +0x214`,
 //! `m_lWarNum +0x238`, `m_CityState +0x23C` и clear timer `+0x240..+0x248`.
-//! Shop tax mutation и superior propagation `0x826E0/0x7C0C0` замкнуты
-//! совместно с `CGame` World-wire owner-ом.
+//! Изменение налога магазина и передача доли вышестоящему региону
+//! `0x826E0/0x7C0C0` замкнуты совместно с владельцем канала World в `CGame`.
+//! Меню выплаты и ставки `0x7C160/0x7C2B0` сохраняют двухфазный
+//! `CNetSession`: клиентские `0xBFF24/0xBFF25`, строгую денежную границу,
+//! региональную публикацию `0xBFF26`, журналы и снимок World `0x6012D`.
 //! Countdown сохраняет wrapping DWORD comparison и signed remaining; virtual
 //! return point, random destination и полный `CPlayer::ChangeRegion` вызываются
 //! Game-owner-ом, который владеет region/player maps и runtime side effects.
@@ -126,9 +129,12 @@
 //! технической классификацией; domain lifecycle и callbacks не затрагивались.
 //! Остальная поверхность файла ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
 
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use encoding_rs::WINDOWS_1251;
+use parking_lot::Mutex;
 
 use super::area::{AreaAiContext, AreaAiReport, AreaWokenMonsterClass, CArea, WarSoulPoint};
 use super::baseobject::CBaseObject;
@@ -150,6 +156,9 @@ use super::shape::{
 };
 use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::guid::CGuid;
+use crate::public::netsession::{
+    NetSessionAsyncResult, NetSessionAsyncResultKind, NetSessionEndpoint,
+};
 use crate::setup::monsterlist::MonsterProperties;
 
 const PLAYER_TYPE: i32 = 400;
@@ -249,6 +258,111 @@ pub(crate) struct RegionTaxAddition {
     pub(crate) today_total_tax: u32,
     pub(crate) total_tax: u32,
     pub(crate) current_tax_rate: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RegionTaxSessionKind {
+    ObtainPayment,
+    AdjustRate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegionTaxSessionBegin {
+    pub(crate) player_id: i32,
+    pub(crate) total_tax: u32,
+    pub(crate) player_money: u32,
+    pub(crate) current_tax_rate: i32,
+    pub(crate) max_tax_rate: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RegionTaxSessionEffect {
+    Prompt {
+        kind: RegionTaxSessionKind,
+        player_id: i32,
+        session_id: i64,
+        password: i32,
+        first_value: u32,
+        second_value: Option<u32>,
+    },
+    Result {
+        kind: RegionTaxSessionKind,
+        player_id: i32,
+        region_id: i32,
+        value: i32,
+    },
+}
+
+pub(crate) type RegionTaxSessionEffects = Arc<Mutex<Vec<RegionTaxSessionEffect>>>;
+
+/// Совмещает исходные владельцы `IAsyncCaller` и `IAsyncCallback` налогового
+/// диалога. Очередь переносит сетевой и игровой результат обратно в `CGame`,
+/// которому принадлежат игроки, регионы и соединения.
+pub(crate) struct RegionTaxSessionEndpoint {
+    kind: RegionTaxSessionKind,
+    player_id: i32,
+    region_id: i32,
+    effects: RegionTaxSessionEffects,
+}
+
+impl RegionTaxSessionEndpoint {
+    pub(crate) fn new(
+        kind: RegionTaxSessionKind,
+        player_id: i32,
+        region_id: i32,
+        effects: RegionTaxSessionEffects,
+    ) -> Self {
+        Self {
+            kind,
+            player_id,
+            region_id,
+            effects,
+        }
+    }
+}
+
+impl NetSessionEndpoint for RegionTaxSessionEndpoint {
+    fn do_async_call(&self, session_id: i64, password: i32, payload: &dyn Any) {
+        let Some(begin) = payload.downcast_ref::<RegionTaxSessionBegin>() else {
+            return;
+        };
+        let (first_value, second_value) = match self.kind {
+            RegionTaxSessionKind::ObtainPayment => {
+                let capacity = 999_999_999_u32.wrapping_sub(begin.player_money);
+                (begin.total_tax.min(capacity), None)
+            }
+            RegionTaxSessionKind::AdjustRate => (
+                begin.current_tax_rate as u32,
+                Some(begin.max_tax_rate as u32),
+            ),
+        };
+        self.effects.lock().push(RegionTaxSessionEffect::Prompt {
+            kind: self.kind,
+            player_id: begin.player_id,
+            session_id,
+            password,
+            first_value,
+            second_value,
+        });
+    }
+
+    fn on_async_callback(&self, result: NetSessionAsyncResult<'_>) {
+        if result.kind != NetSessionAsyncResultKind::Result {
+            return;
+        }
+        let Some(value) = result
+            .payload
+            .and_then(|payload| payload.downcast_ref::<i32>())
+        else {
+            return;
+        };
+        self.effects.lock().push(RegionTaxSessionEffect::Result {
+            kind: self.kind,
+            player_id: self.player_id,
+            region_id: self.region_id,
+            value: *value,
+        });
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -722,6 +836,34 @@ pub(crate) struct CServerRegion {
 impl CServerRegion {
     pub(crate) const fn tax_rate(&self) -> i32 {
         self.param.current_tax_rate
+    }
+
+    pub(crate) const fn max_tax_rate(&self) -> i32 {
+        self.param.max_tax_rate
+    }
+
+    pub(crate) const fn total_tax_payment(&self) -> u32 {
+        self.param.total_tax
+    }
+
+    pub(crate) const fn today_tax_payment(&self) -> u32 {
+        self.param.today_total_tax
+    }
+
+    pub(crate) const fn set_total_tax_payment(&mut self, value: u32) {
+        self.param.total_tax = value;
+    }
+
+    pub(crate) const fn set_today_tax_payment(&mut self, value: u32) {
+        self.param.today_total_tax = value;
+    }
+
+    pub(crate) const fn set_tax_rate(&mut self, value: i32) {
+        self.param.current_tax_rate = value;
+    }
+
+    pub(crate) const fn owned_faction_id(&self) -> i32 {
+        self.param.owned_faction_id
     }
 
     /// Periodic weather fragment `CServerRegion::AI`; caller уже применил
