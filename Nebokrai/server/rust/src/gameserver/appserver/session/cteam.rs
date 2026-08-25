@@ -4,8 +4,11 @@
 //! `appserver/session/cteam.cpp`. Материализован reached local creation/join
 //! prefix: team/leader identity, default shared allocation и exact session +
 //! teammate serialization, local leave/leader/kick/disband lifecycle,
-//! allocation/chat transitions и их World/client publications. Remote
-//! reconstruction, AI/quest и остальные state transitions остаются RAW.
+//! allocation/chat transitions, remote snapshot reconstruction и их
+//! World/client publications. AI/quest и остальные state transitions остаются
+//! RAW. Static `QuestTeamData/CompleteTeamData` заменены owned retry-очередью
+//! `CGame`: login ставит team ID, session-stage отправляет `0x60008`, а
+//! успешный `0x7FD08` снимает запрос.
 
 use crate::gameserver::appserver::session::csession::CSession;
 use crate::gameserver::appserver::session::cteamate::CTeamate;
@@ -27,6 +30,21 @@ impl CTeam {
             allocation_scheme: 1,
             team_name: Vec::new(),
             password: Vec::new(),
+        }
+    }
+
+    pub(crate) fn restored(
+        team_id: u32,
+        team_name: Vec<u8>,
+        password: Vec<u8>,
+        leader_id: i32,
+    ) -> Self {
+        Self {
+            team_id,
+            leader_id,
+            allocation_scheme: 1,
+            team_name,
+            password,
         }
     }
 

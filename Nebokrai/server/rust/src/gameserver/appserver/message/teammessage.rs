@@ -1,17 +1,22 @@
 //! Team-message owner GameServer.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `appserver/message/teammessage.cpp`. Материализован полный достигнутый
-//! полная client-side local team chain `0x8FF01..0B`: invite/answer/password
+//! `appserver/message/teammessage.cpp`. Материализована полная client-side
+//! local team chain `0x8FF01..0B`: invite/answer/password
 //! join, leave, leader transfer, kick, disband, recruitment state,
 //! allocation, chat и invite-by-name; typed `CTeam/CTeamate`, player
 //! membership/cooldown, client publications, World session messages и
-//! conditional `0x60209` audit. Remote reconstruction сохранена ниже как RAW.
+//! conditional `0x60209` audit. World→Game replication `0x7FD02..0C`
+//! восстанавливает/изменяет тот же typed session и доходит до client callbacks.
 
+use crate::gameserver::appserver::session::csessionfactory::{
+    TeamMemberSnapshot, TeamSessionSnapshot,
+};
 use crate::gameserver::appserver::teamstate::CTeamState;
 use crate::gameserver::gameserver::game::{
     CGame, GameTeamChatResult, GameTeamControlMutation, GameTeamJoinMutation, GameTeamJoinResult,
-    GameTeamLifecycleMutation, colored_player_notice_message, game_tick_milliseconds,
+    GameTeamLifecycleMutation, GameTeamRemoteMutation, colored_player_notice_message,
+    game_tick_milliseconds,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -26,6 +31,17 @@ const DISBAND_TEAM: u32 = 0x0008_ff07;
 const SET_ALLOCATION_SCHEME: u32 = 0x0008_ff09;
 const TEAM_CHAT: u32 = 0x0008_ff0a;
 const INVITE_BY_NAME: u32 = 0x0008_ff0b;
+const WORLD_ABORT_TEAM: u32 = 0x0007_fd02;
+const WORLD_INSERT_MEMBER: u32 = 0x0007_fd03;
+const WORLD_REMOVE_MEMBER: u32 = 0x0007_fd04;
+const WORLD_CHANGE_REGION: u32 = 0x0007_fd05;
+const WORLD_KICK_PLAYER: u32 = 0x0007_fd06;
+const WORLD_CHANGE_LEADER: u32 = 0x0007_fd07;
+const WORLD_TEAM_SNAPSHOT: u32 = 0x0007_fd08;
+const WORLD_ONLINE_QUERY: u32 = 0x0007_fd09;
+const WORLD_ALLOCATION_SCHEME: u32 = 0x0007_fd0a;
+const WORLD_TEAM_CHAT: u32 = 0x0007_fd0b;
+const WORLD_MEMBER_STATE: u32 = 0x0007_fd0c;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameTeamMessageError {
@@ -37,6 +53,8 @@ pub(crate) enum GameTeamMessageError {
     MissingAllocationScheme,
     MissingChatText,
     MissingInvitedName,
+    MissingRemoteField,
+    InvalidRemoteTeamSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +80,8 @@ pub(crate) enum GameTeamMessageOutcome {
     NamedInvitationSent,
     LifecycleIgnored,
     ControlIgnored,
+    RemoteApplied,
+    RemoteIgnored,
 }
 
 #[must_use = "team-message report сохраняет state и client effects"]
@@ -78,6 +98,7 @@ pub(crate) struct GameTeamMessageReport {
     pub(crate) mutation: Option<GameTeamJoinMutation>,
     pub(crate) lifecycle: Option<GameTeamLifecycleMutation>,
     pub(crate) control: Option<GameTeamControlMutation>,
+    pub(crate) remote: Option<GameTeamRemoteMutation>,
 }
 
 fn empty_report(player_id: Option<i32>) -> GameTeamMessageReport {
@@ -92,7 +113,53 @@ fn empty_report(player_id: Option<i32>) -> GameTeamMessageReport {
         mutation: None,
         lifecycle: None,
         control: None,
+        remote: None,
     }
+}
+
+fn decode_remote_team_snapshot(message: &mut CMessage) -> Option<TeamSessionSnapshot> {
+    let session_type = message.base_mut().get_long()?;
+    if session_type != 1 {
+        return None;
+    }
+    let minimum_plugs = message.base_mut().get_long()? as u32;
+    let maximum_plugs = message.base_mut().get_long()? as u32;
+    let lifetime = message.base_mut().get_long()? as u32;
+    let team_id = message.base_mut().get_long()? as u32;
+    let team_name = message.base_mut().get_str_bytes(0x100)?;
+    let password = message.base_mut().get_str_bytes(0x100)?;
+    let leader_id = message.base_mut().get_long()?;
+    let member_count = usize::try_from(message.base_mut().get_long()? as u32).ok()?;
+    if minimum_plugs > maximum_plugs || maximum_plugs > 8 || member_count > maximum_plugs as usize {
+        return None;
+    }
+    let mut members = Vec::with_capacity(member_count);
+    for _ in 0..member_count {
+        if message.base_mut().get_long()? != 5 {
+            return None;
+        }
+        let owner_type = message.base_mut().get_long()?;
+        let owner_id = message.base_mut().get_long()?;
+        let _plug_state = message.base_mut().get_long()?;
+        let owner_region_id = message.base_mut().get_long()?;
+        let owner_name = message.base_mut().get_str_bytes(0x100)?;
+        members.push(TeamMemberSnapshot {
+            owner_type,
+            owner_id,
+            owner_region_id,
+            owner_name,
+        });
+    }
+    Some(TeamSessionSnapshot {
+        minimum_plugs,
+        maximum_plugs,
+        lifetime,
+        team_id,
+        team_name,
+        password,
+        leader_id,
+        members,
+    })
 }
 
 fn notify_colored(
@@ -135,6 +202,186 @@ pub(crate) fn dispatch_game_team_message(
     game: &mut CGame,
 ) -> Option<Result<GameTeamMessageReport, GameTeamMessageError>> {
     match message.message_type() as u32 {
+        WORLD_ABORT_TEAM => {
+            let Some(team_id) = message.base_mut().get_long() else {
+                return Some(Err(GameTeamMessageError::MissingRemoteField));
+            };
+            let mut report = empty_report(None);
+            report.remote = game.abort_remote_team(team_id as u32);
+            report.outcome = if report.remote.is_some() {
+                GameTeamMessageOutcome::RemoteApplied
+            } else {
+                GameTeamMessageOutcome::RemoteIgnored
+            };
+            return Some(Ok(report));
+        }
+        WORLD_INSERT_MEMBER => {
+            let (Some(team_id), Some(owner_type), Some(owner_id), Some(owner_region_id)) = (
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+            ) else {
+                return Some(Err(GameTeamMessageError::MissingRemoteField));
+            };
+            let Some(owner_name) = message.base_mut().get_str_bytes(0x100) else {
+                return Some(Err(GameTeamMessageError::MissingRemoteField));
+            };
+            let mut report = empty_report(None);
+            report.remote = game.insert_remote_team_member(
+                team_id as u32,
+                owner_type,
+                owner_id,
+                owner_region_id,
+                owner_name,
+            );
+            report.outcome = if report.remote.is_some() {
+                GameTeamMessageOutcome::RemoteApplied
+            } else {
+                GameTeamMessageOutcome::RemoteIgnored
+            };
+            return Some(Ok(report));
+        }
+        WORLD_REMOVE_MEMBER => {
+            let (Some(team_id), Some(owner_type), Some(owner_id)) = (
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+            ) else {
+                return Some(Err(GameTeamMessageError::MissingRemoteField));
+            };
+            let mut report = empty_report(None);
+            report.remote = game.remove_remote_team_member(team_id as u32, owner_type, owner_id);
+            report.outcome = if report.remote.is_some() {
+                GameTeamMessageOutcome::RemoteApplied
+            } else {
+                GameTeamMessageOutcome::RemoteIgnored
+            };
+            return Some(Ok(report));
+        }
+        WORLD_CHANGE_REGION => {
+            let (Some(team_id), Some(owner_type), Some(owner_id), Some(owner_region_id)) = (
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+            ) else {
+                return Some(Err(GameTeamMessageError::MissingRemoteField));
+            };
+            let mut report = empty_report(None);
+            report.remote = game.change_remote_team_region(
+                team_id as u32,
+                owner_type,
+                owner_id,
+                owner_region_id,
+            );
+            report.outcome = if report.remote.is_some() {
+                GameTeamMessageOutcome::RemoteApplied
+            } else {
+                GameTeamMessageOutcome::RemoteIgnored
+            };
+            return Some(Ok(report));
+        }
+        WORLD_KICK_PLAYER | WORLD_CHANGE_LEADER => {
+            let (Some(team_id), Some(player_id)) =
+                (message.base_mut().get_long(), message.base_mut().get_long())
+            else {
+                return Some(Err(GameTeamMessageError::MissingRemoteField));
+            };
+            let mut report = empty_report(None);
+            report.remote = if message.message_type() as u32 == WORLD_KICK_PLAYER {
+                game.kick_remote_team_player(team_id as u32, player_id)
+            } else {
+                game.change_remote_team_leader(team_id as u32, player_id)
+            };
+            report.outcome = if report.remote.is_some() {
+                GameTeamMessageOutcome::RemoteApplied
+            } else {
+                GameTeamMessageOutcome::RemoteIgnored
+            };
+            return Some(Ok(report));
+        }
+        WORLD_TEAM_SNAPSHOT => {
+            let Some(snapshot) = decode_remote_team_snapshot(message) else {
+                return Some(Err(GameTeamMessageError::InvalidRemoteTeamSnapshot));
+            };
+            let mut report = empty_report(None);
+            report.remote = game.restore_remote_team(snapshot);
+            report.outcome = if report.remote.is_some() {
+                GameTeamMessageOutcome::RemoteApplied
+            } else {
+                GameTeamMessageOutcome::RemoteIgnored
+            };
+            return Some(Ok(report));
+        }
+        WORLD_ONLINE_QUERY => {
+            let (Some(first), Some(second), Some(player_id)) = (
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+            ) else {
+                return Some(Err(GameTeamMessageError::MissingRemoteField));
+            };
+            let mut report = empty_report(None);
+            report.remote = Some(game.answer_remote_team_online_query(first, second, player_id));
+            report.outcome = GameTeamMessageOutcome::RemoteApplied;
+            return Some(Ok(report));
+        }
+        WORLD_ALLOCATION_SCHEME => {
+            let (Some(team_id), Some(allocation_scheme)) =
+                (message.base_mut().get_long(), message.base_mut().get_long())
+            else {
+                return Some(Err(GameTeamMessageError::MissingRemoteField));
+            };
+            let mut report = empty_report(None);
+            report.remote = game.change_remote_team_allocation(team_id as u32, allocation_scheme);
+            report.outcome = if report.remote.is_some() {
+                GameTeamMessageOutcome::RemoteApplied
+            } else {
+                GameTeamMessageOutcome::RemoteIgnored
+            };
+            return Some(Ok(report));
+        }
+        WORLD_TEAM_CHAT => {
+            let (Some(team_id), Some(owner_type), Some(owner_id)) = (
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+            ) else {
+                return Some(Err(GameTeamMessageError::MissingRemoteField));
+            };
+            let Some(text) = message.base_mut().get_str_bytes(0x200) else {
+                return Some(Err(GameTeamMessageError::MissingRemoteField));
+            };
+            let mut report = empty_report(None);
+            report.remote =
+                game.relay_remote_team_chat(team_id as u32, owner_type, owner_id, &text);
+            report.outcome = if report.remote.is_some() {
+                GameTeamMessageOutcome::RemoteApplied
+            } else {
+                GameTeamMessageOutcome::RemoteIgnored
+            };
+            return Some(Ok(report));
+        }
+        WORLD_MEMBER_STATE => {
+            let (Some(team_id), Some(owner_type), Some(owner_id), Some(state)) = (
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_long(),
+                message.base_mut().get_float(),
+            ) else {
+                return Some(Err(GameTeamMessageError::MissingRemoteField));
+            };
+            let mut report = empty_report(None);
+            report.remote =
+                game.relay_remote_team_state(team_id as u32, owner_type, owner_id, state);
+            report.outcome = if report.remote.is_some() {
+                GameTeamMessageOutcome::RemoteApplied
+            } else {
+                GameTeamMessageOutcome::RemoteIgnored
+            };
+            return Some(Ok(report));
+        }
         INVITE_BY_ID => {
             let Some(leader_id) = message.base_mut().get_long() else {
                 return Some(Err(GameTeamMessageError::MissingLeaderId));

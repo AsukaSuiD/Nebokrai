@@ -713,7 +713,7 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
 use crate::gameserver::appserver::session::csessionfactory::{
     CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved, SessionEndReport,
     TeamMemberInserted, TeamMemberRemoved, TeamSessionCreated, TeamSessionDisbanded,
-    TerminalEquipmentSessionCollected,
+    TeamSessionRestored, TeamSessionSnapshot, TerminalEquipmentSessionCollected,
 };
 use crate::gameserver::appserver::session::ctrader::{
     TraderContainerKind, TraderOfferAdded, TraderOfferBlock, TraderOfferRemoved,
@@ -2138,6 +2138,7 @@ pub(crate) struct GamePlayerLoginReport {
     pub(crate) goods_ai_registrations: usize,
     pub(crate) equipment_state_updates: Vec<PlayerLoginEquipmentStateUpdate>,
     pub(crate) team_session_found: bool,
+    pub(crate) team_snapshot_queued: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5135,6 +5136,38 @@ pub(crate) enum GameTeamChatResult {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameTeamRemoteAction {
+    Aborted,
+    MemberInserted,
+    MemberRemoved,
+    RegionChanged,
+    PlayerKicked,
+    LeaderChanged,
+    SnapshotRestored,
+    OnlineAnswered,
+    AllocationChanged,
+    ChatRelayed,
+    StateRelayed,
+}
+
+#[must_use = "remote team mutation сохраняет typed state и network callbacks"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameTeamRemoteMutation {
+    pub(crate) action: GameTeamRemoteAction,
+    pub(crate) session_id: Option<i32>,
+    pub(crate) team_id: Option<u32>,
+    pub(crate) affected_player_ids: Vec<i32>,
+    pub(crate) client_deliveries: Vec<i32>,
+    pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct GameTeamSnapshotQuery {
+    last_request_ms: u32,
+    requested: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GameKickPlayerReport {
     pub(crate) player_id: i32,
     pub(crate) command_result: i32,
@@ -5708,6 +5741,7 @@ pub(crate) struct CGame {
     initial_total_monsters: i32,
     initial_total_npcs: i32,
     team_session_ids: BTreeMap<u32, i32>,
+    team_snapshot_queries: BTreeMap<u32, GameTeamSnapshotQuery>,
     main_loop_state: GameMainLoopState,
 }
 
@@ -6328,6 +6362,7 @@ impl CGame {
             initial_total_monsters: 0,
             initial_total_npcs: 0,
             team_session_ids: BTreeMap::new(),
+            team_snapshot_queries: BTreeMap::new(),
             main_loop_state: GameMainLoopState::default(),
         }
     }
@@ -16965,8 +17000,8 @@ impl CGame {
             if player.team_id() != 0 {
                 let mut team = CMessage::new(0x0006_0005);
                 team.add_long(player.team_id());
+                team.add_long(400);
                 team.add_long(player_id);
-                team.add_long(source_region_id);
                 team.add_long(target_region_id);
                 report.team_delivery = Some(team.send(self, false));
             }
@@ -25792,6 +25827,11 @@ impl CGame {
         self.restore_region_owner(owner);
         self.players.insert(expected_player_id, player);
         membership.map_err(GamePlayerLoginBlock::Membership)?;
+        let team_snapshot_queued = team_id != 0 && !team_session_found;
+        if team_snapshot_queued {
+            self.team_snapshot_queries
+                .insert(team_id as u32, GameTeamSnapshotQuery::default());
+        }
 
         let login_tick_ms = context.now_milliseconds();
         let loaded_change_body_states = self
@@ -25973,6 +26013,7 @@ impl CGame {
             goods_ai_registrations,
             equipment_state_updates,
             team_session_found,
+            team_snapshot_queued,
         })
     }
 
@@ -26003,6 +26044,43 @@ impl CGame {
 
     pub(crate) fn get_team_session_id(&self, team_id: u32) -> i32 {
         self.team_session_ids.get(&team_id).copied().unwrap_or(0)
+    }
+
+    fn run_team_snapshot_queries(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<(u32, Result<i32, SendMessageError>)> {
+        let completed = self
+            .team_snapshot_queries
+            .keys()
+            .copied()
+            .filter(|team_id| self.get_team_session_id(*team_id) != 0)
+            .collect::<Vec<_>>();
+        for team_id in completed {
+            self.team_snapshot_queries.remove(&team_id);
+        }
+        let due = self
+            .team_snapshot_queries
+            .iter()
+            .filter_map(|(team_id, query)| {
+                (!query.requested || query.last_request_ms.wrapping_add(60_000) <= now_ms)
+                    .then_some(*team_id)
+            })
+            .collect::<Vec<_>>();
+        due.into_iter()
+            .map(|team_id| {
+                let mut message = CMessage::new(0x0006_0008);
+                message.add_ulong(team_id);
+                let delivery = message.send(self, false);
+                let query = self
+                    .team_snapshot_queries
+                    .get_mut(&team_id)
+                    .expect("due team snapshot query остаётся в canonical queue");
+                query.last_request_ms = now_ms;
+                query.requested = true;
+                (team_id, delivery)
+            })
+            .collect()
     }
 
     pub(crate) fn check_team_join(&self, leader_id: i32, candidate_id: i32) -> GameTeamJoinResult {
@@ -26048,6 +26126,72 @@ impl CGame {
         let mut message = CMessage::new(0x000b_fd03);
         message.base_mut().add(snapshot);
         message.send_to_player(self.net_server(), player_id)
+    }
+
+    fn publish_team_member_region(
+        &self,
+        team_id: u32,
+        owner_type: i32,
+        owner_id: i32,
+        owner_region_id: i32,
+        recipients: impl IntoIterator<Item = i32>,
+    ) -> Vec<i32> {
+        let mut message = CMessage::new(0x000b_fd06);
+        message.add_ulong(team_id);
+        message.add_long(owner_type);
+        message.add_long(owner_id);
+        message.add_long(owner_region_id);
+        recipients
+            .into_iter()
+            .map(|recipient| message.send_to_player(self.net_server(), recipient))
+            .collect()
+    }
+
+    fn publish_team_member_joined(
+        &self,
+        team_id: u32,
+        owner_type: i32,
+        owner_id: i32,
+        owner_region_id: i32,
+        owner_name: &[u8],
+        hp_ratio_bits: u32,
+        recipients: impl IntoIterator<Item = i32>,
+    ) -> Vec<i32> {
+        let mut message = CMessage::new(0x000b_fd04);
+        message.add_ulong(team_id);
+        message.add_long(owner_type);
+        message.add_long(owner_id);
+        message.add_long(owner_region_id);
+        message.add_ulong(hp_ratio_bits);
+        add_legacy_c_string(message.base_mut(), owner_name);
+        recipients
+            .into_iter()
+            .map(|recipient| message.send_to_player(self.net_server(), recipient))
+            .collect()
+    }
+
+    fn publish_world_team_member_joined(
+        &self,
+        team_id: u32,
+        owner_type: i32,
+        owner_id: i32,
+        owner_region_id: i32,
+        owner_name: &[u8],
+    ) -> Result<i32, SendMessageError> {
+        let mut message = CMessage::new(0x0006_0003);
+        message.add_ulong(team_id);
+        message.add_long(owner_type);
+        message.add_long(owner_id);
+        message.add_long(owner_region_id);
+        add_legacy_c_string(message.base_mut(), owner_name);
+        message.send(self, false)
+    }
+
+    fn player_team_hp_ratio_bits(&self, player_id: i32) -> u32 {
+        let Some(player) = self.players.get(&player_id) else {
+            return 1.0_f32.to_bits();
+        };
+        ((player.health() as f32) / (player.maximum_health() as f32)).to_bits()
     }
 
     fn publish_team_recruitment_count(
@@ -26109,20 +26253,52 @@ impl CGame {
             let mut started = CMessage::new(0x0006_0001);
             started.base_mut().add(&created.empty_snapshot);
             world_deliveries.push(started.send(self, false));
+
             client_deliveries.push(self.send_team_snapshot(leader_id, &created.leader_snapshot));
+            world_deliveries.push(self.publish_world_team_member_joined(
+                team_id,
+                400,
+                leader_id,
+                leader_region_id,
+                &leader_name,
+            ));
+
+            client_deliveries.extend(self.publish_team_member_region(
+                team_id,
+                400,
+                candidate_id,
+                candidate_region_id,
+                [leader_id],
+            ));
             client_deliveries
                 .push(self.send_team_snapshot(candidate_id, &created.candidate_snapshot));
+            client_deliveries.extend(self.publish_team_member_joined(
+                team_id,
+                400,
+                candidate_id,
+                candidate_region_id,
+                &candidate_name,
+                self.player_team_hp_ratio_bits(candidate_id),
+                [leader_id],
+            ));
+            world_deliveries.push(self.publish_world_team_member_joined(
+                team_id,
+                400,
+                candidate_id,
+                candidate_region_id,
+                &candidate_name,
+            ));
 
-            let mut leader_changed = CMessage::new(0x0006_0006);
-            leader_changed.add_ulong(team_id);
-            leader_changed.add_long(leader_id);
-            world_deliveries.push(leader_changed.send(self, false));
             for player_id in &created.teammate_ids {
                 let mut changed = CMessage::new(0x000b_fd07);
                 changed.add_ulong(team_id);
                 changed.add_long(leader_id);
                 client_deliveries.push(changed.send_to_player(self.net_server(), *player_id));
             }
+            let mut leader_changed = CMessage::new(0x0006_0006);
+            leader_changed.add_ulong(team_id);
+            leader_changed.add_long(leader_id);
+            world_deliveries.push(leader_changed.send(self, false));
             (created.session_id, team_id, created.teammate_ids.len())
         } else {
             let session_id = self.get_team_session_id(leader_team_id as u32);
@@ -26136,7 +26312,42 @@ impl CGame {
                 .get_mut(&candidate_id)?
                 .set_team_membership(inserted.team_id as i32);
             self.players.get_mut(&candidate_id)?.set_team_captain(false);
+            client_deliveries.extend(
+                self.publish_team_member_region(
+                    inserted.team_id,
+                    400,
+                    candidate_id,
+                    candidate_region_id,
+                    inserted
+                        .teammate_ids
+                        .iter()
+                        .copied()
+                        .filter(|player_id| *player_id != candidate_id),
+                ),
+            );
             client_deliveries.push(self.send_team_snapshot(candidate_id, &inserted.snapshot));
+            client_deliveries.extend(
+                self.publish_team_member_joined(
+                    inserted.team_id,
+                    400,
+                    candidate_id,
+                    candidate_region_id,
+                    &candidate_name,
+                    self.player_team_hp_ratio_bits(candidate_id),
+                    inserted
+                        .teammate_ids
+                        .iter()
+                        .copied()
+                        .filter(|player_id| *player_id != candidate_id),
+                ),
+            );
+            world_deliveries.push(self.publish_world_team_member_joined(
+                inserted.team_id,
+                400,
+                candidate_id,
+                candidate_region_id,
+                &candidate_name,
+            ));
             (
                 inserted.session_id,
                 inserted.team_id,
@@ -26320,15 +26531,18 @@ impl CGame {
         ended.add_ulong(disbanded.team_id);
         let world_deliveries = vec![ended.send(self, false)];
         let mut client_deliveries = Vec::new();
-        for player_id in &disbanded.player_ids {
+        for (index, player_id) in disbanded.player_ids.iter().enumerate() {
             if let Some(player) = self.players.get_mut(player_id) {
                 player.set_team_membership(0);
-                client_deliveries.extend(self.publish_team_member_left(
-                    disbanded.team_id,
-                    *player_id,
-                    [*player_id],
-                ));
             }
+            let recipients = std::iter::once(*player_id)
+                .chain(disbanded.player_ids[index + 1..].iter().copied())
+                .filter(|recipient| self.players.contains_key(recipient));
+            client_deliveries.extend(self.publish_team_member_left(
+                disbanded.team_id,
+                *player_id,
+                recipients,
+            ));
         }
         self.team_session_ids.remove(&disbanded.team_id);
         let around_delivery = self.publish_team_recruitment_count(disbanded.leader_id, 1);
@@ -26433,6 +26647,503 @@ impl CGame {
             client_deliveries,
             world_delivery: world.send(self, false),
         })
+    }
+
+    fn team_remote_report(
+        action: GameTeamRemoteAction,
+        session_id: Option<i32>,
+        team_id: Option<u32>,
+    ) -> GameTeamRemoteMutation {
+        GameTeamRemoteMutation {
+            action,
+            session_id,
+            team_id,
+            affected_player_ids: Vec::new(),
+            client_deliveries: Vec::new(),
+            world_deliveries: Vec::new(),
+        }
+    }
+
+    pub(crate) fn abort_remote_team(&mut self, team_id: u32) -> Option<GameTeamRemoteMutation> {
+        let session_id = self.get_team_session_id(team_id);
+        let disbanded = self.session_factory.disband_team(session_id)?;
+        let mut report = Self::team_remote_report(
+            GameTeamRemoteAction::Aborted,
+            Some(session_id),
+            Some(team_id),
+        );
+        for (index, player_id) in disbanded.player_ids.iter().copied().enumerate() {
+            if let Some(player) = self.players.get_mut(&player_id) {
+                player.set_team_membership(0);
+            }
+            let recipients = std::iter::once(player_id)
+                .chain(disbanded.player_ids[index + 1..].iter().copied())
+                .filter(|recipient| self.players.contains_key(recipient));
+            report
+                .client_deliveries
+                .extend(self.publish_team_member_left(team_id, player_id, recipients));
+        }
+        self.team_session_ids.remove(&team_id);
+        self.team_snapshot_queries.remove(&team_id);
+        report.affected_player_ids = disbanded.player_ids;
+        Some(report)
+    }
+
+    pub(crate) fn insert_remote_team_member(
+        &mut self,
+        team_id: u32,
+        owner_type: i32,
+        owner_id: i32,
+        mut owner_region_id: i32,
+        mut owner_name: Vec<u8>,
+    ) -> Option<GameTeamRemoteMutation> {
+        let session_id = self.get_team_session_id(team_id);
+        let source_local = owner_type == 400 && self.players.contains_key(&owner_id);
+        if source_local {
+            let player = self
+                .players
+                .get(&owner_id)
+                .expect("remote insert source-local player остаётся canonical");
+            owner_region_id = player.server_region_id().unwrap_or_default();
+            owner_name = player.player_name().to_vec();
+        }
+        let inserted = self.session_factory.insert_team_member_owned(
+            session_id,
+            owner_type,
+            owner_id,
+            owner_region_id,
+            &owner_name,
+        )?;
+        let local_recipients = inserted
+            .teammate_ids
+            .iter()
+            .copied()
+            .filter(|player_id| self.players.contains_key(player_id))
+            .collect::<Vec<_>>();
+        let mut report = Self::team_remote_report(
+            GameTeamRemoteAction::MemberInserted,
+            Some(session_id),
+            Some(team_id),
+        );
+        report.affected_player_ids.push(owner_id);
+        if source_local {
+            let player = self
+                .players
+                .get_mut(&owner_id)
+                .expect("remote insert source-local player остаётся canonical");
+            player.set_team_membership(team_id as i32);
+            report.client_deliveries.extend(
+                self.publish_team_member_region(
+                    team_id,
+                    owner_type,
+                    owner_id,
+                    owner_region_id,
+                    local_recipients
+                        .iter()
+                        .copied()
+                        .filter(|recipient| *recipient != owner_id),
+                ),
+            );
+            report
+                .client_deliveries
+                .push(self.send_team_snapshot(owner_id, &inserted.snapshot));
+        }
+        report.client_deliveries.extend(
+            self.publish_team_member_joined(
+                team_id,
+                owner_type,
+                owner_id,
+                owner_region_id,
+                &owner_name,
+                self.player_team_hp_ratio_bits(owner_id),
+                local_recipients
+                    .iter()
+                    .copied()
+                    .filter(|recipient| *recipient != owner_id),
+            ),
+        );
+        if source_local {
+            report
+                .world_deliveries
+                .push(self.publish_world_team_member_joined(
+                    team_id,
+                    owner_type,
+                    owner_id,
+                    owner_region_id,
+                    &owner_name,
+                ));
+        }
+        Some(report)
+    }
+
+    pub(crate) fn remove_remote_team_member(
+        &mut self,
+        team_id: u32,
+        owner_type: i32,
+        owner_id: i32,
+    ) -> Option<GameTeamRemoteMutation> {
+        let session_id = self.get_team_session_id(team_id);
+        self.session_factory
+            .query_session_plug_by_owner(session_id, owner_type, owner_id)?;
+        let removed = self
+            .session_factory
+            .remove_team_member(session_id, owner_id)?;
+        let source_local = owner_type == 400 && self.players.contains_key(&owner_id);
+        if source_local {
+            self.players
+                .get_mut(&owner_id)
+                .expect("remote exit source-local player остаётся canonical")
+                .set_team_membership(0);
+        }
+        let recipients = std::iter::once(owner_id).filter(|_| source_local).chain(
+            removed
+                .remaining_player_ids
+                .iter()
+                .copied()
+                .filter(|player_id| self.players.contains_key(player_id)),
+        );
+        let mut report = Self::team_remote_report(
+            GameTeamRemoteAction::MemberRemoved,
+            Some(session_id),
+            Some(team_id),
+        );
+        report.affected_player_ids.push(owner_id);
+        report.client_deliveries = self.publish_team_member_left(team_id, owner_id, recipients);
+        if source_local {
+            let mut world = CMessage::new(0x0006_0004);
+            world.add_ulong(team_id);
+            world.add_long(owner_type);
+            world.add_long(owner_id);
+            report.world_deliveries.push(world.send(self, false));
+        }
+        Some(report)
+    }
+
+    pub(crate) fn change_remote_team_region(
+        &mut self,
+        team_id: u32,
+        owner_type: i32,
+        owner_id: i32,
+        owner_region_id: i32,
+    ) -> Option<GameTeamRemoteMutation> {
+        let session_id = self.get_team_session_id(team_id);
+        let recipients = self.session_factory.update_team_member_region(
+            session_id,
+            owner_type,
+            owner_id,
+            owner_region_id,
+        )?;
+        let recipients = recipients
+            .into_iter()
+            .filter(|player_id| *player_id != owner_id && self.players.contains_key(player_id));
+        let mut report = Self::team_remote_report(
+            GameTeamRemoteAction::RegionChanged,
+            Some(session_id),
+            Some(team_id),
+        );
+        report.affected_player_ids.push(owner_id);
+        report.client_deliveries = self.publish_team_member_region(
+            team_id,
+            owner_type,
+            owner_id,
+            owner_region_id,
+            recipients,
+        );
+        Some(report)
+    }
+
+    pub(crate) fn kick_remote_team_player(
+        &mut self,
+        team_id: u32,
+        player_id: i32,
+    ) -> Option<GameTeamRemoteMutation> {
+        if self.players.contains_key(&player_id) {
+            let mut report = self.remove_remote_team_member(team_id, 400, player_id)?;
+            report.action = GameTeamRemoteAction::PlayerKicked;
+            return Some(report);
+        }
+        let session_id = self.get_team_session_id(team_id);
+        self.session_factory
+            .query_session_plug_by_owner(session_id, 400, player_id)?;
+        let mut report = Self::team_remote_report(
+            GameTeamRemoteAction::PlayerKicked,
+            Some(session_id),
+            Some(team_id),
+        );
+        report.affected_player_ids.push(player_id);
+        let mut world = CMessage::new(0x0006_0007);
+        world.add_ulong(team_id);
+        world.add_long(player_id);
+        report.world_deliveries.push(world.send(self, false));
+        Some(report)
+    }
+
+    pub(crate) fn change_remote_team_leader(
+        &mut self,
+        team_id: u32,
+        player_id: i32,
+    ) -> Option<GameTeamRemoteMutation> {
+        let session_id = self.get_team_session_id(team_id);
+        let previous = self.session_factory.query_team(session_id)?.leader_id();
+        if previous == player_id {
+            return None;
+        }
+        self.session_factory
+            .set_team_leader(session_id, player_id)?;
+        if let Some(player) = self.players.get_mut(&previous) {
+            player.set_team_captain(false);
+        }
+        if let Some(player) = self.players.get_mut(&player_id) {
+            player.set_team_captain(true);
+        }
+        let recipients = self
+            .session_factory
+            .team_player_ids(session_id)?
+            .into_iter()
+            .filter(|id| self.players.contains_key(id));
+        let mut client = CMessage::new(0x000b_fd07);
+        client.add_ulong(team_id);
+        client.add_long(player_id);
+        let mut report = Self::team_remote_report(
+            GameTeamRemoteAction::LeaderChanged,
+            Some(session_id),
+            Some(team_id),
+        );
+        report.affected_player_ids.extend([previous, player_id]);
+        report.client_deliveries = recipients
+            .map(|recipient| client.send_to_player(self.net_server(), recipient))
+            .collect();
+        if self.players.contains_key(&previous) {
+            let mut world = CMessage::new(0x0006_0006);
+            world.add_ulong(team_id);
+            world.add_long(player_id);
+            report.world_deliveries.push(world.send(self, false));
+        }
+        Some(report)
+    }
+
+    pub(crate) fn restore_remote_team(
+        &mut self,
+        mut snapshot: TeamSessionSnapshot,
+    ) -> Option<GameTeamRemoteMutation> {
+        if self.get_team_session_id(snapshot.team_id) != 0 {
+            return None;
+        }
+        for member in &mut snapshot.members {
+            if member.owner_type == 400 {
+                if let Some(player) = self.players.get(&member.owner_id) {
+                    member.owner_region_id = player.server_region_id().unwrap_or_default();
+                    member.owner_name = player.player_name().to_vec();
+                }
+            }
+        }
+        let members = snapshot.members.clone();
+        let leader_id = snapshot.leader_id;
+        let restored: TeamSessionRestored = self.session_factory.restore_team_session(snapshot)?;
+        self.team_session_ids
+            .insert(restored.team_id, restored.session_id);
+        self.team_snapshot_queries.remove(&restored.team_id);
+        let mut report = Self::team_remote_report(
+            GameTeamRemoteAction::SnapshotRestored,
+            Some(restored.session_id),
+            Some(restored.team_id),
+        );
+        let mut inserted_ids = Vec::new();
+        for (index, member) in members.iter().enumerate() {
+            inserted_ids.push(member.owner_id);
+            let local_recipients = inserted_ids
+                .iter()
+                .copied()
+                .filter(|player_id| self.players.contains_key(player_id))
+                .collect::<Vec<_>>();
+            let source_local =
+                member.owner_type == 400 && self.players.contains_key(&member.owner_id);
+            if source_local {
+                let player = self
+                    .players
+                    .get_mut(&member.owner_id)
+                    .expect("restored source-local player остаётся canonical");
+                player.set_team_membership(restored.team_id as i32);
+                player.set_team_captain(member.owner_id == leader_id);
+                report.client_deliveries.extend(
+                    self.publish_team_member_region(
+                        restored.team_id,
+                        member.owner_type,
+                        member.owner_id,
+                        member.owner_region_id,
+                        local_recipients
+                            .iter()
+                            .copied()
+                            .filter(|recipient| *recipient != member.owner_id),
+                    ),
+                );
+                report.client_deliveries.push(
+                    self.send_team_snapshot(
+                        member.owner_id,
+                        restored.insertion_snapshots.get(index)?,
+                    ),
+                );
+            }
+            report.client_deliveries.extend(
+                self.publish_team_member_joined(
+                    restored.team_id,
+                    member.owner_type,
+                    member.owner_id,
+                    member.owner_region_id,
+                    &member.owner_name,
+                    self.player_team_hp_ratio_bits(member.owner_id),
+                    local_recipients
+                        .iter()
+                        .copied()
+                        .filter(|recipient| *recipient != member.owner_id),
+                ),
+            );
+            if source_local {
+                report
+                    .world_deliveries
+                    .push(self.publish_world_team_member_joined(
+                        restored.team_id,
+                        member.owner_type,
+                        member.owner_id,
+                        member.owner_region_id,
+                        &member.owner_name,
+                    ));
+            }
+        }
+        report.affected_player_ids = restored.player_ids;
+        Some(report)
+    }
+
+    pub(crate) fn answer_remote_team_online_query(
+        &self,
+        first: i32,
+        second: i32,
+        player_id: i32,
+    ) -> GameTeamRemoteMutation {
+        let mut world = CMessage::new(0x0006_0009);
+        world.add_long(first);
+        world.add_long(second);
+        world.add_long(player_id);
+        world.add_long(i32::from(self.players.contains_key(&player_id)));
+        let mut report = Self::team_remote_report(GameTeamRemoteAction::OnlineAnswered, None, None);
+        report.affected_player_ids.push(player_id);
+        report.world_deliveries.push(world.send(self, false));
+        report
+    }
+
+    pub(crate) fn change_remote_team_allocation(
+        &mut self,
+        team_id: u32,
+        allocation_scheme: i32,
+    ) -> Option<GameTeamRemoteMutation> {
+        let session_id = self.get_team_session_id(team_id);
+        let leader_id = self.session_factory.query_team(session_id)?.leader_id();
+        let (team_id, recipients) = self.session_factory.set_team_allocation_scheme(
+            session_id,
+            leader_id,
+            allocation_scheme,
+        )?;
+        let mut client = CMessage::new(0x000b_fd08);
+        client.add_ulong(team_id);
+        client.add_long(allocation_scheme);
+        let mut report = Self::team_remote_report(
+            GameTeamRemoteAction::AllocationChanged,
+            Some(session_id),
+            Some(team_id),
+        );
+        report.affected_player_ids.push(leader_id);
+        report.client_deliveries = recipients
+            .into_iter()
+            .filter(|id| self.players.contains_key(id))
+            .map(|recipient| client.send_to_player(self.net_server(), recipient))
+            .collect();
+        if self.players.contains_key(&leader_id) {
+            let mut world = CMessage::new(0x0006_000a);
+            world.add_ulong(team_id);
+            world.add_long(allocation_scheme);
+            report.world_deliveries.push(world.send(self, false));
+        }
+        Some(report)
+    }
+
+    pub(crate) fn relay_remote_team_chat(
+        &self,
+        team_id: u32,
+        owner_type: i32,
+        owner_id: i32,
+        text: &[u8],
+    ) -> Option<GameTeamRemoteMutation> {
+        let session_id = self.get_team_session_id(team_id);
+        self.session_factory
+            .team_member(session_id, owner_type, owner_id)?;
+        let recipients = self
+            .session_factory
+            .team_player_ids(session_id)?
+            .into_iter()
+            .filter(|id| self.players.contains_key(id));
+        let mut client = CMessage::new(0x000b_fd09);
+        client.add_ulong(team_id);
+        client.add_long(owner_type);
+        client.add_long(owner_id);
+        add_legacy_c_string(client.base_mut(), text);
+        let mut report = Self::team_remote_report(
+            GameTeamRemoteAction::ChatRelayed,
+            Some(session_id),
+            Some(team_id),
+        );
+        report.affected_player_ids.push(owner_id);
+        report.client_deliveries = recipients
+            .map(|recipient| client.send_to_player(self.net_server(), recipient))
+            .collect();
+        if owner_type == 400 && self.players.contains_key(&owner_id) {
+            let mut world = CMessage::new(0x0006_000b);
+            world.add_ulong(team_id);
+            world.add_long(owner_type);
+            world.add_long(owner_id);
+            add_legacy_c_string(world.base_mut(), text);
+            report.world_deliveries.push(world.send(self, false));
+        }
+        Some(report)
+    }
+
+    pub(crate) fn relay_remote_team_state(
+        &self,
+        team_id: u32,
+        owner_type: i32,
+        owner_id: i32,
+        state: f32,
+    ) -> Option<GameTeamRemoteMutation> {
+        let session_id = self.get_team_session_id(team_id);
+        self.session_factory
+            .team_member(session_id, owner_type, owner_id)?;
+        let recipients = self
+            .session_factory
+            .team_player_ids(session_id)?
+            .into_iter()
+            .filter(|id| *id != owner_id && self.players.contains_key(id));
+        let mut client = CMessage::new(0x000b_fd0a);
+        client.add_ulong(team_id);
+        client.add_long(owner_type);
+        client.add_long(owner_id);
+        client.add_ulong(state.to_bits());
+        let mut report = Self::team_remote_report(
+            GameTeamRemoteAction::StateRelayed,
+            Some(session_id),
+            Some(team_id),
+        );
+        report.affected_player_ids.push(owner_id);
+        report.client_deliveries = recipients
+            .map(|recipient| client.send_to_player(self.net_server(), recipient))
+            .collect();
+        if owner_type == 400 && self.players.contains_key(&owner_id) {
+            let mut world = CMessage::new(0x0006_000c);
+            world.add_ulong(team_id);
+            world.add_long(owner_type);
+            world.add_long(owner_id);
+            world.add_ulong(state.to_bits());
+            report.world_deliveries.push(world.send(self, false));
+        }
+        Some(report)
     }
 
     pub(crate) fn find_player(&self, player_id: i32) -> Option<&CPlayer> {
@@ -31562,6 +32273,8 @@ impl CGame {
             stages.push(GameMainLoopStage::Message);
 
             let started = runtime.now_milliseconds();
+            let _team_snapshot_requests =
+                self.run_team_snapshot_queries(runtime.now_milliseconds());
             let terminal_equipment_sessions = self
                 .session_factory
                 .garbage_collect_terminal_equipment_sessions();
@@ -31586,6 +32299,8 @@ impl CGame {
             stages.push(GameMainLoopStage::Ai);
             messages = self.process_messages(runtime);
             stages.push(GameMainLoopStage::Message);
+            let _team_snapshot_requests =
+                self.run_team_snapshot_queries(runtime.now_milliseconds());
             let terminal_equipment_sessions = self
                 .session_factory
                 .garbage_collect_terminal_equipment_sessions();

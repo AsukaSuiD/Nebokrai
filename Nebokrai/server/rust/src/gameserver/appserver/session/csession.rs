@@ -5,10 +5,11 @@
 //! source-owner `server/gameserver/appserver/area.cpp` и материализован там.
 //! `Vec<i32>` сохраняет порядок обхода. Normal equipment-session materializes
 //! constructor defaults, Start gate и InsertPlug capacity/state prefix;
-//! team lifecycle ниже остаётся RAW. `from_plug_ids` является assembly-
-//! границей уже восстановленного registry state. Для normal equipment-session
-//! материализован terminal `End`: ended/remove state и ordered обход plug IDs;
-//! concrete plug callback/registry lookup выполняет `CSessionFactory`.
+//! team create/restore и terminal lifecycle используют тот же storage.
+//! `from_plug_ids` является assembly-границей уже восстановленного registry
+//! state. Для normal equipment-session материализован terminal `End`:
+//! ended/remove state и ordered обход plug IDs; concrete plug callback/registry
+//! lookup выполняет `CSessionFactory`.
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CSession {

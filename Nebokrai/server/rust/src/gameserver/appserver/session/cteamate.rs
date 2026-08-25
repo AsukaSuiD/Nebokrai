@@ -5,12 +5,14 @@
 //! prefix: plug identity, player owner, region/name snapshot и wire Serialize,
 //! который `OnPlugInserted` вкладывает в клиентский `0xBFD03`, а local exit
 //! доводит до player membership и `0xBFD05`. Достигнутые allocation/chat
-//! callbacks материализуют `0xBFD08/09` из typed session owner-ов. Lose/restore,
-//! AI и остальные change-state ветви сохранены ниже как RAW.
+//! callbacks материализуют `0xBFD08/09` из typed session owner-ов. Region,
+//! member-state и remote restore используют тот же typed plug. Lose/AI и
+//! остальные недостигнутые ветви сохранены ниже как RAW.
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CTeamate {
     plug_id: i32,
+    owner_type: i32,
     owner_id: i32,
     owner_region_id: i32,
     owner_name: Vec<u8>,
@@ -23,8 +25,19 @@ impl CTeamate {
         owner_region_id: i32,
         owner_name: &[u8],
     ) -> Self {
+        Self::new_owned(plug_id, 400, owner_id, owner_region_id, owner_name)
+    }
+
+    pub(crate) fn new_owned(
+        plug_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+        owner_region_id: i32,
+        owner_name: &[u8],
+    ) -> Self {
         Self {
             plug_id,
+            owner_type,
             owner_id,
             owner_region_id,
             owner_name: owner_name
@@ -43,9 +56,13 @@ impl CTeamate {
         self.owner_id
     }
 
+    pub(crate) const fn set_owner_region_id(&mut self, owner_region_id: i32) {
+        self.owner_region_id = owner_region_id;
+    }
+
     pub(crate) fn serialize(&self, output: &mut Vec<u8>) {
         output.extend_from_slice(&5_i32.to_le_bytes());
-        output.extend_from_slice(&400_i32.to_le_bytes());
+        output.extend_from_slice(&self.owner_type.to_le_bytes());
         output.extend_from_slice(&self.owner_id.to_le_bytes());
         output.extend_from_slice(&0_i32.to_le_bytes());
         output.extend_from_slice(&self.owner_region_id.to_le_bytes());

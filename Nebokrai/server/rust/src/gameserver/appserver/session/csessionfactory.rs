@@ -26,7 +26,9 @@
 //! creation/join теперь хранит typed `CTeam/CTeamate`, сохраняя общий ID
 //! allocator, insertion order и промежуточные serialization snapshots;
 //! allocation/chat переходы получают ordered teammate owners из той же
-//! session и не обходят typed plug registry.
+//! session и не обходят typed plug registry. World snapshot unserialize и
+//! incremental replication используют тот же allocator/registry и сохраняют
+//! insertion-order client snapshots.
 
 use std::collections::BTreeMap;
 
@@ -164,6 +166,36 @@ pub(crate) struct TeamMemberInserted {
     pub(crate) team_id: u32,
     pub(crate) snapshot: Vec<u8>,
     pub(crate) teammate_count: usize,
+    pub(crate) teammate_ids: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TeamMemberSnapshot {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) owner_region_id: i32,
+    pub(crate) owner_name: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TeamSessionSnapshot {
+    pub(crate) minimum_plugs: u32,
+    pub(crate) maximum_plugs: u32,
+    pub(crate) lifetime: u32,
+    pub(crate) team_id: u32,
+    pub(crate) team_name: Vec<u8>,
+    pub(crate) password: Vec<u8>,
+    pub(crate) leader_id: i32,
+    pub(crate) members: Vec<TeamMemberSnapshot>,
+}
+
+#[must_use = "restored team сохраняет insertion snapshots и ordered members"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TeamSessionRestored {
+    pub(crate) session_id: i32,
+    pub(crate) team_id: u32,
+    pub(crate) insertion_snapshots: Vec<Vec<u8>>,
+    pub(crate) player_ids: Vec<i32>,
 }
 
 #[must_use = "team removal сохраняет removed owner и remaining members"]
@@ -286,8 +318,19 @@ impl CSessionFactory {
         owner_region_id: i32,
         owner_name: &[u8],
     ) -> Option<TeamMemberInserted> {
+        self.insert_team_member_owned(session_id, 400, owner_id, owner_region_id, owner_name)
+    }
+
+    pub(crate) fn insert_team_member_owned(
+        &mut self,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+        owner_region_id: i32,
+        owner_name: &[u8],
+    ) -> Option<TeamMemberInserted> {
         if self
-            .query_session_plug_by_owner(session_id, 400, owner_id)
+            .query_session_plug_by_owner(session_id, owner_type, owner_id)
             .is_some()
             || !self.teams.contains_key(&session_id)
         {
@@ -296,10 +339,11 @@ impl CSessionFactory {
         let plug_id = self.next_plug_id;
         let mut base = CPlug::new();
         base.set_id(plug_id);
-        base.set_owner(400, owner_id);
+        base.set_owner(owner_type, owner_id);
         base.set_session(session_id);
         base.set_plug_type(5);
-        let teammate = CTeamate::new(plug_id, owner_id, owner_region_id, owner_name);
+        let teammate =
+            CTeamate::new_owned(plug_id, owner_type, owner_id, owner_region_id, owner_name);
         if !self.sessions.get_mut(&session_id)?.insert_plug(plug_id) {
             return None;
         }
@@ -315,12 +359,91 @@ impl CSessionFactory {
                 .iter()
                 .filter_map(|id| self.teammates.get(id)),
         );
+        let teammate_ids = session
+            .plug_ids_storage()
+            .iter()
+            .filter_map(|id| self.teammates.get(id).map(CTeamate::owner_id))
+            .collect();
         Some(TeamMemberInserted {
             session_id,
             team_id: team.team_id(),
             snapshot,
             teammate_count: session.plug_ids_storage().len(),
+            teammate_ids,
         })
+    }
+
+    pub(crate) fn restore_team_session(
+        &mut self,
+        snapshot: TeamSessionSnapshot,
+    ) -> Option<TeamSessionRestored> {
+        let session_id = self.next_session_id;
+        let team_id = snapshot.team_id;
+        let mut session = CSession::normal(
+            snapshot.minimum_plugs,
+            snapshot.maximum_plugs,
+            snapshot.lifetime,
+        );
+        if !session.start() {
+            return None;
+        }
+        let team = CTeam::restored(
+            snapshot.team_id,
+            snapshot.team_name,
+            snapshot.password,
+            snapshot.leader_id,
+        );
+        self.next_session_id = self.next_session_id.wrapping_add(1);
+        self.sessions.insert(session_id, session);
+        self.teams.insert(session_id, team);
+
+        let mut insertion_snapshots = Vec::with_capacity(snapshot.members.len());
+        let mut player_ids = Vec::with_capacity(snapshot.members.len());
+        for member in snapshot.members {
+            let inserted = self.insert_team_member_owned(
+                session_id,
+                member.owner_type,
+                member.owner_id,
+                member.owner_region_id,
+                &member.owner_name,
+            )?;
+            player_ids.push(member.owner_id);
+            insertion_snapshots.push(inserted.snapshot);
+        }
+        Some(TeamSessionRestored {
+            session_id,
+            team_id,
+            insertion_snapshots,
+            player_ids,
+        })
+    }
+
+    pub(crate) fn update_team_member_region(
+        &mut self,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+        owner_region_id: i32,
+    ) -> Option<Vec<i32>> {
+        let plug_id = self
+            .query_session_plug_by_owner(session_id, owner_type, owner_id)?
+            .id();
+        self.teammates
+            .get_mut(&plug_id)?
+            .set_owner_region_id(owner_region_id);
+        self.team_player_ids(session_id)
+    }
+
+    pub(crate) fn team_member(
+        &self,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+    ) -> Option<&CTeamate> {
+        let plug_id = self
+            .query_session_plug_by_owner(session_id, owner_type, owner_id)?
+            .id();
+        self.teammates.get(&plug_id)
     }
 
     pub(crate) fn query_team(&self, session_id: i32) -> Option<&CTeam> {
@@ -1332,9 +1455,9 @@ impl CSessionFactory {
 //
 //
 
-// MATERIALIZED: live equipment-session registry sweep выполняется на обеих
-// MainLoop session-stage. Неподключённая `CTeam::s_mQuestedTeams` retry-queue
-// (`0x60008`, 60 секунд) остаётся конкретной границей будущего team owner-а.
+// MATERIALIZED: live equipment-session registry sweep и team snapshot
+// retry-queue (`0x60008`, 60 секунд) выполняются на обеих MainLoop
+// session-stage; сама очередь принадлежит owned `CGame`.
 // ============================================================================
 // FUNCTION: CSessionFactory::CreateSession
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
