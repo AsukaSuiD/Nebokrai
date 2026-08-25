@@ -73,6 +73,9 @@
 //! exact capacity gate выполняется и в Receive по полному auction balance, и
 //! повторно после source removal; partial currency ownership, rollback,
 //! last-operated state, `GPM015/GPM019` и self wire сохраняют исходный порядок.
+//! Hand↔auction listing (`3↔13`) проходит отдельным direct owner-путём:
+//! partial one-slot removal, slot-0 `AuctionLimit`, burden обратного переноса,
+//! positional stack, rollback и `0xC0101` больше не выпадают в RAW handler.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -107,8 +110,8 @@ use crate::gameserver::gameserver::game::{
     BattleFairyTransferReport, CGame, CiQingComposeTransferBlock, CiQingComposeTransferReport,
     DepotStorageTransferAddition, DepotStorageTransferBlock, DepotStorageTransferReport,
     FairyStorageTransferBlock, FairyStorageTransferReport, GameContainerMessageRuntime,
-    GroundGoodsMoveBlock, GroundGoodsMoveReport, HandContainerMoveBlock, HandContainerMoveReport,
-    PlayerHandMoveBlock, PlayerHandMoveReport,
+    GroundGoodsMoveBlock, GroundGoodsMoveReport, HandAuctionListingBlock, HandAuctionListingReport,
+    HandContainerMoveBlock, HandContainerMoveReport, PlayerHandMoveBlock, PlayerHandMoveReport,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -324,6 +327,12 @@ pub(crate) enum GameContainerMessageOutcome {
         delivery: Option<i32>,
         notification_deliveries: Vec<i32>,
     },
+    HandAuctionListingMoved(HandAuctionListingReport),
+    HandAuctionListingRolledBack {
+        reason: HandAuctionListingBlock,
+        delivery: i32,
+        notification_delivery: Option<i32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -337,6 +346,7 @@ enum EnhancementMessageRoute {
     CiQingComposeTransfer,
     AuctionGoodsInventoryReturn,
     AuctionMoneyReturn,
+    HandAuctionListingTransfer,
     GroundDrop,
     GroundPickup,
     EnhancementSelect,
@@ -688,6 +698,17 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 && matches!(request.destination_container_extend_id, 1 | 2 | 9)
             {
                 EnhancementMessageRoute::HandContainerMove
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && matches!(
+                    (
+                        request.source_container_extend_id,
+                        request.destination_container_extend_id
+                    ),
+                    (3, 13) | (13, 3)
+                )
+            {
+                EnhancementMessageRoute::HandAuctionListingTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.source_container_extend_id == 15
@@ -1199,6 +1220,51 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     )
                 });
                 GameContainerMessageOutcome::PlayerHandRolledBack {
+                    reason,
+                    delivery: send_rollback(game, player_id),
+                    notification_delivery,
+                }
+            }
+        })));
+    }
+
+    if route == EnhancementMessageRoute::HandAuctionListingTransfer {
+        let transfer = game.transfer_hand_auction_listing_goods(
+            player_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_container_extend_id,
+            request.destination_position,
+        );
+        return Some(Ok(report(match transfer {
+            Ok(transfer) => GameContainerMessageOutcome::HandAuctionListingMoved(transfer),
+            Err(reason) => {
+                let notice_id: Option<&[u8]> = match &reason {
+                    HandAuctionListingBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
+                        Some(b"GS0113")
+                    }
+                    HandAuctionListingBlock::PartialMoveBusy(PlayerProgress::Trading) => {
+                        Some(b"GS0114")
+                    }
+                    HandAuctionListingBlock::PartialMoveBusy(PlayerProgress::Upgrade) => {
+                        Some(b"GS0115")
+                    }
+                    HandAuctionListingBlock::BurdenRolledBack { .. } => Some(b"GS0259"),
+                    HandAuctionListingBlock::RollbackFailed { .. } => Some(b"GPM019"),
+                    _ => None,
+                };
+                let notification_delivery = notice_id.map(|notice_id| {
+                    send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(notice_id),
+                        0xffff_ffff,
+                        0,
+                    )
+                });
+                GameContainerMessageOutcome::HandAuctionListingRolledBack {
                     reason,
                     delivery: send_rollback(game, player_id),
                     notification_delivery,

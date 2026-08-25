@@ -3001,6 +3001,63 @@ pub(crate) struct AuctionGoodsInventoryReport {
     pub(crate) delivery: i32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HandAuctionListingRemoval {
+    Hand(GroundHandRemoval),
+    Listing(AuctionListingWithdrawalRemoval),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HandAuctionListingAddition {
+    Hand(GroundHandAddition),
+    Listing(VolumeGoodsAddOutcome),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HandAuctionListingBlock {
+    MissingPlayer,
+    UnsupportedRoute,
+    InvalidPosition,
+    MissingGoods,
+    AmountMismatch,
+    PartialMoveBusy(PlayerProgress),
+    AuctionLimitRejected {
+        removal: HandAuctionListingRemoval,
+        restored: HandAuctionListingAddition,
+    },
+    BurdenRolledBack {
+        removal: HandAuctionListingRemoval,
+        restored: HandAuctionListingAddition,
+    },
+    Rejected {
+        removal: HandAuctionListingRemoval,
+        rejected: HandAuctionListingAddition,
+        restored: HandAuctionListingAddition,
+    },
+    RollbackFailed {
+        goods: CGoods,
+        removal: HandAuctionListingRemoval,
+        rejected: Option<HandAuctionListingAddition>,
+        rollback: HandAuctionListingAddition,
+    },
+    RemovalFailed,
+}
+
+#[must_use = "hand↔auction-listing report сохраняет ownership, slot state и wire"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HandAuctionListingReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) source_extend_id: i32,
+    pub(crate) source_position: u32,
+    pub(crate) destination_extend_id: i32,
+    pub(crate) destination_position: u32,
+    pub(crate) removal: HandAuctionListingRemoval,
+    pub(crate) addition: HandAuctionListingAddition,
+    pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) delivery: i32,
+}
+
 #[must_use = "ground-goods report сохраняет ownership и обе client/around публикации"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GroundGoodsMoveReport {
@@ -8857,6 +8914,310 @@ impl CGame {
             AuctionGoodsInventoryRollback::Failed { goods, outcome }
         } else {
             AuctionGoodsInventoryRollback::Restored(outcome)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn transfer_hand_auction_listing_goods(
+        &mut self,
+        player_id: i32,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+    ) -> Result<HandAuctionListingReport, HandAuctionListingBlock> {
+        if !matches!((source_extend_id, destination_extend_id), (3, 13) | (13, 3)) {
+            return Err(HandAuctionListingBlock::UnsupportedRoute);
+        }
+        if source_extend_id == 3 && source_position != 0
+            || destination_extend_id == 3 && destination_position != 0
+            || source_extend_id == 13 && source_position >= 2
+            || destination_extend_id == 13 && destination_position >= 2
+        {
+            return Err(HandAuctionListingBlock::InvalidPosition);
+        }
+        let player = self
+            .find_player(player_id)
+            .ok_or(HandAuctionListingBlock::MissingPlayer)?;
+        let source = if source_extend_id == 3 {
+            player.hand().get_goods(source_position)
+        } else {
+            player.auction_listing().get_goods(source_position)
+        }
+        .filter(|goods| goods.identity().ex_id == goods_id)
+        .ok_or(HandAuctionListingBlock::MissingGoods)?;
+        if amount == 0 || source.amount() < amount {
+            return Err(HandAuctionListingBlock::AmountMismatch);
+        }
+        if source.amount() != amount
+            && matches!(
+                player.current_progress(),
+                PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+            )
+        {
+            return Err(HandAuctionListingBlock::PartialMoveBusy(
+                player.current_progress(),
+            ));
+        }
+        let source_identity = source.identity();
+        let mut burden_goods = source.clone();
+        burden_goods.set_amount(amount);
+        let burden_exceeded = source_extend_id == 13
+            && player
+                .current_burden(&self.goods_factory)
+                .wrapping_add(burden_goods.weight(&self.goods_factory))
+                > u32::from(player.combat_properties().burden);
+        let mut split_template = source.clone();
+        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .expect("player проверен перед hand↔auction-listing ownership pass");
+
+        let (removal, mut incoming) = if source_extend_id == 3 {
+            let removed =
+                player
+                    .hand_mut()
+                    .take_goods(source_position, amount, &self.goods_factory, |_| {
+                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                            .then(|| split_template.clone())
+                    });
+            let Some(taken) = removed else {
+                self.players.insert(player_id, player);
+                return Err(HandAuctionListingBlock::RemovalFailed);
+            };
+            let (goods, removal) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    GroundHandRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                        kind: GroundHandRemovalKind::Removed,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    GroundHandRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                        kind: GroundHandRemovalKind::Split {
+                            source: split.source,
+                        },
+                    },
+                ),
+            };
+            (HandAuctionListingRemoval::Hand(removal), Some(goods))
+        } else {
+            let removed = player.auction_listing_mut().take_goods(
+                source_position,
+                amount,
+                &self.goods_factory,
+                |_| {
+                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                        .then(|| split_template.clone())
+                },
+            );
+            let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
+                self.players.insert(player_id, player);
+                return Err(HandAuctionListingBlock::RemovalFailed);
+            };
+            let (goods, removal) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    AuctionListingWithdrawalRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    AuctionListingWithdrawalRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                    },
+                ),
+            };
+            (HandAuctionListingRemoval::Listing(removal), Some(goods))
+        };
+
+        if burden_exceeded {
+            let rollback = self.add_hand_auction_listing_goods(
+                &mut player,
+                source_extend_id,
+                source_position,
+                &mut incoming,
+            );
+            self.players.insert(player_id, player);
+            if let Some(goods) = incoming {
+                return Err(HandAuctionListingBlock::RollbackFailed {
+                    goods,
+                    removal,
+                    rejected: None,
+                    rollback,
+                });
+            }
+            return Err(HandAuctionListingBlock::BurdenRolledBack {
+                removal,
+                restored: rollback,
+            });
+        }
+
+        if destination_extend_id == 13
+            && destination_position == 0
+            && !CPlayer::auction_listing_goods_allowed(
+                incoming
+                    .as_ref()
+                    .expect("listing limit получает detached goods"),
+                &self.goods_factory,
+            )
+        {
+            let rollback = self.add_hand_auction_listing_goods(
+                &mut player,
+                source_extend_id,
+                source_position,
+                &mut incoming,
+            );
+            self.players.insert(player_id, player);
+            if let Some(goods) = incoming {
+                return Err(HandAuctionListingBlock::RollbackFailed {
+                    goods,
+                    removal,
+                    rejected: None,
+                    rollback,
+                });
+            }
+            return Err(HandAuctionListingBlock::AuctionLimitRejected {
+                removal,
+                restored: rollback,
+            });
+        }
+
+        let addition = self.add_hand_auction_listing_goods(
+            &mut player,
+            destination_extend_id,
+            destination_position,
+            &mut incoming,
+        );
+        if incoming.is_some() {
+            let rejected = addition;
+            let rollback = self.add_hand_auction_listing_goods(
+                &mut player,
+                source_extend_id,
+                source_position,
+                &mut incoming,
+            );
+            self.players.insert(player_id, player);
+            if let Some(goods) = incoming {
+                return Err(HandAuctionListingBlock::RollbackFailed {
+                    goods,
+                    removal,
+                    rejected: Some(rejected),
+                    rollback,
+                });
+            }
+            return Err(HandAuctionListingBlock::Rejected {
+                removal,
+                rejected,
+                restored: rollback,
+            });
+        }
+
+        let (actual_position, destination_goods, destination_amount) =
+            Self::hand_auction_listing_destination(&player, destination_position, &addition);
+        let previous_last_operated =
+            player.record_last_operated_goods(source_extend_id, source_position);
+        self.players.insert(player_id, player);
+        let mut moved = CS2CContainerObjectMove::default();
+        moved.set_operation(ContainerObjectMoveOperation::MoveObject);
+        moved.set_source_container(PLAYER_TYPE, player_id, source_position);
+        moved.set_source_container_extend_id(source_extend_id);
+        moved.set_destination_container(PLAYER_TYPE, player_id, actual_position);
+        moved.set_destination_container_extend_id(destination_extend_id);
+        moved.set_source_object(GOODS_TYPE, goods_id, amount);
+        moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
+        moved.set_destination_object_amount(destination_amount);
+        let delivery = moved.send_to_player(self, player_id);
+        Ok(HandAuctionListingReport {
+            goods: source_identity,
+            amount,
+            source_extend_id,
+            source_position,
+            destination_extend_id,
+            destination_position: actual_position,
+            removal,
+            addition,
+            previous_last_operated,
+            delivery,
+        })
+    }
+
+    fn add_hand_auction_listing_goods(
+        &self,
+        player: &mut CPlayer,
+        extend_id: i32,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+    ) -> HandAuctionListingAddition {
+        if extend_id == 3 {
+            return HandAuctionListingAddition::Hand(
+                self.add_ground_hand_goods(player, position, incoming),
+            );
+        }
+        let owner_progress_allows = player.current_progress() == PlayerProgress::None;
+        HandAuctionListingAddition::Listing(player.auction_listing_mut().add_goods_at(
+            position,
+            incoming,
+            &self.goods_factory,
+            owner_progress_allows,
+        ))
+    }
+
+    fn hand_auction_listing_destination(
+        player: &CPlayer,
+        requested_position: u32,
+        addition: &HandAuctionListingAddition,
+    ) -> (u32, ShapeIdentity, u32) {
+        match addition {
+            HandAuctionListingAddition::Hand(_) => {
+                let goods = player.hand().get_goods(0).expect("успешный hand add");
+                (0, goods.identity(), goods.amount())
+            }
+            HandAuctionListingAddition::Listing(outcome) => match outcome {
+                VolumeGoodsAddOutcome::Added(added) => {
+                    let position = added.position.unwrap_or(requested_position);
+                    let goods = player
+                        .auction_listing()
+                        .get_goods(position)
+                        .expect("успешный listing add");
+                    (position, goods.identity(), goods.amount())
+                }
+                VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { target, .. }) => {
+                    let position = player
+                        .auction_listing()
+                        .query_goods_position(target.ex_id)
+                        .expect("listing stack position");
+                    let goods = player
+                        .auction_listing()
+                        .get_goods(position)
+                        .expect("успешный listing stack");
+                    (position, goods.identity(), goods.amount())
+                }
+                _ => unreachable!("успешный listing add забрал incoming"),
+            },
         }
     }
 

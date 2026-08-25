@@ -279,10 +279,11 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BURDEN_UPPER_LIMIT_CORRECTION, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2,
     GAP_CONSTITUTION_CORRECTION, GAP_DODGE_CORRECTION, GAP_ELEMENT_ATTACK_CORRECTION,
     GAP_ELEMENT_AVOID, GAP_ELEMENT_RESISTANCE_CORRECTION, GAP_FATAL_BLOW_RATE_CORRECTION,
-    GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL, GAP_GOODS_BIND, GAP_GOODS_PACKAGE_EXTENTION,
-    GAP_HIT_RATE_CORRECTION, GAP_HP_RESTORE_SPEED_CORRECTION, GAP_HP_UPPER_LIMIT_CORRECTION,
-    GAP_MAXIMUM_ATTACK_CORRECTION, GAP_MINIMUM_ATTACK_CORRECTION, GAP_MOUNT_LEVEL, GAP_MOUNT_TYPE,
-    GAP_MP_RESTORE_SPEED_CORRECTION, GAP_MP_UPPER_LIMIT_CORRECTION, GAP_REQUIRE_GENDER,
+    GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL, GAP_GOODS_BIND, GAP_GOODS_LIFE_TYPE,
+    GAP_GOODS_PACKAGE_EXTENTION, GAP_HIT_RATE_CORRECTION, GAP_HP_RESTORE_SPEED_CORRECTION,
+    GAP_HP_UPPER_LIMIT_CORRECTION, GAP_MAXIMUM_ATTACK_CORRECTION, GAP_MINIMUM_ATTACK_CORRECTION,
+    GAP_MOUNT_LEVEL, GAP_MOUNT_TYPE, GAP_MP_RESTORE_SPEED_CORRECTION,
+    GAP_MP_UPPER_LIMIT_CORRECTION, GAP_PARTICULAR_ATTRIBUTE, GAP_REQUIRE_GENDER,
     GAP_REQUIRE_OCCUPATION, GAP_ROLE_MINIMUM_AGILITY_LIMIT, GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT,
     GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_ROLE_MINIMUM_STRENGTH_LIMIT, GAP_ROLE_MINIMUM_WAKAN_LIMIT,
     GAP_STIFFEN_PROBABILITY_CORRECTION, GAP_STRENGTH_CORRECTION, GAP_WAKAN_CORRECTION,
@@ -6799,6 +6800,16 @@ impl CPlayer {
         }
     }
 
+    /// Exact `AuctionLimit`: listing slot `0` принимает только предмет без
+    /// particular-флагов `0x20/0x04` и без life-type addon. Player state в
+    /// формуле не участвует; owner остаётся здесь из-за исходного dispatch.
+    pub(crate) fn auction_listing_goods_allowed(goods: &CGoods, factory: &CGoodsFactory) -> bool {
+        let particular = goods.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32;
+        particular & 0x20 == 0
+            && particular & 0x04 == 0
+            && !goods.query_attribute(GAP_GOODS_LIFE_TYPE)
+    }
+
     pub(crate) fn auction_money_goods(&self) -> Option<&CGoods> {
         self.auction_wallet.get_goods(0)
     }
@@ -10950,20 +10961,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x0002EEF0
 // ADDRESS: 0042eef0
 // PROTOTYPE: ulong __thiscall GetAuctionMoney(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AuctionLimit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14998
-// RVA: 0x0002EF00
-// ADDRESS: 0042ef00
-// PROTOTYPE: bool __thiscall AuctionLimit(CGoods * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
