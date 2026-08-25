@@ -1,6 +1,37 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Базовая атака GameServer (`SKILL_BASE_ATTACK == 1`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
+//! `appserver/skills/baseattack.cpp`. Подтверждённый контракт: первый AI tick
+//! проверяет дальность, поворачивает игрока и публикует action 0; после
+//! `SKILL_USAGE_DELAY_TIME` action 1 до расчёта атаки; dead target завершает
+//! skill action 2, distant target — action `0x0b`. Состояние хранится рядом с
+//! canonical `CPlayerAI`, а не в shadow-map CGame. Конкретный PvP damage и
+//! сетевые hurt/death effects исполняет CGame caller; прочие skill ID сюда не
+//! маршрутизируются.
+
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+
+pub(crate) const BASE_ATTACK_SKILL_ID: u32 = 1;
+pub(crate) const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5003;
+pub(crate) const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
+pub(crate) const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
+pub(crate) const SKILL_USAGE_USER_HIT_MODIFIER: u32 = 20_001;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BaseAttackExecutionState {
+    pub(crate) dispatch: PlayerSkillDispatch,
+    pub(crate) started_at_ms: u32,
+}
+
+pub(crate) const fn time_reached(now_ms: u32, started_at_ms: u32, delay_ms: u32) -> bool {
+    now_ms.wrapping_sub(started_at_ms) >= delay_ms
+}
+
+pub(crate) fn real_distance(source_x: i32, source_y: i32, target_x: i32, target_y: i32) -> i32 {
+    let x = target_x.wrapping_sub(source_x) as f32;
+    let y = target_y.wrapping_sub(source_y) as f32;
+    (x.mul_add(x, y * y).sqrt()).round_ties_even() as i32
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -203,15 +234,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

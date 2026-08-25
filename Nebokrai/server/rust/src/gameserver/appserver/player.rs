@@ -1627,7 +1627,12 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) element_modify: i32,
     pub(crate) blast_attack: u16,
     pub(crate) blast_element_attack: u16,
+    pub(crate) soul_resistance: u16,
+    pub(crate) add_soul_attack: u16,
+    pub(crate) blast_attack_scale_bits: u32,
     pub(crate) blast_defense_scale_bits: u32,
+    pub(crate) element_blast_attack_scale_bits: u32,
+    pub(crate) element_blast_defense_scale_bits: u32,
     pub(crate) full_miss_scale_bits: u32,
     pub(crate) critical_rate_bits: u32,
 }
@@ -1702,12 +1707,24 @@ pub(crate) struct PlayerPkPermissionMutation {
 }
 
 impl PlayerCombatProperties {
+    pub(crate) const fn blast_attack_scale(self) -> f32 {
+        f32::from_bits(self.blast_attack_scale_bits)
+    }
+
     pub(crate) const fn blast_defense_scale(self) -> f32 {
         f32::from_bits(self.blast_defense_scale_bits)
     }
 
     pub(crate) const fn full_miss_scale(self) -> f32 {
         f32::from_bits(self.full_miss_scale_bits)
+    }
+
+    pub(crate) const fn element_blast_attack_scale(self) -> f32 {
+        f32::from_bits(self.element_blast_attack_scale_bits)
+    }
+
+    pub(crate) const fn element_blast_defense_scale(self) -> f32 {
+        f32::from_bits(self.element_blast_defense_scale_bits)
     }
 
     pub(crate) const fn critical_rate(self) -> f32 {
@@ -3230,7 +3247,12 @@ impl CPlayer {
             full_miss: read_player_wire_u16(wire, 0x52),
             blast_attack: read_player_wire_u16(wire, 0x54),
             blast_element_attack: read_player_wire_u16(wire, 0x56),
+            soul_resistance: read_player_wire_u16(wire, 0x3c),
+            add_soul_attack: read_player_wire_u16(wire, 0x44),
+            blast_attack_scale_bits: read_player_wire_u32(wire, 0x58),
             blast_defense_scale_bits: read_player_wire_u32(wire, 0x5c),
+            element_blast_attack_scale_bits: read_player_wire_u32(wire, 0x60),
+            element_blast_defense_scale_bits: read_player_wire_u32(wire, 0x64),
             full_miss_scale_bits: read_player_wire_u32(wire, 0x68),
             critical_rate_bits: read_player_wire_u32(wire, 0x6c),
         };
@@ -4240,6 +4262,29 @@ impl CPlayer {
             current_count: 0,
             entered_peace: true,
         }
+    }
+
+    /// Exact `OnBeginSkill -> EnterCombatState`: base defense — единственное
+    /// исключение; concrete skill caller уже отфильтровал его. Countdown
+    /// хранится в simulation frames (`g_ms == 80`), around `0xBF607` остаётся
+    /// у CGame рядом с live region transport.
+    pub(crate) fn enter_combat_state(
+        &mut self,
+        fight_state_timer_ms: i32,
+    ) -> PlayerFightStateTransition {
+        let previous_count = self.fight_state_count;
+        self.movement_shape_mut().set_state(1);
+        self.fight_state_count = fight_state_timer_ms / 80;
+        PlayerFightStateTransition {
+            player_id: self.player_id(),
+            previous_count,
+            current_count: self.fight_state_count,
+            entered_peace: false,
+        }
+    }
+
+    pub(crate) const fn can_fight(&self) -> bool {
+        self.move_shape.can_fight()
     }
 
     /// Reached `UpdateCurrentState` combat half. Только положительный counter
@@ -5396,6 +5441,21 @@ impl CPlayer {
             0x34,
             properties.element_resistance,
         );
+        write_u16(
+            &mut self.combat_property_wire,
+            0x3c,
+            properties.soul_resistance,
+        );
+        write_u16(
+            &mut self.combat_property_wire,
+            0x44,
+            properties.add_soul_attack,
+        );
+        write_u32(
+            &mut self.combat_property_wire,
+            0x58,
+            properties.blast_attack_scale_bits,
+        );
         write_u32(
             &mut self.combat_property_wire,
             0x40,
@@ -5434,6 +5494,16 @@ impl CPlayer {
             &mut self.combat_property_wire,
             0x5c,
             properties.blast_defense_scale_bits,
+        );
+        write_u32(
+            &mut self.combat_property_wire,
+            0x60,
+            properties.element_blast_attack_scale_bits,
+        );
+        write_u32(
+            &mut self.combat_property_wire,
+            0x64,
+            properties.element_blast_defense_scale_bits,
         );
         write_u32(
             &mut self.combat_property_wire,

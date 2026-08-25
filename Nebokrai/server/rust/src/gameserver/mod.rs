@@ -56,9 +56,14 @@ pub(crate) mod appserver {
         pub(crate) mod fairyproperties;
     }
     pub(crate) mod skills {
+        pub(crate) mod baseattack;
+        pub(crate) mod fightdefense;
         pub(crate) mod realmappellation;
         pub(crate) mod skillbaseproperties;
         pub(crate) mod skillfactory;
+    }
+    pub(crate) mod states {
+        pub(crate) mod attackpower;
     }
     pub(crate) mod message {
         pub(crate) mod containermessage;

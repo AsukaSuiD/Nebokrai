@@ -256,6 +256,126 @@ impl CGoods {
         true
     }
 
+    /// Exact `SerializeForOldClient` projection, используемая live
+    /// `0xBF918` updates. В отличие от persisted `Serialize`, здесь идут
+    /// catalog type/place/weight, current durability, modifier-only ordinary
+    /// addons и отдельный DaKong tail. GUID сохраняет legacy 0/16 marker.
+    pub(crate) fn serialize_for_old_client(
+        &self,
+        destination: &mut Vec<u8>,
+        factory: &CGoodsFactory,
+        da_kong_enabled: bool,
+    ) -> bool {
+        let Some(base) = factory.query_goods_base_properties(self.base_properties_index) else {
+            return false;
+        };
+        let da_kong_count = self
+            .addon_properties
+            .iter()
+            .filter(|property| {
+                base.get_addon_property_values(property.property_type)
+                    .is_empty()
+            })
+            .count();
+        let normal_count = self.addon_properties.len().saturating_sub(da_kong_count);
+        destination.extend_from_slice(&(self.base_properties_index as i32).to_le_bytes());
+        destination.extend_from_slice(&self.identity().id.to_le_bytes());
+        let guid = self.identity().ex_id;
+        if guid == CGuid::GUID_INVALID {
+            destination.push(0);
+        } else {
+            destination.push(16);
+            destination.extend_from_slice(guid.as_legacy_bytes());
+        }
+        destination.extend_from_slice(&(self.amount as i32).to_le_bytes());
+        destination.extend_from_slice(self.name());
+        destination.push(0);
+        destination.extend_from_slice(&(self.price as i32).to_le_bytes());
+        destination.extend_from_slice(
+            &base
+                .equip_place()
+                .wrapping_add(base.goods_type().wrapping_sub(GOODS_TYPE_CONSUMABLE))
+                .to_le_bytes(),
+        );
+        destination.extend_from_slice(&(base.weight() as i32).to_le_bytes());
+        destination.extend_from_slice(
+            &self
+                .addon_property_value(factory, GAP_GOODS_MAXIMUM_DURABILITY, 2)
+                .to_le_bytes(),
+        );
+        destination.extend_from_slice(&(normal_count as i32).to_le_bytes());
+        for property in self.addon_properties.iter().take(normal_count) {
+            let modifier = |id| {
+                property
+                    .values
+                    .iter()
+                    .find(|value| value.id == id)
+                    .map_or(0, |value| value.modifier)
+            };
+            let value1 = if property.property_type == GAP_GOODS_LIFE_TYPE {
+                let high = i64::from(self.addon_property_value(factory, GAP_GOODS_START_POINT, 1));
+                let low = self.addon_property_value(factory, GAP_GOODS_START_POINT, 2) as u32;
+                let start = (high << 32) | i64::from(low);
+                if start == 0 {
+                    modifier(1)
+                } else {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |duration| duration.as_secs() as i64);
+                    let elapsed = if start <= now { now - start } else { 0 };
+                    let lifetime =
+                        i64::from(self.addon_property_value(factory, GAP_GOODS_LIFE_TYPE, 1));
+                    let remaining = if elapsed < lifetime {
+                        lifetime - elapsed
+                    } else {
+                        0
+                    };
+                    let base_value = property
+                        .values
+                        .iter()
+                        .find(|value| value.id == 1)
+                        .map_or(0, |value| value.base_value);
+                    remaining.wrapping_sub(i64::from(base_value)) as i32
+                }
+            } else {
+                modifier(1)
+            };
+            destination.extend_from_slice(&(property.property_type as u16).to_le_bytes());
+            destination.extend_from_slice(&value1.to_le_bytes());
+            destination.extend_from_slice(&modifier(2).to_le_bytes());
+        }
+        let visible_da_kong_count = if da_kong_enabled { da_kong_count } else { 0 };
+        destination.extend_from_slice(&(self.shape.get_pos_x() as i32).to_le_bytes());
+        destination.extend_from_slice(&(self.shape.get_pos_y() as i32).to_le_bytes());
+        destination.extend_from_slice(&(visible_da_kong_count as i32).to_le_bytes());
+        for property in self
+            .addon_properties
+            .iter()
+            .skip(normal_count)
+            .take(visible_da_kong_count)
+        {
+            destination.extend_from_slice(&(property.property_type as u16).to_le_bytes());
+            let mut base_value1 = 0;
+            let mut base_value2 = 0;
+            for value in &property.values {
+                if value.id == 1 {
+                    base_value1 = value.base_value;
+                    destination.extend_from_slice(&value.modifier.to_le_bytes());
+                }
+                if value.id == 2 {
+                    base_value2 = value.base_value;
+                    destination.extend_from_slice(&value.modifier.to_le_bytes());
+                }
+            }
+            destination.push(u8::from(property.is_enabled != 0));
+            destination.push(u8::from(property.is_implicit_attribute != 0));
+            destination.extend_from_slice(&base_value1.to_le_bytes());
+            destination.extend_from_slice(&base_value2.to_le_bytes());
+            destination.extend_from_slice(&10_000u16.to_le_bytes());
+        }
+        true
+    }
+
     /// Exact `CGoods::Unserialize`: release, shape/scalar/string/addon wire и
     /// обе derived fairy-проекции выполняются в исходном порядке.
     pub(crate) fn unserialize<OrdinaryThreshold, BattleThreshold>(

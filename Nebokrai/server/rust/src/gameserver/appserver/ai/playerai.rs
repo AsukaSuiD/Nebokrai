@@ -22,6 +22,7 @@ use std::collections::VecDeque;
 use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
+use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAiDestination {
@@ -34,6 +35,8 @@ pub(crate) struct CPlayerAI {
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
+    base_attack: Option<BaseAttackExecutionState>,
+    base_attack_last_used_ms: u32,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -78,6 +81,7 @@ impl CPlayerAI {
         }
         let rejected = self.player_skills.len();
         self.player_skills.clear();
+        self.base_attack = None;
         self.player_skills.push_back(dispatch);
         rejected
     }
@@ -105,7 +109,24 @@ impl CPlayerAI {
             return false;
         }
         self.player_skills.pop_front();
+        self.base_attack = None;
         true
+    }
+
+    pub(crate) const fn base_attack(&self) -> Option<BaseAttackExecutionState> {
+        self.base_attack
+    }
+
+    pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {
+        self.base_attack = Some(state);
+    }
+
+    pub(crate) const fn base_attack_last_used_ms(&self) -> u32 {
+        self.base_attack_last_used_ms
+    }
+
+    pub(crate) const fn mark_base_attack_used(&mut self, now_ms: u32) {
+        self.base_attack_last_used_ms = now_ms;
     }
 
     pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {

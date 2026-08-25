@@ -145,6 +145,23 @@ const NEW_SOLDIER_LEVEL_OFFSET: usize = 0x738;
 const LOSS_EXP_NORMAL_OFFSET: usize = 0x0A0;
 const LOSS_EXP_GAME_OFFSET: usize = 0x0A4;
 const LOSS_EXP_WAR_OFFSET: usize = 0x0A8;
+const MINIMUM_PLAYER_HIT_OFFSET: usize = 0x084;
+const MAXIMUM_PLAYER_HIT_OFFSET: usize = 0x090;
+const CRITICAL_RATE_OFFSET: usize = 0x09C;
+const PVP_DAMAGE_FACTOR_OFFSET: usize = 0x730;
+const BLAST_ATTACK_SCALE_OFFSET: usize = 0x748;
+const BLAST_DEFENSE_SCALE_OFFSET: usize = 0x74C;
+const ELEMENT_BLAST_ATTACK_SCALE_OFFSET: usize = 0x750;
+const ELEMENT_BLAST_DEFENSE_SCALE_OFFSET: usize = 0x754;
+const FULL_MISS_SCALE_OFFSET: usize = 0x758;
+const WEAPON_POWER_MODIFIER_OFFSET: usize = 0x740;
+const WEAPON_MINIMUM_POWER_MODIFIER_OFFSET: usize = 0x744;
+const GOODS_DURABILITY_FRAY_OFFSET: usize = 0x2F8;
+const NATIONAL_ATTACK_LEVEL_LIMIT_OFFSET: usize = 0x830;
+const ENEMY_ATTACK_LEVEL_LIMIT_OFFSET: usize = 0x834;
+const ARMOR_WASTE_OFFSETS: [usize; 10] = [
+    0x300, 0x304, 0x308, 0x30C, 0x310, 0x318, 0x320, 0x328, 0x32C, 0x330,
+];
 const DIED_DROP_TABLE_OFFSET: usize = 0x0AC;
 const DIED_DROP_TABLE_ROWS: usize = 2;
 const DIED_DROP_TABLE_COLUMNS: usize = 4;
@@ -226,6 +243,53 @@ impl Default for GlobeSetupSnapshot {
 }
 
 impl GlobeSetupSnapshot {
+    pub(crate) fn player_hit_limits(&self, occupation: u8) -> (i32, i32) {
+        let index = usize::from(occupation.min(2));
+        (
+            self.read_i32(MINIMUM_PLAYER_HIT_OFFSET + index * 4),
+            self.read_i32(MAXIMUM_PLAYER_HIT_OFFSET + index * 4),
+        )
+    }
+
+    pub(crate) fn critical_rate(&self) -> f32 {
+        self.read_f32(CRITICAL_RATE_OFFSET)
+    }
+
+    pub(crate) fn pvp_damage_factor(&self) -> f32 {
+        self.read_f32(PVP_DAMAGE_FACTOR_OFFSET)
+    }
+
+    pub(crate) fn base_combat_scales(&self) -> [f32; 5] {
+        [
+            self.read_f32(BLAST_ATTACK_SCALE_OFFSET),
+            self.read_f32(BLAST_DEFENSE_SCALE_OFFSET),
+            self.read_f32(ELEMENT_BLAST_ATTACK_SCALE_OFFSET),
+            self.read_f32(ELEMENT_BLAST_DEFENSE_SCALE_OFFSET),
+            self.read_f32(FULL_MISS_SCALE_OFFSET),
+        ]
+    }
+
+    pub(crate) fn weapon_damage_factors(&self) -> (f32, f32) {
+        (
+            self.read_f32(WEAPON_POWER_MODIFIER_OFFSET),
+            self.read_f32(WEAPON_MINIMUM_POWER_MODIFIER_OFFSET),
+        )
+    }
+
+    pub(crate) fn goods_durability_fray(&self) -> i32 {
+        self.read_i32(GOODS_DURABILITY_FRAY_OFFSET)
+    }
+
+    pub(crate) fn armor_waste_probabilities(&self) -> [i32; 10] {
+        ARMOR_WASTE_OFFSETS.map(|offset| self.read_i32(offset))
+    }
+
+    pub(crate) fn player_attack_level_limits(&self) -> (i32, i32) {
+        (
+            self.read_i32(NATIONAL_ATTACK_LEVEL_LIMIT_OFFSET),
+            self.read_i32(ENEMY_ATTACK_LEVEL_LIMIT_OFFSET),
+        )
+    }
     /// Exact `fLossExp_Normal/Game/War +0xA0..+0xA8`. Несмотря на имя,
     /// `CPKSys::GetDiedLostExp` округляет эти значения как абсолютное число
     /// опыта, а не как коэффициент.

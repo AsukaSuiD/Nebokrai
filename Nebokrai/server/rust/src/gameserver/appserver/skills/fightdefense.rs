@@ -1,6 +1,148 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Базовая PvP-защита GameServer (`SKILL_BASE_DEFENSE`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
+//! `appserver/skills/fightdefense.cpp`. Этот materialized проход сохраняет
+//! exact hit/full-miss, physical/element/soul, blast/critical, avoid и PvP
+//! factor для player-vs-player базовой атаки. Активные polymorphic shield
+//! state-классы не подменяются: их owner-ы остаются в unmaterialized state AI,
+//! а этот owner применяется к обычному defense snapshot без таких state.
+
+use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPowerType};
+use crate::setup::globesetup::GlobeSetupSnapshot;
+
+fn truncate_original(value: f64) -> i32 {
+    if !value.is_finite() || value < i32::MIN as f64 || value > i32::MAX as f64 {
+        i32::MIN
+    } else {
+        value as i32
+    }
+}
+
+fn avoid_damage(damage: i32, avoid: u16) -> i32 {
+    let passed = 100i32.wrapping_sub(i32::from(avoid));
+    if (1..100).contains(&passed) {
+        truncate_original(f64::from(passed) * 0.01 * f64::from(damage))
+    } else {
+        damage
+    }
+}
+
+pub(crate) fn defend_player_base_attack(
+    attack: &mut AttackInformation,
+    attacker: PlayerCombatProperties,
+    attacker_occupation: u8,
+    target: PlayerCombatProperties,
+    setup: &GlobeSetupSnapshot,
+    random: &mut dyn FnMut(i32) -> i32,
+) {
+    let (minimum_hit, maximum_hit) = setup.player_hit_limits(attacker_occupation);
+    let hit = maximum_hit
+        .wrapping_add(attack.hit_modifier)
+        .clamp(minimum_hit, maximum_hit);
+    let has_element = attack
+        .damages
+        .iter()
+        .any(|power| power.kind == AttackPowerType::Element && power.hp_damage > 0);
+    let full_miss = if target.full_miss == 0 {
+        false
+    } else {
+        let chance = if has_element {
+            truncate_original(f64::from(target.full_miss) * f64::from(attacker.full_miss_scale()))
+        } else {
+            i32::from(target.full_miss)
+        };
+        random(100) < chance
+    };
+    if hit <= random(100) || full_miss {
+        for power in &mut attack.damages {
+            power.hp_damage = 0;
+        }
+        attack.damage_modifier = 0;
+        attack.full_miss = if full_miss { 1 } else { 2 };
+        return;
+    }
+
+    for power in &mut attack.damages {
+        match power.kind {
+            AttackPowerType::Physical => {
+                let defense = target.defense as i32;
+                if random(100) < i32::from(attacker.blast_attack) {
+                    power.hp_damage = truncate_original(
+                        f64::from(power.hp_damage) * f64::from(attacker.blast_attack_scale()),
+                    );
+                    let scale = f64::from(attacker.blast_defense_scale());
+                    power.hp_damage = if attack.critical {
+                        power.hp_damage.wrapping_add(truncate_original(
+                            f64::from(defense) * scale * f64::from(attacker.critical_rate()) * -0.5,
+                        ))
+                    } else {
+                        power
+                            .hp_damage
+                            .wrapping_sub(truncate_original(f64::from(defense / 2) * scale))
+                    };
+                    attack.blast_attack = true;
+                } else if attack.critical {
+                    power.hp_damage = power.hp_damage.wrapping_add(truncate_original(
+                        f64::from(defense) * f64::from(attacker.critical_rate()) * -0.5,
+                    ));
+                } else {
+                    power.hp_damage = power.hp_damage.wrapping_sub(defense / 2);
+                }
+                power.hp_damage = avoid_damage(power.hp_damage, target.attack_avoid).max(1);
+            }
+            AttackPowerType::Element => {
+                let resistance = target.element_resistance as i32;
+                if random(100) < i32::from(attacker.blast_element_attack) {
+                    power.hp_damage = truncate_original(
+                        f64::from(power.hp_damage)
+                            * f64::from(attacker.element_blast_attack_scale()),
+                    );
+                    let scale = f64::from(attacker.element_blast_defense_scale());
+                    power.hp_damage = if attack.critical {
+                        power.hp_damage.wrapping_add(truncate_original(
+                            f64::from(resistance)
+                                * scale
+                                * f64::from(attacker.critical_rate())
+                                * -0.5,
+                        ))
+                    } else {
+                        power
+                            .hp_damage
+                            .wrapping_sub(truncate_original(f64::from(resistance / 2) * scale))
+                    };
+                    attack.blast_attack = true;
+                } else if attack.critical {
+                    power.hp_damage = power.hp_damage.wrapping_add(truncate_original(
+                        f64::from(resistance) * f64::from(attacker.critical_rate()) * -0.5,
+                    ));
+                } else {
+                    power.hp_damage = power.hp_damage.wrapping_sub(resistance / 2);
+                }
+                power.hp_damage = avoid_damage(power.hp_damage, target.element_avoid).max(1);
+            }
+            AttackPowerType::Soul => {
+                let resistance = i32::from(target.soul_resistance);
+                power.hp_damage = if attack.critical {
+                    power.hp_damage.wrapping_sub(truncate_original(
+                        f64::from(resistance) * f64::from(attacker.critical_rate()),
+                    ))
+                } else {
+                    power.hp_damage.wrapping_sub(resistance)
+                }
+                .max(0);
+            }
+        }
+        if power.hp_damage > 0 {
+            power.hp_damage =
+                truncate_original(f64::from(power.hp_damage) * f64::from(attack.damage_factor))
+                    .max(1);
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(setup.pvp_damage_factor()),
+            );
+        }
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -78,15 +220,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

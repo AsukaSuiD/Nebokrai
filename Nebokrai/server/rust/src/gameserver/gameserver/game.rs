@@ -524,7 +524,8 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE, GAP_BF_CURRENT_MAX_EXP, GAP_BF_DEFUALT_SKLL, GAP_BF_HP,
     GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAX_MP, GAP_BF_MODULE,
     GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_EQUIP_STATE, GAP_GOODS_BIND,
-    GAP_GOODS_PACKAGE_EXTENTION, GAP_PARTICULAR_ATTRIBUTE, GOODS_TYPE_EQUIPMENT,
+    GAP_GOODS_PACKAGE_EXTENTION, GAP_PARTICULAR_ATTRIBUTE, GAP_WEAPON_DAMAGE_LEVEL,
+    GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goods::fairyproperties::{
@@ -744,7 +745,16 @@ use crate::gameserver::appserver::shape::{
     SHAPE_CHANGE_REGION, SHAPE_CHANGE_REMOVE, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity,
     ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
+use crate::gameserver::appserver::skills::baseattack::{
+    BASE_ATTACK_SKILL_ID, BaseAttackExecutionState, SKILL_USAGE_DELAY_TIME,
+    SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
+    real_distance, time_reached,
+};
+use crate::gameserver::appserver::skills::fightdefense::defend_player_base_attack;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
+use crate::gameserver::appserver::states::attackpower::{
+    AttackInformation, AttackPower, AttackPowerType,
+};
 use crate::gameserver::gameserver::honorranks::CHonorRanks;
 use crate::gameserver::gameserver::playerranks::{
     CPlayerRanks, PlayerRanksRequestOutcome, PlayerRanksSerializeError,
@@ -774,7 +784,9 @@ use crate::public::netsessionmanager::{
     CNetSessionManager, NetSessionManagerVariant, NetSessionRunReport,
 };
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
-use crate::public::tools::{add_game_log_text, put_debug_string, put_string_to_file};
+use crate::public::tools::{
+    add_game_log_text, get_line_direction, put_debug_string, put_string_to_file,
+};
 use crate::public::wordsfilter::CWordsFilter;
 use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
@@ -30799,6 +30811,592 @@ impl CGame {
         })
     }
 
+    fn player_base_attackable(&self, attacker_id: i32, victim_id: i32) -> bool {
+        let Some(attacker) = self.find_player(attacker_id) else {
+            return false;
+        };
+        let Some(victim) = self.find_player(victim_id) else {
+            return false;
+        };
+        if attacker_id == victim_id
+            || victim.is_dead()
+            || victim.is_god_mode()
+            || victim.is_nation_war_player_weak()
+        {
+            return false;
+        }
+        let Some(region_id) = attacker
+            .server_region_id()
+            .filter(|region_id| victim.server_region_id() == Some(*region_id))
+        else {
+            return false;
+        };
+        let Some(region) = self.find_region(region_id) else {
+            return false;
+        };
+        let (Ok(attacker_x), Ok(attacker_y), Ok(victim_x), Ok(victim_y)) = (
+            attacker.shape().get_tile_x(),
+            attacker.shape().get_tile_y(),
+            victim.shape().get_tile_x(),
+            victim.shape().get_tile_y(),
+        ) else {
+            return false;
+        };
+        if region.base().no_pk
+            || region.get_security(attacker_x, attacker_y).ok() == Some(RegionSecurity::SAFE)
+            || region.get_security(victim_x, victim_y).ok() == Some(RegionSecurity::SAFE)
+        {
+            return false;
+        }
+        let faction_enemies = attacker.is_enemy_faction_member(victim.faction_id())
+            || attacker.is_city_war_enemy_faction_member(victim.faction_id());
+        if faction_enemies {
+            return true;
+        }
+        let permissions = attacker.pk_permissions();
+        let victim_badman = victim.is_badman(self.globe_setup.pk_count_per_kill());
+        let mut attackable = true;
+        if !permissions.player && !victim_badman && attacker.country() == victim.country() {
+            attackable = false;
+        }
+        if !permissions.teammate && victim.team_id() != 0 && attacker.team_id() == victim.team_id()
+        {
+            attackable = false;
+        }
+        if !permissions.guild_member
+            && ((victim.faction_id() != 0 && attacker.faction_id() == victim.faction_id())
+                || (victim.union_id() != 0 && attacker.union_id() == victim.union_id()))
+        {
+            attackable = false;
+        }
+        if !permissions.criminal && victim_badman {
+            attackable = false;
+        }
+        if !permissions.country && !victim_badman && attacker.country() != victim.country() {
+            attackable = false;
+        }
+        if region.is_gods_battle()
+            && !permissions.player
+            && attacker.gods_battle_faction() == victim.gods_battle_faction()
+            && !victim_badman
+        {
+            attackable = false;
+        }
+        attackable
+    }
+
+    fn player_base_attack_level_block(
+        &self,
+        attacker_id: i32,
+        victim_id: i32,
+    ) -> Option<(&'static [u8], u32)> {
+        let attacker = self.find_player(attacker_id)?;
+        let victim = self.find_player(victim_id)?;
+        let region_id = attacker
+            .server_region_id()
+            .filter(|region_id| victim.server_region_id() == Some(*region_id))?;
+        let region = self.find_region(region_id)?.base();
+        if attacker_id == victim_id || region.war_region_type != 0 {
+            return None;
+        }
+        let (national_limit, enemy_limit) = self.globe_setup.player_attack_level_limits();
+        if victim.country() == region.country {
+            if victim.country() == attacker.country() {
+                if i32::from(victim.level()) <= national_limit {
+                    return Some((b"GS0160", national_limit as u32));
+                }
+                if i32::from(attacker.level()) <= national_limit {
+                    return Some((b"GS0161", national_limit as u32));
+                }
+            } else if i32::from(victim.level()) <= enemy_limit {
+                return Some((b"GS0162", enemy_limit as u32));
+            }
+        } else if attacker.country() == region.country
+            && i32::from(attacker.level()) <= national_limit
+        {
+            return Some((b"GS0161", national_limit as u32));
+        }
+        None
+    }
+
+    fn send_base_attack_level_block(&self, player_id: i32, string_id: &[u8], limit: u32) {
+        let text = format_single_legacy_u32(self.get_string_by_id(string_id), limit, 255);
+        let mut message = CMessage::new(0x000b_f807);
+        message.add_ulong(0xffff_0000);
+        add_legacy_c_string(message.base_mut(), &text);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    fn enter_player_combat_state(&mut self, player_id: i32) {
+        let fight_timer = self.globe_setup.fight_state_timer_ms();
+        let transition = self
+            .find_player_mut(player_id)
+            .map(|player| player.enter_combat_state(fight_timer));
+        if let Some(transition) = transition {
+            let mut state = CMessage::new(0x000b_f607);
+            state.add_long(transition.player_id);
+            state.add_long(1);
+            let _ = self.send_player_shape_around(player_id, None, &state);
+        }
+    }
+
+    fn send_base_attack_failure(&self, player_id: i32, action: u8) -> i32 {
+        let mut message = CMessage::new(0x000b_fe01);
+        message.add_byte(0);
+        message.add_byte(action);
+        message.send_to_player(self.net_server(), player_id)
+    }
+
+    fn append_base_attack_tail(message: &mut CMessage, attack: &AttackInformation) {
+        message
+            .base_mut()
+            .add_char(if attack.critical { 1 } else { 0 });
+        message
+            .base_mut()
+            .add_char(if attack.blast_attack { 1 } else { 0 });
+        message.add_long(attack.skill_id as i32);
+        message.add_byte(attack.skill_level);
+    }
+
+    fn damage_player_equipment<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        position: u32,
+        runtime: &mut Runtime,
+    ) {
+        let fray = self.globe_setup.goods_durability_fray();
+        let (old, current, identity, payload) = {
+            let (players, factory) = (&mut self.players, &self.goods_factory);
+            let Some(player) = players.get_mut(&player_id) else {
+                return;
+            };
+            let Some(goods) = player.equipment_mut().get_goods_mut(position) else {
+                return;
+            };
+            let maximum = goods.addon_property_value(factory, crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_MAXIMUM_DURABILITY, 1);
+            let old = goods.addon_property_value(factory, crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_MAXIMUM_DURABILITY, 2);
+            if maximum <= 0 || old == 0 {
+                return;
+            }
+            let current = old.wrapping_sub(fray);
+            if !goods.set_addon_property_value_first_core(
+                crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_MAXIMUM_DURABILITY,
+                2,
+                current,
+            ) {
+                return;
+            }
+            let mut payload = Vec::new();
+            if !goods.serialize_for_old_client(
+                &mut payload,
+                factory,
+                self.globe_setup.da_kong_key(),
+            ) {
+                return;
+            }
+            (old, current, goods.identity().ex_id, payload)
+        };
+        if current < 1 {
+            let mut update = CMessage::new(0x000b_f918);
+            update.add_long(player_id);
+            update.base_mut().add_guid(identity);
+            update.add_ulong(payload.len() as u32);
+            update.base_mut().add(&payload);
+            let _ = update.send_to_player(self.net_server(), player_id);
+            if let Some(properties) = self
+                .find_player(player_id)
+                .map(|player| runtime.recompute_enhancement_player_properties(player))
+            {
+                let _ = self.apply_recomputed_player_properties(player_id, properties);
+                if let Some(player) = self.find_player(player_id) {
+                    let _ = self.send_player_properties_changed(player);
+                }
+            }
+        } else if old / 100 != current / 100 {
+            let mut durability = CMessage::new(0x000b_f90c);
+            durability.add_byte(position as u8);
+            durability.add_ulong(current as u32);
+            let _ = durability.send_to_player(self.net_server(), player_id);
+        }
+    }
+
+    fn damage_player_weapon<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) {
+        self.damage_player_equipment(player_id, 2, runtime);
+    }
+
+    fn damage_player_armor<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) {
+        const POSITIONS: [u32; 10] = [0, 1, 3, 4, 9, 10, 12, 13, 14, 15];
+        let probabilities = self.globe_setup.armor_waste_probabilities();
+        let rolls: [i32; 10] =
+            std::array::from_fn(|_| game_legacy_random(&mut self.random_state, 100));
+        for ((position, probability), roll) in POSITIONS.into_iter().zip(probabilities).zip(rolls) {
+            if roll < probability {
+                self.damage_player_equipment(player_id, position, runtime);
+            }
+        }
+    }
+
+    fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let rejected = || QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Rejected,
+            first_contact: false,
+            killing_blow: None,
+        };
+        let Some(player) = self.find_player(player_id) else {
+            return rejected();
+        };
+        let skill_level = player.learned_skill_level(BASE_ATTACK_SKILL_ID);
+        let Some(properties) = self
+            .skill_factory
+            .query_skill_base_properties(BASE_ATTACK_SKILL_ID, skill_level)
+        else {
+            return rejected();
+        };
+        let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+        let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+        let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+        let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
+        let now_ms = runtime.now_milliseconds();
+        let target = match dispatch {
+            PlayerSkillDispatch::Object { target, .. } if target.object_type == PLAYER_TYPE => self
+                .find_player(target.id)
+                .map(|target| (target.player_id(), target.shape_view())),
+            _ => None,
+        };
+        let target = target.and_then(|(id, view)| view.map(|view| (id, view)));
+
+        if player_ai.base_attack().is_none() {
+            if matches!(dispatch, PlayerSkillDispatch::Object { .. }) && target.is_none() {
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            }
+            if player.is_rider() || !player.can_fight() {
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            }
+            let last_used_ms = player_ai.base_attack_last_used_ms();
+            if last_used_ms != 0 && !time_reached(now_ms, last_used_ms, reuse_delay_ms) {
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            }
+            if let Some((target_id, _)) = target
+                && self.find_player(target_id).is_some_and(CPlayer::is_dead)
+            {
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            }
+            if let Some((target_id, _)) = target
+                && let Some((string_id, limit)) =
+                    self.player_base_attack_level_block(player_id, target_id)
+            {
+                self.send_base_attack_level_block(player_id, string_id, limit);
+                self.enter_player_combat_state(player_id);
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            }
+            if let Some((target_id, _)) = target
+                && !self.player_base_attackable(player_id, target_id)
+            {
+                self.enter_player_combat_state(player_id);
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            }
+            let (source_x, source_y) =
+                match (player.shape().get_tile_x(), player.shape().get_tile_y()) {
+                    (Ok(x), Ok(y)) => (x, y),
+                    _ => return rejected(),
+                };
+            let (target_x, target_y) = match (dispatch, target) {
+                (_, Some((_, view))) => (view.tile_x, view.tile_y),
+                (PlayerSkillDispatch::Point { x, y, .. }, None) => (x, y),
+                _ => (source_x, source_y),
+            };
+            if maximum_distance != 0
+                && (maximum_distance as i32) < real_distance(source_x, source_y, target_x, target_y)
+            {
+                let _ = self.send_base_attack_failure(player_id, 0x0b);
+                return rejected();
+            }
+            if let Some(player) = self.find_player_mut(player_id) {
+                player
+                    .movement_shape_mut()
+                    .set_direction(get_line_direction(source_x, source_y, target_x, target_y));
+                player.set_current_skill_id(Some(BASE_ATTACK_SKILL_ID));
+            }
+            self.enter_player_combat_state(player_id);
+            let direction = self
+                .find_player(player_id)
+                .map(|player| player.shape().get_direction())
+                .unwrap_or_default();
+            let mut start = CMessage::new(0x000b_fe01);
+            start.add_byte(1);
+            start.add_long(BASE_ATTACK_SKILL_ID as i32);
+            start.base_mut().add_short(skill_level as i16);
+            start.add_long(PLAYER_TYPE);
+            start.add_long(player_id);
+            start.add_long(direction);
+            let _ = self.send_player_shape_around(player_id, None, &start);
+            player_ai.begin_base_attack(BaseAttackExecutionState {
+                dispatch,
+                started_at_ms: now_ms,
+            });
+            if !time_reached(now_ms, now_ms, delay_ms) {
+                return QueuedSkillExecutionOutcome {
+                    state: QueuedSkillExecutionState::Pending,
+                    first_contact: false,
+                    killing_blow: None,
+                };
+            }
+        } else if player_ai
+            .base_attack()
+            .is_none_or(|state| state.dispatch != dispatch)
+        {
+            return rejected();
+        } else if !time_reached(
+            now_ms,
+            player_ai
+                .base_attack()
+                .map_or(now_ms, |state| state.started_at_ms),
+            delay_ms,
+        ) {
+            return QueuedSkillExecutionOutcome {
+                state: QueuedSkillExecutionState::Pending,
+                first_contact: false,
+                killing_blow: None,
+            };
+        }
+
+        if let Some((target_id, _)) = target
+            && self.find_player(target_id).is_some_and(CPlayer::is_dead)
+        {
+            let _ = self.send_base_attack_failure(player_id, 2);
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_current_skill_id(None);
+            }
+            return rejected();
+        }
+        let (target_type, target_id, target_x, target_y) = match target {
+            Some((target_id, view)) => (PLAYER_TYPE, target_id, view.tile_x, view.tile_y),
+            None => match dispatch {
+                PlayerSkillDispatch::Point { x, y, .. } => (0, 0, x, y),
+                _ => (0, 0, 0, 0),
+            },
+        };
+        let mut fire = CMessage::new(0x000b_fe01);
+        fire.add_byte(2);
+        fire.add_long(BASE_ATTACK_SKILL_ID as i32);
+        fire.base_mut().add_short(skill_level as i16);
+        fire.add_long(PLAYER_TYPE);
+        fire.add_long(player_id);
+        fire.add_long(target_type);
+        fire.add_long(target_id);
+        fire.add_long(target_x);
+        fire.add_long(target_y);
+        let _ = self.send_player_shape_around(player_id, None, &fire);
+
+        let mut killing_blow = None;
+        let mut first_contact = false;
+        if target_type == PLAYER_TYPE && self.player_base_attackable(player_id, target_id) {
+            let (
+                mut attacker_properties,
+                attacker_occupation,
+                attacker_team,
+                attacker_faction,
+                attacker_union,
+                target_properties,
+                target_level,
+                target_health,
+            ) = {
+                let attacker = self
+                    .find_player(player_id)
+                    .expect("base-attack attacker сохранён");
+                let target = self
+                    .find_player(target_id)
+                    .expect("base-attack target сохранён");
+                (
+                    attacker.combat_properties(),
+                    attacker.occupation(),
+                    attacker.team_id(),
+                    attacker.faction_id(),
+                    attacker.union_id(),
+                    target.combat_properties(),
+                    target.level(),
+                    target.health(),
+                )
+            };
+            let [
+                blast_attack,
+                blast_defense,
+                element_blast_attack,
+                element_blast_defense,
+                full_miss,
+            ] = self.globe_setup.base_combat_scales();
+            if attacker_properties.blast_attack_scale() < 1.0 {
+                attacker_properties.blast_attack_scale_bits = blast_attack.max(1.0).to_bits();
+            }
+            if attacker_properties.blast_defense_scale() < 0.01 {
+                attacker_properties.blast_defense_scale_bits = blast_defense.max(0.01).to_bits();
+            }
+            if attacker_properties.element_blast_attack_scale() < 1.0 {
+                attacker_properties.element_blast_attack_scale_bits =
+                    element_blast_attack.max(1.0).to_bits();
+            }
+            if attacker_properties.element_blast_defense_scale() < 0.01 {
+                attacker_properties.element_blast_defense_scale_bits =
+                    element_blast_defense.max(0.01).to_bits();
+            }
+            if attacker_properties.full_miss_scale() < 0.01 {
+                attacker_properties.full_miss_scale_bits = full_miss.max(0.01).to_bits();
+            }
+            if attacker_properties.critical_rate() < 1.0 {
+                attacker_properties.critical_rate_bits =
+                    self.globe_setup.critical_rate().max(1.0).to_bits();
+            }
+            let weapon_level = self
+                .find_player(player_id)
+                .and_then(|player| player.equipment().get_goods(2))
+                .map_or(0, |goods| {
+                    goods.addon_property_value(&self.goods_factory, GAP_WEAPON_DAMAGE_LEVEL, 1)
+                });
+            let (weapon_divisor, weapon_minimum) = self.globe_setup.weapon_damage_factors();
+            let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
+            let mut damage_factor = if weapon_divisor == 0.0 {
+                1.0
+            } else {
+                delta as f32 / weapon_divisor
+            };
+            damage_factor = damage_factor.min(1.0).max(weapon_minimum);
+            let minimum = attacker_properties.minimum_attack as i32;
+            let maximum = attacker_properties.maximum_attack as i32;
+            let span = maximum.wrapping_sub(minimum).max(0).wrapping_add(1);
+            let physical = minimum.wrapping_add(game_legacy_random(&mut self.random_state, span));
+            let mut attack = AttackInformation {
+                skill_id: BASE_ATTACK_SKILL_ID,
+                skill_level: skill_level as u8,
+                attacker_type: PLAYER_TYPE,
+                attacker_id: player_id,
+                attacker_team_id: attacker_team,
+                attacker_faction_id: attacker_faction,
+                attacker_union_id: attacker_union,
+                hit_modifier,
+                damage_factor,
+                damage_modifier: 0,
+                critical: false,
+                blast_attack: false,
+                full_miss: 0,
+                damages: vec![
+                    AttackPower {
+                        kind: AttackPowerType::Physical,
+                        hp_damage: physical.max(0),
+                        mp_damage: 0,
+                    },
+                    AttackPower {
+                        kind: AttackPowerType::Element,
+                        hp_damage: attacker_properties.add_element_attack as i32,
+                        mp_damage: 0,
+                    },
+                    AttackPower {
+                        kind: AttackPowerType::Soul,
+                        hp_damage: i32::from(attacker_properties.add_soul_attack),
+                        mp_damage: 0,
+                    },
+                ],
+            };
+            if game_legacy_random(&mut self.random_state, 100) < i32::from(attacker_properties.cch)
+            {
+                attack.critical = true;
+                let critical_rate = self.globe_setup.critical_rate();
+                for power in &mut attack.damages {
+                    power.hp_damage =
+                        ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
+                }
+            }
+            let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
+            defend_player_base_attack(
+                &mut attack,
+                attacker_properties,
+                attacker_occupation,
+                target_properties,
+                &self.globe_setup,
+                &mut random,
+            );
+            first_contact = true;
+            let damage = attack.hp_damage().min(target_health);
+            if attack.full_miss != 0 {
+                let mut missed = CMessage::new(0x000b_f612);
+                missed.add_byte(attack.full_miss);
+                missed.add_long(PLAYER_TYPE);
+                missed.add_long(target_id);
+                let _ = self.send_player_shape_around(target_id, None, &missed);
+            } else if damage != 0 {
+                let current_health = target_health - damage;
+                if let Some(target) = self.find_player_mut(target_id) {
+                    target.set_health(current_health);
+                    target
+                        .movement_shape_mut()
+                        .set_action(if current_health == 0 { 6 } else { 5 });
+                }
+                if current_health == 0 {
+                    let mut died = CMessage::new(0x000b_f60b);
+                    died.add_long(PLAYER_TYPE);
+                    died.add_long(player_id);
+                    died.add_long(PLAYER_TYPE);
+                    died.add_long(target_id);
+                    died.add_ulong(damage);
+                    died.base_mut().add_char(1);
+                    Self::append_base_attack_tail(&mut died, &attack);
+                    let _ = self.send_player_shape_around(target_id, None, &died);
+                    killing_blow = Some(PlayerKillingBlow {
+                        victim_id: target_id,
+                        attacker_type: PLAYER_TYPE,
+                        attacker_id: player_id,
+                        attacker_faction_id: attacker_faction,
+                    });
+                } else {
+                    let mut hurt = CMessage::new(0x000b_f60a);
+                    hurt.add_long(PLAYER_TYPE);
+                    hurt.add_long(player_id);
+                    hurt.add_long(PLAYER_TYPE);
+                    hurt.add_long(target_id);
+                    hurt.add_byte(1);
+                    hurt.add_byte(0);
+                    hurt.add_ulong(damage);
+                    hurt.add_ulong(current_health);
+                    Self::append_base_attack_tail(&mut hurt, &attack);
+                    let _ = self.send_player_shape_around(target_id, None, &hurt);
+                    self.damage_player_armor(target_id, runtime);
+                }
+            }
+            if let Some(attacker) = self.find_player_mut(player_id) {
+                attacker.movement_shape_mut().set_action(1);
+            }
+        }
+        self.damage_player_weapon(player_id, runtime);
+        player_ai.mark_base_attack_used(now_ms);
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_current_skill_id(None);
+        }
+        QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Completed,
+            first_contact,
+            killing_blow,
+        }
+    }
+
     fn execute_queued_player_skills<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -30807,7 +31405,18 @@ impl CGame {
     ) -> Vec<GameQueuedSkillExecutionReport> {
         let mut reports = Vec::with_capacity(2);
         if let Some(dispatch) = player_ai.next_player_skill() {
-            let outcome = runtime.execute_player_skill_dispatch(self, player_id, dispatch);
+            let concrete_base_attack = match dispatch {
+                PlayerSkillDispatch::SelfTarget { skill_id, .. }
+                | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == BASE_ATTACK_SKILL_ID,
+                PlayerSkillDispatch::Object { skill_id, target } => {
+                    skill_id == BASE_ATTACK_SKILL_ID && target.object_type == PLAYER_TYPE
+                }
+            };
+            let outcome = if concrete_base_attack {
+                self.execute_player_base_attack(player_id, dispatch, player_ai, runtime)
+            } else {
+                runtime.execute_player_skill_dispatch(self, player_id, dispatch)
+            };
             let pk_first_skill = if outcome.first_contact {
                 match dispatch {
                     PlayerSkillDispatch::Object { target, .. } if target.object_type == 400 => self

@@ -1,6 +1,56 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Attack-value owner GameServer.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
+//! `appserver/states/attackpower.cpp`. Подтверждённый контракт хранит ordered
+//! damage powers, skill/attacker identity, PK-разрешения и четыре defense-tail
+//! признака. Rust `Vec` заменяет native vector указателей; lifetime и ручное
+//! удаление не переносятся, числовая/wire-семантика полей сохранена.
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AttackPowerType {
+    Physical,
+    Element,
+    Soul,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AttackPower {
+    pub(crate) kind: AttackPowerType,
+    pub(crate) hp_damage: i32,
+    pub(crate) mp_damage: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AttackInformation {
+    pub(crate) skill_id: u32,
+    pub(crate) skill_level: u8,
+    pub(crate) attacker_type: i32,
+    pub(crate) attacker_id: i32,
+    pub(crate) attacker_team_id: i32,
+    pub(crate) attacker_faction_id: i32,
+    pub(crate) attacker_union_id: i32,
+    pub(crate) hit_modifier: i32,
+    pub(crate) damage_factor: f32,
+    pub(crate) damage_modifier: i32,
+    pub(crate) critical: bool,
+    pub(crate) blast_attack: bool,
+    pub(crate) full_miss: u8,
+    pub(crate) damages: Vec<AttackPower>,
+}
+
+impl AttackInformation {
+    pub(crate) fn clear_damage(&mut self) {
+        self.damages.clear();
+        self.damage_modifier = 0;
+    }
+
+    pub(crate) fn hp_damage(&self) -> u32 {
+        self.damages
+            .iter()
+            .map(|power| power.hp_damage.max(0) as u32)
+            .fold(self.damage_modifier.max(0) as u32, u32::saturating_add)
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -63,6 +113,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: GameServer
