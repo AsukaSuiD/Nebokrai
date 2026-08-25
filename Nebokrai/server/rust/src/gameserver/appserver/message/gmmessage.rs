@@ -661,7 +661,7 @@ pub(crate) fn dispatch_gm_message<
         add_legacy_c_string(&mut response, &player_name);
         response.add_long(minutes);
         let player_id =
-            game.silence_player_by_name(&player_name, minutes, || runtime.other_now_milliseconds());
+            game.silence_player_by_name(&player_name, minutes, || runtime.now_milliseconds());
         let (success, text_id) = if player_id.is_some() {
             (1, b"GS0031".as_slice())
         } else {
@@ -852,7 +852,7 @@ pub(crate) fn dispatch_gm_message<
         }));
     }
 
-    let first_pass = game.silenced_player_names_pass(|| runtime.other_now_milliseconds());
+    let first_pass = game.silenced_player_names_pass(|| runtime.now_milliseconds());
     if first_pass.is_empty() {
         let localized = game.get_string_by_id(b"GS0028").to_vec();
         let mut response = CMessage::new(GM_QUERY_SILENCE_RESPONSE);
@@ -886,7 +886,7 @@ pub(crate) fn dispatch_gm_message<
         }));
     };
 
-    let published_names = game.silenced_player_names_pass(|| runtime.other_now_milliseconds());
+    let published_names = game.silenced_player_names_pass(|| runtime.now_milliseconds());
     let mut names = Vec::with_capacity(required - GM_SILENCE_RESPONSE_SLACK);
     for name in &published_names {
         names.extend_from_slice(name);

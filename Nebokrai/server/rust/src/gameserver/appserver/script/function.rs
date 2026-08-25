@@ -538,7 +538,6 @@ pub(crate) trait ScriptAwardAuthenticationContext {
 
 pub(crate) trait ScriptFunctionRuntime:
     GameClockContext
-    + CountryExileTimeScriptContext
     + NationCombatContext
     + EquipmentSessionOpenContext
     + EquipmentDaKongContext
@@ -557,7 +556,6 @@ pub(crate) trait ScriptFunctionRuntime:
 
 impl<T> ScriptFunctionRuntime for T where
     T: GameClockContext
-        + CountryExileTimeScriptContext
         + NationCombatContext
         + EquipmentSessionOpenContext
         + EquipmentDaKongContext
@@ -2791,10 +2789,6 @@ pub(crate) fn run_country_control_point_script_function(
     }
 }
 
-pub(crate) trait CountryExileTimeScriptContext {
-    fn country_exile_time_now_milliseconds(&mut self) -> u32;
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryExileTimeScriptDisposition {
     ScriptPlayerMissing,
@@ -2818,7 +2812,7 @@ pub(crate) enum CountryExileTimeScriptFunctionOutcome {
     },
 }
 
-pub(crate) fn run_country_exile_time_script_function<Context: CountryExileTimeScriptContext>(
+pub(crate) fn run_country_exile_time_script_function<Context: GameClockContext>(
     game: &CGame,
     script_player_id: Option<i32>,
     function_id: i32,
@@ -2848,7 +2842,7 @@ pub(crate) fn run_country_exile_time_script_function<Context: CountryExileTimeSc
             disposition: CountryExileTimeScriptDisposition::CountryMissing { country },
         };
     };
-    let sampled_at_ms = context.country_exile_time_now_milliseconds();
+    let sampled_at_ms = context.now_milliseconds();
     match country_owner.exile_rest_time(player_id, sampled_at_ms, game.country_param().exile_time())
     {
         Ok(report) => CountryExileTimeScriptFunctionOutcome::Handled {

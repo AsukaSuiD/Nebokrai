@@ -76,13 +76,6 @@ pub(crate) trait GameCountryWarRuntime:
 {
     /// Материализует virtual `UpdateContendPlayer` country-region owner-а.
     fn update_country_contend_player(&mut self, region_id: i32);
-
-    /// Единственный `timeGetTime` sample, который `SetSilence` переводит в
-    /// минуты после успешных country/player gates.
-    fn country_governance_now_milliseconds(&mut self) -> u32;
-
-    /// Отдельный `timeGetTime` sample на каждый exact `AddToExileList`.
-    fn country_exile_now_milliseconds(&mut self) -> u32;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -891,7 +884,7 @@ fn dispatch_country_exile_message<Runtime: GameCountryWarRuntime>(
         let mut mutations = Vec::new();
         for _ in 0..advertised_count.max(0) {
             let player_id = message.base_mut().get_long().unwrap_or(0);
-            let sampled_at_ms = runtime.country_exile_now_milliseconds();
+            let sampled_at_ms = runtime.now_milliseconds();
             let mutation = game
                 .country_handler_mut()
                 .country_mut(country)
@@ -970,7 +963,7 @@ fn dispatch_country_exile_message<Runtime: GameCountryWarRuntime>(
                 runtime,
             ));
         }
-        let sampled_at_ms = runtime.country_exile_now_milliseconds();
+        let sampled_at_ms = runtime.now_milliseconds();
         mutation = Some(
             game.country_handler_mut()
                 .country_mut(country)
@@ -1081,7 +1074,7 @@ fn dispatch_country_governance_effect_message<Runtime: GameCountryWarRuntime>(
                 },
             };
         };
-        let sampled_at_ms = runtime.country_governance_now_milliseconds();
+        let sampled_at_ms = runtime.now_milliseconds();
         game.find_player_mut(player_id)
             .expect("0x7FF0D player проверен до clock sample")
             .set_silence(minutes, sampled_at_ms);

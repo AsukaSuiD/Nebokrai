@@ -50,8 +50,8 @@ use crate::gameserver::appserver::player::{
 use crate::gameserver::appserver::script::script::legacy_atoi;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, GameKickPlayerReport, GameRegionClearStarted, colored_player_notice_message,
-    player_skill_learned_message,
+    CGame, GameClockContext, GameKickPlayerReport, GameRegionClearStarted,
+    colored_player_notice_message, player_skill_learned_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
@@ -219,8 +219,7 @@ pub(crate) enum GameOtherErrorLog {
     },
 }
 
-pub(crate) trait GameOtherMessageRuntime {
-    fn other_now_milliseconds(&mut self) -> u32;
+pub(crate) trait GameOtherMessageRuntime: GameClockContext {
     fn add_other_error_log(&mut self, event: GameOtherErrorLog);
 }
 
@@ -1090,7 +1089,7 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
         let channel = peek_long(message)?;
         if matches!(channel, 0 | 1 | 2 | 4) {
             return Some(dispatch_player_chat(message, game, || {
-                runtime.other_now_milliseconds()
+                runtime.now_milliseconds()
             }));
         }
         return None;
@@ -1157,7 +1156,7 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
             message_type,
             message,
             game,
-            &mut || runtime.other_now_milliseconds(),
+            &mut || runtime.now_milliseconds(),
         ));
     }
     if message_type == PLAYER_RENAME_REQUEST {
@@ -1414,7 +1413,7 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
                 game.start_region_clear_player(
                     region_id,
                     buffer_seconds,
-                    runtime.other_now_milliseconds(),
+                    runtime.now_milliseconds(),
                 )
                 .expect("clear-player region проверен до timer mutation")
             });
