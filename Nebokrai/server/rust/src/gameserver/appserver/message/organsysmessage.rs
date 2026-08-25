@@ -4,8 +4,8 @@
 //! cases faction lifecycle `0x90101/05/06/1A/1B` и
 //! `0x7FE01/06/07/18/19/1E`,
 //! AttackCity `0x7FE1F..0x7FE25`, Village `0x7FE2F..0x7FE33`, faction
-//! update `0x7FE35/0x7FE36`, FourNation `0x7FE3C..0x7FE45` и control tail
-//! `0x7FE46..0x7FE4A` со статусом
+//! update `0x7FE35/0x7FE36`, player-quest route `0x7FE38/0x7FE39`,
+//! FourNation `0x7FE3C..0x7FE45` и control tail `0x7FE46..0x7FE4A` со статусом
 //! `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\organsysmessage.cpp`.
@@ -217,8 +217,29 @@ pub(crate) struct FourNationExploitDispatchReport {
     pub(crate) notice_delivery: Option<i32>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerQuestCommandKind {
+    Add,
+    Remove,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerQuestCommandReport {
+    pub(crate) opcode: u32,
+    pub(crate) kind: GamePlayerQuestCommandKind,
+    pub(crate) player_id: i32,
+    pub(crate) quest_id: u16,
+    pub(crate) player_found: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerQuestCommandError {
+    MissingPlayerId,
+    MissingQuestId,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameOrganizingWarMessageReport {
+pub(crate) enum GameOrganizingMessageReport {
     FactionLifecycle(FactionLifecycleDispatchReport),
     CityGate(CityGateDispatchReport),
     VillageApplication(WarApplicationResponseReport),
@@ -227,10 +248,11 @@ pub(crate) enum GameOrganizingWarMessageReport {
     Phase(WarPhaseDispatchReport),
     FourNationPhase(FourNationPhaseDispatchReport),
     Control(OrganizingControlDispatchReport),
+    PlayerQuest(GamePlayerQuestCommandReport),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameOrganizingWarMessageError {
+pub(crate) enum GameOrganizingMessageError {
     FactionLifecycle(FactionLifecycleDispatchError),
     CityGate(FactionLifecycleDispatchError),
     VillageApplication(FactionLifecycleDispatchError),
@@ -238,6 +260,7 @@ pub(crate) enum GameOrganizingWarMessageError {
     FactionUpdate(WarFactionUpdateDispatchError),
     Phase(WarPhaseDispatchError),
     Control(OrganizingControlDispatchError),
+    PlayerQuest(GamePlayerQuestCommandError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -299,6 +322,17 @@ pub(crate) enum WarPhaseDispatchError {
         available: usize,
     },
 }
+
+impl fmt::Display for GamePlayerQuestCommandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingPlayerId => formatter.write_str("quest command не содержит player ID"),
+            Self::MissingQuestId => formatter.write_str("quest command не содержит quest ID"),
+        }
+    }
+}
+
+impl Error for GamePlayerQuestCommandError {}
 
 impl fmt::Display for WarPhaseDispatchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -443,14 +477,50 @@ where
     Some(Ok(WarPhaseDispatchReport { opcode, war_number }))
 }
 
-/// Подключает всю достигнутую OrganSys war family к живому `CGame` owner-у.
-pub(crate) fn dispatch_game_organizing_war_message<
+fn dispatch_game_player_quest_command(
+    opcode: u32,
+    message: &mut CMessage,
+    game: &mut CGame,
+) -> Result<GamePlayerQuestCommandReport, GamePlayerQuestCommandError> {
+    let player_id = message
+        .base_mut()
+        .get_long()
+        .ok_or(GamePlayerQuestCommandError::MissingPlayerId)?;
+    let quest_id = message
+        .base_mut()
+        .get_short()
+        .ok_or(GamePlayerQuestCommandError::MissingQuestId)? as u16;
+    let kind = if opcode == 0x7fe38 {
+        GamePlayerQuestCommandKind::Add
+    } else {
+        GamePlayerQuestCommandKind::Remove
+    };
+    let player_found = game.find_player(player_id).is_some();
+    if player_found {
+        match kind {
+            GamePlayerQuestCommandKind::Add => game.add_script_player_quest(player_id, quest_id),
+            GamePlayerQuestCommandKind::Remove => {
+                game.remove_script_player_quest(player_id, quest_id)
+            }
+        }
+    }
+    Ok(GamePlayerQuestCommandReport {
+        opcode,
+        kind,
+        player_id,
+        quest_id,
+        player_found,
+    })
+}
+
+/// Подключает всю достигнутую OrganSys family к живому `CGame` owner-у.
+pub(crate) fn dispatch_game_organizing_message<
     Runtime: GameOrganizingWarRuntime + ScriptRegionChangeContext + OldClientGoodsCodec,
 >(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Option<Result<GameOrganizingWarMessageReport, GameOrganizingWarMessageError>> {
+) -> Option<Result<GameOrganizingMessageReport, GameOrganizingMessageError>> {
     let opcode = message.message_type() as u32;
     if !matches!(
         opcode,
@@ -472,6 +542,8 @@ pub(crate) fn dispatch_game_organizing_war_message<
             | 0x7fe35
             | 0x7fe36
             | 0x7fe37
+            | 0x7fe38
+            | 0x7fe39
             | 0x7fe3c..=0x7fe3f
             | 0x7fe41
             | 0x7fe43..=0x7fe45
@@ -480,27 +552,35 @@ pub(crate) fn dispatch_game_organizing_war_message<
         return None;
     }
 
+    if matches!(opcode, 0x7fe38 | 0x7fe39) {
+        return Some(
+            dispatch_game_player_quest_command(opcode, message, game)
+                .map(GameOrganizingMessageReport::PlayerQuest)
+                .map_err(GameOrganizingMessageError::PlayerQuest),
+        );
+    }
+
     if opcode == 0x7fe2a {
         return Some(
             dispatch_city_gate_response(message, game, runtime)
-                .map(GameOrganizingWarMessageReport::CityGate)
-                .map_err(GameOrganizingWarMessageError::CityGate),
+                .map(GameOrganizingMessageReport::CityGate)
+                .map_err(GameOrganizingMessageError::CityGate),
         );
     }
 
     if opcode == 0x7fe34 {
         return Some(
             dispatch_village_war_application_response(message, game, runtime)
-                .map(GameOrganizingWarMessageReport::VillageApplication)
-                .map_err(GameOrganizingWarMessageError::VillageApplication),
+                .map(GameOrganizingMessageReport::VillageApplication)
+                .map_err(GameOrganizingMessageError::VillageApplication),
         );
     }
 
     if opcode == 0x7fe37 {
         return Some(
             dispatch_war_application_response(message, game, runtime)
-                .map(GameOrganizingWarMessageReport::CityApplication)
-                .map_err(GameOrganizingWarMessageError::CityApplication),
+                .map(GameOrganizingMessageReport::CityApplication)
+                .map_err(GameOrganizingMessageError::CityApplication),
         );
     }
 
@@ -520,16 +600,16 @@ pub(crate) fn dispatch_game_organizing_war_message<
     ) {
         return Some(
             dispatch_faction_lifecycle_message(opcode, message, game, runtime)
-                .map(GameOrganizingWarMessageReport::FactionLifecycle)
-                .map_err(GameOrganizingWarMessageError::FactionLifecycle),
+                .map(GameOrganizingMessageReport::FactionLifecycle)
+                .map_err(GameOrganizingMessageError::FactionLifecycle),
         );
     }
 
     if matches!(opcode, 0x7fe46..=0x7fe4a) {
         return Some(
             dispatch_organizing_control_message(opcode, message, game, runtime)
-                .map(GameOrganizingWarMessageReport::Control)
-                .map_err(GameOrganizingWarMessageError::Control),
+                .map(GameOrganizingMessageReport::Control)
+                .map_err(GameOrganizingMessageError::Control),
         );
     }
 
@@ -539,8 +619,8 @@ pub(crate) fn dispatch_game_organizing_war_message<
     ) {
         return Some(
             dispatch_four_nation_phase_message(opcode, message, game, runtime)
-                .map(GameOrganizingWarMessageReport::FourNationPhase)
-                .map_err(GameOrganizingWarMessageError::Phase),
+                .map(GameOrganizingMessageReport::FourNationPhase)
+                .map_err(GameOrganizingMessageError::Phase),
         );
     }
 
@@ -558,8 +638,8 @@ pub(crate) fn dispatch_game_organizing_war_message<
                 &mut context,
             )
             .expect("faction opcode проверен перед dispatcher-ом")
-            .map(GameOrganizingWarMessageReport::FactionUpdate)
-            .map_err(GameOrganizingWarMessageError::FactionUpdate)
+            .map(GameOrganizingMessageReport::FactionUpdate)
+            .map_err(GameOrganizingMessageError::FactionUpdate)
         } else {
             dispatch_war_phase(
                 opcode,
@@ -570,8 +650,8 @@ pub(crate) fn dispatch_game_organizing_war_message<
                 &mut context,
             )
             .expect("phase opcode проверен перед dispatcher-ом")
-            .map(GameOrganizingWarMessageReport::Phase)
-            .map_err(GameOrganizingWarMessageError::Phase)
+            .map(GameOrganizingMessageReport::Phase)
+            .map_err(GameOrganizingMessageError::Phase)
         }
     };
     game.restore_war_startup_owners(owners);

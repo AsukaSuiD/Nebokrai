@@ -181,6 +181,9 @@
 //! Client timing owner хранит quest countdown и heartbeat acknowledgement:
 //! остаток сохраняет signed 32-bit arithmetic исходного `time_t`, а wall/local
 //! clock остаются внешними runtime-фактами message caller-а.
+//! Player quest lifecycle хранит persisted `ushort → complete byte`: accept,
+//! complete и disband публикуют `0xBFF2C/2D/2E`, а `0xBFF2F` position остаётся
+//! transient client hint и не создаёт второго авторитетного quest state.
 //! LeiTing owner хранит пять scalar-полей и ordered `tagThing` list; codec
 //! совпадает с WorldServer `Add/DecodeByteArrayLeiTing`, а reward-флаг
 //! выставляется только после exact energy/count threshold. Script `2650/2651`
@@ -315,6 +318,7 @@ const BASE_CREDIT_OFFSET: usize = 0xfc;
 const BASE_DISPLAY_HEAD_PIECE_OFFSET: usize = 0x104;
 const BASE_QUEST_TIME_BEGIN_OFFSET: usize = 0x108;
 const BASE_QUEST_TIME_LIMIT_OFFSET: usize = 0x10c;
+const BASE_QUEST_ENABLED_OFFSET: usize = 0x110;
 const BASE_EXPLOIT_OFFSET: usize = 0x114;
 const BASE_FAIRY_CONTAINER_ENABLED_OFFSET: usize = 0x11c;
 const BASE_DAYS_HONOR_OFFSET: usize = 0x140;
@@ -1188,6 +1192,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) display_head_piece: bool,
     pub(crate) quest_time_begin: i32,
     pub(crate) quest_time_limit: i32,
+    pub(crate) quest_enabled: bool,
     pub(crate) fy_enable_flags: u32,
     pub(crate) fy_energy: u32,
     pub(crate) lt_60_stamp: u32,
@@ -2590,6 +2595,7 @@ impl CPlayer {
                 BASE_BATTLE_FAIRY_DIED_OFFSET,
                 self.base_properties.battle_fairy_died,
             ),
+            (BASE_QUEST_ENABLED_OFFSET, self.base_properties.quest_enabled),
         ] {
             wire[offset] = u8::from(value);
         }
@@ -2696,6 +2702,7 @@ impl CPlayer {
             read_player_wire_u32(wire, BASE_QUEST_TIME_BEGIN_OFFSET) as i32;
         self.base_properties.quest_time_limit =
             read_player_wire_u32(wire, BASE_QUEST_TIME_LIMIT_OFFSET) as i32;
+        self.base_properties.quest_enabled = wire[BASE_QUEST_ENABLED_OFFSET] != 0;
         self.base_properties.exploit = read_player_wire_u32(wire, BASE_EXPLOIT_OFFSET);
         self.base_properties.fairy_container_enabled =
             wire[BASE_FAIRY_CONTAINER_ENABLED_OFFSET] != 0;
@@ -2840,6 +2847,14 @@ impl CPlayer {
         };
         *state = 1;
         true
+    }
+
+    pub(crate) fn remove_script_quest(&mut self, quest_id: u16) -> bool {
+        self.quest_states.remove(&quest_id).is_some()
+    }
+
+    pub(crate) fn has_script_quest(&self, quest_id: u16) -> bool {
+        self.quest_states.contains_key(&quest_id)
     }
 
     pub(crate) fn add_friend_state(&mut self, name: &[u8]) -> PlayerFriendAddOutcome {
@@ -3199,11 +3214,40 @@ impl CPlayer {
         self.base_properties.display_head_piece
     }
 
+    pub(crate) const fn quest_enabled(&self) -> bool {
+        self.base_properties.quest_enabled
+    }
+
+    pub(crate) const fn set_quest_enabled(&mut self, enabled: bool) {
+        self.base_properties.quest_enabled = enabled;
+    }
+
+    pub(crate) const fn begin_quest_time(&mut self, now_seconds: i32, time_limit: i32) {
+        self.base_properties.quest_time_begin = now_seconds;
+        self.base_properties.quest_time_limit = time_limit;
+    }
+
+    pub(crate) const fn clear_quest_time(&mut self) {
+        self.base_properties.quest_time_begin = 0;
+        self.base_properties.quest_time_limit = 0;
+    }
+
     pub(crate) const fn quest_time_remaining(&self, now_seconds: i32) -> i32 {
-        self.base_properties
-            .quest_time_limit
-            .wrapping_sub(now_seconds)
-            .wrapping_add(self.base_properties.quest_time_begin)
+        if self.base_properties.quest_time_begin == 0
+            || self.base_properties.quest_time_limit == 0
+        {
+            return 0;
+        }
+        let remaining = self
+            .base_properties
+            .quest_time_begin
+            .wrapping_add(self.base_properties.quest_time_limit)
+            .wrapping_sub(now_seconds);
+        if remaining < 0 {
+            0
+        } else {
+            remaining
+        }
     }
 
     pub(crate) const fn acknowledge_heartbeat(&mut self) {
@@ -9380,48 +9424,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::QuestTimeBegin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11486
-// RVA: 0x0002DA20
-// ADDRESS: 0042da20
-// PROTOTYPE: void __thiscall QuestTimeBegin(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::QuestTimeClear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11497
-// RVA: 0x0002DAC0
-// ADDRESS: 0042dac0
-// PROTOTYPE: void __thiscall QuestTimeClear(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::SetQuestOn
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11506
-// RVA: 0x0002DB40
-// ADDRESS: 0042db40
-// PROTOTYPE: void __thiscall SetQuestOn(bool param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::end_business
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -10010,62 +10012,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::GetQuestState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11293
-// RVA: 0x000333B0
-// ADDRESS: 004333b0
-// PROTOTYPE: long __thiscall GetQuestState(ushort param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::GetValidQuestNum
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11301
-// RVA: 0x000333F0
-// ADDRESS: 004333f0
-// PROTOTYPE: long __thiscall GetValidQuestNum(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::CompleteQuest
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11352
-// RVA: 0x00033480
-// ADDRESS: 00433480
-// PROTOTYPE: void __thiscall CompleteQuest(ushort param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::UpdateQuest
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11383
-// RVA: 0x00033550
-// ADDRESS: 00433550
-// PROTOTYPE: void __thiscall UpdateQuest(ushort param_1, long param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::ReUseSkillItem
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -10242,20 +10188,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x000369B0
 // ADDRESS: 004369b0
 // PROTOTYPE: bool __thiscall CheckAuctionMoneyMove(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::RemoveQuest
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11367
-// RVA: 0x00038DC0
-// ADDRESS: 00438dc0
-// PROTOTYPE: void __thiscall RemoveQuest(ushort param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -10942,20 +10874,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x000452D0
 // ADDRESS: 004452d0
 // PROTOTYPE: bool __thiscall DecordQuestDataFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddQuest
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11316
-// RVA: 0x00045360
-// ADDRESS: 00445360
-// PROTOTYPE: void __thiscall AddQuest(ushort param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

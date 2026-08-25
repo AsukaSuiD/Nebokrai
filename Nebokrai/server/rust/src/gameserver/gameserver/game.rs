@@ -97,6 +97,9 @@
 //! проходят общий player-rule FIFO pass с точными partial/cursor/log
 //! контрактами; player-ranks `0x17` соседним owner-ом сохраняет missing-init и
 //! исходный allocation source.
+//! Script quest owner замыкает local add/complete/remove/update на persisted
+//! player map и client `0xBFF2C..2F`; remote add/remove проходят существующий
+//! `0x6013B/C → World → 0x7FE38/39` route без повторной пересылки.
 //! CountryParam и CountryHandler `0x18/0x19` публикуются одним country-state
 //! FIFO pass, сохраняя scalar/map partial mutation, replacement и exact logs.
 //! Proxy/reload/region-level/dupli selectors `0x0F/0x10/0x11/0x1A` проходят
@@ -474,8 +477,8 @@ use crate::gameserver::appserver::message::playershopmessage::{
     PlayerShopMessageError, PlayerShopMessageReport, dispatch_player_shop_message,
 };
 use crate::gameserver::appserver::message::organsysmessage::{
-    GameOrganizingWarMessageError, GameOrganizingWarMessageReport, GameOrganizingWarRuntime,
-    dispatch_game_organizing_war_message,
+    GameOrganizingMessageError, GameOrganizingMessageReport, GameOrganizingWarRuntime,
+    dispatch_game_organizing_message,
 };
 use crate::gameserver::appserver::message::othermessage::{
     GameOtherMessageError, GameOtherMessageReport, GameOtherMessageRuntime,
@@ -3004,8 +3007,8 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
         Vec<Result<GameIncrementShopMessageReport, GameIncrementShopMessageError>>,
     pub(crate) increment_shop_billing_messages:
         Vec<Result<IncrementShopBillingReport, IncrementShopBillingMessageError>>,
-    pub(crate) organizing_war_messages:
-        Vec<Result<GameOrganizingWarMessageReport, GameOrganizingWarMessageError>>,
+    pub(crate) organizing_messages:
+        Vec<Result<GameOrganizingMessageReport, GameOrganizingMessageError>>,
     pub(crate) country_war_messages: Vec<
         Result<
             GameCountryWarMessageReport,
@@ -9500,6 +9503,92 @@ impl CGame {
         let mut message = CMessage::new(0x000b_ff2d);
         message.base_mut().add_short(quest_id as i16);
         add_legacy_c_string(message.base_mut(), &quest_name);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    pub(crate) fn remove_script_player_quest(&mut self, player_id: i32, quest_id: u16) {
+        if !self.players.contains_key(&player_id) {
+            let mut request = CMessage::new(0x0006_013c);
+            request.add_long(player_id);
+            request.base_mut().add_short(quest_id as i16);
+            let _ = request.send(self, false);
+            return;
+        }
+        let Some(quest_name) = self
+            .quest_system
+            .quest_data_by_id(quest_id)
+            .map(|quest| quest.name.clone())
+        else {
+            return;
+        };
+        let player = self
+            .players
+            .get_mut(&player_id)
+            .expect("local quest-player проверен до removal");
+        if !player.remove_script_quest(quest_id) {
+            return;
+        }
+
+        let mut message = CMessage::new(0x000b_ff2e);
+        message.base_mut().add_short(quest_id as i16);
+        add_legacy_c_string(message.base_mut(), &quest_name);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    pub(crate) fn update_script_player_quest_position(
+        &self,
+        player_id: i32,
+        quest_id: u16,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+    ) {
+        let Some(player) = self.players.get(&player_id) else {
+            return;
+        };
+        if !player.has_script_quest(quest_id) {
+            return;
+        }
+
+        let mut message = CMessage::new(0x000b_ff2f);
+        message.base_mut().add_short(quest_id as i16);
+        message.add_long(region_id);
+        message.add_long(tile_x);
+        message.add_long(tile_y);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    pub(crate) fn set_script_player_quest_enabled(&mut self, player_id: i32, enabled: bool) {
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return;
+        };
+        player.set_quest_enabled(enabled);
+        let mut message = CMessage::new(0x000b_f728);
+        message.add_byte(u8::from(enabled));
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    pub(crate) fn begin_script_player_quest_time(
+        &mut self,
+        player_id: i32,
+        now_seconds: i32,
+        time_limit: i32,
+    ) {
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return;
+        };
+        player.begin_quest_time(now_seconds, time_limit);
+        let mut message = CMessage::new(0x000b_f729);
+        message.add_long(time_limit);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    pub(crate) fn clear_script_player_quest_time(&mut self, player_id: i32) {
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return;
+        };
+        player.clear_quest_time();
+        let message = CMessage::new(0x000b_f72a);
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
@@ -20264,7 +20353,7 @@ impl CGame {
         let mut depot_messages = Vec::new();
         let mut increment_shop_messages = Vec::new();
         let mut increment_shop_billing_messages = Vec::new();
-        let mut organizing_war_messages = Vec::new();
+        let mut organizing_messages = Vec::new();
         let mut country_war_messages = Vec::new();
         let mut goods_war_messages = Vec::new();
         let mut container_messages = Vec::new();
@@ -20292,7 +20381,7 @@ impl CGame {
                 &mut depot_messages,
                 &mut increment_shop_messages,
                 &mut increment_shop_billing_messages,
-                &mut organizing_war_messages,
+                &mut organizing_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
                 &mut container_messages,
@@ -20322,7 +20411,7 @@ impl CGame {
                 &mut depot_messages,
                 &mut increment_shop_messages,
                 &mut increment_shop_billing_messages,
-                &mut organizing_war_messages,
+                &mut organizing_messages,
                 &mut country_war_messages,
                 &mut goods_war_messages,
                 &mut container_messages,
@@ -20354,7 +20443,7 @@ impl CGame {
                         &mut depot_messages,
                         &mut increment_shop_messages,
                         &mut increment_shop_billing_messages,
-                        &mut organizing_war_messages,
+                        &mut organizing_messages,
                         &mut country_war_messages,
                         &mut goods_war_messages,
                         &mut container_messages,
@@ -20385,7 +20474,7 @@ impl CGame {
             depot_messages,
             increment_shop_messages,
             increment_shop_billing_messages,
-            organizing_war_messages,
+            organizing_messages,
             country_war_messages,
             goods_war_messages,
             container_messages,
@@ -20415,8 +20504,8 @@ impl CGame {
         increment_shop_billing_messages: &mut Vec<
             Result<IncrementShopBillingReport, IncrementShopBillingMessageError>,
         >,
-        organizing_war_messages: &mut Vec<
-            Result<GameOrganizingWarMessageReport, GameOrganizingWarMessageError>,
+        organizing_messages: &mut Vec<
+            Result<GameOrganizingMessageReport, GameOrganizingMessageError>,
         >,
         country_war_messages: &mut Vec<
             Result<
@@ -20464,8 +20553,8 @@ impl CGame {
         } else if let Some(report) = dispatch_increment_shop_billing_message(message, self, runtime)
         {
             increment_shop_billing_messages.push(report);
-        } else if let Some(report) = dispatch_game_organizing_war_message(message, self, runtime) {
-            organizing_war_messages.push(report);
+        } else if let Some(report) = dispatch_game_organizing_message(message, self, runtime) {
+            organizing_messages.push(report);
         } else if let Some(report) = dispatch_game_country_war_message(message, self, runtime) {
             country_war_messages.push(report);
         } else if let Some(report) = dispatch_game_goods_war_message(message, self) {

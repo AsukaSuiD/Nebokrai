@@ -90,6 +90,12 @@
 //! Достигнутая там же notice-family `3316/5201/5202` единообразно вычисляет
 //! text/color/background: личный круг использует `0xBF811` и opaque-black
 //! default, региональный — `0xBF806`, мировой сохраняет World `0x5FF0E` relay.
+//! Quest family `6200/6201/6202/6203/6207` сохраняет ushort narrowing,
+//! computed target-player selector, persisted completion/removal, transient
+//! position wire и межсерверный add/remove round-trip для удалённого target-а.
+//! Соседний `3500..3503/3507` owner меняет persisted quest-enabled/countdown
+//! поля, публикует `0xBF728..2A` и возвращает тот же signed-wrap remainder,
+//! который client может отдельно запросить через уже достигнутый `0xBF72B`.
 //! PreciousBox `2221/2222/2237` сохраняет trusted action-script у player,
 //! client open/result/close wire, общий Game RNG, configuration roll,
 //! goods factory/upgrade/packet ownership и optional World announcement;
@@ -293,7 +299,14 @@ pub(crate) const SCRIPT_FUNCTION_POST_WORLD_INFO: i32 = 5202;
 pub(crate) const SCRIPT_FUNCTION_POST_COUNTRY_INFO: i32 = 5203;
 pub(crate) const SCRIPT_FUNCTION_ADD_QUEST: i32 = 6200;
 pub(crate) const SCRIPT_FUNCTION_COMPLETE_QUEST: i32 = 6201;
+pub(crate) const SCRIPT_FUNCTION_DISBAND_QUEST: i32 = 6202;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
+pub(crate) const SCRIPT_FUNCTION_UPDATE_QUEST_POSITION: i32 = 6207;
+pub(crate) const SCRIPT_FUNCTION_IS_QUEST_ENABLED: i32 = 3500;
+pub(crate) const SCRIPT_FUNCTION_SET_QUEST_ENABLED: i32 = 3501;
+pub(crate) const SCRIPT_FUNCTION_QUEST_TIME_BEGIN: i32 = 3502;
+pub(crate) const SCRIPT_FUNCTION_QUEST_TIME_CLEAR: i32 = 3503;
+pub(crate) const SCRIPT_FUNCTION_GET_QUEST_TIME: i32 = 3507;
 pub(crate) const SCRIPT_FUNCTION_ACTIVITY_LOG: i32 = 9510;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
@@ -3272,8 +3285,20 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_ADD_QUEST
         | SCRIPT_FUNCTION_COMPLETE_QUEST
+        | SCRIPT_FUNCTION_DISBAND_QUEST
         | SCRIPT_FUNCTION_GET_QUEST_STATE => match index {
             0 | 1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_UPDATE_QUEST_POSITION => match index {
+            0..=4 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_IS_QUEST_ENABLED
+        | SCRIPT_FUNCTION_QUEST_TIME_CLEAR
+        | SCRIPT_FUNCTION_GET_QUEST_TIME => Unused,
+        SCRIPT_FUNCTION_SET_QUEST_ENABLED | SCRIPT_FUNCTION_QUEST_TIME_BEGIN => match index {
+            0 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_ACTIVITY_LOG => Unused,
@@ -4732,7 +4757,9 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
         SCRIPT_FUNCTION_ACTIVITY_LOG => {
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
-        SCRIPT_FUNCTION_ADD_QUEST | SCRIPT_FUNCTION_COMPLETE_QUEST => {
+        SCRIPT_FUNCTION_ADD_QUEST
+        | SCRIPT_FUNCTION_COMPLETE_QUEST
+        | SCRIPT_FUNCTION_DISBAND_QUEST => {
             let Some(target_player_id) =
                 integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
             else {
@@ -4746,20 +4773,105 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             if function_id == SCRIPT_FUNCTION_ADD_QUEST {
                 game.add_script_player_quest(target_player_id, quest_id);
-            } else {
+            } else if function_id == SCRIPT_FUNCTION_COMPLETE_QUEST {
                 game.complete_script_player_quest(target_player_id, quest_id);
+            } else {
+                game.remove_script_player_quest(target_player_id, quest_id);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
         }
         SCRIPT_FUNCTION_GET_QUEST_STATE => {
-            let quest_id = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
-            let legacy_return = u16::try_from(quest_id)
-                .ok()
-                .and_then(|quest_id| {
-                    game.find_player(player_id)
-                        .map(|player| player.quest_state(quest_id))
-                })
-                .unwrap_or(2);
+            let Some(target_player_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            let target_player_id = if target_player_id == 0 {
+                player_id
+            } else {
+                target_player_id
+            };
+            let quest_id = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR) as u16;
+            let legacy_return = game
+                .find_player(target_player_id)
+                .map(|player| player.quest_state(quest_id))
+                .unwrap_or(-1);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_UPDATE_QUEST_POSITION => {
+            let Some(target_player_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let (Some(region_id), Some(tile_x), Some(tile_y)) = (
+                integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[3].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[4].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let target_player_id = if target_player_id == 0 {
+                player_id
+            } else {
+                target_player_id
+            };
+            let quest_id = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR) as u16;
+            game.update_script_player_quest_position(
+                target_player_id,
+                quest_id,
+                region_id,
+                tile_x,
+                tile_y,
+            );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_IS_QUEST_ENABLED => {
+            let legacy_return = game
+                .find_player(player_id)
+                .map(|player| i32::from(player.quest_enabled()))
+                .unwrap_or(0);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_SET_QUEST_ENABLED => {
+            let Some(enabled) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if game.find_player(player_id).is_some() {
+                game.set_script_player_quest_enabled(player_id, enabled != 0);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_QUEST_TIME_BEGIN => {
+            let Some(time_limit) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            game.begin_script_player_quest_time(
+                player_id,
+                chrono::Local::now().timestamp() as i32,
+                time_limit,
+            );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
+        }
+        SCRIPT_FUNCTION_QUEST_TIME_CLEAR => {
+            if game.find_player(player_id).is_some() {
+                game.clear_script_player_quest_time(player_id);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GET_QUEST_TIME => {
+            let now_seconds = chrono::Local::now().timestamp() as i32;
+            let legacy_return = game
+                .find_player(player_id)
+                .map(|player| player.quest_time_remaining(now_seconds))
+                .unwrap_or(0);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }
         SCRIPT_FUNCTION_CHECK_GOODS => {
