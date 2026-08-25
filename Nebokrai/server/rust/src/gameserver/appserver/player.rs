@@ -3837,6 +3837,21 @@ impl CPlayer {
         self.move_shape.delete_extended_state(kind, state_id)
     }
 
+    pub(crate) fn delete_extended_state_by_type(
+        &mut self,
+        state_type: u16,
+    ) -> super::exstate::ExtendedStateMutation {
+        self.move_shape.delete_extended_state_by_type(state_type)
+    }
+
+    pub(crate) const fn remain_jing_li_dan_count(&self) -> u16 {
+        self.base_properties.remain_jing_li_dan_count
+    }
+
+    pub(crate) const fn set_remain_jing_li_dan_count(&mut self, count: u16) {
+        self.base_properties.remain_jing_li_dan_count = count;
+    }
+
     pub(crate) fn get_extended_state(
         &self,
         kind: super::exstate::ExtendedStateKind,

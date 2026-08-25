@@ -299,12 +299,16 @@ pub(crate) const SCRIPT_FUNCTION_GET_WEEKS_HONOR_RANK: i32 = 2626;
 pub(crate) const SCRIPT_FUNCTION_GET_MONTHS_HONOR_RANK: i32 = 2627;
 pub(crate) const SCRIPT_FUNCTION_GET_TOTAL_HONOR_RANK: i32 = 2628;
 pub(crate) const SCRIPT_FUNCTION_GET_ATTEMPT_APPELLATION_ID: i32 = 2630;
+pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_RANK: i32 = 2631;
+pub(crate) const SCRIPT_FUNCTION_DELETE_EX_STATE_BY_TYPE: i32 = 2632;
 pub(crate) const SCRIPT_FUNCTION_SEND_TOTAL_HONOR_RANKS: i32 = 2634;
 pub(crate) const SCRIPT_FUNCTION_ADD_APPELLATION_STATE: i32 = 2635;
 pub(crate) const SCRIPT_FUNCTION_DEL_APPELLATION_STATE: i32 = 2636;
 pub(crate) const SCRIPT_FUNCTION_GET_APPELLATION_STATE: i32 = 2637;
 pub(crate) const SCRIPT_FUNCTION_SET_THING_COUNT: i32 = 2650;
 pub(crate) const SCRIPT_FUNCTION_GET_THING_COUNT: i32 = 2651;
+pub(crate) const SCRIPT_FUNCTION_SET_JING_LI_DAN: i32 = 2652;
+pub(crate) const SCRIPT_FUNCTION_GET_JING_LI_DAN: i32 = 2653;
 pub(crate) const SCRIPT_FUNCTION_GET_WAR_REGION_STATE: i32 = 6054;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_OWNING_REGION: i32 = 6055;
 pub(crate) const SCRIPT_FUNCTION_GET_WAR_START_TIME: i32 = 6056;
@@ -3321,7 +3325,9 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_GET_MONTHS_HONOR_RANK
         | SCRIPT_FUNCTION_GET_TOTAL_HONOR_RANK
         | SCRIPT_FUNCTION_GET_ATTEMPT_APPELLATION_ID
-        | SCRIPT_FUNCTION_SEND_TOTAL_HONOR_RANKS => Unused,
+        | SCRIPT_FUNCTION_SEND_TOTAL_HONOR_RANKS
+        | SCRIPT_FUNCTION_GET_PLAYER_RANK
+        | SCRIPT_FUNCTION_GET_JING_LI_DAN => Unused,
         SCRIPT_FUNCTION_ADD_APPELLATION_STATE
         | SCRIPT_FUNCTION_DEL_APPELLATION_STATE
         | SCRIPT_FUNCTION_GET_APPELLATION_STATE => match index {
@@ -3333,6 +3339,10 @@ pub(crate) fn script_function_parameter_kind(
             _ => Unused,
         },
         SCRIPT_FUNCTION_GET_THING_COUNT => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_DELETE_EX_STATE_BY_TYPE | SCRIPT_FUNCTION_SET_JING_LI_DAN => match index {
             0 => Integer,
             _ => Unused,
         },
@@ -5701,6 +5711,36 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let _ = message.send(game, false);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
+        SCRIPT_FUNCTION_GET_PLAYER_RANK => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: game
+                .find_player(player_id)
+                .and_then(|player| {
+                    game.player_ranks().map(|ranks| {
+                        ranks.get_specify_player_rank(player.player_id() as u32) as i32
+                    })
+                })
+                .unwrap_or(0),
+        }),
+        SCRIPT_FUNCTION_DELETE_EX_STATE_BY_TYPE => {
+            let state_type = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR) as u16;
+            let now_ms = runtime.country_contend_now_milliseconds();
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game
+                    .delete_script_extended_state_by_type(player_id, state_type, now_ms, runtime)
+                    as i32,
+            })
+        }
+        SCRIPT_FUNCTION_SET_JING_LI_DAN => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: game.set_script_jing_li_dan_count(
+                player_id,
+                integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+            ),
+        }),
+        SCRIPT_FUNCTION_GET_JING_LI_DAN => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: game
+                .find_player(player_id)
+                .map_or(0, |player| i32::from(player.remain_jing_li_dan_count())),
+        }),
         _ => None,
     }
 }

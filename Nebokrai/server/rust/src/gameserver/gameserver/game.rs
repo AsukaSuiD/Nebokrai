@@ -16474,6 +16474,51 @@ impl CGame {
         mutation.legacy_return
     }
 
+    pub(crate) fn delete_script_extended_state_by_type<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        state_type: u16,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> u32 {
+        let Some(mutation) = self
+            .find_player_mut(player_id)
+            .map(|player| player.delete_extended_state_by_type(state_type))
+        else {
+            return 0;
+        };
+        for removed in &mutation.removed {
+            self.send_extended_state_visual(player_id, removed, false, now_ms);
+        }
+        if !mutation.removed.is_empty() {
+            self.refresh_script_change_body_properties(player_id, context);
+            self.send_script_player_state_changed(player_id);
+        }
+        mutation.legacy_return
+    }
+
+    pub(crate) fn set_script_jing_li_dan_count(&mut self, player_id: i32, used_count: i32) -> i32 {
+        if used_count < 0 || used_count > i32::from(self.globe_setup.total_jing_li_dan_count()) {
+            return -1;
+        }
+        let remaining = self
+            .globe_setup
+            .total_jing_li_dan_count()
+            .wrapping_sub(used_count as u16);
+        let Some(player) = self.find_player_mut(player_id) else {
+            return -1;
+        };
+        player.set_remain_jing_li_dan_count(remaining);
+        let identity = player.shape().identity();
+        let mut changed = CMessage::new(0x000b_f80c);
+        changed.add_long(identity.object_type);
+        changed.add_long(identity.id);
+        add_legacy_c_string(changed.base_mut(), b"wRemainJingLiDanCnt");
+        changed.add_long(i32::from(remaining));
+        let _ = changed.send_to_player(self.net_server(), player_id);
+        -1
+    }
+
     fn send_extended_state_visual(
         &mut self,
         player_id: i32,

@@ -674,6 +674,29 @@ impl CMoveShape {
         }
     }
 
+    pub(crate) fn delete_extended_state_by_type(
+        &mut self,
+        state_type: u16,
+    ) -> ExtendedStateMutation {
+        let Some(index) = self.extended_states.iter().position(|state| {
+            state.kind == ExtendedStateKind::Original && state.state_type == state_type
+        }) else {
+            return ExtendedStateMutation {
+                removed: Vec::new(),
+                added: None,
+                legacy_return: 0,
+            };
+        };
+        let removed = self.extended_states.remove(index);
+        let legacy_return = removed.level;
+        self.remove_extended_state_serialized(&removed);
+        ExtendedStateMutation {
+            removed: vec![removed],
+            added: None,
+            legacy_return,
+        }
+    }
+
     fn remove_extended_state_serialized(&mut self, state: &ExtendedState) {
         let span = state.serialized_span();
         state.remove_serialized(&mut self.ex_states);
