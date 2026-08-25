@@ -64,6 +64,8 @@
 //! Packet/equipment/hand↔battle-fairy (`12`) дополнительно сохраняет ранние
 //! `BFPropertyAdd`, partial material/gem remove, property/goods-update
 //! deliveries и их повторный rollback add до итогового move/rollback wire.
+//! Ordinary-fairy↔battle-fairy (`11↔12`) связывает те же hatch/lock и BF
+//! property/equipment owners без промежуточного carried burden.
 //! Packet/equipment/hand↔CiQing compose (`17`) достигает persisted трёхслотового
 //! owner-а: positional/automatic stack, partial remove, burden, equipment
 //! callbacks, rollback и self wire связаны целиком. Сохранён exact quirk
@@ -686,10 +688,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 EnhancementMessageRoute::CiQingComposeTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && (matches!(request.source_container_extend_id, 1 | 2 | 3 | 9)
+                && (matches!(request.source_container_extend_id, 1 | 2 | 3 | 9 | 11)
                     && request.destination_container_extend_id == 12
                     || request.source_container_extend_id == 12
-                        && matches!(request.destination_container_extend_id, 1 | 2 | 3 | 9))
+                        && matches!(request.destination_container_extend_id, 1 | 2 | 3 | 9 | 11))
             {
                 EnhancementMessageRoute::BattleFairyTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE

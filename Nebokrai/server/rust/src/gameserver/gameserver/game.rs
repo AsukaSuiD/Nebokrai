@@ -2832,6 +2832,7 @@ pub(crate) enum BattleFairyTransferRemoval {
     Player(EnhancementTransferRemoval),
     Hand(GroundHandRemoval),
     Depot(DepotStorageRemoval),
+    Fairy(FairyStorageRemoval),
     BattleFairy(BattleFairyStorageRemoval),
 }
 
@@ -2839,6 +2840,7 @@ pub(crate) enum BattleFairyTransferRemoval {
 pub(crate) enum BattleFairyTransferAddition {
     Player(DepotStorageTransferAddition),
     Hand(GroundHandAddition),
+    Fairy(FairyContainerAddOutcome),
     BattleFairy(BattleFairyEquipmentMutationReport),
 }
 
@@ -2864,6 +2866,7 @@ pub(crate) enum BattleFairyTransferBlock {
     PacketRemovalFailed,
     HandRemovalFailed,
     DepotRemovalFailed,
+    FairyRemovalFailed(FairyContainerRemoveOutcome),
     EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
     BattleFairyRemovalFailed(BattleFairyEquipmentMutationReport),
     RolledBack {
@@ -8275,8 +8278,9 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<BattleFairyTransferReport, BattleFairyTransferBlock> {
-        let supported = matches!(source_extend_id, 1 | 2 | 3 | 9) && destination_extend_id == 12
-            || source_extend_id == 12 && matches!(destination_extend_id, 1 | 2 | 3 | 9);
+        let supported = matches!(source_extend_id, 1 | 2 | 3 | 9 | 11)
+            && destination_extend_id == 12
+            || source_extend_id == 12 && matches!(destination_extend_id, 1 | 2 | 3 | 9 | 11);
         if !supported {
             return Err(BattleFairyTransferBlock::UnsupportedRoute);
         }
@@ -8296,6 +8300,7 @@ impl CGame {
             2 => player.equipment().get_goods(source_position),
             3 => player.hand().get_goods(source_position),
             9 => player.depot().get_goods(source_position),
+            11 => player.fairy_container().base().get_goods(source_position),
             12 => player
                 .battle_fairy_container()
                 .base()
@@ -8472,6 +8477,48 @@ impl CGame {
                 ),
             };
             (BattleFairyTransferRemoval::Depot(removal), Some(goods))
+        } else if source_extend_id == 11 {
+            let outcome = player.fairy_container_mut().take(
+                source_position,
+                amount,
+                &self.goods_factory,
+                |_| {
+                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                        .then(|| split_template.clone())
+                },
+            );
+            let taken = match outcome {
+                FairyContainerRemoveOutcome::Removed(VolumeGoodsRemoveOutcome::Removed(taken)) => {
+                    taken
+                }
+                failed => {
+                    self.players.insert(player_id, player);
+                    return Err(BattleFairyTransferBlock::FairyRemovalFailed(failed));
+                }
+            };
+            let (goods, removal) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    FairyStorageRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    FairyStorageRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                    },
+                ),
+            };
+            (BattleFairyTransferRemoval::Fairy(removal), Some(goods))
         } else {
             let Some(cell) = BattleFairyCell::from_position(source_position) else {
                 self.players.insert(player_id, player);
@@ -8680,6 +8727,27 @@ impl CGame {
             self.deliver_battle_fairy_equipment_effects_for_player(Some(player), &mut report);
             return BattleFairyTransferAddition::BattleFairy(report);
         }
+        if extend_id == 11 {
+            let owner_progress_allows = !matches!(
+                player.current_progress(),
+                PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+            );
+            let outcome = if position == u32::MAX {
+                player.fairy_container_mut().add(
+                    incoming,
+                    &self.goods_factory,
+                    owner_progress_allows,
+                )
+            } else {
+                player.fairy_container_mut().add_at(
+                    position,
+                    incoming,
+                    &self.goods_factory,
+                    owner_progress_allows,
+                )
+            };
+            return BattleFairyTransferAddition::Fairy(outcome);
+        }
         if extend_id == 3 {
             return BattleFairyTransferAddition::Hand(
                 self.add_ground_hand_goods(player, position, incoming),
@@ -8705,6 +8773,30 @@ impl CGame {
                     .get_goods(0)
                     .expect("battle-fairy→hand add сохранён");
                 (0, goods.identity(), goods.amount())
+            }
+            BattleFairyTransferAddition::Fairy(FairyContainerAddOutcome::Base(outcome)) => {
+                let position = match outcome {
+                    VolumeGoodsAddOutcome::Added(added) => {
+                        added.position.unwrap_or(requested_position)
+                    }
+                    VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
+                        target, ..
+                    }) => player
+                        .fairy_container()
+                        .base()
+                        .query_goods_position(target.ex_id)
+                        .expect("fairy stack position"),
+                    _ => unreachable!("успешный fairy storage add"),
+                };
+                let goods = player
+                    .fairy_container()
+                    .base()
+                    .get_goods(position)
+                    .expect("fairy add сохранён");
+                (position, goods.identity(), goods.amount())
+            }
+            BattleFairyTransferAddition::Fairy(FairyContainerAddOutcome::Rejected(_)) => {
+                unreachable!("успешный fairy transfer не содержит reject")
             }
             BattleFairyTransferAddition::BattleFairy(report) => {
                 let BattleFairyEquipmentMutationOutcome::Added(
