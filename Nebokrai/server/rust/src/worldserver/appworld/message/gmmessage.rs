@@ -15,11 +15,14 @@
 //! Ban ищет account в полном player map, при пустом значении запрашивает БД и
 //! только затем отправляет `0x20001` LoginServer. Requester не проверяется и
 //! ответа не получает. Tiberius заменяет ADO, сохраняя этот порядок.
+//! Сценарный запрос списка блокировок `0x5FF17` проверяет принадлежность игрока
+//! исходному GameServer и передаёт ID игрока и сценария в LoginServer как
+//! `0x20002`; отказ очереди немедленно возвращается исходной карте.
 
 use std::ffi::CString;
 
-use crate::dbaccess::worlddb::rsplayer::{RsPlayerOwner, TiberiusRsPlayer};
 use crate::dbaccess::worlddb::rsgodsbattle::TiberiusRsGodsBattle;
+use crate::dbaccess::worlddb::rsplayer::{RsPlayerOwner, TiberiusRsPlayer};
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::setup::godsbattleconf::CGodsBattleConf;
@@ -33,6 +36,8 @@ const ONLINE_PLAYER_COUNT_REQUEST: i32 = 0x0005_FF01;
 const ONLINE_PLAYER_COUNT_RESPONSE: i32 = 0x0007_FC01;
 const ONLINE_PLAYER_ID_REQUEST: i32 = 0x0005_FF05;
 const ONLINE_PLAYER_ID_RESPONSE: i32 = 0x0007_FC05;
+const ACTIVE_BAN_LIST_REQUEST: i32 = 0x0005_ff17;
+const ACTIVE_BAN_LIST_LOGIN_REQUEST: i32 = 0x0002_0002;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldGmTransportOutcome {
@@ -220,6 +225,16 @@ pub(crate) enum WorldGmMessageOutcome {
         wire: Option<Vec<u8>>,
         delivery: Option<Result<i32, SendMessageError>>,
     },
+    ActiveBanListRequested {
+        requester_player_id: i32,
+        script_id: i32,
+        source_map_id: i32,
+        requester_map_id: i32,
+        payload_complete: [bool; 2],
+        wire: Option<Vec<u8>>,
+        delivery: Option<Result<i32, SendMessageError>>,
+        failure_delivery: Option<Result<i32, SendMessageError>>,
+    },
     Transport(WorldGmTransportOutcome),
 }
 
@@ -249,22 +264,66 @@ pub(crate) async fn on_gm_message(
     let decoded_request_id = message.base_mut().get_long();
     let request_id = decoded_request_id.unwrap_or(0);
     match message.message_type() {
+        ACTIVE_BAN_LIST_REQUEST => {
+            let decoded_script_id = message.base_mut().get_long();
+            let script_id = decoded_script_id.unwrap_or(0);
+            let source_map_id = message.map_id();
+            let requester_map_id = game.game_server_number_by_player_id(request_id);
+            let (wire, delivery) =
+                if request_id > 0 && script_id > 0 && requester_map_id == source_map_id {
+                    let mut request = CMessage::new(ACTIVE_BAN_LIST_LOGIN_REQUEST);
+                    request.base_mut().add_long(request_id);
+                    request.base_mut().add_long(script_id);
+                    let wire = request.as_wire_bytes().to_vec();
+                    let delivery = request.send(
+                        game.current_login_client()
+                            .map(|client| client.send_queue()),
+                        false,
+                    );
+                    (Some(wire), Some(delivery))
+                } else {
+                    (None, None)
+                };
+            let failure_delivery = if delivery
+                .as_ref()
+                .is_some_and(|result| !matches!(result, Ok(1)))
+            {
+                let mut failure = CMessage::new(0x0007_fc14);
+                failure.base_mut().add_long(request_id);
+                failure.base_mut().add_long(script_id);
+                failure.base_mut().add_byte(0);
+                failure.base_mut().add_long(0);
+                failure.base_mut().add_byte(0);
+                failure.base_mut().add_long(0);
+                Some(game.send_msg_to_game_server(source_map_id, &failure))
+            } else {
+                None
+            };
+            WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::ActiveBanListRequested {
+                requester_player_id: request_id,
+                script_id,
+                source_map_id,
+                requester_map_id,
+                payload_complete: [decoded_request_id.is_some(), decoded_script_id.is_some()],
+                wire,
+                delivery,
+                failure_delivery,
+            })
+        }
         ONLINE_PLAYER_COUNT_REQUEST => {
             let decoded_script_id = message.base_mut().get_long();
             let script_id = decoded_script_id.unwrap_or(0);
             let payload_complete = [decoded_request_id.is_some(), decoded_script_id.is_some()];
             let count = game.online_player_count();
             let Ok(online_count_bits) = u32::try_from(count) else {
-                return WorldGmMessageDispatch::Handled(
-                    WorldGmMessageOutcome::OnlinePlayerCount(
-                        WorldGmOnlinePlayerCountOutcome::CountOutsideLegacyRange {
-                            request_id,
-                            script_id,
-                            payload_complete,
-                            count,
-                        },
-                    ),
-                );
+                return WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::OnlinePlayerCount(
+                    WorldGmOnlinePlayerCountOutcome::CountOutsideLegacyRange {
+                        request_id,
+                        script_id,
+                        payload_complete,
+                        count,
+                    },
+                ));
             };
             let online_count = online_count_bits as i32;
 
@@ -564,10 +623,7 @@ pub(crate) async fn on_gm_message(
             WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::KickMap {
                 request_id,
                 region_id,
-                payload_complete: [
-                    decoded_request_id.is_some(),
-                    decoded_region_id.is_some(),
-                ],
+                payload_complete: [decoded_request_id.is_some(), decoded_region_id.is_some()],
                 response_type: 0x0007_FC0A,
                 scan,
                 wire,
@@ -582,8 +638,8 @@ pub(crate) async fn on_gm_message(
             let decoded_silience_time = message.base_mut().get_long();
             let silience_time = decoded_silience_time.unwrap_or(0);
             let online_player_id = game.online_player_id_by_name(&player_name);
-            let previous_silience_time = game
-                .replace_online_player_silience_time(online_player_id, silience_time);
+            let previous_silience_time =
+                game.replace_online_player_silience_time(online_player_id, silience_time);
             let disposition = if let Some(previous_silience_time) = previous_silience_time {
                 message.set_message_type(0x0007_FC0B);
                 let target_game_server_id =
@@ -676,9 +732,7 @@ pub(crate) async fn on_gm_message(
                 WorldGmBanAccountSource::MapPlayer
             };
             if account.is_empty() {
-                account = rs_player
-                    .get_cd_key(&player_name, player_database)
-                    .await;
+                account = rs_player.get_cd_key(&player_name, player_database).await;
                 if !account.is_empty() {
                     account_source = WorldGmBanAccountSource::Database;
                 }
@@ -692,7 +746,8 @@ pub(crate) async fn on_gm_message(
                 response.base_mut().add_long(minutes);
                 let wire = response.as_wire_bytes().to_vec();
                 let delivery = response.send(
-                    game.current_login_client().map(|client| client.send_queue()),
+                    game.current_login_client()
+                        .map(|client| client.send_queue()),
                     false,
                 );
                 (Some(wire), Some(delivery))
@@ -776,15 +831,7 @@ fn handled_rewritten_broadcast(
     response_type: i32,
 ) -> WorldGmMessageDispatch {
     message.set_message_type(response_type);
-    handled_broadcast(
-        game,
-        message,
-        request_type,
-        response_type,
-        true,
-        None,
-        None,
-    )
+    handled_broadcast(game, message, request_type, response_type, true, None, None)
 }
 
 fn handled_broadcast(
@@ -825,10 +872,8 @@ fn handled_player_route(
     } else {
         message.set_message_type(response_type);
         let wire = message.as_wire_bytes().to_vec();
-        let delivery = message.send_to_map_id(
-            game.current_game_server_sender().as_ref(),
-            game_server_id,
-        );
+        let delivery =
+            message.send_to_map_id(game.current_game_server_sender().as_ref(), game_server_id);
         (Some(wire), Some(delivery))
     };
     WorldGmMessageDispatch::Handled(WorldGmMessageOutcome::Transport(

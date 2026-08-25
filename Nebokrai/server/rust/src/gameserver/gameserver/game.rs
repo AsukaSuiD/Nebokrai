@@ -16452,6 +16452,22 @@ impl CGame {
             .is_some_and(|script| script.continue_with(value))
     }
 
+    pub(crate) fn continue_player_script_function(
+        &mut self,
+        script_id: i32,
+        player_id: i32,
+        function_id: i32,
+        value: i32,
+    ) -> bool {
+        self.active_scripts
+            .get_mut(&script_id)
+            .filter(|script| {
+                script.player_id() == Some(player_id)
+                    && script.waiting_function() == Some(function_id)
+            })
+            .is_some_and(|script| script.continue_with(value))
+    }
+
     pub(crate) fn player_script_is_running(
         &self,
         player_id: i32,

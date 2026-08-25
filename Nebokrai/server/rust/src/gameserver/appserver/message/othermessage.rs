@@ -1061,7 +1061,8 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameClockContext>(
             let script_id = read_long(message, "script id")?;
             let value = read_long(message, "script continuation value")?;
             let player_present = game.find_player(requested_player_id).is_some();
-            let _ = game.continue_player_script(script_id, requested_player_id, value);
+            let _ =
+                game.continue_player_script_function(script_id, requested_player_id, 9314, value);
             Ok(GameOtherMessageReport {
                 message_type,
                 player_id: requested_player_id,

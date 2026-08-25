@@ -47,13 +47,14 @@ use super::function::{
     SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE, SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID,
     SCRIPT_FUNCTION_GET_STRING_BY_ID, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME,
     SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME,
-    SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME, SCRIPT_FUNCTION_MONSTER_TALK,
-    SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAY_SOUND, SCRIPT_FUNCTION_PLAYER_MESSAGE,
-    SCRIPT_FUNCTION_PLAYER_TALK, SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS,
-    ScriptFunctionDispatchOutcome, ScriptFunctionParameterKind, ScriptFunctionRuntime,
-    ScriptStringFunctionDispatchOutcome, dispatch_script_function, dispatch_script_string_function,
-    owned_region_script_caller_is_live, script_function_parameter_kind,
-    script_player_npc_caller_exists, village_war_script_caller_is_live,
+    SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME, SCRIPT_FUNCTION_LIST_BANNED_PLAYER,
+    SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAY_SOUND,
+    SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
+    SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
+    ScriptFunctionParameterKind, ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome,
+    dispatch_script_function, dispatch_script_string_function, owned_region_script_caller_is_live,
+    script_function_parameter_kind, script_player_npc_caller_exists,
+    village_war_script_caller_is_live,
 };
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
@@ -350,21 +351,28 @@ impl ActiveScript {
             };
         }
         if let Some(function_id) = self.waiting_function {
-            if function_id == SCRIPT_FUNCTION_GET_COPY_NUMBER
-                && self.waiting_started_ms.is_some_and(|started| {
-                    runtime.now_milliseconds().wrapping_sub(started) >= 10_000
-                })
+            if matches!(
+                function_id,
+                SCRIPT_FUNCTION_GET_COPY_NUMBER | SCRIPT_FUNCTION_LIST_BANNED_PLAYER
+            ) && self
+                .waiting_started_ms
+                .is_some_and(|started| runtime.now_milliseconds().wrapping_sub(started) >= 10_000)
             {
                 self.waiting_function = None;
                 self.waiting_replay = false;
                 self.waiting_started_ms = None;
+                let legacy_return = if function_id == SCRIPT_FUNCTION_LIST_BANNED_PLAYER {
+                    -1
+                } else {
+                    0
+                };
                 self.integer_variables
-                    .insert(normalize_name(b"$m_TalkRet"), 0);
+                    .insert(normalize_name(b"$m_TalkRet"), legacy_return);
                 return ScriptStepReport {
                     execution: ScriptExecutionReport::default(),
                     disposition: ScriptStepDisposition::WaitingFunctionTimedOut {
                         function_id,
-                        legacy_return: 0,
+                        legacy_return,
                     },
                 };
             }
@@ -867,6 +875,10 @@ impl<'a> CScript<'a> {
                 }
             }
             ScriptFunctionDispatchOutcome::Handled { legacy_return } => {
+                if function_id == SCRIPT_FUNCTION_LIST_BANNED_PLAYER && legacy_return == -1 {
+                    self.integer_variables
+                        .insert(normalize_name(b"$m_TalkRet"), -1);
+                }
                 ScriptCommandOutcome::Handled {
                     function_id,
                     legacy_return,

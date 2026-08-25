@@ -108,6 +108,10 @@
 //! игрока и ID сценария в World-запрос `0x5FD0B`; ответ `0x7FA15` возвращается
 //! через общего владельца продолжения, а десятисекундный тайм-аут записывает ноль
 //! в `$m_TalkRet` и освобождает сохранённую позицию сценария.
+//! `ListBanedPlayer 5106` тем же способом передаёт ID игрока и сценария по
+//! цепочке GameServer → WorldServer → LoginServer, получает до 256 действующих
+//! блокировок, продолжает только ожидающую функцию `5106` и публикует строки
+//! клиенту; отказ и десятисекундный тайм-аут возвращают `-1`.
 //! PreciousBox `2221/2222/2237` сохраняет trusted action-script у player,
 //! client open/result/close wire, общий Game RNG, configuration roll,
 //! goods factory/upgrade/packet ownership и optional World announcement;
@@ -427,6 +431,7 @@ pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
 pub(crate) const SCRIPT_FUNCTION_ADD_INCREMENT_LOG: i32 = 2570;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
+pub(crate) const SCRIPT_FUNCTION_LIST_BANNED_PLAYER: i32 = 5106;
 pub(crate) const SCRIPT_FUNCTION_GET_COPY_NUMBER: i32 = 9314;
 pub(crate) const SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE: i32 = 5411;
 pub(crate) const SCRIPT_FUNCTION_GET_MAXIMUM_LEVEL: i32 = 5412;
@@ -3530,6 +3535,7 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_SECOND
         | SCRIPT_FUNCTION_GET_COUNTRY
         | SCRIPT_FUNCTION_GET_ONLINE_PLAYERS
+        | SCRIPT_FUNCTION_LIST_BANNED_PLAYER
         | SCRIPT_FUNCTION_GET_MAXIMUM_LEVEL
         | SCRIPT_FUNCTION_GET_AREA_ID
         | SCRIPT_FUNCTION_GET_AREA_TYPE
@@ -6206,6 +6212,18 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let _ = request.send(game, false);
             Some(ScriptFunctionDispatchOutcome::Yielded {
                 legacy_return: local_count,
+            })
+        }
+        SCRIPT_FUNCTION_LIST_BANNED_PLAYER => {
+            if argument_count != 0 || game.find_player(player_id).is_none() || script_id <= 0 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let mut request = CMessage::new(0x0005_ff17);
+            request.add_long(player_id);
+            request.add_long(script_id);
+            Some(match request.send(game, false) {
+                Ok(1) => ScriptFunctionDispatchOutcome::Yielded { legacy_return: -1 },
+                _ => ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 },
             })
         }
         SCRIPT_FUNCTION_GET_COPY_NUMBER => {
