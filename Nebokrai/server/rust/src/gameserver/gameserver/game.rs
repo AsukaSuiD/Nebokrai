@@ -5035,7 +5035,6 @@ pub(crate) trait GameMainLoopRuntime:
     + GamePlayerLostRuntime
 {
     fn exit_requested(&self) -> bool;
-    fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
     /// Исполняет только ещё не материализованные state-классы из
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
@@ -5554,6 +5553,26 @@ pub(crate) struct CGame {
 }
 
 impl CGame {
+    /// Linux operator-projection reached `RefeashInfoText`. Публикуются только
+    /// live owners; неперенесённые GUI throughput/peak counters не подменяются
+    /// нулями. Исходный periodic caller остаётся в MainLoop.
+    fn publish_runtime_info(&self) {
+        let connections = self
+            .net_server
+            .as_ref()
+            .map_or(0, CMyNetServer::client_count);
+        eprintln!(
+            "GameServer: connections={connections}, players={}, teams={}, scripts={}, server_id={}, regions={}, auction={}({})",
+            self.players.len(),
+            self.team_session_ids.len(),
+            self.active_scripts.len(),
+            self.id_index,
+            self.regions.len(),
+            self.auction_now,
+            self.auction_room.goods_count(),
+        );
+    }
+
     fn register_player_goods_ai(
         player: &mut CPlayer,
         factory: &CGoodsFactory,
@@ -30681,7 +30700,7 @@ impl CGame {
             .wrapping_sub(state.refresh_info_tick_ms);
         if self.setup.refresh_info_time_ms < refresh_elapsed {
             state.refresh_info_tick_ms = state.current_tick_ms;
-            runtime.refresh_info_text(self);
+            self.publish_runtime_info();
             stages.push(GameMainLoopStage::RefreshInfo);
         }
 

@@ -213,9 +213,7 @@ impl CMyNetServer {
     /// player map ID and clear that route before the destination reconnects.
     pub(crate) fn clear_player_map_id(&self, player_id: i32) -> i32 {
         let socket_id = self.base.get_socket_id_by_map_id(player_id);
-        self.base
-            .command_handle()
-            .set_client_map_id(socket_id, 0)
+        self.base.command_handle().set_client_map_id(socket_id, 0)
     }
 
     pub(crate) fn has_player_map_id(&self, player_id: i32) -> bool {
@@ -270,6 +268,10 @@ impl CMyNetServer {
 
     pub(crate) const fn legacy_index_id(&self) -> Option<i32> {
         self.legacy_index_id
+    }
+
+    pub(crate) const fn client_count(&self) -> i32 {
+        self.base.client_count()
     }
 }
 
