@@ -9635,7 +9635,7 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<AuctionGoodsInventoryReport, AuctionGoodsInventoryBlock> {
-        if !matches!(destination_extend_id, 1 | 2 | 9 | 11 | 12 | 17) {
+        if !matches!(destination_extend_id, 1 | 2 | 3 | 9 | 11 | 12 | 17) {
             return Err(AuctionGoodsInventoryBlock::UnsupportedDestination);
         }
         if destination_extend_id == 12
@@ -9672,7 +9672,7 @@ impl CGame {
         let audit_price = source.price();
         let mut burden_goods = source.clone();
         burden_goods.set_amount(amount);
-        let burden_exceeded = matches!(destination_extend_id, 1 | 2)
+        let burden_exceeded = matches!(destination_extend_id, 1 | 2 | 3)
             && player
                 .current_burden(&self.goods_factory)
                 .wrapping_add(burden_goods.weight(&self.goods_factory))

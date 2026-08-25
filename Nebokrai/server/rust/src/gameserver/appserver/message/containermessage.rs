@@ -77,7 +77,8 @@
 //! validation, BF property/equipment effects и deliveries на remove/add/rollback.
 //! Auction-return storage (`14`) имеет только исходящий generic route:
 //! packet destination заново выбирает `FindPositionForGoods`, очищает bind
-//! value-id `2`, equipment сохраняет positional add, depot — lock/anchor/audit,
+//! value-id `2`, hand сохраняет one-slot add/stack, equipment — positional add,
+//! depot — lock/anchor/audit,
 //! а fairy/battle-fairy/CiQing — hatch/property/compose effects. Для compose
 //! сохранён source-slot-2 remove→rollback quirk; burden, partial guards,
 //! callbacks, rollback и self wire доходят до live owner-ов.
@@ -782,7 +783,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 && request.source_container_extend_id == 14
                 && matches!(
                     request.destination_container_extend_id,
-                    1 | 2 | 9 | 11 | 12 | 17
+                    1 | 2 | 3 | 9 | 11 | 12 | 17
                 )
             {
                 EnhancementMessageRoute::AuctionGoodsInventoryReturn
