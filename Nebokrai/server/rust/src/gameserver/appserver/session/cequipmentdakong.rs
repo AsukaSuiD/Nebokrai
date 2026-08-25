@@ -1,16 +1,17 @@
-//! DaKong/XiangQian session plug исторического GameServer.
+//! Сессионное расширение DaKong/XiangQian исторического GameServer.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `server/gameserver/appserver/session/cequipmentdakong.cpp`. Owned plug
-//! хранит восьмислотовый shadow и достигается из goods opcodes
-//! `0x8FC1E..0x8FC23`; gameplay и terminal close выполняются через canonical `CGame`, player,
-//! goods factory и общий MSVCRT RNG. Listener/session lifecycle связан через
-//! equipment-session factory и MainLoop; script-only external-refresh caller `9351` использует тот же external-attribute
-//! алгоритм, обязательный reason `4`, расход, area effect `11` и item update.
-//! Уведомления, packet consumption, `0xBF918`, `0xBF50A` и World `0x60212`
-//! исполняются `CGame`; announcement scripts проходят через живой
-//! `CScript::RunFunction` dispatcher с временным возвратом owned player в
-//! canonical game map на точной позиции вызова.
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `server/gameserver/appserver/session/cequipmentdakong.cpp`. Расширение во
+//! владении Rust хранит восьмислотовую теневую копию и достигается из кодов
+//! предметов `0x8FC1E..0x8FC23`; игровая логика и окончательное закрытие
+//! выполняются через канонические `CGame`, игрока, фабрику предметов и общий
+//! RNG MSVCRT. Жизненный цикл слушателя и сессии связан через фабрику сессий
+//! экипировки и `MainLoop`; сценарный вызов `9351` использует тот же алгоритм
+//! внешних свойств, обязательную причину `4`, расход, эффект области `11` и
+//! обновление предмета. Уведомления, расход пакета, `0xBF918`, `0xBF50A` и
+//! World `0x60212` исполняются `CGame`; сценарии объявлений проходят через
+//! живой диспетчер `CScript::RunFunction` с временным возвратом игрока в
+//! каноническую карту игры в точной позиции вызова.
 
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentdakongcontainer::{
@@ -377,6 +378,73 @@ pub(crate) fn deal_with_da_kong_external_attributes(
         }
         let _ = equipment.cut_addon_property_value(factory, target, 1, value, 0);
     }
+}
+
+/// Накладывает свойства уже записанных в предмет камней без расхода,
+/// уведомлений и изменения самих слотов. Это точная ветка
+/// `CGoodsFactory::DealEnchaseGem(goods, false)`, которую вызывает
+/// `ReCreateAddonProperties` после восстановления диапазона DaKong.
+pub(crate) fn apply_embedded_gem_properties<Random>(
+    equipment: &mut CGoods,
+    factory: &CGoodsFactory,
+    mut random: Random,
+) where
+    Random: FnMut(i32) -> i32,
+{
+    let mut add_types = std::collections::BTreeSet::new();
+    crate::public::dakongxiangqian::CDaKongXiangQian::get_add_type(&mut add_types);
+
+    let count = equipment.da_kong_count(factory);
+    for socket in 0..count {
+        let socket_property = GAP_DAKONG_1 + socket as i32;
+        let socket_color = equipment.addon_property_value(factory, socket_property, 1);
+        let gem_index = equipment.addon_property_value(factory, socket_property, 2) as u32;
+        let Some(gem) = EquipmentDaKongGemSnapshot::from_catalog(gem_index, factory) else {
+            continue;
+        };
+        let Some(base) = factory.query_goods_base_properties(gem_index) else {
+            continue;
+        };
+        let deluxe_condition_met = socket_color != 7
+            || gem.color != 8
+            || factory
+                .create_goods_core(
+                    gem_index,
+                    |maximum| random(maximum),
+                    || crate::public::guid::CGuid::GUID_INVALID,
+                )
+                .is_some_and(|created| {
+                    equipment_da_kong_condition(
+                        EquipmentDaKongGemSnapshot::capture(&created, factory),
+                        equipment,
+                        factory,
+                    )
+                });
+        for addon in base.addon_properties() {
+            if !add_types.contains(&addon.property_type) {
+                continue;
+            }
+            let mut value = first_base_value(&addon.values);
+            if socket_color < 7 && gem.color == 8 {
+                value = 0;
+            } else if socket_color == 7 && gem.color != 8 {
+                value /= 2;
+            } else if !deluxe_condition_met {
+                value = 0;
+            }
+            let _ = equipment.cut_addon_property_value(
+                factory,
+                addon.property_type,
+                1,
+                value.wrapping_neg(),
+                gem_index,
+            );
+        }
+    }
+
+    let seventh_index = equipment.addon_property_value(factory, GAP_DAKONG_1 + 6, 2) as u32;
+    let seventh = EquipmentDaKongGemSnapshot::from_catalog(seventh_index, factory);
+    deal_with_da_kong_external_attributes(equipment, factory, seventh, true);
 }
 
 pub(crate) fn deal_with_da_kong_seven(

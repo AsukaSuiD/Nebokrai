@@ -116,19 +116,25 @@
 //! канонические состояние игрока, фабрику предметов и кодек старого клиента:
 //! открытие отправляет `0xC0112`, а подтверждённый предмет с дополнением `243`
 //! сохраняется в списке и публикует весь упорядоченный набор через `0xC010C`.
-//! PreciousBox `2221/2222/2237` сохраняет trusted action-script у player,
-//! client open/result/close wire, общий Game RNG, configuration roll,
-//! goods factory/upgrade/packet ownership и optional World announcement;
-//! повторный запуск приходит из живого goods opcode `0x8FC12`.
+//! PreciousBox `2221/2222/2237` сохраняет доверенный сценарий действия у
+//! игрока, клиентский обмен открытия, результата и закрытия, общий RNG игры,
+//! бросок конфигурации, владение фабрикой, улучшением и пакетом предметов, а
+//! также необязательное объявление World; повторный запуск приходит из живого
+//! кода предметов `0x8FC12`.
 //! Перенос предметов `2200..2203` сохраняет необязательную подготовку
 //! улучшения и особого свойства, приоритет рюкзака в `DelGoods`, переход к
 //! экипировке с полным завершением игрока и обычные клиентские сообщения
 //! добавления, удаления и изменения количества; достигнутый вызов находится
 //! в первом блоке очистки реально запускаемого `scripts/quest/nodupe.script`.
 //! Соседняя группа `2204/2205/2212/2217/2218/2220` связывает подсчёты рюкзака
-//! и депо, выбранный предмет enhancement-контейнера, локальное либо удалённое
+//! и депо, выбранный предмет контейнера улучшения, локальное либо удалённое
 //! удаление и доверенный путь сценария окна `0xBF919` с подтверждением
 //! `0x8FC11`.
+//! Группа `2209/2223..2230` продолжает тот же живой выбранный предмет: читает
+//! имя, цену и значения свойств, меняет модификаторы, улучшает, полностью
+//! удаляет либо пересоздаёт случайные дополнения с сохранением уровня,
+//! долговечности, камней и их итоговых эффектов. Изменения доходят до
+//! клиентского `0xBF918`, а удаление экипировки проходит общие свойства игрока.
 //! Следующий sanitation-блок `2002/2316/2317/2500` читает live player
 //! region/country и работает с тем же owned script registry; current-script
 //! removal завершается на command boundary без legacy use-after-free.
@@ -457,10 +463,19 @@ pub(crate) const SCRIPT_FUNCTION_CHECK_GOODS: i32 = 2202;
 pub(crate) const SCRIPT_FUNCTION_CHECK_SPACE: i32 = 2203;
 pub(crate) const SCRIPT_FUNCTION_GET_GOODS_NUMBER: i32 = 2204;
 pub(crate) const SCRIPT_FUNCTION_GET_FREE_SPACE: i32 = 2205;
+pub(crate) const SCRIPT_FUNCTION_UPGRADE_SELECTED_EQUIPMENT: i32 = 2209;
 pub(crate) const SCRIPT_FUNCTION_CHECK_DEPOT_GOODS: i32 = 2212;
 pub(crate) const SCRIPT_FUNCTION_DELETE_PLAYER_GOODS: i32 = 2217;
 pub(crate) const SCRIPT_FUNCTION_GET_CONTAINER_ITEM_TYPE: i32 = 2218;
 pub(crate) const SCRIPT_FUNCTION_OPEN_GOODS_CONTAINER: i32 = 2220;
+pub(crate) const SCRIPT_FUNCTION_GET_GOODS_PROPERTY_1: i32 = 2223;
+pub(crate) const SCRIPT_FUNCTION_GET_GOODS_PROPERTY_2: i32 = 2224;
+pub(crate) const SCRIPT_FUNCTION_DELETE_SPLIT_GOODS: i32 = 2225;
+pub(crate) const SCRIPT_FUNCTION_GET_GOODS_ORIGINAL_NAME: i32 = 2226;
+pub(crate) const SCRIPT_FUNCTION_GET_GOODS_PRICE: i32 = 2227;
+pub(crate) const SCRIPT_FUNCTION_SET_GOODS_PROPERTY_1: i32 = 2228;
+pub(crate) const SCRIPT_FUNCTION_SET_GOODS_PROPERTY_2: i32 = 2229;
+pub(crate) const SCRIPT_FUNCTION_RECREATE_GOODS_ADDON_PROPERTIES: i32 = 2230;
 pub(crate) const SCRIPT_FUNCTION_ADD_INFO: i32 = 2305;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX: i32 = 2307;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX_SMALL: i32 = 2324;
@@ -3261,8 +3276,9 @@ pub(crate) enum ScriptStringFunctionDispatchOutcome {
 }
 
 /// Строковая половина `CScript::RunFunction`. Исторические `GetName` и
-/// `GetStringByID` возвращали borrowed `char *`; owned Rust runtime копирует
-/// те же байты до следующего шага evaluator-а, не превращая адрес в число.
+/// `GetStringByID` возвращали заимствованный `char *`; среда исполнения Rust
+/// копирует те же байты до следующего шага вычисления, не превращая адрес в
+/// число.
 pub(crate) fn dispatch_script_string_function(
     game: &CGame,
     script_player_id: Option<i32>,
@@ -3274,6 +3290,16 @@ pub(crate) fn dispatch_script_string_function(
         return evaluated_string.map_or(ScriptStringFunctionDispatchOutcome::Invalid, |id| {
             ScriptStringFunctionDispatchOutcome::Handled(game.get_string_by_id(id).to_vec())
         });
+    }
+    if function_id == SCRIPT_FUNCTION_GET_GOODS_ORIGINAL_NAME {
+        let value = script_player_id
+            .and_then(|player_id| script_selected_goods(game, player_id))
+            .and_then(|goods| {
+                game.goods_factory()
+                    .query_goods_original_name(goods.base_properties_index())
+            })
+            .unwrap_or_default();
+        return ScriptStringFunctionDispatchOutcome::Handled(value.to_vec());
     }
     if function_id == SCRIPT_FUNCTION_GET_NAME {
         let requested = evaluated_player_id.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
@@ -3304,9 +3330,10 @@ pub(crate) enum ScriptFunctionParameterKind {
     Unused,
 }
 
-/// `GetStringParam`/`GetIntParam` routing исторического dense owner-а.
-/// CScript использует таблицу до вычисления выражения, сохраняя positional
-/// string arguments вместо прежнего special-case только для 9351.
+/// Маршрутизация `GetStringParam`/`GetIntParam` исторического плотного
+/// диспетчера. `CScript` использует таблицу до вычисления выражения и сохраняет
+/// позиционные строковые аргументы вместо прежнего особого случая только для
+/// `9351`.
 pub(crate) fn script_function_parameter_kind(
     function_id: i32,
     index: usize,
@@ -3708,10 +3735,12 @@ pub(crate) fn script_function_parameter_kind(
             0..=2 => Integer,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_GET_FREE_SPACE => match index {
-            0 => Integer,
-            _ => Unused,
-        },
+        SCRIPT_FUNCTION_GET_FREE_SPACE | SCRIPT_FUNCTION_UPGRADE_SELECTED_EQUIPMENT => {
+            match index {
+                0 => Integer,
+                _ => Unused,
+            }
+        }
         SCRIPT_FUNCTION_CHECK_DEPOT_GOODS => match index {
             0 => String,
             _ => Unused,
@@ -3726,6 +3755,22 @@ pub(crate) fn script_function_parameter_kind(
             _ => Unused,
         },
         SCRIPT_FUNCTION_GET_GOODS_NUMBER | SCRIPT_FUNCTION_GET_CONTAINER_ITEM_TYPE => Unused,
+        SCRIPT_FUNCTION_GET_GOODS_PROPERTY_1 | SCRIPT_FUNCTION_GET_GOODS_PROPERTY_2 => {
+            match index {
+                0 => Integer,
+                _ => Unused,
+            }
+        }
+        SCRIPT_FUNCTION_SET_GOODS_PROPERTY_1 | SCRIPT_FUNCTION_SET_GOODS_PROPERTY_2 => {
+            match index {
+                0..=1 => Integer,
+                _ => Unused,
+            }
+        }
+        SCRIPT_FUNCTION_DELETE_SPLIT_GOODS
+        | SCRIPT_FUNCTION_GET_GOODS_ORIGINAL_NAME
+        | SCRIPT_FUNCTION_GET_GOODS_PRICE
+        | SCRIPT_FUNCTION_RECREATE_GOODS_ADDON_PROPERTIES => Unused,
         SCRIPT_FUNCTION_ADD_QUEST
         | SCRIPT_FUNCTION_COMPLETE_QUEST
         | SCRIPT_FUNCTION_DISBAND_QUEST
@@ -6772,6 +6817,64 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
         SCRIPT_FUNCTION_GET_CONTAINER_ITEM_TYPE => Some(ScriptFunctionDispatchOutcome::Handled {
             legacy_return: game.script_selected_container_item_type(player_id),
         }),
+        SCRIPT_FUNCTION_UPGRADE_SELECTED_EQUIPMENT => {
+            let Some(level_delta) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.upgrade_script_selected_equipment(
+                    player_id,
+                    level_delta,
+                    runtime,
+                ),
+            })
+        }
+        SCRIPT_FUNCTION_GET_GOODS_PROPERTY_1 | SCRIPT_FUNCTION_GET_GOODS_PROPERTY_2 => {
+            let Some(property) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            let value_id = if function_id == SCRIPT_FUNCTION_GET_GOODS_PROPERTY_1 {
+                1
+            } else {
+                2
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.script_selected_goods_property(player_id, property, value_id),
+            })
+        }
+        SCRIPT_FUNCTION_GET_GOODS_PRICE => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: game.script_selected_goods_price(player_id),
+        }),
+        SCRIPT_FUNCTION_SET_GOODS_PROPERTY_1 | SCRIPT_FUNCTION_SET_GOODS_PROPERTY_2 => {
+            let (Some(property), Some(modifier)) = (
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let value_id = if function_id == SCRIPT_FUNCTION_SET_GOODS_PROPERTY_1 {
+                1
+            } else {
+                2
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.set_script_selected_goods_property(
+                    player_id, property, value_id, modifier, runtime,
+                ),
+            })
+        }
+        SCRIPT_FUNCTION_RECREATE_GOODS_ADDON_PROPERTIES => {
+            game.recreate_script_selected_goods_addons(player_id, runtime);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_DELETE_SPLIT_GOODS => {
+            game.delete_script_selected_goods(player_id, runtime);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
         SCRIPT_FUNCTION_OPEN_GOODS_CONTAINER => {
             if game.find_player(player_id).is_none() {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);

@@ -307,11 +307,17 @@
 //! fight/progress gates открытия теперь читаются из canonical region/player
 //! owners с virtual city/country security dispatch; внешними остаются только
 //! polymorphic team state и old-client codec.
-//! Goods destruction `0x8FC1C/1D` замыкает hand mutation и `0xC0101/0xC0102`,
-//! exact LogSystem byte `55`, World `0x60202` с bank/region/IP facts и client
-//! result. Произвольный extend-ID open-route теперь проходит единый owned
-//! `DeleteGoods` dispatcher всех player containers, включая enhancement source,
-//! equipment properties, частичный amount wire и silent miss.
+//! Уничтожение предметов `0x8FC1C/1D` замыкает изменение руки и
+//! `0xC0101/0xC0102`, точный байт `55` системы журналирования, World `0x60202`
+//! с данными банка, региона и IP, а также клиентский результат. Путь открытия
+//! с произвольным расширенным ID теперь проходит единый диспетчер `DeleteGoods`
+//! всех контейнеров игрока во владении Rust, включая исходный контейнер
+//! улучшения, свойства экипировки, обмен частичного количества и тихое
+//! отсутствие результата.
+//! Сценарные функции `2209/2223..2230` работают с тем же живым выбранным
+//! предметом: чтение и изменения не расходятся с теневой копией контейнера,
+//! пересоздание дополнений повторно накладывает камни, каждое изменение шлёт
+//! `0xBF918`, а полное удаление использует общий путь контейнера или экипировки.
 //! Hotkey `0x8FC08..0A` замыкает все 24 slots и возврат hand consumable:
 //! concrete `0xC0101` сохраняет move/rollback/delete, фактическую destination
 //! position/identity/amount и self-move normalization; success `0xBF908`
@@ -20322,6 +20328,187 @@ impl CGame {
             })
             .map(|properties| properties.goods_type() + properties.equip_place() - 1)
             .unwrap_or(-1)
+    }
+
+    pub(crate) fn script_selected_goods_property(
+        &self,
+        player_id: i32,
+        property: i32,
+        value_id: u32,
+    ) -> i32 {
+        let Some(goods) = self.find_player(player_id).and_then(|player| {
+            let goods_id = player.enhancement_selected_goods_id()?;
+            player.get_goods_by_id(goods_id)
+        }) else {
+            return -1;
+        };
+        let value = goods.addon_property_value(&self.goods_factory, property, value_id);
+        if value != 0
+            || self
+                .goods_factory
+                .query_goods_base_properties(goods.base_properties_index())
+                .is_some_and(|base| base.has_addon_property(property))
+        {
+            value
+        } else {
+            -1
+        }
+    }
+
+    pub(crate) fn script_selected_goods_price(&self, player_id: i32) -> i32 {
+        self.find_player(player_id)
+            .and_then(|player| {
+                let goods_id = player.enhancement_selected_goods_id()?;
+                let goods = player.get_goods_by_id(goods_id)?;
+                self.goods_factory
+                    .query_goods_base_properties(goods.base_properties_index())
+            })
+            .map(|base| base.price() as i32)
+            .unwrap_or(0)
+    }
+
+    fn mutate_script_selected_goods<Context, ResultValue, Mutate>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+        mutate: Mutate,
+    ) -> Option<ResultValue>
+    where
+        Context: OldClientGoodsCodec,
+        Mutate: FnOnce(&CGoodsFactory, &mut u32, &mut CGoods) -> (ResultValue, bool),
+    {
+        let mut player = self.players.remove(&player_id)?;
+        let outcome = (|| {
+            let goods_id = player.enhancement_selected_goods_id()?;
+            let goods = player.get_goods_by_id_mut(goods_id)?;
+            let (result, publish) = mutate(&self.goods_factory, &mut self.random_state, goods);
+            let update =
+                publish.then(|| (goods.identity(), context.encode_goods_for_old_client(goods)));
+            Some((result, update))
+        })();
+        self.players.insert(player_id, player);
+        let (result, update) = outcome?;
+        if let Some((identity, payload)) = update {
+            let mut message = CMessage::new(0x000b_f918);
+            message.add_long(player_id);
+            message.base_mut().add_guid(identity.ex_id);
+            message.add_ulong(payload.len() as u32);
+            message.base_mut().add(&payload);
+            let _ = message.send_to_player(self.net_server(), player_id);
+        }
+        Some(result)
+    }
+
+    pub(crate) fn upgrade_script_selected_equipment<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        level_delta: i32,
+        context: &mut Context,
+    ) -> i32 {
+        self.mutate_script_selected_goods(player_id, context, |factory, random_state, goods| {
+            let current = goods.addon_property_value(
+                factory,
+                crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_LEVEL,
+                1,
+            );
+            let target = (current as u32).wrapping_add(level_delta as u32) as i32;
+            let _ = factory.upgrade_equipment(goods, target, |maximum| {
+                game_legacy_random(random_state, maximum)
+            });
+            (1, true)
+        })
+        .unwrap_or(0)
+    }
+
+    pub(crate) fn set_script_selected_goods_property<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        property: i32,
+        value_id: u32,
+        modifier: i32,
+        context: &mut Context,
+    ) -> i32 {
+        self.mutate_script_selected_goods(player_id, context, |_, _, goods| {
+            let changed = goods.set_addon_property_modifier_core(property, value_id, modifier);
+            (i32::from(changed), changed)
+        })
+        .unwrap_or(0)
+    }
+
+    pub(crate) fn recreate_script_selected_goods_addons<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) {
+        let _ = self.mutate_script_selected_goods(
+            player_id,
+            context,
+            |factory, random_state, goods| {
+                factory.recreate_addon_properties(goods, |maximum| {
+                    game_legacy_random(random_state, maximum)
+                });
+                ((), true)
+            },
+        );
+    }
+
+    pub(crate) fn delete_script_selected_goods<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) {
+        let Some(mut player) = self.players.remove(&player_id) else {
+            return;
+        };
+        let selected = player.enhancement_selected_goods_id().and_then(|goods_id| {
+            let location = player.owned_goods_location(10, goods_id)?;
+            let amount = player.get_goods_by_id(goods_id)?.amount();
+            Some((goods_id, location, amount))
+        });
+        let Some((goods_id, location, amount)) = selected else {
+            self.players.insert(player_id, player);
+            return;
+        };
+        if location.extend_id == 2 {
+            let Some(goods) = player.equipment().find(goods_id).cloned() else {
+                self.players.insert(player_id, player);
+                return;
+            };
+            let facts = context.enhancement_equipment_remove_facts(
+                &player,
+                &goods,
+                self.globe_setup.pack_add_enabled(),
+            );
+            let mut recompute =
+                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut report = player.remove_equipment_goods(
+                goods_id,
+                &self.goods_factory,
+                &self.skill_factory,
+                facts,
+                &mut recompute,
+            );
+            drop(recompute);
+            if matches!(report.outcome, EquipmentRemoveOutcome::Removed(_)) {
+                let _ = player.clear_all_enhancement_selection();
+            }
+            self.publish_player_equipment_remove_report(&mut report);
+            self.players.insert(player_id, player);
+            if self.globe_setup.tao_zhuang_modify_enabled() {
+                let _ = self.done_player_tao_zhuang(player_id);
+            }
+            return;
+        }
+        let deletion = player.delete_owned_goods(location, goods_id, amount, &self.goods_factory);
+        if deletion.is_some() {
+            let _ = player.clear_all_enhancement_selection();
+        }
+        self.players.insert(player_id, player);
+        if let Some(deletion) = deletion
+            && let Some(player) = self.players.get(&player_id)
+        {
+            let _ = self.send_player_owned_goods_deletion(player, &deletion);
+        }
     }
 
     pub(crate) fn delete_named_player_script_goods<Runtime: GameContainerMessageRuntime>(

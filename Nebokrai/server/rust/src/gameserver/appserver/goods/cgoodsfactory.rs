@@ -1,23 +1,26 @@
-//! Startup registry и lookup-часть `CGoodsFactory` GameServer.
+//! Реестр запуска и поисковая часть `CGoodsFactory` GameServer.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
-//! `server/gameserver/appserver/goods/cgoodsfactory.cpp`. Selector `0x00`
-//! сначала освобождает три прежних map, затем читает `u32 count` и ordered
-//! records `goods_id + CGoodsBaseProperties`; ID и оба byte-string index-а
-//! используют last-write-wins. Lookup miss и null name возвращают ноль/`None`.
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `server/gameserver/appserver/goods/cgoodsfactory.cpp`. Селектор `0x00`
+//! сначала освобождает три прежние карты, затем читает счётчик `u32` и
+//! упорядоченные записи `goods_id + CGoodsBaseProperties`; ID и оба индекса
+//! строковых байтов используют последнюю запись. Отсутствующий результат и
+//! нулевой указатель имени возвращают ноль/`None`.
 //!
-//! Парный WorldServer serializer подтверждает wire. `BTreeMap` и owned values
-//! заменяют MSVC tree/raw pointers без изменения порядка. Одиночное создание
-//! предмета замкнуто вместе с обязательной загрузкой ordinary/battle-fairy
-//! свойств. Пошаговый `UpgradeBFEquipment` меняет instance level и восемь
-//! growth-зависимых addon-ов в исходном порядке каждого level step; прочая
-//! CiQing batch-overload сохраняет дробление consumable/useless по stacking-
-//! limit и поштучное создание остальных типов; ordinary upgrade mutation ниже
-//! остаётся RAW. NPC shop замыкает repair/vend formulas с setup-факторами;
-//! integer durability ratio продажи сохранён как наблюдаемая x86-семантика.
+//! Парный сериализатор WorldServer подтверждает формат обмена. `BTreeMap` и
+//! значения во владении Rust заменяют дерево MSVC и сырые указатели без
+//! изменения порядка. Одиночное создание предмета замкнуто вместе с
+//! обязательной загрузкой свойств обычных предметов и боевых фей. Пошаговый
+//! `UpgradeBFEquipment` меняет уровень экземпляра и восемь зависящих от роста
+//! дополнений в исходном порядке каждого шага уровня. Пакетная перегрузка
+//! CiQing сохраняет дробление расходуемых и бесполезных предметов по пределу
+//! стопки и поштучное создание остальных типов; обычное улучшение ниже
+//! сохраняется как RAW. Магазин NPC замыкает формулы ремонта и продажи с
+//! коэффициентами настройки; целочисленное отношение долговечности при продаже
+//! сохранено как наблюдаемая семантика x86.
 //! `ReCreateBattleFairyAttributes` сохраняет странный повтор полного набора
-//! RNG-бросков по числу instance-addon-ов; оптимизация донора в один pass не
-//! переносится, потому что меняла итоговое игровое состояние RNG.
+//! бросков RNG по числу дополнений экземпляра; однопроходная оптимизация донора
+//! не переносится, потому что меняла итоговое состояние игрового RNG.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -33,8 +36,9 @@ use super::cgoodsbaseproperties::{
     GAP_BF_SPRITE_BASE, GAP_BF_SPRITE_GROW, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISE_GROW,
     GAP_BF_SPRITUALISM_BASE, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_BASE, GAP_BF_STRENGH_GROW,
     GAP_BF_WEAPON_LEVEL, GAP_BURDEN_UPPER_LIMIT_CORRECTION,
-    GAP_BURDEN_UPPER_LIMIT_CORRECTION_UPGRADE, GAP_DODGE_CORRECTION, GAP_DODGE_UPGRADE,
-    GAP_ELEMENT_ATTACK_CORRECTION, GAP_ELEMENT_ATTACK_UPGRADE, GAP_ELEMENT_RESISTANCE_CORRECTION,
+    GAP_BURDEN_UPPER_LIMIT_CORRECTION_UPGRADE, GAP_DAKONG_1, GAP_DAKONG_EXTERN_3,
+    GAP_DODGE_CORRECTION, GAP_DODGE_UPGRADE, GAP_ELEMENT_ATTACK_CORRECTION,
+    GAP_ELEMENT_ATTACK_UPGRADE, GAP_ELEMENT_RESISTANCE_CORRECTION,
     GAP_ELEMENT_RESISTANCE_CORRECTION_UPGRADE, GAP_FATAL_BLOW_RATE_CORRECTION,
     GAP_FATAL_BLOW_RATE_UPGRADE, GAP_GOODS_MAXIMUM_DURABILITY,
     GAP_GOODS_MAXIMUM_DURABILITY_UPGRADE, GAP_GOODS_STACKING_LIMIT, GAP_HIT_RATE_CORRECTION,
@@ -52,6 +56,7 @@ use super::cgoodsbaseproperties::{
     GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
     GoodsBasePropertiesDecodeError, ICON_TYPE_GROUND,
 };
+use crate::gameserver::appserver::session::cequipmentdakong::apply_embedded_gem_properties;
 use crate::public::guid::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -346,9 +351,70 @@ impl CGoodsFactory {
         }
     }
 
-    /// Переходит к target level по одному шагу. На каждом шаге growth-addon-ы
-    /// применяются в instance insertion order, а level меняется через modifier
-    /// value-id 1; отсутствие такого value завершает уже применённый prefix.
+    /// `ReCreateAddonProperties` повторно создаёт случайные дополнения,
+    /// сохраняет уровень, долговечность и непрерывный диапазон DaKong, а затем
+    /// заново накладывает свойства вставленных камней и внешних сочетаний.
+    pub(crate) fn recreate_addon_properties<Random>(&self, goods: &mut CGoods, mut random: Random)
+    where
+        Random: FnMut(i32) -> i32,
+    {
+        let current_level = goods.addon_property_value(self, GAP_WEAPON_LEVEL, 1);
+        let maximum_durability = goods.addon_property_value(self, GAP_GOODS_MAXIMUM_DURABILITY, 1);
+        let current_durability = goods.addon_property_value(self, GAP_GOODS_MAXIMUM_DURABILITY, 2);
+        let sockets: Vec<_> = goods
+            .addon_properties()
+            .iter()
+            .filter(|property| {
+                (GAP_DAKONG_1..=GAP_DAKONG_EXTERN_3).contains(&property.property_type)
+            })
+            .cloned()
+            .collect();
+        let base_index = goods.base_properties_index();
+        let Some(recreated) = self.create_goods_core(
+            base_index,
+            |maximum| random(maximum),
+            || CGuid::GUID_INVALID,
+        ) else {
+            return;
+        };
+        goods.addon_properties_mut().clear();
+        goods
+            .addon_properties_mut()
+            .extend_from_slice(recreated.addon_properties());
+        if current_level > 0 {
+            let _ = self.upgrade_equipment(goods, current_level, |maximum| random(maximum));
+        }
+        let _ = goods.set_addon_property_value_first_core(
+            GAP_GOODS_MAXIMUM_DURABILITY,
+            1,
+            maximum_durability,
+        );
+        let _ = goods.set_current_durability(current_durability);
+
+        let expected = (GAP_DAKONG_EXTERN_3 - GAP_DAKONG_1 + 1) as usize;
+        if sockets.len() == expected {
+            for property in goods.addon_properties_mut() {
+                if !(GAP_DAKONG_1..=GAP_DAKONG_EXTERN_3).contains(&property.property_type) {
+                    continue;
+                }
+                if let Some(saved) = sockets.get((property.property_type - GAP_DAKONG_1) as usize) {
+                    property.clone_from(saved);
+                }
+            }
+        }
+        if goods
+            .addon_properties()
+            .iter()
+            .any(|property| property.property_type == GAP_DAKONG_1)
+        {
+            apply_embedded_gem_properties(goods, self, |maximum| random(maximum));
+        }
+    }
+
+    /// Переходит к целевому уровню по одному шагу. На каждом шаге зависящие от
+    /// роста дополнения применяются в порядке хранения экземпляра, а уровень
+    /// меняется через модификатор значения с ID `1`; отсутствие такого значения
+    /// завершает уже применённую начальную часть прохода.
     pub(crate) fn upgrade_battle_fairy_equipment(
         &self,
         goods: &mut CGoods,
