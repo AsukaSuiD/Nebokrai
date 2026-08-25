@@ -316,6 +316,9 @@
 //! progress/movement, подключают listeners и публикуют `0xBF912/29/2A` с
 //! полным send-failure rollback; busy/team notices теперь также адресные.
 //! Только запрос team skill-state остаётся внешним state-owner fact.
+//! Reached `CPlayer::OnChangeStates` принадлежит этому же live owner-у:
+//! relive и revive боевой феи публикуют self `0xBFE02`, local-team `0xBFD0A`
+//! и World `0x6000C` через canonical player/session maps.
 //! Container `0x90301` также замыкает packet/equipment/hand↔ground
 //! вертикаль через owned region goods: split/full ownership, exact drop
 //! cell, protection/range,
@@ -3280,7 +3283,6 @@ impl<T> GodsBattleNpcContendContext for T where
 pub(crate) trait PlayerReliveContext: RegionRandomContext + ScriptFunctionRuntime {
     fn auto_start_player_passive_skills(&mut self, player: &mut CPlayer);
     fn player_enter_region_after_relive(&mut self, player: &mut CPlayer);
-    fn change_player_states_after_relive(&mut self, player: &mut CPlayer);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3487,6 +3489,20 @@ pub(crate) struct PlayerRelivePreludeReport {
     pub(crate) owned: PlayerReliveOwnedPrelude,
     pub(crate) combat_property_delivery: i32,
     pub(crate) tao_zhuang_ran: bool,
+    pub(crate) states: Option<PlayerStatesPublication>,
+}
+
+#[must_use = "OnChangeStates report сохраняет player и team/world wire"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerStatesPublication {
+    pub(crate) player_id: i32,
+    pub(crate) health: u32,
+    pub(crate) mana: u32,
+    pub(crate) rp: u16,
+    pub(crate) yp: u16,
+    pub(crate) health_ratio_bits: u32,
+    pub(crate) player_delivery: i32,
+    pub(crate) team: Option<GameTeamRemoteMutation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21396,8 +21412,8 @@ impl CGame {
     }
 
     /// Full reached `CPlayer::OnRelive` path. Только ещё не материализованные
-    /// passive-skill, EnterRegion и OnChangeStates virtual owners остаются
-    /// explicit callbacks; companion cleanup, property recompute, movement,
+    /// passive-skill и EnterRegion virtual owners остаются explicit callbacks;
+    /// companion cleanup, property recompute, movement, `OnChangeStates`,
     /// resident/peace state, GodsBattle return, region change и client wires
     /// исполняются concrete `CPlayer/CGame` owners.
     pub(crate) fn relive_gods_battle_player<Context: PlayerReliveContext>(
@@ -21442,13 +21458,17 @@ impl CGame {
             let owned = player
                 .unlock_movement_after_relive(cleared_uncreated_pets, cleared_uncreated_carriage);
             let mutation = player.apply_relive_scalars();
-            context.change_player_states_after_relive(player);
             (owned, mutation)
         };
+        let states = mutation
+            .as_ref()
+            .ok()
+            .and_then(|_| self.publish_player_states(player_id));
         let prelude = PlayerRelivePreludeReport {
             owned,
             combat_property_delivery,
             tao_zhuang_ran,
+            states,
         };
         let mutation = match mutation {
             Ok(mutation) => mutation,
@@ -27146,6 +27166,43 @@ impl CGame {
         Some(report)
     }
 
+    /// Exact reached `CPlayer::OnChangeStates`: полный player snapshot сначала
+    /// уходит самому игроку, затем state `9` его typed team plug публикует долю
+    /// HP локальным teammates и WorldServer. В report ratio хранится битами,
+    /// чтобы сохранить в том числе legacy NaN при нулевом maximum HP.
+    pub(crate) fn publish_player_states(&self, player_id: i32) -> Option<PlayerStatesPublication> {
+        let player = self.find_player(player_id)?;
+        let health = player.health();
+        let mana = player.mana();
+        let rp = player.rp();
+        let yp = player.yp();
+        let team_id = player.team_id();
+        let health_ratio = health as f32 / player.maximum_health() as f32;
+
+        let mut client = CMessage::new(0x000b_fe02);
+        client.add_long(400);
+        client.add_long(player_id);
+        client.add_ulong(health);
+        client.add_ulong(mana);
+        client.base_mut().add_short(rp as i16);
+        client.base_mut().add_short(yp as i16);
+        let player_delivery = client.send_to_player(self.net_server(), player_id);
+
+        let team = (team_id != 0)
+            .then(|| self.relay_remote_team_state(team_id as u32, 400, player_id, health_ratio))
+            .flatten();
+        Some(PlayerStatesPublication {
+            player_id,
+            health,
+            mana,
+            rp,
+            yp,
+            health_ratio_bits: health_ratio.to_bits(),
+            player_delivery,
+            team,
+        })
+    }
+
     pub(crate) fn find_player(&self, player_id: i32) -> Option<&CPlayer> {
         self.players.get(&player_id)
     }
@@ -29628,9 +29685,7 @@ impl CGame {
                 if let Some(update) = update {
                     let _ = self.send_battle_fairy_goods_update(&update);
                 }
-                if let Some(player) = self.find_player(player_id) {
-                    let _ = self.send_player_properties_changed(player);
-                }
+                let _ = self.publish_player_states(player_id);
                 1
             }
             BattleFairyScriptAction::AddExperience {

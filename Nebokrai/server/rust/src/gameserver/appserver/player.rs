@@ -71,7 +71,8 @@
 //! World/country public talk timestamps принадлежат тому же player state:
 //! wrapping cooldown обновляется до проверки и списания channel-cost.
 //! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
-//! изменение самих max не выполняет этот clamp без конкретного caller-а.
+//! RP/YP сохраняют соседние WORD offsets `0xAC/0xAE` base-wire. Изменение
+//! самих max не выполняет этот clamp без конкретного caller-а.
 //! `UseItem` материализует exact requirement-коды, owned skill learning,
 //! packet consumption и четыре replaceable `tagExpendableEffect` combat
 //! mutation. Mount и ChangeBody guards/state замкнуты на canonical player/game
@@ -342,6 +343,7 @@ const BASE_PK_COUNTRY_OFFSET: usize = 0xa0;
 const BASE_HEALTH_OFFSET: usize = 0xa4;
 const BASE_MANA_OFFSET: usize = 0xa8;
 const BASE_RP_OFFSET: usize = 0xac;
+const BASE_YP_OFFSET: usize = 0xae;
 const BASE_MAXIMUM_HP_OFFSET: usize = 0xb0;
 const BASE_MAXIMUM_MP_OFFSET: usize = 0xb4;
 const BASE_BURDEN_OFFSET: usize = 0xb8;
@@ -1249,6 +1251,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) health: u32,
     pub(crate) mana: u32,
     pub(crate) rp: u16,
+    pub(crate) yp: u16,
     pub(crate) maximum_rp: u16,
     pub(crate) maximum_vigour: u32,
     pub(crate) energy: u32,
@@ -3051,6 +3054,7 @@ impl CPlayer {
             self.base_properties.lt_up_60_count,
         );
         write_player_wire_u16(&mut wire, BASE_RP_OFFSET, self.base_properties.rp);
+        write_player_wire_u16(&mut wire, BASE_YP_OFFSET, self.base_properties.yp);
         write_player_wire_u16(
             &mut wire,
             BASE_BURDEN_OFFSET,
@@ -3113,6 +3117,7 @@ impl CPlayer {
         self.base_properties.health = read_player_wire_u32(wire, BASE_HEALTH_OFFSET);
         self.base_properties.mana = read_player_wire_u32(wire, BASE_MANA_OFFSET);
         self.base_properties.rp = read_player_wire_u16(wire, BASE_RP_OFFSET);
+        self.base_properties.yp = read_player_wire_u16(wire, BASE_YP_OFFSET);
         self.base_properties.maximum_rp = read_player_wire_u16(wire, BASE_MAXIMUM_RP_OFFSET);
         self.base_properties.base_maximum_hp = read_player_wire_u32(wire, BASE_MAXIMUM_HP_OFFSET);
         self.base_properties.base_maximum_mp = read_player_wire_u32(wire, BASE_MAXIMUM_MP_OFFSET);
@@ -10595,6 +10600,14 @@ impl CPlayer {
 
     pub(crate) const fn mana(&self) -> u32 {
         self.base_properties.mana
+    }
+
+    pub(crate) const fn rp(&self) -> u16 {
+        self.base_properties.rp
+    }
+
+    pub(crate) const fn yp(&self) -> u16 {
+        self.base_properties.yp
     }
 
     pub(crate) const fn set_maximum_hp(&mut self, value: u32) {
