@@ -24,6 +24,8 @@ use crate::gameserver::gameserver::game::{
     colored_player_notice_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::public::auctionlog::AuctionLogSystemTime;
+use crate::public::date::TagTime;
 use crate::public::tools::put_string_to_file;
 
 const INCREMENT_PURCHASE_RESPONSE: i32 = 0x000F_F002;
@@ -34,9 +36,29 @@ const INCREMENT_PURCHASE_AUDIT: i32 = 0x0006_020D;
 
 pub(crate) trait IncrementShopBillingContext: GameContainerMessageRuntime {
     fn publish_increment_shop_yuan_bao_change(&mut self, change: &PlayerYuanBaoChange) -> Vec<i32>;
-    fn auction_billing_local_system_time(
-        &mut self,
-    ) -> crate::public::auctionlog::AuctionLogSystemTime;
+}
+
+pub(crate) fn auction_billing_local_system_time() -> AuctionLogSystemTime {
+    let [
+        year,
+        month,
+        day_of_week,
+        day,
+        hour,
+        minute,
+        second,
+        milliseconds,
+    ] = TagTime::local_now().fields();
+    AuctionLogSystemTime {
+        year,
+        month,
+        day_of_week,
+        day,
+        hour,
+        minute,
+        second,
+        milliseconds,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -392,7 +414,7 @@ fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
         .expect("Billing auction buyer проверен")
         .take_current_auction_buy_node()
     {
-        let buyer_time = context.auction_billing_local_system_time();
+        let buyer_time = auction_billing_local_system_time();
         let (buyer_log, mut seller_log, notice) =
             super::onmsg_w2s_auction::build_auction_buy_log_effects(&node, game, buyer_time);
         let mut buyer_audit = CMessage::new(0x0006_0214);
@@ -404,7 +426,7 @@ fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
             colored_player_notice_message(0xffff_ffff, 0xffff_0000, &notice)
                 .send_to_player(game.net_server(), buyer_id),
         );
-        seller_log.time = context.auction_billing_local_system_time();
+        seller_log.time = auction_billing_local_system_time();
         let mut seller_audit = CMessage::new(0x0006_0214);
         seller_audit.base_mut().add(&seller_log.to_legacy_bytes());
         report

@@ -60,6 +60,7 @@ use crate::gameserver::gameserver::game::{
     format_legacy_text_fields, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::public::date::TagTime;
 use crate::public::guid::CGuid;
 
 const ALLOCATE_STAT_POINT: u32 = 0x0008_fa01;
@@ -101,16 +102,6 @@ const LEI_TING_REWARD_SCRIPTS: [&[u8]; 9] = [
 pub(crate) trait GamePlayerMessageRuntime:
     PlayerReliveContext + GameContainerMessageRuntime + ScriptFunctionRuntime
 {
-    /// Возвращает поля Windows `SYSTEMTIME` в native field order.
-    fn player_local_system_time(&mut self) -> [u16; 8];
-
-    /// Выполняет exact local `mktime`/`time`/`difftime` для packed equipment
-    /// timestamp. `None` соответствует `_mktime == -1`; DST выбирает CRT.
-    fn player_elapsed_seconds_from_local_time(
-        &mut self,
-        local: PlayerPackedLocalTime,
-    ) -> Option<f64>;
-
     /// Snapshot отсутствующего `CState`/timer/setup owner-а до item mutation;
     /// blocking state проверяет ordered `PLAYER_ITEM_BLOCKING_SKILL_IDS`.
     fn player_item_use_facts(&mut self, game: &CGame, player_id: i32) -> PlayerItemUseFacts;
@@ -425,6 +416,28 @@ fn decode_equipment_state_local_time(packed: i32) -> PlayerPackedLocalTime {
         minute: (packed >> 3) & 0x3f,
         second: 0,
     }
+}
+
+/// Exact local `mktime`/`time`/`difftime` owner packed equipment timestamp.
+/// `tm_isdst=-1` сохраняет CRT-выбор DST, `-1` остаётся invalid boundary.
+pub(crate) fn equipment_state_elapsed_seconds(packed: i32) -> Option<f64> {
+    let local = decode_equipment_state_local_time(packed);
+    let mut native = libc::tm {
+        tm_sec: local.second,
+        tm_min: local.minute,
+        tm_hour: local.hour,
+        tm_mday: local.day,
+        tm_mon: local.zero_based_month,
+        tm_year: local.year_since_1900,
+        tm_isdst: -1,
+        ..unsafe { std::mem::zeroed() }
+    };
+    let expiry = unsafe { libc::mktime(&raw mut native) };
+    if expiry == -1 {
+        return None;
+    }
+    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    (now != -1).then(|| unsafe { libc::difftime(now, expiry) })
 }
 
 fn apply_friend_add(
@@ -1571,9 +1584,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                             .wrapping_add(2) as i32
                     })
             });
-            let Some(elapsed_seconds) = runtime.player_elapsed_seconds_from_local_time(
-                decode_equipment_state_local_time(packed_time),
-            ) else {
+            let Some(elapsed_seconds) = equipment_state_elapsed_seconds(packed_time) else {
                 report.outcome = GamePlayerMessageOutcome::ExpiredEquipmentTimeInvalid;
                 return Some(Ok(report));
             };
@@ -1649,7 +1660,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             report.outcome = GamePlayerMessageOutcome::AppellationChangeRequested;
         }
         QUERY_LOCAL_TIME => {
-            let system_time = runtime.player_local_system_time();
+            let system_time = TagTime::local_now().fields();
             let mut response = CMessage::new(0x000b_f73f);
             for field in system_time {
                 response.base_mut().add(&field.to_le_bytes());

@@ -99,6 +99,19 @@ impl TagTime {
         }
     }
 
+    pub(crate) const fn fields(self) -> [u16; 8] {
+        [
+            self.year,
+            self.month,
+            self.day_of_week,
+            self.day,
+            self.hour,
+            self.minute,
+            self.second,
+            self.milliseconds,
+        ]
+    }
+
     /// Разбирает legacy `year:month:day:hour:minute:second` через `atoi`.
     pub(crate) fn from_legacy_string(source: &[u8]) -> Result<Self, TagTimeParseBlock> {
         let mut remaining = source;

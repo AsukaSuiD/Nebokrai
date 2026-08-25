@@ -564,7 +564,7 @@ use crate::gameserver::appserver::message::othermessage::{
 };
 use crate::gameserver::appserver::message::playermessage::{
     GamePlayerMessageError, GamePlayerMessageReport, GamePlayerMessageRuntime,
-    dispatch_game_player_message,
+    dispatch_game_player_message, equipment_state_elapsed_seconds,
 };
 use crate::gameserver::appserver::message::playershopmessage::{
     PlayerShopMessageError, PlayerShopMessageReport, dispatch_player_shop_message,
@@ -2107,10 +2107,6 @@ pub(crate) trait GamePlayerLoginContext:
         player_id: i32,
         first_login: bool,
     ) -> Vec<i32>;
-    /// Переводит packed local `tm` equipment-state в исходное условие
-    /// `difftime(now, expiry) / 60 > 10079`. Time-zone/CRT conversion остаётся
-    /// системной runtime-границей; gameplay mutation и wire принадлежат CGame.
-    fn login_equipment_state_expired(&mut self, packed_local_time: i32) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25660,7 +25656,9 @@ impl CGame {
                 if packed_expiration == 0 {
                     return false;
                 }
-                if context.login_equipment_state_expired(packed_expiration) {
+                if equipment_state_elapsed_seconds(packed_expiration)
+                    .is_some_and(|elapsed| elapsed / 60.0 > 10_079.0)
+                {
                     let _ = goods.set_addon_property_modifier_core(GAP_EQUIP_STATE, 1, 3);
                     pending_equipment_state_updates.push((
                         location,

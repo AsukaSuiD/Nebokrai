@@ -36,7 +36,9 @@ use crate::gameserver::appserver::cs2ccontainerobjectmove::{
     CS2CContainerObjectMove, ContainerObjectMoveOperation,
 };
 use crate::gameserver::appserver::goods::cgoods::GoodsDecodeError;
-use crate::gameserver::appserver::message::unibillmessage::IncrementShopBillingContext;
+use crate::gameserver::appserver::message::unibillmessage::{
+    IncrementShopBillingContext, auction_billing_local_system_time,
+};
 use crate::gameserver::appserver::player::{
     AuctionSelfGoodsRefresh, PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange,
     PlayerYuanBaoChange,
@@ -776,7 +778,7 @@ where
                         }
                     }
                 } else {
-                    let buyer_log_time = runtime.auction_billing_local_system_time();
+                    let buyer_log_time = auction_billing_local_system_time();
                     let (buyer_log, mut seller_log, notice) =
                         build_auction_buy_log_effects(&node, game, buyer_log_time);
                     let mut buyer_audit = CMessage::new(WORLD_AUCTION_LOG_MESSAGE);
@@ -786,7 +788,7 @@ where
                         colored_player_notice_message(0xffff_ffff, 0xffff_0000, &notice)
                             .send_to_player(game.net_server(), player_id),
                     );
-                    seller_log.time = runtime.auction_billing_local_system_time();
+                    seller_log.time = auction_billing_local_system_time();
                     let mut seller_audit = CMessage::new(WORLD_AUCTION_LOG_MESSAGE);
                     seller_audit.base_mut().add(&seller_log.to_legacy_bytes());
                     world_deliveries.push(seller_audit.send(game, false));
