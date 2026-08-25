@@ -382,6 +382,7 @@ pub(crate) struct CMoveShape {
     undead_states: Vec<UndeadState>,
     moveable_count: i32,
     moveable: bool,
+    is_god: bool,
 }
 
 impl Default for CMoveShape {
@@ -397,6 +398,7 @@ impl Default for CMoveShape {
             undead_states: Vec::new(),
             moveable_count: 0,
             moveable: true,
+            is_god: false,
         }
     }
 }
@@ -408,6 +410,16 @@ impl CMoveShape {
 
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape {
         &mut self.shape
+    }
+
+    /// Exact inline `CMoveShape::God`: runtime-only invulnerability flag не
+    /// сериализуется и проверяется ordinary `OnBeenAttacked` owner-ом.
+    pub(crate) const fn set_god(&mut self, enabled: bool) {
+        self.is_god = enabled;
+    }
+
+    pub(crate) const fn is_god(&self) -> bool {
+        self.is_god
     }
 
     pub(crate) const fn skills(&self) -> &BTreeMap<u32, MoveShapeSkill> {

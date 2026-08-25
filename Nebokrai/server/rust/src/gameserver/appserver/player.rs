@@ -3230,6 +3230,14 @@ impl CPlayer {
         CMoveShape::is_died(self.base_properties.health)
     }
 
+    pub(crate) const fn set_god_mode(&mut self, enabled: bool) {
+        self.move_shape.set_god(enabled);
+    }
+
+    pub(crate) const fn is_god_mode(&self) -> bool {
+        self.move_shape.is_god()
+    }
+
     pub(crate) fn release_goods_session_state(&mut self) -> GoodsSessionPlayerRelease {
         let previous_progress = self.current_progress;
         let previous_moveable_count = self.move_shape.moveable_count();

@@ -12162,6 +12162,34 @@ impl CGame {
         self.send_player_shape_around(player_id, None, &message)
     }
 
+    /// Script `5402/5406` меняет тот же runtime-флаг, который проверяет
+    /// ordinary attack owner; отсутствующий script-player сохраняет no-op.
+    pub(crate) fn set_script_player_god_mode(&mut self, player_id: i32, enabled: bool) -> bool {
+        let Some(player) = self.find_player_mut(player_id) else {
+            return false;
+        };
+        player.set_god_mode(enabled);
+        true
+    }
+
+    /// `CPlayer::GetGMLevel` требует записи в обеих startup maps и возвращает
+    /// клиентский bool-level: любой non-player role в одной из записей даёт 1.
+    pub(crate) fn script_player_gm_level(&self, player_id: i32) -> Option<i32> {
+        let name = self.find_player(player_id)?.player_name();
+        let gm = self.gm_list.gm_info().get(name)?;
+        let player_gm = self.gm_list.player_gm_info().get(name)?;
+        Some(i32::from(gm.level != 0 || player_gm.level != 0))
+    }
+
+    pub(crate) fn send_script_player_gm_mode(&self, player_id: i32) -> Option<i32> {
+        let level = self.script_player_gm_level(player_id).unwrap_or(0);
+        self.find_player(player_id)?;
+        let mut message = CMessage::new(0x000b_fc01);
+        message.add_long(level);
+        message.add_long(player_id);
+        Some(message.send_to_player(self.net_server(), player_id))
+    }
+
     fn equipment_da_kong_run_script<Context: ScriptFunctionRuntime>(
         &mut self,
         report: &mut EquipmentDaKongReport,
