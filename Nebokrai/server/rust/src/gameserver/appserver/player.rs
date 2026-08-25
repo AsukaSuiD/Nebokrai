@@ -3558,6 +3558,21 @@ impl CPlayer {
         self.move_shape.get_undead_state(state_id)
     }
 
+    pub(crate) fn activate_loaded_appellation_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::moveshape::UndeadState> {
+        self.move_shape.activate_loaded_undead_states(now_ms)
+    }
+
+    pub(crate) fn appellation_state_tick(
+        &mut self,
+        now_ms: u32,
+    ) -> (Vec<u32>, Vec<(u32, u32, u32)>) {
+        let dead = self.is_dead();
+        self.move_shape.undead_state_tick(now_ms, dead)
+    }
+
     pub(crate) fn change_body_check(&self) -> bool {
         self.base_properties.mode == 0
             && !matches!(
@@ -3646,7 +3661,122 @@ impl CPlayer {
         self.move_shape.change_body_death_end_ids()
     }
 
-    pub(crate) fn apply_change_body_properties(&mut self, mut properties: PlayerCombatProperties) {
+    pub(crate) fn apply_change_body_properties(
+        &mut self,
+        mut properties: PlayerCombatProperties,
+        coefficients: GlobePlayerPropertyCoefficients,
+    ) {
+        let occupation = usize::from(self.base_properties.occupation).min(2);
+        let signed = |target: &mut u32, value: i64| {
+            *target = ((*target as i64) + value).clamp(1, i32::MAX as i64) as u32;
+        };
+        let percent = |target: &mut u32, value: i64| {
+            let delta = ((*target as f64) * value as f64 * 0.01).round() as i64;
+            *target = ((*target as i64) + delta).clamp(1, i32::MAX as i64) as u32;
+        };
+        for state in self.move_shape.undead_states() {
+            let scalar = |current: u32, value: i64| -> i64 {
+                if state.percentage {
+                    ((current as f64) * value as f64 * 0.01).round() as i64
+                } else {
+                    value
+                }
+            };
+            if state.percentage {
+                percent(&mut properties.maximum_hp, i64::from(state.maximum_hp));
+                percent(&mut properties.maximum_mp, i64::from(state.maximum_mp));
+                percent(&mut properties.defense, i64::from(state.defense));
+                percent(
+                    &mut properties.element_resistance,
+                    i64::from(state.element_resistance),
+                );
+            } else {
+                signed(&mut properties.maximum_hp, i64::from(state.maximum_hp));
+                signed(&mut properties.maximum_mp, i64::from(state.maximum_mp));
+                signed(&mut properties.defense, i64::from(state.defense));
+                signed(
+                    &mut properties.element_resistance,
+                    i64::from(state.element_resistance),
+                );
+            }
+            let strength_delta = scalar(properties.strength, i64::from(state.strength));
+            let dexterity_delta = scalar(properties.dexterity, i64::from(state.dexterity));
+            let constitution_delta = scalar(properties.constitution, i64::from(state.constitution));
+            let intelligence_delta = scalar(properties.intelligence, i64::from(state.intelligence));
+            signed(&mut properties.strength, strength_delta);
+            signed(&mut properties.dexterity, dexterity_delta);
+            signed(&mut properties.constitution, constitution_delta);
+            signed(&mut properties.intelligence, intelligence_delta);
+            signed(
+                &mut properties.maximum_attack,
+                (strength_delta as f64 * f64::from(coefficients.str_to_max_attack[occupation]))
+                    .round() as i64,
+            );
+            properties.burden = ((i64::from(properties.burden)
+                + (strength_delta as f64 * f64::from(coefficients.str_to_burden[occupation]))
+                    .round() as i64)
+                .clamp(1, i64::from(u16::MAX))) as u16;
+            signed(
+                &mut properties.minimum_attack,
+                (dexterity_delta as f64 * f64::from(coefficients.dex_to_min_attack[occupation]))
+                    .round() as i64,
+            );
+            properties.reank = ((i64::from(properties.reank)
+                + (dexterity_delta as f64 * f64::from(coefficients.dex_to_stiff[occupation]))
+                    .round() as i64)
+                .clamp(1, i64::from(u16::MAX))) as u16;
+            signed(
+                &mut properties.maximum_hp,
+                (constitution_delta as f64 * f64::from(coefficients.con_to_max_hp[occupation]))
+                    .round() as i64,
+            );
+            signed(
+                &mut properties.defense,
+                (constitution_delta as f64 * f64::from(coefficients.con_to_defense[occupation]))
+                    .round() as i64,
+            );
+            properties.element_modify = properties.element_modify.wrapping_add(
+                (intelligence_delta as f64 * f64::from(coefficients.int_to_element[occupation]))
+                    .round() as i32,
+            );
+            signed(
+                &mut properties.maximum_mp,
+                (intelligence_delta as f64 * f64::from(coefficients.int_to_max_mp[occupation]))
+                    .round() as i64,
+            );
+            signed(
+                &mut properties.element_resistance,
+                (intelligence_delta as f64 * f64::from(coefficients.int_to_resistant[occupation]))
+                    .round() as i64,
+            );
+            signed(
+                &mut properties.minimum_attack,
+                i64::from(state.minimum_attack),
+            );
+            signed(
+                &mut properties.maximum_attack,
+                i64::from(state.maximum_attack),
+            );
+            properties.element_modify = properties
+                .element_modify
+                .wrapping_add(i32::from(state.element_modify));
+            properties.blast_attack = properties
+                .blast_attack
+                .wrapping_add(state.blast_attack as u16);
+            properties.blast_element_attack = properties
+                .blast_element_attack
+                .wrapping_add(state.blast_element_attack as u16);
+            properties.cch = properties.cch.wrapping_add(state.cch as u16);
+            properties.full_miss = properties.full_miss.wrapping_add(state.full_miss as u16);
+            properties.attack_avoid = properties
+                .attack_avoid
+                .wrapping_add(state.attack_avoid as u16);
+            properties.element_avoid = properties
+                .element_avoid
+                .wrapping_add(state.element_avoid as u16);
+            properties.attack_speed = properties.attack_speed.wrapping_add(state.hit as u16);
+            properties.dodge = properties.dodge.wrapping_add(state.dodge as u16);
+        }
         for state in self.move_shape.extended_states() {
             let add = |target: &mut u32, value: u16| {
                 *target = (*target)

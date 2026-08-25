@@ -16339,47 +16339,52 @@ impl CGame {
             .map(CPlayer::attempt_appellation_id)
     }
 
-    pub(crate) fn add_script_appellation_state<Now>(
+    pub(crate) fn add_script_appellation_state<Context: RealmAppellationScriptContext>(
         &mut self,
         player_id: i32,
         state_id: u32,
-        now_ms: Now,
-    ) -> Option<u32>
-    where
-        Now: FnOnce() -> u32,
-    {
+        now_ms: u32,
+        context: &mut Context,
+    ) -> u32 {
         let mutation = {
             let (players, skill_factory) = (&mut self.players, &self.skill_factory);
-            players
-                .get_mut(&player_id)?
-                .add_appellation_state(state_id, skill_factory, now_ms)
+            let Some(player) = players.get_mut(&player_id) else {
+                return 0;
+            };
+            player.add_appellation_state(state_id, skill_factory, || now_ms)
         };
         for state in &mutation.removed {
-            self.send_appellation_visual(player_id, state, false);
+            self.send_appellation_visual(player_id, state, false, now_ms);
         }
         if let Some(state) = &mutation.added {
-            self.send_appellation_visual(player_id, state, true);
+            self.send_appellation_visual(player_id, state, true, now_ms);
+        }
+        if mutation.state_list_changed {
+            self.refresh_script_change_body_properties(player_id, context);
             self.send_script_player_state_changed(player_id);
         }
-        Some(mutation.legacy_return)
+        mutation.legacy_return
     }
 
-    pub(crate) fn delete_script_appellation_state(
+    pub(crate) fn delete_script_appellation_state<Context: RealmAppellationScriptContext>(
         &mut self,
         player_id: i32,
         state_id: u32,
-    ) -> Option<u32> {
-        let mutation = self
-            .players
-            .get_mut(&player_id)?
-            .delete_appellation_state(state_id);
+        now_ms: u32,
+        context: &mut Context,
+    ) -> u32 {
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return 0;
+        };
+        let mutation = player.delete_appellation_state(state_id);
         for state in &mutation.removed {
-            self.send_appellation_visual(player_id, state, false);
+            self.send_appellation_visual(player_id, state, false, now_ms);
         }
         if mutation.state_list_changed {
+            self.refresh_script_change_body_properties(player_id, context);
             self.send_script_player_state_changed(player_id);
         }
-        Some(mutation.legacy_return)
+        mutation.legacy_return
     }
 
     pub(crate) fn get_script_appellation_state(
@@ -16549,6 +16554,62 @@ impl CGame {
         }
     }
 
+    fn update_appellation_states<Context: RealmAppellationScriptContext>(
+        &mut self,
+        now_ms: u32,
+        context: &mut Context,
+    ) {
+        let player_ids: Vec<_> = self.players.keys().copied().collect();
+        for player_id in player_ids {
+            let (ended, item_due) = self
+                .find_player_mut(player_id)
+                .map(|player| player.appellation_state_tick(now_ms))
+                .unwrap_or_default();
+            for state_id in ended {
+                let _ = self.delete_script_appellation_state(player_id, state_id, now_ms, context);
+            }
+            for (state_id, item_index, item_amount) in item_due {
+                let enough = self
+                    .find_player(player_id)
+                    .is_some_and(|player| player.check_item_in_packet(item_index) >= item_amount);
+                if !enough {
+                    let goods_name = self
+                        .goods_factory
+                        .query_goods_name(item_index)
+                        .unwrap_or_default();
+                    let text = format_legacy_text_fields(
+                        self.get_string_by_id(b"GS0128"),
+                        &[goods_name],
+                        0xff,
+                    );
+                    let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
+                        .send_to_player(self.net_server(), player_id);
+                    let _ =
+                        self.delete_script_appellation_state(player_id, state_id, now_ms, context);
+                    continue;
+                }
+                let consumptions = self
+                    .find_player_mut(player_id)
+                    .map(|player| player.remove_item_in_packet(item_index, item_amount))
+                    .unwrap_or_default();
+                let removed = consumptions.iter().fold(0_u32, |total, consumption| {
+                    total.wrapping_add(
+                        consumption
+                            .previous_amount
+                            .wrapping_sub(consumption.remaining_amount),
+                    )
+                });
+                for consumption in &consumptions {
+                    let _ = self.send_player_packet_consumption(consumption);
+                }
+                if removed != item_amount {
+                    let _ =
+                        self.delete_script_appellation_state(player_id, state_id, now_ms, context);
+                }
+            }
+        }
+    }
+
     pub(crate) fn add_script_change_body_state<Context: RealmAppellationScriptContext>(
         &mut self,
         player_id: i32,
@@ -16703,9 +16764,10 @@ impl CGame {
             Some(player) => context.recompute_realm_appellation_player_properties(player),
             None => return,
         };
+        let coefficients = self.globe_setup.player_property_coefficients();
         self.find_player_mut(player_id)
             .expect("ChangeBody recompute сохраняет player")
-            .apply_change_body_properties(properties);
+            .apply_change_body_properties(properties, coefficients);
         let external = context.player_properties_external_facts(player_id);
         if let Some(player) = self.find_player(player_id) {
             let _ = self.send_player_properties_changed(player, external);
@@ -16806,7 +16868,13 @@ impl CGame {
         Some(i32::from(mutation.succeeded))
     }
 
-    fn send_appellation_visual(&self, player_id: i32, state: &UndeadState, begin: bool) {
+    fn send_appellation_visual(
+        &self,
+        player_id: i32,
+        state: &UndeadState,
+        begin: bool,
+        now_ms: u32,
+    ) {
         let Some(player) = self.find_player(player_id) else {
             return;
         };
@@ -16829,10 +16897,10 @@ impl CGame {
         message.add_long(player.shape().identity().object_type);
         message.add_long(player_id);
         message.add_long(56);
-        message.add_long(state.state_id() as i32);
+        message.add_ulong(state.state_id());
         if begin {
-            message.add_long(state.keep_time_ms() as i32);
-            message.add_long(0);
+            message.add_ulong(state.remaining_time_ms(now_ms));
+            message.add_ulong(u32::from(state.state_type()));
         }
         let _ = message.send_to_around(Some(region), player.shape(), None, &runtime);
     }
@@ -17485,6 +17553,14 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_extended_states(login_tick_ms);
+        let loaded_appellation_states = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_appellation_states(login_tick_ms);
+        for state in &loaded_appellation_states {
+            self.send_appellation_visual(expected_player_id, state, true, login_tick_ms);
+        }
         for state in &loaded_extended_states {
             self.send_extended_state_visual(expected_player_id, state, true, login_tick_ms);
         }
@@ -17516,10 +17592,11 @@ impl CGame {
                 .get(&expected_player_id)
                 .expect("login script не удаляет player owner"),
         );
+        let coefficients = self.globe_setup.player_property_coefficients();
         self.players
             .get_mut(&expected_player_id)
             .expect("login property callback не удаляет player owner")
-            .apply_change_body_properties(recomputed);
+            .apply_change_body_properties(recomputed, coefficients);
         let client_deliveries =
             context.publish_initial_player_client_snapshot(self, expected_player_id, first_login);
         let mut billing = CMessage::new(0x000e_f201);
@@ -20548,6 +20625,7 @@ impl CGame {
         self.expire_script_faction_sessions(state.current_tick_ms);
         self.expire_change_body_states(state.current_tick_ms, runtime);
         self.update_extended_states(state.current_tick_ms, runtime);
+        self.update_appellation_states(state.current_tick_ms, runtime);
         state.calls_since_runtime_log = state.calls_since_runtime_log.wrapping_add(1);
         let mut stages = Vec::new();
 

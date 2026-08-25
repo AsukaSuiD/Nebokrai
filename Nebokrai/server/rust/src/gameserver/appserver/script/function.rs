@@ -259,6 +259,9 @@ pub(crate) const SCRIPT_FUNCTION_GET_EX_STATE: i32 = 2552;
 pub(crate) const SCRIPT_FUNCTION_ADD_EX_STATE_NEW: i32 = 2553;
 pub(crate) const SCRIPT_FUNCTION_DELETE_EX_STATE_NEW: i32 = 2554;
 pub(crate) const SCRIPT_FUNCTION_GET_EX_STATE_NEW: i32 = 2555;
+pub(crate) const SCRIPT_FUNCTION_ADD_UNDEAD_STATE: i32 = 2556;
+pub(crate) const SCRIPT_FUNCTION_DELETE_UNDEAD_STATE: i32 = 2557;
+pub(crate) const SCRIPT_FUNCTION_GET_UNDEAD_STATE: i32 = 2558;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
@@ -3251,7 +3254,10 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_GET_EX_STATE
         | SCRIPT_FUNCTION_ADD_EX_STATE_NEW
         | SCRIPT_FUNCTION_DELETE_EX_STATE_NEW
-        | SCRIPT_FUNCTION_GET_EX_STATE_NEW => match index {
+        | SCRIPT_FUNCTION_GET_EX_STATE_NEW
+        | SCRIPT_FUNCTION_ADD_UNDEAD_STATE
+        | SCRIPT_FUNCTION_DELETE_UNDEAD_STATE
+        | SCRIPT_FUNCTION_GET_UNDEAD_STATE => match index {
             0 => Integer,
             _ => Unused,
         },
@@ -4415,6 +4421,35 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 .and_then(|player_id| game.find_player(player_id))
                 .map_or(-1, |player| player.current_progress() as i32),
         }),
+        SCRIPT_FUNCTION_ADD_UNDEAD_STATE
+        | SCRIPT_FUNCTION_DELETE_UNDEAD_STATE
+        | SCRIPT_FUNCTION_GET_UNDEAD_STATE => {
+            let Some(state_id) = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .map(|value| value as u32)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let Some(player_id) = script_player_id else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let now_ms = runtime.country_contend_now_milliseconds();
+            let legacy_return = match function_id {
+                SCRIPT_FUNCTION_ADD_UNDEAD_STATE => {
+                    game.add_script_appellation_state(player_id, state_id, now_ms, runtime)
+                }
+                SCRIPT_FUNCTION_DELETE_UNDEAD_STATE => {
+                    game.delete_script_appellation_state(player_id, state_id, now_ms, runtime)
+                }
+                SCRIPT_FUNCTION_GET_UNDEAD_STATE => game
+                    .find_player(player_id)
+                    .map_or(0, |player| player.get_appellation_state(state_id)),
+                _ => unreachable!("undead-state selector проверен"),
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: legacy_return as i32,
+            })
+        }
         SCRIPT_FUNCTION_ADD_EX_STATE
         | SCRIPT_FUNCTION_DELETE_EX_STATE
         | SCRIPT_FUNCTION_GET_EX_STATE
@@ -5632,25 +5667,22 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         ) else {
             return ScriptFunctionDispatchOutcome::Invalid;
         };
-        let result = match function_id {
+        let now_ms = runtime.country_contend_now_milliseconds();
+        let legacy_return = match function_id {
             SCRIPT_FUNCTION_ADD_APPELLATION_STATE => {
-                game.add_script_appellation_state(player_id, state_id as u32, || {
-                    runtime.country_contend_now_milliseconds()
-                })
+                game.add_script_appellation_state(player_id, state_id as u32, now_ms, runtime)
             }
             SCRIPT_FUNCTION_DEL_APPELLATION_STATE => {
-                game.delete_script_appellation_state(player_id, state_id as u32)
+                game.delete_script_appellation_state(player_id, state_id as u32, now_ms, runtime)
             }
-            SCRIPT_FUNCTION_GET_APPELLATION_STATE => {
-                game.get_script_appellation_state(player_id, state_id as u32)
-            }
+            SCRIPT_FUNCTION_GET_APPELLATION_STATE => game
+                .get_script_appellation_state(player_id, state_id as u32)
+                .unwrap_or(0),
             _ => unreachable!("appellation selector уже проверен"),
         };
-        return result.map_or(ScriptFunctionDispatchOutcome::Invalid, |legacy_return| {
-            ScriptFunctionDispatchOutcome::Handled {
-                legacy_return: legacy_return as i32,
-            }
-        });
+        return ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: legacy_return as i32,
+        };
     }
     if function_id == SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS {
         if !script_player_npc_caller_exists(game, script_player_id, script_npc_id) {
