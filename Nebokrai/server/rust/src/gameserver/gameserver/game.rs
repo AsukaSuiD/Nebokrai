@@ -297,7 +297,9 @@
 //! проверяется exact temporary container simulation, coins и ingredients — в
 //! исходной `uint64` арифметике, затем concrete wallet/packet remove/add wire
 //! предшествует result, notice и optional World broadcast. Только safe-cell,
-//! fight/team state открытия и old-client codec остаются runtime facts.
+//! fight/progress gates открытия теперь читаются из canonical region/player
+//! owners с virtual city/country security dispatch; внешними остаются только
+//! polymorphic team state и old-client codec.
 //! Goods destruction `0x8FC1C/1D` замыкает hand mutation и `0xC0101/0xC0102`,
 //! exact LogSystem byte `55`, World `0x60202` с bank/region/IP facts и client
 //! result. Произвольный extend-ID open-route теперь проходит единый owned
@@ -633,7 +635,7 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
-    RegionCellAccessBlock, RegionRandomContext, RegionReturnPoint,
+    RegionCellAccessBlock, RegionRandomContext, RegionReturnPoint, RegionSecurity,
 };
 use crate::gameserver::appserver::ridestate::{RIDE_STATE_ID, RideState};
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
@@ -652,7 +654,7 @@ use crate::gameserver::appserver::servercityregion::{
 use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryBattleStateBlock, CountryContendContext,
     CountryContendEntryContext, CountryContendPlayer, CountryRegionAiError,
-    CountryReturnPointContext, CountryReturnPointError,
+    CountryReturnPointContext, CountryReturnPointError, CountrySecurityError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleCancelByPlayer, GodsBattleContender,
@@ -1424,6 +1426,12 @@ pub(crate) enum ServerRegionOwner {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ServerRegionSecurityBlock {
+    Cell(RegionCellAccessBlock),
+    Country(CountrySecurityError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameWarRegionHandle {
     Local(i32),
     Proxy(i32),
@@ -1776,9 +1784,17 @@ pub(crate) struct EquipmentSessionOpenReport {
     pub(crate) collected_plug_ids: Vec<i32>,
 }
 
-pub(crate) trait EquipmentSessionOpenContext {
-    fn equipment_session_has_team_state(&mut self, player_id: i32) -> bool;
+/// Единственная ещё polymorphic часть session-open gates: `CTeamState`
+/// хранится в общем state registry, который пока не материализован у
+/// `CMoveShape`. Progress, fight counter и region security читаются у
+/// canonical `CPlayer/CRegion` owners.
+pub(crate) trait TeamStateContext {
+    fn player_has_team_state(&mut self, player_id: i32) -> bool;
 }
+
+pub(crate) trait EquipmentSessionOpenContext: TeamStateContext {}
+
+impl<T: TeamStateContext> EquipmentSessionOpenContext for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsDestroyDeleteRequest {
@@ -1811,16 +1827,9 @@ pub(crate) struct GoodsDestroyAuditLog {
     pub(crate) tile_y: Result<i32, ShapeCoordinateBlock>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SynthesisOpenFacts {
-    pub(crate) safe_region_cell: bool,
-    pub(crate) fight_state_count: i32,
-    pub(crate) has_team_state: bool,
-}
+pub(crate) trait SynthesisContext: OldClientGoodsCodec + TeamStateContext {}
 
-pub(crate) trait SynthesisContext: OldClientGoodsCodec {
-    fn synthesis_open_facts(&mut self, game: &CGame, player: &CPlayer) -> SynthesisOpenFacts;
-}
+impl<T: OldClientGoodsCodec + TeamStateContext> SynthesisContext for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SynthesisOpenOutcome {
@@ -5258,6 +5267,29 @@ impl ServerRegionOwner {
 
     pub(crate) fn name(&self) -> &[u8] {
         self.base().region.get_name()
+    }
+
+    /// Typed dispatch исходного virtual `GetSecurity`: city/country owners
+    /// накладывают war-state semantics поверх тех же byte-exact клеток,
+    /// остальные region subtype-ы используют базовый `CRegion`.
+    pub(crate) fn get_security(
+        &self,
+        x: i32,
+        y: i32,
+    ) -> Result<RegionSecurity, ServerRegionSecurityBlock> {
+        match self {
+            Self::City(region) => region
+                .get_security(x, y)
+                .map_err(ServerRegionSecurityBlock::Cell),
+            Self::Country(region) => region
+                .get_security(x, y)
+                .map_err(ServerRegionSecurityBlock::Country),
+            _ => self
+                .base()
+                .region
+                .get_security(x, y)
+                .map_err(ServerRegionSecurityBlock::Cell),
+        }
     }
 
     pub(crate) const fn is_gods_battle(&self) -> bool {
@@ -17437,9 +17469,7 @@ impl CGame {
                 Some(self.send_equipment_session_notification(player_id, string_id));
             return report;
         }
-        if kind != EquipmentSessionPlugKind::Upgrade
-            && context.equipment_session_has_team_state(player_id)
-        {
+        if kind != EquipmentSessionPlugKind::Upgrade && context.player_has_team_state(player_id) {
             report.outcome = EquipmentSessionOpenOutcome::TeamStateBlocked;
             let string_id = match kind {
                 EquipmentSessionPlugKind::DaKong => "GS1058",
@@ -23428,17 +23458,30 @@ impl CGame {
         player_id: i32,
         context: &mut Context,
     ) -> Option<SynthesisOpenReport> {
-        let player = self.find_player(player_id)?;
-        let facts = context.synthesis_open_facts(self, player);
-        let outcome = if !facts.safe_region_cell {
+        let (region_id, tile_x, tile_y, progress, fight_state_count) = {
+            let player = self.find_player(player_id)?;
+            (
+                player.server_region_id()?,
+                player.shape().get_tile_x().ok()?,
+                player.shape().get_tile_y().ok()?,
+                player.current_progress(),
+                player.fight_state_count(),
+            )
+        };
+        let safe_region_cell = self
+            .find_region(region_id)?
+            .get_security(tile_x, tile_y)
+            .ok()?
+            == RegionSecurity::SAFE;
+        let outcome = if !safe_region_cell {
             SynthesisOpenOutcome::UnsafeRegion
-        } else if player.current_progress() == PlayerProgress::Trading {
+        } else if progress == PlayerProgress::Trading {
             SynthesisOpenOutcome::Trading
-        } else if facts.fight_state_count > 0 {
+        } else if fight_state_count > 0 {
             SynthesisOpenOutcome::Fighting
-        } else if player.current_progress() == PlayerProgress::OpenStall {
+        } else if progress == PlayerProgress::OpenStall {
             SynthesisOpenOutcome::StallOpen
-        } else if facts.has_team_state {
+        } else if context.player_has_team_state(player_id) {
             SynthesisOpenOutcome::TeamState
         } else {
             SynthesisOpenOutcome::Opened
