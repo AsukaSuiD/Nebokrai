@@ -690,6 +690,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             if let Some(player) = game.find_player(player_id) {
                 facts.mount_state_exists = player.is_rider();
                 facts.fight_state_count = player.fight_state_count();
+                facts.state_110000_exists |= player.script_move_state_count(110000) != 0;
             }
             if facts.blocking_skill_state {
                 report
@@ -705,11 +706,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 return Some(Ok(report));
             }
             if facts.state_110000_exists {
-                let _ended = runtime.apply_player_item_runtime_effect(
-                    game,
-                    player_id,
-                    PlayerItemRuntimeEffect::EndState(110000),
-                );
+                if !game.end_script_auto_protect_state(player_id) {
+                    let _ended = runtime.apply_player_item_runtime_effect(
+                        game,
+                        player_id,
+                        PlayerItemRuntimeEffect::EndState(110000),
+                    );
+                }
             }
             let Some(slot) = message.base_mut().get_char() else {
                 return Some(Err(GamePlayerMessageError::MissingField(

@@ -320,7 +320,7 @@ use super::shape::{
     CShape, ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView,
 };
 use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
-use super::teamstate::CTeamState;
+use super::teamstate::{CTeamState, TEAM_STATE_ID};
 use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::auctionnode::CGoodsNode;
 use crate::public::guid::CGuid;
@@ -2026,6 +2026,7 @@ pub(crate) struct CPlayer {
     jjc_data: [u8; 0x10],
     jjc_pk_state: bool,
     fight_state_count: i32,
+    auto_protected: bool,
     lost_time_stamp_ms: u32,
     continuous_kill_amount: u32,
     continuous_kill_timestamp_ms: u32,
@@ -2375,6 +2376,7 @@ impl CPlayer {
             jjc_data: [0; 0x10],
             jjc_pk_state: false,
             fight_state_count: 0,
+            auto_protected: false,
             lost_time_stamp_ms: 0,
             continuous_kill_amount: 0,
             continuous_kill_timestamp_ms: 0,
@@ -2515,6 +2517,7 @@ impl CPlayer {
         }
 
         player.move_shape.clear_persisted_runtime_state();
+        player.auto_protected = false;
         let skill_count = read_player_game_save_count(source, cursor, "skill count")?;
         for _ in 0..skill_count {
             let packed = read_player_game_save_u32(source, cursor, "tagSkillID")?;
@@ -4268,6 +4271,99 @@ impl CPlayer {
 
     pub(crate) const fn has_materialized_abnormality(&self) -> bool {
         self.move_shape.has_materialized_abnormality()
+    }
+
+    pub(crate) fn add_script_move_state(
+        &mut self,
+        state_id: i32,
+        value1: i32,
+        value2: i32,
+        sufferer_is_gm: bool,
+    ) -> Option<super::moveshape::ScriptMoveState> {
+        self.move_shape
+            .add_script_state(state_id, value1, value2, sufferer_is_gm)
+    }
+
+    pub(crate) fn script_move_state_count(&self, state_id: i32) -> u32 {
+        self.move_shape.script_state_count(state_id).saturating_add(
+            (state_id == TEAM_STATE_ID)
+                .then_some(self.team_recruitment_states.len())
+                .unwrap_or(0)
+                .min(u32::MAX as usize) as u32,
+        )
+    }
+
+    pub(crate) fn end_auto_protect_state(&mut self) -> Option<super::moveshape::ScriptMoveState> {
+        let removed = self
+            .move_shape
+            .take_first_script_state(super::moveshape::STATE_AUTO_PROTECT)?;
+        self.auto_protected = false;
+        Some(removed)
+    }
+
+    pub(crate) const fn is_auto_protected(&self) -> bool {
+        self.auto_protected
+    }
+
+    /// Накладывает шесть конкретных состояний предметов в порядке живого
+    /// списка `CMoveShape`. Округление и сужение повторяют отдельные поля
+    /// исходного `CPlayer::m_Property`.
+    pub(crate) fn apply_script_move_state_properties(
+        &mut self,
+        mut properties: PlayerCombatProperties,
+    ) -> (
+        PlayerCombatProperties,
+        Vec<super::moveshape::ScriptMoveState>,
+    ) {
+        for state in self.move_shape.script_states() {
+            let coefficient = state.coefficient();
+            let percent_delta =
+                |base: u32| ((coefficient as f32) * 0.01 * (base as f32)).round() as u32;
+            match state.state_id() {
+                super::moveshape::STATE_USER_GOODS_ENLARGE_MAX_HP => {
+                    properties.maximum_hp = properties
+                        .maximum_hp
+                        .saturating_add(percent_delta(properties.maximum_hp))
+                        .min(i32::MAX as u32);
+                }
+                super::moveshape::STATE_USER_GOODS_ENLARGE_MAX_MP => {
+                    properties.maximum_mp = properties
+                        .maximum_mp
+                        .saturating_add(percent_delta(properties.maximum_mp))
+                        .min(i32::MAX as u32);
+                }
+                super::moveshape::STATE_USER_GOODS_ENLARGE_DEF => {
+                    properties.defense = properties
+                        .defense
+                        .wrapping_add(percent_delta(properties.defense))
+                        & 0xffff;
+                }
+                super::moveshape::STATE_USER_GOODS_ENLARGE_ELM_DEF => {
+                    properties.element_resistance = properties
+                        .element_resistance
+                        .wrapping_add(percent_delta(properties.element_resistance))
+                        & 0xffff;
+                }
+                super::moveshape::STATE_USER_GOODS_ENLARGE_FULL_MISS => {
+                    properties.full_miss = properties.full_miss.wrapping_add(coefficient as u16);
+                }
+                super::moveshape::STATE_AUTO_PROTECT => self.auto_protected = true,
+                super::moveshape::STATE_IMPROVE_EXP => {}
+                _ => unreachable!("список содержит только фабричные состояния сценария"),
+            }
+        }
+        let visuals = self.move_shape.take_pending_script_state_visuals();
+        (properties, visuals)
+    }
+
+    pub(crate) fn improve_experience_multiplier(&self) -> f32 {
+        self.move_shape
+            .script_states()
+            .iter()
+            .filter(|state| state.state_id() == super::moveshape::STATE_IMPROVE_EXP)
+            .fold(1.0_f32, |multiplier, state| {
+                multiplier + state.coefficient() as f32 * 0.01
+            })
     }
 
     pub(crate) const fn fight_state_count(&self) -> i32 {

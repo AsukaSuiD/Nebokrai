@@ -640,7 +640,8 @@ use crate::gameserver::appserver::monster::{
     CMonster, MonsterKillingAttack, PetLifecycleFacts, PetLifecycleNotice,
 };
 use crate::gameserver::appserver::moveshape::{
-    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver, UndeadState,
+    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver,
+    STATE_AUTO_PROTECT, ScriptMoveState, UndeadState,
 };
 use crate::gameserver::appserver::organizingsystem::attackcitysys::{
     AttackCityMembershipBlock, CAttackCitySys,
@@ -6843,11 +6844,79 @@ impl CGame {
         player_id: i32,
         properties: PlayerCombatProperties,
     ) -> bool {
+        let Some((properties, script_visuals)) = self
+            .find_player_mut(player_id)
+            .map(|player| player.apply_script_move_state_properties(properties))
+        else {
+            return false;
+        };
+        for state in script_visuals {
+            let _ = self.send_script_move_state_visual(player_id, state, true);
+        }
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
         let Some(player) = players.get_mut(&player_id) else {
             return false;
         };
         player.apply_recomputed_combat_properties(properties, goods_factory);
+        true
+    }
+
+    fn send_script_move_state_visual(
+        &mut self,
+        player_id: i32,
+        state: ScriptMoveState,
+        begin: bool,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let player = self.find_player(player_id)?;
+        let identity = player.shape().identity();
+        let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(state.state_id());
+        if begin {
+            // Эти семь классов наследуют базовые нулевые значения
+            // `GetClientStateTime` и `GetAdditionalData`.
+            message.add_long(0);
+            message.add_long(0);
+        }
+        self.send_player_shape_around(player_id, None, &message)
+    }
+
+    pub(crate) fn add_script_move_state(
+        &mut self,
+        player_id: i32,
+        state_id: i32,
+        value1: i32,
+        value2: i32,
+    ) -> i32 {
+        let sufferer_is_gm = self.script_player_gm_level(player_id).unwrap_or(0) != 0;
+        let Some(state) = self.find_player_mut(player_id).and_then(|player| {
+            player.add_script_move_state(state_id, value1, value2, sufferer_is_gm)
+        }) else {
+            return 0;
+        };
+        if state.is_auto_protect() {
+            let _ = self.send_script_move_state_visual(player_id, state, true);
+        }
+        let _ = self.publish_player_states(player_id);
+        1
+    }
+
+    pub(crate) fn script_move_state_count(&self, player_id: i32, state_id: i32) -> i32 {
+        self.find_player(player_id)
+            .map(|player| player.script_move_state_count(state_id) as i32)
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn end_script_auto_protect_state(&mut self, player_id: i32) -> bool {
+        let Some(state) = self
+            .find_player_mut(player_id)
+            .and_then(CPlayer::end_auto_protect_state)
+        else {
+            return false;
+        };
+        debug_assert_eq!(state.state_id(), STATE_AUTO_PROTECT);
+        let _ = self.send_script_move_state_visual(player_id, state, false);
         true
     }
 
@@ -16615,10 +16684,7 @@ impl CGame {
             let _ = player.set_script_value(property, value)?;
             context.recompute_enhancement_player_properties(player)
         };
-        self.players
-            .get_mut(&player_id)
-            .expect("script-player сохранён между write и UpdateProperty")
-            .apply_recomputed_combat_properties(recomputed, &self.goods_factory);
+        let _ = self.apply_recomputed_player_properties(player_id, recomputed);
 
         let player = self
             .players
@@ -16658,10 +16724,7 @@ impl CGame {
             let player = self.players.get(&player_id)?;
             context.recompute_enhancement_player_properties(player)
         };
-        self.players
-            .get_mut(&player_id)
-            .expect("named script-player сохранён до ChangePlayer UpdateProperty")
-            .apply_recomputed_combat_properties(recomputed, &self.goods_factory);
+        let _ = self.apply_recomputed_player_properties(player_id, recomputed);
         let player = self
             .players
             .get(&player_id)
@@ -16694,10 +16757,7 @@ impl CGame {
             let player = self.players.get(&player_id)?;
             context.recompute_enhancement_player_properties(player)
         };
-        self.players
-            .get_mut(&player_id)
-            .expect("named script-player сохранён до UpdateProperty")
-            .apply_recomputed_combat_properties(recomputed, &self.goods_factory);
+        let _ = self.apply_recomputed_player_properties(player_id, recomputed);
         let player = self
             .players
             .get(&player_id)
@@ -16890,12 +16950,12 @@ impl CGame {
                     .expect("realm skill mutation сохраняет canonical player");
                 context.recompute_enhancement_player_properties(player)
             };
-            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
-            players
-                .get_mut(&target_id)
-                .expect("realm skill recompute сохраняет canonical player")
-                .apply_recomputed_combat_properties(current_properties, goods_factory);
-            if previous_properties != current_properties {
+            let _ = self.apply_recomputed_player_properties(target_id, current_properties);
+            let applied_properties = self
+                .find_player(target_id)
+                .map(CPlayer::combat_properties)
+                .unwrap_or(current_properties);
+            if previous_properties != applied_properties {
                 if let Some(player) = self.find_player(target_id) {
                     let _ = self.send_player_properties_changed(player);
                 }
@@ -25776,12 +25836,12 @@ impl CGame {
                 .expect("realm mutation сохраняет canonical player");
             context.recompute_enhancement_player_properties(player)
         };
-        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
-        players
-            .get_mut(&player_id)
-            .expect("realm recompute сохраняет canonical player")
-            .apply_recomputed_combat_properties(current_properties, goods_factory);
-        if mutation.previous_properties != current_properties {
+        let _ = self.apply_recomputed_player_properties(player_id, current_properties);
+        let applied_properties = self
+            .find_player(player_id)
+            .map(CPlayer::combat_properties)
+            .unwrap_or(current_properties);
+        if mutation.previous_properties != applied_properties {
             if let Some(player) = self.find_player(player_id) {
                 let _ = self.send_player_properties_changed(player);
             }
@@ -31675,9 +31735,19 @@ impl CGame {
 
     fn enter_player_combat_state(&mut self, player_id: i32) {
         let fight_timer = self.globe_setup.fight_state_timer_ms();
-        let transition = self
+        let (transition, had_auto_protect) = self
             .find_player_mut(player_id)
-            .map(|player| player.enter_combat_state(fight_timer));
+            .map(|player| {
+                let transition = player.enter_combat_state(fight_timer);
+                let had_state = player.script_move_state_count(STATE_AUTO_PROTECT) != 0;
+                (transition, had_state)
+            })
+            .unzip();
+        if had_auto_protect == Some(true) {
+            // `EnterCombatState` вызывает `End` после установки боевого
+            // счётчика и до публикации `0xBF607`.
+            let _ = self.end_script_auto_protect_state(player_id);
+        }
         if let Some(transition) = transition {
             let mut state = CMessage::new(0x000b_f607);
             state.add_long(transition.player_id);
@@ -32117,9 +32187,11 @@ impl CGame {
                         .max(0.0) as u32;
                 }
             }
-            let experience_gain = ((corrected as f32) * exp_scale * region_scale)
-                .round_ties_even()
-                .max(0.0) as u32;
+            let improve_multiplier = player.improve_experience_multiplier();
+            let experience_gain =
+                ((corrected as f32) * exp_scale * region_scale * improve_multiplier)
+                    .round_ties_even()
+                    .max(0.0) as u32;
             if self.add_player_experience(player_id, experience_gain, runtime) {
                 self.increase_player_followers_experience(player_id, region_id, experience_gain);
             }
@@ -35013,6 +35085,9 @@ impl CGame {
             .get_security(tile_x, tile_y)
             .ok()?;
 
+        while self.end_script_auto_protect_state(blow.victim_id) {
+            let _ = self.publish_player_states(blow.victim_id);
+        }
         self.change_body_after_player_death(blow.victim_id, runtime);
         let nation = self.player_died_in_nation_region(blow.victim_id, runtime);
         let mut owner = self.take_region_owner(region_id)?;

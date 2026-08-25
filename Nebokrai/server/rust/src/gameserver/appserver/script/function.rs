@@ -262,6 +262,9 @@
 //! `ReLive 2400` вычисляет только первый аргумент, вызывает общего владельца
 //! `CPlayer::OnRelive` и всегда возвращает сценарный ноль; лишние аргументы
 //! не вычисляются.
+//! `AddState 2323` вычисляет ровно три аргумента и возвращает результат
+//! фабрики `CMoveShape`, а `GetStatesNum 2322` вычисляет один ID и считает
+//! живые материализованные состояния игрока через тот же достигнутый вызов.
 
 use crate::gameserver::appserver::country::country::{
     CountryExileRestTimeReport, CountryScalarMutationReport,
@@ -342,6 +345,8 @@ pub(crate) const SCRIPT_FUNCTION_GET_STRING_BY_ID: i32 = 2000;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
 pub(crate) const SCRIPT_FUNCTION_RE_LIVE: i32 = 2400;
+pub(crate) const SCRIPT_FUNCTION_GET_STATES_NUMBER: i32 = 2322;
+pub(crate) const SCRIPT_FUNCTION_ADD_STATE: i32 = 2323;
 pub(crate) const SCRIPT_FUNCTION_PLAYER_TALK: i32 = 2308;
 pub(crate) const SCRIPT_FUNCTION_GET_NAME: i32 = 2998;
 pub(crate) const SCRIPT_FUNCTION_IS_CHARGED: i32 = 2516;
@@ -1763,7 +1768,8 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
             )
         }
         NationWarScriptKind::SetPlayerTime => {
-            // Exact dispatcher вычисляет оба expression до любой sentinel-проверки.
+            // Исходный диспетчер вычисляет оба выражения до любой проверки
+            // граничного значения.
             let player_id = evaluated_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
             let time_ms = evaluated_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
             if player_id == SCRIPT_INT_PARAMETER_ERROR {
@@ -1860,9 +1866,9 @@ fn format_nation_war_time_debug(template: &[u8], player_name: &[u8], time: i32) 
     let mut output = Vec::new();
     let mut argument = 0usize;
     let mut offset = 0usize;
-    // Safe replacement for zeroed `char[64] + _snprintf(..., 64, ...)`:
-    // one byte remains reserved for the terminator instead of reproducing
-    // the legacy unterminated-buffer UB on a fully truncated result.
+    // Безопасная замена обнулённого `char[64] + _snprintf(..., 64, ...)`:
+    // один байт остаётся для завершающего нуля, поэтому при полном усечении
+    // не воспроизводится неопределённое поведение старого буфера без нуля.
     while offset < template.len() && output.len() < 63 {
         if template[offset] != b'%' {
             output.push(template[offset]);
@@ -3305,6 +3311,14 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_STATES_NUMBER => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_ADD_STATE => match index {
+            0..=2 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_SET_PLAYER_LEVEL => match index {
             0 => String,
             1 => Integer,
@@ -4102,8 +4116,9 @@ fn send_script_goods_update(game: &CGame, player_id: i32, goods: ShapeIdentity, 
     let _ = message.send_to_player(game.net_server(), player_id);
 }
 
-/// Packed `time()` result of script selector 13. This is not Unix time: the
-/// original stores CRT `tm_year/tm_mon` and ends with the three weekday bits.
+/// Упакованный результат `time()` для сценарного селектора 13. Это не время
+/// Unix: исходник хранит поля CRT `tm_year/tm_mon` и завершает значение тремя
+/// битами дня недели.
 fn pack_script_local_time(time: TagTime) -> i32 {
     i32::from(time.year)
         .wrapping_sub(1900)
@@ -4607,7 +4622,8 @@ fn format_script_variable_line(name: &[u8], index: Option<usize>, value: i32) ->
     }
     line.extend_from_slice(b" = ");
     line.extend_from_slice(value.to_string().as_bytes());
-    // EXE uses a 0x19000-byte stack buffer and reserves the final NUL.
+    // EXE использует стековый буфер размером `0x19000` байт и оставляет
+    // последний байт для завершающего нуля.
     line.truncate(0x18fff);
     line
 }
@@ -6178,8 +6194,9 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let Some(target_region_id) =
                 integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
             else {
-                // Exact dispatcher treats an absent/failed first parameter as
-                // a successful no-op and continues the calling script.
+                // Исходный диспетчер считает отсутствующий или невычисленный
+                // первый аргумент успешным пустым действием и продолжает
+                // вызывающий сценарий.
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };
             let current_direction = game
@@ -6224,6 +6241,31 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let _ = game.relive_player(player_id, relive_type, runtime);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_ADD_STATE => {
+            let (Some(state_id), Some(value1), Some(value2)) = (
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let legacy_return = script_player_id.map_or(0, |player_id| {
+                game.add_script_move_state(player_id, state_id, value1, value2)
+            });
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_GET_STATES_NUMBER => {
+            let Some(state_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: script_player_id.map_or(0, |player_id| {
+                    game.script_move_state_count(player_id, state_id)
+                }),
+            })
         }
         SCRIPT_FUNCTION_GET_COUNTRY => {
             if argument_count != 0 {

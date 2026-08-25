@@ -46,9 +46,15 @@
 //! state заменяются по usage type либо ID, сохраняются exact tag `0x38/72`,
 //! wrapping lifetime/item clock и death flag. Property overlay, login restore,
 //! item consumption и `0xBFE03/04` замкнуты concrete player/CGame owner-ами.
-//! Эти и уже owned extended/change-body/ride state теперь получают AI из
-//! реального `CMoveShape::UpdateAbnormality` caller-а; неизвестные concrete
-//! state-классы остаются узкой runtime-границей после materialized pass.
+//! Эти и уже собственные расширенные состояния, смена тела и езда теперь
+//! обновляются из реального владельца `CMoveShape::UpdateAbnormality`;
+//! неизвестные конкретные классы состояний остаются узкой границей среды
+//! после материализованного прохода.
+//! Сценарная пара `AddState/GetStatesNum` материализует семь фабричных
+//! состояний предметов и защиты: хранит исходный порядок и дубликаты, включает
+//! их в общий подсчёт известных `CState`, накладывает свойства и множитель
+//! опыта, а `AutoProtect` проходит начало, снятие при бое/предмете/смерти и
+//! сообщения `0xBFE03/0xBFE04`.
 
 use std::collections::BTreeMap;
 
@@ -56,7 +62,7 @@ use super::ai::baseai::{AiShapeAction, CBaseAI};
 use super::chbystate::{ChangeBodyMutation, ChangeBodyState};
 use super::exstate::{ExtendedState, ExtendedStateKind, ExtendedStateMutation};
 use super::region::{CRegion, RegionCellAccessBlock};
-use super::ridestate::RideState;
+use super::ridestate::{RIDE_STATE_ID, RideState};
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
@@ -79,6 +85,39 @@ const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const UNDEAD_STATE_ID: u32 = 0x38;
 const UNDEAD_STATE_PARAMETER_BYTES: usize = 72;
+pub(crate) const STATE_USER_GOODS_ENLARGE_MAX_HP: i32 = 100_007;
+pub(crate) const STATE_USER_GOODS_ENLARGE_MAX_MP: i32 = 100_008;
+pub(crate) const STATE_IMPROVE_EXP: i32 = 100_009;
+pub(crate) const STATE_USER_GOODS_ENLARGE_DEF: i32 = 100_010;
+pub(crate) const STATE_USER_GOODS_ENLARGE_ELM_DEF: i32 = 100_011;
+pub(crate) const STATE_USER_GOODS_ENLARGE_FULL_MISS: i32 = 100_012;
+pub(crate) const STATE_AUTO_PROTECT: i32 = 110_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ScriptMoveState {
+    state_id: i32,
+    keep_time: u32,
+    coefficient: u32,
+    visual_pending: bool,
+}
+
+impl ScriptMoveState {
+    pub(crate) const fn state_id(self) -> i32 {
+        self.state_id
+    }
+
+    pub(crate) const fn keep_time(self) -> u32 {
+        self.keep_time
+    }
+
+    pub(crate) const fn coefficient(self) -> u32 {
+        self.coefficient
+    }
+
+    pub(crate) const fn is_auto_protect(self) -> bool {
+        self.state_id == STATE_AUTO_PROTECT
+    }
+}
 
 /// Достигнутая common-проекция `CSkill`: identity, level, category и name.
 /// Исполнение concrete attack/defense/state/summon owners остаётся у самих
@@ -394,6 +433,7 @@ pub(crate) struct CMoveShape {
     change_body_states: Vec<ChangeBodyState>,
     extended_states: Vec<ExtendedState>,
     undead_states: Vec<UndeadState>,
+    script_states: Vec<ScriptMoveState>,
     ride_state: Option<RideState>,
     moveable_count: i32,
     moveable: bool,
@@ -415,6 +455,7 @@ impl Default for CMoveShape {
             change_body_states: Vec::new(),
             extended_states: Vec::new(),
             undead_states: Vec::new(),
+            script_states: Vec::new(),
             ride_state: None,
             moveable_count: 0,
             moveable: true,
@@ -547,6 +588,7 @@ impl CMoveShape {
         self.change_body_states.clear();
         self.extended_states.clear();
         self.undead_states.clear();
+        self.script_states.clear();
         self.ride_state = None;
         self.can_fight_count = 0;
         self.can_fight = true;
@@ -569,6 +611,94 @@ impl CMoveShape {
             || !self.extended_states.is_empty()
             || !self.undead_states.is_empty()
             || self.ride_state.is_some()
+    }
+
+    /// Точный фабричный диапазон `CMoveShape::AddState`: остальные ID не
+    /// создают состояние. Значения принимают исходное знаковое представление
+    /// сценария и сохраняются как поля `DWORD` конкретных классов.
+    pub(crate) fn add_script_state(
+        &mut self,
+        state_id: i32,
+        value1: i32,
+        value2: i32,
+        sufferer_is_gm: bool,
+    ) -> Option<ScriptMoveState> {
+        let supported = matches!(
+            state_id,
+            STATE_USER_GOODS_ENLARGE_MAX_HP
+                | STATE_USER_GOODS_ENLARGE_MAX_MP
+                | STATE_IMPROVE_EXP
+                | STATE_USER_GOODS_ENLARGE_DEF
+                | STATE_USER_GOODS_ENLARGE_ELM_DEF
+                | STATE_USER_GOODS_ENLARGE_FULL_MISS
+                | STATE_AUTO_PROTECT
+        );
+        if !supported || (state_id == STATE_AUTO_PROTECT && sufferer_is_gm) {
+            return None;
+        }
+        let state = ScriptMoveState {
+            state_id,
+            keep_time: value1 as u32,
+            coefficient: if state_id == STATE_AUTO_PROTECT {
+                0
+            } else {
+                value2 as u32
+            },
+            // У `AutoProtect` зацикленный визуальный эффект публикует начало
+            // прямо из `Begin`; остальные эффекты ждут `UpdateProperty`.
+            visual_pending: state_id != STATE_AUTO_PROTECT,
+        };
+        self.script_states.push(state);
+        Some(state)
+    }
+
+    pub(crate) fn script_state_count(&self, state_id: i32) -> u32 {
+        let scripted = self
+            .script_states
+            .iter()
+            .filter(|state| state.state_id == state_id)
+            .count();
+        let change_body = (state_id == 0x37)
+            .then_some(self.change_body_states.len())
+            .unwrap_or(0);
+        let extended = self
+            .extended_states
+            .iter()
+            .filter(|state| state.kind.state_id() as i32 == state_id)
+            .count();
+        let undead = (state_id == UNDEAD_STATE_ID as i32)
+            .then_some(self.undead_states.len())
+            .unwrap_or(0);
+        let ride = usize::from(state_id == RIDE_STATE_ID as i32 && self.ride_state.is_some());
+        scripted
+            .saturating_add(change_body)
+            .saturating_add(extended)
+            .saturating_add(undead)
+            .saturating_add(ride)
+            .min(u32::MAX as usize) as u32
+    }
+
+    pub(crate) fn take_first_script_state(&mut self, state_id: i32) -> Option<ScriptMoveState> {
+        let index = self
+            .script_states
+            .iter()
+            .position(|state| state.state_id == state_id)?;
+        Some(self.script_states.remove(index))
+    }
+
+    pub(crate) fn script_states(&self) -> &[ScriptMoveState] {
+        &self.script_states
+    }
+
+    pub(crate) fn take_pending_script_state_visuals(&mut self) -> Vec<ScriptMoveState> {
+        let mut pending = Vec::new();
+        for state in &mut self.script_states {
+            if state.visual_pending {
+                state.visual_pending = false;
+                pending.push(*state);
+            }
+        }
+        pending
     }
 
     pub(crate) fn begin_ride_state(&mut self, mut state: RideState) -> Option<RideState> {
