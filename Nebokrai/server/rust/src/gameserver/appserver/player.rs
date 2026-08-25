@@ -5225,6 +5225,30 @@ impl CPlayer {
         )
     }
 
+    /// Сценарные `WalkStep` и `RunStep` используют обычного владельца движения
+    /// `CMoveShape`, поэтому сетевой маршрут `0xBF605` и перестановка в регионе
+    /// остаются единым действием.
+    pub(crate) fn move_script_step(
+        &mut self,
+        server_region: &mut CServerRegion,
+        destination_x: i32,
+        destination_y: i32,
+        run: i32,
+        area_width: i32,
+        area_height: i32,
+        around: &GameServerAroundRuntime<'_>,
+    ) -> Result<(), MoveShapeCommandBlock> {
+        let facts = self.movement_position_facts(area_width, area_height);
+        self.move_shape.on_move(
+            Some(server_region),
+            destination_x,
+            destination_y,
+            run,
+            facts,
+            around,
+        )
+    }
+
     pub(crate) const fn figure(&self) -> ShapeFigure {
         self.figure
     }

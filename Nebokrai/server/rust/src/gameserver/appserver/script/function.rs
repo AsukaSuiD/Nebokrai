@@ -284,6 +284,10 @@
 //! Соседний `3402 / AutoMove` вычисляет только две координаты и отправляет
 //! игроку точный `0xBF723`; позиция сервера не меняется, хвост аргументов и
 //! результат сетевой доставки не прерывают дальнейшее исполнение сценария.
+//! Движение `2100..2103` использует тот же пространственный владелец игрока:
+//! шаг ходьбой или бегом проходит через `CMoveShape::OnMove`, установка позиции
+//! переставляет ячейку региона и публикует `0xBF603`, а направление сохраняет
+//! исходный особый порядок полей `0xBF601`.
 //! Числовой селектор получает вычисленные параметры из собственного
 //! `CScript`; результат или приостановка диалога возвращается в ту же цепочку
 //! исполнения. Остальные идентификаторы функций и неподтверждённые семейства
@@ -380,6 +384,10 @@ pub(crate) const SCRIPT_FUNCTION_SET_ENERGY: i32 = 2005;
 pub(crate) const SCRIPT_FUNCTION_SET_MAXIMUM_ENERGY: i32 = 2006;
 pub(crate) const SCRIPT_FUNCTION_GET_ENERGY: i32 = 2007;
 pub(crate) const SCRIPT_FUNCTION_GET_MAXIMUM_ENERGY: i32 = 2008;
+pub(crate) const SCRIPT_FUNCTION_WALK_STEP: i32 = 2100;
+pub(crate) const SCRIPT_FUNCTION_RUN_STEP: i32 = 2101;
+pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_POSITION: i32 = 2102;
+pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_DIRECTION: i32 = 2103;
 pub(crate) const SCRIPT_FUNCTION_RE_LIVE: i32 = 2400;
 pub(crate) const SCRIPT_FUNCTION_GET_STATES_NUMBER: i32 = 2322;
 pub(crate) const SCRIPT_FUNCTION_ADD_STATE: i32 = 2323;
@@ -3625,6 +3633,16 @@ pub(crate) fn script_function_parameter_kind(
             0..=2 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_WALK_STEP
+        | SCRIPT_FUNCTION_RUN_STEP
+        | SCRIPT_FUNCTION_SET_PLAYER_DIRECTION => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_SET_PLAYER_POSITION => match index {
+            0 | 1 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_IS_CHARGED
         | SCRIPT_FUNCTION_CHANGE_BODY_CHECK
         | SCRIPT_FUNCTION_CHECK_MODE
@@ -5731,6 +5749,31 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 player.maximum_energy() as i32
             };
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_WALK_STEP | SCRIPT_FUNCTION_RUN_STEP => {
+            let Some(direction) = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .filter(|value| (0..=7).contains(value))
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let _ = game.move_script_player_step(
+                player_id,
+                direction as usize,
+                i32::from(function_id == SCRIPT_FUNCTION_RUN_STEP),
+            );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_SET_PLAYER_POSITION => {
+            let tile_x = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let tile_y = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let _ = game.set_script_player_position(player_id, tile_x, tile_y);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_SET_PLAYER_DIRECTION => {
+            let direction = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let _ = game.set_script_player_direction(player_id, direction);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_SET_PLAYER_LEVEL => {
             let (Some(target_name), Some(level)) = (string_arguments[0], integer_arguments[1])

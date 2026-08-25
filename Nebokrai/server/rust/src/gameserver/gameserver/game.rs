@@ -36870,9 +36870,10 @@ impl CGame {
         Some(result)
     }
 
-    /// Exact script `8000 / RefeashBlock`: snapshot заменяет только временные
-    /// C++ pointers, пока canonical region mutably пересобирает BLOCK_SHAPE.
-    /// Координаты и `!IsDied` берутся у достигнутых player/monster/NPC owners.
+    /// Точная сценарная функция `8000 / RefeashBlock`: снимок заменяет только
+    /// временные указатели C++, пока основной регион изменяемо пересобирает
+    /// `BLOCK_SHAPE`. Координаты и `!IsDied` берутся у достигнутых владельцев
+    /// игрока, монстра и NPC.
     pub(crate) fn refresh_script_region_blocks(
         &mut self,
         region_id: i32,
@@ -36908,10 +36909,11 @@ impl CGame {
         Some(result)
     }
 
-    /// Runtime bridge script `3010`: удерживает target player и его concrete
-    /// region одним mutable проходом, чтобы `CMoveShape::ForceMove` одновременно
-    /// опубликовал around wire, переставил spatial membership и поставил AI
-    /// stand-event на вычисленную сценарием длительность.
+    /// Связка сценарной функции `3010` с исполнением удерживает целевого игрока
+    /// и его конкретный регион одним изменяемым проходом, чтобы
+    /// `CMoveShape::ForceMove` одновременно опубликовал сообщение окружающим,
+    /// переставил пространственную принадлежность и поставил событие ожидания
+    /// искусственному интеллекту на вычисленную сценарием длительность.
     pub(crate) fn force_move_script_player<Context: MoveShapeCommandContext>(
         &mut self,
         player_id: i32,
@@ -36953,6 +36955,141 @@ impl CGame {
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
         Some(result)
+    }
+
+    pub(crate) fn move_script_player_step(
+        &mut self,
+        player_id: i32,
+        direction: usize,
+        run: i32,
+    ) -> Option<Result<(), MoveShapeCommandBlock>> {
+        const STEP_OFFSETS: [(i32, i32); 8] = [
+            (0, -1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+            (0, 1),
+            (-1, 1),
+            (-1, 0),
+            (-1, -1),
+        ];
+        let offset = *STEP_OFFSETS.get(direction)?;
+        let (region_id, source_x, source_y) = self.find_player(player_id).and_then(|player| {
+            Some((
+                player.server_region_id()?,
+                player.shape().get_tile_x().ok()?,
+                player.shape().get_tile_y().ok()?,
+            ))
+        })?;
+        let mut player = self.players.remove(&player_id)?;
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            self.players.insert(player_id, player);
+            return None;
+        };
+        let destination_x = source_x.wrapping_add(offset.0);
+        let destination_y = source_y.wrapping_add(offset.1);
+        let (area_width, area_height) = self.area_dimensions();
+        let Some(around) =
+            GameServerAroundRuntime::new(self, &self.session_factory, area_width, area_height)
+        else {
+            self.restore_region_owner(owner);
+            self.players.insert(player_id, player);
+            return None;
+        };
+        let result = player.move_script_step(
+            owner.base_mut(),
+            destination_x,
+            destination_y,
+            run,
+            area_width,
+            area_height,
+            &around,
+        );
+        self.restore_region_owner(owner);
+        self.players.insert(player_id, player);
+        Some(result)
+    }
+
+    pub(crate) fn set_script_player_position(
+        &mut self,
+        player_id: i32,
+        requested_x: i32,
+        requested_y: i32,
+    ) -> Option<Result<Option<Result<i32, ShapeCoordinateBlock>>, RegionMembershipBlock>> {
+        let mut player = self.players.remove(&player_id)?;
+        let Some(region_id) = player.server_region_id() else {
+            self.players.insert(player_id, player);
+            return None;
+        };
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            self.players.insert(player_id, player);
+            return None;
+        };
+        let width = owner.base().region.width;
+        let height = owner.base().region.height;
+        let tile_x = if requested_x >= width {
+            width.wrapping_sub(1)
+        } else if requested_x < 0 {
+            0
+        } else {
+            requested_x
+        };
+        let tile_y = if requested_y >= height {
+            height.wrapping_sub(1)
+        } else if requested_y < 0 {
+            0
+        } else {
+            requested_y
+        };
+        let facts = player.movement_position_facts(
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        );
+        let result = owner.base_mut().set_move_shape_tile_position(
+            player.movement_shape_mut(),
+            tile_x,
+            tile_y,
+            facts,
+        );
+        let delivery = result.as_ref().ok().map(|_| {
+            let identity = player.shape().identity();
+            let mut movement = CMessage::new(0x000b_f603);
+            movement.add_long(identity.object_type);
+            movement.add_long(identity.id);
+            movement.add_long(tile_x);
+            movement.add_long(tile_y);
+            movement.add_long(0);
+            self.send_game_shape_around(owner.base(), player.shape(), None, &movement)
+        });
+        self.restore_region_owner(owner);
+        self.players.insert(player_id, player);
+        Some(result.map(|_| delivery))
+    }
+
+    pub(crate) fn set_script_player_direction(
+        &mut self,
+        player_id: i32,
+        direction: i32,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let mut player = self.players.remove(&player_id)?;
+        let Some(region_id) = player.server_region_id() else {
+            self.players.insert(player_id, player);
+            return None;
+        };
+        let Some(owner) = self.take_region_owner(region_id) else {
+            self.players.insert(player_id, player);
+            return None;
+        };
+        player.movement_shape_mut().set_direction(direction);
+        let identity = player.shape().identity();
+        let mut changed = CMessage::new(0x000b_f601);
+        changed.add_long(identity.object_type);
+        changed.add_long(identity.id);
+        changed.add_long(player.shape().get_direction());
+        let delivery = self.send_game_shape_around(owner.base(), player.shape(), None, &changed);
+        self.restore_region_owner(owner);
+        self.players.insert(player_id, player);
+        Some(delivery)
     }
 
     pub(crate) fn find_shape_in_region(
