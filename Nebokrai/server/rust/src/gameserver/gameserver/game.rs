@@ -24495,12 +24495,12 @@ impl CGame {
         self.players.insert(player.player_id(), player)
     }
 
-    pub(crate) fn discard_player_login(&mut self, player_id: i32) -> bool {
+    pub(crate) fn discard_player_login(&mut self, player_id: i32) -> (bool, i32) {
         let removed = self.players.remove(&player_id).is_some();
         self.login_sequences.remove(&player_id);
         self.login_validate_times.remove(&player_id);
-        let _ = self.net_server().clear_player_map_id(player_id);
-        removed
+        let route_command = self.net_server().clear_player_map_id(player_id);
+        (removed, route_command)
     }
 
     /// Exact login prefix после успешного World status: optional validation
@@ -24853,6 +24853,12 @@ impl CGame {
 
     pub(crate) fn find_player_mut(&mut self, player_id: i32) -> Option<&mut CPlayer> {
         self.players.get_mut(&player_id)
+    }
+
+    pub(crate) fn player_registered_in_region(&self, player_id: i32) -> bool {
+        self.regions
+            .values()
+            .any(|region| region.base().registered_player_ids().contains(&player_id))
     }
 
     pub(crate) fn set_player_yuan_bao(

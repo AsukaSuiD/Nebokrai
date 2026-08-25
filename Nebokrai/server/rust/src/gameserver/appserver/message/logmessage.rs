@@ -16,13 +16,15 @@
 //! Client entry `0x8F702` теперь сам создаёт этот pending route после World
 //! `0x5FB01`; duplicate live owner закрывает новый socket. До player decode
 //! успешный `0x7F901` выдаёт optional validate `0xBF402` и sequence `0xBF403`,
-//! а reject и reached `0x6FA01/0x7F903` prefix очищают оба CGame owner-а до
-//! прежнего virtual Log tail без сдвига его message cursor.
+//! а reject и reached `0x6FA01` prefix очищают оба CGame owner-а до прежнего
+//! virtual OnLost tail без сдвига его message cursor. LoginServer kick
+//! `0x7F903` полностью различает live, pending, orphan-region и missing player:
+//! публикует `GS0041`, transport close либо World `0x5FB02` и очищает route.
 
 use crate::gameserver::appserver::player::PlayerGameSaveCodecError;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerLoginBlock, GamePlayerLoginPreludeError,
-    GamePlayerLoginPreludeReport, GamePlayerLoginReport,
+    GamePlayerLoginPreludeReport, GamePlayerLoginReport, colored_player_notice_message,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -38,6 +40,10 @@ pub(crate) enum GameLogMessageOutcome {
     Forwarded,
     ClientEnterRequested,
     DuplicateClientEnterRejected,
+    LivePlayerKicked,
+    PendingPlayerKicked,
+    OrphanRegionPlayerKicked,
+    MissingPlayerConfirmed,
     PlayerLogin,
     PlayerLoginRejected,
     IgnoredStatus,
@@ -75,13 +81,16 @@ pub(crate) fn dispatch_game_log_message<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> Option<Result<GameLogMessageReport, GameLogMessageError>> {
     let source_type = message.message_type() as u32;
-    if matches!(source_type, PLAYER_LOST | PLAYER_KICK) {
+    if source_type == PLAYER_LOST {
         if let Some(player_id) = peek_player_id(message) {
             game.clear_player_login_validation(player_id);
         }
-        // Полный OnLost/Kick virtual tail остаётся у прежнего Log handler-а;
+        // Полный OnLost virtual tail остаётся у прежнего Log handler-а;
         // cleanup reached CGame maps не двигает message cursor перед ним.
         return None;
+    }
+    if source_type == PLAYER_KICK {
+        return Some(dispatch_player_kick(message, game));
     }
     if source_type == CLIENT_ENTER {
         return Some(dispatch_client_enter(message, game));
@@ -164,6 +173,88 @@ fn dispatch_client_enter(
         login_prelude: None,
         login: None,
     })
+}
+
+fn dispatch_player_kick(
+    message: &mut CMessage,
+    game: &mut CGame,
+) -> Result<GameLogMessageReport, GameLogMessageError> {
+    let player_id = message
+        .base_mut()
+        .get_long()
+        .ok_or(GameLogMessageError::MissingPlayerId)?;
+    game.clear_player_login_validation(player_id);
+
+    if game.find_player(player_id).is_some() {
+        let notice = colored_player_notice_message(
+            0xffff_ffff,
+            0xffff_0000,
+            game.get_string_by_id(b"GS0041"),
+        );
+        let delivery = notice.send_to_player(game.net_server(), player_id);
+        let kick = game.kick_player(player_id);
+        return Ok(kick_report(
+            player_id,
+            GameLogMessageOutcome::LivePlayerKicked,
+            delivery,
+            Some(kick.command_result),
+        ));
+    }
+
+    if game.net_server().has_player_map_id(player_id) {
+        let delivery = publish_login_kick_confirmation(game, player_id);
+        let (_, route_command) = game.discard_player_login(player_id);
+        return Ok(kick_report(
+            player_id,
+            GameLogMessageOutcome::PendingPlayerKicked,
+            delivery,
+            Some(route_command),
+        ));
+    }
+
+    if game.player_registered_in_region(player_id) {
+        let kick = game.kick_player(player_id);
+        return Ok(kick_report(
+            player_id,
+            GameLogMessageOutcome::OrphanRegionPlayerKicked,
+            0,
+            Some(kick.command_result),
+        ));
+    }
+
+    Ok(kick_report(
+        player_id,
+        GameLogMessageOutcome::MissingPlayerConfirmed,
+        publish_login_kick_confirmation(game, player_id),
+        None,
+    ))
+}
+
+fn publish_login_kick_confirmation(game: &CGame, player_id: i32) -> i32 {
+    let mut confirmation = CMessage::new(0x0005_fb02);
+    confirmation.add_long(player_id);
+    confirmation.add_long(0);
+    confirmation.send(game, false).unwrap_or_default()
+}
+
+fn kick_report(
+    player_id: i32,
+    outcome: GameLogMessageOutcome,
+    delivery: i32,
+    route_command: Option<i32>,
+) -> GameLogMessageReport {
+    GameLogMessageReport {
+        source_type: PLAYER_KICK,
+        outcome,
+        client_type: 0,
+        player_id,
+        delivery,
+        login_status: None,
+        decoded_bytes: 0,
+        route_command,
+        login_prelude: None,
+        login: None,
+    }
 }
 
 fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
