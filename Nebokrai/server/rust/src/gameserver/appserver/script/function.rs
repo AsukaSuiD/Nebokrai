@@ -288,6 +288,9 @@
 //! шаг ходьбой или бегом проходит через `CMoveShape::OnMove`, установка позиции
 //! переставляет ячейку региона и публикует `0xBF603`, а направление сохраняет
 //! исходный особый порядок полей `0xBF601`.
+//! Подтверждённые функции экипировки `2206/2208` разрешают текущего либо
+//! именованного игрока, читают позиционный контейнер, а повышение уровня
+//! завершает старую сериализацию товара и `0xBF918` вокруг владельца.
 //! Числовой селектор получает вычисленные параметры из собственного
 //! `CScript`; результат или приостановка диалога возвращается в ту же цепочку
 //! исполнения. Остальные идентификаторы функций и неподтверждённые семейства
@@ -388,6 +391,8 @@ pub(crate) const SCRIPT_FUNCTION_WALK_STEP: i32 = 2100;
 pub(crate) const SCRIPT_FUNCTION_RUN_STEP: i32 = 2101;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_POSITION: i32 = 2102;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_DIRECTION: i32 = 2103;
+pub(crate) const SCRIPT_FUNCTION_GET_EQUIPMENT_ID_BY_POSITION: i32 = 2206;
+pub(crate) const SCRIPT_FUNCTION_UPGRADE_EQUIPMENT: i32 = 2208;
 pub(crate) const SCRIPT_FUNCTION_RE_LIVE: i32 = 2400;
 pub(crate) const SCRIPT_FUNCTION_GET_STATES_NUMBER: i32 = 2322;
 pub(crate) const SCRIPT_FUNCTION_ADD_STATE: i32 = 2323;
@@ -3643,6 +3648,16 @@ pub(crate) fn script_function_parameter_kind(
             0 | 1 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_EQUIPMENT_ID_BY_POSITION => match index {
+            0 => String,
+            1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_UPGRADE_EQUIPMENT => match index {
+            0 => String,
+            1 | 2 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_IS_CHARGED
         | SCRIPT_FUNCTION_CHANGE_BODY_CHECK
         | SCRIPT_FUNCTION_CHECK_MODE
@@ -5774,6 +5789,34 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let direction = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
             let _ = game.set_script_player_direction(player_id, direction);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GET_EQUIPMENT_ID_BY_POSITION => {
+            let (Some(player_name), Some(position)) = (
+                string_arguments[0],
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let legacy_return =
+                game.script_equipment_base_index(script_player_id, player_name, position);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_UPGRADE_EQUIPMENT => {
+            let (Some(player_name), Some(position), Some(level_delta)) = (
+                string_arguments[0],
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let legacy_return = game.upgrade_script_player_equipment(
+                script_player_id,
+                player_name,
+                position,
+                level_delta,
+                runtime,
+            );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }
         SCRIPT_FUNCTION_SET_PLAYER_LEVEL => {
             let (Some(target_name), Some(level)) = (string_arguments[0], integer_arguments[1])

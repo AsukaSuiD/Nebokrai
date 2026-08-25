@@ -37092,6 +37092,67 @@ impl CGame {
         Some(delivery)
     }
 
+    pub(crate) fn script_equipment_base_index(
+        &self,
+        script_player_id: Option<i32>,
+        player_name: &[u8],
+        position: i32,
+    ) -> i32 {
+        let target = if player_name.is_empty() {
+            script_player_id.and_then(|player_id| self.find_player(player_id))
+        } else {
+            self.find_player_by_name(player_name)
+        };
+        target
+            .filter(|_| position >= 0)
+            .and_then(|player| player.script_equipment_base_index(position as u32))
+            .map(|index| index as i32)
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn upgrade_script_player_equipment<Context: OldClientGoodsCodec>(
+        &mut self,
+        script_player_id: Option<i32>,
+        player_name: &[u8],
+        position: i32,
+        level_delta: i32,
+        context: &mut Context,
+    ) -> i32 {
+        let target_id = if player_name.is_empty() {
+            script_player_id.filter(|player_id| self.find_player(*player_id).is_some())
+        } else {
+            self.find_player_by_name(player_name)
+                .map(CPlayer::player_id)
+        };
+        let Some(target_id) = target_id.filter(|_| position >= 0) else {
+            return 0;
+        };
+        let Some(mut player) = self.players.remove(&target_id) else {
+            return 0;
+        };
+        let upgraded = player.upgrade_script_equipment(
+            position as u32,
+            level_delta,
+            &self.goods_factory,
+            |maximum| game_legacy_random(&mut self.random_state, maximum),
+        );
+        let update = upgraded.and_then(|identity| {
+            let goods = player.get_goods_by_id(identity.ex_id)?;
+            Some((identity, context.encode_goods_for_old_client(goods)))
+        });
+        self.players.insert(target_id, player);
+        let Some((identity, payload)) = update else {
+            return 0;
+        };
+        let mut message = CMessage::new(0x000b_f918);
+        message.add_long(target_id);
+        message.base_mut().add_guid(identity.ex_id);
+        message.add_ulong(payload.len() as u32);
+        message.base_mut().add(&payload);
+        let _ = self.send_player_shape_around(target_id, None, &message);
+        1
+    }
+
     pub(crate) fn find_shape_in_region(
         &self,
         region_id: i32,

@@ -307,7 +307,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT, GAP_ROLE_MINIMUM_LEVEL_LIMIT,
     GAP_ROLE_MINIMUM_STRENGTH_LIMIT, GAP_ROLE_MINIMUM_WAKAN_LIMIT,
     GAP_STIFFEN_PROBABILITY_CORRECTION, GAP_STRENGTH_CORRECTION, GAP_WAKAN_CORRECTION,
-    GOODS_TYPE_CONSUMABLE,
+    GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::{
@@ -9108,6 +9108,26 @@ impl CPlayer {
             }
         }
         drops
+    }
+
+    pub(crate) fn script_equipment_base_index(&self, position: u32) -> Option<u32> {
+        self.equipment
+            .get_goods(position)
+            .map(CGoods::base_properties_index)
+    }
+
+    pub(crate) fn upgrade_script_equipment(
+        &mut self,
+        position: u32,
+        level_delta: i32,
+        factory: &CGoodsFactory,
+        mut random_below: impl FnMut(i32) -> i32,
+    ) -> Option<ShapeIdentity> {
+        let goods = self.equipment.get_goods_mut(position)?;
+        let current_level = goods.addon_property_value(factory, GAP_WEAPON_LEVEL, 1);
+        let target_level = (current_level as u32).wrapping_add(level_delta as u32) as i32;
+        let _ = factory.upgrade_equipment(goods, target_level, &mut random_below);
+        Some(goods.identity())
     }
 
     /// Stable snapshot контейнеров для `CPlayer::OnDied`: caller может
