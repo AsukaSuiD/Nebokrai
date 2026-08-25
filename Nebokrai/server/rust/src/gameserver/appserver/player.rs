@@ -8929,6 +8929,17 @@ impl CPlayer {
         true
     }
 
+    /// Завершает удаление предмета со склада через тот же реестр `GoodsAI`,
+    /// который обслуживает перемещения между контейнерами игрока.
+    pub(crate) fn unregister_depot_goods_ai(
+        &mut self,
+        goods: &mut CGoods,
+        factory: &CGoodsFactory,
+        now_seconds: u64,
+    ) {
+        self.unregister_goods_ai(goods, factory, now_seconds);
+    }
+
     fn get_goods_ai_by_id_mut(&mut self, goods_id: CGuid) -> Option<&mut CGoods> {
         if self.hand.find(goods_id).is_some() {
             return self.hand.find_mut(goods_id);

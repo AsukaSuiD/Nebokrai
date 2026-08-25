@@ -490,7 +490,12 @@ pub(crate) const SCRIPT_FUNCTION_CHECK_SPACE: i32 = 2203;
 pub(crate) const SCRIPT_FUNCTION_GET_GOODS_NUMBER: i32 = 2204;
 pub(crate) const SCRIPT_FUNCTION_GET_FREE_SPACE: i32 = 2205;
 pub(crate) const SCRIPT_FUNCTION_UPGRADE_SELECTED_EQUIPMENT: i32 = 2209;
+pub(crate) const SCRIPT_FUNCTION_ADD_DEPOT_GOODS: i32 = 2210;
+pub(crate) const SCRIPT_FUNCTION_DELETE_DEPOT_GOODS: i32 = 2211;
 pub(crate) const SCRIPT_FUNCTION_CHECK_DEPOT_GOODS: i32 = 2212;
+pub(crate) const SCRIPT_FUNCTION_CHECK_DEPOT_SPACE: i32 = 2213;
+pub(crate) const SCRIPT_FUNCTION_GET_DEPOT_GOODS_NUMBER: i32 = 2214;
+pub(crate) const SCRIPT_FUNCTION_GET_DEPOT_GOODS_FREE: i32 = 2215;
 pub(crate) const SCRIPT_FUNCTION_DELETE_PLAYER_GOODS: i32 = 2217;
 pub(crate) const SCRIPT_FUNCTION_GET_CONTAINER_ITEM_TYPE: i32 = 2218;
 pub(crate) const SCRIPT_FUNCTION_OPEN_GOODS_CONTAINER: i32 = 2220;
@@ -3850,7 +3855,12 @@ pub(crate) fn script_function_parameter_kind(
                 _ => Unused,
             }
         }
-        SCRIPT_FUNCTION_CHECK_DEPOT_GOODS => match index {
+        SCRIPT_FUNCTION_ADD_DEPOT_GOODS | SCRIPT_FUNCTION_DELETE_DEPOT_GOODS => match index {
+            0 => String,
+            1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_CHECK_DEPOT_GOODS | SCRIPT_FUNCTION_CHECK_DEPOT_SPACE => match index {
             0 => String,
             _ => Unused,
         },
@@ -3863,7 +3873,10 @@ pub(crate) fn script_function_parameter_kind(
             0..=1 => String,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_GET_GOODS_NUMBER | SCRIPT_FUNCTION_GET_CONTAINER_ITEM_TYPE => Unused,
+        SCRIPT_FUNCTION_GET_GOODS_NUMBER
+        | SCRIPT_FUNCTION_GET_DEPOT_GOODS_NUMBER
+        | SCRIPT_FUNCTION_GET_DEPOT_GOODS_FREE
+        | SCRIPT_FUNCTION_GET_CONTAINER_ITEM_TYPE => Unused,
         SCRIPT_FUNCTION_GET_GOODS_PROPERTY_1 | SCRIPT_FUNCTION_GET_GOODS_PROPERTY_2 => {
             match index {
                 0 => Integer,
@@ -7132,6 +7145,48 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: game.script_depot_goods_amount(player_id, name),
             })
+        }
+        SCRIPT_FUNCTION_ADD_DEPOT_GOODS => {
+            let Some(name) = string_arguments[0].filter(|name| !name.is_empty()) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let amount = match integer_arguments[1] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) => 1,
+                Some(amount) if 0 < amount => amount as u32,
+                Some(_) => {
+                    return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+                }
+                None => 1,
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.add_script_depot_goods(player_id, name, amount, runtime),
+            })
+        }
+        SCRIPT_FUNCTION_DELETE_DEPOT_GOODS => {
+            let (Some(name), Some(amount)) = (
+                string_arguments[0].filter(|name| !name.is_empty()),
+                integer_arguments[1]
+                    .filter(|amount| *amount != SCRIPT_INT_PARAMETER_ERROR && 0 < *amount),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.delete_script_depot_goods(player_id, name, amount as u32),
+            })
+        }
+        SCRIPT_FUNCTION_CHECK_DEPOT_SPACE => {
+            let Some(name) = string_arguments[0].filter(|name| !name.is_empty()) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.script_depot_space_for_goods(player_id, name),
+            })
+        }
+        SCRIPT_FUNCTION_GET_DEPOT_GOODS_NUMBER => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: game.script_depot_goods_number(player_id),
+        }),
+        SCRIPT_FUNCTION_GET_DEPOT_GOODS_FREE => {
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_DELETE_PLAYER_GOODS => {
             let (Some(player_name), Some(goods_name), Some(requested)) = (

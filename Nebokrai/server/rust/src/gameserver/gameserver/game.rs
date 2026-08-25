@@ -20431,10 +20431,11 @@ impl CGame {
         vec![message.send_to_player(self, consumption.player_id)]
     }
 
-    /// Exact script `DelGoods(name, amount)` расходует packet stacks в
-    /// insertion order, затем equipment в column order. Каждая мутация сразу
-    /// публикует обычный container wire; equipment также проходит полный
-    /// player property/skill/around tail до перехода к следующему кандидату.
+    /// Точная сценарная функция `DelGoods(name, amount)` расходует стопки
+    /// пакета в порядке вставки, затем снаряжение в порядке колонок. Каждая
+    /// мутация сразу публикует обычное контейнерное сообщение; снаряжение также
+    /// проходит полную цепочку свойств, навыков и уведомлений окружения игрока
+    /// до перехода к следующему кандидату.
     pub(crate) fn delete_script_goods<Runtime: GameContainerMessageRuntime>(
         &mut self,
         player_id: i32,
@@ -20560,6 +20561,196 @@ impl CGame {
                     .fold(0u64, |total, goods| total + u64::from(goods.amount()))
                     .min(i32::MAX as u64) as i32
             })
+            .unwrap_or(0)
+    }
+
+    /// Сценарные `AddDepotGoods` и `DelDepotGoods` используют пароль самого
+    /// игрока: закрытый склад временно открывается и после мутации снова
+    /// закрывается. Все изменения доходят до обычных складских владельцев,
+    /// реестра `GoodsAI` и контейнерных сообщений клиента.
+    pub(crate) fn add_script_depot_goods<Runtime: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        name: &[u8],
+        amount: u32,
+        runtime: &mut Runtime,
+    ) -> i32 {
+        let goods_index = self
+            .goods_factory
+            .query_goods_id_by_original_name(Some(name));
+        let created = self.create_goods_batch(goods_index, amount);
+        let Some(mut player) = self.players.remove(&player_id) else {
+            return 0;
+        };
+        let was_locked = player.depot().is_locked();
+        if was_locked {
+            let _ = player.depot_mut().unlock_if_authenticated(true);
+        }
+        for goods in created {
+            let mut incoming = Some(goods);
+            let addition =
+                self.add_depot_transfer_goods(&mut player, 9, u32::MAX, &mut incoming, runtime);
+            let DepotStorageTransferAddition::Depot(DepotGoodsAddOutcome::Volume(outcome)) =
+                addition
+            else {
+                continue;
+            };
+            match outcome {
+                VolumeGoodsAddOutcome::Added(added) => {
+                    let Some(position) = added.position else {
+                        continue;
+                    };
+                    let Some(old_client_payload) = player
+                        .depot()
+                        .get_goods(position)
+                        .map(|goods| runtime.encode_goods_for_old_client(goods))
+                    else {
+                        continue;
+                    };
+                    let mut message = CS2CContainerObjectMove::default();
+                    message.set_operation(ContainerObjectMoveOperation::NewObject);
+                    message.set_destination_container(PLAYER_TYPE, player_id, position);
+                    message.set_destination_container_extend_id(9);
+                    message
+                        .set_destination_object(added.identity.object_type, added.identity.ex_id);
+                    message.set_object_stream(old_client_payload);
+                    let _ = message.send_to_player(self, player_id);
+                }
+                VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { target, .. }) => {
+                    let Some((position, resulting_amount)) = player
+                        .depot()
+                        .snapshot_goods()
+                        .find(|(_, goods)| goods.identity().ex_id == target.ex_id)
+                        .map(|(position, goods)| (position, goods.amount()))
+                    else {
+                        continue;
+                    };
+                    let mut message = CS2CContainerObjectAmountChange::default();
+                    message.set_source_container(PLAYER_TYPE, player_id, position);
+                    message.set_source_container_extend_id(9);
+                    message.set_object(target.object_type, target.ex_id);
+                    message.set_object_amount(resulting_amount);
+                    let _ = message.send_to_player(self, player_id);
+                }
+                VolumeGoodsAddOutcome::Stack(_) | VolumeGoodsAddOutcome::Rejected(_) => {}
+            }
+        }
+        if was_locked {
+            let _ = player.depot_mut().lock();
+        }
+        self.players.insert(player_id, player);
+        1
+    }
+
+    pub(crate) fn delete_script_depot_goods(
+        &mut self,
+        player_id: i32,
+        name: &[u8],
+        requested: u32,
+    ) -> i32 {
+        let base_index = self
+            .goods_factory
+            .query_goods_id_by_original_name(Some(name));
+        if base_index == 0 || requested == 0 {
+            return 0;
+        }
+        let Some(mut player) = self.players.remove(&player_id) else {
+            return 0;
+        };
+        let was_locked = player.depot().is_locked();
+        if was_locked {
+            let _ = player.depot_mut().unlock_if_authenticated(true);
+        }
+        let candidates: Vec<_> = player
+            .depot()
+            .snapshot_goods()
+            .filter(|(_, goods)| goods.base_properties_index() == base_index)
+            .map(|(position, goods)| (position, goods.identity(), goods.amount()))
+            .collect();
+        let mut removed_amount = 0u32;
+        for (position, identity, previous_amount) in candidates {
+            if requested <= removed_amount {
+                break;
+            }
+            let amount = requested.wrapping_sub(removed_amount).min(previous_amount);
+            let mut split_goods = (amount < previous_amount)
+                .then(|| self.create_goods_core(base_index))
+                .flatten();
+            let Some(outcome) =
+                player
+                    .depot_mut()
+                    .take_goods(position, amount, &self.goods_factory, |_| {
+                        split_goods.take()
+                    })
+            else {
+                continue;
+            };
+            let taken = match outcome {
+                VolumeGoodsRemoveOutcome::Removed(taken)
+                | VolumeGoodsRemoveOutcome::RemovedButCellMissing(taken) => taken,
+            };
+            match taken {
+                AmountLimitGoodsTaken::Removed(mut removed) => {
+                    player.unregister_depot_goods_ai(
+                        &mut removed.goods,
+                        &self.goods_factory,
+                        game_wall_time_seconds(),
+                    );
+                    let mut message = CS2CContainerObjectMove::default();
+                    message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+                    message.set_source_container(PLAYER_TYPE, player_id, position);
+                    message.set_source_container_extend_id(9);
+                    message.set_source_object(
+                        identity.object_type,
+                        identity.ex_id,
+                        previous_amount,
+                    );
+                    let _ = message.send_to_player(self, player_id);
+                }
+                AmountLimitGoodsTaken::Split(split) => {
+                    let mut message = CS2CContainerObjectAmountChange::default();
+                    message.set_source_container(PLAYER_TYPE, player_id, position);
+                    message.set_source_container_extend_id(9);
+                    message.set_object(split.source.object_type, split.source.ex_id);
+                    message.set_object_amount(previous_amount.wrapping_sub(amount));
+                    let _ = message.send_to_player(self, player_id);
+                }
+            }
+            removed_amount = removed_amount.wrapping_add(amount);
+        }
+        if was_locked {
+            let _ = player.depot_mut().lock();
+        }
+        self.players.insert(player_id, player);
+        removed_amount.min(i32::MAX as u32) as i32
+    }
+
+    pub(crate) fn script_depot_space_for_goods(&mut self, player_id: i32, name: &[u8]) -> i32 {
+        let goods_index = self
+            .goods_factory
+            .query_goods_id_by_original_name(Some(name));
+        let Some(goods) = self.create_goods_core(goods_index) else {
+            return 0;
+        };
+        let Some(player) = self.find_player(player_id) else {
+            return 0;
+        };
+        let mut depot = player.depot().clone();
+        let _ = depot.unlock_if_authenticated(true);
+        let mut incoming = Some(goods);
+        let outcome = depot.add_goods(&mut incoming, &self.goods_factory, true);
+        i32::from(matches!(
+            outcome,
+            DepotGoodsAddOutcome::Volume(
+                VolumeGoodsAddOutcome::Added(_)
+                    | VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { .. })
+            )
+        ))
+    }
+
+    pub(crate) fn script_depot_goods_number(&self, player_id: i32) -> i32 {
+        self.find_player(player_id)
+            .map(|player| player.depot().goods_amount(&self.goods_factory) as i32)
             .unwrap_or(0)
     }
 
