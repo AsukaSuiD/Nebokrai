@@ -2300,10 +2300,10 @@ pub(crate) trait PlayerEquipmentContext {
 }
 
 /// Container transfer использует уже материализованные player/equipment
-/// owners. Ещё не восстановленные `CanMountEquip`, базовый property recompute,
-/// clock и GoodsAI registration остаются обязательными runtime facts, а не
-/// подменяются magic success или cached properties; RideState overlay и
-/// personal-shop mount gate уже принадлежат canonical player owner-у.
+/// owners. Exact `CanMountEquip` теперь читает persisted player flags и goods
+/// прямо у canonical owner-а; базовый property recompute, clock и GoodsAI
+/// registration остаются обязательными runtime facts. RideState overlay и
+/// personal-shop mount gate также принадлежат canonical player owner-у.
 pub(crate) trait GameContainerMessageRuntime:
     OldClientGoodsCodec + PlayerEquipmentContext
 {

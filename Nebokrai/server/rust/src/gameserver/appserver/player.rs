@@ -74,7 +74,10 @@
 //! Как в связном `RefreshContainerOwners`, достигнутые equipment,
 //! ordinary-fairy и battle-fairy containers принадлежат player type `400` с
 //! его numeric ID. Ordinary fairy получает exact volume 14 и persisted
-//! enable/vigour/experience; periodic hatcher caller замкнут через `CGame`;
+//! enable/vigour/experience; persisted battle-fairy enable декодируется из
+//! World base-property offset `0x128`, а `CanMountEquip` использует оба enable
+//! flag-а, headgear addon и live requirements без внешнего result snapshot.
+//! Periodic hatcher caller замкнут через `CGame`;
 //! Hotkey owner хранит exact 24 DWORD и связывает назначение с возвратом
 //! consumable из hand в packet/hand/wallet/YuanBao; equipment destination
 //! проходит исходный remove→failed add→hand rollback без потери ownership.
@@ -260,17 +263,17 @@ use super::container::cyuanbao::CYuanBao;
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
 use super::goods::cgoodsbaseproperties::{
-    GAP_AGILITY_CORRECTION, GAP_ARMOR_CORRECTION, GAP_ATTACK_AVOID, GAP_ATTACK_SPEED_CORRECTION,
-    GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON, GAP_BF_AGILITY_POTENTIAL,
-    GAP_BF_ALL_SKILL, GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_POTENTIAL,
-    GAP_BF_BATTLE_FAIRY, GAP_BF_BLAST, GAP_BF_BLAST_ADDON, GAP_BF_BLAST_POTENTIAL, GAP_BF_BRAVE,
-    GAP_BF_BRAVE_POTENTIAL, GAP_BF_CUT_HURT_ADDON, GAP_BF_CUT_HURT_SCALE, GAP_BF_EARTH,
-    GAP_BF_EARTH_SKILL, GAP_BF_HP, GAP_BF_HUOXIESHU_SKILL, GAP_BF_LIFE_ADDON,
-    GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAN, GAP_BF_MAN_SKILL, GAP_BF_MAX_HP, GAP_BF_MAX_MP, GAP_BF_MP,
-    GAP_BF_MP_ADDON, GAP_BF_POTENTIAL, GAP_BF_SKY, GAP_BF_SKY_SKILL, GAP_BF_SPRITE,
-    GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISM,
-    GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_POTENTIAL,
-    GAP_BF_WEAPON_LEVEL, GAP_BLAST_ATTACK, GAP_BLAST_ELEMENT_ATTACK,
+    EQUIP_PLACE_HEADGEAR, GAP_AGILITY_CORRECTION, GAP_ARMOR_CORRECTION, GAP_ATTACK_AVOID,
+    GAP_ATTACK_SPEED_CORRECTION, GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON,
+    GAP_BF_AGILITY_POTENTIAL, GAP_BF_ALL_SKILL, GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON,
+    GAP_BF_ATTACK_POTENTIAL, GAP_BF_BATTLE_FAIRY, GAP_BF_BLAST, GAP_BF_BLAST_ADDON,
+    GAP_BF_BLAST_POTENTIAL, GAP_BF_BRAVE, GAP_BF_BRAVE_POTENTIAL, GAP_BF_CUT_HURT_ADDON,
+    GAP_BF_CUT_HURT_SCALE, GAP_BF_EARTH, GAP_BF_EARTH_SKILL, GAP_BF_HP, GAP_BF_HUOXIESHU_SKILL,
+    GAP_BF_LIFE_ADDON, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAN, GAP_BF_MAN_SKILL, GAP_BF_MAX_HP,
+    GAP_BF_MAX_MP, GAP_BF_MP, GAP_BF_MP_ADDON, GAP_BF_POTENTIAL, GAP_BF_SKY, GAP_BF_SKY_SKILL,
+    GAP_BF_SPRITE, GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON,
+    GAP_BF_SPRITUALISM, GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON,
+    GAP_BF_STRENGH_POTENTIAL, GAP_BF_WEAPON_LEVEL, GAP_BLAST_ATTACK, GAP_BLAST_ELEMENT_ATTACK,
     GAP_BURDEN_UPPER_LIMIT_CORRECTION, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2,
     GAP_CONSTITUTION_CORRECTION, GAP_DODGE_CORRECTION, GAP_ELEMENT_ATTACK_CORRECTION,
     GAP_ELEMENT_AVOID, GAP_ELEMENT_RESISTANCE_CORRECTION, GAP_FATAL_BLOW_RATE_CORRECTION,
@@ -336,6 +339,7 @@ const BASE_QUEST_TIME_LIMIT_OFFSET: usize = 0x10c;
 const BASE_QUEST_ENABLED_OFFSET: usize = 0x110;
 const BASE_EXPLOIT_OFFSET: usize = 0x114;
 const BASE_FAIRY_CONTAINER_ENABLED_OFFSET: usize = 0x11c;
+const BASE_BATTLE_FAIRY_ENABLED_OFFSET: usize = 0x128;
 const BASE_DAYS_HONOR_OFFSET: usize = 0x140;
 const BASE_WEEKS_HONOR_OFFSET: usize = 0x144;
 const BASE_MONTHS_HONOR_OFFSET: usize = 0x148;
@@ -629,7 +633,6 @@ pub(crate) struct PlayerEquipmentRemoveReport {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerEquipmentAddRuntimeFacts {
-    pub(crate) can_mount_result: i32,
     pub(crate) pack_add_enabled: bool,
     pub(crate) now: u64,
 }
@@ -1203,6 +1206,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) credit: u32,
     pub(crate) charged: bool,
     pub(crate) fairy_container_enabled: bool,
+    pub(crate) battle_fairy_enabled: bool,
     pub(crate) hotkeys: [u32; 24],
     pub(crate) mode: u32,
     pub(crate) display_head_piece: bool,
@@ -2332,7 +2336,7 @@ impl CPlayer {
             },
             |goods| EquipmentAddRuntimeFacts {
                 owner_player: Some(EquipmentOwnerPlayerFacts {
-                    can_mount_result: Self::can_use_item_from_properties(
+                    can_mount_result: Self::can_mount_equip_from_properties(
                         base_properties,
                         combat_properties,
                         goods,
@@ -2764,6 +2768,10 @@ impl CPlayer {
                 self.base_properties.fairy_container_enabled,
             ),
             (
+                BASE_BATTLE_FAIRY_ENABLED_OFFSET,
+                self.base_properties.battle_fairy_enabled,
+            ),
+            (
                 BASE_DISPLAY_HEAD_PIECE_OFFSET,
                 self.base_properties.display_head_piece,
             ),
@@ -2924,6 +2932,7 @@ impl CPlayer {
         self.base_properties.exploit = read_player_wire_u32(wire, BASE_EXPLOIT_OFFSET);
         self.base_properties.fairy_container_enabled =
             wire[BASE_FAIRY_CONTAINER_ENABLED_OFFSET] != 0;
+        self.base_properties.battle_fairy_enabled = wire[BASE_BATTLE_FAIRY_ENABLED_OFFSET] != 0;
         self.base_properties.days_honor_eliminate =
             read_player_wire_u32(wire, BASE_DAYS_HONOR_OFFSET);
         self.base_properties.weeks_honor_eliminate =
@@ -4542,6 +4551,42 @@ impl CPlayer {
             goods,
             factory,
         )
+    }
+
+    /// Exact `CPlayer::CanMountEquip`: для headgear сначала согласует persisted
+    /// ordinary/battle-fairy enable flags с `GAP_BF_BATTLE_FAIRY`, затем
+    /// возвращает те же requirement-коды `1..7` или magic success `9`.
+    pub(crate) fn can_mount_equip(&self, goods: &CGoods, factory: &CGoodsFactory) -> i32 {
+        Self::can_mount_equip_from_properties(
+            self.base_properties,
+            self.combat_properties,
+            goods,
+            factory,
+        )
+    }
+
+    fn can_mount_equip_from_properties(
+        base_properties: PlayerBaseProperties,
+        combat_properties: PlayerCombatProperties,
+        goods: &CGoods,
+        factory: &CGoodsFactory,
+    ) -> i32 {
+        if factory
+            .query_goods_base_properties(goods.base_properties_index())
+            .is_some_and(|properties| properties.equip_place() == EQUIP_PLACE_HEADGEAR)
+        {
+            let battle_fairy_headgear =
+                goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) == 1;
+            if (!base_properties.fairy_container_enabled
+                && (!base_properties.battle_fairy_enabled || !battle_fairy_headgear))
+                || (base_properties.fairy_container_enabled
+                    && !base_properties.battle_fairy_enabled
+                    && battle_fairy_headgear)
+            {
+                return 0;
+            }
+        }
+        Self::can_use_item_from_properties(base_properties, combat_properties, goods, factory)
     }
 
     fn can_use_item_from_properties(
@@ -6907,14 +6952,15 @@ impl CPlayer {
     ) -> PlayerEquipmentAddReport {
         let player_id = self.player_id();
         let previous_expanded_package_num = self.equipment.expanded_package_num();
+        let can_mount_result = incoming
+            .as_ref()
+            .map_or(0, |goods| self.can_mount_equip(goods, factory));
         let outcome = self.equipment.add_at(
             position,
             incoming,
             factory,
             EquipmentAddRuntimeFacts {
-                owner_player: Some(EquipmentOwnerPlayerFacts {
-                    can_mount_result: runtime.can_mount_result,
-                }),
+                owner_player: Some(EquipmentOwnerPlayerFacts { can_mount_result }),
                 pack_add_enabled: runtime.pack_add_enabled,
                 now: runtime.now,
             },
