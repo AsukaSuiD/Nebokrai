@@ -1154,7 +1154,7 @@ impl CEquipmentContainer {
         })
     }
 
-    fn does_equip_place_fit(column: EquipmentColumn, equip_place: i32) -> bool {
+    pub(crate) fn does_equip_place_fit(column: EquipmentColumn, equip_place: i32) -> bool {
         match equip_place {
             EQUIP_PLACE_HEAD => column == EquipmentColumn::Head,
             EQUIP_PLACE_BODY => column == EquipmentColumn::Body,
@@ -1836,19 +1836,6 @@ impl CEquipmentContainer {
 //
 //
 
-// ============================================================================
-// FUNCTION: CEquipmentContainer::Swap
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cequipmentcontainer.cpp:227
-// RVA: 0x000EECB0
-// ADDRESS: 004eecb0
-// PROTOTYPE: int __thiscall Swap(EQUIPMENT_COLUMN param_1, CGoods * param_2, CGoods * * param_3, void * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CEquipmentContainer::Remove

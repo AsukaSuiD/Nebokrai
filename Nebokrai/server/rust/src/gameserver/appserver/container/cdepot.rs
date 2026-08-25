@@ -10,13 +10,14 @@
 //! `Vec`/`IndexMap` базы остаются библиотечным storage-слоем. Здесь сохранены
 //! exact position selection, inactive-anchor и expansion partial effects.
 //! Достигнутый `0x90301` move/stack caller сохраняет запрет извлечения anchor,
-//! kind-1 activation, GoodsAI/listener effects и rollback. `OT_SWITCH_OBJECT`,
+//! kind-1 activation, GoodsAI/listener effects и rollback. Hand-owned
+//! `OT_SWITCH_OBJECT` проходит через depot guard и общий volume swap;
 //! вне-клиентский extension-remove callback и codec restore остаются RAW.
 
 use super::camountlimitgoodscontainer::{AmountLimitGoodsCleared, AmountLimitGoodsRelease};
 use super::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeExpandOutcome, VolumeGoodsAddBlock, VolumeGoodsAddOutcome,
-    VolumeGoodsCodecError, VolumeGoodsRemoveOutcome,
+    VolumeGoodsCodecError, VolumeGoodsRemoveOutcome, VolumeGoodsSwapOutcome,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
@@ -268,6 +269,25 @@ impl CDepot {
             position,
             base_properties_index,
         )
+    }
+
+    /// `SwapGoods` caller уже проверил source hand. Depot дополнительно
+    /// запрещает lock, extension anchor и неактивную extension-группу.
+    pub(crate) fn swap_goods(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> Option<VolumeGoodsSwapOutcome> {
+        if self.locked
+            || Self::is_extension_item_position(position)
+            || position >= DEPOT_BASE_CELLS && !self.is_activated(position)
+        {
+            return None;
+        }
+        self.base
+            .swap_goods(position, incoming, factory, owner_progress_allows)
     }
 
     fn from_volume_add(

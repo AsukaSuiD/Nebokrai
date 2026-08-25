@@ -80,19 +80,6 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CC2SContainerObjectMove::SwapGoods
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:1031
-// RVA: 0x001BC620
-// ADDRESS: 005bc620
-// PROTOTYPE: int __thiscall SwapGoods(CGoods * param_1, CS2CContainerObjectMove * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::RollBack
@@ -126,7 +113,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::Move
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: полные packet/equipment ↔ enhancement/equipment-session, двусторонние auction-listing, ground, wallet↔bank gold и direct move/stack packet/equipment↔depot transfers, включая burden/rollback/equipment/lock/audit effects; OT_SWITCH_OBJECT и остальные container routes RAW ниже
+// MATERIALIZED: полные packet/equipment ↔ enhancement/equipment-session, двусторонние auction-listing, ground, wallet↔bank gold, direct move/stack packet/equipment↔depot и hand→packet/equipment/depot Put/Swap, включая burden/rollback/equipment/lock/audit/last-operated effects и OT_SWITCH_OBJECT wire; остальные container routes RAW ниже
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:1225

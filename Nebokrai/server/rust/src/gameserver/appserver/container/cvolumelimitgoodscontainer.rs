@@ -14,7 +14,7 @@
 //! Базовый expansion получает setup-policy явно и сохраняет
 //! exact release→resize→restore-owner order. Persisted codec и player
 //! packet expansion достигнуты общим GameSave owner-ом; listener messages,
-//! swap, clone и auction-scale mutation ниже остаются RAW до замыкания
+//! clone и auction-scale mutation ниже остаются RAW до замыкания
 //! соответствующих player/message/goods owners.
 
 use super::camountlimitgoodscontainer::{
@@ -61,6 +61,37 @@ pub(crate) enum VolumeGoodsAddOutcome {
 pub(crate) enum VolumeGoodsRemoveOutcome {
     Removed(AmountLimitGoodsTaken),
     RemovedButCellMissing(AmountLimitGoodsTaken),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VolumeGoodsSwapRemoval {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) identity: crate::gameserver::appserver::shape::ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<super::ccontainer::ContainerListenerHandle>,
+}
+
+#[must_use = "swap outcome сохраняет displaced ownership и rollback partial effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum VolumeGoodsSwapOutcome {
+    Swapped {
+        outgoing: CGoods,
+        removed: VolumeGoodsSwapRemoval,
+        added: AmountLimitGoodsAdded,
+    },
+    RejectedAndRestored {
+        incoming: VolumeGoodsAddOutcome,
+        removed: VolumeGoodsSwapRemoval,
+        restored: VolumeGoodsAddOutcome,
+    },
+    RejectedAndOldGoodsCollected {
+        incoming: VolumeGoodsAddOutcome,
+        removed: VolumeGoodsSwapRemoval,
+        rollback: VolumeGoodsAddOutcome,
+        garbage_collected: crate::gameserver::appserver::shape::ShapeIdentity,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -385,6 +416,64 @@ impl CVolumeLimitGoodsContainer {
             self.cells[position as usize] = VolumeCell::Available;
         }
         Some(VolumeGoodsRemoveOutcome::Removed(taken))
+    }
+
+    /// Exact `Swap` удаляет занятый destination, делает positional `Add`
+    /// incoming и при отказе тем же owner-ом возвращает displaced goods.
+    /// Последний rollback failure в оригинале garbage-collect-ил displaced.
+    pub(crate) fn swap_goods(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> Option<VolumeGoodsSwapOutcome> {
+        let incoming_id = incoming.as_ref()?.identity().ex_id;
+        if self.base.find(incoming_id).is_some() {
+            return None;
+        }
+        let displaced_id = self.get_goods(position)?.identity().ex_id;
+        let VolumeGoodsRemoveOutcome::Removed(removed) = self.remove_goods(displaced_id)? else {
+            return None;
+        };
+        let AmountLimitGoodsTaken::Removed(removed_goods) = removed else {
+            unreachable!("Swap удаляет destination целиком")
+        };
+        let outgoing_identity = removed_goods.goods.identity();
+        let removed = VolumeGoodsSwapRemoval {
+            owner_type: removed_goods.owner_type,
+            owner_id: removed_goods.owner_id,
+            position: removed_goods.position.unwrap_or(position),
+            identity: outgoing_identity,
+            amount: removed_goods.amount,
+            listeners: removed_goods.listeners,
+        };
+        let mut outgoing = Some(removed_goods.goods);
+        let added = self.add_goods_at(position, incoming, factory, owner_progress_allows);
+        if let VolumeGoodsAddOutcome::Added(added) = added {
+            return Some(VolumeGoodsSwapOutcome::Swapped {
+                outgoing: outgoing.take().expect("displaced goods сохранён"),
+                removed,
+                added,
+            });
+        }
+
+        let rejected = added;
+        let rollback = self.add_goods_at(position, &mut outgoing, factory, true);
+        if outgoing.is_none() {
+            return Some(VolumeGoodsSwapOutcome::RejectedAndRestored {
+                incoming: rejected,
+                removed,
+                restored: rollback,
+            });
+        }
+        let _collected = outgoing.take();
+        Some(VolumeGoodsSwapOutcome::RejectedAndOldGoodsCollected {
+            incoming: rejected,
+            removed,
+            rollback,
+            garbage_collected: outgoing_identity,
+        })
     }
 
     pub(crate) fn clean_cell(&mut self) {
@@ -753,19 +842,6 @@ fn read_volume_wire_u32(
 //
 //
 
-// ============================================================================
-// FUNCTION: CVolumeLimitGoodsContainer::Swap
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cvolumelimitgoodscontainer.cpp:166
-// RVA: 0x000DD390
-// ADDRESS: 004dd390
-// PROTOTYPE: int __thiscall Swap(ulong param_1, CGoods * param_2, CGoods * * param_3, void * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CVolumeLimitGoodsContainer::IsOpenExpantion

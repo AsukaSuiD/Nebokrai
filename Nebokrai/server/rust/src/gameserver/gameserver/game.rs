@@ -453,7 +453,7 @@ use crate::gameserver::appserver::container::cdepot::{
 };
 use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::ComposeEquipmentCell;
 use crate::gameserver::appserver::container::cequipmentcontainer::{
-    EQUIPMENT_COLUMN_LIMIT, EquipmentAddOutcome, EquipmentRemoveOutcome,
+    EQUIPMENT_COLUMN_LIMIT, EquipmentAddOutcome, EquipmentColumn, EquipmentRemoveOutcome,
 };
 use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::UpgradeEquipmentCell;
 use crate::gameserver::appserver::container::cfairycontainer::{
@@ -465,7 +465,7 @@ use crate::gameserver::appserver::container::cfairycontainer::{
 };
 use crate::gameserver::appserver::container::cgoodscontainer::GoodsStackMergeOutcome;
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::{
-    VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
+    VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome, VolumeGoodsSwapOutcome, VolumeGoodsSwapRemoval,
 };
 use crate::gameserver::appserver::container::cwallet::{
     CurrencyGoodsAddOutcome, CurrencyGoodsTaken,
@@ -485,8 +485,8 @@ use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE, GAP_BF_CURRENT_MAX_EXP, GAP_BF_DEFUALT_SKLL, GAP_BF_HP,
     GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAX_MP, GAP_BF_MODULE,
-    GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_EQUIP_STATE, GAP_PARTICULAR_ATTRIBUTE,
-    GOODS_TYPE_EQUIPMENT,
+    GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_EQUIP_STATE, GAP_GOODS_PACKAGE_EXTENTION,
+    GAP_PARTICULAR_ATTRIBUTE, GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goods::fairyproperties::{
@@ -2573,6 +2573,85 @@ pub(crate) struct DepotStorageTransferReport {
     pub(crate) destination_position: u32,
     pub(crate) removal: DepotStorageTransferRemoval,
     pub(crate) addition: DepotStorageTransferAddition,
+    pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) audit_deliveries: Vec<i32>,
+    pub(crate) delivery: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HandContainerSwapDestination {
+    Volume {
+        extend_id: i32,
+        removed: VolumeGoodsSwapRemoval,
+        added: AmountLimitGoodsAdded,
+    },
+    Equipment {
+        removed: EnhancementTransferRemoval,
+        added: PlayerEquipmentAddReport,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HandContainerMoveKind {
+    Moved(DepotStorageTransferAddition),
+    Swapped {
+        destination: HandContainerSwapDestination,
+        displaced: ShapeIdentity,
+        hand_addition: Option<AmountLimitGoodsAdded>,
+        displaced_collected: bool,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HandContainerMoveBlock {
+    MissingPlayer,
+    UnsupportedDestination,
+    MissingGoods,
+    AmountMismatch,
+    PartialMoveBusy(PlayerProgress),
+    BurdenExceeded {
+        restored: GroundHandAddition,
+    },
+    SwapBusy {
+        rejected: DepotStorageTransferAddition,
+        restored: GroundHandAddition,
+    },
+    SwapFailed {
+        rejected: DepotStorageTransferAddition,
+        swap: Option<HandContainerSwapFailure>,
+        restored: GroundHandAddition,
+    },
+    RollbackFailed {
+        goods: CGoods,
+        rejected: DepotStorageTransferAddition,
+        rollback: GroundHandAddition,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HandContainerSwapFailure {
+    Volume(VolumeGoodsSwapOutcome),
+    EquipmentCapacity {
+        required: u32,
+        available: u32,
+    },
+    EquipmentRemoval(PlayerEquipmentRemoveReport),
+    Equipment {
+        removed: EnhancementTransferRemoval,
+        rejected: PlayerEquipmentAddReport,
+        restored: PlayerEquipmentAddReport,
+    },
+}
+
+#[must_use = "hand transfer report сохраняет move/swap ownership и client wire"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HandContainerMoveReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) destination_extend_id: i32,
+    pub(crate) destination_position: u32,
+    pub(crate) removal: GroundHandRemoval,
+    pub(crate) kind: HandContainerMoveKind,
     pub(crate) previous_last_operated: (u32, u32),
     pub(crate) audit_deliveries: Vec<i32>,
     pub(crate) delivery: i32,
@@ -6930,6 +7009,468 @@ impl CGame {
             audit_deliveries,
             delivery,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn move_hand_goods_to_player_container<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<HandContainerMoveReport, HandContainerMoveBlock> {
+        if !matches!(destination_extend_id, 1 | 2 | 9) {
+            return Err(HandContainerMoveBlock::UnsupportedDestination);
+        }
+        let player = self
+            .find_player(player_id)
+            .ok_or(HandContainerMoveBlock::MissingPlayer)?;
+        let source = player
+            .hand()
+            .get_goods(0)
+            .filter(|goods| goods.identity().ex_id == goods_id)
+            .ok_or(HandContainerMoveBlock::MissingGoods)?;
+        if amount == 0 || source.amount() < amount {
+            return Err(HandContainerMoveBlock::AmountMismatch);
+        }
+        if source.amount() != amount
+            && matches!(
+                player.current_progress(),
+                PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+            )
+        {
+            return Err(HandContainerMoveBlock::PartialMoveBusy(
+                player.current_progress(),
+            ));
+        }
+        let source_identity = source.identity();
+        let audit_name = source.name().to_vec();
+        let audit_price = source.price();
+        let burden_exceeded = matches!(destination_extend_id, 1 | 2)
+            && player.current_burden(&self.goods_factory)
+                > u32::from(player.combat_properties().burden);
+        let mut split_template = source.clone();
+        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .expect("player проверен перед hand ownership pass");
+        let removed = player
+            .hand_mut()
+            .take_goods(0, amount, &self.goods_factory, |_| {
+                (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                    .then(|| split_template.clone())
+            });
+        let Some(removed) = removed else {
+            self.players.insert(player_id, player);
+            return Err(HandContainerMoveBlock::AmountMismatch);
+        };
+        let (mut incoming, removal) = match removed {
+            AmountLimitGoodsTaken::Removed(removed) => (
+                Some(removed.goods),
+                GroundHandRemoval {
+                    owner_type: removed.owner_type,
+                    owner_id: removed.owner_id,
+                    position: removed.position.unwrap_or(0),
+                    amount: removed.amount,
+                    listeners: removed.listeners,
+                    kind: GroundHandRemovalKind::Removed,
+                },
+            ),
+            AmountLimitGoodsTaken::Split(split) => (
+                Some(split.goods),
+                GroundHandRemoval {
+                    owner_type: split.owner_type,
+                    owner_id: split.owner_id,
+                    position: split.position.unwrap_or(0),
+                    amount: split.amount,
+                    listeners: split.listeners,
+                    kind: GroundHandRemovalKind::Split {
+                        source: split.source,
+                    },
+                },
+            ),
+        };
+
+        if burden_exceeded {
+            let restored = self.add_ground_hand_goods(&mut player, 0, &mut incoming);
+            self.players.insert(player_id, player);
+            return Err(HandContainerMoveBlock::BurdenExceeded { restored });
+        }
+
+        let addition = self.add_depot_transfer_goods(
+            &mut player,
+            destination_extend_id,
+            destination_position,
+            &mut incoming,
+            context,
+        );
+        if incoming.is_none() {
+            let (actual_position, destination_goods, destination_amount) =
+                Self::depot_transfer_destination(&player, destination_position, &addition);
+            let previous_last_operated = player.record_last_operated_goods(3, 0);
+            self.players.insert(player_id, player);
+            let audit_deliveries =
+                if destination_extend_id == 9 && self.log_system.goods_depot_set_log_enabled() {
+                    self.send_ground_goods_move_log(
+                        player_id,
+                        7,
+                        source_identity,
+                        audit_price,
+                        &audit_name,
+                        amount,
+                    )
+                } else {
+                    Vec::new()
+                };
+            let mut moved = CS2CContainerObjectMove::default();
+            moved.set_operation(ContainerObjectMoveOperation::MoveObject);
+            moved.set_source_container(PLAYER_TYPE, player_id, 0);
+            moved.set_source_container_extend_id(3);
+            moved.set_destination_container(PLAYER_TYPE, player_id, actual_position);
+            moved.set_destination_container_extend_id(destination_extend_id);
+            moved.set_source_object(GOODS_TYPE, goods_id, amount);
+            moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
+            moved.set_destination_object_amount(destination_amount);
+            let delivery = moved.send_to_player(self, player_id);
+            return Ok(HandContainerMoveReport {
+                goods: source_identity,
+                amount,
+                destination_extend_id,
+                destination_position: actual_position,
+                removal,
+                kind: HandContainerMoveKind::Moved(addition),
+                previous_last_operated,
+                audit_deliveries,
+                delivery,
+            });
+        }
+
+        let progress = player.current_progress();
+        if matches!(
+            progress,
+            PlayerProgress::Trading | PlayerProgress::OpenStall | PlayerProgress::Upgrade
+        ) {
+            let restored = self.add_ground_hand_goods(&mut player, 0, &mut incoming);
+            self.players.insert(player_id, player);
+            return Err(HandContainerMoveBlock::SwapBusy {
+                rejected: addition,
+                restored,
+            });
+        }
+
+        let mut swap_failure = None;
+        let swapped = if destination_extend_id == 1 {
+            let expanded = player.equipment().expanded_package_num();
+            if !player.packet().can_swap(
+                destination_position,
+                expanded,
+                self.globe_setup.pack_add_enabled(),
+            ) {
+                None
+            } else {
+                player.packet_mut().swap_goods(
+                    destination_position,
+                    &mut incoming,
+                    &self.goods_factory,
+                    true,
+                )
+            }
+            .and_then(|outcome| match outcome {
+                VolumeGoodsSwapOutcome::Swapped {
+                    outgoing,
+                    removed,
+                    added,
+                } => Some((
+                    outgoing,
+                    HandContainerSwapDestination::Volume {
+                        extend_id: 1,
+                        removed,
+                        added,
+                    },
+                )),
+                failed => {
+                    swap_failure = Some(HandContainerSwapFailure::Volume(failed));
+                    None
+                }
+            })
+        } else if destination_extend_id == 9 {
+            let outcome = player.depot_mut().swap_goods(
+                destination_position,
+                &mut incoming,
+                &self.goods_factory,
+                true,
+            );
+            match outcome {
+                Some(VolumeGoodsSwapOutcome::Swapped {
+                    outgoing,
+                    removed,
+                    added,
+                }) => {
+                    if let Some(goods) = player.depot().get_goods(destination_position) {
+                        context.register_enhancement_goods_ai(goods);
+                    }
+                    Some((
+                        outgoing,
+                        HandContainerSwapDestination::Volume {
+                            extend_id: 9,
+                            removed,
+                            added,
+                        },
+                    ))
+                }
+                Some(failed) => {
+                    swap_failure = Some(HandContainerSwapFailure::Volume(failed));
+                    None
+                }
+                None => None,
+            }
+        } else {
+            self.swap_hand_goods_with_equipment(
+                &mut player,
+                destination_position,
+                &mut incoming,
+                context,
+                &mut swap_failure,
+            )
+        };
+
+        let Some((displaced, destination)) = swapped else {
+            let restored = self.add_ground_hand_goods(&mut player, 0, &mut incoming);
+            let rollback_failed = incoming.take();
+            self.players.insert(player_id, player);
+            if let Some(goods) = rollback_failed {
+                return Err(HandContainerMoveBlock::RollbackFailed {
+                    goods,
+                    rejected: addition,
+                    rollback: restored,
+                });
+            }
+            return Err(HandContainerMoveBlock::SwapFailed {
+                rejected: addition,
+                swap: swap_failure,
+                restored,
+            });
+        };
+
+        let displaced_identity = displaced.identity();
+        let hand_add = player.hand_mut().add_goods(displaced, &self.goods_factory);
+        let (hand_addition, displaced_collected) = match hand_add {
+            Ok(added) => (Some(added), false),
+            Err(_collected) => (None, true),
+        };
+        let previous_last_operated = player.record_last_operated_goods(0, 0);
+        self.players.insert(player_id, player);
+        let mut moved = CS2CContainerObjectMove::default();
+        moved.set_operation(ContainerObjectMoveOperation::SwitchObject);
+        moved.set_source_container(PLAYER_TYPE, player_id, 0);
+        moved.set_source_container_extend_id(3);
+        moved.set_destination_container(PLAYER_TYPE, player_id, destination_position);
+        moved.set_destination_container_extend_id(destination_extend_id);
+        moved.set_source_object(GOODS_TYPE, goods_id, amount);
+        moved.set_destination_object(GOODS_TYPE, displaced_identity.ex_id);
+        let delivery = moved.send_to_player(self, player_id);
+        Ok(HandContainerMoveReport {
+            goods: source_identity,
+            amount,
+            destination_extend_id,
+            destination_position,
+            removal,
+            kind: HandContainerMoveKind::Swapped {
+                destination,
+                displaced: displaced_identity,
+                hand_addition,
+                displaced_collected,
+            },
+            previous_last_operated,
+            audit_deliveries: Vec::new(),
+            delivery,
+        })
+    }
+
+    fn depot_transfer_destination(
+        player: &CPlayer,
+        requested_position: u32,
+        addition: &DepotStorageTransferAddition,
+    ) -> (u32, ShapeIdentity, u32) {
+        match addition {
+            DepotStorageTransferAddition::Player(EnhancementTransferAddition::Packet(outcome)) => {
+                match outcome {
+                    VolumeGoodsAddOutcome::Added(added) => {
+                        let position = added.position.unwrap_or(requested_position);
+                        let goods = player
+                            .packet()
+                            .get_goods(position)
+                            .expect("packet add сохранён");
+                        (position, goods.identity(), goods.amount())
+                    }
+                    VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
+                        target, ..
+                    }) => {
+                        let position = player
+                            .packet()
+                            .query_goods_position(target.ex_id)
+                            .expect("packet stack position");
+                        let goods = player
+                            .packet()
+                            .get_goods(position)
+                            .expect("packet stack сохранён");
+                        (position, goods.identity(), goods.amount())
+                    }
+                    _ => unreachable!("успешный packet add забрал incoming"),
+                }
+            }
+            DepotStorageTransferAddition::Player(EnhancementTransferAddition::Equipment(
+                report,
+            )) => {
+                let EquipmentAddOutcome::Added(added) = &report.outcome else {
+                    unreachable!("успешный equipment add")
+                };
+                (added.column.position(), added.identity, added.amount)
+            }
+            DepotStorageTransferAddition::Depot(DepotGoodsAddOutcome::Volume(outcome)) => {
+                match outcome {
+                    VolumeGoodsAddOutcome::Added(added) => (
+                        added.position.unwrap_or(requested_position),
+                        added.identity,
+                        added.amount,
+                    ),
+                    VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
+                        target, ..
+                    }) => {
+                        let position = player
+                            .depot()
+                            .base()
+                            .query_goods_position(target.ex_id)
+                            .expect("depot stack position");
+                        let goods = player
+                            .depot()
+                            .get_goods(position)
+                            .expect("depot stack сохранён");
+                        (position, goods.identity(), goods.amount())
+                    }
+                    _ => unreachable!("успешный depot add забрал incoming"),
+                }
+            }
+            _ => unreachable!("успешный player-container addition"),
+        }
+    }
+
+    fn swap_hand_goods_with_equipment<Context: GameContainerMessageRuntime>(
+        &self,
+        player: &mut CPlayer,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        context: &mut Context,
+        failure: &mut Option<HandContainerSwapFailure>,
+    ) -> Option<(CGoods, HandContainerSwapDestination)> {
+        let incoming_goods = incoming.as_ref()?;
+        if player.can_mount_equip(incoming_goods, &self.goods_factory) != 9 {
+            return None;
+        }
+        let properties = self
+            .goods_factory
+            .query_goods_base_properties(incoming_goods.base_properties_index())?;
+        let column = EquipmentColumn::from_position(position)?;
+        if !crate::gameserver::appserver::container::cequipmentcontainer::CEquipmentContainer::does_equip_place_fit(
+            column,
+            properties.equip_place(),
+        ) {
+            return None;
+        }
+        let old_goods = player.equipment().get_goods(position)?.clone();
+        if self.globe_setup.pack_add_enabled()
+            && old_goods.query_attribute(GAP_GOODS_PACKAGE_EXTENTION)
+            && old_goods.addon_property_value(&self.goods_factory, GAP_GOODS_PACKAGE_EXTENTION, 1)
+                == 2
+        {
+            let required =
+                old_goods.addon_property_value(&self.goods_factory, GAP_GOODS_PACKAGE_EXTENTION, 2)
+                    as u32;
+            let available = player.packet().activated_but_unused_count(true);
+            if available < required {
+                *failure = Some(HandContainerSwapFailure::EquipmentCapacity {
+                    required,
+                    available,
+                });
+                return None;
+            }
+        }
+        let remove_facts = context.enhancement_equipment_remove_facts(
+            player,
+            &old_goods,
+            self.globe_setup.pack_add_enabled(),
+        );
+        let mut recompute =
+            |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+        let mut removed_report = player.remove_equipment_goods(
+            old_goods.identity().ex_id,
+            &self.goods_factory,
+            &self.skill_factory,
+            remove_facts,
+            &mut recompute,
+        );
+        drop(recompute);
+        self.publish_player_equipment_remove_report(&mut removed_report, context);
+        let outcome = std::mem::replace(
+            &mut removed_report.outcome,
+            EquipmentRemoveOutcome::Missing {
+                partial_effects: Default::default(),
+            },
+        );
+        let EquipmentRemoveOutcome::Removed(removed) = outcome else {
+            removed_report.outcome = outcome;
+            *failure = Some(HandContainerSwapFailure::EquipmentRemoval(removed_report));
+            return None;
+        };
+        let removed_mutation = EnhancementTransferRemoval::Equipment {
+            event: removed.event,
+            effects: removed_report.effects,
+            deliveries: removed_report.deliveries,
+        };
+        let mut outgoing = Some(removed.goods);
+        let added = self.add_enhancement_transfer_goods(
+            player,
+            2,
+            position,
+            incoming,
+            self.globe_setup.pack_add_enabled(),
+            context,
+        );
+        let EnhancementTransferAddition::Equipment(added_report) = added else {
+            unreachable!("equipment positional add возвращает equipment report")
+        };
+        if incoming.is_none() {
+            return Some((
+                outgoing.take().expect("removed equipment сохранён"),
+                HandContainerSwapDestination::Equipment {
+                    removed: removed_mutation,
+                    added: added_report,
+                },
+            ));
+        }
+
+        let restored = self.add_enhancement_transfer_goods(
+            player,
+            2,
+            position,
+            &mut outgoing,
+            self.globe_setup.pack_add_enabled(),
+            context,
+        );
+        let EnhancementTransferAddition::Equipment(restored_report) = restored else {
+            unreachable!("equipment rollback возвращает equipment report")
+        };
+        let _collected = outgoing.take();
+        *failure = Some(HandContainerSwapFailure::Equipment {
+            removed: removed_mutation,
+            rejected: added_report,
+            restored: restored_report,
+        });
+        None
     }
 
     fn add_depot_transfer_goods<Context: GameContainerMessageRuntime>(

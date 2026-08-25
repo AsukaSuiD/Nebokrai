@@ -7155,17 +7155,27 @@ impl CPlayer {
         let can_mount_result = incoming
             .as_ref()
             .map_or(0, |goods| self.can_mount_equip(goods, factory));
-        let outcome = self.equipment.add_at(
-            position,
-            incoming,
-            factory,
-            EquipmentAddRuntimeFacts {
-                owner_player: Some(EquipmentOwnerPlayerFacts { can_mount_result }),
-                pack_add_enabled: runtime.pack_add_enabled,
-                now: runtime.now,
-            },
-            register_with_goods_ai,
-        );
+        let container_runtime = EquipmentAddRuntimeFacts {
+            owner_player: Some(EquipmentOwnerPlayerFacts { can_mount_result }),
+            pack_add_enabled: runtime.pack_add_enabled,
+            now: runtime.now,
+        };
+        let outcome = if position == u32::MAX {
+            self.equipment.add_preferred(
+                incoming,
+                factory,
+                container_runtime,
+                register_with_goods_ai,
+            )
+        } else {
+            self.equipment.add_at(
+                position,
+                incoming,
+                factory,
+                container_runtime,
+                register_with_goods_ai,
+            )
+        };
         let mut effects = Vec::new();
         if let EquipmentAddOutcome::Added(added) = &outcome
             && let Some(player_effects) = added.player_effects
