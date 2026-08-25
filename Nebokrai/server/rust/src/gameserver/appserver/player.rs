@@ -5855,6 +5855,10 @@ impl CPlayer {
         &self.account
     }
 
+    pub(crate) fn billing_session_id(&self) -> &[u8] {
+        &self.session_id
+    }
+
     /// Exact `GetWarSoulGoods`: боевой дух — только headgear в позиции 10,
     /// чьё первое значение `GAP_BF_BATTLE_FAIRY` равно единице.
     pub(crate) fn war_soul_goods(&self, factory: &CGoodsFactory) -> Option<&CGoods> {

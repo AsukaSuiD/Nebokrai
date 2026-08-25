@@ -182,7 +182,9 @@ use crate::gameserver::appserver::country::country::{
 use crate::gameserver::appserver::exstate::ExtendedStateKind;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::organizingsystem::attackcitysys::AttackCityMembershipBlock;
-use crate::gameserver::appserver::player::{PlayerLeiTingThingCountOutcome, PlayerProgress};
+use crate::gameserver::appserver::player::{
+    CPlayer, PlayerLeiTingThingCountOutcome, PlayerProgress,
+};
 use crate::gameserver::appserver::script::buffskillfunc::{
     BuffSkillScriptFunctionOutcome, SCRIPT_FUNCTION_ADD_JING_JIE_BUFF,
     run_buff_skill_script_function,
@@ -265,6 +267,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_UNDEAD_STATE: i32 = 2558;
 pub(crate) const SCRIPT_FUNCTION_SET_HOTKEY: i32 = 2560;
 pub(crate) const SCRIPT_FUNCTION_ADD_LOG: i32 = 2571;
 pub(crate) const SCRIPT_FUNCTION_IS_COMBAT_STATE: i32 = 2574;
+pub(crate) const SCRIPT_FUNCTION_DRAW_AWARDS: i32 = 2575;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
@@ -406,6 +409,21 @@ pub(crate) trait CountryWarActionScriptRuntime {
     fn country_contend_now_milliseconds(&mut self) -> u32;
 }
 
+pub(crate) trait ScriptAwardAuthenticationContext {
+    /// Внешняя UniBill/Bsip граница exact `AwardAuthenByPatchID`: реализация
+    /// создаёт order IDs, удерживает pending bill record до callback-а и
+    /// возвращает immediate vendor result. `DrawAwards` исторически его
+    /// игнорирует и сообщает лишь факт принятия запроса.
+    fn submit_script_award_authentication(
+        &mut self,
+        player: &CPlayer,
+        patch_id: i32,
+        information_type: i32,
+        color: u32,
+        background: u32,
+    ) -> i32;
+}
+
 pub(crate) trait ScriptFunctionRuntime:
     CountryWarActionScriptRuntime
     + CountryExileTimeScriptContext
@@ -419,6 +437,7 @@ pub(crate) trait ScriptFunctionRuntime:
     + CityGateRuntimeContext
     + GodsBattleDeathContext
     + RealmAppellationScriptContext
+    + ScriptAwardAuthenticationContext
 {
 }
 
@@ -435,6 +454,7 @@ impl<T> ScriptFunctionRuntime for T where
         + CityGateRuntimeContext
         + GodsBattleDeathContext
         + RealmAppellationScriptContext
+        + ScriptAwardAuthenticationContext
 {
 }
 
@@ -3346,6 +3366,10 @@ pub(crate) fn script_function_parameter_kind(
             1 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_DRAW_AWARDS => match index {
+            0..=3 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_ADD_GOODS
         | SCRIPT_FUNCTION_DELETE_GOODS
         | SCRIPT_FUNCTION_CHECK_GOODS
@@ -4441,6 +4465,52 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 .find_player(player_id)
                 .map_or(-1, |player| i32::from(player.shape().get_action() == 1)),
         }),
+        SCRIPT_FUNCTION_DRAW_AWARDS => {
+            let Some(patch_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let information_type = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let (color, background) = if information_type == 1 {
+                (
+                    integer_arguments[2]
+                        .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                        .map_or(0xffff_ff00, |value| value as u32),
+                    integer_arguments[3]
+                        .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                        .map_or(0xffff_0000, |value| value as u32),
+                )
+            } else {
+                (0, 0)
+            };
+            let Some(player) = game.find_player(player_id) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            if player.is_dead() || player.in_changing_server() || player.in_changing_region() {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            }
+            if player.current_progress() != PlayerProgress::None {
+                let _ =
+                    colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0175"))
+                        .send_to_player(game.net_server(), player_id);
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            }
+            if player.packet().is_full(game.goods_factory()) {
+                let _ =
+                    colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0176"))
+                        .send_to_player(game.net_server(), player_id);
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            }
+            let _ = runtime.submit_script_award_authentication(
+                player,
+                patch_id,
+                information_type,
+                color,
+                background,
+            );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
+        }
         SCRIPT_FUNCTION_ADD_UNDEAD_STATE
         | SCRIPT_FUNCTION_DELETE_UNDEAD_STATE
         | SCRIPT_FUNCTION_GET_UNDEAD_STATE => {
