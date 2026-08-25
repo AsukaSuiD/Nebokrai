@@ -25,6 +25,9 @@
 //! schedule membership, flag owner, capture/victory callbacks и war-log tuple.
 //! City slot проводит тот же inherited AI через weekly AttackCity membership,
 //! defender/owner mutation, `0x60138` victory и общий capture-message/log tail.
+//! Nation slot вызывает отдельный `ServerNationRegion::AI`: base-region pass,
+//! magic-stone replacements и altar contender completion выполняются одним
+//! reached проходом с morale, player-state, network и NPC spawn effects.
 //!
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
@@ -2965,6 +2968,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) periodical_updates: Vec<PlayerPeriodicalUpdateReport>,
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
+    pub(crate) nation_contend: Option<Result<NationContendAiReport, NationContendArithmeticBlock>>,
     pub(crate) city_contend: Option<CityRegionAiReport>,
     pub(crate) village_contend: Option<VillageRegionAiReport>,
     pub(crate) country_contend: Option<CountryRegionAiReport>,
@@ -3969,6 +3973,7 @@ pub(crate) trait GameMainLoopRuntime:
     + IncrementShopBillingContext
     + WorldAuctionRuntime
     + CountryReturnPointContext
+    + NationContendContext
     + GodsBattleNpcContendContext
 {
     fn exit_requested(&self) -> bool;
@@ -22187,6 +22192,10 @@ impl CGame {
                 self.find_region(region_id),
                 Some(ServerRegionOwner::Country(_))
             );
+            let is_nation = matches!(
+                self.find_region(region_id),
+                Some(ServerRegionOwner::Nation(_))
+            );
             let is_city = matches!(
                 self.find_region(region_id),
                 Some(ServerRegionOwner::City(_))
@@ -22195,38 +22204,51 @@ impl CGame {
                 self.find_region(region_id),
                 Some(ServerRegionOwner::Village(_))
             );
-            let (city_contend, village_contend, country_contend, gods_battle) = if is_gods_battle {
-                (
-                    None,
-                    None,
-                    None,
-                    self.gods_battle_contend_ai(region_id, runtime),
-                )
-            } else if is_country {
-                (
-                    None,
-                    None,
-                    self.run_country_region_ai(region_id, runtime),
-                    None,
-                )
-            } else if is_city {
-                (
-                    self.run_city_region_ai(region_id, runtime),
-                    None,
-                    None,
-                    None,
-                )
-            } else if is_village {
-                (
-                    None,
-                    self.run_village_region_ai(region_id, runtime),
-                    None,
-                    None,
-                )
-            } else {
-                runtime.region_ai_before_clear_player(self, region_id);
-                (None, None, None, None)
-            };
+            let (nation_contend, city_contend, village_contend, country_contend, gods_battle) =
+                if is_gods_battle {
+                    (
+                        None,
+                        None,
+                        None,
+                        None,
+                        self.gods_battle_contend_ai(region_id, runtime),
+                    )
+                } else if is_nation {
+                    (
+                        self.nation_contend_ai(region_id, runtime),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                } else if is_country {
+                    (
+                        None,
+                        None,
+                        None,
+                        self.run_country_region_ai(region_id, runtime),
+                        None,
+                    )
+                } else if is_city {
+                    (
+                        None,
+                        self.run_city_region_ai(region_id, runtime),
+                        None,
+                        None,
+                        None,
+                    )
+                } else if is_village {
+                    (
+                        None,
+                        None,
+                        self.run_village_region_ai(region_id, runtime),
+                        None,
+                        None,
+                    )
+                } else {
+                    runtime.region_ai_before_clear_player(self, region_id);
+                    (None, None, None, None, None)
+                };
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 continue;
             };
@@ -22304,6 +22326,7 @@ impl CGame {
                             periodical_updates,
                             battle_fairy_follows,
                             player_ai_tails,
+                            nation_contend,
                             city_contend,
                             village_contend,
                             country_contend,
@@ -22327,6 +22350,7 @@ impl CGame {
                 periodical_updates,
                 battle_fairy_follows,
                 player_ai_tails,
+                nation_contend,
                 city_contend,
                 village_contend,
                 country_contend,

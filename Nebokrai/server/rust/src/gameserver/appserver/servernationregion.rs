@@ -17,6 +17,8 @@
 //! захват Алтаря. Предшествующий AI pass строго связывает четыре смерти stone
 //! guards со смертью адмирала и отдаёт ordered magic-stone replacements;
 //! player flags, сообщения и concrete NPC/monster lifetime остаются у caller-а.
+//! Полный `ServerNationRegion::AI` вызывается из реального `CGame::AI` и
+//! объединяет base pass, magic-stone replacements и altar contender tail.
 //! Virtual `GetDiedStateTime` замкнут тем же `CGame` death caller-ом через
 //! signed GlobeSetup field: wrapping seconds→milliseconds и деление пополам.
 
@@ -1703,9 +1705,7 @@ pub(crate) fn convert_morale_to_exploit(
 
 // ============================================================================
 // FUNCTION: ServerNationRegion::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// IMPLEMENTED_SUBCHAIN: base-AI callback, ordered magic-stone gates и полный
-// contend timer/completion pass материализованы в `CGame::nation_contend_ai`.
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servernationregion.cpp:156
@@ -1713,8 +1713,9 @@ pub(crate) fn convert_morale_to_exploit(
 // ADDRESS: 004f8290
 // PROTOTYPE: void __thiscall AI(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Реальный `CGame::AI` вызывает `CGame::nation_contend_ai` для concrete Nation
+// owner-а. Сохранены base-first ordering, country `1..4` magic-stone gates,
+// первый завершившийся contender, `100% -> completion -> clear-all` и все
+// достигнутые morale/player/network/NPC side effects.
 
 // COMPONENT_VARIANT_END: GameServer
