@@ -486,8 +486,8 @@ use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE, GAP_BF_CURRENT_MAX_EXP, GAP_BF_DEFUALT_SKLL, GAP_BF_HP,
     GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAX_MP, GAP_BF_MODULE,
-    GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_EQUIP_STATE, GAP_GOODS_PACKAGE_EXTENTION,
-    GAP_PARTICULAR_ATTRIBUTE, GOODS_TYPE_EQUIPMENT,
+    GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_EQUIP_STATE, GAP_GOODS_BIND,
+    GAP_GOODS_PACKAGE_EXTENTION, GAP_PARTICULAR_ATTRIBUTE, GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goods::fairyproperties::{
@@ -2920,6 +2920,63 @@ pub(crate) struct CiQingComposeTransferReport {
     pub(crate) destination_position: u32,
     pub(crate) removal: CiQingComposeTransferRemoval,
     pub(crate) addition: CiQingComposeTransferAddition,
+    pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) delivery: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuctionGoodsInventoryRemoval {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionGoodsInventoryRollback {
+    Restored(VolumeGoodsAddOutcome),
+    Failed {
+        goods: CGoods,
+        outcome: VolumeGoodsAddOutcome,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AuctionGoodsInventoryBlock {
+    MissingPlayer,
+    UnsupportedDestination,
+    MissingGoods,
+    AmountMismatch,
+    PartialMoveBusy(PlayerProgress),
+    BurdenExceeded {
+        removal: AuctionGoodsInventoryRemoval,
+        rollback: AuctionGoodsInventoryRollback,
+    },
+    PacketPositionUnavailable {
+        removal: AuctionGoodsInventoryRemoval,
+        rollback: AuctionGoodsInventoryRollback,
+    },
+    RemovalFailed,
+    RolledBack {
+        removal: AuctionGoodsInventoryRemoval,
+        bind_cleared: bool,
+        rejected: EnhancementTransferAddition,
+        rollback: AuctionGoodsInventoryRollback,
+    },
+}
+
+#[must_use = "auction-goods inventory report сохраняет bind/equipment effects и wire"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuctionGoodsInventoryReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) source_position: u32,
+    pub(crate) destination_extend_id: i32,
+    pub(crate) destination_position: u32,
+    pub(crate) removal: AuctionGoodsInventoryRemoval,
+    pub(crate) bind_cleared: bool,
+    pub(crate) addition: EnhancementTransferAddition,
     pub(crate) previous_last_operated: (u32, u32),
     pub(crate) delivery: i32,
 }
@@ -8542,6 +8599,196 @@ impl CGame {
                     .expect("успешный CiQing compose add сохранён");
                 (addition.position, goods.identity(), goods.amount())
             }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn return_auction_goods_to_inventory<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<AuctionGoodsInventoryReport, AuctionGoodsInventoryBlock> {
+        if !matches!(destination_extend_id, 1 | 2) {
+            return Err(AuctionGoodsInventoryBlock::UnsupportedDestination);
+        }
+        let player = self
+            .find_player(player_id)
+            .ok_or(AuctionGoodsInventoryBlock::MissingPlayer)?;
+        let source = player
+            .auction_goods()
+            .get_goods(source_position)
+            .filter(|goods| goods.identity().ex_id == goods_id)
+            .ok_or(AuctionGoodsInventoryBlock::MissingGoods)?;
+        if amount == 0 || source.amount() < amount {
+            return Err(AuctionGoodsInventoryBlock::AmountMismatch);
+        }
+        if source.amount() != amount
+            && matches!(
+                player.current_progress(),
+                PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+            )
+        {
+            return Err(AuctionGoodsInventoryBlock::PartialMoveBusy(
+                player.current_progress(),
+            ));
+        }
+        let source_identity = source.identity();
+        let mut burden_goods = source.clone();
+        burden_goods.set_amount(amount);
+        let burden_exceeded = player
+            .current_burden(&self.goods_factory)
+            .wrapping_add(burden_goods.weight(&self.goods_factory))
+            > u32::from(player.combat_properties().burden);
+        let mut split_template = source.clone();
+        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .expect("player проверен перед auction-goods ownership pass");
+        let removed = player.auction_goods_mut().take_goods(
+            source_position,
+            amount,
+            &self.goods_factory,
+            |_| {
+                (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                    .then(|| split_template.clone())
+            },
+        );
+        let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
+            self.players.insert(player_id, player);
+            return Err(AuctionGoodsInventoryBlock::RemovalFailed);
+        };
+        let (goods, removal) = match taken {
+            AmountLimitGoodsTaken::Removed(removed) => (
+                removed.goods,
+                AuctionGoodsInventoryRemoval {
+                    owner_type: removed.owner_type,
+                    owner_id: removed.owner_id,
+                    position: removed.position.unwrap_or(source_position),
+                    amount: removed.amount,
+                    listeners: removed.listeners,
+                },
+            ),
+            AmountLimitGoodsTaken::Split(split) => (
+                split.goods,
+                AuctionGoodsInventoryRemoval {
+                    owner_type: split.owner_type,
+                    owner_id: split.owner_id,
+                    position: split.position.unwrap_or(source_position),
+                    amount: split.amount,
+                    listeners: split.listeners,
+                },
+            ),
+        };
+        let mut incoming = Some(goods);
+
+        if burden_exceeded {
+            let rollback =
+                self.rollback_auction_goods_transfer(&mut player, source_position, &mut incoming);
+            self.players.insert(player_id, player);
+            return Err(AuctionGoodsInventoryBlock::BurdenExceeded { removal, rollback });
+        }
+
+        // Exact PutGoods игнорирует присланную packet position для source 14:
+        // FindPositionForGoods выбирает compatible stack либо первый empty
+        // slot до bind mutation и до positional Add.
+        let actual_destination_position = if destination_extend_id == 1 {
+            let Some(position) = incoming.as_ref().and_then(|goods| {
+                player
+                    .packet()
+                    .find_position_for_goods(goods, &self.goods_factory)
+            }) else {
+                let rollback = self.rollback_auction_goods_transfer(
+                    &mut player,
+                    source_position,
+                    &mut incoming,
+                );
+                self.players.insert(player_id, player);
+                return Err(AuctionGoodsInventoryBlock::PacketPositionUnavailable {
+                    removal,
+                    rollback,
+                });
+            };
+            position
+        } else {
+            destination_position
+        };
+        let bind_cleared = destination_extend_id == 1
+            && incoming
+                .as_mut()
+                .is_some_and(|goods| goods.set_addon_property_value_core(GAP_GOODS_BIND, 2, 0));
+        let addition = self.add_enhancement_transfer_goods(
+            &mut player,
+            destination_extend_id,
+            actual_destination_position,
+            &mut incoming,
+            self.globe_setup.pack_add_enabled(),
+            context,
+        );
+        if incoming.is_some() {
+            let rejected = addition;
+            let rollback =
+                self.rollback_auction_goods_transfer(&mut player, source_position, &mut incoming);
+            self.players.insert(player_id, player);
+            return Err(AuctionGoodsInventoryBlock::RolledBack {
+                removal,
+                bind_cleared,
+                rejected,
+                rollback,
+            });
+        }
+
+        let wrapped = DepotStorageTransferAddition::Player(addition.clone());
+        let (actual_destination_position, destination_goods, destination_amount) =
+            Self::depot_transfer_destination(&player, actual_destination_position, &wrapped);
+        let previous_last_operated = player.record_last_operated_goods(14, source_position);
+        self.players.insert(player_id, player);
+        let mut moved = CS2CContainerObjectMove::default();
+        moved.set_operation(ContainerObjectMoveOperation::MoveObject);
+        moved.set_source_container(PLAYER_TYPE, player_id, source_position);
+        moved.set_source_container_extend_id(14);
+        moved.set_destination_container(PLAYER_TYPE, player_id, actual_destination_position);
+        moved.set_destination_container_extend_id(destination_extend_id);
+        moved.set_source_object(GOODS_TYPE, goods_id, amount);
+        moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
+        moved.set_destination_object_amount(destination_amount);
+        let delivery = moved.send_to_player(self, player_id);
+        Ok(AuctionGoodsInventoryReport {
+            goods: source_identity,
+            amount,
+            source_position,
+            destination_extend_id,
+            destination_position: actual_destination_position,
+            removal,
+            bind_cleared,
+            addition,
+            previous_last_operated,
+            delivery,
+        })
+    }
+
+    fn rollback_auction_goods_transfer(
+        &self,
+        player: &mut CPlayer,
+        source_position: u32,
+        incoming: &mut Option<CGoods>,
+    ) -> AuctionGoodsInventoryRollback {
+        let owner_progress_allows = player.current_progress() == PlayerProgress::None;
+        let outcome = player.auction_goods_mut().add_goods_at(
+            source_position,
+            incoming,
+            &self.goods_factory,
+            owner_progress_allows,
+        );
+        if let Some(goods) = incoming.take() {
+            AuctionGoodsInventoryRollback::Failed { goods, outcome }
+        } else {
+            AuctionGoodsInventoryRollback::Restored(outcome)
         }
     }
 

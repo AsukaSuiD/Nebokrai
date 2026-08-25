@@ -65,6 +65,10 @@
 //! callbacks, rollback и self wire связаны целиком. Сохранён exact quirk
 //! `PutGoods`: source slot `2` запрещает помещение в compose уже после
 //! source remove, поэтому наблюдаемы remove/add rollback effects.
+//! Auction-return storage (`14`) имеет только исходящий generic route:
+//! packet destination заново выбирает `FindPositionForGoods`, очищает bind
+//! value-id `2`, equipment сохраняет positional add; burden, partial guards,
+//! equipment callbacks, rollback и self wire доходят до live owner-ов.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -94,6 +98,7 @@ use crate::gameserver::appserver::session::csessionfactory::{
 use crate::gameserver::appserver::session::ctrader::{TraderOfferAdded, TraderOfferRemoved};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
+    AuctionGoodsInventoryBlock, AuctionGoodsInventoryReport, AuctionGoodsInventoryRollback,
     BankCurrencyTransferBlock, BankCurrencyTransferReport, BattleFairyTransferBlock,
     BattleFairyTransferReport, CGame, CiQingComposeTransferBlock, CiQingComposeTransferReport,
     DepotStorageTransferAddition, DepotStorageTransferBlock, DepotStorageTransferReport,
@@ -303,6 +308,12 @@ pub(crate) enum GameContainerMessageOutcome {
         delivery: i32,
         notification_delivery: Option<i32>,
     },
+    AuctionGoodsInventoryMoved(AuctionGoodsInventoryReport),
+    AuctionGoodsInventoryRolledBack {
+        reason: AuctionGoodsInventoryBlock,
+        delivery: i32,
+        notification_deliveries: Vec<i32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -314,6 +325,7 @@ enum EnhancementMessageRoute {
     FairyStorageTransfer,
     BattleFairyTransfer,
     CiQingComposeTransfer,
+    AuctionGoodsInventoryReturn,
     GroundDrop,
     GroundPickup,
     EnhancementSelect,
@@ -687,6 +699,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 )
             {
                 EnhancementMessageRoute::DepotStorageTransfer
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && request.source_container_extend_id == 14
+                && matches!(request.destination_container_extend_id, 1 | 2)
+            {
+                EnhancementMessageRoute::AuctionGoodsInventoryReturn
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == 200
                 && (matches!(request.source_container_extend_id, 1 | 2) || source_is_reached)
@@ -1181,6 +1199,74 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     reason,
                     delivery: send_rollback(game, player_id),
                     notification_delivery,
+                }
+            }
+        })));
+    }
+
+    if route == EnhancementMessageRoute::AuctionGoodsInventoryReturn {
+        let transfer = game.return_auction_goods_to_inventory(
+            player_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_container_extend_id,
+            request.destination_position,
+            context,
+        );
+        return Some(Ok(report(match transfer {
+            Ok(transfer) => GameContainerMessageOutcome::AuctionGoodsInventoryMoved(transfer),
+            Err(reason) => {
+                let mut notification_deliveries = Vec::new();
+                let progress_notice: Option<&[u8]> = match &reason {
+                    AuctionGoodsInventoryBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
+                        Some(b"GS0113")
+                    }
+                    AuctionGoodsInventoryBlock::PartialMoveBusy(PlayerProgress::Trading) => {
+                        Some(b"GS0114")
+                    }
+                    AuctionGoodsInventoryBlock::PartialMoveBusy(PlayerProgress::Upgrade) => {
+                        Some(b"GS0115")
+                    }
+                    _ => None,
+                };
+                if let Some(notice_id) = progress_notice {
+                    notification_deliveries.push(send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(notice_id),
+                        0xffff_ffff,
+                        0,
+                    ));
+                }
+                if matches!(&reason, AuctionGoodsInventoryBlock::BurdenExceeded { .. }) {
+                    notification_deliveries.push(send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(b"GS0259"),
+                        0xffff_ffff,
+                        0,
+                    ));
+                }
+                let rollback = match &reason {
+                    AuctionGoodsInventoryBlock::BurdenExceeded { rollback, .. }
+                    | AuctionGoodsInventoryBlock::PacketPositionUnavailable { rollback, .. }
+                    | AuctionGoodsInventoryBlock::RolledBack { rollback, .. } => Some(rollback),
+                    _ => None,
+                };
+                if matches!(rollback, Some(AuctionGoodsInventoryRollback::Failed { .. })) {
+                    notification_deliveries.push(send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(b"GPM019"),
+                        0xffff_ffff,
+                        0,
+                    ));
+                }
+                GameContainerMessageOutcome::AuctionGoodsInventoryRolledBack {
+                    reason,
+                    delivery: send_rollback(game, player_id),
+                    notification_deliveries,
                 }
             }
         })));
