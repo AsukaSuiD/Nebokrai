@@ -18,6 +18,8 @@
 //! `INT_MIN / -1` не получает придуманной реакции и возвращает локальный
 //! `BLOCKED_MISSING_FACT`. Player/message/string-table owners остаются узким
 //! context-контрактом; city weekly membership продолжает возвращать `Result`.
+//! Base AI также возвращает typed monster-spawn block: при нём weather и
+//! contender tail не выполняются.
 //! Decoder сначала делегирует сырому `CServerRegion` через узкий context, затем
 //! читает три signed little-endian DWORD и обновляет только keys `0..total`:
 //! старые map-keys за новым total оригинал не очищает. Безразмерный legacy read
@@ -26,7 +28,9 @@
 use std::collections::BTreeMap;
 
 use super::servercountryregion::is_player_contend_symbol;
-use super::serverregion::{CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError};
+use super::serverregion::{
+    CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError, ServerRegionMonsterRectBlock,
+};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ContendState {
@@ -79,6 +83,7 @@ pub(crate) struct ContendArithmeticBlock {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ContendAiError<MembershipError> {
+    Base(ServerRegionMonsterRectBlock),
     Arithmetic(ContendArithmeticBlock),
     Membership(MembershipError),
 }
@@ -157,7 +162,10 @@ pub(crate) trait WarContendEntryContext: WarRegionContext {
 
 pub(crate) trait WarContendContext: WarContendEntryContext {
     /// Выполняет исходный `CServerRegion::AI` до contender-tick.
-    fn run_base_region_ai(&mut self, region: &mut CServerRegion);
+    fn run_base_region_ai(
+        &mut self,
+        region: &mut CServerRegion,
+    ) -> Result<(), ServerRegionMonsterRectBlock>;
 
     /// Имитирует lookup в глобальном `s_mapPlayer`, возвращая стабильный снимок.
     fn find_global_player(&mut self, player_id: i32) -> Option<ContendPlayerState>;
@@ -394,7 +402,9 @@ impl CServerWarRegion {
         &mut self,
         context: &mut Context,
     ) -> Result<(), ContendAiError<Context::MembershipError>> {
-        context.run_base_region_ai(&mut self.base);
+        context
+            .run_base_region_ai(&mut self.base)
+            .map_err(ContendAiError::Base)?;
         let now_ms = context.now_millis();
         let mut completed = Vec::new();
         for contender in &mut self.contenders {

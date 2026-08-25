@@ -88,9 +88,11 @@
 //! он одновременно питает born-time и concrete spatial membership owner.
 //! One-second AI fragment сохраняет wrapping respawn deadline, сначала пишет
 //! last-reset и затем восполняет только deficit `count-living_count`.
-//! Для concrete Base owner-а этот fragment вызывается реальным `CGame::AI`;
-//! typed spawn/spatial block прекращает дальнейший region tail после уже
-//! выполненной partial mutation.
+//! Для всех concrete region owners этот fragment вызывается реальным
+//! `CGame::AI`; typed spawn/spatial block прекращает weather, дальнейший
+//! region tail и subtype contender после уже выполненной partial mutation.
+//! Следом тот же секундный gate увеличивает weather counter, циклически меняет
+//! segment, выбирает первую cumulative RNG-option и публикует `0xBF507`.
 //! `BTreeMap` используется только для identity lookup: observable обход
 //! старого MSVC `stdext::hash_map` для startup name-cache пока остаётся у
 //! `ServerRegionDecodeContext`, а не подменяется сортировкой Rust-map.
@@ -329,6 +331,21 @@ pub(crate) struct ServerRegionWeatherOption {
 pub(crate) struct ServerRegionWeatherTime {
     pub(crate) time: i32,
     pub(crate) options: Vec<ServerRegionWeatherOption>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ServerRegionWeatherTick {
+    Waiting {
+        segment: usize,
+        count: i32,
+    },
+    AdvancedWithoutSelection {
+        segment: usize,
+    },
+    Changed {
+        segment: usize,
+        weather: Vec<ServerRegionWeather>,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -627,6 +644,8 @@ pub(crate) struct CServerRegion {
     npc_setups: Vec<ServerRegionNpcSetup>,
     monster_setups: Vec<ServerRegionMonsterSetup>,
     weather_setup: Vec<ServerRegionWeatherTime>,
+    current_weather: Vec<ServerRegionWeather>,
+    current_weather_segment: usize,
     npc_name_list: Vec<u8>,
     npc_name_list_count: i32,
     current_weather_count: i32,
@@ -640,6 +659,56 @@ pub(crate) struct CServerRegion {
 impl CServerRegion {
     pub(crate) const fn tax_rate(&self) -> i32 {
         self.param.current_tax_rate
+    }
+
+    /// Periodic weather fragment `CServerRegion::AI`; caller уже применил
+    /// общий one-second gate monster/weather prefix-а.
+    pub(crate) fn advance_weather_tick(
+        &mut self,
+        mut random_below: impl FnMut(i32) -> i32,
+    ) -> ServerRegionWeatherTick {
+        self.current_weather_count = self.current_weather_count.wrapping_add(1);
+        let Some(current) = self.weather_setup.get(self.current_weather_segment) else {
+            return ServerRegionWeatherTick::Waiting {
+                segment: self.current_weather_segment,
+                count: self.current_weather_count,
+            };
+        };
+        if current.time > self.current_weather_count {
+            return ServerRegionWeatherTick::Waiting {
+                segment: self.current_weather_segment,
+                count: self.current_weather_count,
+            };
+        }
+
+        self.current_weather_count = 0;
+        self.current_weather_segment = self.current_weather_segment.wrapping_add(1);
+        if self.current_weather_segment >= self.weather_setup.len() {
+            self.current_weather_segment = 0;
+        }
+        let segment = self.current_weather_segment;
+        let options = &self.weather_setup[segment].options;
+        if options.is_empty() {
+            self.current_weather.clear();
+            return ServerRegionWeatherTick::Changed {
+                segment,
+                weather: Vec::new(),
+            };
+        }
+
+        let odds = random_below(100);
+        let Some(option) = options.iter().find(|option| odds < option.cumulative_odds) else {
+            return ServerRegionWeatherTick::AdvancedWithoutSelection { segment };
+        };
+        self.current_weather.clone_from(&option.weather);
+        ServerRegionWeatherTick::Changed {
+            segment,
+            weather: self.current_weather.clone(),
+        }
+    }
+
+    pub(crate) fn current_weather(&self) -> &[ServerRegionWeather] {
+        &self.current_weather
     }
 
     /// State-owner `AddTaxMoney`: доля superior вычитается до доставки,
@@ -3279,10 +3348,10 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // IMPLEMENTED_SUBCHAIN: сбор, unique insert, state reset и отложенное
 // применение `CS_CHANGEAREA`, а также monster refresh due/deficit/spawn
-// материализованы выше; Base monster refresh подключён к `CGame::AI`, а
-// delete-list storage/unique sleeping append также достигнуты. Weather/delete
-// application/remove и точный move-existing-monsters area callback остаются
-// RAW в этом блоке; change-region/ClearPlayerAI исполняет CGame tail.
+// материализованы выше; общий monster/weather prefix подключён к `CGame::AI`,
+// delete-list application и change-area/change-region/ClearPlayerAI также
+// достигнуты. Shape scan/remove queue и точный move-existing-monsters area
+// callback остаются внешней границей этого блока.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:87

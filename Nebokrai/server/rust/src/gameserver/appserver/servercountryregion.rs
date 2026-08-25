@@ -37,7 +37,8 @@
 //! cancel-by-symbol удаляет все совпадения в порядке списка. AI собирает все
 //! завершённые снимки до callbacks и сохраняет wrapping `DWORD`/signed math.
 //! Реальный caller находится в `CGame::AI`: adapter передаёт live base-region,
-//! canonical players, state/notice wire и virtual country-symbol callback.
+//! общий monster/weather prefix, canonical players, state/notice wire и
+//! virtual country-symbol callback.
 //! `INT_MIN / -1` и недоказанные invalid x87 conversions остаются локальными
 //! typed-границами.
 //! `GetSecurity` до cell lookup проверяет исходный war-byte: false и
@@ -73,8 +74,8 @@ use super::region::{
 };
 use super::servercityregion::{CityGateRuntimeContext, city_gate_footprint_is_clear};
 use super::serverregion::{
-    CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError, ServerReturnPlayer,
-    ServerReturnSetupBlock,
+    CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError,
+    ServerRegionMonsterRectBlock, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use super::serverwarregion::{
     ContendArithmeticBlock, ContendState, RegionDecodeInputBlock, read_region_array,
@@ -218,7 +219,10 @@ pub(crate) trait CountryContendEntryContext {
 
 pub(crate) trait CountryContendContext: CountryContendEntryContext {
     /// Выполняет исходный `CServerRegion::AI` до contender-tick.
-    fn run_base_region_ai(&mut self, region: &mut CServerRegion);
+    fn run_base_region_ai(
+        &mut self,
+        region: &mut CServerRegion,
+    ) -> Result<(), ServerRegionMonsterRectBlock>;
 
     /// Имитирует lookup non-null player-а в глобальном `s_mapPlayer`.
     fn find_global_player(&mut self, player_id: i32) -> Option<CountryContendPlayer>;
@@ -240,6 +244,12 @@ pub(crate) trait CountryContendContext: CountryContendEntryContext {
         region_name: &str,
         symbol_name: &str,
     );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CountryRegionAiError {
+    Base(ServerRegionMonsterRectBlock),
+    Arithmetic(ContendArithmeticBlock),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -697,8 +707,10 @@ impl CServerCountryRegion {
     pub(crate) fn ai<Context: CountryContendContext>(
         &mut self,
         context: &mut Context,
-    ) -> Result<(), ContendArithmeticBlock> {
-        context.run_base_region_ai(&mut self.base);
+    ) -> Result<(), CountryRegionAiError> {
+        context
+            .run_base_region_ai(&mut self.base)
+            .map_err(CountryRegionAiError::Base)?;
         let now_ms = context.now_millis();
         let mut completed = Vec::new();
         for contender in &mut self.contenders {
@@ -711,7 +723,8 @@ impl CServerCountryRegion {
                 contender.current_time = contender.current_time.wrapping_add(elapsed as i32);
                 contender.start_time_ms = now_ms;
                 let percentage =
-                    country_contend_percentage(contender.current_time, contender.max_time)?;
+                    country_contend_percentage(contender.current_time, contender.max_time)
+                        .map_err(CountryRegionAiError::Arithmetic)?;
                 context.send_contend_time(contender.player_id, percentage);
             }
         }

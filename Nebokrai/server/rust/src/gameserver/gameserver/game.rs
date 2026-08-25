@@ -28,8 +28,9 @@
 //! Nation slot вызывает отдельный `ServerNationRegion::AI`: base-region pass,
 //! magic-stone replacements и altar contender completion выполняются одним
 //! reached проходом с morale, player-state, network и NPC spawn effects.
-//! Для concrete Base owner-а секундный monster refresh уже выполняется самим
-//! `CGame`; runtime сохраняет только ещё не материализованный region-AI tail.
+//! Для всех concrete region owner-ов секундный monster refresh и следующий
+//! weather transition выполняются самим `CGame`; runtime сохраняет только ещё
+//! не материализованный shape scan/remove region-AI tail.
 //! После virtual region AI тот же caller применяет ordered `CS_CHANGEAREA` для
 //! canonical players и owned monsters/NPC до change-region/ClearPlayer tail.
 //! Перед area queue он завершает staged player/monster/NPC deletion. Для
@@ -607,8 +608,8 @@ use crate::gameserver::appserver::servercityregion::{
 };
 use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryBattleStateBlock, CountryContendContext,
-    CountryContendEntryContext, CountryContendPlayer, CountryReturnPointContext,
-    CountryReturnPointError,
+    CountryContendEntryContext, CountryContendPlayer, CountryRegionAiError,
+    CountryReturnPointContext, CountryReturnPointError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleCancelByPlayer, GodsBattleContender,
@@ -623,13 +624,13 @@ use crate::gameserver::appserver::serverregion::{
     AreaTransitionBlock, CServerRegion, RegionMembershipBlock, ServerRegionAreaTransitionContext,
     ServerRegionClearPlayerTick, ServerRegionMonsterContext, ServerRegionMonsterRectBlock,
     ServerRegionMonsterRefreshReport, ServerRegionNpcContext, ServerRegionNpcSetup,
-    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport, ServerReturnPlayer,
-    ServerReturnSetupBlock,
+    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport, ServerRegionWeather,
+    ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
-    ContendAiError, ContendArithmeticBlock, ContendPlayerState, SymbolCaptureLog,
-    WarContendContext, WarContendEntryContext, WarRegionContext, WarRegionOwnership,
+    ContendAiError, ContendPlayerState, SymbolCaptureLog, WarContendContext,
+    WarContendEntryContext, WarRegionContext, WarRegionOwnership,
 };
 use crate::gameserver::appserver::session::cequipmentcompose::{
     CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
@@ -2393,7 +2394,6 @@ pub(crate) trait GodsBattleDeathContext {
 pub(crate) trait GodsBattleNpcContendContext:
     ServerRegionMonsterContext + GodsBattlePlayerContext + ScriptFunctionRuntime
 {
-    fn run_gods_battle_base_region_ai(&mut self, region: &mut CServerRegion);
     fn gods_battle_now_milliseconds(&mut self) -> u32;
     fn record_gods_battle_log(&mut self, event: GodsBattleNpcLog);
 }
@@ -2578,11 +2578,17 @@ pub(crate) struct GodsBattleContendCompletionReport {
     pub(crate) deliveries: Vec<i32>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GodsBattleContendAiReport {
     pub(crate) region_id: i32,
+    pub(crate) base_ai: GameServerRegionBaseAiReport,
     pub(crate) progress_deliveries: Vec<(i32, i32, i32)>,
     pub(crate) completions: Vec<GodsBattleContendCompletionReport>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GodsBattleRegionAiError {
+    Base(ServerRegionMonsterRectBlock),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2677,8 +2683,6 @@ pub(crate) trait NationCombatContext: ServerRegionNpcContext {
 pub(crate) trait NationContendContext:
     NationCombatContext + ServerRegionMonsterContext
 {
-    fn run_base_region_ai(&mut self, region: &mut CServerRegion);
-
     /// Выполняет concrete `CMessage::SendToAround` для двух magic-stone
     /// сообщений до virtual удаления исходного NPC.
     fn send_nation_magic_stone_around(
@@ -2791,6 +2795,7 @@ pub(crate) struct NationMagicStoneTransitionReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NationContendAiReport {
     pub(crate) region_id: i32,
+    pub(crate) base_ai: GameServerRegionBaseAiReport,
     pub(crate) magic_stone_transitions: Vec<NationMagicStoneTransitionReport>,
     pub(crate) progress_deliveries: Vec<(i32, i32, i32)>,
     pub(crate) completed: Option<NationContend>,
@@ -2799,6 +2804,12 @@ pub(crate) struct NationContendAiReport {
     pub(crate) state_deliveries: Vec<(i32, Result<i32, ShapeCoordinateBlock>)>,
     pub(crate) top_info_delivery: Option<Result<i32, SendMessageError>>,
     pub(crate) treasure_spawns: Vec<Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NationRegionAiError {
+    Base(ServerRegionMonsterRectBlock),
+    Contend(NationContendArithmeticBlock),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2978,11 +2989,11 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
     pub(crate) base_region: Option<BaseRegionAiReport>,
-    pub(crate) nation_contend: Option<Result<NationContendAiReport, NationContendArithmeticBlock>>,
+    pub(crate) nation_contend: Option<Result<NationContendAiReport, NationRegionAiError>>,
     pub(crate) city_contend: Option<CityRegionAiReport>,
     pub(crate) village_contend: Option<VillageRegionAiReport>,
     pub(crate) country_contend: Option<CountryRegionAiReport>,
-    pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
+    pub(crate) gods_battle: Option<Result<GodsBattleContendAiReport, GodsBattleRegionAiError>>,
     pub(crate) deletions: Vec<GameRegionDeletionReport>,
     pub(crate) area_transitions: Vec<GameAreaTransitionReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
@@ -3005,9 +3016,19 @@ pub(crate) struct GameAreaTransitionReport {
 pub(crate) struct BaseRegionAiReport {
     pub(crate) region_id: i32,
     pub(crate) ai_tick: i32,
-    pub(crate) monster_refresh:
-        Result<Option<ServerRegionMonsterRefreshReport>, ServerRegionMonsterRectBlock>,
-    pub(crate) tail_called: bool,
+    pub(crate) base_ai: Result<GameServerRegionBaseAiReport, ServerRegionMonsterRectBlock>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameServerRegionBaseAiReport {
+    pub(crate) monster_refresh: Option<ServerRegionMonsterRefreshReport>,
+    pub(crate) weather: Option<GameRegionWeatherReport>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameRegionWeatherReport {
+    pub(crate) tick: ServerRegionWeatherTick,
+    pub(crate) delivery: Option<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3047,7 +3068,8 @@ pub(crate) enum CountryRegionAiEffect {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CountryRegionAiReport {
     pub(crate) region_id: i32,
-    pub(crate) result: Result<(), ContendArithmeticBlock>,
+    pub(crate) result: Result<(), CountryRegionAiError>,
+    pub(crate) base_ai: Option<GameServerRegionBaseAiReport>,
     pub(crate) effects: Vec<CountryRegionAiEffect>,
 }
 
@@ -3055,6 +3077,8 @@ struct GameCountryRegionAiContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
     region: CServerRegion,
+    ai_tick: i32,
+    base_ai: Option<GameServerRegionBaseAiReport>,
     effects: Vec<CountryRegionAiEffect>,
 }
 
@@ -3105,9 +3129,20 @@ impl<Runtime: GameMainLoopRuntime> CountryContendEntryContext
 impl<Runtime: GameMainLoopRuntime> CountryContendContext
     for GameCountryRegionAiContext<'_, Runtime>
 {
-    fn run_base_region_ai(&mut self, region: &mut CServerRegion) {
-        self.runtime.run_country_base_region_ai(self.game, region);
+    fn run_base_region_ai(
+        &mut self,
+        region: &mut CServerRegion,
+    ) -> Result<(), ServerRegionMonsterRectBlock> {
+        let tick_interval_ms = self.runtime.tick_interval_ms() as i32;
+        let base_ai = self.game.run_server_region_base_ai(
+            region,
+            self.ai_tick,
+            tick_interval_ms,
+            self.runtime,
+        )?;
+        self.base_ai = Some(base_ai);
         self.region = region.clone();
+        Ok(())
     }
 
     fn find_global_player(&mut self, player_id: i32) -> Option<CountryContendPlayer> {
@@ -3241,6 +3276,7 @@ pub(crate) struct CityRegionAiReport {
     pub(crate) result: Result<(), ContendAiError<AttackCityMembershipBlock>>,
     pub(crate) owner: WarRegionOwnership,
     pub(crate) defence_side_faction_id: i32,
+    pub(crate) base_ai: Option<GameServerRegionBaseAiReport>,
     pub(crate) effects: Vec<CityRegionAiEffect>,
 }
 
@@ -3248,6 +3284,8 @@ struct GameCityRegionAiContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
     region: CServerRegion,
+    ai_tick: i32,
+    base_ai: Option<GameServerRegionBaseAiReport>,
     war_number: i32,
     owner: WarRegionOwnership,
     defence_side_faction_id: i32,
@@ -3373,13 +3411,24 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext for GameCityRegionAiCo
 }
 
 impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext<'_, Runtime> {
-    fn run_base_region_ai(&mut self, region: &mut CServerRegion) {
-        self.runtime.run_city_base_region_ai(self.game, region);
+    fn run_base_region_ai(
+        &mut self,
+        region: &mut CServerRegion,
+    ) -> Result<(), ServerRegionMonsterRectBlock> {
+        let tick_interval_ms = self.runtime.tick_interval_ms() as i32;
+        let base_ai = self.game.run_server_region_base_ai(
+            region,
+            self.ai_tick,
+            tick_interval_ms,
+            self.runtime,
+        )?;
+        self.base_ai = Some(base_ai);
         self.region = region.clone();
         self.owner = WarRegionOwnership {
             faction_id: region.param.owned_faction_id,
             union_id: region.param.owned_union_id,
         };
+        Ok(())
     }
 
     fn find_global_player(&mut self, player_id: i32) -> Option<ContendPlayerState> {
@@ -3545,6 +3594,7 @@ pub(crate) struct VillageRegionAiReport {
     pub(crate) region_id: i32,
     pub(crate) result: Result<(), ContendAiError<Infallible>>,
     pub(crate) flag_owner_faction_id: i32,
+    pub(crate) base_ai: Option<GameServerRegionBaseAiReport>,
     pub(crate) effects: Vec<VillageRegionAiEffect>,
 }
 
@@ -3553,6 +3603,8 @@ struct GameVillageRegionAiContext<'a, Runtime> {
     runtime: &'a mut Runtime,
     region: CServerRegion,
     war_number: i32,
+    ai_tick: i32,
+    base_ai: Option<GameServerRegionBaseAiReport>,
     flag_owner_faction_id: i32,
     needed_goods: Vec<String>,
     effects: Vec<VillageRegionAiEffect>,
@@ -3702,9 +3754,20 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext
 }
 
 impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiContext<'_, Runtime> {
-    fn run_base_region_ai(&mut self, region: &mut CServerRegion) {
-        self.runtime.run_village_base_region_ai(self.game, region);
+    fn run_base_region_ai(
+        &mut self,
+        region: &mut CServerRegion,
+    ) -> Result<(), ServerRegionMonsterRectBlock> {
+        let tick_interval_ms = self.runtime.tick_interval_ms() as i32;
+        let base_ai = self.game.run_server_region_base_ai(
+            region,
+            self.ai_tick,
+            tick_interval_ms,
+            self.runtime,
+        )?;
+        self.base_ai = Some(base_ai);
         self.region = region.clone();
+        Ok(())
     }
 
     fn find_global_player(&mut self, player_id: i32) -> Option<ContendPlayerState> {
@@ -4033,9 +4096,9 @@ pub(crate) trait GameMainLoopRuntime:
     fn player_done_goods_ai_and_delete_list(&mut self, game: &mut CGame, player_id: i32);
     fn player_done_flash(&mut self, game: &mut CGame, player_id: i32);
     fn player_done_tao_zhuang(&mut self, game: &mut CGame, player_id: i32);
-    /// Выполняет ещё не материализованный `CServerRegion::AI` prefix для
-    /// concrete country owner-а; actual region storage передаётся напрямую.
-    fn run_country_base_region_ai(&mut self, game: &mut CGame, region: &mut CServerRegion);
+    /// Выполняет оставшийся shape scan/remove-queue tail после owned periodic
+    /// monster refresh и weather transition над actual region storage.
+    fn run_region_ai_after_weather(&mut self, game: &mut CGame, region: &mut CServerRegion);
     /// Concrete virtual slot country-region-а после записи symbol owner-а.
     fn on_country_win_one_symbol(
         &mut self,
@@ -4044,14 +4107,12 @@ pub(crate) trait GameMainLoopRuntime:
         country: i32,
         symbol_id: i32,
     );
-    fn run_city_base_region_ai(&mut self, game: &mut CGame, region: &mut CServerRegion);
     fn write_city_symbol_capture_log(
         &mut self,
         game: &mut CGame,
         region_id: i32,
         capture: &CitySymbolCaptureLog,
     );
-    fn run_village_base_region_ai(&mut self, game: &mut CGame, region: &mut CServerRegion);
     /// Concrete `CServerVillageRegion::OnFactionVictory` external callback;
     /// owner state сам village override синхронно не меняет.
     fn on_village_faction_victory(
@@ -4067,9 +4128,6 @@ pub(crate) trait GameMainLoopRuntime:
         region_id: i32,
         capture: &VillageSymbolCaptureLog,
     );
-    /// Выполняет оставшийся weather/shape-scan/remove-queue region-AI tail
-    /// после Base monster refresh; staged owned deletion применяет CGame.
-    fn region_ai_before_clear_player(&mut self, game: &mut CGame, region_id: i32);
     fn wait(&mut self, duration_ms: u32);
     fn output_debug(&mut self, message: &'static str);
 }
@@ -6942,30 +7000,43 @@ impl CGame {
         })
     }
 
-    pub(crate) fn nation_contend_ai<Context: NationContendContext>(
+    pub(crate) fn nation_contend_ai<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
-        context: &mut Context,
-    ) -> Option<Result<NationContendAiReport, NationContendArithmeticBlock>> {
+        ai_tick: i32,
+        tick_interval_ms: i32,
+        runtime: &mut Runtime,
+    ) -> Option<Result<NationContendAiReport, NationRegionAiError>> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
             self.restore_region_owner(owner);
             return None;
         };
-        context.run_base_region_ai(&mut region.war.base);
+        let base_ai = match self.run_server_region_base_ai(
+            &mut region.war.base,
+            ai_tick,
+            tick_interval_ms,
+            runtime,
+        ) {
+            Ok(report) => report,
+            Err(error) => {
+                self.restore_region_owner(ServerRegionOwner::Nation(region));
+                return Some(Err(NationRegionAiError::Base(error)));
+            }
+        };
         let mut magic_stone_transitions = Vec::new();
         for country in region.take_due_magic_stone_transitions() {
             magic_stone_transitions.push(self.replace_nation_magic_stone(
                 &mut region,
                 country,
-                context,
+                runtime,
             ));
         }
-        let advance = match region.advance_contenders(context.now_milliseconds()) {
+        let advance = match region.advance_contenders(runtime.now_milliseconds()) {
             Ok(advance) => advance.unwrap_or_default(),
             Err(error) => {
                 self.restore_region_owner(ServerRegionOwner::Nation(region));
-                return Some(Err(error));
+                return Some(Err(NationRegionAiError::Contend(error)));
             }
         };
         let mut progress_deliveries = Vec::with_capacity(advance.progress.len());
@@ -6982,7 +7053,7 @@ impl CGame {
         let mut treasure_spawns = Vec::new();
         if let Some(contender) = completed {
             completion_deliveries.push(self.send_nation_contend_time(contender.player_id, 100));
-            context.add_log_text(self.get_string_by_id(b"GS1072"));
+            runtime.add_log_text(self.get_string_by_id(b"GS1072"));
             completion_outcome = Some(match self.find_player(contender.player_id) {
                 None => NationContendCompletionOutcome::PlayerMissing,
                 Some(player) if !player.can_attack_nation_monster() => {
@@ -7000,12 +7071,12 @@ impl CGame {
                                     &region.war.base,
                                     *cancelled_player_id,
                                     false,
-                                    context,
+                                    runtime,
                                 ) {
                                     state_deliveries.push((*cancelled_player_id, delivery));
                                 }
                             }
-                            context.add_log_text(self.get_string_by_id(b"GS1073"));
+                            runtime.add_log_text(self.get_string_by_id(b"GS1073"));
                             completion_deliveries.push(
                                 self.four_nation_morale_snapshot(
                                     *region.morale(),
@@ -7074,7 +7145,7 @@ impl CGame {
                                     script,
                                     x,
                                     y,
-                                    context,
+                                    runtime,
                                 ));
                             }
                             NationContendCompletionOutcome::Captured(capture)
@@ -7087,6 +7158,7 @@ impl CGame {
         self.restore_region_owner(ServerRegionOwner::Nation(region));
         Some(Ok(NationContendAiReport {
             region_id,
+            base_ai,
             magic_stone_transitions,
             progress_deliveries,
             completed,
@@ -15414,21 +15486,36 @@ impl CGame {
         })
     }
 
-    pub(crate) fn gods_battle_contend_ai<Context: GodsBattleNpcContendContext>(
+    pub(crate) fn gods_battle_contend_ai<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
-        context: &mut Context,
-    ) -> Option<GodsBattleContendAiReport> {
+        ai_tick: i32,
+        tick_interval_ms: i32,
+        runtime: &mut Runtime,
+    ) -> Option<Result<GodsBattleContendAiReport, GodsBattleRegionAiError>> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::GodsBattle(mut region) = owner else {
             self.restore_region_owner(owner);
             return None;
         };
-        context.run_gods_battle_base_region_ai(&mut region.war.base);
-        let advance = region.advance_contenders(context.gods_battle_now_milliseconds());
+        let base_ai = match self.run_server_region_base_ai(
+            &mut region.war.base,
+            ai_tick,
+            tick_interval_ms,
+            runtime,
+        ) {
+            Ok(report) => report,
+            Err(error) => {
+                self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+                return Some(Err(GodsBattleRegionAiError::Base(error)));
+            }
+        };
+        let advance = region.advance_contenders(runtime.gods_battle_now_milliseconds());
         let mut report = GodsBattleContendAiReport {
             region_id,
-            ..GodsBattleContendAiReport::default()
+            base_ai,
+            progress_deliveries: Vec::new(),
+            completions: Vec::new(),
         };
         for (player_id, percentage) in advance.progress {
             let delivery = self.send_gods_battle_contend_time(player_id, percentage);
@@ -15440,9 +15527,9 @@ impl CGame {
         for contender in advance.completed {
             report
                 .completions
-                .push(self.complete_gods_battle_contend(region_id, contender, context));
+                .push(self.complete_gods_battle_contend(region_id, contender, runtime));
         }
-        Some(report)
+        Some(Ok(report))
     }
 
     fn complete_gods_battle_contend<Context: GodsBattleNpcContendContext>(
@@ -22038,9 +22125,62 @@ impl CGame {
         Some(report)
     }
 
-    /// Достигнутый prefix `CServerRegion::AI` для concrete Base owner-а:
-    /// one-second monster refresh исполняется над canonical storage, а внешний
-    /// runtime получает только оставшийся weather/shape/delete tail.
+    fn run_region_weather_tick<Context: RegionRandomContext>(
+        &self,
+        region: &mut CServerRegion,
+        context: &mut Context,
+    ) -> GameRegionWeatherReport {
+        let tick = region.advance_weather_tick(|bound| context.random_below(bound));
+        let delivery = match &tick {
+            ServerRegionWeatherTick::Changed { weather, .. } => {
+                let mut message = CMessage::new(0x000b_f507);
+                message.add_ulong(weather.len() as u32);
+                for ServerRegionWeather {
+                    weather_index,
+                    fog_color,
+                } in weather
+                {
+                    message.add_long(*weather_index);
+                    message.add_ulong(*fog_color);
+                }
+                Some(message.send_to_region(Some(region), None, self))
+            }
+            ServerRegionWeatherTick::Waiting { .. }
+            | ServerRegionWeatherTick::AdvancedWithoutSelection { .. } => None,
+        };
+        GameRegionWeatherReport { tick, delivery }
+    }
+
+    fn run_server_region_base_ai<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region: &mut CServerRegion,
+        ai_tick: i32,
+        tick_interval_ms: i32,
+        runtime: &mut Runtime,
+    ) -> Result<GameServerRegionBaseAiReport, ServerRegionMonsterRectBlock> {
+        let period = (1_000i32 / tick_interval_ms) as u32;
+        let periodic_due = (ai_tick as u32) % period == 0;
+        let monster_refresh = if periodic_due {
+            let now_ms = runtime.get_tick_ms();
+            Some(region.refresh_monster_groups(
+                now_ms,
+                self.globe_setup.area_width(),
+                self.globe_setup.area_height(),
+                runtime,
+            )?)
+        } else {
+            None
+        };
+        let weather = periodic_due.then(|| self.run_region_weather_tick(region, runtime));
+        runtime.run_region_ai_after_weather(self, region);
+        Ok(GameServerRegionBaseAiReport {
+            monster_refresh,
+            weather,
+        })
+    }
+
+    /// Достигнутый prefix `CServerRegion::AI` для concrete Base owner-а;
+    /// общий helper ниже используется всеми subtype-ами в том же ordering.
     pub(crate) fn run_base_server_region_ai<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
@@ -22053,30 +22193,13 @@ impl CGame {
             return None;
         };
         let tick_interval_ms = runtime.tick_interval_ms() as i32;
-        let period = (1_000i32 / tick_interval_ms) as u32;
-        let monster_refresh = if (ai_tick as u32) % period == 0 {
-            let now_ms = runtime.get_tick_ms();
-            region
-                .refresh_monster_groups(
-                    now_ms,
-                    self.globe_setup.area_width(),
-                    self.globe_setup.area_height(),
-                    runtime,
-                )
-                .map(Some)
-        } else {
-            Ok(None)
-        };
-        let tail_called = monster_refresh.is_ok();
+        let base_ai =
+            self.run_server_region_base_ai(&mut region, ai_tick, tick_interval_ms, runtime);
         self.restore_region_owner(ServerRegionOwner::Base(region));
-        if tail_called {
-            runtime.region_ai_before_clear_player(self, region_id);
-        }
         Some(BaseRegionAiReport {
             region_id,
             ai_tick,
-            monster_refresh,
-            tail_called,
+            base_ai,
         })
     }
 
@@ -22086,6 +22209,7 @@ impl CGame {
     pub(crate) fn run_country_region_ai<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
+        ai_tick: i32,
         runtime: &mut Runtime,
     ) -> Option<CountryRegionAiReport> {
         let owner = self.take_region_owner(region_id)?;
@@ -22098,15 +22222,19 @@ impl CGame {
             game: self,
             runtime,
             region: projection,
+            ai_tick,
+            base_ai: None,
             effects: Vec::new(),
         };
         let result = region.ai(&mut context);
+        let base_ai = context.base_ai.take();
         let effects = std::mem::take(&mut context.effects);
         drop(context);
         self.restore_region_owner(ServerRegionOwner::Country(region));
         Some(CountryRegionAiReport {
             region_id,
             result,
+            base_ai,
             effects,
         })
     }
@@ -22117,6 +22245,7 @@ impl CGame {
     pub(crate) fn run_city_region_ai<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
+        ai_tick: i32,
         runtime: &mut Runtime,
     ) -> Option<CityRegionAiReport> {
         let owner = self.take_region_owner(region_id)?;
@@ -22129,6 +22258,8 @@ impl CGame {
             game: self,
             runtime,
             region: projection,
+            ai_tick,
+            base_ai: None,
             war_number: region.war.base.war_number,
             owner: WarRegionOwnership {
                 faction_id: region.war.base.param.owned_faction_id,
@@ -22140,6 +22271,7 @@ impl CGame {
         let result = region.war.ai(&mut context);
         let owner = context.owner;
         let defence_side_faction_id = context.defence_side_faction_id;
+        let base_ai = context.base_ai.take();
         let effects = std::mem::take(&mut context.effects);
         drop(context);
         region.defence_side_faction_id = defence_side_faction_id;
@@ -22149,6 +22281,7 @@ impl CGame {
             result,
             owner,
             defence_side_faction_id,
+            base_ai,
             effects,
         })
     }
@@ -22159,6 +22292,7 @@ impl CGame {
     pub(crate) fn run_village_region_ai<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
+        ai_tick: i32,
         runtime: &mut Runtime,
     ) -> Option<VillageRegionAiReport> {
         let owner = self.take_region_owner(region_id)?;
@@ -22172,12 +22306,15 @@ impl CGame {
             runtime,
             region: projection,
             war_number: region.war.base.war_number,
+            ai_tick,
+            base_ai: None,
             flag_owner_faction_id: region.flag_owner_faction_id,
             needed_goods: Vec::new(),
             effects: Vec::new(),
         };
         let result = region.war.ai(&mut context);
         let flag_owner_faction_id = context.flag_owner_faction_id;
+        let base_ai = context.base_ai.take();
         let needed_goods = std::mem::take(&mut context.needed_goods);
         let effects = std::mem::take(&mut context.effects);
         drop(context);
@@ -22188,6 +22325,7 @@ impl CGame {
             region_id,
             result,
             flag_owner_faction_id,
+            base_ai,
             effects,
         })
     }
@@ -22208,6 +22346,7 @@ impl CGame {
         // MainLoop увеличивает legacy global tick непосредственно перед AI,
         // а owned state публикует после возврата из всего прохода.
         let ai_tick = self.main_loop_state.ai_tick.wrapping_add(1);
+        let tick_interval_ms = runtime.tick_interval_ms() as i32;
         let region_ids: Vec<_> = self.regions.keys().copied().collect();
         let mut regions = Vec::with_capacity(region_ids.len());
         for region_id in region_ids {
@@ -22301,7 +22440,7 @@ impl CGame {
                     None,
                     None,
                     None,
-                    self.gods_battle_contend_ai(region_id, runtime),
+                    self.gods_battle_contend_ai(region_id, ai_tick, tick_interval_ms, runtime),
                 )
             } else if is_base {
                 (
@@ -22315,7 +22454,7 @@ impl CGame {
             } else if is_nation {
                 (
                     None,
-                    self.nation_contend_ai(region_id, runtime),
+                    self.nation_contend_ai(region_id, ai_tick, tick_interval_ms, runtime),
                     None,
                     None,
                     None,
@@ -22327,14 +22466,14 @@ impl CGame {
                     None,
                     None,
                     None,
-                    self.run_country_region_ai(region_id, runtime),
+                    self.run_country_region_ai(region_id, ai_tick, runtime),
                     None,
                 )
             } else if is_city {
                 (
                     None,
                     None,
-                    self.run_city_region_ai(region_id, runtime),
+                    self.run_city_region_ai(region_id, ai_tick, runtime),
                     None,
                     None,
                     None,
@@ -22344,12 +22483,11 @@ impl CGame {
                     None,
                     None,
                     None,
-                    self.run_village_region_ai(region_id, runtime),
+                    self.run_village_region_ai(region_id, ai_tick, runtime),
                     None,
                     None,
                 )
             } else {
-                runtime.region_ai_before_clear_player(self, region_id);
                 (None, None, None, None, None, None)
             };
             let mut area_resolver = RegionBlockRefreshResolver::default();
