@@ -93,6 +93,7 @@ pub(crate) mod appserver {
     pub(crate) mod monster;
     pub(crate) mod moveshape;
     pub(crate) mod npc;
+    pub(crate) mod pksys;
     pub(crate) mod player;
     pub(crate) mod proxyserverregion;
     pub(crate) mod organizingsystem {

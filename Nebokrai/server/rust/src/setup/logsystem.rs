@@ -117,6 +117,12 @@ impl CLogSystem {
         self.setting(28)
     }
 
+    /// Positional `bPlayerKiller +30`: первый удар/skill по допустимой
+    /// player-цели пишет `0x6020A` в World только при включённом аудите.
+    pub(crate) fn player_killer_log_enabled(&self) -> bool {
+        self.setting(30)
+    }
+
     pub(crate) fn goods_lost_by_upgrade_enabled(&self) -> bool {
         self.setting(7)
     }

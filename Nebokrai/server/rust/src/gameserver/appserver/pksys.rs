@@ -1,12 +1,78 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! PK-policy исторического GameServer.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
+//! `server/gameserver/appserver/pksys.cpp`. Достигнутый `OnFirstSkill`
+//! вызывается реальным `skillmessage 0x90001` перед постановкой object-target
+//! skill в `CPlayerAI`: сохраняет exact victim/security/faction-war gates,
+//! GodsBattle faction либо country rule, criminal transition и World audit
+//! `0x6020A`. Остальные функции ниже пока остаются RAW и не объявляются
+//! исполненными.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\pksys.cpp
+
+use crate::gameserver::appserver::region::RegionSecurity;
+use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
+use crate::nets::netserver::message::SendMessageError;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FirstSkillPkFacts {
+    pub(crate) victim_is_badman: bool,
+    pub(crate) security: RegionSecurity,
+    pub(crate) city_war_enemies: bool,
+    pub(crate) faction_war_enemies: bool,
+    pub(crate) gods_battle_region: bool,
+    pub(crate) same_gods_battle_faction: bool,
+    pub(crate) same_country: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FirstSkillPkDisposition {
+    VictimAlreadyBadman,
+    ProtectedSecurity,
+    CityWarEnemies,
+    FactionWarEnemies,
+    AllowedCombat,
+    EnterCriminalState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FirstSkillPkReport {
+    pub(crate) attacker_id: i32,
+    pub(crate) victim_id: i32,
+    pub(crate) region_id: i32,
+    pub(crate) disposition: FirstSkillPkDisposition,
+    pub(crate) criminal_timestamp_refreshed: bool,
+    pub(crate) criminal_state_started: bool,
+    pub(crate) criminal_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) world_log_delivery: Option<Result<i32, SendMessageError>>,
+}
+
+/// Stateless singleton semantics исходного `CPKSys::OnFirstSkill`.
+pub(crate) struct CPKSys;
+
+impl CPKSys {
+    pub(crate) fn on_first_skill(facts: FirstSkillPkFacts) -> FirstSkillPkDisposition {
+        if facts.victim_is_badman {
+            FirstSkillPkDisposition::VictimAlreadyBadman
+        } else if facts.security != RegionSecurity::FREE {
+            FirstSkillPkDisposition::ProtectedSecurity
+        } else if facts.city_war_enemies {
+            FirstSkillPkDisposition::CityWarEnemies
+        } else if facts.faction_war_enemies {
+            FirstSkillPkDisposition::FactionWarEnemies
+        } else if (facts.gods_battle_region && facts.same_gods_battle_faction)
+            || (!facts.gods_battle_region && facts.same_country)
+        {
+            FirstSkillPkDisposition::EnterCriminalState
+        } else {
+            FirstSkillPkDisposition::AllowedCombat
+        }
+    }
+}
 
 // ============================================================================
 // FUNCTION: CPKSys::getInstance
@@ -175,7 +241,6 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // ============================================================================
 // FUNCTION: Catch@00432321
@@ -386,517 +451,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

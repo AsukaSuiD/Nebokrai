@@ -630,6 +630,9 @@ use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationRect,
 };
 use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSys;
+use crate::gameserver::appserver::pksys::{
+    CPKSys, FirstSkillPkDisposition, FirstSkillPkFacts, FirstSkillPkReport,
+};
 use crate::gameserver::appserver::player::{
     AuctionSelfGoodsRefresh, BattleFairyCombineDelivery, BattleFairyCombineEffect,
     BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
@@ -30500,39 +30503,42 @@ impl CGame {
     /// Player mutation и effects сохраняют native order: optional contend
     /// notice, безусловный `ClearEmotion 0xBF611`, authorization, socket
     /// reject либо очередь concrete `CPlayerAI`.
-    pub(crate) fn request_player_skill(
+    pub(crate) fn request_player_skill<Context: GameClockContext>(
         &mut self,
         player_id: i32,
         socket_id: i32,
         request: PlayerSkillRequest,
         facts: PlayerSkillRequestFacts,
+        context: &mut Context,
     ) -> Option<PlayerSkillRequestReport> {
         let report = self
             .players
             .get_mut(&player_id)
             .map(|player| player.request_player_skill(request, facts, &self.skill_factory))?;
-        Some(self.deliver_player_skill_report(player_id, socket_id, report))
+        Some(self.deliver_player_skill_report(player_id, socket_id, report, context))
     }
 
-    pub(crate) fn request_item_skill(
+    pub(crate) fn request_item_skill<Context: GameClockContext>(
         &mut self,
         player_id: i32,
         socket_id: i32,
         request: PlayerSkillRequest,
         skill_level: i32,
         facts: PlayerSkillRequestFacts,
+        context: &mut Context,
     ) -> Option<PlayerSkillRequestReport> {
         let report = self.players.get_mut(&player_id).map(|player| {
             player.request_item_skill(request, skill_level, facts, &self.skill_factory)
         })?;
-        Some(self.deliver_player_skill_report(player_id, socket_id, report))
+        Some(self.deliver_player_skill_report(player_id, socket_id, report, context))
     }
 
-    fn deliver_player_skill_report(
+    fn deliver_player_skill_report<Context: GameClockContext>(
         &mut self,
         player_id: i32,
         socket_id: i32,
         mut report: PlayerSkillRequestReport,
+        context: &mut Context,
     ) -> PlayerSkillRequestReport {
         for effect in report.effects.clone() {
             match effect {
@@ -30591,6 +30597,20 @@ impl CGame {
                         ));
                 }
                 PlayerSkillRequestEffect::AiDispatch(dispatch) => {
+                    if let crate::gameserver::appserver::player::PlayerSkillDispatch::Object {
+                        target,
+                        ..
+                    } = dispatch
+                    {
+                        if target.object_type == 400 {
+                            report.pk_first_skill = self.player_on_first_skill(
+                                player_id,
+                                target.id,
+                                report.region_id,
+                                context,
+                            );
+                        }
+                    }
                     self.players
                         .get_mut(&player_id)
                         .expect("skill dispatch сохраняет canonical player")
@@ -30601,6 +30621,96 @@ impl CGame {
             }
         }
         report
+    }
+
+    /// Reached `CPKSys::OnFirstSkill` caller: выполняется непосредственно
+    /// перед canonical `CPlayerAI` queue и использует ту же object-target
+    /// identity. Все policy facts берутся из live player/region owners.
+    fn player_on_first_skill<Context: GameClockContext>(
+        &mut self,
+        attacker_id: i32,
+        victim_id: i32,
+        region_id: Option<i32>,
+        context: &mut Context,
+    ) -> Option<FirstSkillPkReport> {
+        let region_id = region_id?;
+        let attacker = self.find_player(attacker_id)?;
+        let victim = self.find_player(victim_id)?;
+        if attacker.server_region_id() != Some(region_id)
+            || victim.server_region_id() != Some(region_id)
+        {
+            return None;
+        }
+        let victim_x = victim.shape().get_tile_x().ok()?;
+        let victim_y = victim.shape().get_tile_y().ok()?;
+        let owner = self.find_region(region_id)?;
+        let security = owner.get_security(victim_x, victim_y).ok()?;
+        let gods_battle_region = owner.is_gods_battle();
+        let attacker_faction = attacker.faction_id();
+        let victim_faction = victim.faction_id();
+        let city_war_enemies = attacker_faction > 0
+            && victim_faction > 0
+            && (attacker.is_city_war_enemy_faction_member(victim_faction)
+                || victim.is_city_war_enemy_faction_member(attacker_faction));
+        let faction_war_enemies = attacker_faction > 0
+            && victim_faction > 0
+            && (attacker.is_enemy_faction_member(victim_faction)
+                || victim.is_enemy_faction_member(attacker_faction));
+        let disposition = CPKSys::on_first_skill(FirstSkillPkFacts {
+            victim_is_badman: victim.is_badman(self.globe_setup.pk_count_per_kill()),
+            security,
+            city_war_enemies,
+            faction_war_enemies,
+            gods_battle_region,
+            same_gods_battle_faction: attacker.gods_battle_faction()
+                == victim.gods_battle_faction(),
+            same_country: attacker.country() == victim.country(),
+        });
+        let victim_level = victim.level();
+        let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
+        let mut criminal_timestamp_refreshed = false;
+        let mut criminal_state_started = false;
+        let mut criminal_delivery = None;
+        if disposition == FirstSkillPkDisposition::EnterCriminalState {
+            if let Some(started) = self
+                .find_player_mut(attacker_id)?
+                .enter_criminal_state(pk_count_per_kill, || context.now_milliseconds())
+            {
+                criminal_timestamp_refreshed = true;
+                criminal_state_started = started;
+                if started {
+                    let mut message = CMessage::new(0x000b_f60e);
+                    message.add_long(attacker_id);
+                    message.add_byte(1);
+                    criminal_delivery = self.send_player_shape_around(attacker_id, None, &message);
+                }
+            }
+        }
+        let eligible = matches!(
+            disposition,
+            FirstSkillPkDisposition::AllowedCombat | FirstSkillPkDisposition::EnterCriminalState
+        );
+        let world_log_delivery =
+            (eligible && self.log_system.player_killer_log_enabled()).then(|| {
+                let mut message = CMessage::new(0x0006_020a);
+                message.add_byte(0);
+                message.add_long(victim_id);
+                message.add_long(attacker_id);
+                message.add_ulong(u32::from(victim_level));
+                message.add_long(victim_x);
+                message.add_long(victim_y);
+                message.send(self, false)
+            });
+        Some(FirstSkillPkReport {
+            attacker_id,
+            victim_id,
+            region_id,
+            disposition,
+            criminal_timestamp_refreshed,
+            criminal_state_started,
+            criminal_delivery,
+            world_log_delivery,
+        })
     }
 
     fn send_player_around_excluding_self(

@@ -799,6 +799,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
             let mut faction_master_id = 0;
             let mut faction_name = Vec::new();
             let mut union_id = 0;
+            let mut enemy_factions = std::collections::BTreeSet::new();
+            let mut city_war_enemy_factions = std::collections::BTreeSet::new();
             if faction_id > 0 {
                 let _logo_id = read_i32(message, "faction logo ID")?;
                 faction_level = message.base_mut().get_word().ok_or(
@@ -820,13 +822,16 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 faction_master_id = read_i32(message, "faction master ID")?;
                 union_id = read_i32(message, "union ID")?;
                 let _union_master_id = read_i32(message, "union master ID")?;
-                for field in ["enemy factions", "city-war enemy factions"] {
+                for (field, destination) in [
+                    ("enemy factions", &mut enemy_factions),
+                    ("city-war enemy factions", &mut city_war_enemy_factions),
+                ] {
                     let count = read_i32(message, field)?;
                     if count < 0 {
                         return Err(FactionLifecycleDispatchError::InvalidPayload);
                     }
                     for _ in 0..count {
-                        let _ = read_i32(message, field)?;
+                        destination.insert(read_i32(message, field)?);
                     }
                 }
                 let owned_count = read_i32(message, "owned regions")?;
@@ -857,6 +862,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                     faction_master_id,
                     &faction_name,
                     union_id,
+                    enemy_factions,
+                    city_war_enemy_factions,
                 );
                 true
             } else {

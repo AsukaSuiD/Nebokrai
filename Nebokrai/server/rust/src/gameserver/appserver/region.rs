@@ -137,6 +137,8 @@ impl RegionCell {
 pub(crate) struct RegionSecurity(u8);
 
 impl RegionSecurity {
+    pub(crate) const FREE: Self = Self(0);
+    pub(crate) const FIGHT: Self = Self(1);
     pub(crate) const SAFE: Self = Self(2);
     pub(crate) const CITY_WAR: Self = Self(3);
 

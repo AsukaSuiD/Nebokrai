@@ -310,6 +310,7 @@ use super::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionFacts,
     MoveShapeSkill,
 };
+use super::pksys::FirstSkillPkReport;
 use super::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
@@ -1087,6 +1088,7 @@ pub(crate) struct PlayerSkillRequestReport {
     pub(crate) outcome: PlayerSkillRequestOutcome,
     pub(crate) effects: Vec<PlayerSkillRequestEffect>,
     pub(crate) deliveries: Vec<PlayerSkillRequestDelivery>,
+    pub(crate) pk_first_skill: Option<FirstSkillPkReport>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1945,6 +1947,8 @@ pub(crate) struct CPlayer {
     faction_level: u16,
     faction_master_id: i32,
     faction_name: Vec<u8>,
+    enemy_factions: BTreeSet<i32>,
+    city_war_enemy_factions: BTreeSet<i32>,
     union_id: i32,
     team_id: i32,
     team_captain: bool,
@@ -2281,6 +2285,8 @@ impl CPlayer {
             faction_level: 0,
             faction_master_id: 0,
             faction_name: Vec::new(),
+            enemy_factions: BTreeSet::new(),
+            city_war_enemy_factions: BTreeSet::new(),
             union_id: 0,
             team_id,
             team_captain: false,
@@ -3241,15 +3247,23 @@ impl CPlayer {
                 read_player_game_save_i32(source, cursor, "m_lFactionMasterID")?;
             self.union_id = read_player_game_save_i32(source, cursor, "m_lUnionID")?;
             let _union_master = read_player_game_save_i32(source, cursor, "m_lUnionMasterID")?;
-            for field in ["m_EnemyFactions", "m_CityWarEnemyFactions"] {
+            for (field, destination) in [
+                ("m_EnemyFactions", &mut self.enemy_factions),
+                ("m_CityWarEnemyFactions", &mut self.city_war_enemy_factions),
+            ] {
                 let count = read_player_game_save_count(source, cursor, field)?;
-                let _ = read_player_game_save_slice(source, cursor, field, count * 4)?;
+                destination.clear();
+                for _ in 0..count {
+                    destination.insert(read_player_game_save_i32(source, cursor, field)?);
+                }
             }
             let count = read_player_game_save_count(source, cursor, "m_OwnedRegions")?;
             let _ = read_player_game_save_slice(source, cursor, "m_OwnedRegions", count * 8)?;
         } else {
             self.faction_level = 0;
             self.faction_name.clear();
+            self.enemy_factions.clear();
+            self.city_war_enemy_factions.clear();
             self.faction_master_id = 0;
             self.union_id = 0;
         }
@@ -3471,6 +3485,8 @@ impl CPlayer {
         faction_master_id: i32,
         faction_name: &[u8],
         union_id: i32,
+        enemy_factions: BTreeSet<i32>,
+        city_war_enemy_factions: BTreeSet<i32>,
     ) {
         self.faction_id = faction_id;
         self.faction_level = faction_level;
@@ -3478,6 +3494,16 @@ impl CPlayer {
         self.faction_name.clear();
         self.faction_name.extend_from_slice(faction_name);
         self.union_id = union_id;
+        self.enemy_factions = enemy_factions;
+        self.city_war_enemy_factions = city_war_enemy_factions;
+    }
+
+    pub(crate) fn is_enemy_faction_member(&self, faction_id: i32) -> bool {
+        self.faction_id > 0 && self.enemy_factions.contains(&faction_id)
+    }
+
+    pub(crate) fn is_city_war_enemy_faction_member(&self, faction_id: i32) -> bool {
+        self.faction_id > 0 && self.city_war_enemy_factions.contains(&faction_id)
     }
 
     pub(crate) const fn country(&self) -> u8 {
@@ -7110,6 +7136,30 @@ impl CPlayer {
         self.base_properties.pk_count
     }
 
+    pub(crate) const fn kill_count(&self) -> u32 {
+        self.base_properties.kill_count
+    }
+
+    pub(crate) fn is_badman(&self, pk_count_per_kill: u32) -> bool {
+        u32::from(self.base_properties.pk_count) > pk_count_per_kill
+            || self.criminal_state_timestamp_ms != 0
+    }
+
+    /// Exact scalar часть `EnterCriminalState`: PK threshold проверяется до
+    /// clock; повторный вход обновляет timestamp, но не требует around-wire.
+    pub(crate) fn enter_criminal_state(
+        &mut self,
+        pk_count_per_kill: u32,
+        now_ms: impl FnOnce() -> u32,
+    ) -> Option<bool> {
+        if u32::from(self.base_properties.pk_count) > pk_count_per_kill {
+            return None;
+        }
+        let started = self.criminal_state_timestamp_ms == 0;
+        self.criminal_state_timestamp_ms = now_ms();
+        Some(started)
+    }
+
     pub(crate) fn reset_murder_counters(&mut self) -> PlayerMurderCountersResetReport {
         let report = PlayerMurderCountersResetReport {
             player_id: self.player_id(),
@@ -10266,6 +10316,7 @@ impl CPlayer {
             outcome: PlayerSkillRequestOutcome::Unauthorized,
             effects: Vec::new(),
             deliveries: Vec::new(),
+            pk_first_skill: None,
         };
         if self.contend_state && facts.symbol_attackable {
             report.effects.push(PlayerSkillRequestEffect::Notification {
