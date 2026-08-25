@@ -21,7 +21,9 @@
 //! single-event handoff только для этих синхронных combat caller-ов. Для
 //! aggressive melee AI `0/3` player/pet search и blocked-step tracing хранят
 //! здесь target/move delay; pet hurt/death сохраняют target priority и master
-//! unlink. Idle wandering и multi-skill decision tree этим не подменяются.
+//! unlink. Passive/command pet target теперь доходит через pet-scaled
+//! base-attack до wild monster death/beneficiary owner-а. Idle wandering,
+//! guard policy и multi-skill decision tree этим не подменяются.
 //! Login pet restoration и client control используют owned `tagMasterInfo`,
 //! taming sign, progress, раздельные Globe experience/property factors и
 //! reached follower-EXP level-up с `0xC0203`, а также узкое pet-control state;
@@ -76,6 +78,15 @@ pub(crate) struct MonsterCombatProperties {
     pub(crate) soul_resistance: u16,
     pub(crate) attack_avoid: u16,
     pub(crate) element_avoid: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PetAttackProperties {
+    pub(crate) minimum_attack: u32,
+    pub(crate) maximum_attack: u32,
+    pub(crate) attack_interval: u32,
+    pub(crate) stop_frame: u32,
+    pub(crate) speed_bits: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -236,12 +247,18 @@ impl CMonster {
         self.pet_action = action;
         if action != 0 {
             self.pet_target = None;
+            self.ai_target = None;
+            self.base_attack_cast = None;
+            self.trace_move_delay = None;
         }
     }
 
     pub(crate) const fn set_pet_target(&mut self, target: ShapeIdentity) {
         self.pet_action = 0;
         self.pet_target = Some(target);
+        self.ai_target = Some(target);
+        self.base_attack_cast = None;
+        self.trace_move_delay = None;
     }
 
     pub(crate) fn retarget_passive_pet(&mut self, target: ShapeIdentity) -> bool {
@@ -321,6 +338,28 @@ impl CMonster {
         }
     }
 
+    pub(crate) fn pet_attack_properties(
+        &self,
+        property: &MonsterProperties,
+    ) -> PetAttackProperties {
+        let factor = |index: usize| f32::from_bits(self.factors[index]);
+        let scaled = |value: u32, index: usize| {
+            ((value as f32) * factor(index)).round_ties_even().max(0.0) as u32
+        };
+        let scaled_attack = |value: u32, index: usize| {
+            let value = value.max(1);
+            let adjusted = scaled(value, index);
+            if adjusted == 0 { value } else { adjusted }
+        };
+        PetAttackProperties {
+            minimum_attack: scaled_attack(property.minimum_attack, 1),
+            maximum_attack: scaled_attack(property.maximum_attack, 0),
+            attack_interval: scaled(property.attack_speed, 7),
+            stop_frame: scaled(property.stop_frame, 9),
+            speed_bits: ((self.move_shape.shape().get_speed() * factor(8)).max(0.0)).to_bits(),
+        }
+    }
+
     /// Exact protection-owner tail of `CMonster::OnBeenHurted`. Nation
     /// notification remains at `CGame`, before this mutation as in the EXE.
     pub(crate) fn register_attacking_player(
@@ -361,7 +400,7 @@ impl CMonster {
 
     pub(crate) fn when_been_hurted_by(&mut self, attacker: ShapeIdentity) {
         self.last_combat_ai_event = Some(MonsterCombatAiEvent::Defense);
-        if self.ai_target.is_none() && attacker.object_type == 400 {
+        if self.ai_target.is_none() && matches!(attacker.object_type, 400 | 600) {
             self.ai_target = Some(attacker);
         }
     }

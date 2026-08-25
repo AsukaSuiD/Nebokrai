@@ -24,6 +24,7 @@
 //! pet progression массивы непосредственно из подтверждённых ABI offsets;
 //! ordinary monster base defense читает raw minimum/maximum monster hit из
 //! `+0x07C/+0x080`, не создавая отдельную config-модель;
+//! pet tracing использует raw `m_dwMaxPetTracingDistance +0x72C`;
 //! абсолютные VA `0xEF410C/0xEF4110` подтверждены целевым GameServer EXE.
 //! `bAllowClientChangePos +0x50D` загружается Game-side positional
 //! projection и напрямую gate-ит runtime `shapemessage 0x8F902`.
@@ -168,6 +169,7 @@ const MINIMUM_MONSTER_HIT_OFFSET: usize = 0x07C;
 const MAXIMUM_MONSTER_HIT_OFFSET: usize = 0x080;
 const CRITICAL_RATE_OFFSET: usize = 0x09C;
 const PVP_DAMAGE_FACTOR_OFFSET: usize = 0x730;
+const MAXIMUM_PET_TRACING_DISTANCE_OFFSET: usize = 0x72C;
 const BLAST_ATTACK_SCALE_OFFSET: usize = 0x748;
 const BLAST_DEFENSE_SCALE_OFFSET: usize = 0x74C;
 const ELEMENT_BLAST_ATTACK_SCALE_OFFSET: usize = 0x750;
@@ -283,6 +285,10 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn pvp_damage_factor(&self) -> f32 {
         self.read_f32(PVP_DAMAGE_FACTOR_OFFSET)
+    }
+
+    pub(crate) fn maximum_pet_tracing_distance(&self) -> u32 {
+        self.read_u32(MAXIMUM_PET_TRACING_DISTANCE_OFFSET)
     }
 
     pub(crate) fn base_combat_scales(&self) -> [f32; 5] {
