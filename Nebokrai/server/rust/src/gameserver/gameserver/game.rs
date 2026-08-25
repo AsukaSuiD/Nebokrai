@@ -12160,6 +12160,20 @@ impl CGame {
         self.send_player_shape_around(player_id, None, &message)
     }
 
+    /// `8100 / OpenChangePlayerNameUI` не вычисляет аргументы. Разрешение
+    /// совпадает с native `strstr(playerName, strSpeStr)`; последующий запрос
+    /// клиента уже проходит concrete `0x8FB05 → World 0x5FD05 → 0x7FA0E`.
+    pub(crate) fn open_script_player_rename(&self, player_id: i32) -> Option<i32> {
+        let player = self.find_player(player_id)?;
+        let name = player.player_name();
+        let special = self.globe_setup.special_string();
+        let allowed =
+            special.is_empty() || name.windows(special.len()).any(|window| window == special);
+        let mut message = CMessage::new(0x000b_f810);
+        message.add_byte(u8::from(allowed));
+        Some(message.send_to_player(self.net_server(), player_id))
+    }
+
     /// Script `5402/5406` меняет тот же runtime-флаг, который проверяет
     /// ordinary attack owner; отсутствующий script-player сохраняет no-op.
     pub(crate) fn set_script_player_god_mode(&mut self, player_id: i32, enabled: bool) -> bool {

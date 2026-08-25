@@ -38,7 +38,10 @@
 //! Городская заявка в той же цепочке добавляет master/country/owner/state
 //! gates, `GS0209..GS0211`, wire `0x60137` и симметричный ответ `0x7FE37`.
 //! Также материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
-//! `9354 / OpenEquipmentCompose` и `2216 / OpenGoodsUpgrade`. Refresh вычисляет первую
+//! `9354 / OpenEquipmentCompose`, `2216 / OpenGoodsUpgrade` и
+//! `8100 / OpenChangePlayerNameUI`. Rename-вход без аргументов публикует
+//! `0xBF810` из canonical player/GlobeSetup и тем самым открывает уже живой
+//! `0x8FB05 → World/DB → 0x7FA0E → 0xBF80F` контур. Refresh вычисляет первую
 //! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
 //! gameplay передаётся canonical `CGame`, который сам исполняет localized
 //! notices, session/plug lifecycle и client wire; runtime сообщает только
@@ -444,6 +447,7 @@ pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER_RECT: i32 = 3313;
 pub(crate) const SCRIPT_FUNCTION_DELETE_NPC_BY_NAME: i32 = 3315;
 pub(crate) const SCRIPT_FUNCTION_REFRESH_BLOCK: i32 = 8000;
 pub(crate) const SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION: i32 = 8003;
+pub(crate) const SCRIPT_FUNCTION_OPEN_CHANGE_PLAYER_NAME: i32 = 8100;
 pub(crate) const SCRIPT_FUNCTION_GET_MONSTER_REFRESH_TIME: i32 = 8101;
 pub(crate) const SCRIPT_FUNCTION_IS_QUEST_ENABLED: i32 = 3500;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_ENABLED: i32 = 3501;
@@ -3529,7 +3533,8 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_GET_AREA_ID
         | SCRIPT_FUNCTION_GET_AREA_TYPE
         | SCRIPT_FUNCTION_GET_WORLD_SERVER_ID
-        | SCRIPT_FUNCTION_GET_PLAYER_SZL => Unused,
+        | SCRIPT_FUNCTION_GET_PLAYER_SZL
+        | SCRIPT_FUNCTION_OPEN_CHANGE_PLAYER_NAME => Unused,
         SCRIPT_FUNCTION_INVISIBLE
         | SCRIPT_FUNCTION_GOD_MODE
         | SCRIPT_FUNCTION_RESIDENT_MODE
@@ -6998,6 +7003,12 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     if function_id == SCRIPT_FUNCTION_PLAYER_TALK {
         if let (Some(player_id), Some(text)) = (script_player_id, string_arguments[0]) {
             let _ = game.script_player_talk(player_id, text);
+        }
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+    }
+    if function_id == SCRIPT_FUNCTION_OPEN_CHANGE_PLAYER_NAME {
+        if let Some(player_id) = script_player_id {
+            let _ = game.open_script_player_rename(player_id);
         }
         return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
     }
