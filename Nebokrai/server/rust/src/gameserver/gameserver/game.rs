@@ -3880,10 +3880,18 @@ pub(crate) struct GameServerRegionBaseAiReport {
 pub(crate) struct GameRegionShapeScanReport {
     pub(crate) areas: usize,
     pub(crate) area_ai: Vec<AreaAiReport>,
+    pub(crate) ground_goods_expirations: Vec<GameGroundGoodsExpiration>,
     pub(crate) npc_expirations: Vec<GameNpcLifetimeExpiration>,
     pub(crate) resolved_shapes: usize,
     pub(crate) shape_ai_calls: usize,
     pub(crate) stale_memberships: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameGroundGoodsExpiration {
+    pub(crate) ex_id: CGuid,
+    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) staged_for_delete: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4933,14 +4941,6 @@ pub(crate) trait GameMainLoopRuntime:
     /// post-AI restored-state current war-soul skill; `None` точно означает
     /// отсутствие skill-а.
     fn player_move_shape_ai(&mut self, game: &mut CGame, player_id: i32) -> Option<bool>;
-    /// Concrete ground-goods owner шлёт around delete и ставит `CS_DELETE`.
-    fn expire_area_ground_goods(
-        &mut self,
-        game: &mut CGame,
-        region_id: i32,
-        area_index: usize,
-        ex_id: CGuid,
-    ) -> bool;
     /// Возвращает actual derived AI/tamed/carriage facts одного monster-а.
     fn area_monster_ai_facts(
         &mut self,
@@ -28569,6 +28569,7 @@ impl CGame {
             };
             if let Some(mut area_ai) = area_ai {
                 for (ex_id, resolved) in &mut area_ai.expired_goods {
+                    let mut around_delivery = None;
                     if region.find_ground_goods(*ex_id).is_some() {
                         {
                             let goods = region
@@ -28594,23 +28595,27 @@ impl CGame {
                                 self.globe_setup.area_width(),
                                 self.globe_setup.area_height(),
                             ) {
-                                let _ = message.send_to_around(
+                                around_delivery = Some(message.send_to_around(
                                     Some(region),
                                     goods.shape(),
                                     None,
                                     &around,
-                                );
+                                ));
                             }
                         }
                         if let Some(goods) = region.find_ground_goods_mut(*ex_id) {
                             goods.shape_mut().set_change_state(SHAPE_CHANGE_DELETE);
                             *resolved = true;
                         }
-                    } else {
-                        *resolved =
-                            runtime.expire_area_ground_goods(self, region.id, area_index, *ex_id);
                     }
                     region.finish_area_ground_goods_expiration(area_index, *ex_id);
+                    report
+                        .ground_goods_expirations
+                        .push(GameGroundGoodsExpiration {
+                            ex_id: *ex_id,
+                            around_delivery,
+                            staged_for_delete: *resolved,
+                        });
                 }
                 {
                     let mut context = GameAreaAiContext {
