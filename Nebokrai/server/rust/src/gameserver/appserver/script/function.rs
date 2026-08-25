@@ -282,6 +282,7 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
 use crate::public::guid::CGuid;
+use crate::public::tools::put_debug_string;
 use crate::setup::leitingsetup::{CThingSetup, LeiTingLocalTime};
 
 pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
@@ -1514,7 +1515,7 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
             )
         }
         NationWarScriptKind::CarriageBackTown => {
-            let enter_debug = nation_war_script_debug(game, runtime, b"GS1053");
+            let enter_debug = nation_war_script_debug(game, b"GS1053");
             let Some((region_id, country)) = script_player_id.and_then(|player_id| {
                 let player = game.find_player(player_id)?;
                 Some((player.server_region_id()?, i32::from(player.country())))
@@ -1533,7 +1534,7 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
             let report = game.script_nation_carriage_back_town(region_id, country);
             let completed_debug = report
                 .is_some()
-                .then(|| nation_war_script_debug(game, runtime, b"GS1054"));
+                .then(|| nation_war_script_debug(game, b"GS1054"));
             nation_war_script_handled(
                 function_id,
                 kind,
@@ -1565,7 +1566,7 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
             )
         }
         NationWarScriptKind::GetTime => {
-            let enter_debug = nation_war_script_debug(game, runtime, b"GS1055");
+            let enter_debug = nation_war_script_debug(game, b"GS1055");
             let Some(player_id) = script_player_id else {
                 return nation_war_script_handled(
                     function_id,
@@ -1593,7 +1594,7 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
                 &player_name,
                 debug_time,
             );
-            runtime.put_debug_string(&value_debug);
+            put_debug_string(&value_debug);
             let value = game
                 .four_nation_war_sys()
                 .player_war_time_seconds(player_id) as i32;
@@ -1813,13 +1814,9 @@ fn nation_script_player_region_id(game: &CGame, player_id: Option<i32>) -> Optio
         .and_then(|player| player.server_region_id())
 }
 
-fn nation_war_script_debug<Runtime: NationCombatContext>(
-    game: &CGame,
-    runtime: &mut Runtime,
-    string_id: &[u8],
-) -> Vec<u8> {
+fn nation_war_script_debug(game: &CGame, string_id: &[u8]) -> Vec<u8> {
     let text = game.get_string_by_id(string_id).to_vec();
-    runtime.put_debug_string(&text);
+    put_debug_string(&text);
     text
 }
 

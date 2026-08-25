@@ -33,8 +33,8 @@
 //! `0xBF807` и переносит registered players в virtual return points.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
-//! Failed GameServer change `0x8FB04` условно пишет player error-log и всегда
-//! ставит concrete `QuitBySocketId`; GUI/file logger остаётся platform runtime.
+//! Failed GameServer change `0x8FB04` условно пишет player error-log через
+//! общий concrete GameServer sink и всегда ставит concrete `QuitBySocketId`.
 //! Script-dialog answer `0x8FB02` сохраняет player/region no-read guard,
 //! exact mode `1/-1/0`, bounded string + CRT-like `atoi` и continue/delete
 //! прямо в owned script-instance `CGame`; ответ снимает TalkBox wait по
@@ -54,6 +54,7 @@ use crate::gameserver::gameserver::game::{
     colored_player_notice_message, player_skill_learned_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::public::tools::add_game_error_log_text;
 
 const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
 const PLAYER_CHAT_REQUEST: u32 = 0x0008_fb01;
@@ -209,18 +210,6 @@ pub(crate) enum GameScriptDialogOutcome {
         script_id: i32,
         mode: i32,
     },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameOtherErrorLog {
-    ChangeGameServerFailed {
-        player_id: i32,
-        player_name: Vec<u8>,
-    },
-}
-
-pub(crate) trait GameOtherMessageRuntime: GameClockContext {
-    fn add_other_error_log(&mut self, event: GameOtherErrorLog);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -972,7 +961,7 @@ fn dispatch_public_talk(
     })
 }
 
-pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
+pub(crate) fn dispatch_game_other_message<Runtime: GameClockContext>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -1042,10 +1031,11 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameOtherMessageRuntime>(
                 .map(|player| (player_id, player.player_name().to_vec()))
         });
         if let Some((player_id, player_name)) = &player {
-            runtime.add_other_error_log(GameOtherErrorLog::ChangeGameServerFailed {
-                player_id: *player_id,
-                player_name: player_name.clone(),
-            });
+            let text = format!(
+                "({player_id}){} CONNECTGAMESERVER For Changing GS FAILED!!!!",
+                String::from_utf8_lossy(player_name)
+            );
+            add_game_error_log_text(text.as_bytes());
         }
         let socket_id = message.socket_id();
         let quit_result = game

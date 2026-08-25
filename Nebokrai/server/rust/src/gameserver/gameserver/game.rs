@@ -560,8 +560,7 @@ use crate::gameserver::appserver::message::organsysmessage::{
     dispatch_game_organizing_message,
 };
 use crate::gameserver::appserver::message::othermessage::{
-    GameOtherMessageError, GameOtherMessageReport, GameOtherMessageRuntime,
-    dispatch_game_other_message,
+    GameOtherMessageError, GameOtherMessageReport, dispatch_game_other_message,
 };
 use crate::gameserver::appserver::message::playermessage::{
     GamePlayerMessageError, GamePlayerMessageReport, GamePlayerMessageRuntime,
@@ -740,7 +739,7 @@ use crate::public::netsessionmanager::{
     CNetSessionManager, NetSessionManagerVariant, NetSessionRunReport,
 };
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
-use crate::public::tools::put_string_to_file;
+use crate::public::tools::{add_game_log_text, put_debug_string, put_string_to_file};
 use crate::public::wordsfilter::CWordsFilter;
 use crate::setup::cbattlefairyexpconfig::CBattleFairyExpConfig;
 use crate::setup::changebody::CChangeBodyConf;
@@ -3552,9 +3551,6 @@ pub(crate) struct GodsBattleDeathSzlReport {
 }
 
 pub(crate) trait NationCombatContext: ServerRegionNpcContext + GameClockContext {
-    fn add_log_text(&mut self, text: &[u8]);
-    fn put_debug_string(&mut self, text: &[u8]);
-
     /// Выполняет concrete player-origin `CMessage::SendToAround`, включая
     /// соседние areas и удалённых team members исходного runtime-а.
     fn send_nation_player_around(
@@ -3776,16 +3772,16 @@ pub(crate) struct NationYuYingShiSpawnReport {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct GameMainLoopProfile {
-    pub(crate) script_ms: u32,
-    pub(crate) ai_ms: u32,
-    pub(crate) message_ms: u32,
-    pub(crate) session_ms: u32,
-    pub(crate) net_session_ms: u32,
+struct GameMainLoopProfile {
+    script_ms: u32,
+    ai_ms: u32,
+    message_ms: u32,
+    session_ms: u32,
+    net_session_ms: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameMainLoopRuntimeLog {
+enum GameMainLoopRuntimeLog {
     Compact {
         elapsed_ms: u32,
         ai_calls: i32,
@@ -3795,6 +3791,28 @@ pub(crate) enum GameMainLoopRuntimeLog {
         ai_calls: i32,
         profile: GameMainLoopProfile,
     },
+}
+
+fn report_main_loop_runtime(log: GameMainLoopRuntimeLog) {
+    let text = match log {
+        GameMainLoopRuntimeLog::Compact {
+            elapsed_ms,
+            ai_calls,
+        } => format!("{elapsed_ms} Sec. {ai_calls} AI"),
+        GameMainLoopRuntimeLog::Profiled {
+            elapsed_ms,
+            ai_calls,
+            profile,
+        } => format!(
+            "{elapsed_ms} Sec. {ai_calls} AI\r\nScript:{}\r\nAI:{}\r\nMessage:{}\r\nSession:{}\r\nNetSession:{}",
+            profile.script_ms,
+            profile.ai_ms,
+            profile.message_ms,
+            profile.session_ms,
+            profile.net_session_ms
+        ),
+    };
+    add_game_log_text(text.as_bytes());
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5026,7 +5044,6 @@ pub(crate) trait GameMainLoopRuntime:
     + GameGoodsMessageRuntime
     + GameSkillMessageRuntime
     + GameShapeMessageRuntime
-    + GameOtherMessageRuntime
     + GamePlayerMessageRuntime
     + IncrementShopBillingContext
     + NationContendContext
@@ -5035,7 +5052,6 @@ pub(crate) trait GameMainLoopRuntime:
     + GamePlayerLostRuntime
 {
     fn exit_requested(&self) -> bool;
-    fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
     /// Исполняет только ещё не материализованные state-классы из
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
@@ -12926,7 +12942,7 @@ impl CGame {
         let mut treasure_spawns = Vec::new();
         if let Some(contender) = completed {
             completion_deliveries.push(self.send_nation_contend_time(contender.player_id, 100));
-            runtime.add_log_text(self.get_string_by_id(b"GS1072"));
+            add_game_log_text(self.get_string_by_id(b"GS1072"));
             completion_outcome = Some(match self.find_player(contender.player_id) {
                 None => NationContendCompletionOutcome::PlayerMissing,
                 Some(player) if !player.can_attack_nation_monster() => {
@@ -12949,7 +12965,7 @@ impl CGame {
                                     state_deliveries.push((*cancelled_player_id, delivery));
                                 }
                             }
-                            runtime.add_log_text(self.get_string_by_id(b"GS1073"));
+                            add_game_log_text(self.get_string_by_id(b"GS1073"));
                             completion_deliveries.push(
                                 self.four_nation_morale_snapshot(
                                     *region.morale(),
@@ -13606,7 +13622,7 @@ impl CGame {
             return None;
         };
         if region.war.base.find_monster_by_id(monster_id).is_some() {
-            context.add_log_text(b"ServerNationRegion::OnMonsterDie");
+            add_game_log_text(b"ServerNationRegion::OnMonsterDie");
         }
         let outcome = if !region
             .war
@@ -13664,7 +13680,7 @@ impl CGame {
             }
         };
         if matches!(outcome, NationMonsterDeathOutcome::KillerMissing) {
-            context.put_debug_string(self.get_string_by_id(b"GS1128"));
+            put_debug_string(self.get_string_by_id(b"GS1128"));
         }
 
         let mut first_guard_delivery = None;
@@ -13729,7 +13745,7 @@ impl CGame {
                 nation_fail_deliveries.push(failure.send(self, false));
             }
 
-            context.add_log_text(self.get_string_by_id(b"GS1129"));
+            add_game_log_text(self.get_string_by_id(b"GS1129"));
         }
         let morale_delivery =
             matches!(outcome, NationMonsterDeathOutcome::MoraleChanged(_)).then(|| {
@@ -30722,7 +30738,7 @@ impl CGame {
                     ai_calls: state.calls_since_runtime_log,
                 }
             };
-            runtime.add_runtime_log(log);
+            report_main_loop_runtime(log);
             stages.push(GameMainLoopStage::RuntimeLog);
             state.calls_since_runtime_log = 0;
             state.runtime_log_tick_ms = state.current_tick_ms;

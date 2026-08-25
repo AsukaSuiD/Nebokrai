@@ -3,8 +3,9 @@
 //! Статус `IniDecoder` LoginServer RVA `0x00020A90`, WorldServer RVA
 //! `0x00053C50`, `PutStringToFile` BillingServer RVA `0x0000FC60` и GameServer
 //! RVA `0x0001CEB0`, а также GameServer `GetLineDir` RVA `0x0001D080` —
-//! `IMPLEMENTED`; последний также `VERIFIED_DISASSEMBLY`. Остальной корпус
-//! ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально). Точные пары:
+//! `AddLogText`/`AddErrorLogText`/`PutDebugString` GameServer — `IMPLEMENTED`;
+//! `GetLineDir` также `VERIFIED_DISASSEMBLY`. Остальной корпус ниже остаётся
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Точные пары:
 //! `BillingServer/billingserver.exe + BillingServer/billingserver.pdb`,
 //! `LoginServer/loginserver.exe + LoginServer/LoginServer.pdb` и
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`,
@@ -35,16 +36,22 @@
 //! целочисленных region-координат сохраняются те же восемь направлений и
 //! исходный результат `0` для совпавших точек.
 //!
-//! Остальные файловые, временные и logging-владельцы этого крупного общего
-//! файла ещё не реализованы и сохраняют сырой экспорт.
+//! Общие GameServer logging owners сохраняют дневной log, timestamp/CRLF,
+//! отдельный process debug-файл и C-string prefix. `OnceLock`, безопасное
+//! форматирование и append заменяют process globals, CRT varargs и Win32 GUI;
+//! log-window не влиял на игровой результат. Остальные файловые и временные
+//! владельцы этого крупного общего файла ещё не реализованы.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use chrono::{Datelike, Local, Timelike};
 
 static LOG_RECORD_NUMBER: AtomicI32 = AtomicI32::new(0);
+static DEBUG_FILE_NAME: OnceLock<PathBuf> = OnceLock::new();
 
 /// Декодирует byte-exact содержимое старого `setup.dat` без интерпретации текста.
 pub(crate) fn ini_decode(encoded: &[u8]) -> Vec<u8> {
@@ -81,6 +88,91 @@ pub(crate) fn put_string_to_file(name: &str, value: &[u8]) {
     );
     let _ = file.write_all(prefix.as_bytes());
     let _ = file.write_all(value);
+}
+
+/// Linux-владелец общего `PutLogInfo`: дописывает byte-exact строку в
+/// подтверждённый дневной `log/YYYY-MM-DD.txt`.
+fn put_log_info(value: &[u8]) {
+    let now = Local::now();
+    let _ = fs::create_dir("log");
+    let path = format!(
+        "log/{:04}-{:02}-{:02}.txt",
+        now.year(),
+        now.month(),
+        now.day()
+    );
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = file.write_all(c_string_prefix(value));
+}
+
+/// Safe owner для GameServer `AddLogText`: сохраняет timestamp, CRLF и общий
+/// дневной файл оригинала, но не воспроизводит небезопасный varargs buffer.
+pub(crate) fn add_game_log_text(value: &[u8]) {
+    add_game_log_record(value, false);
+}
+
+/// Safe owner для GameServer `AddErrorLogText`.
+pub(crate) fn add_game_error_log_text(value: &[u8]) {
+    add_game_log_record(value, true);
+}
+
+fn add_game_log_record(value: &[u8], error: bool) {
+    let now = Local::now();
+    let marker = if error { " <error> " } else { " " };
+    let prefix = format!(
+        "[{:02}-{:02} {:02}:{:02}:{:02}]{marker}",
+        now.month(),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    );
+    let mut record = Vec::with_capacity(prefix.len() + value.len() + 2);
+    record.extend_from_slice(prefix.as_bytes());
+    record.extend_from_slice(c_string_prefix(value));
+    record.extend_from_slice(b"\r\n");
+    put_log_info(&record);
+}
+
+/// Safe Linux owner для process-global `PutDebugString`. Имя debug-файла
+/// фиксируется при первом вызове, как после `InitialDebugFileName` оригинала.
+pub(crate) fn put_debug_string(value: &[u8]) {
+    let path = DEBUG_FILE_NAME.get_or_init(|| {
+        let now = Local::now();
+        PathBuf::from(format!(
+            "log/debug{}_{}_{}[{:02}_{:02}_{:02}].txt",
+            now.year(),
+            now.month(),
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second()
+        ))
+    });
+    let _ = fs::create_dir("log");
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let number = LOG_RECORD_NUMBER
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1);
+    let now = Local::now();
+    let prefix = format!(
+        "\n{number}({:02}-{:02} {:02}:{:02}:{:02}):",
+        now.month(),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    );
+    let _ = file.write_all(prefix.as_bytes());
+    let _ = file.write_all(c_string_prefix(value));
+}
+
+fn c_string_prefix(value: &[u8]) -> &[u8] {
+    value.split(|byte| *byte == 0).next().unwrap_or_default()
 }
 
 /// Возвращает одно из восьми направлений исходной line-direction сетки.
@@ -916,13 +1008,6 @@ pub(crate) fn get_line_direction(
 //
 //
 
-
-
-
-
-
-
-
 // COMPONENT_VARIANT_END: GameServer
 
 // COMPONENT_VARIANT_BEGIN: WorldServer
@@ -1127,8 +1212,5 @@ pub(crate) fn get_line_direction(
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
 
 // COMPONENT_VARIANT_END: WorldServer

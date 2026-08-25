@@ -52,9 +52,8 @@
 //! расхождение между двумя time-sensitive pass-ами. Непокрытые GM
 //! selectors остаются RAW ниже.
 
-use super::othermessage::GameOtherMessageRuntime;
 use crate::gameserver::gameserver::game::{
-    CGame, GameKickAroundOutcome, GameKickAroundReport, GameKickPlayerReport,
+    CGame, GameClockContext, GameKickAroundOutcome, GameKickAroundReport, GameKickPlayerReport,
     RealmAppellationScriptContext, ScriptRegionChangeContext,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
@@ -285,7 +284,7 @@ pub(crate) struct GmListPublishedEntry {
 /// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
 /// `None` оставляет прочие selectors их ещё RAW owner-у.
 pub(crate) fn dispatch_gm_message<
-    Runtime: GameOtherMessageRuntime + ScriptRegionChangeContext + RealmAppellationScriptContext,
+    Runtime: GameClockContext + ScriptRegionChangeContext + RealmAppellationScriptContext,
 >(
     message: &mut CMessage,
     game: &mut CGame,
