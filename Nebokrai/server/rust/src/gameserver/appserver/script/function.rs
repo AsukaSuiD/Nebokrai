@@ -244,10 +244,12 @@ pub(crate) const SCRIPT_FUNCTION_GET_STRING_BY_ID: i32 = 2000;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
 pub(crate) const SCRIPT_FUNCTION_GET_NAME: i32 = 2998;
-pub(crate) const SCRIPT_FUNCTION_CHANGE_BODY_CHECK: i32 = 2517;
+pub(crate) const SCRIPT_FUNCTION_IS_CHARGED: i32 = 2516;
+pub(crate) const SCRIPT_FUNCTION_SET_CHARGED: i32 = 2517;
 pub(crate) const SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE: i32 = 2518;
 pub(crate) const SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE: i32 = 2519;
 pub(crate) const SCRIPT_FUNCTION_GET_CHANGE_BODY_STATE: i32 = 2520;
+pub(crate) const SCRIPT_FUNCTION_CHANGE_BODY_CHECK: i32 = 2521;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
@@ -3225,13 +3227,17 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_SET_CHARGED => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE
         | SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE
         | SCRIPT_FUNCTION_GET_CHANGE_BODY_STATE => match index {
             0 => Integer,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_CHANGE_BODY_CHECK => Unused,
+        SCRIPT_FUNCTION_IS_CHARGED | SCRIPT_FUNCTION_CHANGE_BODY_CHECK => Unused,
         SCRIPT_FUNCTION_CREATE_NPC => match index {
             0 | 8 => String,
             1..=7 | 9..=11 => Integer,
@@ -4348,6 +4354,22 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let _ = player.set_integer_variable(b"$m_Temp", 0, position.x);
             let _ = player.set_integer_variable(b"$m_Temp", 1, position.y);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
+        }
+        SCRIPT_FUNCTION_IS_CHARGED => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: i32::from(
+                game.find_player(player_id)
+                    .is_some_and(|player| player.is_charged()),
+            ),
+        }),
+        SCRIPT_FUNCTION_SET_CHARGED => {
+            let requested = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .unwrap_or_default();
+            let legacy_return = game.find_player_mut(player_id).map_or(0, |player| {
+                player.set_charged(requested != 0);
+                i32::from(player.is_charged())
+            });
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }
         SCRIPT_FUNCTION_CHANGE_BODY_CHECK => {
             let Some(player_id) = script_player_id else {

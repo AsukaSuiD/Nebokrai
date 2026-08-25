@@ -296,6 +296,7 @@ const BASE_OCCUPATION_OFFSET: usize = 0x0e;
 const BASE_SEX_OFFSET: usize = 0x0f;
 const BASE_PK_COUNT_OFFSET: usize = 0x1c;
 const BASE_KILL_COUNT_OFFSET: usize = 0x20;
+const BASE_CHARGED_OFFSET: usize = 0x38;
 const BASE_REMAIN_POINT_OFFSET: usize = 0x3a;
 const BASE_HOTKEY_OFFSET: usize = 0x3c;
 const BASE_PK_NORMAL_OFFSET: usize = 0x9c;
@@ -1184,6 +1185,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) experience: u32,
     pub(crate) vigour: u32,
     pub(crate) credit: u32,
+    pub(crate) charged: bool,
     pub(crate) fairy_container_enabled: bool,
     pub(crate) hotkeys: [u32; 24],
     pub(crate) mode: u32,
@@ -2587,6 +2589,7 @@ impl CPlayer {
             BASE_REMAIN_POINT_OFFSET,
             self.base_properties.remain_point,
         );
+        wire[BASE_CHARGED_OFFSET] = u8::from(self.base_properties.charged);
         for (index, hotkey) in self.base_properties.hotkeys.iter().copied().enumerate() {
             write_player_wire_u32(&mut wire, BASE_HOTKEY_OFFSET + index * 4, hotkey);
         }
@@ -2730,6 +2733,7 @@ impl CPlayer {
         self.base_properties.sex = wire[BASE_SEX_OFFSET];
         self.base_properties.pk_count = read_player_wire_u16(wire, BASE_PK_COUNT_OFFSET);
         self.base_properties.kill_count = read_player_wire_u32(wire, BASE_KILL_COUNT_OFFSET);
+        self.base_properties.charged = wire[BASE_CHARGED_OFFSET] != 0;
         self.base_properties.remain_point = read_player_wire_u16(wire, BASE_REMAIN_POINT_OFFSET);
         for (index, hotkey) in self.base_properties.hotkeys.iter_mut().enumerate() {
             *hotkey = read_player_wire_u32(wire, BASE_HOTKEY_OFFSET + index * 4);
@@ -2945,6 +2949,14 @@ impl CPlayer {
 
     pub(crate) const fn team_id(&self) -> i32 {
         self.team_id
+    }
+
+    pub(crate) const fn is_charged(&self) -> bool {
+        self.base_properties.charged
+    }
+
+    pub(crate) const fn set_charged(&mut self, charged: bool) {
+        self.base_properties.charged = charged;
     }
 
     pub(crate) const fn faction_id(&self) -> i32 {
