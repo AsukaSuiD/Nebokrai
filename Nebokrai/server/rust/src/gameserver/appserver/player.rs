@@ -42,8 +42,9 @@
 //! Reached script property catalog отделён от gameplay setter-ов: generic
 //! `SetValue/ChangeValue` сохраняет narrowing/wrapping storage, включая
 //! shipped `Experience` alias и достигнутые honor
-//! `dwAppellationID/dwRankOfNobilityID`; `GetValue` читает также credit, SZL и
-//! contribution из canonical storage. Пересчёт и
+//! `dwAppellationID/dwRankOfNobilityID`; bool fairy enable pair нормализует
+//! ненулевой write в persisted player state. `GetValue` читает также credit,
+//! SZL и contribution из canonical storage. Пересчёт и
 //! `0xBF721` остаются у вызывающего `CGame`.
 //! Total honor-rank startup материализует days/weeks/months counters и
 //! nobility rank: reset меняет owned state, а пока RAW `PlayerRunScript`
@@ -4232,6 +4233,10 @@ impl CPlayer {
             Some(self.base_properties.szl as i32)
         } else if property.eq_ignore_ascii_case(b"lContribute") {
             Some(self.contribution)
+        } else if property.eq_ignore_ascii_case(b"bFairyContainerEnabled") {
+            Some(i32::from(self.base_properties.fairy_container_enabled))
+        } else if property.eq_ignore_ascii_case(b"bBattleFairyEnabled") {
+            Some(i32::from(self.base_properties.battle_fairy_enabled))
         } else {
             None
         }
@@ -4270,6 +4275,12 @@ impl CPlayer {
         } else if property.eq_ignore_ascii_case(b"lContribute") {
             self.contribution = value;
             Some(value)
+        } else if property.eq_ignore_ascii_case(b"bFairyContainerEnabled") {
+            self.base_properties.fairy_container_enabled = value != 0;
+            Some(value)
+        } else if property.eq_ignore_ascii_case(b"bBattleFairyEnabled") {
+            self.base_properties.battle_fairy_enabled = value != 0;
+            Some(value)
         } else {
             None
         }
@@ -4285,6 +4296,13 @@ impl CPlayer {
             property
         };
         let current = self.script_value(canonical)?;
+        if canonical.eq_ignore_ascii_case(b"bFairyContainerEnabled")
+            || canonical.eq_ignore_ascii_case(b"bBattleFairyEnabled")
+        {
+            let changed = i32::from(current.wrapping_add(delta) != 0);
+            let _ = self.set_script_value(canonical, changed)?;
+            return Some(changed);
+        }
         self.set_script_value(canonical, current.wrapping_add(delta))
     }
 

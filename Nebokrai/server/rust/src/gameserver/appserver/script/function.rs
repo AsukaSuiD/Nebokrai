@@ -234,6 +234,10 @@
 //! `dwAppellationID/dwRankOfNobilityID/dwCredit/dwSZL/lContribute`: чтение
 //! идёт из canonical player storage, а обе записи сохраняют общий порядок
 //! `0xBF80C → SetScriptValue → UpdateProperty → 0xBF721`.
+//! Persisted fairy pair `bFairyContainerEnabled/bBattleFairyEnabled` проходит
+//! тот же reached `GetMe/SetMe/ChangePlayer/SetPlayer` dispatcher: bool write
+//! нормализует любое ненулевое значение, затем исполняет общий property/wire
+//! tail и влияет на следующий exact `CanMountEquip` без shadow-state.
 //! Numeric selector получает вычисленные параметры из owned `CScript`; return
 //! либо dialog-yield возвращается в ту же execution chain. Остальные function
 //! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
