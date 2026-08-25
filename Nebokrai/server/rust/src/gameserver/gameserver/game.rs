@@ -6594,7 +6594,7 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<AuctionListingTransferReport, AuctionListingTransferBlock> {
-        if !matches!(source_extend_id, 1 | 2 | 9 | 11 | 12 | 14) {
+        if !matches!(source_extend_id, 1 | 2 | 9 | 11 | 12 | 14 | 17) {
             return Err(AuctionListingTransferBlock::UnsupportedSourceContainer {
                 extend_id: source_extend_id,
             });
@@ -6663,6 +6663,7 @@ impl CGame {
                 .battle_fairy_container()
                 .base()
                 .get_goods(source_position),
+            17 => player.ci_qing_compose_goods(source_position),
             14 => player.auction_goods().get_goods(source_position),
             _ => unreachable!("source extend проверен выше"),
         }
@@ -6867,6 +6868,31 @@ impl CGame {
                     Some(removed.goods),
                 )
             }
+            17 => {
+                let removed = player.take_ci_qing_compose_transfer_goods(
+                    source_position,
+                    amount,
+                    &self.goods_factory,
+                    |_| None,
+                );
+                let Some(VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(
+                    removed,
+                ))) = removed
+                else {
+                    return Err(AuctionListingTransferBlock::ComposeRemovalFailed);
+                };
+                let storage = CiQingComposeStorageRemoval {
+                    owner_type: removed.owner_type,
+                    owner_id: removed.owner_id,
+                    position: removed.position.unwrap_or(source_position),
+                    amount: removed.amount,
+                    listeners: removed.listeners,
+                };
+                (
+                    AuctionListingTransferRemoval::Compose(storage),
+                    Some(removed.goods),
+                )
+            }
             2 => {
                 let remove_facts =
                     context.enhancement_equipment_remove_facts(player, goods, pack_add_enabled);
@@ -6943,7 +6969,7 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<AuctionListingWithdrawalReport, AuctionListingWithdrawalBlock> {
-        if !matches!(destination_extend_id, 1 | 2 | 9 | 11 | 12) {
+        if !matches!(destination_extend_id, 1 | 2 | 9 | 11 | 12 | 17) {
             return Err(
                 AuctionListingWithdrawalBlock::UnsupportedDestinationContainer {
                     extend_id: destination_extend_id,
@@ -7038,7 +7064,7 @@ impl CGame {
             listeners: removed.listeners,
         };
         let mut incoming = Some(removed.goods);
-        let addition = self.add_battle_fairy_transfer_goods(
+        let addition = self.add_ci_qing_compose_transfer_goods(
             player,
             destination_extend_id,
             destination_position,
@@ -7047,7 +7073,7 @@ impl CGame {
         );
         let outcome = if incoming.is_none() {
             let (destination_position, destination_goods, amount) =
-                Self::battle_fairy_transfer_destination(player, destination_position, &addition);
+                Self::ci_qing_compose_transfer_destination(player, destination_position, &addition);
             AuctionListingWithdrawalOutcome::Moved {
                 addition,
                 destination_position,

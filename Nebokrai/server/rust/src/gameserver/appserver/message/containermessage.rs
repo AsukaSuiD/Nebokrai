@@ -91,6 +91,8 @@
 //! hatch/lock remove/add, listing rollback и фактическую destination position.
 //! Battle-fairy↔auction listing (`12↔13`) сохраняет BF cell validation,
 //! property/equipment effects и deliveries до listing move и при rollback add.
+//! CiQing compose↔auction listing (`17↔13`) связывает persisted compose
+//! remove/add и positional result с AuctionLimit и listing rollback.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -125,12 +127,13 @@ use crate::gameserver::gameserver::game::{
     AuctionGoodsInventoryBlock, AuctionGoodsInventoryReport, AuctionGoodsInventoryRollback,
     BankCurrencyTransferBlock, BankCurrencyTransferReport, BattleFairyStorageRemoval,
     BattleFairyTransferAddition, BattleFairyTransferBlock, BattleFairyTransferReport, CGame,
-    CiQingComposeTransferAddition, CiQingComposeTransferBlock, CiQingComposeTransferReport,
-    DepotStorageRemoval, DepotStorageTransferAddition, DepotStorageTransferBlock,
-    DepotStorageTransferReport, FairyStorageRemoval, FairyStorageTransferAddition,
-    FairyStorageTransferBlock, FairyStorageTransferReport, GameContainerMessageRuntime,
-    GroundGoodsMoveBlock, GroundGoodsMoveReport, HandAuctionListingBlock, HandAuctionListingReport,
-    HandContainerMoveBlock, HandContainerMoveReport, PlayerHandMoveBlock, PlayerHandMoveReport,
+    CiQingComposeStorageRemoval, CiQingComposeTransferAddition, CiQingComposeTransferBlock,
+    CiQingComposeTransferReport, DepotStorageRemoval, DepotStorageTransferAddition,
+    DepotStorageTransferBlock, DepotStorageTransferReport, FairyStorageRemoval,
+    FairyStorageTransferAddition, FairyStorageTransferBlock, FairyStorageTransferReport,
+    GameContainerMessageRuntime, GroundGoodsMoveBlock, GroundGoodsMoveReport,
+    HandAuctionListingBlock, HandAuctionListingReport, HandContainerMoveBlock,
+    HandContainerMoveReport, PlayerHandMoveBlock, PlayerHandMoveReport,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -407,6 +410,7 @@ pub(crate) enum AuctionListingTransferRemoval {
     Depot(DepotStorageRemoval),
     Fairy(FairyStorageRemoval),
     BattleFairy(BattleFairyStorageRemoval),
+    Compose(CiQingComposeStorageRemoval),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -433,6 +437,7 @@ pub(crate) enum AuctionListingTransferBlock {
     FairyRemovalFailed(FairyContainerRemoveOutcome),
     InvalidBattleFairyCell { position: u32 },
     BattleFairyRemovalFailed(BattleFairyEquipmentMutationReport),
+    ComposeRemovalFailed,
     EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
 }
 
@@ -448,17 +453,17 @@ pub(crate) struct AuctionListingWithdrawalRemoval {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AuctionListingWithdrawalOutcome {
     Moved {
-        addition: BattleFairyTransferAddition,
+        addition: CiQingComposeTransferAddition,
         destination_position: u32,
         destination_goods: ShapeIdentity,
         amount: u32,
     },
     RolledBack {
-        rejected: BattleFairyTransferAddition,
+        rejected: CiQingComposeTransferAddition,
         restored: VolumeGoodsAddOutcome,
     },
     GoodsCollected {
-        rejected: BattleFairyTransferAddition,
+        rejected: CiQingComposeTransferAddition,
         rollback: VolumeGoodsAddOutcome,
         goods: ShapeIdentity,
         notification_delivery: i32,
@@ -792,13 +797,19 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_extend_id == 13
-                && matches!(request.source_container_extend_id, 1 | 2 | 9 | 11 | 12 | 14)
+                && matches!(
+                    request.source_container_extend_id,
+                    1 | 2 | 9 | 11 | 12 | 14 | 17
+                )
             {
                 EnhancementMessageRoute::AuctionListingMove
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.source_container_extend_id == 13
-                && matches!(request.destination_container_extend_id, 1 | 2 | 9 | 11 | 12)
+                && matches!(
+                    request.destination_container_extend_id,
+                    1 | 2 | 9 | 11 | 12 | 17
+                )
             {
                 EnhancementMessageRoute::AuctionListingWithdrawal
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
@@ -1719,7 +1730,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             AuctionListingWithdrawalOutcome::RolledBack { rejected, .. }
             | AuctionListingWithdrawalOutcome::GoodsCollected { rejected, .. } => {
                 let notice_id = match rejected {
-                    BattleFairyTransferAddition::Player(addition) => {
+                    CiQingComposeTransferAddition::Player(addition) => {
                         depot_add_rejection_notice(addition)
                     }
                     _ => None,
