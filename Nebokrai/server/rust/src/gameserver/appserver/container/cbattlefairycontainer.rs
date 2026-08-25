@@ -843,19 +843,6 @@ fn x87_fistp_truncating(value: f32) -> i32 {
 //
 //
 
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:334
-// RVA: 0x000DB690
-// ADDRESS: 004db690
-// PROTOTYPE: CBaseObject * __thiscall Remove(CGUID * param_1, void * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBattleFairyContainer::Release
@@ -871,19 +858,6 @@ fn x87_fistp_truncating(value: f32) -> i32 {
 //
 //
 
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:339
-// RVA: 0x000FD470
-// ADDRESS: 004fd470
-// PROTOTYPE: CBaseObject * __thiscall Remove(ulong param_1, ulong param_2, void * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBattleFairyContainer::Serialize
@@ -913,23 +887,6 @@ fn x87_fistp_truncating(value: f32) -> i32 {
 //
 //
 
-// ============================================================================
-// FUNCTION: CBattleFairyContainer::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cbattlefairycontainer.cpp:81
-// RVA: 0x000FD510
-// ADDRESS: 004fd510
-// PROTOTYPE: int __thiscall Add(CBaseObject * param_1, tagPreviousContainer * param_2, void * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// `DeleteGoods(cell)` полностью выражен безопасными positional remove-операциями
-// текущих combine/upgrade/reset caller-ов; `CGame` публикует точный
-// `0xC0101/OT_DELETE_OBJECT` после успешного отделения ownership.
 
 // ============================================================================
 // FUNCTION: CBattleFairyContainer::CBattleFairyContainer

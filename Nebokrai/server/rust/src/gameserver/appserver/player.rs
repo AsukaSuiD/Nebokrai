@@ -7593,6 +7593,47 @@ impl CPlayer {
         }
     }
 
+    /// Безпозиционный overload сначала читает catalog BF equip-place. Только
+    /// валидная колонка достигает player property-tail; все typed reject-и
+    /// остаются у container owner-а без выдуманного размещения.
+    pub(crate) fn add_battle_fairy_goods_auto(
+        &mut self,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        coefficients: GlobePlayerPropertyCoefficients,
+        owner_progress_allows: bool,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> BattleFairyEquipmentMutationReport {
+        let cell = incoming
+            .as_ref()
+            .and_then(|goods| factory.query_goods_base_properties(goods.base_properties_index()))
+            .and_then(|properties| properties.battle_fairy_equip_place())
+            .and_then(|position| BattleFairyCell::from_position(position as u32));
+        if let Some(cell) = cell {
+            return self.add_battle_fairy_goods(
+                cell,
+                incoming,
+                factory,
+                coefficients,
+                owner_progress_allows,
+                encode_old_client,
+            );
+        }
+        let player_id = self.player_id();
+        let outcome = self
+            .battle_fairy_container
+            .add(incoming, factory, owner_progress_allows);
+        BattleFairyEquipmentMutationReport {
+            player_id,
+            cell: None,
+            delta: 1,
+            property_applied: false,
+            outcome: BattleFairyEquipmentMutationOutcome::Added(outcome),
+            effects: Vec::new(),
+            deliveries: Vec::new(),
+        }
+    }
+
     /// Exact `Remove`: base container отделяет goods до `BFPropertyAdd(-1)`;
     /// успешный property path сериализует battle fairy дважды — один раз в
     /// `BFPropertyAdd`, затем ещё раз в override `Remove`.
@@ -7665,6 +7706,65 @@ impl CPlayer {
             }
         }
         report
+    }
+
+    /// Positional `Remove(position, amount)` использует полный player-tail
+    /// для whole goods. Partial stack remove относится к material/gem cells и
+    /// не запускает `BFPropertyAdd(-1)`, пока исходный slot остаётся занят.
+    pub(crate) fn take_battle_fairy_goods<Create>(
+        &mut self,
+        cell: BattleFairyCell,
+        amount: u32,
+        factory: &CGoodsFactory,
+        coefficients: GlobePlayerPropertyCoefficients,
+        create_goods: Create,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> BattleFairyEquipmentMutationReport
+    where
+        Create: FnMut(u32) -> Option<CGoods>,
+    {
+        let player_id = self.player_id();
+        let Some(goods) = self
+            .battle_fairy_container
+            .base()
+            .get_goods(cell.position())
+        else {
+            return BattleFairyEquipmentMutationReport {
+                player_id,
+                cell: Some(cell),
+                delta: -1,
+                property_applied: false,
+                outcome: BattleFairyEquipmentMutationOutcome::MissingGoods,
+                effects: Vec::new(),
+                deliveries: Vec::new(),
+            };
+        };
+        if goods.amount() == amount {
+            return self.remove_battle_fairy_goods(
+                goods.identity().ex_id,
+                factory,
+                coefficients,
+                encode_old_client,
+            );
+        }
+        let outcome = self.battle_fairy_container.base_mut().take_goods(
+            cell.position(),
+            amount,
+            factory,
+            create_goods,
+        );
+        BattleFairyEquipmentMutationReport {
+            player_id,
+            cell: Some(cell),
+            delta: -1,
+            property_applied: false,
+            outcome: outcome.map_or(
+                BattleFairyEquipmentMutationOutcome::MissingGoods,
+                BattleFairyEquipmentMutationOutcome::Removed,
+            ),
+            effects: Vec::new(),
+            deliveries: Vec::new(),
+        }
     }
 
     /// Полный player-side opcode `0x8FC2A`. `allocations` содержат пары

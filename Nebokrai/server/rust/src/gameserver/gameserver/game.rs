@@ -589,28 +589,28 @@ use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSy
 use crate::gameserver::appserver::player::{
     AuctionSelfGoodsRefresh, BattleFairyCombineDelivery, BattleFairyCombineEffect,
     BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
-    BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationReport,
-    BattleFairyFollowDelivery, BattleFairyFollowEffect, BattleFairyFollowReport,
-    BattleFairyObjectMove, BattleFairyObjectMoveOperation, BattleFairyPotentialAllocationDelivery,
-    BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetDelivery,
-    BattleFairyPotentialResetEffect, BattleFairySkillAdded, BattleFairySkillDispatch,
-    BattleFairySkillRequest, BattleFairySkillRequestDelivery, BattleFairySkillRequestEffect,
-    BattleFairySkillRequestFacts, BattleFairySkillRequestReport, BattleFairySkillResetDelivery,
-    BattleFairySkillResetEffect, BattleFairySkillResetReport, BattleFairySummonDelivery,
-    BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeDelivery,
-    BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, CiQingContainerAddition,
-    CiQingContainerConsumption, CiQingHandConsumption, CiQingPacketAddition,
-    CiQingPacketConsumption, EnhancementDeselectionBlock, EnhancementDeselectionReport,
-    EnhancementSelectionBlock, EnhancementSelectionReport, GoodsDestroyHandConsumption,
-    HotkeyHandTransferOutcome, HotkeyHandTransferReport, PlayerAuctionGoodsReturn,
-    PlayerAuctionMoneyChange, PlayerBankCurrencyAddOutcome, PlayerCombatProperties,
-    PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
-    PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
-    PlayerEquipmentRemoveRuntimeFacts, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
-    PlayerHonorResetReport, PlayerLoginGoodsLocation, PlayerProgress, PlayerReliveMutation,
-    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
-    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet,
-    PlayerYuanBaoChange,
+    BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationOutcome,
+    BattleFairyEquipmentMutationReport, BattleFairyFollowDelivery, BattleFairyFollowEffect,
+    BattleFairyFollowReport, BattleFairyObjectMove, BattleFairyObjectMoveOperation,
+    BattleFairyPotentialAllocationDelivery, BattleFairyPotentialAllocationEffect,
+    BattleFairyPotentialResetDelivery, BattleFairyPotentialResetEffect, BattleFairySkillAdded,
+    BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestDelivery,
+    BattleFairySkillRequestEffect, BattleFairySkillRequestFacts, BattleFairySkillRequestReport,
+    BattleFairySkillResetDelivery, BattleFairySkillResetEffect, BattleFairySkillResetReport,
+    BattleFairySummonDelivery, BattleFairySummonEffect, BattleFairySummonReport,
+    BattleFairyUpgradeDelivery, BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer,
+    CiQingContainerAddition, CiQingContainerConsumption, CiQingHandConsumption,
+    CiQingPacketAddition, CiQingPacketConsumption, EnhancementDeselectionBlock,
+    EnhancementDeselectionReport, EnhancementSelectionBlock, EnhancementSelectionReport,
+    GoodsDestroyHandConsumption, HotkeyHandTransferOutcome, HotkeyHandTransferReport,
+    PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange, PlayerBankCurrencyAddOutcome,
+    PlayerCombatProperties, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
+    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
+    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerGameSaveCodecError,
+    PlayerGameSaveDecodeReport, PlayerHonorResetReport, PlayerLoginGoodsLocation, PlayerProgress,
+    PlayerReliveMutation, PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery,
+    PlayerSkillRequestEffect, PlayerSkillRequestFacts, PlayerSkillRequestReport,
+    PlayerUncreatedCarriage, PlayerUncreatedPet, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -2765,6 +2765,81 @@ pub(crate) struct FairyStorageTransferReport {
     pub(crate) destination_position: u32,
     pub(crate) removal: FairyStorageTransferRemoval,
     pub(crate) addition: FairyStorageTransferAddition,
+    pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) delivery: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyStorageRemoval {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+    pub(crate) cell: BattleFairyCell,
+    pub(crate) property_applied: bool,
+    pub(crate) effects: Vec<BattleFairyEquipmentMutationEffect>,
+    pub(crate) deliveries: Vec<BattleFairyEquipmentMutationDelivery>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyTransferRemoval {
+    Player(EnhancementTransferRemoval),
+    BattleFairy(BattleFairyStorageRemoval),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyTransferAddition {
+    Player(DepotStorageTransferAddition),
+    BattleFairy(BattleFairyEquipmentMutationReport),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyTransferBlock {
+    MissingPlayer,
+    UnsupportedRoute,
+    MissingGoods,
+    InvalidCell {
+        position: u32,
+    },
+    AmountMismatch,
+    PartialMoveBusy(PlayerProgress),
+    BurdenRolledBack {
+        removal: BattleFairyTransferRemoval,
+        restored: BattleFairyTransferAddition,
+    },
+    BurdenRollbackFailed {
+        goods: CGoods,
+        removal: BattleFairyTransferRemoval,
+        rollback: BattleFairyTransferAddition,
+    },
+    PacketRemovalFailed,
+    EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
+    BattleFairyRemovalFailed(BattleFairyEquipmentMutationReport),
+    RolledBack {
+        removal: BattleFairyTransferRemoval,
+        rejected: BattleFairyTransferAddition,
+        restored: BattleFairyTransferAddition,
+    },
+    RollbackFailed {
+        goods: CGoods,
+        removal: BattleFairyTransferRemoval,
+        rejected: BattleFairyTransferAddition,
+        rollback: BattleFairyTransferAddition,
+    },
+}
+
+#[must_use = "battle-fairy transfer report сохраняет property effects и wire"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyTransferReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) source_extend_id: i32,
+    pub(crate) source_position: u32,
+    pub(crate) destination_extend_id: i32,
+    pub(crate) destination_position: u32,
+    pub(crate) removal: BattleFairyTransferRemoval,
+    pub(crate) addition: BattleFairyTransferAddition,
     pub(crate) previous_last_operated: (u32, u32),
     pub(crate) delivery: i32,
 }
@@ -7702,6 +7777,371 @@ impl CGame {
             }
             FairyStorageTransferAddition::Fairy(FairyContainerAddOutcome::Rejected(_)) => {
                 unreachable!("успешный fairy transfer не содержит reject")
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn transfer_player_battle_fairy_goods<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<BattleFairyTransferReport, BattleFairyTransferBlock> {
+        let supported = matches!(source_extend_id, 1 | 2) && destination_extend_id == 12
+            || source_extend_id == 12 && matches!(destination_extend_id, 1 | 2);
+        if !supported {
+            return Err(BattleFairyTransferBlock::UnsupportedRoute);
+        }
+        if destination_extend_id == 12
+            && destination_position != u32::MAX
+            && BattleFairyCell::from_position(destination_position).is_none()
+        {
+            return Err(BattleFairyTransferBlock::InvalidCell {
+                position: destination_position,
+            });
+        }
+        let player = self
+            .find_player(player_id)
+            .ok_or(BattleFairyTransferBlock::MissingPlayer)?;
+        let source = match source_extend_id {
+            1 => player.packet().get_goods(source_position),
+            2 => player.equipment().get_goods(source_position),
+            12 => player
+                .battle_fairy_container()
+                .base()
+                .get_goods(source_position),
+            _ => None,
+        }
+        .filter(|goods| goods.identity().ex_id == goods_id)
+        .ok_or(BattleFairyTransferBlock::MissingGoods)?;
+        if amount == 0
+            || source.amount() < amount
+            || source_extend_id == 2 && source.amount() != amount
+        {
+            return Err(BattleFairyTransferBlock::AmountMismatch);
+        }
+        if source.amount() != amount
+            && matches!(
+                player.current_progress(),
+                PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+            )
+        {
+            return Err(BattleFairyTransferBlock::PartialMoveBusy(
+                player.current_progress(),
+            ));
+        }
+        let source_identity = source.identity();
+        let mut burden_goods = source.clone();
+        burden_goods.set_amount(amount);
+        let burden_exceeded = source_extend_id == 12
+            && player
+                .current_burden(&self.goods_factory)
+                .wrapping_add(burden_goods.weight(&self.goods_factory))
+                > u32::from(player.combat_properties().burden);
+        let mut split_template = source.clone();
+        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .expect("player проверен перед battle-fairy ownership pass");
+
+        let (removal, mut incoming) = if source_extend_id == 1 {
+            let removed = player.packet_mut().take_goods(
+                source_position,
+                amount,
+                &self.goods_factory,
+                |_| {
+                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                        .then(|| split_template.clone())
+                },
+            );
+            let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
+                self.players.insert(player_id, player);
+                return Err(BattleFairyTransferBlock::PacketRemovalFailed);
+            };
+            let (goods, removal) = Self::player_packet_taken(taken, source_position);
+            (BattleFairyTransferRemoval::Player(removal), Some(goods))
+        } else if source_extend_id == 2 {
+            let goods = player
+                .equipment()
+                .get_goods(source_position)
+                .expect("equipment source проверен до remove");
+            let facts = context.enhancement_equipment_remove_facts(
+                &player,
+                goods,
+                self.globe_setup.pack_add_enabled(),
+            );
+            let mut recompute =
+                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut report = player.remove_equipment_goods(
+                goods_id,
+                &self.goods_factory,
+                &self.skill_factory,
+                facts,
+                &mut recompute,
+            );
+            drop(recompute);
+            self.publish_player_equipment_remove_report(&mut report, context);
+            let outcome = std::mem::replace(
+                &mut report.outcome,
+                EquipmentRemoveOutcome::Missing {
+                    partial_effects: Default::default(),
+                },
+            );
+            let EquipmentRemoveOutcome::Removed(removed) = outcome else {
+                report.outcome = outcome;
+                self.players.insert(player_id, player);
+                return Err(BattleFairyTransferBlock::EquipmentRemovalFailed(report));
+            };
+            (
+                BattleFairyTransferRemoval::Player(EnhancementTransferRemoval::Equipment {
+                    event: removed.event,
+                    effects: report.effects,
+                    deliveries: report.deliveries,
+                }),
+                Some(removed.goods),
+            )
+        } else {
+            let Some(cell) = BattleFairyCell::from_position(source_position) else {
+                self.players.insert(player_id, player);
+                return Err(BattleFairyTransferBlock::InvalidCell {
+                    position: source_position,
+                });
+            };
+            let coefficients = self.globe_setup.player_property_coefficients();
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let mut report = player.take_battle_fairy_goods(
+                cell,
+                amount,
+                &self.goods_factory,
+                coefficients,
+                |_| {
+                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                        .then(|| split_template.clone())
+                },
+                &mut encode,
+            );
+            drop(encode);
+            self.deliver_battle_fairy_equipment_effects_for_player(Some(&player), &mut report);
+            let outcome = std::mem::replace(
+                &mut report.outcome,
+                BattleFairyEquipmentMutationOutcome::MissingGoods,
+            );
+            let BattleFairyEquipmentMutationOutcome::Removed(VolumeGoodsRemoveOutcome::Removed(
+                taken,
+            )) = outcome
+            else {
+                report.outcome = outcome;
+                self.players.insert(player_id, player);
+                return Err(BattleFairyTransferBlock::BattleFairyRemovalFailed(report));
+            };
+            let (goods, storage) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    BattleFairyStorageRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                        cell,
+                        property_applied: report.property_applied,
+                        effects: report.effects,
+                        deliveries: report.deliveries,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    BattleFairyStorageRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                        cell,
+                        property_applied: report.property_applied,
+                        effects: report.effects,
+                        deliveries: report.deliveries,
+                    },
+                ),
+            };
+            (
+                BattleFairyTransferRemoval::BattleFairy(storage),
+                Some(goods),
+            )
+        };
+
+        if burden_exceeded {
+            let rollback = self.add_battle_fairy_transfer_goods(
+                &mut player,
+                source_extend_id,
+                source_position,
+                &mut incoming,
+                context,
+            );
+            self.players.insert(player_id, player);
+            if let Some(goods) = incoming {
+                return Err(BattleFairyTransferBlock::BurdenRollbackFailed {
+                    goods,
+                    removal,
+                    rollback,
+                });
+            }
+            return Err(BattleFairyTransferBlock::BurdenRolledBack {
+                removal,
+                restored: rollback,
+            });
+        }
+
+        let addition = self.add_battle_fairy_transfer_goods(
+            &mut player,
+            destination_extend_id,
+            destination_position,
+            &mut incoming,
+            context,
+        );
+        if incoming.is_some() {
+            let rejected = addition;
+            let rollback = self.add_battle_fairy_transfer_goods(
+                &mut player,
+                source_extend_id,
+                source_position,
+                &mut incoming,
+                context,
+            );
+            self.players.insert(player_id, player);
+            if let Some(goods) = incoming {
+                return Err(BattleFairyTransferBlock::RollbackFailed {
+                    goods,
+                    removal,
+                    rejected,
+                    rollback,
+                });
+            }
+            return Err(BattleFairyTransferBlock::RolledBack {
+                removal,
+                rejected,
+                restored: rollback,
+            });
+        }
+
+        let (actual_position, destination_goods, destination_amount) =
+            Self::battle_fairy_transfer_destination(&player, destination_position, &addition);
+        let previous_last_operated =
+            player.record_last_operated_goods(source_extend_id, source_position);
+        self.players.insert(player_id, player);
+        let mut moved = CS2CContainerObjectMove::default();
+        moved.set_operation(ContainerObjectMoveOperation::MoveObject);
+        moved.set_source_container(PLAYER_TYPE, player_id, source_position);
+        moved.set_source_container_extend_id(source_extend_id);
+        moved.set_destination_container(PLAYER_TYPE, player_id, actual_position);
+        moved.set_destination_container_extend_id(destination_extend_id);
+        moved.set_source_object(GOODS_TYPE, goods_id, amount);
+        moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
+        moved.set_destination_object_amount(destination_amount);
+        let delivery = moved.send_to_player(self, player_id);
+        Ok(BattleFairyTransferReport {
+            goods: source_identity,
+            amount,
+            source_extend_id,
+            source_position,
+            destination_extend_id,
+            destination_position: actual_position,
+            removal,
+            addition,
+            previous_last_operated,
+            delivery,
+        })
+    }
+
+    fn add_battle_fairy_transfer_goods<Context: GameContainerMessageRuntime>(
+        &self,
+        player: &mut CPlayer,
+        extend_id: i32,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        context: &mut Context,
+    ) -> BattleFairyTransferAddition {
+        if extend_id == 12 {
+            let coefficients = self.globe_setup.player_property_coefficients();
+            let owner_progress_allows = !matches!(
+                player.current_progress(),
+                PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+            );
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let mut report = if position == u32::MAX {
+                player.add_battle_fairy_goods_auto(
+                    incoming,
+                    &self.goods_factory,
+                    coefficients,
+                    owner_progress_allows,
+                    &mut encode,
+                )
+            } else if let Some(cell) = BattleFairyCell::from_position(position) {
+                player.add_battle_fairy_goods(
+                    cell,
+                    incoming,
+                    &self.goods_factory,
+                    coefficients,
+                    owner_progress_allows,
+                    &mut encode,
+                )
+            } else {
+                unreachable!("battle-fairy position проверена до ownership pass")
+            };
+            drop(encode);
+            self.deliver_battle_fairy_equipment_effects_for_player(Some(player), &mut report);
+            return BattleFairyTransferAddition::BattleFairy(report);
+        }
+        BattleFairyTransferAddition::Player(
+            self.add_depot_transfer_goods(player, extend_id, position, incoming, context),
+        )
+    }
+
+    fn battle_fairy_transfer_destination(
+        player: &CPlayer,
+        requested_position: u32,
+        addition: &BattleFairyTransferAddition,
+    ) -> (u32, ShapeIdentity, u32) {
+        match addition {
+            BattleFairyTransferAddition::Player(addition) => {
+                Self::depot_transfer_destination(player, requested_position, addition)
+            }
+            BattleFairyTransferAddition::BattleFairy(report) => {
+                let BattleFairyEquipmentMutationOutcome::Added(
+                    crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyContainerAddOutcome::Stored {
+                        base,
+                        ..
+                    },
+                ) = &report.outcome
+                else {
+                    unreachable!("успешный battle-fairy add")
+                };
+                let position = match base {
+                    VolumeGoodsAddOutcome::Added(added) => {
+                        added.position.unwrap_or(requested_position)
+                    }
+                    VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
+                        target, ..
+                    }) => player
+                        .battle_fairy_container()
+                        .base()
+                        .query_goods_position(target.ex_id)
+                        .expect("battle-fairy stack position"),
+                    _ => unreachable!("успешный battle-fairy storage add"),
+                };
+                let goods = player
+                    .battle_fairy_container()
+                    .base()
+                    .get_goods(position)
+                    .expect("battle-fairy add сохранён");
+                (position, goods.identity(), goods.amount())
             }
         }
     }
@@ -23168,10 +23608,19 @@ impl CGame {
         &self,
         report: &mut BattleFairyEquipmentMutationReport,
     ) {
+        let player = self.find_player(report.player_id);
+        self.deliver_battle_fairy_equipment_effects_for_player(player, report);
+    }
+
+    fn deliver_battle_fairy_equipment_effects_for_player(
+        &self,
+        player: Option<&CPlayer>,
+        report: &mut BattleFairyEquipmentMutationReport,
+    ) {
         for effect in report.effects.clone() {
             match effect {
                 BattleFairyEquipmentMutationEffect::PropertiesChanged { player_id } => {
-                    if let Some(player) = self.find_player(player_id) {
+                    if let Some(player) = player.filter(|player| player.player_id() == player_id) {
                         report
                             .deliveries
                             .push(BattleFairyEquipmentMutationDelivery::Properties(

@@ -54,6 +54,9 @@
 //! Packet/equipment↔ordinary-fairy (`11`) использует тот же ownership owner:
 //! fairy positional filters и hatch-lock, packet split, equipment callbacks,
 //! burden после fairy remove, rollback и self `0xC0101` наблюдаемы целиком.
+//! Packet/equipment↔battle-fairy (`12`) дополнительно сохраняет ранние
+//! `BFPropertyAdd`, partial material/gem remove, property/goods-update
+//! deliveries и их повторный rollback add до итогового move/rollback wire.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -86,11 +89,11 @@ use crate::gameserver::appserver::session::csessionfactory::{
 use crate::gameserver::appserver::session::ctrader::{TraderOfferAdded, TraderOfferRemoved};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
-    BankCurrencyTransferBlock, BankCurrencyTransferReport, CGame, DepotStorageTransferAddition,
-    DepotStorageTransferBlock, DepotStorageTransferReport, FairyStorageTransferBlock,
-    FairyStorageTransferReport, GameContainerMessageRuntime, GroundGoodsMoveBlock,
-    GroundGoodsMoveReport, HandContainerMoveBlock, HandContainerMoveReport, PlayerHandMoveBlock,
-    PlayerHandMoveReport,
+    BankCurrencyTransferBlock, BankCurrencyTransferReport, BattleFairyTransferBlock,
+    BattleFairyTransferReport, CGame, DepotStorageTransferAddition, DepotStorageTransferBlock,
+    DepotStorageTransferReport, FairyStorageTransferBlock, FairyStorageTransferReport,
+    GameContainerMessageRuntime, GroundGoodsMoveBlock, GroundGoodsMoveReport,
+    HandContainerMoveBlock, HandContainerMoveReport, PlayerHandMoveBlock, PlayerHandMoveReport,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -282,6 +285,12 @@ pub(crate) enum GameContainerMessageOutcome {
         delivery: i32,
         notification_delivery: Option<i32>,
     },
+    BattleFairyMoved(BattleFairyTransferReport),
+    BattleFairyRolledBack {
+        reason: BattleFairyTransferBlock,
+        delivery: i32,
+        notification_delivery: Option<i32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -291,6 +300,7 @@ enum EnhancementMessageRoute {
     HandContainerMove,
     PlayerHandMove,
     FairyStorageTransfer,
+    BattleFairyTransfer,
     GroundDrop,
     GroundPickup,
     EnhancementSelect,
@@ -638,6 +648,14 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && (matches!(request.source_container_extend_id, 1 | 2)
+                    && request.destination_container_extend_id == 12
+                    || request.source_container_extend_id == 12
+                        && matches!(request.destination_container_extend_id, 1 | 2))
+            {
+                EnhancementMessageRoute::BattleFairyTransfer
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && (matches!(request.source_container_extend_id, 1 | 2)
                     && request.destination_container_extend_id == 11
                     || request.source_container_extend_id == 11
                         && matches!(request.destination_container_extend_id, 1 | 2))
@@ -918,6 +936,53 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 reason,
                 delivery: send_rollback(game, player_id),
             },
+        })));
+    }
+
+    if route == EnhancementMessageRoute::BattleFairyTransfer {
+        let transfer = game.transfer_player_battle_fairy_goods(
+            player_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_container_extend_id,
+            request.destination_position,
+            context,
+        );
+        return Some(Ok(report(match transfer {
+            Ok(transfer) => GameContainerMessageOutcome::BattleFairyMoved(transfer),
+            Err(reason) => {
+                let notice_id: Option<&[u8]> = match &reason {
+                    BattleFairyTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
+                        Some(b"GS0113")
+                    }
+                    BattleFairyTransferBlock::PartialMoveBusy(PlayerProgress::Trading) => {
+                        Some(b"GS0114")
+                    }
+                    BattleFairyTransferBlock::PartialMoveBusy(PlayerProgress::Upgrade) => {
+                        Some(b"GS0115")
+                    }
+                    BattleFairyTransferBlock::BurdenRolledBack { .. }
+                    | BattleFairyTransferBlock::BurdenRollbackFailed { .. } => Some(b"GS0259"),
+                    BattleFairyTransferBlock::RollbackFailed { .. } => Some(b"GPM019"),
+                    _ => None,
+                };
+                let notification_delivery = notice_id.map(|notice_id| {
+                    send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(notice_id),
+                        0xffff_ffff,
+                        0,
+                    )
+                });
+                GameContainerMessageOutcome::BattleFairyRolledBack {
+                    reason,
+                    delivery: send_rollback(game, player_id),
+                    notification_delivery,
+                }
+            }
         })));
     }
 
