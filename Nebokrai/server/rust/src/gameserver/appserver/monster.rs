@@ -269,6 +269,9 @@ impl CMonster {
         if !self.tamed || self.pet_mode != 1 || self.ai_target.is_some() {
             return false;
         }
+        if self.pet_action == 1 {
+            self.pet_action = 0;
+        }
         self.ai_target = Some(target);
         true
     }
@@ -416,6 +419,9 @@ impl CMonster {
                 .ai_target
                 .is_some_and(|target| target.object_type != 400 && attacker.object_type == 400)
         {
+            if self.pet_action == 1 {
+                self.pet_action = 0;
+            }
             self.ai_target = Some(attacker);
         }
     }
@@ -440,6 +446,9 @@ impl CMonster {
     }
 
     pub(crate) fn set_ai_target(&mut self, target: ShapeIdentity) {
+        if self.tamed && self.pet_action == 1 {
+            self.pet_action = 0;
+        }
         self.ai_target = Some(target);
     }
 
@@ -469,6 +478,9 @@ impl CMonster {
         self.ai_target = None;
         self.base_attack_cast = None;
         self.trace_move_delay = None;
+        if self.tamed && self.pet_action == 0 {
+            self.pet_action = 1;
+        }
     }
 
     pub(crate) const fn last_base_attack_ms(&self) -> u32 {

@@ -371,8 +371,9 @@
 //! factors/tracing и завершает wild-monster reward/drop/script/delete через
 //! master beneficiary; player-target рекурсивно применяет master PvP/level/
 //! safe-cell policy и доходит до общего hurt/death/murder/equipment tail.
-//! Guard policy, idle/multi-skill и остальной tamed decision tree остаются на
-//! derived shape-AI границе.
+//! Follow/stay action также проходит master pet-slot geometry, near movement
+//! либо far `BF603` relocation. Guard policy, idle/multi-skill и остальной
+//! tamed decision tree остаются на derived shape-AI границе.
 //! `Release` сохраняет player-save/catch, city-save, registry/script/factory,
 //! network и singleton teardown order; Rust `clear/take/Drop` заменяет manual
 //! delete, а ещё внешние process-global owners вызываются typed runtime-ом.
@@ -31595,6 +31596,146 @@ impl CGame {
         }
     }
 
+    /// Reached `CPet::OnFallowingSchedule`: pet slot определяет устойчивую
+    /// точку позади master-а; близкий pet идёт туда обычным `BF605`, а далёкий
+    /// переносится в свободную клетку `7x7` с exact `BF603` ordering.
+    fn run_owned_pet_follow<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let handled = (|| {
+            let region = owner.base_mut();
+            let Some((pet_shape, pet_health, master, moveable, property)) =
+                region.find_monster_by_id(monster_id).and_then(|monster| {
+                    if !monster.is_tamed() || monster.pet_action() != 1 {
+                        return None;
+                    }
+                    let property = self
+                        .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                        .clone();
+                    Some((
+                        monster.move_shape().shape().clone(),
+                        monster.hit_points(),
+                        monster.master_info(),
+                        monster.move_shape().is_moveable(),
+                        property,
+                    ))
+                })
+            else {
+                return false;
+            };
+            if CMoveShape::is_died(pet_health) || !moveable {
+                return true;
+            }
+            if master.master_type != PLAYER_TYPE || master.master_id == 0 {
+                return true;
+            }
+            let Some((master_shape, pet_index)) =
+                self.find_player(master.master_id).and_then(|player| {
+                    (player.server_region_id() == Some(region_id)).then(|| {
+                        let index = player.active_pets().iter().position(|pet| {
+                            pet.object_type == MONSTER_TYPE && pet.id == monster_id
+                        })?;
+                        Some((player.shape().clone(), index))
+                    })?
+                })
+            else {
+                return true;
+            };
+            let (Ok(pet_x), Ok(pet_y), Ok(master_x), Ok(master_y), Ok(rear)) = (
+                pet_shape.get_tile_x(),
+                pet_shape.get_tile_y(),
+                master_shape.get_tile_x(),
+                master_shape.get_tile_y(),
+                master_shape.get_rear_direction(),
+            ) else {
+                return true;
+            };
+            let mut destination = ShapeAreaCoordinates {
+                x: master_x,
+                y: master_y,
+            };
+            for _ in 0..(pet_index / 3 + 1) {
+                let Ok(next) = CShape::get_direction_position(rear, destination) else {
+                    return true;
+                };
+                let Ok(next) = CShape::get_direction_position(rear, next) else {
+                    return true;
+                };
+                destination = next;
+            }
+            let side = match pet_index % 3 {
+                1 => master_shape.get_left_direction().ok(),
+                2 => master_shape.get_right_direction().ok(),
+                _ => None,
+            };
+            if let Some(side) = side {
+                let Ok(next) = CShape::get_direction_position(side, destination) else {
+                    return true;
+                };
+                let Ok(next) = CShape::get_direction_position(side, next) else {
+                    return true;
+                };
+                destination = next;
+            }
+            if (pet_x, pet_y) == (destination.x, destination.y) {
+                return true;
+            }
+            let Some(around) = GameServerAroundRuntime::new(
+                self,
+                &self.session_factory,
+                self.area_width,
+                self.area_height,
+            ) else {
+                return true;
+            };
+            let figure = CMonster::figure(&property);
+            if (real_distance(pet_x, pet_y, master_x, master_y) as f32)
+                <= self.globe_setup.pet_translate_distance()
+            {
+                let _ = region.move_owned_monster(
+                    monster_id,
+                    destination.x,
+                    destination.y,
+                    0,
+                    figure,
+                    self.area_width,
+                    self.area_height,
+                    &around,
+                );
+                return true;
+            }
+            let Ok(position) = region.region.get_random_pos_in_range(
+                master_x.wrapping_sub(3),
+                master_y.wrapping_sub(3),
+                7,
+                7,
+                runtime,
+            ) else {
+                return true;
+            };
+            if position.found {
+                let _ = region.set_owned_monster_position(
+                    monster_id,
+                    position.x,
+                    position.y,
+                    figure,
+                    self.area_width,
+                    self.area_height,
+                    &around,
+                );
+            }
+            true
+        })();
+        self.restore_region_owner(owner);
+        handled
+    }
+
     /// Reached `CMonsterAI/CPet::OnSchedule -> CBaseAttack(1)` path:
     /// retaliation, aggressive melee `dwAI 0/3` search/tracing и concrete
     /// pet-to-wild-monster либо policy-checked pet-to-player base attack.
@@ -31662,6 +31803,7 @@ impl CGame {
         let skill = *skill;
         if target.is_none()
             && cast.is_none()
+            && !tamed
             && matches!(property.ai, 0 | 3)
             && let Some(area_index) = area_index
         {
@@ -32115,6 +32257,12 @@ impl CGame {
 
         let distance = real_distance(monster_x, monster_y, target_x, target_y);
         if maximum_distance != 0 && distance > maximum_distance as i32 {
+            if tamed && pet_action == 2 {
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.clear_ai_target();
+                }
+                return true;
+            }
             let chase_range = if tamed {
                 self.globe_setup.maximum_pet_tracing_distance()
             } else {
@@ -35940,7 +36088,9 @@ impl CGame {
                 })
                 .unwrap_or_default();
             for monster_id in monster_ids {
-                let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
+                if !self.run_owned_pet_follow(region_id, monster_id, runtime) {
+                    let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
+                }
             }
             let is_gods_battle = self
                 .find_region(region_id)

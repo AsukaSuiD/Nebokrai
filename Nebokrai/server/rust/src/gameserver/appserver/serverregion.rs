@@ -2443,6 +2443,31 @@ impl CServerRegion {
         Some(result)
     }
 
+    /// `CPet::OnFallowingSchedule` far-master branch: wire `BF603` и
+    /// canonical spatial mutation принадлежат тому же concrete monster.
+    pub(crate) fn set_owned_monster_position(
+        &mut self,
+        monster_id: i32,
+        destination_x: i32,
+        destination_y: i32,
+        figure: ShapeFigure,
+        area_width: i32,
+        area_height: i32,
+        around: &GameServerAroundRuntime<'_>,
+    ) -> Option<Result<bool, MoveShapeCommandBlock>> {
+        let mut monster = self.owned_monsters.remove(&monster_id)?;
+        let facts = monster.movement_position_facts(figure, area_width, area_height);
+        let result = monster.move_shape_mut().on_set_position(
+            Some(self),
+            destination_x,
+            destination_y,
+            facts,
+            around,
+        );
+        self.owned_monsters.insert(monster_id, monster);
+        Some(result)
+    }
+
     fn complete_move_shape_position_facts(
         &self,
         shape: &CShape,
