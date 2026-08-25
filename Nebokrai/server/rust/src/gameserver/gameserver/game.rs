@@ -6594,9 +6594,14 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<AuctionListingTransferReport, AuctionListingTransferBlock> {
-        if !matches!(source_extend_id, 1 | 2 | 9 | 11 | 14) {
+        if !matches!(source_extend_id, 1 | 2 | 9 | 11 | 12 | 14) {
             return Err(AuctionListingTransferBlock::UnsupportedSourceContainer {
                 extend_id: source_extend_id,
+            });
+        }
+        if source_extend_id == 12 && BattleFairyCell::from_position(source_position).is_none() {
+            return Err(AuctionListingTransferBlock::InvalidBattleFairyCell {
+                position: source_position,
             });
         }
         let depot_audit = (source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled())
@@ -6654,6 +6659,10 @@ impl CGame {
             2 => player.equipment().get_goods(source_position),
             9 => player.depot().get_goods(source_position),
             11 => player.fairy_container().base().get_goods(source_position),
+            12 => player
+                .battle_fairy_container()
+                .base()
+                .get_goods(source_position),
             14 => player.auction_goods().get_goods(source_position),
             _ => unreachable!("source extend проверен выше"),
         }
@@ -6814,6 +6823,50 @@ impl CGame {
                 };
                 (AuctionListingTransferRemoval::Fairy(removal), Some(goods))
             }
+            12 => {
+                let cell = BattleFairyCell::from_position(source_position)
+                    .expect("battle-fairy source position проверена");
+                let coefficients = self.globe_setup.player_property_coefficients();
+                let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+                let mut report = player.take_battle_fairy_goods(
+                    cell,
+                    amount,
+                    &self.goods_factory,
+                    coefficients,
+                    |_| None,
+                    &mut encode,
+                );
+                drop(encode);
+                self.deliver_battle_fairy_equipment_effects_for_player(Some(player), &mut report);
+                let outcome = std::mem::replace(
+                    &mut report.outcome,
+                    BattleFairyEquipmentMutationOutcome::MissingGoods,
+                );
+                let BattleFairyEquipmentMutationOutcome::Removed(
+                    VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed)),
+                ) = outcome
+                else {
+                    report.outcome = outcome;
+                    return Err(AuctionListingTransferBlock::BattleFairyRemovalFailed(
+                        report,
+                    ));
+                };
+                let storage = BattleFairyStorageRemoval {
+                    owner_type: removed.owner_type,
+                    owner_id: removed.owner_id,
+                    position: removed.position.unwrap_or(source_position),
+                    amount: removed.amount,
+                    listeners: removed.listeners,
+                    cell,
+                    property_applied: report.property_applied,
+                    effects: report.effects,
+                    deliveries: report.deliveries,
+                };
+                (
+                    AuctionListingTransferRemoval::BattleFairy(storage),
+                    Some(removed.goods),
+                )
+            }
             2 => {
                 let remove_facts =
                     context.enhancement_equipment_remove_facts(player, goods, pack_add_enabled);
@@ -6890,12 +6943,20 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<AuctionListingWithdrawalReport, AuctionListingWithdrawalBlock> {
-        if !matches!(destination_extend_id, 1 | 2 | 9 | 11) {
+        if !matches!(destination_extend_id, 1 | 2 | 9 | 11 | 12) {
             return Err(
                 AuctionListingWithdrawalBlock::UnsupportedDestinationContainer {
                     extend_id: destination_extend_id,
                 },
             );
+        }
+        if destination_extend_id == 12
+            && destination_position != u32::MAX
+            && BattleFairyCell::from_position(destination_position).is_none()
+        {
+            return Err(AuctionListingWithdrawalBlock::InvalidBattleFairyCell {
+                position: destination_position,
+            });
         }
         let depot_audit = (destination_extend_id == 9
             && self.log_system.goods_depot_set_log_enabled())
@@ -6977,7 +7038,7 @@ impl CGame {
             listeners: removed.listeners,
         };
         let mut incoming = Some(removed.goods);
-        let addition = self.add_fairy_transfer_goods(
+        let addition = self.add_battle_fairy_transfer_goods(
             player,
             destination_extend_id,
             destination_position,
@@ -6986,7 +7047,7 @@ impl CGame {
         );
         let outcome = if incoming.is_none() {
             let (destination_position, destination_goods, amount) =
-                Self::fairy_transfer_destination(player, destination_position, &addition);
+                Self::battle_fairy_transfer_destination(player, destination_position, &addition);
             AuctionListingWithdrawalOutcome::Moved {
                 addition,
                 destination_position,
