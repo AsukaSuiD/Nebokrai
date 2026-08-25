@@ -15,6 +15,8 @@
 //! `55/57`; Fairy
 //! grow/incubate/implantation/syncretize — tail `60..63` того же snapshot-а.
 //! Player level-up audit использует positional `bLevelLog` byte `24`.
+//! `CPlayer::ChangeRegion` читает adjacent `bChMap0/1/2` bytes
+//! `51..53` для same/local/remote `0x6020C` audit paths.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -192,6 +194,10 @@ impl CLogSystem {
 
     pub(crate) fn private_chat_enabled(&self) -> bool {
         self.setting(49)
+    }
+
+    pub(crate) fn change_region_log_enabled(&self, kind: u8) -> bool {
+        matches!(kind, 0..=2) && self.setting(51 + usize::from(kind))
     }
 
     pub(crate) fn fairy_grow_enabled(&self) -> bool {

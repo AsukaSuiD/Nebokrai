@@ -2200,6 +2200,7 @@ pub(crate) struct PlayerRegionChangeReport {
     pub(crate) faction_delivery: Option<Result<i32, SendMessageError>>,
     pub(crate) team_delivery: Option<Result<i32, SendMessageError>>,
     pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
+    pub(crate) change_log_delivery: Option<Result<i32, SendMessageError>>,
     pub(crate) player_snapshot_size: Option<usize>,
 }
 
@@ -16476,6 +16477,39 @@ impl CGame {
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
+    /// Exact `CPlayer::ChangeRegion` audit `0x6020C`. `kind` совпадает
+    /// с `bChMap0/1/2`: same-region, local-region и remote-server.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn send_player_change_region_log(
+        &mut self,
+        kind: u8,
+        player_id: i32,
+        wallet_gold: u32,
+        bank_gold: u32,
+        source_region_id: i32,
+        source_tile_x: i32,
+        source_tile_y: i32,
+        target_region_id: i32,
+        target_tile_x: i32,
+        target_tile_y: i32,
+    ) -> Option<Result<i32, SendMessageError>> {
+        if !self.log_system.change_region_log_enabled(kind) {
+            return None;
+        }
+        let mut message = CMessage::new(0x0006_020c);
+        message.add_byte(kind);
+        message.add_long(player_id);
+        message.add_ulong(wallet_gold);
+        message.add_ulong(bank_gold);
+        message.add_long(source_region_id);
+        message.add_long(source_tile_x);
+        message.add_long(source_tile_y);
+        message.add_long(target_region_id);
+        message.add_long(target_tile_x);
+        message.add_long(target_tile_y);
+        Some(message.send(self, false))
+    }
+
     /// Reached common `CPlayer::ChangeRegion` gameplay owner used by client,
     /// GM and script callers. Callers own their argument decoding; this owner
     /// performs session/player state, spatial randomization and exact client /
@@ -16513,6 +16547,7 @@ impl CGame {
             faction_delivery: None,
             team_delivery: None,
             world_delivery: None,
+            change_log_delivery: None,
             player_snapshot_size: None,
         };
         if self
@@ -16529,6 +16564,17 @@ impl CGame {
             return report;
         };
         report.source_region_id = Some(source_region_id);
+        let (source_tile_x, source_tile_y, wallet_gold, bank_gold) = self
+            .find_player(player_id)
+            .map(|player| {
+                (
+                    player.shape().get_tile_x().unwrap_or_default(),
+                    player.shape().get_tile_y().unwrap_or_default(),
+                    player.money(),
+                    player.depot_money(),
+                )
+            })
+            .expect("region-change player проверен до source snapshot");
         let Some(mut source_owner) = self.take_region_owner(source_region_id) else {
             report.kind = PlayerRegionChangeKind::MissingSourceRegion;
             return report;
@@ -16613,6 +16659,18 @@ impl CGame {
                     &changed,
                 ));
             }
+            report.change_log_delivery = self.send_player_change_region_log(
+                0,
+                player_id,
+                wallet_gold,
+                bank_gold,
+                source_region_id,
+                source_tile_x,
+                source_tile_y,
+                target_region_id,
+                tile_x,
+                tile_y,
+            );
             context.refresh_script_region_auto_protect(&mut player);
             report.tile_x = tile_x;
             report.tile_y = tile_y;
@@ -16689,6 +16747,18 @@ impl CGame {
                 team.add_long(target_region_id);
                 report.team_delivery = Some(team.send(self, false));
             }
+            report.change_log_delivery = self.send_player_change_region_log(
+                1,
+                player_id,
+                wallet_gold,
+                bank_gold,
+                source_region_id,
+                source_tile_x,
+                source_tile_y,
+                target_region_id,
+                tile_x,
+                tile_y,
+            );
             context.refresh_script_region_auto_protect(&mut player);
             report.tile_x = tile_x;
             report.tile_y = tile_y;
@@ -16729,6 +16799,18 @@ impl CGame {
         } else {
             player.cancel_server_region_change();
         }
+        report.change_log_delivery = self.send_player_change_region_log(
+            2,
+            player_id,
+            wallet_gold,
+            bank_gold,
+            source_region_id,
+            source_tile_x,
+            source_tile_y,
+            target_region_id,
+            tile_x,
+            tile_y,
+        );
         context.refresh_script_region_auto_protect(&mut player);
         report.tile_x = tile_x;
         report.tile_y = tile_y;

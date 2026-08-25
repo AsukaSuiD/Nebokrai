@@ -88,15 +88,6 @@ pub(crate) trait GameOrganizingWarRuntime:
     /// Исполняет virtual `CPlayer::UpdateProperty` после FourNation exploit.
     fn update_player_property(&mut self, player: &mut CPlayer);
 
-    /// Conditional `bChMap0` log после position mutation.
-    fn log_four_nation_same_region_change(
-        &mut self,
-        player: &CPlayer,
-        region_id: i32,
-        previous: (i32, i32),
-        current: (i32, i32),
-    );
-
     fn on_four_nation_relive_block(&mut self, player_id: i32, block: FourNationReliveBlock);
 
     /// Публикует exact `0xBF504(type,id,0)` вокруг monster/NPC до mutation.
@@ -1660,16 +1651,25 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                 }
             }
 
-            let player = self
-                .game
-                .find_player_mut(player_id)
-                .expect("Nation relive player остаётся live до direction/log");
-            player.nation_relive_shape_mut().set_direction(direction);
-            self.runtime.log_four_nation_same_region_change(
-                player,
+            let (wallet_gold, bank_gold) = {
+                let player = self
+                    .game
+                    .find_player_mut(player_id)
+                    .expect("Nation relive player остаётся live до direction/log");
+                player.nation_relive_shape_mut().set_direction(direction);
+                (player.money(), player.depot_money())
+            };
+            let _change_log = self.game.send_player_change_region_log(
+                0,
+                player_id,
+                wallet_gold,
+                bank_gold,
                 region.war.base.id,
-                previous,
-                (destination.x, destination.y),
+                previous.0,
+                previous.1,
+                region.war.base.id,
+                destination.x,
+                destination.y,
             );
         }
     }
