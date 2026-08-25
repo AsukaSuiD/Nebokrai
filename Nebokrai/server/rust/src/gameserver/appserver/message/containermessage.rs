@@ -44,10 +44,12 @@
 //! Packet/equipment↔depot direct move и compatible stack проходят через тот
 //! же dispatcher после password unlock: burden rollback, extension-anchor
 //! guards, equipment effects, GoodsAI, audit `7/8` и self wire достигают live
-//! owners. `OT_SWITCH_OBJECT` замкнут в доказанном source-hand маршруте:
-//! обычный Put выполняется первым, затем occupied packet/equipment/depot
-//! меняется с предметом руки, displaced возвращается в hand (либо exact
-//! garbage collection), equipment callbacks и switch wire доходят до runtime.
+//! owners. Hand↔packet/equipment обычный Put сохраняет positional split,
+//! equipment callbacks, one-slot stack и двусторонний rollback. Для
+//! source-hand→packet/equipment/depot `OT_SWITCH_OBJECT` выполняется после
+//! отказа Put: occupied destination меняется с предметом руки, displaced
+//! возвращается в hand (либо exact garbage collection), а switch wire доходит
+//! до runtime.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -83,6 +85,7 @@ use crate::gameserver::gameserver::game::{
     BankCurrencyTransferBlock, BankCurrencyTransferReport, CGame, DepotStorageTransferAddition,
     DepotStorageTransferBlock, DepotStorageTransferReport, GameContainerMessageRuntime,
     GroundGoodsMoveBlock, GroundGoodsMoveReport, HandContainerMoveBlock, HandContainerMoveReport,
+    PlayerHandMoveBlock, PlayerHandMoveReport,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -262,6 +265,12 @@ pub(crate) enum GameContainerMessageOutcome {
         delivery: i32,
         notification_delivery: Option<i32>,
     },
+    PlayerHandMoved(PlayerHandMoveReport),
+    PlayerHandRolledBack {
+        reason: PlayerHandMoveBlock,
+        delivery: i32,
+        notification_delivery: Option<i32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -269,6 +278,7 @@ enum EnhancementMessageRoute {
     BankCurrencyTransfer,
     DepotStorageTransfer,
     HandContainerMove,
+    PlayerHandMove,
     GroundDrop,
     GroundPickup,
     EnhancementSelect,
@@ -615,6 +625,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             });
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && matches!(request.source_container_extend_id, 1 | 2)
+                && request.destination_container_extend_id == 3
+            {
+                EnhancementMessageRoute::PlayerHandMove
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.source_container_extend_id == 3
                 && matches!(request.destination_container_extend_id, 1 | 2 | 9)
             {
@@ -882,6 +898,49 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 reason,
                 delivery: send_rollback(game, player_id),
             },
+        })));
+    }
+
+    if route == EnhancementMessageRoute::PlayerHandMove {
+        let transfer = game.move_player_goods_to_hand(
+            player_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            context,
+        );
+        return Some(Ok(report(match transfer {
+            Ok(transfer) => GameContainerMessageOutcome::PlayerHandMoved(transfer),
+            Err(reason) => {
+                let notice_id: Option<&[u8]> = match &reason {
+                    PlayerHandMoveBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
+                        Some(b"GS0113")
+                    }
+                    PlayerHandMoveBlock::PartialMoveBusy(PlayerProgress::Trading) => {
+                        Some(b"GS0114")
+                    }
+                    PlayerHandMoveBlock::PartialMoveBusy(PlayerProgress::Upgrade) => {
+                        Some(b"GS0115")
+                    }
+                    PlayerHandMoveBlock::RollbackFailed { .. } => Some(b"GPM019"),
+                    _ => None,
+                };
+                let notification_delivery = notice_id.map(|notice_id| {
+                    send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(notice_id),
+                        0xffff_ffff,
+                        0,
+                    )
+                });
+                GameContainerMessageOutcome::PlayerHandRolledBack {
+                    reason,
+                    delivery: send_rollback(game, player_id),
+                    notification_delivery,
+                }
+            }
         })));
     }
 
