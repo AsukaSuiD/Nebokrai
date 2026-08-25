@@ -16415,6 +16415,23 @@ impl CGame {
                 ScriptStepDisposition::WaitingFunction { .. } => {
                     self.active_scripts.insert(script_id, script);
                 }
+                ScriptStepDisposition::WaitingRuntime {
+                    countdown_seconds,
+                    expired_path,
+                } => {
+                    let context = script.context();
+                    self.active_scripts.insert(script_id, script);
+                    if let Some(path) = expired_path
+                        && let Some(called_id) = self.run_script_file(&path, context, runtime)
+                    {
+                        report.started_scripts.push(called_id);
+                        pending.push(called_id);
+                    }
+                    if let (Some(player_id), Some(seconds)) = (context.player_id, countdown_seconds)
+                    {
+                        self.send_running_script_countdown(player_id, seconds);
+                    }
+                }
             }
         }
         report
@@ -16458,8 +16475,20 @@ impl CGame {
         current_script_id: i32,
         current_script_path: &[u8],
     ) -> bool {
+        let close_count = self
+            .active_scripts
+            .values()
+            .filter(|script| {
+                script.player_id() == Some(player_id)
+                    && script.path == path
+                    && script.is_runtime_waiting()
+            })
+            .count();
         self.active_scripts
             .retain(|_, script| script.player_id() != Some(player_id) || script.path != path);
+        for _ in 0..close_count {
+            self.send_running_script_countdown(player_id, 0);
+        }
         current_script_id != 0
             && current_script_path == path
             && self.find_player(player_id).is_some()
@@ -16479,6 +16508,7 @@ impl CGame {
             return false;
         };
         let should_close = close_talk_box && matches!(script.waiting_function(), Some(2307 | 2324));
+        let should_close_runtime = script.is_runtime_waiting();
         self.active_scripts.remove(&script_id);
         if should_close {
             let mut message = CMessage::new(0x000b_f805);
@@ -16487,7 +16517,16 @@ impl CGame {
             message.add_byte(0);
             let _ = message.send_to_player(self.net_server(), player_id);
         }
+        if should_close_runtime {
+            self.send_running_script_countdown(player_id, 0);
+        }
         true
+    }
+
+    fn send_running_script_countdown(&self, player_id: i32, seconds: i32) {
+        let mut message = CMessage::new(0x000b_f80e);
+        message.add_long(seconds);
+        let _ = message.send_to_player(self.net_server(), player_id);
     }
 
     pub(crate) const fn general_variables(&self) -> &CVariableList {
@@ -17645,9 +17684,17 @@ impl CGame {
         };
         let team_detached = false;
         self.clear_player_login_validation(player_id);
+        let runtime_scripts = self
+            .active_scripts
+            .values()
+            .filter(|script| script.player_id() == Some(player_id) && script.is_runtime_waiting())
+            .count();
         let scripts_before = self.active_scripts.len();
         self.active_scripts
             .retain(|_, script| script.player_id() != Some(player_id));
+        for _ in 0..runtime_scripts {
+            self.send_running_script_countdown(player_id, 0);
+        }
         let scripts_removed = scripts_before.wrapping_sub(self.active_scripts.len());
         let jjc_quit = self.quit_player_jjc(player_id).changed;
 

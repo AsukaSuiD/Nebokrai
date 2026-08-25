@@ -22,8 +22,10 @@
 //! Metadata/progression group `5411/5412/5414/5420` читает единый загруженный
 //! `CPlayerList`, current player EXP и startup IDs; аргументы, которых exact
 //! selector не касается, VM не вычисляет.
-//! Неподтверждённые wait/pause families и остальной не достигнутый синтаксис
-//! остаются в RAW ниже.
+//! `RunTime 22` хранит deadline и дочерний script в том же `ActiveScript`;
+//! owned scheduler раз в секунду отправляет `0xBF80E`, а после нуля запускает
+//! дочерний instance с исходным player/NPC/region context. Остальные
+//! неподтверждённые wait/pause families остаются в RAW ниже.
 //! Поздний `RegisterBuffSkillFunctions` программно дополняет загруженный RU
 //! FunctionList потерянным `AddJingJieBuff = 11131`; тот же registry lookup
 //! затем ведёт в общий `CScript::RunFunction`, а не в обходной parser path.
@@ -135,6 +137,7 @@ pub(crate) fn legacy_atoi(value: &[u8]) -> i32 {
 }
 
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
+const SCRIPT_FUNCTION_RUN_TIME: i32 = 22;
 
 /// Native `stRunScript` execution facts used by concrete callers. Monster
 /// death supplies its base index alongside player/region so queued death
@@ -184,6 +187,10 @@ pub(crate) enum ScriptStepDisposition {
         function_id: i32,
         replay_command: bool,
     },
+    WaitingRuntime {
+        countdown_seconds: Option<i32>,
+        expired_path: Option<Vec<u8>>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -211,6 +218,14 @@ pub(crate) struct ActiveScript {
     waiting_function: Option<i32>,
     waiting_replay: bool,
     resumed_function: Option<(i32, i32)>,
+    runtime_wait: Option<ScriptRuntimeWait>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ScriptRuntimeWait {
+    deadline_ms: u32,
+    last_update_ms: u32,
+    path: Vec<u8>,
 }
 
 impl ActiveScript {
@@ -231,6 +246,7 @@ impl ActiveScript {
             waiting_function: None,
             waiting_replay: false,
             resumed_function: None,
+            runtime_wait: None,
         }
     }
 
@@ -244,6 +260,10 @@ impl ActiveScript {
 
     pub(crate) const fn waiting_function(&self) -> Option<i32> {
         self.waiting_function
+    }
+
+    pub(crate) const fn is_runtime_waiting(&self) -> bool {
+        self.runtime_wait.is_some()
     }
 
     pub(crate) fn continue_with(&mut self, value: i32) -> bool {
@@ -264,6 +284,35 @@ impl ActiveScript {
         game: &mut CGame,
         runtime: &mut Runtime,
     ) -> ScriptStepReport {
+        if let Some(wait) = self.runtime_wait.as_mut() {
+            let now = runtime.now_milliseconds();
+            if now.wrapping_sub(wait.last_update_ms) <= 999 {
+                return ScriptStepReport {
+                    execution: ScriptExecutionReport::default(),
+                    disposition: ScriptStepDisposition::WaitingRuntime {
+                        countdown_seconds: None,
+                        expired_path: None,
+                    },
+                };
+            }
+            wait.last_update_ms = now;
+            let remaining_ms = if wait.deadline_ms > now {
+                wait.deadline_ms - now
+            } else {
+                0
+            };
+            let expired_path = (remaining_ms < 1).then(|| wait.path.clone());
+            if expired_path.is_some() {
+                self.runtime_wait = None;
+            }
+            return ScriptStepReport {
+                execution: ScriptExecutionReport::default(),
+                disposition: ScriptStepDisposition::WaitingRuntime {
+                    countdown_seconds: Some((remaining_ms / 1000) as i32),
+                    expired_path,
+                },
+            };
+        }
         if let Some(function_id) = self.waiting_function {
             return ScriptStepReport {
                 execution: ScriptExecutionReport::default(),
@@ -283,6 +332,7 @@ impl ActiveScript {
             script_id: self.id,
             resumed_function: self.resumed_function.take(),
             pending_yield: None,
+            runtime_wait: &mut self.runtime_wait,
         };
         let report = script.run_step(game, runtime);
         self.point = script.point;
@@ -317,6 +367,7 @@ pub(crate) struct CScript<'a> {
     script_id: i32,
     resumed_function: Option<(i32, i32)>,
     pending_yield: Option<i32>,
+    runtime_wait: &'a mut Option<ScriptRuntimeWait>,
 }
 
 impl<'a> CScript<'a> {
@@ -473,6 +524,15 @@ impl<'a> CScript<'a> {
                         function_id,
                         legacy_return,
                     });
+                    if self.runtime_wait.is_some() {
+                        return ScriptStepReport {
+                            execution: report,
+                            disposition: ScriptStepDisposition::WaitingRuntime {
+                                countdown_seconds: None,
+                                expired_path: None,
+                            },
+                        };
+                    }
                 }
                 ScriptCommandOutcome::Yielded {
                     function_id,
@@ -542,6 +602,31 @@ impl<'a> CScript<'a> {
             return ScriptCommandOutcome::Handled {
                 function_id,
                 legacy_return,
+            };
+        }
+        if function_id == SCRIPT_FUNCTION_RUN_TIME {
+            let Some(wait_ms) = parameters
+                .first()
+                .and_then(|parameter| self.evaluate_integer(game, runtime, parameter))
+            else {
+                return ScriptCommandOutcome::InvalidExpression;
+            };
+            let Some(path) = parameters
+                .get(1)
+                .map(|parameter| self.evaluate_string(game, runtime, parameter))
+                .unwrap_or_else(|| Some(Vec::new()))
+            else {
+                return ScriptCommandOutcome::InvalidExpression;
+            };
+            let now = runtime.now_milliseconds();
+            *self.runtime_wait = Some(ScriptRuntimeWait {
+                deadline_ms: now.wrapping_add(wait_ms.max(0) as u32),
+                last_update_ms: now,
+                path,
+            });
+            return ScriptCommandOutcome::Handled {
+                function_id,
+                legacy_return: 0,
             };
         }
         if matches!(
@@ -1592,8 +1677,8 @@ fn is_command_start(value: u8) -> bool {
 // IMPLEMENTED: player/path lookup и безопасное удаление текущего/чужих instances
 // принадлежат `CGame::player_script_is_running` / `remove_player_scripts`;
 // ID-based delete/continue замкнуты `delete_player_script` / `continue_player_script`.
-// Function `0x16`, которая перед удалением посылает `0xBF80E`, ещё не
-// материализована и потому не может образовать waiting state в owned scheduler.
+// Function `0x16` materialized выше: её waiting state принадлежит
+// `ActiveScript`, а countdown, дочерний запуск и delete-close — `CGame`.
 
 // ============================================================================
 // FUNCTION: CScript::~CScript
