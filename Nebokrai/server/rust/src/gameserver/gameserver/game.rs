@@ -784,6 +784,8 @@ const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const GAME_RELEASE_PLAYER_SAVE_MESSAGE: i32 = 0x0005_FB02;
 const GAME_AUCTION_GOODS_SYNC_MESSAGE: i32 = 0x0006_0807;
 const GAME_AUCTION_STATE_REQUEST_MESSAGE: i32 = 0x0006_0808;
+/// Exact process-global `g_ms`, подтверждённый combat/AI ABI и pacing caller-ами.
+const GAME_TICK_INTERVAL_MS: u32 = 80;
 const RECONNECT_RETRY_DELAY: Duration = Duration::from_millis(8_000);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4099,7 +4101,7 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
         &mut self,
         region: &mut CServerRegion,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
-        let tick_interval_ms = self.runtime.tick_interval_ms() as i32;
+        let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
         let base_ai = self.game.run_server_region_base_ai(
             region,
             self.ai_tick,
@@ -4380,7 +4382,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
         &mut self,
         region: &mut CServerRegion,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
-        let tick_interval_ms = self.runtime.tick_interval_ms() as i32;
+        let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
         let base_ai = self.game.run_server_region_base_ai(
             region,
             self.ai_tick,
@@ -4708,7 +4710,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
         &mut self,
         region: &mut CServerRegion,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
-        let tick_interval_ms = self.runtime.tick_interval_ms() as i32;
+        let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
         let base_ai = self.game.run_server_region_base_ai(
             region,
             self.ai_tick,
@@ -5014,7 +5016,6 @@ pub(crate) trait GameMainLoopRuntime:
     + GamePlayerLostRuntime
 {
     fn exit_requested(&self) -> bool;
-    fn tick_interval_ms(&self) -> u32;
     fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
     /// Исполняет только ещё не материализованные state-классы из
@@ -5067,8 +5068,6 @@ pub(crate) trait GameMainLoopRuntime:
         region: &mut CServerRegion,
         identity: ShapeIdentity,
     ) -> Option<Result<bool, RegionMembershipBlock>>;
-    fn wait(&mut self, duration_ms: u32);
-    fn output_debug(&mut self, message: &'static str);
 }
 
 struct GameAreaAiContext<'a, Runtime> {
@@ -29792,7 +29791,7 @@ impl CGame {
             self.restore_region_owner(owner);
             return None;
         };
-        let tick_interval_ms = runtime.tick_interval_ms() as i32;
+        let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
         let base_ai =
             self.run_server_region_base_ai(&mut region, ai_tick, tick_interval_ms, runtime);
         self.restore_region_owner(ServerRegionOwner::Base(region));
@@ -29946,7 +29945,7 @@ impl CGame {
         // MainLoop увеличивает legacy global tick непосредственно перед AI,
         // а owned state публикует после возврата из всего прохода.
         let ai_tick = self.main_loop_state.ai_tick.wrapping_add(1);
-        let tick_interval_ms = runtime.tick_interval_ms() as i32;
+        let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
         let region_ids: Vec<_> = self.regions.keys().copied().collect();
         let mut regions = Vec::with_capacity(region_ids.len());
         for region_id in region_ids {
@@ -30607,7 +30606,8 @@ impl CGame {
 
     /// Один exact `CGame::MainLoop` turn. Wrapping DWORD clocks, strict
     /// interval comparisons, profiling reads и pacing deadline сохраняют
-    /// наблюдаемый Win32 порядок; wait заменён platform callback-ом.
+    /// наблюдаемый Win32 порядок; `Sleep` заменён стандартным
+    /// блокирующим sleep того же game thread-а.
     pub(crate) fn main_loop<Runtime: GameMainLoopRuntime>(
         &mut self,
         runtime: &mut Runtime,
@@ -30747,20 +30747,20 @@ impl CGame {
         }
         let pacing_tick_ms = runtime.now_milliseconds();
         state.current_tick_ms = pacing_tick_ms;
-        let interval_ms = runtime.tick_interval_ms();
+        let interval_ms = GAME_TICK_INTERVAL_MS;
         if pacing_tick_ms.wrapping_sub(state.pacing_deadline_ms) < interval_ms {
             let duration_ms = state
                 .pacing_deadline_ms
                 .wrapping_sub(pacing_tick_ms)
                 .wrapping_add(interval_ms);
-            runtime.wait(duration_ms);
+            std::thread::sleep(Duration::from_millis(u64::from(duration_ms)));
             stages.push(GameMainLoopStage::Wait { duration_ms });
         }
 
         state.pacing_deadline_ms = state.pacing_deadline_ms.wrapping_add(interval_ms);
         let signed_lag_ms = pacing_tick_ms.wrapping_sub(state.pacing_deadline_ms) as i32;
         if 1_000 < signed_lag_ms {
-            runtime.output_debug("warning!!! 1 second not call AI()\n");
+            eprint!("warning!!! 1 second not call AI()\n");
             let resync_tick_ms = runtime.now_milliseconds();
             state.pacing_deadline_ms = resync_tick_ms;
             stages.push(GameMainLoopStage::LagWarning { resync_tick_ms });
