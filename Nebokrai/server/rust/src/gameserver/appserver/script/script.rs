@@ -22,10 +22,11 @@
 //! Metadata/progression group `5411/5412/5414/5420` читает единый загруженный
 //! `CPlayerList`, current player EXP и startup IDs; аргументы, которых exact
 //! selector не касается, VM не вычисляет.
-//! `RunTime 22` хранит deadline и дочерний script в том же `ActiveScript`;
-//! owned scheduler раз в секунду отправляет `0xBF80E`, а после нуля запускает
-//! дочерний instance с исходным player/NPC/region context. Остальные
-//! неподтверждённые wait/pause families остаются в RAW ниже.
+//! `wait 6` и `RunTime 22` хранят deadline в том же `ActiveScript`: первый
+//! продолжает cursor после истечения, второй раз в секунду отправляет
+//! `0xBF80E`, а после нуля запускает дочерний instance с исходным
+//! player/NPC/region context. Остальные неподтверждённые pause families
+//! остаются в RAW ниже.
 //! Поздний `RegisterBuffSkillFunctions` программно дополняет загруженный RU
 //! FunctionList потерянным `AddJingJieBuff = 11131`; тот же registry lookup
 //! затем ведёт в общий `CScript::RunFunction`, а не в обходной parser path.
@@ -137,6 +138,7 @@ pub(crate) fn legacy_atoi(value: &[u8]) -> i32 {
 }
 
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
+const SCRIPT_FUNCTION_WAIT: i32 = 6;
 const SCRIPT_FUNCTION_RUN_TIME: i32 = 22;
 
 /// Native `stRunScript` execution facts used by concrete callers. Monster
@@ -225,7 +227,13 @@ pub(crate) struct ActiveScript {
 struct ScriptRuntimeWait {
     deadline_ms: u32,
     last_update_ms: u32,
-    path: Vec<u8>,
+    completion: ScriptRuntimeCompletion,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ScriptRuntimeCompletion {
+    Continue,
+    RunScript(Vec<u8>),
 }
 
 impl ActiveScript {
@@ -262,8 +270,14 @@ impl ActiveScript {
         self.waiting_function
     }
 
-    pub(crate) const fn is_runtime_waiting(&self) -> bool {
-        self.runtime_wait.is_some()
+    pub(crate) fn is_countdown_runtime_waiting(&self) -> bool {
+        matches!(
+            self.runtime_wait.as_ref(),
+            Some(ScriptRuntimeWait {
+                completion: ScriptRuntimeCompletion::RunScript(_),
+                ..
+            })
+        )
     }
 
     pub(crate) fn continue_with(&mut self, value: i32) -> bool {
@@ -286,6 +300,18 @@ impl ActiveScript {
     ) -> ScriptStepReport {
         if let Some(wait) = self.runtime_wait.as_mut() {
             let now = runtime.now_milliseconds();
+            if matches!(&wait.completion, ScriptRuntimeCompletion::Continue) {
+                if wait.deadline_ms < now {
+                    self.runtime_wait = None;
+                }
+                return ScriptStepReport {
+                    execution: ScriptExecutionReport::default(),
+                    disposition: ScriptStepDisposition::WaitingRuntime {
+                        countdown_seconds: None,
+                        expired_path: None,
+                    },
+                };
+            }
             if now.wrapping_sub(wait.last_update_ms) <= 999 {
                 return ScriptStepReport {
                     execution: ScriptExecutionReport::default(),
@@ -301,7 +327,10 @@ impl ActiveScript {
             } else {
                 0
             };
-            let expired_path = (remaining_ms < 1).then(|| wait.path.clone());
+            let expired_path = (remaining_ms < 1).then(|| match &wait.completion {
+                ScriptRuntimeCompletion::RunScript(path) => path.clone(),
+                ScriptRuntimeCompletion::Continue => unreachable!("continue обработан выше"),
+            });
             if expired_path.is_some() {
                 self.runtime_wait = None;
             }
@@ -604,25 +633,30 @@ impl<'a> CScript<'a> {
                 legacy_return,
             };
         }
-        if function_id == SCRIPT_FUNCTION_RUN_TIME {
+        if matches!(function_id, SCRIPT_FUNCTION_WAIT | SCRIPT_FUNCTION_RUN_TIME) {
             let Some(wait_ms) = parameters
                 .first()
                 .and_then(|parameter| self.evaluate_integer(game, runtime, parameter))
             else {
                 return ScriptCommandOutcome::InvalidExpression;
             };
-            let Some(path) = parameters
-                .get(1)
-                .map(|parameter| self.evaluate_string(game, runtime, parameter))
-                .unwrap_or_else(|| Some(Vec::new()))
-            else {
-                return ScriptCommandOutcome::InvalidExpression;
+            let completion = if function_id == SCRIPT_FUNCTION_RUN_TIME {
+                let Some(path) = parameters
+                    .get(1)
+                    .map(|parameter| self.evaluate_string(game, runtime, parameter))
+                    .unwrap_or_else(|| Some(Vec::new()))
+                else {
+                    return ScriptCommandOutcome::InvalidExpression;
+                };
+                ScriptRuntimeCompletion::RunScript(path)
+            } else {
+                ScriptRuntimeCompletion::Continue
             };
             let now = runtime.now_milliseconds();
             *self.runtime_wait = Some(ScriptRuntimeWait {
                 deadline_ms: now.wrapping_add(wait_ms.max(0) as u32),
                 last_update_ms: now,
-                path,
+                completion,
             });
             return ScriptCommandOutcome::Handled {
                 function_id,

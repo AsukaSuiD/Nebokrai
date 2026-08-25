@@ -16481,7 +16481,7 @@ impl CGame {
             .filter(|script| {
                 script.player_id() == Some(player_id)
                     && script.path == path
-                    && script.is_runtime_waiting()
+                    && script.is_countdown_runtime_waiting()
             })
             .count();
         self.active_scripts
@@ -16508,7 +16508,7 @@ impl CGame {
             return false;
         };
         let should_close = close_talk_box && matches!(script.waiting_function(), Some(2307 | 2324));
-        let should_close_runtime = script.is_runtime_waiting();
+        let should_close_runtime = script.is_countdown_runtime_waiting();
         self.active_scripts.remove(&script_id);
         if should_close {
             let mut message = CMessage::new(0x000b_f805);
@@ -17687,7 +17687,9 @@ impl CGame {
         let runtime_scripts = self
             .active_scripts
             .values()
-            .filter(|script| script.player_id() == Some(player_id) && script.is_runtime_waiting())
+            .filter(|script| {
+                script.player_id() == Some(player_id) && script.is_countdown_runtime_waiting()
+            })
             .count();
         let scripts_before = self.active_scripts.len();
         self.active_scripts
