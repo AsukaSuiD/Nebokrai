@@ -187,6 +187,12 @@
 //! `3305 / CreateMonster` проводит local spawn через canonical property,
 //! random-position, AI/spatial и around owners; чужой region сохраняет
 //! существующий `0x5FA0B -> 0x7F80A` межсерверный маршрут.
+//! Explicit removal pair `3303/3306` разрешает shape только в current player
+//! region, публикует `0xBF504` до mutation и сохраняет различие: NPC сразу
+//! покидает spatial owner, monster лишь ставится в `CS_DELETE` для AI cleanup.
+//! Batch selectors `3313/3315` переиспользуют тот же terminal owner после
+//! rectangle/original-name либо region/name lookup, сохраняя publication-first
+//! порядок для каждого найденного shape.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -398,8 +404,12 @@ pub(crate) const SCRIPT_FUNCTION_DISBAND_QUEST: i32 = 6202;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
 pub(crate) const SCRIPT_FUNCTION_UPDATE_QUEST_POSITION: i32 = 6207;
 pub(crate) const SCRIPT_FUNCTION_CREATE_NPC: i32 = 3302;
+pub(crate) const SCRIPT_FUNCTION_DELETE_NPC: i32 = 3303;
 pub(crate) const SCRIPT_FUNCTION_CREATE_MONSTER: i32 = 3305;
+pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER: i32 = 3306;
 pub(crate) const SCRIPT_FUNCTION_GET_MAP_INFO: i32 = 3309;
+pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER_RECT: i32 = 3313;
+pub(crate) const SCRIPT_FUNCTION_DELETE_NPC_BY_NAME: i32 = 3315;
 pub(crate) const SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION: i32 = 8003;
 pub(crate) const SCRIPT_FUNCTION_IS_QUEST_ENABLED: i32 = 3500;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_ENABLED: i32 = 3501;
@@ -3433,6 +3443,20 @@ pub(crate) fn script_function_parameter_kind(
             1..=5 | 7 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_DELETE_NPC | SCRIPT_FUNCTION_DELETE_MONSTER => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_DELETE_MONSTER_RECT => match index {
+            0..=4 => Integer,
+            5 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_DELETE_NPC_BY_NAME => match index {
+            0 => String,
+            1 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_GET_MAP_INFO => match index {
             0..=1 => Integer,
             _ => Unused,
@@ -5077,6 +5101,74 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: first_monster_id,
             })
+        }
+        SCRIPT_FUNCTION_DELETE_NPC | SCRIPT_FUNCTION_DELETE_MONSTER => {
+            if argument_count != 1 || script_player_id.is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(target_id) = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR && *value > 0)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if function_id == SCRIPT_FUNCTION_DELETE_NPC {
+                let _ = game.delete_script_npc(player_id, target_id);
+            } else {
+                let _ = game.delete_script_monster(player_id, target_id);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_DELETE_MONSTER_RECT => {
+            let region_id = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let Some((width, height)) = game
+                .find_region(region_id)
+                .map(|owner| (owner.base().region.width, owner.base().region.height))
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let (maximum_x, maximum_y) = (width.wrapping_sub(1), height.wrapping_sub(1));
+            if maximum_x < 0 || maximum_y < 0 {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let mut rectangle = [
+                integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[2].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[3].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[4].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+            ];
+            if rectangle
+                .iter()
+                .all(|value| *value == SCRIPT_INT_PARAMETER_ERROR)
+            {
+                rectangle = [0, 0, maximum_x, maximum_y];
+            } else {
+                rectangle[0] = rectangle[0].clamp(0, maximum_x);
+                rectangle[1] = rectangle[1].clamp(0, maximum_y);
+                rectangle[2] = rectangle[2].clamp(0, maximum_x);
+                rectangle[3] = rectangle[3].clamp(0, maximum_y);
+            }
+            let _ = game.delete_script_monsters_in_rect(region_id, rectangle, string_arguments[5]);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_DELETE_NPC_BY_NAME => {
+            let Some(name) = string_arguments[0].filter(|name| !name.is_empty()) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let player_region_id = game
+                .find_player(player_id)
+                .and_then(|player| player.server_region_id())
+                .unwrap_or_default();
+            let source_region_id = script_region_id.unwrap_or(player_region_id);
+            let region_id = match integer_arguments[1] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) => {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                }
+                Some(0) => script_region_id.unwrap_or_default(),
+                Some(region_id) => region_id,
+                None => source_region_id,
+            };
+            let _ = game.delete_script_npc_by_name(region_id, name);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_SET_THING_COUNT => {
             let (Some(player_id), Some(thing_id), Some(requested_count)) = (

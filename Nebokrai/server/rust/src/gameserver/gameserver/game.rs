@@ -349,6 +349,8 @@
 //! nullable-client guard, вторая доходит до обычной nullable send-семантики.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
 //! lookup по original name становится общей базой concrete monster spawn.
+//! Script shape removal `3303/3306/3313/3315` публикует `0xBF504` через
+//! canonical around runtime до spatial removal либо deferred `CS_DELETE`.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
 //! `0x0000AD10` сохраняет map-assignment, а `FindProxyRegion` `0x0000AD30` —
 //! lookup/null. Proxy snapshot `0x0F` публикуется целиком до startup log.
@@ -18172,6 +18174,121 @@ impl CGame {
     pub(crate) fn kick_player_by_name(&self, name: &[u8]) -> Option<GameKickPlayerReport> {
         let player_id = self.find_player_by_name(name)?.player_id();
         Some(self.kick_player(player_id))
+    }
+
+    fn send_script_shape_exit_around(&self, region: &CServerRegion, shape: &CShape) -> Option<i32> {
+        let runtime = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        )?;
+        let identity = shape.identity();
+        let mut message = CMessage::new(0x000b_f504);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(0);
+        message
+            .send_to_around(Some(region), shape, None, &runtime)
+            .ok()
+    }
+
+    /// Exact script `3303 / DeleteNpc`: current player region lookup,
+    /// `0xBF504(type,id,0)` around publication и только затем spatial removal.
+    pub(crate) fn delete_script_npc(&mut self, player_id: i32, npc_id: i32) -> Option<i32> {
+        let region_id = self.find_player(player_id)?.server_region_id()?;
+        let mut owner = self.take_region_owner(region_id)?;
+        let result = (|| {
+            let npc = owner.base().find_npc_by_id(npc_id)?;
+            let delivery =
+                self.send_script_shape_exit_around(owner.base(), npc.move_shape().shape())?;
+            owner
+                .base_mut()
+                .remove_owned_npc_by_id(npc_id)
+                .ok()?
+                .then_some(delivery)
+        })();
+        self.restore_region_owner(owner);
+        result
+    }
+
+    /// Exact script `3306 / DeleteMonster` не запускает death owner: после
+    /// around-exit monster лишь получает `CS_DELETE` для обычного AI cleanup.
+    pub(crate) fn delete_script_monster(&mut self, player_id: i32, monster_id: i32) -> Option<i32> {
+        let region_id = self.find_player(player_id)?.server_region_id()?;
+        let mut owner = self.take_region_owner(region_id)?;
+        let result = (|| {
+            let monster = owner.base().find_monster_by_id(monster_id)?;
+            let delivery =
+                self.send_script_shape_exit_around(owner.base(), monster.move_shape().shape())?;
+            owner
+                .base_mut()
+                .find_monster_by_id_mut(monster_id)
+                .expect("around publication сохраняет owned monster")
+                .stage_for_delete();
+            Some(delivery)
+        })();
+        self.restore_region_owner(owner);
+        result
+    }
+
+    /// Script `3315` использует explicit/source region уже после вычисления
+    /// имени; ambiguous duplicate-name lookup безопасно остаётся no-op.
+    pub(crate) fn delete_script_npc_by_name(&mut self, region_id: i32, name: &[u8]) -> Option<i32> {
+        let mut owner = self.take_region_owner(region_id)?;
+        let result = (|| {
+            let npc = owner.base().find_npc_by_name(name).ok()??;
+            let npc_id = npc.move_shape().shape().identity().id;
+            let delivery =
+                self.send_script_shape_exit_around(owner.base(), npc.move_shape().shape())?;
+            owner
+                .base_mut()
+                .remove_owned_npc_by_id(npc_id)
+                .ok()?
+                .then_some(delivery)
+        })();
+        self.restore_region_owner(owner);
+        result
+    }
+
+    /// Script `3313` сначала фиксирует ordered rectangle snapshot, затем для
+    /// каждого совпадения публикует exit и ставит `CS_DELETE`.
+    pub(crate) fn delete_script_monsters_in_rect(
+        &mut self,
+        region_id: i32,
+        rectangle: [i32; 4],
+        original_name: Option<&[u8]>,
+    ) -> Vec<i32> {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return Vec::new();
+        };
+        let monster_ids = owner.base().script_monster_ids_in_rect(
+            rectangle[0],
+            rectangle[1],
+            rectangle[2],
+            rectangle[3],
+            original_name,
+        );
+        let mut deliveries = Vec::new();
+        for monster_id in monster_ids {
+            let delivery = owner
+                .base()
+                .find_monster_by_id(monster_id)
+                .and_then(|monster| {
+                    self.send_script_shape_exit_around(owner.base(), monster.move_shape().shape())
+                });
+            let Some(delivery) = delivery else {
+                continue;
+            };
+            owner
+                .base_mut()
+                .find_monster_by_id_mut(monster_id)
+                .expect("rectangle snapshot сохраняет owned monster")
+                .stage_for_delete();
+            deliveries.push(delivery);
+        }
+        self.restore_region_owner(owner);
+        deliveries
     }
 
     /// Exact recipient pass `OnGMMessage 0x7FC13`: unsigned `long` country

@@ -73,6 +73,8 @@
 //! Low-level `AddMonster` аналогично владеет type `600` spawn и хранит
 //! original-name key вместо висячего указателя в reloadable MonsterList;
 //! skills/AI Init и around serialization остаются concrete context callbacks.
+//! Script rectangle removal снимает ordered ID snapshot по live tile и
+//! original-name до publication/mutation у `CGame` owner-а.
 //! Exact EXE подтверждает legacy quirk: его пятый bool не читается, enter
 //! message отправляется всегда, а шестой bool подавляет ранний guard-hook.
 //! Clock-вариант `AddNpc` получает отдельный tick на каждый объект batch-а:
@@ -901,6 +903,33 @@ impl CServerRegion {
 
     pub(crate) fn find_monster_by_id_mut(&mut self, id: i32) -> Option<&mut CMonster> {
         self.owned_monsters.get_mut(&id)
+    }
+
+    /// Snapshot для script `3313`: inclusive tile rectangle и optional exact
+    /// original-name filter обходят canonical monster ID order до mutations.
+    pub(crate) fn script_monster_ids_in_rect(
+        &self,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+        original_name: Option<&[u8]>,
+    ) -> Vec<i32> {
+        self.owned_monsters
+            .iter()
+            .filter_map(|(monster_id, monster)| {
+                let shape = monster.move_shape().shape();
+                let (Ok(tile_x), Ok(tile_y)) = (shape.get_tile_x(), shape.get_tile_y()) else {
+                    return None;
+                };
+                (tile_x >= left
+                    && tile_x <= right
+                    && tile_y >= top
+                    && tile_y <= bottom
+                    && original_name.is_none_or(|name| monster.original_name() == name))
+                .then_some(*monster_id)
+            })
+            .collect()
     }
 
     /// Exact area-array traversal `FindShapes(600)` без смены pointer owner-а.
