@@ -2015,15 +2015,23 @@ pub(crate) struct GoodsDestroyConfirmReport {
 /// `CGame/CPlayer` и не передаются через этот context.
 pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {}
 
-/// Exact virtual `CPlayer::UpdateProperty` после realm hidden-skill mutation.
-/// Runtime владеет ещё не сведёнными equipment/state/GlobeSetup источниками;
-/// CGame применяет возвращённый полный snapshot и сам публикует `0xBF721`.
-pub(crate) trait RealmAppellationScriptContext: BattleFairyDeathContext {
-    fn recompute_realm_appellation_player_properties(
+/// Единая runtime-граница virtual `CPlayer::UpdateProperty`. Все reached
+/// callers применяют один полный snapshot независимо от причины mutation;
+/// локальные `CGame` owners сохраняют собственный порядок publication и
+/// последующие TaoZhuang/state side effects.
+pub(crate) trait PlayerPropertyContext {
+    fn recompute_enhancement_player_properties(
         &mut self,
         player: &CPlayer,
     ) -> PlayerCombatProperties;
+}
 
+/// Exact virtual `CPlayer::UpdateProperty` после realm hidden-skill mutation.
+/// Runtime владеет ещё не сведёнными equipment/state/GlobeSetup источниками;
+/// CGame применяет возвращённый полный snapshot и сам публикует `0xBF721`.
+pub(crate) trait RealmAppellationScriptContext:
+    BattleFairyDeathContext + PlayerPropertyContext
+{
     /// `AddExState` type `0x12F` сначала снимает concrete
     /// `SKILL_GOD_BLESS`. Общий state registry ещё остаётся у runtime, но
     /// вызов идёт из реального script owner-а до replacement нового state.
@@ -2080,8 +2088,9 @@ pub(crate) trait GameRegionEnterContext: NationCombatContext {
 /// Ещё не материализованные полный client snapshot и virtual property
 /// recompute получают тот же live runtime в исходном порядке. GoodsAI tree
 /// принадлежит canonical player и заполняется после успешной регистрации.
-pub(crate) trait GamePlayerLoginContext: NationCombatContext + OldClientGoodsCodec {
-    fn recompute_login_player_properties(&mut self, player: &CPlayer) -> PlayerCombatProperties;
+pub(crate) trait GamePlayerLoginContext:
+    NationCombatContext + OldClientGoodsCodec + PlayerPropertyContext
+{
     fn publish_initial_player_client_snapshot(
         &mut self,
         game: &mut CGame,
@@ -2458,7 +2467,7 @@ pub(crate) trait PlayerEquipmentContext {
 /// runtime fact. RideState overlay и
 /// personal-shop mount gate также принадлежат canonical player owner-у.
 pub(crate) trait GameContainerMessageRuntime:
-    OldClientGoodsCodec + PlayerEquipmentContext + ServerRegionMembershipContext
+    OldClientGoodsCodec + PlayerEquipmentContext + PlayerPropertyContext + ServerRegionMembershipContext
 {
     fn container_tick_ms(&mut self) -> u32;
 
@@ -2475,11 +2484,6 @@ pub(crate) trait GameContainerMessageRuntime:
         goods: &CGoods,
         pack_add_enabled: bool,
     ) -> PlayerEquipmentAddRuntimeFacts;
-
-    fn recompute_enhancement_player_properties(
-        &mut self,
-        player: &CPlayer,
-    ) -> PlayerCombatProperties;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16313,7 +16317,7 @@ impl CGame {
                 let player = self
                     .find_player(target_id)
                     .expect("realm skill mutation сохраняет canonical player");
-                context.recompute_realm_appellation_player_properties(player)
+                context.recompute_enhancement_player_properties(player)
             };
             let (players, goods_factory) = (&mut self.players, &self.goods_factory);
             players
@@ -24463,7 +24467,7 @@ impl CGame {
     ) {
         let Some(properties) = self
             .find_player(player_id)
-            .map(|player| context.recompute_realm_appellation_player_properties(player))
+            .map(|player| context.recompute_enhancement_player_properties(player))
         else {
             return;
         };
@@ -24686,7 +24690,7 @@ impl CGame {
         context: &mut Context,
     ) {
         let properties = match self.find_player(player_id) {
-            Some(player) => context.recompute_realm_appellation_player_properties(player),
+            Some(player) => context.recompute_enhancement_player_properties(player),
             None => return,
         };
         let coefficients = self.globe_setup.player_property_coefficients();
@@ -24795,7 +24799,7 @@ impl CGame {
             let player = self
                 .find_player(player_id)
                 .expect("realm mutation сохраняет canonical player");
-            context.recompute_realm_appellation_player_properties(player)
+            context.recompute_enhancement_player_properties(player)
         };
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
         players
@@ -25616,7 +25620,7 @@ impl CGame {
         } else {
             None
         };
-        let recomputed = context.recompute_login_player_properties(
+        let recomputed = context.recompute_enhancement_player_properties(
             self.players
                 .get(&expected_player_id)
                 .expect("login script не удаляет player owner"),
