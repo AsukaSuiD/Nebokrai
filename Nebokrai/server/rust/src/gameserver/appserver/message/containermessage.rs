@@ -69,6 +69,10 @@
 //! packet destination заново выбирает `FindPositionForGoods`, очищает bind
 //! value-id `2`, equipment сохраняет positional add; burden, partial guards,
 //! equipment callbacks, rollback и self wire доходят до live owner-ов.
+//! Auction wallet (`15`) аналогично имеет только исходящий путь в wallet `4`:
+//! exact capacity gate выполняется и в Receive по полному auction balance, и
+//! повторно после source removal; partial currency ownership, rollback,
+//! last-operated state, `GPM015/GPM019` и self wire сохраняют исходный порядок.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -314,6 +318,12 @@ pub(crate) enum GameContainerMessageOutcome {
         delivery: i32,
         notification_deliveries: Vec<i32>,
     },
+    AuctionMoneyReturned(BankCurrencyTransferReport),
+    AuctionMoneyReturnRejected {
+        reason: BankCurrencyTransferBlock,
+        delivery: Option<i32>,
+        notification_deliveries: Vec<i32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -326,6 +336,7 @@ enum EnhancementMessageRoute {
     BattleFairyTransfer,
     CiQingComposeTransfer,
     AuctionGoodsInventoryReturn,
+    AuctionMoneyReturn,
     GroundDrop,
     GroundPickup,
     EnhancementSelect,
@@ -679,6 +690,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 EnhancementMessageRoute::HandContainerMove
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && request.source_container_extend_id == 15
+                && request.destination_container_extend_id == 4
+            {
+                EnhancementMessageRoute::AuctionMoneyReturn
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && matches!(
                     (
                         request.source_container_extend_id,
@@ -930,6 +947,60 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
             EnhancementMoveReceiveBlock::ForbiddenRoute,
         ))));
+    }
+
+    if route == EnhancementMessageRoute::AuctionMoneyReturn {
+        let transfer = game.transfer_player_bank_currency(
+            player_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_container_extend_id,
+            request.destination_position,
+        );
+        return Some(Ok(report(match transfer {
+            Ok(transfer) => GameContainerMessageOutcome::AuctionMoneyReturned(transfer),
+            Err(reason) => {
+                let receive_rejected = matches!(
+                    &reason,
+                    BankCurrencyTransferBlock::AuctionCapacityRejectedBeforeRemoval { .. }
+                );
+                let mut notification_deliveries = Vec::new();
+                if matches!(
+                    &reason,
+                    BankCurrencyTransferBlock::AuctionCapacityRejectedBeforeRemoval { .. }
+                        | BankCurrencyTransferBlock::AuctionCapacityRejectedAfterRemoval { .. }
+                        | BankCurrencyTransferBlock::AuctionCapacityRollbackFailed { .. }
+                ) {
+                    notification_deliveries.push(send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(b"GPM015"),
+                        0xffff_ffff,
+                        0,
+                    ));
+                }
+                if matches!(
+                    &reason,
+                    BankCurrencyTransferBlock::AuctionCapacityRollbackFailed { .. }
+                        | BankCurrencyTransferBlock::RollbackFailed { .. }
+                ) {
+                    notification_deliveries.push(send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(b"GPM019"),
+                        0xffff_ffff,
+                        0,
+                    ));
+                }
+                GameContainerMessageOutcome::AuctionMoneyReturnRejected {
+                    reason,
+                    delivery: (!receive_rejected).then(|| send_rollback(game, player_id)),
+                    notification_deliveries,
+                }
+            }
+        })));
     }
 
     if route == EnhancementMessageRoute::BankCurrencyTransfer {

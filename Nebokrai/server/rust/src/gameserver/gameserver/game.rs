@@ -2465,6 +2465,26 @@ pub(crate) enum BankCurrencyTransferBlock {
     InvalidPosition,
     MissingGoods,
     AmountMismatch,
+    AuctionCapacityRejectedBeforeRemoval {
+        wallet_amount: u32,
+        auction_amount: u32,
+        maximum: u32,
+    },
+    AuctionCapacityRejectedAfterRemoval {
+        wallet_amount: u32,
+        auction_amount: u32,
+        maximum: u32,
+        removal: BankCurrencyRemoval,
+        rollback: PlayerBankCurrencyAddOutcome,
+    },
+    AuctionCapacityRollbackFailed {
+        goods: CGoods,
+        wallet_amount: u32,
+        auction_amount: u32,
+        maximum: u32,
+        removal: BankCurrencyRemoval,
+        rollback: Option<PlayerBankCurrencyAddOutcome>,
+    },
     RemovalFailed,
     RollbackCompleted {
         removal: BankCurrencyRemoval,
@@ -6846,7 +6866,10 @@ impl CGame {
         destination_extend_id: i32,
         destination_position: u32,
     ) -> Result<BankCurrencyTransferReport, BankCurrencyTransferBlock> {
-        if !matches!((source_extend_id, destination_extend_id), (4, 8) | (8, 4)) {
+        if !matches!(
+            (source_extend_id, destination_extend_id),
+            (4, 8) | (8, 4) | (15, 4)
+        ) {
             return Err(BankCurrencyTransferBlock::UnsupportedRoute);
         }
         if source_position != 0 || destination_position != 0 {
@@ -6862,6 +6885,21 @@ impl CGame {
         }
         if amount == 0 || source.amount() < amount {
             return Err(BankCurrencyTransferBlock::AmountMismatch);
+        }
+        if source_extend_id == 15 {
+            let capacity = self
+                .find_player(player_id)
+                .expect("auction player проверен до capacity gate")
+                .auction_money_move_capacity(&self.goods_factory);
+            if !capacity.allowed {
+                return Err(
+                    BankCurrencyTransferBlock::AuctionCapacityRejectedBeforeRemoval {
+                        wallet_amount: capacity.wallet_amount,
+                        auction_amount: capacity.auction_amount,
+                        maximum: capacity.maximum,
+                    },
+                );
+            }
         }
         let audit_name = source.name().to_vec();
         let mut split_template = source.clone();
@@ -6916,6 +6954,36 @@ impl CGame {
             ),
         };
         let mut incoming = Some(detached);
+        if source_extend_id == 15 {
+            let capacity = player.auction_money_move_capacity(&self.goods_factory);
+            if !capacity.allowed {
+                let rollback = player.add_bank_transfer_currency_goods(
+                    source_extend_id,
+                    &mut incoming,
+                    &self.goods_factory,
+                );
+                self.players.insert(player_id, player);
+                if let Some(goods) = incoming {
+                    return Err(BankCurrencyTransferBlock::AuctionCapacityRollbackFailed {
+                        goods,
+                        wallet_amount: capacity.wallet_amount,
+                        auction_amount: capacity.auction_amount,
+                        maximum: capacity.maximum,
+                        removal,
+                        rollback,
+                    });
+                }
+                return Err(
+                    BankCurrencyTransferBlock::AuctionCapacityRejectedAfterRemoval {
+                        wallet_amount: capacity.wallet_amount,
+                        auction_amount: capacity.auction_amount,
+                        maximum: capacity.maximum,
+                        removal,
+                        rollback: rollback.expect("auction wallet rollback extend проверен"),
+                    },
+                );
+            }
+        }
         let addition = player
             .add_bank_transfer_currency_goods(
                 destination_extend_id,

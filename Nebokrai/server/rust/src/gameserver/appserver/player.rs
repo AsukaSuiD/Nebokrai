@@ -1698,6 +1698,7 @@ pub(crate) struct PlayerMoneyDecrease {
 pub(crate) enum PlayerBankCurrencyAddOutcome {
     Wallet(CurrencyGoodsAddOutcome),
     Bank(BankGoodsAddOutcome),
+    AuctionWallet(CurrencyGoodsAddOutcome),
 }
 
 #[must_use = "изменение аукционных денег содержит wallet outcome для client effect"]
@@ -1707,6 +1708,14 @@ pub(crate) struct PlayerAuctionMoneyChange {
     pub(crate) previous: u32,
     pub(crate) current: u32,
     pub(crate) outcome: CurrencyIncreaseOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuctionMoneyMoveCapacity {
+    pub(crate) wallet_amount: u32,
+    pub(crate) auction_amount: u32,
+    pub(crate) maximum: u32,
+    pub(crate) allowed: bool,
 }
 
 #[must_use = "возврат с аукциона содержит container, bind и ownership outcome"]
@@ -6050,6 +6059,7 @@ impl CPlayer {
         match extend_id {
             4 => self.wallet.get_goods(0),
             8 => self.bank.get_goods(0),
+            15 => self.auction_wallet.get_goods(0),
             _ => None,
         }
     }
@@ -6070,6 +6080,9 @@ impl CPlayer {
                 .take_goods(0, requested, factory, &mut create_goods),
             8 => self
                 .bank
+                .take_goods(0, requested, factory, &mut create_goods),
+            15 => self
+                .auction_wallet
                 .take_goods(0, requested, factory, &mut create_goods),
             _ => None,
         };
@@ -6097,6 +6110,12 @@ impl CPlayer {
                 owner_progress_allows,
             )),
             8 => PlayerBankCurrencyAddOutcome::Bank(self.bank.add_goods(
+                0,
+                incoming,
+                factory,
+                owner_progress_allows,
+            )),
+            15 => PlayerBankCurrencyAddOutcome::AuctionWallet(self.auction_wallet.add_goods(
                 0,
                 incoming,
                 factory,
@@ -6757,6 +6776,27 @@ impl CPlayer {
 
     pub(crate) fn auction_money(&self) -> u32 {
         self.auction_wallet.currency_amount()
+    }
+
+    /// Exact state-часть `CheckAuctionMoneyMove`: checked unsigned sum
+    /// основного и auction wallet сравнивается с max stack основного wallet.
+    /// Уведомление `GPM015` остаётся у message runtime caller-а.
+    pub(crate) fn auction_money_move_capacity(
+        &self,
+        factory: &CGoodsFactory,
+    ) -> AuctionMoneyMoveCapacity {
+        let wallet_amount = self.wallet.currency_amount();
+        let auction_amount = self.auction_wallet.currency_amount();
+        let maximum = self.wallet.max_stack_number(factory);
+        let allowed = wallet_amount
+            .checked_add(auction_amount)
+            .is_some_and(|total| total <= maximum);
+        AuctionMoneyMoveCapacity {
+            wallet_amount,
+            auction_amount,
+            maximum,
+            allowed,
+        }
     }
 
     pub(crate) fn auction_money_goods(&self) -> Option<&CGoods> {
@@ -11498,20 +11538,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x00036080
 // ADDRESS: 00436080
 // PROTOTYPE: int __thiscall ChangeBodyCheck(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::CheckAuctionMoneyMove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:14846
-// RVA: 0x000369B0
-// ADDRESS: 004369b0
-// PROTOTYPE: bool __thiscall CheckAuctionMoneyMove(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
