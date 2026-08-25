@@ -24,8 +24,9 @@
 //! unlink. Passive/command pet target теперь доходит через pet-scaled
 //! base-attack до wild monster death/beneficiary owner-а; pet schedule хранит
 //! one-second master checks, 6-hour age counter и wild-timeout state, а
-//! `CGame` завершает reclaim/notice/evanish effects. Idle wandering, guard
-//! policy и multi-skill decision tree этим не подменяются.
+//! `CGame` завершает active-mode master-centered target search и
+//! reclaim/notice/evanish effects. Idle wandering, специальные guard AI и
+//! multi-skill decision tree этим не подменяются.
 //! Login pet restoration и client control используют owned `tagMasterInfo`,
 //! taming sign, progress, раздельные Globe experience/property factors и
 //! reached follower-EXP level-up с `0xC0203`, а также узкое pet-control state;
@@ -277,6 +278,10 @@ impl CMonster {
 
     pub(crate) const fn set_pet_mode(&mut self, mode: i32) {
         self.pet_mode = mode;
+    }
+
+    pub(crate) const fn pet_mode(&self) -> i32 {
+        self.pet_mode
     }
 
     pub(crate) const fn set_pet_action(&mut self, action: i32) {

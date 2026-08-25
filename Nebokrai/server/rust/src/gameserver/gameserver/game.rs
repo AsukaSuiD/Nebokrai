@@ -373,8 +373,9 @@
 //! safe-cell policy и доходит до общего hurt/death/murder/equipment tail.
 //! Follow/stay action также проходит master pet-slot geometry, near movement
 //! либо far `BF603` relocation; lifecycle замыкает master loss/reclaim,
-//! age/wild notices и `Evanish` unlink/wire. Guard policy, idle/multi-skill и
-//! остальной tamed decision tree остаются на derived shape-AI границе.
+//! age/wild notices и `Evanish` unlink/wire, active-mode search выбирает
+//! ближайшего attackable wild monster вокруг master-а. Специальные guard AI,
+//! idle/multi-skill и остальной decision tree остаются derived AI границей.
 //! `Release` сохраняет player-save/catch, city-save, registry/script/factory,
 //! network и singleton teardown order; Rust `clear/take/Drop` заменяет manual
 //! delete, а ещё внешние process-global owners вызываются typed runtime-ом.
@@ -31598,6 +31599,81 @@ impl CGame {
         }
     }
 
+    /// Reached `CPet::OnSearchEnemy`: active-mode pet scans type `600` around
+    /// its master and transfers the nearest attackable wild target into the
+    /// same canonical attack state used by command and retaliation paths.
+    fn run_owned_pet_active_search(&mut self, region_id: i32, monster_id: i32) -> bool {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let selected = (|| {
+            let region = owner.base_mut();
+            let Some(master) = region.find_monster_by_id(monster_id).and_then(|pet| {
+                (pet.is_tamed() && pet.pet_mode() == 2 && pet.ai_target().is_none())
+                    .then_some(pet.master_info())
+            }) else {
+                return false;
+            };
+            if master.master_type != PLAYER_TYPE || master.master_id == 0 {
+                return false;
+            }
+            let Some((master_view, master_badman, area_index)) = self
+                .find_player(master.master_id)
+                .filter(|player| player.server_region_id() == Some(region_id))
+                .and_then(|player| {
+                    Some((
+                        player.shape_view()?,
+                        player.is_badman(self.globe_setup.pk_count_per_kill()),
+                        player.shape().area_index()?,
+                    ))
+                })
+            else {
+                return false;
+            };
+            let mut selected = None;
+            let mut selected_distance = i32::MAX;
+            for candidate_id in region.monster_ids_around_area(area_index) {
+                if candidate_id == monster_id {
+                    continue;
+                }
+                let Some(candidate) = region
+                    .find_monster_by_id(candidate_id)
+                    .filter(|candidate| {
+                        !candidate.is_tamed() && !CMoveShape::is_died(candidate.hit_points())
+                    })
+                    .and_then(|candidate| {
+                        let property = self
+                            .find_monster_property_by_origin_name(candidate.base_property_key()?)?;
+                        (!(property.tamable == 1 && property.maximum_tame_attempt_count == 0)
+                            && (property.kind != 5 || master_badman))
+                            .then(|| candidate.shape_view(property))?
+                    })
+                else {
+                    continue;
+                };
+                let distance = real_distance(
+                    master_view.tile_x,
+                    master_view.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                );
+                if distance <= 10 && distance <= selected_distance {
+                    selected = Some(candidate.identity);
+                    selected_distance = distance;
+                }
+            }
+            if let Some(target) = selected
+                && let Some(pet) = region.find_monster_by_id_mut(monster_id)
+            {
+                pet.set_ai_target(target);
+                return true;
+            }
+            false
+        })();
+        self.restore_region_owner(owner);
+        selected
+    }
+
     /// Reached one-second/lifecycle tail `CPet::OnSchedule`: master lookup,
     /// safe-cell mode, return-to-master, 6-hour warnings, wild timeout и
     /// `Evanish -> owner unlink -> BF504` остаются одним runtime проходом.
@@ -32011,7 +32087,7 @@ impl CGame {
         let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
         let hit_modifier = skill_properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
         let now_ms = runtime.now_milliseconds();
-        if target.object_type == MONSTER_TYPE && property.kind == 5 {
+        if target.object_type == MONSTER_TYPE && !tamed && property.kind == 5 {
             return false;
         }
         let target_snapshot = match target.object_type {
@@ -32038,8 +32114,18 @@ impl CGame {
                     let target_property = self.find_monster_property_by_origin_name(
                         target_monster.base_property_key()?,
                     )?;
-                    (target_monster.is_tamed() != tamed && !(tamed && target_property.kind == 5))
-                        .then(|| {
+                    let guard_attackable =
+                        !tamed
+                            || target_property.kind != 5
+                            || (attacker_master.master_type == PLAYER_TYPE
+                                && self.find_player(attacker_master.master_id).is_some_and(
+                                    |master| master.is_badman(self.globe_setup.pk_count_per_kill()),
+                                ));
+                    let carriage = !target_monster.is_tamed()
+                        && target_property.tamable == 1
+                        && target_property.maximum_tame_attempt_count == 0;
+                    (target_monster.is_tamed() != tamed && !carriage && guard_attackable).then(
+                        || {
                             (
                                 target_monster.move_shape().shape().clone(),
                                 target_monster.hit_points(),
@@ -32053,7 +32139,8 @@ impl CGame {
                                 Some(target_property.clone()),
                                 target_monster.is_tamed(),
                             )
-                        })
+                        },
+                    )
                 }),
             _ => None,
         };
@@ -36223,6 +36310,7 @@ impl CGame {
                 if !self.run_owned_pet_follow(region_id, monster_id, runtime) {
                     let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                 }
+                let _ = self.run_owned_pet_active_search(region_id, monster_id);
                 let _ = self.run_owned_pet_lifecycle(region_id, monster_id, runtime);
             }
             let is_gods_battle = self
