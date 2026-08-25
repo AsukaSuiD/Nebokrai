@@ -536,7 +536,9 @@ use crate::gameserver::appserver::message::incrementshopmessage::{
     GameIncrementShopMessageError, GameIncrementShopMessageReport, dispatch_increment_shop_message,
 };
 use crate::gameserver::appserver::message::logmessage::{
-    GameLogMessageError, GameLogMessageReport, dispatch_game_log_message,
+    GameLogMessageError, GameLogMessageReport, GamePlayerLostDisposition,
+    GamePlayerLostParticularGoodsDrop, GamePlayerLostReport, GamePlayerLostRuntime,
+    dispatch_game_log_message,
 };
 use crate::gameserver::appserver::message::onmsg_c2s_auction::dispatch_client_auction_message;
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
@@ -3831,6 +3833,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) periodical_updates: Vec<PlayerPeriodicalUpdateReport>,
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
+    pub(crate) player_lost_timeouts: Vec<GamePlayerLostTimeoutReport>,
     pub(crate) base_region: Option<BaseRegionAiReport>,
     pub(crate) nation_contend: Option<Result<NationContendAiReport, NationRegionAiError>>,
     pub(crate) city_contend: Option<CityRegionAiReport>,
@@ -3842,6 +3845,13 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) area_transitions: Vec<GameAreaTransitionReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerLostTimeoutReport {
+    pub(crate) player_id: i32,
+    pub(crate) sampled_at_ms: u32,
+    pub(crate) staged_for_delete: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4923,6 +4933,7 @@ pub(crate) trait GameMainLoopRuntime:
     + NationContendContext
     + GodsBattleNpcContendContext
     + ServerRegionAreaTransitionContext
+    + GamePlayerLostRuntime
 {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
@@ -4930,10 +4941,9 @@ pub(crate) trait GameMainLoopRuntime:
     fn wall_time_seconds(&mut self) -> u32;
     fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
-    /// Исполняет disconnect/lost prefix `CPlayer::AI` до проверки
-    /// `m_bInChangingRegion`; owner вправе удалить player-а или перевести его
-    /// в terminal state, поэтому `CGame` после возврата повторяет lookup.
-    fn player_ai_before_periodical_update(&mut self, game: &mut CGame, player_id: i32);
+    /// Исполняет ещё внешний disconnect prefix `CPlayer::AI`; delayed lost
+    /// timestamp и его `OnExit/CS_DELETE` tail принадлежат `CGame`.
+    fn player_disconnect_ai_prefix(&mut self, game: &mut CGame, player_id: i32);
     /// Исполняет ещё внешний virtual base-slot `PeriodicalUpdate`
     /// непосредственно перед owned murderer/ping/countdown/hatcher tail.
     fn player_periodical_update_virtual(&mut self, game: &mut CGame, player_id: i32);
@@ -16680,6 +16690,169 @@ impl CGame {
         Some(removal)
     }
 
+    /// Exact live `0x6FA01 -> CPlayer::OnLost` lifecycle. Общий caller
+    /// владеет validation/script/map/spatial и delayed-fight timestamp;
+    /// JJC/team/OnExit остаются узкими virtual owner-ами
+    /// с canonical `CGame + player_id`, а не generic message fallback-ом.
+    pub(crate) fn on_player_lost<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> GamePlayerLostReport {
+        if self.find_player(player_id).is_none() {
+            self.clear_player_login_validation(player_id);
+            let (disposition, route_command) = if self.net_server().has_player_map_id(player_id) {
+                let (_, command) = self.discard_player_login(player_id);
+                (
+                    GamePlayerLostDisposition::PendingLoginCleared,
+                    Some(command),
+                )
+            } else if self.player_registered_in_region(player_id) {
+                (GamePlayerLostDisposition::OrphanRegionEntry, None)
+            } else {
+                (GamePlayerLostDisposition::Missing, None)
+            };
+            return GamePlayerLostReport {
+                player_id,
+                disposition,
+                changing_server: false,
+                changing_region: false,
+                scripts_removed: 0,
+                team_detached: false,
+                jjc_quit: false,
+                nation_timing_finished: false,
+                particular_goods: Vec::new(),
+                change_body_states_ended: 0,
+                delay: None,
+                departure: None,
+                route_command,
+            };
+        }
+
+        let (changing_server, changing_region, team_id, fight_state_count) = {
+            let player = self
+                .find_player(player_id)
+                .expect("OnLost live player проверен перед snapshot");
+            (
+                player.in_changing_server(),
+                player.in_changing_region(),
+                player.team_id(),
+                player.fight_state_count(),
+            )
+        };
+        let team_detached = !changing_server
+            && team_id != 0
+            && runtime.detach_player_from_team_on_lost(self, player_id);
+        self.clear_player_login_validation(player_id);
+        let scripts_before = self.active_scripts.len();
+        self.active_scripts
+            .retain(|_, script| script.player_id() != Some(player_id));
+        let scripts_removed = scripts_before.wrapping_sub(self.active_scripts.len());
+        let jjc_quit = runtime.quit_player_jjc_on_lost(self, player_id);
+
+        let mut nation_timing_finished = false;
+        let mut particular_goods = Vec::new();
+        let mut change_body_states_ended = 0;
+        if !changing_server {
+            nation_timing_finished =
+                self.finish_nation_war_timing_on_player_lost(player_id, || runtime.get_tick_ms());
+            particular_goods = self.drop_particular_goods_on_player_lost(player_id, runtime);
+            change_body_states_ended = self.change_body_after_player_lost(player_id, runtime);
+        }
+
+        if !changing_server && !changing_region && fight_state_count > 0 {
+            let sampled_at_ms = runtime.get_tick_ms();
+            let fight_state_timer_ms = self.globe_setup.fight_state_timer_ms();
+            let delay = self
+                .find_player_mut(player_id)
+                .and_then(|player| player.begin_lost_delay(sampled_at_ms, fight_state_timer_ms));
+            return GamePlayerLostReport {
+                player_id,
+                disposition: GamePlayerLostDisposition::Delayed,
+                changing_server,
+                changing_region,
+                scripts_removed,
+                team_detached,
+                jjc_quit,
+                nation_timing_finished,
+                particular_goods,
+                change_body_states_ended,
+                delay,
+                departure: None,
+                route_command: None,
+            };
+        }
+
+        runtime.player_on_exit(self, player_id, changing_server);
+        let departure = self.remove_lost_player(player_id);
+        GamePlayerLostReport {
+            player_id,
+            disposition: GamePlayerLostDisposition::Removed,
+            changing_server,
+            changing_region,
+            scripts_removed,
+            team_detached,
+            jjc_quit,
+            nation_timing_finished,
+            particular_goods,
+            change_body_states_ended,
+            delay: None,
+            departure,
+            route_command: None,
+        }
+    }
+
+    fn remove_lost_player(&mut self, player_id: i32) -> Option<Result<(), RegionMembershipBlock>> {
+        let mut player = self.players.remove(&player_id)?;
+        let region_id = player.server_region_id()?;
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return None;
+        };
+        let facts = ShapeRuntimeFacts {
+            is_player: true,
+            monster: None,
+            is_npc: false,
+            goods: None,
+            is_move_shape: true,
+            figure: player.figure(),
+        };
+        let removal = owner
+            .base_mut()
+            .remove_object(player.movement_shape_mut(), facts);
+        self.restore_region_owner(owner);
+        Some(removal)
+    }
+
+    fn drop_particular_goods_on_player_lost<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> Vec<GamePlayerLostParticularGoodsDrop> {
+        let Some((region_id, sources)) = self.find_player(player_id).and_then(|player| {
+            Some((
+                player.server_region_id()?,
+                player.particular_goods_drops(&self.goods_factory),
+            ))
+        }) else {
+            return Vec::new();
+        };
+        sources
+            .into_iter()
+            .map(|source| GamePlayerLostParticularGoodsDrop {
+                result: self.drop_player_goods_to_region(
+                    player_id,
+                    region_id,
+                    source.location.extend_id,
+                    source.location.position,
+                    source.goods_id,
+                    source.amount,
+                    runtime,
+                ),
+                source,
+            })
+            .collect()
+    }
+
     /// Client `8F801` acknowledgement completes a deferred local change. The
     /// player is added to the destination registry before snapshots/weather
     /// and state callbacks, matching `CServerRegion::OnMessage`.
@@ -23908,12 +24081,14 @@ impl CGame {
         &mut self,
         player_id: i32,
         context: &mut Context,
-    ) {
+    ) -> usize {
         let state_ids = self
             .find_player_mut(player_id)
             .map(CPlayer::change_body_player_lost_end_ids)
             .unwrap_or_default();
+        let ended = state_ids.len();
         self.end_change_body_states(player_id, state_ids, None, context);
+        ended
     }
 
     fn change_body_after_player_death<Context: RealmAppellationScriptContext>(
@@ -28351,6 +28526,42 @@ impl CGame {
         message.send_to_player(self.net_server(), player.player_id())
     }
 
+    /// Delayed branch `CPlayer::AI`: clock читается только при ненулевом lost
+    /// timestamp; due вызывает тот же virtual `OnExit(false)` и ставит
+    /// `CS_DELETE`, который reached region queue удалит после player pass.
+    fn run_player_lost_timeout<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<GamePlayerLostTimeoutReport> {
+        if !self
+            .find_player(player_id)
+            .is_some_and(CPlayer::has_lost_delay)
+        {
+            return None;
+        }
+        let sampled_at_ms = runtime.get_tick_ms();
+        let fight_state_timer_ms = self.globe_setup.fight_state_timer_ms();
+        if !self
+            .find_player(player_id)
+            .is_some_and(|player| player.lost_delay_due(sampled_at_ms, fight_state_timer_ms))
+        {
+            return None;
+        }
+        runtime.player_on_exit(self, player_id, false);
+        let staged_for_delete = self.find_player_mut(player_id).is_some_and(|player| {
+            player
+                .movement_shape_mut()
+                .set_change_state(SHAPE_CHANGE_DELETE);
+            true
+        });
+        Some(GamePlayerLostTimeoutReport {
+            player_id,
+            sampled_at_ms,
+            staged_for_delete,
+        })
+    }
+
     /// Один exact `CGame::RunAuction` pass. Feature gate не читает часы;
     /// strict 999-ms gate читает wall-clock только при срабатывании.
     /// Goods snapshot и оба World sends сохраняют исходный порядок.
@@ -28888,11 +29099,15 @@ impl CGame {
             let mut periodical_updates = Vec::with_capacity(player_ids.len());
             let mut battle_fairy_follows = Vec::with_capacity(player_ids.len());
             let mut player_ai_tails = Vec::with_capacity(player_ids.len());
+            let mut player_lost_timeouts = Vec::new();
             for player_id in player_ids {
                 if let Some(death) = self.refresh_battle_fairy_death(player_id) {
                     battle_fairy_deaths.push(death);
                 }
-                runtime.player_ai_before_periodical_update(self, player_id);
+                runtime.player_disconnect_ai_prefix(self, player_id);
+                if let Some(timeout) = self.run_player_lost_timeout(player_id, runtime) {
+                    player_lost_timeouts.push(timeout);
+                }
                 let mut restored = None;
                 let mut ran_player_body = false;
                 if self
@@ -29248,6 +29463,7 @@ impl CGame {
                             periodical_updates,
                             battle_fairy_follows,
                             player_ai_tails,
+                            player_lost_timeouts,
                             base_region,
                             nation_contend,
                             city_contend,
@@ -29276,6 +29492,7 @@ impl CGame {
                 periodical_updates,
                 battle_fairy_follows,
                 player_ai_tails,
+                player_lost_timeouts,
                 base_region,
                 nation_contend,
                 city_contend,

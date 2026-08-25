@@ -1438,6 +1438,13 @@ pub(crate) struct PlayerMurdererSignDecrease {
     pub(crate) next_timestamp_ms: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerLostDelayStarted {
+    pub(crate) player_id: i32,
+    pub(crate) fight_state_count: i32,
+    pub(crate) timestamp_ms: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerRemoteSkillMutation {
     pub(crate) skill_id: u32,
@@ -1923,6 +1930,7 @@ pub(crate) struct CPlayer {
     jjc_data: [u8; 0x10],
     jjc_pk_state: bool,
     fight_state_count: i32,
+    lost_time_stamp_ms: u32,
     organizing_wire: Vec<u8>,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
@@ -2001,6 +2009,13 @@ pub(crate) struct CPlayer {
 pub(crate) struct PlayerGoodsAiLocation {
     pub(crate) extend_id: i32,
     pub(crate) position: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerParticularGoodsDrop {
+    pub(crate) location: PlayerGoodsAiLocation,
+    pub(crate) goods_id: CGuid,
+    pub(crate) amount: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2238,6 +2253,7 @@ impl CPlayer {
             jjc_data: [0; 0x10],
             jjc_pk_state: false,
             fight_state_count: 0,
+            lost_time_stamp_ms: 0,
             organizing_wire: Vec::new(),
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
@@ -3962,6 +3978,40 @@ impl CPlayer {
 
     pub(crate) const fn fight_state_count(&self) -> i32 {
         self.fight_state_count
+    }
+
+    /// Exact delayed `OnLost` timestamp. Native formula deliberately keeps
+    /// signed/wrapping intermediate arithmetic with fixed process `g_ms=80`.
+    pub(crate) fn begin_lost_delay(
+        &mut self,
+        now_ms: u32,
+        fight_state_timer_ms: i32,
+    ) -> Option<PlayerLostDelayStarted> {
+        if self.fight_state_count <= 0 {
+            return None;
+        }
+        let remaining = self
+            .fight_state_count
+            .wrapping_mul(80)
+            .wrapping_sub(fight_state_timer_ms);
+        self.lost_time_stamp_ms = now_ms.wrapping_add(remaining as u32);
+        Some(PlayerLostDelayStarted {
+            player_id: self.player_id(),
+            fight_state_count: self.fight_state_count,
+            timestamp_ms: self.lost_time_stamp_ms,
+        })
+    }
+
+    pub(crate) const fn lost_delay_due(&self, now_ms: u32, fight_state_timer_ms: i32) -> bool {
+        self.lost_time_stamp_ms != 0
+            && self
+                .lost_time_stamp_ms
+                .wrapping_add(fight_state_timer_ms as u32)
+                <= now_ms
+    }
+
+    pub(crate) const fn has_lost_delay(&self) -> bool {
+        self.lost_time_stamp_ms != 0
     }
 
     pub(crate) fn begin_ride_state(
@@ -8329,6 +8379,44 @@ impl CPlayer {
             })
     }
 
+    /// Exact `DropParticularGoodsWhenLost` snapshot: packet, equipment, затем
+    /// hand; выбирается бит `0x04`, а actual `DropGoods` mutation выполняется
+    /// caller-ом после завершения обхода, чтобы container erase не сбивал его.
+    pub(crate) fn particular_goods_drops(
+        &self,
+        factory: &CGoodsFactory,
+    ) -> Vec<PlayerParticularGoodsDrop> {
+        let mut drops = Vec::new();
+        let mut push = |extend_id: i32, position: u32, goods: &CGoods| {
+            if goods.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1) & 0x04 != 0 {
+                drops.push(PlayerParticularGoodsDrop {
+                    location: PlayerGoodsAiLocation {
+                        extend_id,
+                        position,
+                    },
+                    goods_id: goods.identity().ex_id,
+                    amount: goods.amount(),
+                });
+            }
+        };
+        for position in 0..self.packet.size() {
+            if let Some(goods) = self.packet.get_goods(position) {
+                push(1, position, goods);
+            }
+        }
+        for position in 0..17 {
+            if let Some(goods) = self.equipment.get_goods(position) {
+                push(2, position, goods);
+            }
+        }
+        for goods in self.hand.traversing_goods() {
+            if let Some(position) = self.hand.query_goods_position(goods.identity().ex_id) {
+                push(3, position, goods);
+            }
+        }
+        drops
+    }
+
     pub(crate) fn owned_goods_location(
         &self,
         extend_id: i32,
@@ -12563,20 +12651,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x0003A4D0
 // ADDRESS: 0043a4d0
 // PROTOTYPE: void __thiscall DropParticularGoodsWhenDead(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DropParticularGoodsWhenLost
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:10776
-// RVA: 0x0003A860
-// ADDRESS: 0043a860
-// PROTOTYPE: void __thiscall DropParticularGoodsWhenLost(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

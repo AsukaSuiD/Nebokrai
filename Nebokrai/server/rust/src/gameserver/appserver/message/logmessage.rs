@@ -16,15 +16,20 @@
 //! Client entry `0x8F702` теперь сам создаёт этот pending route после World
 //! `0x5FB01`; duplicate live owner закрывает новый socket. До player decode
 //! успешный `0x7F901` выдаёт optional validate `0xBF402` и sequence `0xBF403`,
-//! а reject и reached `0x6FA01` prefix очищают оба CGame owner-а до прежнего
-//! virtual OnLost tail без сдвига его message cursor. LoginServer kick
+//! а `0x6FA01` теперь проходит полный reached `OnLost` lifecycle: team/JJC,
+//! scripts, nation timing, particular goods/states, immediate либо delayed
+//! fight-state departure и region/map cleanup. Ещё polymorphic эффекты
+//! выражены узкими owner-callback-ами с live `CGame/player_id`. LoginServer kick
 //! `0x7F903` полностью различает live, pending, orphan-region и missing player:
 //! публикует `GS0041`, transport close либо World `0x5FB02` и очищает route.
 
 use crate::gameserver::appserver::player::PlayerGameSaveCodecError;
+use crate::gameserver::appserver::player::{PlayerLostDelayStarted, PlayerParticularGoodsDrop};
+use crate::gameserver::appserver::serverregion::RegionMembershipBlock;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerLoginBlock, GamePlayerLoginPreludeError,
-    GamePlayerLoginPreludeReport, GamePlayerLoginReport, colored_player_notice_message,
+    GamePlayerLoginPreludeReport, GamePlayerLoginReport, GroundGoodsMoveBlock,
+    GroundGoodsMoveReport, colored_player_notice_message,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -47,6 +52,45 @@ pub(crate) enum GameLogMessageOutcome {
     PlayerLogin,
     PlayerLoginRejected,
     IgnoredStatus,
+    PlayerLost,
+}
+
+pub(crate) trait GamePlayerLostRuntime {
+    fn detach_player_from_team_on_lost(&mut self, game: &mut CGame, player_id: i32) -> bool;
+    fn quit_player_jjc_on_lost(&mut self, game: &mut CGame, player_id: i32) -> bool;
+    fn player_on_exit(&mut self, game: &mut CGame, player_id: i32, changing_server: bool);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerLostParticularGoodsDrop {
+    pub(crate) source: PlayerParticularGoodsDrop,
+    pub(crate) result: Result<GroundGoodsMoveReport, GroundGoodsMoveBlock>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerLostDisposition {
+    PendingLoginCleared,
+    OrphanRegionEntry,
+    Missing,
+    Delayed,
+    Removed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerLostReport {
+    pub(crate) player_id: i32,
+    pub(crate) disposition: GamePlayerLostDisposition,
+    pub(crate) changing_server: bool,
+    pub(crate) changing_region: bool,
+    pub(crate) scripts_removed: usize,
+    pub(crate) team_detached: bool,
+    pub(crate) jjc_quit: bool,
+    pub(crate) nation_timing_finished: bool,
+    pub(crate) particular_goods: Vec<GamePlayerLostParticularGoodsDrop>,
+    pub(crate) change_body_states_ended: usize,
+    pub(crate) delay: Option<PlayerLostDelayStarted>,
+    pub(crate) departure: Option<Result<(), RegionMembershipBlock>>,
+    pub(crate) route_command: Option<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,6 +117,7 @@ pub(crate) struct GameLogMessageReport {
     pub(crate) route_command: Option<i32>,
     pub(crate) login_prelude: Option<GamePlayerLoginPreludeReport>,
     pub(crate) login: Option<GamePlayerLoginReport>,
+    pub(crate) lost: Option<GamePlayerLostReport>,
 }
 
 pub(crate) fn dispatch_game_log_message<Runtime: GameMainLoopRuntime>(
@@ -82,12 +127,26 @@ pub(crate) fn dispatch_game_log_message<Runtime: GameMainLoopRuntime>(
 ) -> Option<Result<GameLogMessageReport, GameLogMessageError>> {
     let source_type = message.message_type() as u32;
     if source_type == PLAYER_LOST {
-        if let Some(player_id) = peek_player_id(message) {
-            game.clear_player_login_validation(player_id);
-        }
-        // Полный OnLost virtual tail остаётся у прежнего Log handler-а;
-        // cleanup reached CGame maps не двигает message cursor перед ним.
-        return None;
+        let player_id = message
+            .base_mut()
+            .get_long()
+            .ok_or(GameLogMessageError::MissingPlayerId);
+        return Some(player_id.map(|player_id| {
+            let lost = game.on_player_lost(player_id, runtime);
+            GameLogMessageReport {
+                source_type,
+                outcome: GameLogMessageOutcome::PlayerLost,
+                client_type: 0,
+                player_id,
+                delivery: 0,
+                login_status: None,
+                decoded_bytes: 0,
+                route_command: lost.route_command,
+                login_prelude: None,
+                login: None,
+                lost: Some(lost),
+            }
+        }));
     }
     if source_type == PLAYER_KICK {
         return Some(dispatch_player_kick(message, game));
@@ -119,12 +178,8 @@ pub(crate) fn dispatch_game_log_message<Runtime: GameMainLoopRuntime>(
         route_command: None,
         login_prelude: None,
         login: None,
+        lost: None,
     }))
-}
-
-fn peek_player_id(message: &CMessage) -> Option<i32> {
-    let bytes: [u8; 4] = message.unread_bytes().get(..4)?.try_into().ok()?;
-    Some(i32::from_le_bytes(bytes))
 }
 
 fn dispatch_client_enter(
@@ -152,6 +207,7 @@ fn dispatch_client_enter(
             route_command: Some(route_command),
             login_prelude: None,
             login: None,
+            lost: None,
         });
     }
 
@@ -172,6 +228,7 @@ fn dispatch_client_enter(
         route_command: Some(route_command),
         login_prelude: None,
         login: None,
+        lost: None,
     })
 }
 
@@ -254,6 +311,7 @@ fn kick_report(
         route_command,
         login_prelude: None,
         login: None,
+        lost: None,
     }
 }
 
@@ -283,6 +341,7 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
             route_command: None,
             login_prelude: None,
             login: None,
+            lost: None,
         });
     }
     if status == -2 {
@@ -297,6 +356,7 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
             route_command: None,
             login_prelude: None,
             login: None,
+            lost: None,
         });
     }
 
@@ -349,6 +409,7 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
         route_command: None,
         login_prelude: Some(login_prelude),
         login: Some(login),
+        lost: None,
     })
 }
 

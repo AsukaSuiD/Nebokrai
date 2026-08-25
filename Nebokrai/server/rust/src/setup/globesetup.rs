@@ -99,6 +99,7 @@ const FAIRY_SYNCRETIC_NEEDED_GOODS_OFFSET: usize = 0x8A0;
 const FAIRY_SYNCRETIC_NEEDED_EXP_OFFSET: usize = 0x8A4;
 const FAIRY_SYNCRETIC_NEEDED_MONEY_OFFSET: usize = 0x8A8;
 const PK_COUNT_PER_KILL_OFFSET: usize = 0x4F4;
+const FIGHT_STATE_TIMER_OFFSET: usize = 0x364;
 const TALK_WORLD_GOODS_NAME_OFFSET: usize = 0x768;
 const TALK_WORLD_GOODS_AMOUNT_OFFSET: usize = 0x7A8;
 const TALK_WORLD_MONEY_OFFSET: usize = 0x7AC;
@@ -524,6 +525,12 @@ impl GlobeSetupSnapshot {
     /// Exact `dwPkCountPerKill` по подтверждённому ABI offset `+0x4F4`.
     pub(crate) fn pk_count_per_kill(&self) -> u32 {
         self.read_u32(PK_COUNT_PER_KILL_OFFSET)
+    }
+
+    /// Exact signed `lFightStateTimer +0x364`; `CPlayer::OnLost` и
+    /// `EnterCombatState` используют его вместе с process `g_ms == 80`.
+    pub(crate) fn fight_state_timer_ms(&self) -> i32 {
+        self.read_i32(FIGHT_STATE_TIMER_OFFSET)
     }
 
     /// `dwOnePkCountTime +0x4F8` определяет восстановление remaining murder
