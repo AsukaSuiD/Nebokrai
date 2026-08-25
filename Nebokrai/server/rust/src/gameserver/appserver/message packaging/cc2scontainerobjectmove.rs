@@ -126,7 +126,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::Move
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: полные packet/equipment ↔ enhancement/equipment-session, двусторонние auction-listing, ground и wallet↔bank gold transfers, включая burden/rollback/equipment/lock effects; остальные container routes RAW ниже
+// MATERIALIZED: полные packet/equipment ↔ enhancement/equipment-session, двусторонние auction-listing, ground, wallet↔bank gold и direct move/stack packet/equipment↔depot transfers, включая burden/rollback/equipment/lock/audit effects; OT_SWITCH_OBJECT и остальные container routes RAW ниже
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:1225

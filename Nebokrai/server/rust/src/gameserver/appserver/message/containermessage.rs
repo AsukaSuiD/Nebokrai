@@ -41,18 +41,27 @@
 //! positional split/stack owner-ов только после реального password unlock;
 //! locked destination выполняет полный rollback в source balance, а success
 //! до client move публикует World bank audit с reason `9/10`.
+//! Packet/equipment↔depot direct move и compatible stack проходят через тот
+//! же dispatcher после password unlock: burden rollback, extension-anchor
+//! guards, equipment effects, GoodsAI, audit `7/8` и self wire достигают live
+//! owners. Incompatible occupied destination остаётся у отдельного RAW
+//! `OT_SWITCH_OBJECT`, поэтому этот проход не перехватывает swap-запрос.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
 
 use crate::gameserver::appserver::container::ccontainer::ContainerListenerHandle;
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
+use crate::gameserver::appserver::container::cdepot::{
+    CDepot, DepotGoodsAddBlock, DepotGoodsAddOutcome,
+};
 use crate::gameserver::appserver::container::cequipmentcontainer::EquipmentRemovedEvent;
 use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
     ShadowPresenceReport, ShadowRemovedReport,
 };
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
 use crate::gameserver::appserver::message::containermessage::EnhancementMoveReceiveBlock::{
     InvalidExtendId, InvalidObjectType, SameContainer, ZeroAmount,
 };
@@ -69,7 +78,8 @@ use crate::gameserver::appserver::session::csessionfactory::{
 use crate::gameserver::appserver::session::ctrader::{TraderOfferAdded, TraderOfferRemoved};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
-    BankCurrencyTransferBlock, BankCurrencyTransferReport, CGame, GameContainerMessageRuntime,
+    BankCurrencyTransferBlock, BankCurrencyTransferReport, CGame, DepotStorageTransferAddition,
+    DepotStorageTransferBlock, DepotStorageTransferReport, GameContainerMessageRuntime,
     GroundGoodsMoveBlock, GroundGoodsMoveReport,
 };
 use crate::nets::netserver::message::CMessage;
@@ -238,11 +248,18 @@ pub(crate) enum GameContainerMessageOutcome {
         reason: BankCurrencyTransferBlock,
         delivery: i32,
     },
+    DepotStorageMoved(DepotStorageTransferReport),
+    DepotStorageRolledBack {
+        reason: DepotStorageTransferBlock,
+        delivery: i32,
+        notification_delivery: Option<i32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EnhancementMessageRoute {
     BankCurrencyTransfer,
+    DepotStorageTransfer,
     GroundDrop,
     GroundPickup,
     EnhancementSelect,
@@ -558,6 +575,35 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 && !ground_is_currency)
                 || (ground_is_currency
                     && !matches!(request.destination_container_extend_id, 1 | 2));
+            let depot_move_requires_swap = game.find_player(player_id).is_some_and(|player| {
+                let source = match request.source_container_extend_id {
+                    1 => player.packet().get_goods(request.source_position),
+                    2 => player.equipment().get_goods(request.source_position),
+                    9 => player.depot().get_goods(request.source_position),
+                    _ => None,
+                };
+                let destination = match request.destination_container_extend_id {
+                    1 => player.packet().get_goods(request.destination_position),
+                    2 => player.equipment().get_goods(request.destination_position),
+                    9 => player.depot().get_goods(request.destination_position),
+                    _ => None,
+                };
+                let (Some(source), Some(destination)) = (source, destination) else {
+                    return false;
+                };
+                if request.destination_container_extend_id == 9
+                    && CDepot::is_extension_item_position(request.destination_position)
+                {
+                    return false;
+                }
+                let factory = game.goods_factory();
+                source.base_properties_index() != destination.base_properties_index()
+                    || source.max_stack_number(factory) <= 1
+                    || destination.amount().wrapping_add(request.amount)
+                        > destination.max_stack_number(factory)
+                    || source.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1)
+                        != destination.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1)
+            });
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && matches!(
@@ -568,6 +614,15 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     (4, 8) | (8, 4)
                 ) {
                 EnhancementMessageRoute::BankCurrencyTransfer
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && (matches!(request.source_container_extend_id, 1 | 2)
+                    && request.destination_container_extend_id == 9
+                    || request.source_container_extend_id == 9
+                        && matches!(request.destination_container_extend_id, 1 | 2))
+                && !depot_move_requires_swap
+            {
+                EnhancementMessageRoute::DepotStorageTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == 200
                 && (matches!(request.source_container_extend_id, 1 | 2) || source_is_reached)
@@ -811,6 +866,69 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 reason,
                 delivery: send_rollback(game, player_id),
             },
+        })));
+    }
+
+    if route == EnhancementMessageRoute::DepotStorageTransfer {
+        let transfer = game.transfer_player_depot_goods(
+            player_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_container_extend_id,
+            request.destination_position,
+            context,
+        );
+        return Some(Ok(report(match transfer {
+            Ok(transfer) => GameContainerMessageOutcome::DepotStorageMoved(transfer),
+            Err(reason) => {
+                let rejected = match &reason {
+                    DepotStorageTransferBlock::RolledBack { rejected, .. }
+                    | DepotStorageTransferBlock::RollbackFailed { rejected, .. } => Some(rejected),
+                    _ => None,
+                };
+                let notice_id: Option<&[u8]> = if matches!(
+                    &reason,
+                    DepotStorageTransferBlock::BurdenRollbackCompleted { .. }
+                        | DepotStorageTransferBlock::BurdenRollbackFailed { .. }
+                ) {
+                    Some(b"GS0259")
+                } else {
+                    match rejected {
+                        Some(DepotStorageTransferAddition::Depot(
+                            DepotGoodsAddOutcome::Rejected(
+                                DepotGoodsAddBlock::ExtensionSlotOccupied { .. },
+                            ),
+                        )) => Some(b"KR007"),
+                        Some(DepotStorageTransferAddition::Depot(
+                            DepotGoodsAddOutcome::Rejected(
+                                DepotGoodsAddBlock::ExtensionItemRequired { .. },
+                            ),
+                        )) => Some(b"KR008"),
+                        Some(DepotStorageTransferAddition::Depot(
+                            DepotGoodsAddOutcome::Rejected(
+                                DepotGoodsAddBlock::InvalidExtensionKind { .. },
+                            ),
+                        )) => Some(b"KR009"),
+                        _ => None,
+                    }
+                };
+                let notification_delivery = notice_id.map(|notice_id| {
+                    send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(notice_id),
+                        0xffff_ffff,
+                        0,
+                    )
+                });
+                GameContainerMessageOutcome::DepotStorageRolledBack {
+                    reason,
+                    delivery: send_rollback(game, player_id),
+                    notification_delivery,
+                }
+            }
         })));
     }
 

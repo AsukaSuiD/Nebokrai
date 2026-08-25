@@ -9,8 +9,9 @@
 //!
 //! `Vec`/`IndexMap` базы остаются библиотечным storage-слоем. Здесь сохранены
 //! exact position selection, inactive-anchor и expansion partial effects.
-//! Extension-item add/remove callbacks, player notifications и codec restore
-//! ниже остаются RAW до замыкания goods/player/message owners.
+//! Достигнутый `0x90301` move/stack caller сохраняет запрет извлечения anchor,
+//! kind-1 activation, GoodsAI/listener effects и rollback. `OT_SWITCH_OBJECT`,
+//! вне-клиентский extension-remove callback и codec restore остаются RAW.
 
 use super::camountlimitgoodscontainer::{AmountLimitGoodsCleared, AmountLimitGoodsRelease};
 use super::cvolumelimitgoodscontainer::{
@@ -129,11 +130,38 @@ impl CDepot {
         self.base.base().find(ex_id)
     }
 
+    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+        if self.locked {
+            return None;
+        }
+        self.base.get_goods(position)
+    }
+
     pub(crate) fn remove_goods(&mut self, ex_id: CGuid) -> Option<VolumeGoodsRemoveOutcome> {
         if self.locked {
             return None;
         }
         self.base.remove_goods(ex_id)
+    }
+
+    /// `CC2SContainerObjectMove::GetGoods` запрещает клиентское извлечение
+    /// extension anchor до virtual `Remove(position, amount)`. Обычные слоты
+    /// сохраняют общий full/partial ownership pass volume-container-а.
+    pub(crate) fn take_goods<Create>(
+        &mut self,
+        position: u32,
+        requested_amount: u32,
+        factory: &CGoodsFactory,
+        create_goods: Create,
+    ) -> Option<VolumeGoodsRemoveOutcome>
+    where
+        Create: FnMut(u32) -> Option<CGoods>,
+    {
+        if self.locked || Self::is_extension_item_position(position) {
+            return None;
+        }
+        self.base
+            .take_goods(position, requested_amount, factory, create_goods)
     }
 
     pub(crate) fn add_goods(

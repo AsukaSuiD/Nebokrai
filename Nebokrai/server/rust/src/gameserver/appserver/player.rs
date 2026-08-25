@@ -6298,6 +6298,10 @@ impl CPlayer {
         &self.depot
     }
 
+    pub(crate) const fn depot_mut(&mut self) -> &mut CDepot {
+        &mut self.depot
+    }
+
     pub(crate) fn trade_source_goods(
         &self,
         extend_id: i32,
