@@ -635,6 +635,15 @@ impl CArea {
         true
     }
 
+    pub(crate) fn append_carriage_ids(&self, destination: &mut Vec<i32>) -> bool {
+        let _guard = self.critical_section.lock();
+        if self.parent != AreaParentLink::OwningServerRegion {
+            return false;
+        }
+        destination.extend_from_slice(&self.carriages);
+        true
+    }
+
     pub(crate) fn get_all_shapes<Resolver: ShapeResolver>(
         &self,
         resolver: &Resolver,

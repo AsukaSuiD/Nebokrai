@@ -2003,6 +2003,7 @@ pub(crate) struct CPlayer {
     flash_changed: bool,
     battle_fairy_summoned: bool,
     recreate_carriage: bool,
+    active_carriage_id: i32,
     create_faction_operator: bool,
     apply_join_faction_operator: bool,
     faction_declare_operator: bool,
@@ -2350,6 +2351,7 @@ impl CPlayer {
             flash_changed: false,
             battle_fairy_summoned: false,
             recreate_carriage: false,
+            active_carriage_id: 0,
             create_faction_operator: false,
             apply_join_faction_operator: false,
             faction_declare_operator: false,
@@ -8086,6 +8088,36 @@ impl CPlayer {
 
     pub(crate) fn take_uncreated_pets(&mut self) -> Vec<PlayerUncreatedPet> {
         std::mem::take(&mut self.uncreated_pets)
+    }
+
+    pub(crate) fn login_carriage(&self) -> (&PlayerUncreatedCarriage, bool) {
+        (&self.uncreated_carriage, self.recreate_carriage)
+    }
+
+    pub(crate) fn finish_login_carriage_recreation(&mut self, carriage_id: i32) {
+        self.active_carriage_id = carriage_id;
+        self.recreate_carriage = false;
+        self.uncreated_carriage = PlayerUncreatedCarriage::default();
+    }
+
+    pub(crate) fn finish_empty_login_carriage_recreation(&mut self) {
+        self.finish_login_carriage_recreation(0);
+    }
+
+    pub(crate) const fn bind_active_carriage(&mut self, carriage_id: i32) {
+        self.active_carriage_id = carriage_id;
+    }
+
+    pub(crate) const fn active_carriage_id(&self) -> i32 {
+        self.active_carriage_id
+    }
+
+    pub(crate) const fn clear_active_carriage(&mut self, carriage_id: i32) -> bool {
+        if self.active_carriage_id != carriage_id {
+            return false;
+        }
+        self.active_carriage_id = 0;
+        true
     }
 
     pub(crate) const fn current_pets_mode(&self) -> i32 {

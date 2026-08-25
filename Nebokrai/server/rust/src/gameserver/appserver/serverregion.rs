@@ -1189,6 +1189,22 @@ impl CServerRegion {
         pet_ids
     }
 
+    pub(crate) fn carriage_ids_around_area(&self, area_index: usize) -> Vec<i32> {
+        let Some(center) = self.areas.get(area_index) else {
+            return Vec::new();
+        };
+        let center = ShapeAreaCoordinates {
+            x: center.x(),
+            y: center.y(),
+        };
+        let mut carriage_ids = Vec::new();
+        for index in self.neighbor_area_indices(center) {
+            let _ = self.areas[index].append_carriage_ids(&mut carriage_ids);
+        }
+        carriage_ids.retain(|carriage_id| self.owned_monsters.contains_key(carriage_id));
+        carriage_ids
+    }
+
     pub(crate) fn monster_ids_around_area(&self, area_index: usize) -> Vec<i32> {
         let Some(center) = self.areas.get(area_index) else {
             return Vec::new();

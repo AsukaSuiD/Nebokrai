@@ -228,6 +228,10 @@ impl CMonster {
         self.tamed
     }
 
+    pub(crate) fn is_carriage(&self, property: &MonsterProperties) -> bool {
+        !self.tamed && property.tamable == 1 && property.maximum_tame_attempt_count == 0
+    }
+
     pub(crate) const fn is_owned_pet(&self, player_id: i32) -> bool {
         self.master_info.master_type == 400 && self.master_info.master_id == player_id
     }

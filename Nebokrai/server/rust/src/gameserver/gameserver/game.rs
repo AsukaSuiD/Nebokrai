@@ -2200,9 +2200,9 @@ pub(crate) trait BattleFairySkillResetContext {
     ) -> Vec<i32>;
 }
 
-/// Нематериализованные virtual owners полного player GameSave, pet/carriage
-/// snapshot и skill-state остаются на runtime-границе. Region/player maps,
-/// session state и message wire исполняет непосредственно `CGame`.
+/// Нематериализованные virtual owners skill-state остаются на
+/// runtime-границе. Player GameSave, live pet/carriage snapshots,
+/// region/player maps, session state и message wire исполняет `CGame`.
 pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
     fn prepare_script_region_companions(
         &mut self,
@@ -2216,13 +2216,6 @@ pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
     );
 
     fn refresh_script_region_auto_protect(&mut self, player: &mut CPlayer);
-
-    /// Carriage ещё остаётся внешним derived monster owner-ом. Pet snapshot
-    /// уже строится из canonical player refs и region-owned `CMonster`.
-    fn snapshot_script_player_carriage(
-        &mut self,
-        player: &CPlayer,
-    ) -> (PlayerUncreatedCarriage, bool);
 }
 
 pub(crate) trait GameRegionEnterContext: NationCombatContext {
@@ -2280,10 +2273,18 @@ pub(crate) struct GamePlayerLoginReport {
     pub(crate) team_snapshot_queued: bool,
     pub(crate) pet_restore_notice_delivery: Option<i32>,
     pub(crate) pet_restorations: Vec<GamePlayerPetRestoration>,
+    pub(crate) carriage_restoration: Option<GamePlayerCarriageRestoration>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GamePlayerPetRestoration {
+    pub(crate) original_name: Vec<u8>,
+    pub(crate) monster_id: Option<i32>,
+    pub(crate) around_delivery: Option<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerCarriageRestoration {
     pub(crate) original_name: Vec<u8>,
     pub(crate) monster_id: Option<i32>,
     pub(crate) around_delivery: Option<i32>,
@@ -6879,7 +6880,31 @@ impl CGame {
         destination: &mut Vec<u8>,
         context: &mut Context,
     ) -> bool {
-        let (carriage, recreate_carriage) = context.snapshot_script_player_carriage(player);
+        let (loaded_carriage, recreate_carriage) = player.login_carriage();
+        let carriage = if recreate_carriage {
+            loaded_carriage.clone()
+        } else {
+            player
+                .server_region_id()
+                .and_then(|region_id| self.find_region(region_id))
+                .and_then(|region| {
+                    let carriage = region
+                        .base()
+                        .find_monster_by_id(player.active_carriage_id())?;
+                    let property =
+                        self.find_monster_property_by_origin_name(carriage.base_property_key()?)?;
+                    let master = carriage.master_info();
+                    (carriage.is_carriage(property)
+                        && master.master_type == PLAYER_TYPE
+                        && master.master_id == player.player_id())
+                    .then(|| PlayerUncreatedCarriage {
+                        original_name: carriage.original_name().to_vec(),
+                        script: carriage.script_file().to_vec(),
+                        health: carriage.hit_points(),
+                    })
+                })
+                .unwrap_or_default()
+        };
         let pets = player
             .server_region_id()
             .and_then(|region_id| self.find_region(region_id))
@@ -26586,6 +26611,169 @@ impl CGame {
         (notice_delivery, restorations)
     }
 
+    fn restore_player_login_carriage<Context: ServerRegionMonsterContext>(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        context: &mut Context,
+    ) -> Option<GamePlayerCarriageRestoration> {
+        let (record, recreate, player_name, player_x, player_y, player_direction) =
+            self.find_player(player_id).and_then(|player| {
+                let (record, recreate) = player.login_carriage();
+                Some((
+                    record.clone(),
+                    recreate,
+                    player.player_name().to_vec(),
+                    player.shape().get_tile_x().ok()?,
+                    player.shape().get_tile_y().ok()?,
+                    player.shape().get_direction(),
+                ))
+            })?;
+        if recreate && record.original_name.is_empty() {
+            self.find_player_mut(player_id)?
+                .finish_empty_login_carriage_recreation();
+            return None;
+        }
+        let mut owner = self.take_region_owner(region_id)?;
+
+        let existing = if !recreate {
+            owner
+                .base()
+                .area_monster_ids()
+                .into_iter()
+                .find_map(|monster_id| {
+                    let monster = owner.base().find_monster_by_id(monster_id)?;
+                    let property =
+                        self.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+                    (monster.is_carriage(property)
+                        && monster.master_info().master_type == PLAYER_TYPE
+                        && monster.master_info().master_id == player_id)
+                        .then_some((
+                            monster_id,
+                            monster.move_shape().shape().clone(),
+                            monster.hit_points(),
+                            property.maximum_hp,
+                            monster.original_name().to_vec(),
+                        ))
+                })
+        } else {
+            None
+        };
+
+        let carriage = if let Some(existing) = existing {
+            Some(existing)
+        } else if recreate && !record.original_name.is_empty() {
+            let Some(property) = self
+                .find_monster_property_by_origin_name(&record.original_name)
+                .cloned()
+            else {
+                self.restore_region_owner(owner);
+                return Some(GamePlayerCarriageRestoration {
+                    original_name: record.original_name,
+                    monster_id: None,
+                    around_delivery: None,
+                });
+            };
+            if !(property.tamable == 1 && property.maximum_tame_attempt_count == 0) {
+                self.restore_region_owner(owner);
+                return Some(GamePlayerCarriageRestoration {
+                    original_name: record.original_name,
+                    monster_id: None,
+                    around_delivery: None,
+                });
+            }
+            let Some(position) = owner
+                .base()
+                .region
+                .get_random_pos_in_range(player_x, player_y, 10, 10, context)
+                .ok()
+            else {
+                self.restore_region_owner(owner);
+                return Some(GamePlayerCarriageRestoration {
+                    original_name: record.original_name,
+                    monster_id: None,
+                    around_delivery: None,
+                });
+            };
+            let Some(monster_id) = owner
+                .base_mut()
+                .add_monster(
+                    &property,
+                    position.x,
+                    position.y,
+                    -1,
+                    true,
+                    false,
+                    context.now_milliseconds(),
+                    self.area_width,
+                    self.area_height,
+                    context,
+                )
+                .ok()
+            else {
+                self.restore_region_owner(owner);
+                return Some(GamePlayerCarriageRestoration {
+                    original_name: record.original_name,
+                    monster_id: None,
+                    around_delivery: None,
+                });
+            };
+            let monster = owner
+                .base_mut()
+                .find_monster_by_id_mut(monster_id)
+                .expect("carriage AddMonster публикует concrete owner");
+            monster.set_master_info(crate::gameserver::appserver::masterinfo::MasterInfo {
+                master_type: PLAYER_TYPE,
+                master_id: player_id,
+                ..crate::gameserver::appserver::masterinfo::MasterInfo::default()
+            });
+            monster
+                .move_shape_mut()
+                .shape_mut()
+                .set_direction(player_direction);
+            monster.set_hit_points(record.health);
+            monster.set_script_file(&record.script);
+            Some((
+                monster_id,
+                monster.move_shape().shape().clone(),
+                monster.hit_points(),
+                property.maximum_hp,
+                monster.original_name().to_vec(),
+            ))
+        } else {
+            None
+        };
+
+        let Some((monster_id, shape, health, maximum_hp, original_name)) = carriage else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        if let Some(player) = self.find_player_mut(player_id) {
+            if recreate {
+                player.finish_login_carriage_recreation(monster_id);
+            } else {
+                player.bind_active_carriage(monster_id);
+            }
+        }
+        let mut entered = CMessage::new(0x000c_0205);
+        entered.add_long(MONSTER_TYPE);
+        entered.add_long(monster_id);
+        entered.add_long(PLAYER_TYPE);
+        entered.add_long(player_id);
+        add_legacy_c_string(entered.base_mut(), &player_name);
+        entered.add_ulong(health);
+        entered.add_ulong(maximum_hp);
+        let around_delivery = self
+            .send_game_shape_around(owner.base(), &shape, None, &entered)
+            .ok();
+        self.restore_region_owner(owner);
+        Some(GamePlayerCarriageRestoration {
+            original_name,
+            monster_id: Some(monster_id),
+            around_delivery,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn complete_world_player_login<
         Context: GamePlayerLoginContext + ScriptFunctionRuntime,
@@ -26718,6 +26906,8 @@ impl CGame {
         }
         let (pet_restore_notice_delivery, pet_restorations) =
             self.restore_player_login_pets(expected_player_id, region_id, context);
+        let carriage_restoration =
+            self.restore_player_login_carriage(expected_player_id, region_id, context);
 
         let first_login = self
             .players
@@ -26868,6 +27058,7 @@ impl CGame {
             team_snapshot_queued,
             pet_restore_notice_delivery,
             pet_restorations,
+            carriage_restoration,
         })
     }
 
@@ -30971,6 +31162,43 @@ impl CGame {
         }
     }
 
+    /// Exact `PetLikeTargetAttackableByMonster` policy for a carriage target.
+    fn carriage_attackable_by_monster(
+        &self,
+        attacker_property: &crate::setup::monsterlist::MonsterProperties,
+        attacker_tamed: bool,
+        attacker_master: crate::gameserver::appserver::masterinfo::MasterInfo,
+        target_master: crate::gameserver::appserver::masterinfo::MasterInfo,
+        region_id: i32,
+    ) -> bool {
+        let target_player = (target_master.master_type == PLAYER_TYPE
+            && target_master.master_id != 0)
+            .then_some(target_master.master_id);
+        let Some(target_player) = target_player else {
+            return true;
+        };
+        if attacker_tamed {
+            return (attacker_master.master_type != PLAYER_TYPE || attacker_master.master_id == 0)
+                || self.player_base_attackable(attacker_master.master_id, target_player);
+        }
+        if attacker_property.kind != 5 {
+            return true;
+        }
+        if matches!(attacker_property.ai as i32, 10..=11) {
+            let Some(player) = self.find_player(target_player) else {
+                return true;
+            };
+            let Some(region) = self.find_region(region_id) else {
+                return true;
+            };
+            return !((player.faction_id() != 0
+                && player.faction_id() == region.base().owned_city_faction())
+                || (player.union_id() != 0
+                    && player.union_id() == region.base().owned_city_union()));
+        }
+        self.guard_monster_attackable(target_player, region_id, attacker_property)
+    }
+
     fn apply_guard_monster_first_attack(
         &mut self,
         attacker_id: i32,
@@ -31999,6 +32227,11 @@ impl CGame {
         else {
             return false;
         };
+        if !tamed && property.tamable == 1 && property.maximum_tame_attempt_count == 0 {
+            // Carriage has its own derived AI and never runs generic monster
+            // base-attack/search scheduling.
+            return false;
+        }
         if CMoveShape::is_died(monster_health) {
             return false;
         }
@@ -32063,6 +32296,44 @@ impl CGame {
                     }
                 }
             }
+            for carriage_id in region.carriage_ids_around_area(area_index) {
+                let Some((candidate, target_master)) =
+                    region.find_monster_by_id(carriage_id).and_then(|carriage| {
+                        let carriage_property = self
+                            .find_monster_property_by_origin_name(carriage.base_property_key()?)?;
+                        if !carriage.is_carriage(carriage_property)
+                            || CMoveShape::is_died(carriage.hit_points())
+                        {
+                            return None;
+                        }
+                        Some((
+                            carriage.shape_view(carriage_property)?,
+                            carriage.master_info(),
+                        ))
+                    })
+                else {
+                    continue;
+                };
+                if !self.carriage_attackable_by_monster(
+                    &property,
+                    tamed,
+                    attacker_master,
+                    target_master,
+                    region.id,
+                ) {
+                    continue;
+                }
+                let distance = real_distance(
+                    monster_view.tile_x,
+                    monster_view.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                );
+                if distance <= 10 && distance <= selected_distance {
+                    selected = Some(candidate.identity);
+                    selected_distance = distance;
+                }
+            }
             if let Some(selected) = selected {
                 if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                     monster.set_ai_target(selected);
@@ -32087,9 +32358,6 @@ impl CGame {
         let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
         let hit_modifier = skill_properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
         let now_ms = runtime.now_milliseconds();
-        if target.object_type == MONSTER_TYPE && !tamed && property.kind == 5 {
-            return false;
-        }
         let target_snapshot = match target.object_type {
             PLAYER_TYPE => self.find_player(target.id).and_then(|player| {
                 (player.server_region_id() == Some(region.id)).then(|| {
@@ -32104,6 +32372,7 @@ impl CGame {
                         player.is_badman(self.globe_setup.pk_count_per_kill()),
                         None,
                         None,
+                        false,
                         false,
                     )
                 })
@@ -32121,26 +32390,37 @@ impl CGame {
                                 && self.find_player(attacker_master.master_id).is_some_and(
                                     |master| master.is_badman(self.globe_setup.pk_count_per_kill()),
                                 ));
-                    let carriage = !target_monster.is_tamed()
-                        && target_property.tamable == 1
-                        && target_property.maximum_tame_attempt_count == 0;
-                    (target_monster.is_tamed() != tamed && !carriage && guard_attackable).then(
-                        || {
-                            (
-                                target_monster.move_shape().shape().clone(),
-                                target_monster.hit_points(),
-                                None,
-                                Some(target_monster.combat_properties(target_property)),
-                                CMoveShape::is_died(target_monster.hit_points()),
-                                target_monster.move_shape().is_god(),
-                                false,
-                                true,
-                                Some(target_monster.master_info()),
-                                Some(target_property.clone()),
-                                target_monster.is_tamed(),
-                            )
-                        },
-                    )
+                    let carriage = target_monster.is_carriage(target_property);
+                    let target_master = target_monster.master_info();
+                    let target_attackable = if carriage {
+                        self.carriage_attackable_by_monster(
+                            &property,
+                            tamed,
+                            attacker_master,
+                            target_master,
+                            region.id,
+                        )
+                    } else {
+                        !(!tamed && property.kind == 5)
+                            && target_monster.is_tamed() != tamed
+                            && guard_attackable
+                    };
+                    target_attackable.then(|| {
+                        (
+                            target_monster.move_shape().shape().clone(),
+                            target_monster.hit_points(),
+                            None,
+                            Some(target_monster.combat_properties(target_property)),
+                            CMoveShape::is_died(target_monster.hit_points()),
+                            target_monster.move_shape().is_god(),
+                            false,
+                            true,
+                            Some(target_master),
+                            Some(target_property.clone()),
+                            target_monster.is_tamed(),
+                            carriage,
+                        )
+                    })
                 }),
             _ => None,
         };
@@ -32156,6 +32436,7 @@ impl CGame {
             target_master,
             target_monster_property,
             target_tamed,
+            target_carriage,
         )) = target_snapshot
         else {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
@@ -32348,7 +32629,7 @@ impl CGame {
                         .set_action(if current_health == 0 { 6 } else { 5 });
                     if current_health == 0 {
                         pet.when_been_killed();
-                        if !target_tamed {
+                        if !target_tamed && !target_carriage {
                             pet.set_killed_by(MonsterKillingAttack {
                                 attacker_type: MONSTER_TYPE,
                                 attacker_id: monster_id,
@@ -32371,6 +32652,7 @@ impl CGame {
                         }
                     }
                     if !target_tamed
+                        && !target_carriage
                         && attacker_master.master_type == PLAYER_TYPE
                         && attacker_master.master_id != 0
                     {
@@ -32398,7 +32680,7 @@ impl CGame {
                             attacker_id: monster_id,
                             attacker_faction_id: 0,
                         });
-                    } else if target_tamed {
+                    } else if target_tamed || target_carriage {
                         if let Some(master) = target_master
                             && master.master_type == PLAYER_TYPE
                             && self
@@ -32406,10 +32688,18 @@ impl CGame {
                                 .is_some_and(|player| player.server_region_id() == Some(region.id))
                             && let Some(player) = self.find_player_mut(master.master_id)
                         {
-                            let _ = player.remove_active_pet(MONSTER_TYPE, target.id);
+                            if target_carriage {
+                                player.clear_active_carriage(target.id);
+                            } else {
+                                let _ = player.remove_active_pet(MONSTER_TYPE, target.id);
+                            }
                         }
                         if let Some(pet) = region.find_monster_by_id_mut(target.id) {
-                            pet.evanish_pet();
+                            if target_carriage {
+                                pet.stage_for_delete();
+                            } else {
+                                pet.evanish_pet();
+                            }
                         }
                         let mut vanished = CMessage::new(0x000b_f504);
                         vanished.add_long(MONSTER_TYPE);
@@ -33067,6 +33357,7 @@ impl CGame {
                     monster.combat_properties(&monster_property),
                     monster.hit_points(),
                     monster.is_tamed(),
+                    monster.is_carriage(&monster_property),
                     monster.move_shape().is_god(),
                     monster.master_info(),
                 ))
@@ -33075,6 +33366,7 @@ impl CGame {
                 monster_properties,
                 monster_health,
                 monster_tamed,
+                monster_carriage,
                 monster_god,
                 monster_master,
             )) = monster_snapshot
@@ -33090,13 +33382,29 @@ impl CGame {
                 let _ = self.send_base_attack_failure(player_id, 2);
                 return rejected();
             }
-            let owned_target_player = (monster_tamed
+            let owned_target_player = ((monster_tamed || monster_carriage)
                 && monster_master.master_type == PLAYER_TYPE
                 && monster_master.master_id != 0)
                 .then_some(monster_master.master_id);
-            if owned_target_player
-                .is_some_and(|owner_id| !self.player_base_attackable(player_id, owner_id))
+            if let Some(owner_id) = owned_target_player
+                && owner_id != player_id
+                && let Some((string_id, limit)) =
+                    self.player_base_attack_level_block(player_id, owner_id)
             {
+                self.send_base_attack_level_block(player_id, string_id, limit);
+                self.enter_player_combat_state(player_id);
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            }
+            let owned_target_attackable = owned_target_player.is_none_or(|owner_id| {
+                if owner_id == player_id {
+                    self.find_player(player_id)
+                        .is_some_and(|player| player.pk_permissions().criminal)
+                } else {
+                    self.player_base_attackable(player_id, owner_id)
+                }
+            });
+            if !owned_target_attackable {
                 self.enter_player_combat_state(player_id);
                 let _ = self.send_base_attack_failure(player_id, 2);
                 return rejected();
@@ -33288,7 +33596,13 @@ impl CGame {
                     let _ =
                         self.gods_battle_monster_died(region_id, target_id, PLAYER_TYPE, player_id);
                     let _ = self.monster_on_died(region_id, target_id, player_id, runtime);
-                    if !monster_tamed {
+                    if monster_carriage {
+                        if monster_master.master_type == PLAYER_TYPE
+                            && let Some(master) = self.find_player_mut(monster_master.master_id)
+                        {
+                            master.clear_active_carriage(target_id);
+                        }
+                    } else if !monster_tamed {
                         self.finish_monster_kill_effects(
                             region_id,
                             target_id,
