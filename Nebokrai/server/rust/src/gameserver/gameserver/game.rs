@@ -2496,6 +2496,7 @@ pub(crate) struct BankCurrencyTransferReport {
     pub(crate) removal: BankCurrencyRemoval,
     pub(crate) addition: PlayerBankCurrencyAddOutcome,
     pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) audit_deliveries: Vec<i32>,
     pub(crate) delivery: i32,
 }
 
@@ -6381,6 +6382,7 @@ impl CGame {
         if amount == 0 || source.amount() < amount {
             return Err(BankCurrencyTransferBlock::AmountMismatch);
         }
+        let audit_name = source.name().to_vec();
         let mut split_template = source.clone();
         split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
 
@@ -6485,6 +6487,22 @@ impl CGame {
             player.record_last_operated_goods(source_extend_id, source_position);
         self.players.insert(player_id, player);
 
+        let audit_deliveries = if (destination_extend_id == 8
+            && self.log_system.goods_bank_set_log_enabled())
+            || (source_extend_id == 8 && self.log_system.goods_bank_get_log_enabled())
+        {
+            self.send_ground_goods_move_log(
+                player_id,
+                if destination_extend_id == 8 { 9 } else { 10 },
+                removal.source,
+                amount,
+                &audit_name,
+                amount,
+            )
+        } else {
+            Vec::new()
+        };
+
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -6503,6 +6521,7 @@ impl CGame {
             removal,
             addition,
             previous_last_operated,
+            audit_deliveries,
             delivery,
         })
     }

@@ -39,7 +39,8 @@
 //! отсутствует в точном `GetGoods` switch этого `0x90301` owner-а и остаётся
 //! вне данного runtime-маршрута. Wallet↔bank gold transfer достигает тех же
 //! positional split/stack owner-ов только после реального password unlock;
-//! locked destination выполняет полный rollback в source balance.
+//! locked destination выполняет полный rollback в source balance, а success
+//! до client move публикует World bank audit с reason `9/10`.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.

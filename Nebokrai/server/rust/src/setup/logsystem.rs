@@ -10,6 +10,7 @@
 //! `CDaKongXiangQian::SetLogKey`, остальные неподтверждённые offsets не именуются.
 //! NPC buy/sell используют подтверждённые первые два bytes. Region pickup и
 //! drop используют bytes `2/5`, причём pickup сохраняет точный item-set filter.
+//! Bank deposit/withdrawal используют positional bytes `11/12`.
 //! Goods destruction и equipment compose используют подтверждённые bytes
 //! `55/57`; Fairy
 //! grow/incubate/implantation/syncretize — tail `60..63` того же snapshot-а.
@@ -51,6 +52,14 @@ impl CLogSystem {
 
     pub(crate) fn goods_drop_to_region_log_enabled(&self) -> bool {
         self.setting(5)
+    }
+
+    pub(crate) fn goods_bank_set_log_enabled(&self) -> bool {
+        self.setting(11)
+    }
+
+    pub(crate) fn goods_bank_get_log_enabled(&self) -> bool {
+        self.setting(12)
     }
 
     pub(crate) fn is_log_item(&self, goods_id: i32) -> bool {
