@@ -63,7 +63,6 @@ pub(crate) struct SymbolCaptureLog<'a> {
     pub(crate) faction_id: i32,
     pub(crate) player_id: i32,
     pub(crate) symbol_id: i32,
-    pub(crate) recorded_faction_id: i32,
     pub(crate) union_id: i32,
 }
 
@@ -458,7 +457,6 @@ impl CServerWarRegion {
             faction_id: player.faction_id,
             player_id: contender.player_id,
             symbol_id: contender.id,
-            recorded_faction_id: contender.faction_id,
             union_id: player.union_id,
         });
         Ok(())

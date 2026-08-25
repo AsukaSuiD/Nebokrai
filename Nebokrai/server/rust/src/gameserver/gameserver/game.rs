@@ -4076,7 +4076,7 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CitySymbolCaptureLog {
+pub(crate) struct WarSymbolCaptureLog {
     pub(crate) war_number: i32,
     pub(crate) owned_faction_id: i32,
     pub(crate) owned_union_id: i32,
@@ -4084,7 +4084,6 @@ pub(crate) struct CitySymbolCaptureLog {
     pub(crate) faction_id: i32,
     pub(crate) player_id: i32,
     pub(crate) symbol_id: i32,
-    pub(crate) recorded_faction_id: i32,
     pub(crate) union_id: i32,
 }
 
@@ -4128,7 +4127,7 @@ pub(crate) enum CityRegionAiEffect {
         symbol_name: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
     },
-    CaptureLog(CitySymbolCaptureLog),
+    CaptureLog(WarSymbolCaptureLog),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4374,34 +4373,19 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
     }
 
     fn write_symbol_capture_logs(&mut self, capture: SymbolCaptureLog<'_>) {
-        let capture = CitySymbolCaptureLog {
-            war_number: capture.war_number,
-            owned_faction_id: capture.owned_faction_id,
-            owned_union_id: capture.owned_union_id,
-            faction_name: capture.faction_name.as_bytes().to_vec(),
-            faction_id: capture.faction_id,
-            player_id: capture.player_id,
-            symbol_id: capture.symbol_id,
-            recorded_faction_id: capture.recorded_faction_id,
-            union_id: capture.union_id,
-        };
-        self.runtime
-            .write_city_symbol_capture_log(self.game, self.region.id, &capture);
-        self.effects.push(CityRegionAiEffect::CaptureLog(capture));
+        self.game.write_war_symbol_capture_log(&capture);
+        self.effects
+            .push(CityRegionAiEffect::CaptureLog(WarSymbolCaptureLog {
+                war_number: capture.war_number,
+                owned_faction_id: capture.owned_faction_id,
+                owned_union_id: capture.owned_union_id,
+                faction_name: capture.faction_name.as_bytes().to_vec(),
+                faction_id: capture.faction_id,
+                player_id: capture.player_id,
+                symbol_id: capture.symbol_id,
+                union_id: capture.union_id,
+            }));
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct VillageSymbolCaptureLog {
-    pub(crate) war_number: i32,
-    pub(crate) owned_faction_id: i32,
-    pub(crate) owned_union_id: i32,
-    pub(crate) faction_name: Vec<u8>,
-    pub(crate) faction_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) symbol_id: i32,
-    pub(crate) recorded_faction_id: i32,
-    pub(crate) union_id: i32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4447,7 +4431,7 @@ pub(crate) enum VillageRegionAiEffect {
         symbol_name: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
     },
-    CaptureLog(VillageSymbolCaptureLog),
+    CaptureLog(WarSymbolCaptureLog),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4698,21 +4682,18 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
     }
 
     fn write_symbol_capture_logs(&mut self, capture: SymbolCaptureLog<'_>) {
-        let capture = VillageSymbolCaptureLog {
-            war_number: capture.war_number,
-            owned_faction_id: capture.owned_faction_id,
-            owned_union_id: capture.owned_union_id,
-            faction_name: capture.faction_name.as_bytes().to_vec(),
-            faction_id: capture.faction_id,
-            player_id: capture.player_id,
-            symbol_id: capture.symbol_id,
-            recorded_faction_id: capture.recorded_faction_id,
-            union_id: capture.union_id,
-        };
-        self.runtime
-            .write_village_symbol_capture_log(self.game, self.region.id, &capture);
+        self.game.write_war_symbol_capture_log(&capture);
         self.effects
-            .push(VillageRegionAiEffect::CaptureLog(capture));
+            .push(VillageRegionAiEffect::CaptureLog(WarSymbolCaptureLog {
+                war_number: capture.war_number,
+                owned_faction_id: capture.owned_faction_id,
+                owned_union_id: capture.owned_union_id,
+                faction_name: capture.faction_name.as_bytes().to_vec(),
+                faction_id: capture.faction_id,
+                player_id: capture.player_id,
+                symbol_id: capture.symbol_id,
+                union_id: capture.union_id,
+            }));
     }
 }
 
@@ -4993,18 +4974,6 @@ pub(crate) trait GameMainLoopRuntime:
         region: &mut CServerRegion,
         identity: ShapeIdentity,
     ) -> Option<Result<bool, RegionMembershipBlock>>;
-    fn write_city_symbol_capture_log(
-        &mut self,
-        game: &mut CGame,
-        region_id: i32,
-        capture: &CitySymbolCaptureLog,
-    );
-    fn write_village_symbol_capture_log(
-        &mut self,
-        game: &mut CGame,
-        region_id: i32,
-        capture: &VillageSymbolCaptureLog,
-    );
     fn wait(&mut self, duration_ms: u32);
     fn output_debug(&mut self, message: &'static str);
 }
@@ -16784,6 +16753,36 @@ impl CGame {
             .table()
             .get_string_by_id(id)
             .unwrap_or_default()
+    }
+
+    /// Exact tail `CServerWarRegion::OnContendTimeOver` RVA `0x001D3820`:
+    /// после owner mutation и обоих уведомлений пишет две bounded `0x100`
+    /// строки. `GS0242` повторяет текущий faction ID перед union ID.
+    fn write_war_symbol_capture_log(&self, capture: &SymbolCaptureLog<'_>) {
+        let header = format_legacy_mixed(
+            b"WarNum:%d,OwnedFac:%d,OwnedUnion:%d :",
+            &[
+                LegacyFormatArgument::Signed(capture.war_number),
+                LegacyFormatArgument::Signed(capture.owned_faction_id),
+                LegacyFormatArgument::Signed(capture.owned_union_id),
+            ],
+            0xff,
+        );
+        put_string_to_file("war", &header);
+
+        let detail = format_legacy_mixed(
+            self.get_string_by_id(b"GS0242"),
+            &[
+                LegacyFormatArgument::Bytes(capture.faction_name.as_bytes()),
+                LegacyFormatArgument::Signed(capture.faction_id),
+                LegacyFormatArgument::Signed(capture.player_id),
+                LegacyFormatArgument::Signed(capture.symbol_id),
+                LegacyFormatArgument::Signed(capture.faction_id),
+                LegacyFormatArgument::Signed(capture.union_id),
+            ],
+            0xff,
+        );
+        put_string_to_file("war", &detail);
     }
 
     pub(crate) const fn quest_system(&self) -> &CQuestSystem {
