@@ -569,11 +569,11 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 game.find_player(player_id)
                     .expect("stat-allocation player сохранён после mutation"),
             );
+            let _applied = game.apply_recomputed_player_properties(player_id, properties);
             let (wire, base_maximum_hp, base_maximum_mp) = {
                 let player = game
-                    .find_player_mut(player_id)
+                    .find_player(player_id)
                     .expect("stat-allocation player сохранён до property response");
-                player.apply_recomputed_combat_properties(properties);
                 let state = player.stat_allocation_state();
                 (
                     *player.combat_property_wire(),

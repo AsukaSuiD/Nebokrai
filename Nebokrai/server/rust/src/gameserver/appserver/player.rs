@@ -279,13 +279,14 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BURDEN_UPPER_LIMIT_CORRECTION, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2,
     GAP_CONSTITUTION_CORRECTION, GAP_DODGE_CORRECTION, GAP_ELEMENT_ATTACK_CORRECTION,
     GAP_ELEMENT_AVOID, GAP_ELEMENT_RESISTANCE_CORRECTION, GAP_FATAL_BLOW_RATE_CORRECTION,
-    GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL, GAP_GOODS_BIND, GAP_GOODS_LIFE_TYPE,
-    GAP_GOODS_PACKAGE_EXTENTION, GAP_HIT_RATE_CORRECTION, GAP_HP_RESTORE_SPEED_CORRECTION,
-    GAP_HP_UPPER_LIMIT_CORRECTION, GAP_MAXIMUM_ATTACK_CORRECTION, GAP_MINIMUM_ATTACK_CORRECTION,
-    GAP_MOUNT_LEVEL, GAP_MOUNT_TYPE, GAP_MP_RESTORE_SPEED_CORRECTION,
-    GAP_MP_UPPER_LIMIT_CORRECTION, GAP_PARTICULAR_ATTRIBUTE, GAP_REQUIRE_GENDER,
-    GAP_REQUIRE_OCCUPATION, GAP_ROLE_MINIMUM_AGILITY_LIMIT, GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT,
-    GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_ROLE_MINIMUM_STRENGTH_LIMIT, GAP_ROLE_MINIMUM_WAKAN_LIMIT,
+    GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL, GAP_GOODS_BIND, GAP_GOODS_EQUIMENT_FLASH,
+    GAP_GOODS_LIFE_TYPE, GAP_GOODS_MAXIMUM_DURABILITY, GAP_GOODS_PACKAGE_EXTENTION,
+    GAP_HIT_RATE_CORRECTION, GAP_HP_RESTORE_SPEED_CORRECTION, GAP_HP_UPPER_LIMIT_CORRECTION,
+    GAP_MAXIMUM_ATTACK_CORRECTION, GAP_MINIMUM_ATTACK_CORRECTION, GAP_MOUNT_LEVEL, GAP_MOUNT_TYPE,
+    GAP_MP_RESTORE_SPEED_CORRECTION, GAP_MP_UPPER_LIMIT_CORRECTION, GAP_PARTICULAR_ATTRIBUTE,
+    GAP_REQUIRE_GENDER, GAP_REQUIRE_OCCUPATION, GAP_ROLE_MINIMUM_AGILITY_LIMIT,
+    GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT, GAP_ROLE_MINIMUM_LEVEL_LIMIT,
+    GAP_ROLE_MINIMUM_STRENGTH_LIMIT, GAP_ROLE_MINIMUM_WAKAN_LIMIT,
     GAP_STIFFEN_PROBABILITY_CORRECTION, GAP_STRENGTH_CORRECTION, GAP_WAKAN_CORRECTION,
     GOODS_TYPE_CONSUMABLE,
 };
@@ -1873,6 +1874,9 @@ pub(crate) struct CPlayer {
     war_soul_visual_x_bits: u32,
     war_soul_visual_y_bits: u32,
     current_ticket: u32,
+    flash_previous: [u32; 17],
+    flash_current: [u32; 17],
+    flash_changed: bool,
     battle_fairy_summoned: bool,
     recreate_carriage: bool,
     create_faction_operator: bool,
@@ -2159,6 +2163,9 @@ impl CPlayer {
             war_soul_visual_x_bits: 0.0f32.to_bits(),
             war_soul_visual_y_bits: 0.0f32.to_bits(),
             current_ticket: 0,
+            flash_previous: [0; 17],
+            flash_current: [0; 17],
+            flash_changed: false,
             battle_fairy_summoned: false,
             recreate_carriage: false,
             create_faction_operator: false,
@@ -4156,7 +4163,7 @@ impl CPlayer {
                 usize::from(self.base_properties.occupation).min(2),
             );
         }
-        self.apply_recomputed_combat_properties(properties);
+        self.apply_recomputed_combat_properties(properties, goods_factory);
     }
 
     pub(crate) fn add_extended_state(
@@ -4898,6 +4905,7 @@ impl CPlayer {
     pub(crate) fn apply_recomputed_combat_properties(
         &mut self,
         properties: PlayerCombatProperties,
+        goods_factory: &CGoodsFactory,
     ) {
         self.combat_properties = properties;
         let write_u16 = |wire: &mut [u8], offset: usize, value: u16| {
@@ -4994,6 +5002,63 @@ impl CPlayer {
             0x6c,
             properties.critical_rate_bits,
         );
+        self.refresh_equipment_flash(goods_factory);
+    }
+
+    /// `MountAllEquip -> SetCurFlash`: пересобирает 17 flash-ячеек после
+    /// каждого полного property commit. Исторический system clock заменён
+    /// `SystemTime`; damaged equipment намеренно сохраняет прежнее значение,
+    /// потому что original loop пропускает `SetCurFlash` для нулевой прочности.
+    fn refresh_equipment_flash(&mut self, factory: &CGoodsFactory) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_secs() as u32);
+        for position in 0..17usize {
+            let Some(goods) = self.equipment.get_goods(position as u32) else {
+                self.flash_current[position] = 0;
+                self.flash_changed = true;
+                continue;
+            };
+            if goods.query_attribute(GAP_GOODS_MAXIMUM_DURABILITY)
+                && goods.addon_property_value(factory, GAP_GOODS_MAXIMUM_DURABILITY, 2) < 1
+            {
+                continue;
+            }
+            let flash = if goods.query_attribute(GAP_GOODS_LIFE_TYPE) {
+                match goods.addon_property_value(factory, GAP_GOODS_EQUIMENT_FLASH, 2) {
+                    1 => {
+                        let expiry = goods
+                            .start_point(factory)
+                            .wrapping_add(u64::from(goods.goods_lifetime(factory)));
+                        if (expiry >> 32) as i32 == 0 && expiry as u32 <= now {
+                            0
+                        } else {
+                            goods.addon_property_value(factory, GAP_GOODS_EQUIMENT_FLASH, 1) as u32
+                        }
+                    }
+                    2 => goods.addon_property_value(factory, GAP_GOODS_EQUIMENT_FLASH, 1) as u32,
+                    _ => continue,
+                }
+            } else {
+                goods.addon_property_value(factory, GAP_GOODS_EQUIMENT_FLASH, 1) as u32
+            };
+            self.flash_current[position] = flash;
+            self.flash_changed = true;
+        }
+    }
+
+    /// `DoneFlash` забирает один pending snapshot и одновременно продвигает
+    /// previous-table. Повторный tick без нового `MountAllEquip` ничего не шлёт.
+    pub(crate) fn take_flash_update(&mut self) -> Option<[(u32, u32); 17]> {
+        if !self.flash_changed {
+            return None;
+        }
+        let pairs = std::array::from_fn(|position| {
+            (self.flash_previous[position], self.flash_current[position])
+        });
+        self.flash_previous = self.flash_current;
+        self.flash_changed = false;
+        Some(pairs)
     }
 
     pub(crate) const fn stat_allocation_state(&self) -> PlayerStatAllocationState {
@@ -7237,7 +7302,7 @@ impl CPlayer {
             }
             if player_effects.recompute_without_removed_slot {
                 let properties = recompute_properties(self);
-                self.apply_recomputed_combat_properties(properties);
+                self.apply_recomputed_combat_properties(properties, factory);
                 effects.push(
                     PlayerEquipmentRemoveEffect::PropertiesChangedWithoutRemovedSlot {
                         column: removed.event.column,
@@ -7332,7 +7397,7 @@ impl CPlayer {
             }
             if player_effects.recompute_properties {
                 let properties = recompute_properties(self);
-                self.apply_recomputed_combat_properties(properties);
+                self.apply_recomputed_combat_properties(properties, factory);
                 effects.push(PlayerEquipmentAddEffect::PropertiesChanged {
                     combat_properties: self.combat_properties,
                 });
@@ -7513,9 +7578,10 @@ impl CPlayer {
         }
     }
 
-    /// Владеющая state/container середина оставшегося `CPlayer::AI` tail. GoodsAI,
-    /// Flash и TaoZhuang остаются у своих runtime owner-ов; ticket и packet
-    /// expansion принадлежат самому player-у и меняются между ними.
+    /// Владеющая state/container середина оставшегося `CPlayer::AI` tail.
+    /// GoodsAI и TaoZhuang остаются у runtime owner-ов; ticket и packet
+    /// expansion принадлежат самому player-у и меняются между ними. Flash
+    /// завершается соседним concrete `CGame::DoneFlash` caller-ом.
     pub(crate) fn advance_ai_ticket_and_packet(
         &mut self,
         pack_add_enabled: bool,

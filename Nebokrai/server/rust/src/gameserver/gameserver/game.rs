@@ -18,6 +18,9 @@
 //! остаётся только у ещё не материализованных virtual/disconnect owners.
 //! После live/dead war-soul ветви тот же caller сохраняет GoodsAI/delete,
 //! wrapping ticket, packet expansion, Flash и инвертированный TaoZhuang gate.
+//! `MountAllEquip` обновляет две exact 17-DWORD flash-таблицы при каждом
+//! property commit, а `DoneFlash` публикует pending `0xBF73B` через live
+//! region around-route без внешнего MainLoop callback-а.
 //! Country virtual slot вызывает concrete contender AI через CGame adapter:
 //! canonical player state, `0xBFF28/29`, region notice и top-info не уходят в
 //! отдельный runtime snapshot.
@@ -1591,14 +1594,22 @@ pub(crate) struct PlayerPeriodicalUpdateReport {
     pub(crate) fairy_hatcher: Option<FairyHatcherRunReport>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAiTailReport {
     pub(crate) player_id: i32,
     pub(crate) goods_ai_ran: bool,
     pub(crate) current_ticket: u32,
     pub(crate) packet_expansion_applied: Option<u32>,
-    pub(crate) flash_ran: bool,
+    pub(crate) flash_update: Option<PlayerFlashUpdateReport>,
     pub(crate) tao_zhuang_ran: bool,
+}
+
+#[must_use = "DoneFlash report сохраняет 17 пар и around delivery"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerFlashUpdateReport {
+    pub(crate) player_id: i32,
+    pub(crate) pairs: [(u32, u32); 17],
+    pub(crate) delivery: Option<Result<i32, ShapeCoordinateBlock>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4944,7 +4955,6 @@ pub(crate) trait GameMainLoopRuntime:
     /// Точная соседняя пара `DoneGoodsAiTree -> DoneDelList`; вызывается только
     /// при live `bGoodsAi` до ticket increment.
     fn player_done_goods_ai_and_delete_list(&mut self, game: &mut CGame, player_id: i32);
-    fn player_done_flash(&mut self, game: &mut CGame, player_id: i32);
     fn player_done_tao_zhuang(&mut self, game: &mut CGame, player_id: i32);
     /// Concrete ground-goods owner шлёт around delete и ставит `CS_DELETE`.
     fn expire_area_ground_goods(
@@ -6277,6 +6287,19 @@ impl CGame {
 
     pub(crate) const fn goods_factory_mut(&mut self) -> &mut CGoodsFactory {
         &mut self.goods_factory
+    }
+
+    pub(crate) fn apply_recomputed_player_properties(
+        &mut self,
+        player_id: i32,
+        properties: PlayerCombatProperties,
+    ) -> bool {
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        let Some(player) = players.get_mut(&player_id) else {
+            return false;
+        };
+        player.apply_recomputed_combat_properties(properties, goods_factory);
+        true
     }
 
     pub(crate) fn decode_auction_goods(&self, source: &[u8]) -> Result<CGoods, GoodsDecodeError> {
@@ -15910,7 +15933,7 @@ impl CGame {
         self.players
             .get_mut(&player_id)
             .expect("script-player сохранён между write и UpdateProperty")
-            .apply_recomputed_combat_properties(recomputed);
+            .apply_recomputed_combat_properties(recomputed, &self.goods_factory);
 
         let player = self
             .players
@@ -15953,7 +15976,7 @@ impl CGame {
         self.players
             .get_mut(&player_id)
             .expect("named script-player сохранён до ChangePlayer UpdateProperty")
-            .apply_recomputed_combat_properties(recomputed);
+            .apply_recomputed_combat_properties(recomputed, &self.goods_factory);
         let player = self
             .players
             .get(&player_id)
@@ -15989,7 +16012,7 @@ impl CGame {
         self.players
             .get_mut(&player_id)
             .expect("named script-player сохранён до UpdateProperty")
-            .apply_recomputed_combat_properties(recomputed);
+            .apply_recomputed_combat_properties(recomputed, &self.goods_factory);
         let player = self
             .players
             .get(&player_id)
@@ -16182,9 +16205,11 @@ impl CGame {
                     .expect("realm skill mutation сохраняет canonical player");
                 context.recompute_realm_appellation_player_properties(player)
             };
-            self.find_player_mut(target_id)
+            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+            players
+                .get_mut(&target_id)
                 .expect("realm skill recompute сохраняет canonical player")
-                .apply_recomputed_combat_properties(current_properties);
+                .apply_recomputed_combat_properties(current_properties, goods_factory);
             if previous_properties != current_properties {
                 if let Some(player) = self.find_player(target_id) {
                     let _ = self.send_player_properties_changed(player);
@@ -23892,9 +23917,11 @@ impl CGame {
                 .expect("realm mutation сохраняет canonical player");
             context.recompute_realm_appellation_player_properties(player)
         };
-        self.find_player_mut(player_id)
+        let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+        players
+            .get_mut(&player_id)
             .expect("realm recompute сохраняет canonical player")
-            .apply_recomputed_combat_properties(current_properties);
+            .apply_recomputed_combat_properties(current_properties, goods_factory);
         if mutation.previous_properties != current_properties {
             if let Some(player) = self.find_player(player_id) {
                 let _ = self.send_player_properties_changed(player);
@@ -27713,8 +27740,8 @@ impl CGame {
     }
 
     /// Точный остаток `CPlayer::AI` после live/dead war-soul ветви.
-    /// Feature gates принадлежат live GlobeSetup, ticket/packet — CPlayer, а
-    /// ещё не перенесённые GoodsAI/Flash/TaoZhuang owners вызываются в
+    /// Feature gates принадлежат live GlobeSetup, ticket/packet/Flash —
+    /// CPlayer, а ещё не перенесённые GoodsAI/TaoZhuang owners вызываются в
     /// подтверждённом порядке через тот же main-loop runtime.
     pub(crate) fn run_player_ai_tail<Runtime: GameMainLoopRuntime>(
         &mut self,
@@ -27730,7 +27757,7 @@ impl CGame {
         let (current_ticket, packet_expansion_applied) = self
             .find_player_mut(player_id)?
             .advance_ai_ticket_and_packet(pack_add_enabled);
-        runtime.player_done_flash(self, player_id);
+        let flash_update = self.done_player_flash(player_id);
         let tao_zhuang_ran = !self.globe_setup.tao_zhuang_modify_enabled();
         if tao_zhuang_ran {
             runtime.player_done_tao_zhuang(self, player_id);
@@ -27740,8 +27767,34 @@ impl CGame {
             goods_ai_ran,
             current_ticket,
             packet_expansion_applied,
-            flash_ran: true,
+            flash_update,
             tao_zhuang_ran,
+        })
+    }
+
+    /// `DoneFlash`: pending property snapshot становится exact `0xBF73B` и
+    /// доходит до canonical region around-route; пустой tick ничего не шлёт.
+    fn done_player_flash(&mut self, player_id: i32) -> Option<PlayerFlashUpdateReport> {
+        let pairs = self.players.get_mut(&player_id)?.take_flash_update()?;
+        let mut message = CMessage::new(0x000b_f73b);
+        message.add_long(player_id);
+        message.add_ulong(17);
+        for (previous, current) in pairs {
+            message.add_ulong(previous);
+            message.add_ulong(current);
+        }
+        let delivery = self.find_player(player_id).and_then(|player| {
+            player
+                .server_region_id()
+                .and_then(|region_id| self.find_region(region_id))
+                .map(|region| {
+                    self.send_battle_fairy_around(region.base(), player.shape(), &message)
+                })
+        });
+        Some(PlayerFlashUpdateReport {
+            player_id,
+            pairs,
+            delivery,
         })
     }
 

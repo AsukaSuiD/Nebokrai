@@ -1025,6 +1025,10 @@ impl CGoods {
         self.addon_property_value(factory, GAP_GOODS_LIFE_TYPE, 2) as u32
     }
 
+    pub(crate) fn goods_lifetime(&self, factory: &CGoodsFactory) -> u32 {
+        self.addon_property_value(factory, GAP_GOODS_LIFE_TYPE, 1) as u32
+    }
+
     pub(crate) fn start_point(&self, factory: &CGoodsFactory) -> u64 {
         let high = self.addon_property_value(factory, GAP_GOODS_START_POINT, 1) as u32;
         let low = self.addon_property_value(factory, GAP_GOODS_START_POINT, 2) as u32;

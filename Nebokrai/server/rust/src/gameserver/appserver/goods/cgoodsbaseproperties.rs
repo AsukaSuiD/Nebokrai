@@ -209,6 +209,7 @@ pub(crate) const GAP_BF_CUT_HURT_ADDON: i32 = 227;
 pub(crate) const GAP_BF_DEFUALT_SKLL: i32 = 228;
 pub(crate) const GAP_GOODS_LIFE_TYPE: i32 = 229;
 pub(crate) const GAP_GOODS_START_POINT: i32 = 230;
+pub(crate) const GAP_GOODS_EQUIMENT_FLASH: i32 = 231;
 pub(crate) const GAP_GOODS_PACKAGE_EXTENTION: i32 = 234;
 pub(crate) const ICON_TYPE_GROUND: i32 = 1;
 
