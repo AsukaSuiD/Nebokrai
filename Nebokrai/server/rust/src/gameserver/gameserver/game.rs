@@ -537,8 +537,8 @@ use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE, GAP_BF_CURRENT_MAX_EXP, GAP_BF_DEFUALT_SKLL, GAP_BF_HP,
     GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAX_MP, GAP_BF_MODULE,
-    GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_EQUIP_STATE, GAP_GOODS_BIND,
-    GAP_GOODS_PACKAGE_EXTENTION, GAP_PARTICULAR_ATTRIBUTE, GAP_WEAPON_DAMAGE_LEVEL,
+    GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_CIQING_PROPERTY1, GAP_EQUIP_STATE,
+    GAP_GOODS_BIND, GAP_GOODS_PACKAGE_EXTENTION, GAP_PARTICULAR_ATTRIBUTE, GAP_WEAPON_DAMAGE_LEVEL,
     GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
@@ -2434,6 +2434,15 @@ pub(crate) struct CiQingGoodsPreview {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CiQingGoodsQueryReport {
     pub(crate) player_id: i32,
+    pub(crate) previews: Vec<CiQingGoodsPreview>,
+}
+
+#[must_use = "сценарное открытие предмета CiQing хранит изменение списка и все отправки"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingScriptItemReport {
+    pub(crate) player_id: i32,
+    pub(crate) base_index: u32,
+    pub(crate) inserted: bool,
     pub(crate) previews: Vec<CiQingGoodsPreview>,
 }
 
@@ -20960,6 +20969,75 @@ impl CGame {
             player_id,
             previews,
         })
+    }
+
+    /// Сценарный `PushItemToCiQing` добавляет только подтверждённый базовый
+    /// предмет татуировки и затем заново публикует весь упорядоченный список.
+    pub(crate) fn push_script_ci_qing_item<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        original_name: &[u8],
+        context: &mut Context,
+    ) -> Option<CiQingScriptItemReport> {
+        let base_index = self
+            .goods_factory
+            .query_goods_id_by_original_name(Some(original_name));
+        if base_index == 0
+            || !self
+                .goods_factory
+                .query_goods_base_properties(base_index)
+                .is_some_and(|properties| properties.has_addon_property(GAP_CIQING_PROPERTY1))
+        {
+            return None;
+        }
+        let inserted = self
+            .find_player_mut(player_id)?
+            .restore_ci_qing_entry(base_index);
+        let base_indices: Vec<_> = self.find_player(player_id)?.ci_qing_list().collect();
+        let mut previews = Vec::with_capacity(base_indices.len());
+        for base_index in base_indices {
+            let created = {
+                let (random_state, goods_factory, fairy_exp_conf, battle_fairy_exp_config) = (
+                    &mut self.random_state,
+                    &self.goods_factory,
+                    &self.fairy_exp_conf,
+                    &self.battle_fairy_exp_config,
+                );
+                let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+                goods_factory.create_goods(
+                    base_index,
+                    &mut random,
+                    || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                    |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
+                    |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
+                )
+            };
+            let Some(goods) = created else {
+                continue;
+            };
+            let old_client_payload = context.encode_goods_for_old_client(&goods);
+            let mut message = CMessage::new(0x0c_010c);
+            message.base_mut().add(&old_client_payload);
+            let delivery = message.send_to_player(self.net_server(), player_id);
+            previews.push(CiQingGoodsPreview {
+                base_index,
+                old_client_payload,
+                delivery,
+            });
+        }
+        Some(CiQingScriptItemReport {
+            player_id,
+            base_index,
+            inserted,
+            previews,
+        })
+    }
+
+    pub(crate) fn open_script_ci_qing_page(&mut self, player_id: i32) -> Option<i32> {
+        self.find_player_mut(player_id)?.set_ci_qing_open(true);
+        let mut message = CMessage::new(0x000c_0112);
+        message.add_long(1);
+        Some(message.send_to_player(self.net_server(), player_id))
     }
 
     /// Global setup query `goodsmessage 0x8FC30`; serialization block не

@@ -112,6 +112,10 @@
 //! цепочке GameServer → WorldServer → LoginServer, получает до 256 действующих
 //! блокировок, продолжает только ожидающую функцию `5106` и публикует строки
 //! клиенту; отказ и десятисекундный тайм-аут возвращают `-1`.
+//! Связка `OpenCiQingPage 9628` и `PushItemToCiQing 9629` использует
+//! канонические состояние игрока, фабрику предметов и кодек старого клиента:
+//! открытие отправляет `0xC0112`, а подтверждённый предмет с дополнением `243`
+//! сохраняется в списке и публикует весь упорядоченный набор через `0xC010C`.
 //! PreciousBox `2221/2222/2237` сохраняет trusted action-script у player,
 //! client open/result/close wire, общий Game RNG, configuration roll,
 //! goods factory/upgrade/packet ownership и optional World announcement;
@@ -300,6 +304,8 @@ use crate::setup::leitingsetup::{CThingSetup, LeiTingLocalTime};
 
 pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
 pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
+pub(crate) const SCRIPT_FUNCTION_OPEN_CI_QING_PAGE: i32 = 9628;
+pub(crate) const SCRIPT_FUNCTION_PUSH_ITEM_TO_CI_QING: i32 = 9629;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_UPGRADE: i32 = 2216;
 pub(crate) const SCRIPT_FUNCTION_OPEN_PRECIOUS_BOX: i32 = 2221;
@@ -3559,6 +3565,11 @@ pub(crate) fn script_function_parameter_kind(
             1 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_OPEN_CI_QING_PAGE => Unused,
+        SCRIPT_FUNCTION_PUSH_ITEM_TO_CI_QING => match index {
+            0 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS => match index {
             0 => Integer,
             _ => Unused,
@@ -6225,6 +6236,19 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 Ok(1) => ScriptFunctionDispatchOutcome::Yielded { legacy_return: -1 },
                 _ => ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 },
             })
+        }
+        SCRIPT_FUNCTION_OPEN_CI_QING_PAGE => {
+            if argument_count != 0 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let _ = game.open_script_ci_qing_page(player_id);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_PUSH_ITEM_TO_CI_QING => {
+            if let Some(original_name) = string_arguments[0].filter(|value| !value.is_empty()) {
+                let _ = game.push_script_ci_qing_item(player_id, original_name, runtime);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_GET_COPY_NUMBER => {
             let Some(increment_flag) = integer_arguments[0].filter(|value| matches!(value, 0 | 1))
