@@ -32,8 +32,9 @@
 //! `CGame`; runtime сохраняет только ещё не материализованный region-AI tail.
 //! После virtual region AI тот же caller применяет ordered `CS_CHANGEAREA` для
 //! canonical players и owned monsters/NPC до change-region/ClearPlayer tail.
-//! Перед area queue он завершает staged owned monster/NPC deletion; player
-//! deletion остаётся в очереди до полного CPlayer/session lifecycle owner-а.
+//! Перед area queue он завершает staged player/monster/NPC deletion. Для
+//! player-а это exact post-OnLost tail: region removal, map erase и Rust drop
+//! без повторного session/logout callback-а.
 //!
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
@@ -22367,6 +22368,22 @@ impl CGame {
             let mut deletions = Vec::new();
             for identity in staged_deletions {
                 let result = match identity.object_type {
+                    PLAYER_TYPE => self.players.remove(&identity.id).map(|mut player| {
+                        let facts = ShapeRuntimeFacts {
+                            is_player: true,
+                            is_move_shape: true,
+                            figure: player.figure(),
+                            ..ShapeRuntimeFacts::default()
+                        };
+                        let result = owner
+                            .base_mut()
+                            .remove_object(player.movement_shape_mut(), facts)
+                            .map(|()| true);
+                        if result.is_err() {
+                            self.players.insert(identity.id, player);
+                        }
+                        result
+                    }),
                     MONSTER_TYPE => {
                         let figure = area_resolver
                             .resolve_shape(identity)

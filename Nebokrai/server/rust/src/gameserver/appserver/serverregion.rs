@@ -57,8 +57,8 @@
 //! `m_listDeleteShape` теперь также имеет typed ordered identity storage:
 //! Nation clear напрямую ставит туда sleeping monsters, которых active AI
 //! scan не видит, сохраняя pointer-unique append исходника. CGame после scan
-//! выполняет `RemoveObject` и освобождает owned monster/NPC; player identities
-//! сохраняются до отдельного полного player/session deletion lifecycle.
+//! выполняет `RemoveObject` и освобождает player/monster/NPC owners; player
+//! ветвь является post-OnLost tail и не повторяет session callbacks.
 //! GM `0x7FC07` использует identity snapshot registry для проверки, что каждый
 //! потенциально более ранний `GetShape` candidate разрешим runtime owner-ом;
 //! неразрешённый goods/other shape блокирует сценарий до ложного player match.
