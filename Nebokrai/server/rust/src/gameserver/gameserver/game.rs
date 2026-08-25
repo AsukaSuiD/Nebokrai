@@ -26417,6 +26417,29 @@ impl CGame {
         Some(report)
     }
 
+    /// Exact virtual `CPlayer::UpdateProperty` caller из `goodsmessage
+    /// 0x8FC2E`: recompute меняет canonical combat snapshot,
+    /// `OnChangeProperties` публикует `0xBF721`, затем активный
+    /// `bTaoZhuangModify` запускает reached set-completion owner.
+    pub(crate) fn refresh_battle_fairy_player_property<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<(i32, bool)> {
+        let properties = self
+            .find_player(player_id)
+            .map(|player| context.recompute_enhancement_player_properties(player))?;
+        if !self.apply_recomputed_player_properties(player_id, properties) {
+            return None;
+        }
+        let property_delivery = self
+            .find_player(player_id)
+            .map(|player| self.send_player_properties_changed(player))?;
+        let tao_zhuang_ran =
+            self.globe_setup.tao_zhuang_modify_enabled() && self.done_player_tao_zhuang(player_id);
+        Some((property_delivery, tao_zhuang_ran))
+    }
+
     fn deliver_battle_fairy_summon_effects(&mut self, report: &mut BattleFairySummonReport) {
         for effect in report.effects.clone() {
             match effect {

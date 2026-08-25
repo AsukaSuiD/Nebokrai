@@ -18,7 +18,8 @@
 //! attach и World ack завершают Message-stage до диалога, а client reply на
 //! `TalkBoxSmall` позднее ведёт к canonical `AddSkillBF` mutation.
 //! `0x8FC2E` читает два GUID, выполняет exact four-container lookup и только
-//! для найденного goods вызывает обязательный virtual property runtime.
+//! для найденного goods замыкает `UpdateProperty`: equipment recompute,
+//! canonical player state, `0xBF721` и conditional `DoneTaoZhuang`.
 //! Парные `0x8FC2F/0x8FC30` публикуют ordered CiQing goods preview и global
 //! setup; первый непустой preview сохраняет ранний return исходного EXE.
 //! `0x8FC31` продолжает тот же owner полным make-проходом: оба feature gate-а
@@ -159,7 +160,6 @@ pub(crate) trait GameGoodsMessageRuntime:
     + FairyContext
     + SynthesisContext
 {
-    fn update_battle_fairy_player_property(&mut self, game: &mut CGame, player_id: i32);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -188,7 +188,10 @@ pub(crate) struct BattleFairyScriptResetReport {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BattleFairyPropertyRefreshOutcome {
     MissingGoods,
-    UpdateDispatched,
+    Updated {
+        property_delivery: i32,
+        tao_zhuang_ran: bool,
+    },
 }
 
 #[must_use = "property refresh report сохраняет оба GUID и virtual update result"]
@@ -922,8 +925,13 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 .find_player(player_id)
                 .is_some_and(|player| player.get_goods_by_id(goods_guid).is_some());
             let outcome = if goods_exists {
-                runtime.update_battle_fairy_player_property(game, player_id);
-                BattleFairyPropertyRefreshOutcome::UpdateDispatched
+                let (property_delivery, tao_zhuang_ran) = game
+                    .refresh_battle_fairy_player_property(player_id, runtime)
+                    .expect("0x8FC2E player сохранён после four-container lookup");
+                BattleFairyPropertyRefreshOutcome::Updated {
+                    property_delivery,
+                    tao_zhuang_ran,
+                }
             } else {
                 BattleFairyPropertyRefreshOutcome::MissingGoods
             };
