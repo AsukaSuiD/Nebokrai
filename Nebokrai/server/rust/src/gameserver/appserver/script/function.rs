@@ -1,4 +1,4 @@
-//! Script-function dispatcher исторического GameServer.
+//! Диспетчер сценарных функций исторического GameServer.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/script/function.cpp`. Из dense dispatcher-а
@@ -483,12 +483,18 @@ pub(crate) const SCRIPT_FUNCTION_RECREATE_GOODS_ADDON_PROPERTIES: i32 = 2230;
 pub(crate) const SCRIPT_FUNCTION_GET_DIED_MONSTER_INDEX: i32 = 2240;
 pub(crate) const SCRIPT_FUNCTION_GET_DIED_MONSTER_ORIGINAL_NAME: i32 = 2241;
 pub(crate) const SCRIPT_FUNCTION_GET_DIED_MONSTER_LEVEL: i32 = 2242;
+pub(crate) const SCRIPT_FUNCTION_GET_TEAM_NUM: i32 = 2302;
+pub(crate) const SCRIPT_FUNCTION_GET_TEAMER_NAME: i32 = 2303;
 pub(crate) const SCRIPT_FUNCTION_ADD_INFO: i32 = 2305;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX: i32 = 2307;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX_SMALL: i32 = 2324;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS_LOG: i32 = 2313;
+pub(crate) const SCRIPT_FUNCTION_SET_REGION_FOR_TEAM: i32 = 2310;
+pub(crate) const SCRIPT_FUNCTION_SET_TEAM_REGION: i32 = 2311;
+pub(crate) const SCRIPT_FUNCTION_IS_TEAMMATES_AROUND_ME: i32 = 2312;
 pub(crate) const SCRIPT_FUNCTION_SCRIPT_IS_RUNNING: i32 = 2316;
 pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
+pub(crate) const SCRIPT_FUNCTION_IS_TEAM_CAPTAIN: i32 = 2325;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
 pub(crate) const SCRIPT_FUNCTION_ADD_INCREMENT_LOG: i32 = 2570;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
@@ -3291,7 +3297,7 @@ pub(crate) fn dispatch_script_string_function(
     script_player_id: Option<i32>,
     died_monster_index: Option<u32>,
     function_id: i32,
-    evaluated_player_id: Option<i32>,
+    evaluated_integer: Option<i32>,
     evaluated_string: Option<&[u8]>,
 ) -> ScriptStringFunctionDispatchOutcome {
     if function_id == SCRIPT_FUNCTION_GET_STRING_BY_ID {
@@ -3316,8 +3322,16 @@ pub(crate) fn dispatch_script_string_function(
             .map_or(&[][..], |properties| properties.original_name.as_slice());
         return ScriptStringFunctionDispatchOutcome::Handled(value.to_vec());
     }
+    if function_id == SCRIPT_FUNCTION_GET_TEAMER_NAME {
+        let position = evaluated_integer.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+        let value = script_player_id
+            .filter(|_| position != SCRIPT_INT_PARAMETER_ERROR)
+            .map(|player_id| game.script_team_member_name(player_id, position))
+            .unwrap_or_default();
+        return ScriptStringFunctionDispatchOutcome::Handled(value);
+    }
     if function_id == SCRIPT_FUNCTION_GET_NAME {
-        let requested = evaluated_player_id.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+        let requested = evaluated_integer.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
         let player_id = if requested == SCRIPT_INT_PARAMETER_ERROR {
             let Some(player_id) = script_player_id else {
                 return ScriptStringFunctionDispatchOutcome::Invalid;
@@ -3371,8 +3385,17 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_CHECK_LEVEL
         | SCRIPT_FUNCTION_GET_ENERGY
         | SCRIPT_FUNCTION_GET_MAXIMUM_ENERGY => Unused,
-        SCRIPT_FUNCTION_GET_NAME => match index {
+        SCRIPT_FUNCTION_GET_NAME | SCRIPT_FUNCTION_GET_TEAMER_NAME => match index {
             0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_TEAM_NUM | SCRIPT_FUNCTION_IS_TEAM_CAPTAIN => Unused,
+        SCRIPT_FUNCTION_IS_TEAMMATES_AROUND_ME => match index {
+            0 | 1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_SET_REGION_FOR_TEAM | SCRIPT_FUNCTION_SET_TEAM_REGION => match index {
+            0..=5 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_PLAYER_TALK => match index {
@@ -6353,6 +6376,68 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     runtime,
                 ),
             })
+        }
+        SCRIPT_FUNCTION_GET_TEAM_NUM => {
+            if argument_count != 0 || script_player_id.is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.script_team_member_count(player_id),
+            })
+        }
+        SCRIPT_FUNCTION_IS_TEAM_CAPTAIN => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: script_player_id
+                .map_or(-1, |player_id| game.script_is_team_captain(player_id)),
+        }),
+        SCRIPT_FUNCTION_IS_TEAMMATES_AROUND_ME => {
+            let check_type = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .unwrap_or_default();
+            let radius = integer_arguments[1]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .unwrap_or(3);
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: script_player_id.map_or(0, |player_id| {
+                    i32::from(game.script_are_teammates_around(player_id, check_type, radius))
+                }),
+            })
+        }
+        SCRIPT_FUNCTION_SET_REGION_FOR_TEAM => {
+            let integer =
+                |index: usize| integer_arguments[index].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.script_set_region_for_team(
+                    player_id,
+                    integer(0),
+                    integer(1),
+                    integer(2),
+                    integer(3),
+                    integer(4),
+                    integer(5),
+                    runtime,
+                ),
+            })
+        }
+        SCRIPT_FUNCTION_SET_TEAM_REGION => {
+            let integer =
+                |index: usize| integer_arguments[index].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            if integer(0) == SCRIPT_INT_PARAMETER_ERROR {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let Some(player_id) = script_player_id else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            game.script_set_team_region(
+                player_id,
+                integer(0),
+                integer(1),
+                integer(2),
+                integer(3),
+                integer(4),
+                integer(5),
+                runtime,
+            );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_CHANGE_REGION => {
             let Some(target_region_id) =

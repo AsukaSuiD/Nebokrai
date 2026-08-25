@@ -1,38 +1,41 @@
-//! Script resource registry GameServer.
+//! Реестр сценарных ресурсов GameServer.
 //!
-//! `CScript::LoadFunction(nullptr, data)` из точного EXE/PDB читает
-//! непрерывный `FunctionList`, преобразует caption через `atoi` и сохраняет
-//! text → numeric ID в ordered `std::map`. `BTreeMap` является прямой safe
-//! заменой lookup/order semantics. Owned `ActiveScript` сохраняет source,
-//! cursor, player/NPC/region context и переменные между стадиями главного
-//! цикла; `call` создаёт отдельный instance, а `TalkBox` возобновляется ответом
-//! клиента через тот же script ID. Path/player lookup и remove поддерживают
-//! также текущий вынутый из map instance; async function внутри expression
-//! сохраняет cursor и единожды потребляет continuation result при replay.
-//! Аргументный проход хранит 12 позиций: это подтверждённая граница достигнутого
-//! `CreateNpc`, поэтому region/show/lifetime вычисляются тем же evaluator-ом, а
-//! не восстанавливаются формальным wrapper-ом после dispatcher-а.
-//! `MonsterTalk 3304` сохраняет отдельный exact порядок выражений `text ->
-//! name` и намеренно не вычисляет хвост команды.
-//! `PlayerMessage 3308` вычисляет message type только после успешно
-//! вычисленного explicit color, сохраняя short-circuit исходного owner-а.
-//! `GetMonsterRefeashTime 8101` вычисляет только region/refresh pair, берёт
-//! clock после успешного region lookup и читает live refresh setup того же
-//! `CServerRegion`, который обновляет periodic monster AI.
-//! Metadata/progression group `5411/5412/5414/5420` читает единый загруженный
-//! `CPlayerList`, current player EXP и startup IDs; аргументы, которых exact
-//! selector не касается, VM не вычисляет.
-//! `wait 6` и `RunTime 22` хранят срок ожидания в том же `ActiveScript`:
-//! первый продолжает выполнение с сохранённой позиции, второй раз в секунду
+//! `CScript::LoadFunction(nullptr, data)` из точной пары EXE/PDB читает
+//! непрерывный `FunctionList`, преобразует подпись через `atoi` и сохраняет
+//! соответствие текста числовому идентификатору в упорядоченном `std::map`.
+//! `BTreeMap` сохраняет наблюдаемые правила поиска и порядка. Принадлежащий
+//! среде экземпляр `ActiveScript` хранит исходный текст, позицию, контекст
+//! игрока, NPC и региона, а также переменные между стадиями главного цикла.
+//! `call` создаёт отдельный экземпляр, а `TalkBox` возобновляется ответом
+//! клиента через тот же идентификатор сценария. Поиск и удаление по пути или
+//! игроку учитывают и текущий экземпляр, временно вынутый из карты. Асинхронная
+//! функция внутри выражения сохраняет позицию и при повторном проходе один раз
+//! потребляет результат продолжения.
+//!
+//! Проход аргументов хранит 12 позиций — подтверждённую границу достигнутого
+//! `CreateNpc`. Поэтому регион, видимость и срок жизни вычисляет тот же
+//! вычислитель выражений до входа в диспетчер. `MonsterTalk 3304` сохраняет
+//! отдельный порядок выражений `text -> name` и намеренно не вычисляет хвост
+//! команды. `PlayerMessage 3308` вычисляет тип сообщения только после успешно
+//! вычисленного явного цвета, сохраняя раннее прекращение исходного владельца.
+//! `GetMonsterRefeashTime 8101` вычисляет только пару региона и обновления,
+//! получает время после успешного поиска региона и читает действующую
+//! настройку того же `CServerRegion`, который обновляет периодический ИИ
+//! монстров. Группа `5411/5412/5414/5420` читает единый загруженный
+//! `CPlayerList`, текущий опыт игрока и начальные идентификаторы; виртуальная
+//! машина не вычисляет аргументы, которых не касается точный selector.
+//!
+//! `wait 6` и `RunTime 22` хранят срок ожидания в том же `ActiveScript`.
+//! Первый продолжает выполнение с сохранённой позиции, второй раз в секунду
 //! отправляет `0xBF80E`, а после нуля запускает дочерний сценарий с исходным
 //! контекстом игрока, NPC и региона. Остальные неподтверждённые семейства
-//! приостановки остаются в RAW ниже.
-//! Поздний `RegisterBuffSkillFunctions` программно дополняет загруженный RU
-//! FunctionList потерянным `AddJingJieBuff = 11131`; тот же registry lookup
-//! затем ведёт в общий `CScript::RunFunction`, а не в обходной parser path.
-//! Строковый result `GetStringByID` проходит typed dispatcher, `TalkBoxSmall`
-//! сохраняет instance до client reply, а `random` расходует общий process
-//! MSVCRT stream; battle-fairy reset не получает отдельную shadow VM.
+//! приостановки остаются в RAW ниже. `RegisterBuffSkillFunctions` дополняет
+//! загруженный русский `FunctionList` потерянным `AddJingJieBuff = 11131`;
+//! последующий поиск ведёт в общий `CScript::RunFunction`. Строковые результаты
+//! `GetStringByID` и `GetTeamerName` проходят типизированный диспетчер,
+//! `TalkBoxSmall` сохраняет экземпляр до ответа клиента, а `random` расходует
+//! общий поток MSVCRT. Сброс боевой феи не создаёт отдельное теневое состояние
+//! виртуальной машины.
 
 use std::collections::BTreeMap;
 
@@ -46,10 +49,11 @@ use super::function::{
     SCRIPT_FUNCTION_GET_APPELLATION_STATE, SCRIPT_FUNCTION_GET_COPY_NUMBER,
     SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE, SCRIPT_FUNCTION_GET_NAME,
     SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID, SCRIPT_FUNCTION_GET_STRING_BY_ID,
-    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME,
-    SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME,
-    SCRIPT_FUNCTION_LIST_BANNED_PLAYER, SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT,
-    SCRIPT_FUNCTION_PLAY_SOUND, SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
+    SCRIPT_FUNCTION_GET_TEAMER_NAME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME,
+    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME,
+    SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME, SCRIPT_FUNCTION_LIST_BANNED_PLAYER,
+    SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAY_SOUND,
+    SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
     SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
     ScriptFunctionParameterKind, ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome,
     dispatch_script_function, dispatch_script_string_function, owned_region_script_caller_is_live,
@@ -1059,7 +1063,10 @@ impl<'a> CScript<'a> {
         if let Some((name, parameters)) = split_function(expression) {
             let function_id = game.script_function_id(name)?;
             let first = parameters.first().copied();
-            let evaluated_player_id = if function_id == SCRIPT_FUNCTION_GET_NAME {
+            let evaluated_integer = if matches!(
+                function_id,
+                SCRIPT_FUNCTION_GET_NAME | SCRIPT_FUNCTION_GET_TEAMER_NAME
+            ) {
                 first.and_then(|parameter| self.evaluate_integer(game, runtime, parameter))
             } else {
                 None
@@ -1074,7 +1081,7 @@ impl<'a> CScript<'a> {
                 self.context.player_id,
                 self.context.died_monster_index,
                 function_id,
-                evaluated_player_id,
+                evaluated_integer,
                 evaluated_string.as_deref(),
             ) {
                 ScriptStringFunctionDispatchOutcome::Handled(value) => return Some(value),

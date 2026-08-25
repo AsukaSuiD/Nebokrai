@@ -1,34 +1,38 @@
-//! Достигнутая lookup-часть GameServer `CSessionFactory`.
+//! Достигнутая часть поиска GameServer `CSessionFactory`.
 //!
-//! `QuerySession` RVA `0x000780C0` и `QueryPlug` RVA `0x00078190` имеют статус
-//! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, исходник
+//! `QuerySession` RVA `0x000780C0` и `QueryPlug` RVA `0x00078190` подтверждены
+//! дизассемблированием точной пары `GameServer/gameserver.exe +
+//! GameServer/GameServer.pdb`; исходный владелец —
 //! `server/gameserver/appserver/session/csessionfactory.cpp`. PDB подтверждает
-//! две static `hash_map<long, CSession*/CPlug*>`; оба lookup возвращают null
-//! при отсутствии ключа.
+//! две статические `hash_map<long, CSession*/CPlug*>`; оба поиска возвращают
+//! null при отсутствии ключа.
 //!
-//! Один owned `CSessionFactory`, подключённый к `CGame`, заменяет две
-//! process-static maps, а `BTreeMap`
-//! является deterministic replacement: hash iteration этими функциями не
-//! наблюдается, только exact-key lookup. `register_*`
-//! материализует достигнутый registry storage; `goodsmessage 0x8FC25`
-//! выполняет ordered session plug lookup по owner type/ID. Equipment-upgrade
-//! close материализует concrete session GC. Script-входы трёх equipment
-//! механик также создают normal session и typed plug, связывают owner/session,
-//! shadow owner/extend ID и insert-order. Container-message проход разрешает
-//! wire `(session, plug << 8)`, записывает и снимает typed upgrade/DaKong/
-//! compose и personal-shop seller shadows с исходным player slot. Terminal
-//! `End/Exit` хранится здесь,
-//! а ended equipment-session GC сохраняет session/plug order и owner identity
-//! для listener detach на MainLoop session-stage. Достигнутый personal-shop
-//! lifecycle создаёт normal `(1, 20, 0)` session, typed seller/buyer plugs,
-//! exact owner/session relations и personal-shop shadow metadata. Local team
-//! creation/join теперь хранит typed `CTeam/CTeamate`, сохраняя общий ID
-//! allocator, insertion order и промежуточные serialization snapshots;
-//! allocation/chat переходы получают ordered teammate owners из той же
-//! session и не обходят typed plug registry. World snapshot unserialize и
-//! incremental replication используют тот же allocator/registry и сохраняют
-//! insertion-order client snapshots.
+//! Один принадлежащий `CGame` экземпляр `CSessionFactory` заменяет две
+//! статические карты процесса. `BTreeMap` служит детерминированной заменой:
+//! достигнутые функции не наблюдают порядок обхода хеш-таблицы и выполняют
+//! только поиск по точному ключу. `register_*` материализует хранилище реестра,
+//! а `goodsmessage 0x8FC25` выполняет упорядоченный поиск разъёма сессии по
+//! типу и идентификатору владельца.
+//!
+//! Закрытие сессии улучшения экипировки доведено до сборки завершённых сессий.
+//! Сценарные входы трёх механизмов экипировки создают обычную сессию и
+//! типизированный разъём, связывают владельца с сессией и сохраняют теневые
+//! идентификаторы владельца, расширения и порядок вставки. Обработчик
+//! контейнерных сообщений разрешает пару `(session, plug << 8)`, записывает и
+//! снимает типизированные состояния upgrade, DaKong, compose и продавца
+//! personal-shop в исходной ячейке игрока. Завершения `End/Exit` хранятся здесь,
+//! а сборка завершённой сессии сохраняет порядок сессии и разъёмов, а также
+//! идентификатор владельца для отключения слушателей на стадии сессий
+//! `MainLoop`.
+//!
+//! Достигнутый жизненный цикл personal-shop создаёт обычную сессию `(1, 20,
+//! 0)`, типизированные разъёмы продавца и покупателя, точные связи владельца с
+//! сессией и теневые сведения магазина. Создание команды и вход в неё хранят
+//! типизированные `CTeam/CTeamate`, общий распределитель идентификаторов,
+//! порядок вставки и промежуточные снимки сериализации. Переходы распределения
+//! и чата получают владельцев участников в порядке той же сессии. Снимок из
+//! WorldServer и последующая репликация используют тот же реестр и сохраняют
+//! порядок клиентских снимков.
 
 use std::collections::BTreeMap;
 
@@ -490,6 +494,24 @@ impl CSessionFactory {
             .plug_ids_storage()
             .iter()
             .map(|plug_id| self.teammates.get(plug_id).map(CTeamate::owner_id))
+            .collect()
+    }
+
+    pub(crate) fn team_member_descriptors(&self, session_id: i32) -> Option<Vec<(i32, i32, i32)>> {
+        let session = self.sessions.get(&session_id)?;
+        self.teams.get(&session_id)?;
+        session
+            .plug_ids_storage()
+            .iter()
+            .map(|plug_id| {
+                self.teammates.get(plug_id).map(|teammate| {
+                    (
+                        teammate.owner_type(),
+                        teammate.owner_id(),
+                        teammate.owner_region_id(),
+                    )
+                })
+            })
             .collect()
     }
 

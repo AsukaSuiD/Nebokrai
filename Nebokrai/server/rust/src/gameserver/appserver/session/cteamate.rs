@@ -1,13 +1,14 @@
-//! Player-owned team plug `CTeamate` GameServer.
+//! Командный разъём `CTeamate`, принадлежащий игроку в GameServer.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `appserver/session/cteamate.cpp`. Материализован достигнутый invite/join
-//! prefix: plug identity, player owner, region/name snapshot и wire Serialize,
-//! который `OnPlugInserted` вкладывает в клиентский `0xBFD03`, а local exit
-//! доводит до player membership и `0xBFD05`. Достигнутые allocation/chat
-//! callbacks материализуют `0xBFD08/09` из typed session owner-ов. Region,
-//! member-state и remote restore используют тот же typed plug. Lose/AI и
-//! остальные недостигнутые ветви сохранены ниже как RAW.
+//! `appserver/session/cteamate.cpp`. Материализована достигнутая часть
+//! приглашения и входа: идентификатор разъёма, владелец-игрок, снимок региона
+//! и имени, а также `Serialize`, который `OnPlugInserted` вкладывает в
+//! клиентское сообщение `0xBFD03`. Локальный выход доведён до членства игрока
+//! и сообщения `0xBFD05`. Достигнутые обработчики распределения и чата
+//! создают `0xBFD08/09` из типизированных владельцев сессии. Регион, состояние
+//! участника и удалённое восстановление используют тот же типизированный
+//! разъём. `Lose`, `AI` и остальные недостигнутые ветви сохранены ниже как RAW.
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CTeamate {
@@ -54,6 +55,14 @@ impl CTeamate {
 
     pub(crate) const fn owner_id(&self) -> i32 {
         self.owner_id
+    }
+
+    pub(crate) const fn owner_type(&self) -> i32 {
+        self.owner_type
+    }
+
+    pub(crate) const fn owner_region_id(&self) -> i32 {
+        self.owner_region_id
     }
 
     pub(crate) const fn set_owner_region_id(&mut self, owner_region_id: i32) {

@@ -17260,10 +17260,11 @@ impl CGame {
         Some(message.send(self, false))
     }
 
-    /// Reached common `CPlayer::ChangeRegion` gameplay owner used by client,
-    /// GM and script callers. Callers own their argument decoding; this owner
-    /// performs session/player state, spatial randomization and exact client /
-    /// World wire in the original order.
+    /// Достигнутый общий игровой владелец `CPlayer::ChangeRegion`, которым
+    /// пользуются клиент, GM и сценарии. Вызывающая сторона разбирает
+    /// аргументы, а этот владелец меняет состояние сессии и игрока, выбирает
+    /// пространственную позицию и в исходном порядке отправляет сообщения
+    /// клиенту и WorldServer.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn change_player_region<
         Context: ScriptRegionChangeContext + RealmAppellationScriptContext,
@@ -27924,6 +27925,327 @@ impl CGame {
 
     pub(crate) fn get_team_session_id(&self, team_id: u32) -> i32 {
         self.team_session_ids.get(&team_id).copied().unwrap_or(0)
+    }
+
+    fn script_team_session_id(&self, player_id: i32) -> Option<i32> {
+        let team_id = self.find_player(player_id)?.team_id();
+        if team_id == 0 {
+            return None;
+        }
+        let session_id = self.get_team_session_id(team_id as u32);
+        (session_id != 0 && self.session_factory.query_team(session_id).is_some())
+            .then_some(session_id)
+    }
+
+    pub(crate) fn script_team_member_count(&self, player_id: i32) -> i32 {
+        self.script_team_session_id(player_id)
+            .and_then(|session_id| self.session_factory.team_member_count(session_id))
+            .map(|count| i32::try_from(count).unwrap_or(i32::MAX))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn script_team_member_name(&self, player_id: i32, position: i32) -> Vec<u8> {
+        if position < 0 {
+            return Vec::new();
+        }
+        self.script_team_session_id(player_id)
+            .and_then(|session_id| self.session_factory.team_member_descriptors(session_id))
+            .and_then(|members| members.get(position as usize).copied())
+            .filter(|(owner_type, _, _)| *owner_type == 400)
+            .and_then(|(_, teammate_id, _)| self.find_player(teammate_id))
+            .map(|player| player.shape().base_object().get_name().to_vec())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn script_is_team_captain(&self, player_id: i32) -> i32 {
+        self.script_team_session_id(player_id)
+            .and_then(|session_id| self.session_factory.query_team(session_id))
+            .map_or(-1, |team| i32::from(team.leader_id() == player_id))
+    }
+
+    fn script_player_is_in_area(&self, player_id: i32, x: i32, y: i32, range: i32) -> bool {
+        let Some(player) = self.find_player(player_id) else {
+            return false;
+        };
+        let Some(region) = player
+            .server_region_id()
+            .and_then(|region_id| self.find_region(region_id))
+        else {
+            return false;
+        };
+        let (Ok(tile_x), Ok(tile_y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        else {
+            return false;
+        };
+        let range = i64::from(range);
+        let offset_x = i64::from(x) - range;
+        let offset_y = i64::from(y) - range;
+        let center_x = if offset_x < 0 {
+            0
+        } else if offset_x > i64::from(region.base().region.width) {
+            i64::from(region.base().region.width)
+        } else {
+            i64::from(x)
+        };
+        let center_y = if offset_y < 0 {
+            0
+        } else if offset_y > i64::from(region.base().region.height) {
+            i64::from(region.base().region.height)
+        } else {
+            i64::from(y)
+        };
+        let tile_x = i64::from(tile_x);
+        let tile_y = i64::from(tile_y);
+        tile_x >= center_x - range
+            && tile_x <= center_x + range
+            && tile_y >= center_y - range
+            && tile_y <= center_y + range
+    }
+
+    pub(crate) fn script_are_teammates_around(
+        &self,
+        player_id: i32,
+        check_type: i32,
+        radius: i32,
+    ) -> bool {
+        if !(0..=2).contains(&check_type) {
+            return false;
+        }
+        let Some(session_id) = self.script_team_session_id(player_id) else {
+            return false;
+        };
+        let Some(members) = self.session_factory.team_member_descriptors(session_id) else {
+            return false;
+        };
+        let local_count = members
+            .iter()
+            .filter(|(owner_type, owner_id, _)| {
+                *owner_type == 400 && self.find_player(*owner_id).is_some()
+            })
+            .count();
+        if local_count != members.len() {
+            return false;
+        }
+        if check_type == 2 {
+            return true;
+        }
+        let Some(source) = self.find_player(player_id) else {
+            return false;
+        };
+        let Some(source_region_id) = source.server_region_id() else {
+            return false;
+        };
+        let (Ok(source_x), Ok(source_y)) =
+            (source.shape().get_tile_x(), source.shape().get_tile_y())
+        else {
+            return false;
+        };
+        members.into_iter().all(|(owner_type, teammate_id, _)| {
+            if owner_type != 400 {
+                return false;
+            }
+            if teammate_id == player_id {
+                return true;
+            }
+            self.find_player(teammate_id)
+                .is_some_and(|teammate| teammate.server_region_id() == Some(source_region_id))
+                && (check_type != 0
+                    || self.script_player_is_in_area(teammate_id, source_x, source_y, radius))
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn script_set_region_for_team<
+        Context: ScriptRegionChangeContext + RealmAppellationScriptContext,
+    >(
+        &mut self,
+        player_id: i32,
+        mut transfer_type: i32,
+        region_id: i32,
+        mut tile_x: i32,
+        mut tile_y: i32,
+        mut direction: i32,
+        mut range: i32,
+        context: &mut Context,
+    ) -> i32 {
+        if !(0..=3).contains(&transfer_type) {
+            transfer_type = 0;
+        }
+        if tile_x == SCRIPT_SCALAR_ERROR
+            || tile_y == SCRIPT_SCALAR_ERROR
+            || tile_x == 0
+            || tile_y == 0
+        {
+            tile_x = -1;
+            tile_y = -1;
+        }
+        let Some(player) = self.find_player(player_id) else {
+            return 0;
+        };
+        if direction == SCRIPT_SCALAR_ERROR {
+            direction = player.shape().get_direction();
+        }
+        if range == SCRIPT_SCALAR_ERROR {
+            range = 2;
+        }
+        let Some(session_id) = self.script_team_session_id(player_id) else {
+            return 1;
+        };
+        let Some(members) = self.session_factory.team_member_descriptors(session_id) else {
+            return 1;
+        };
+        let teammate_count = members.len();
+        let local_player_ids = members
+            .iter()
+            .filter_map(|(owner_type, owner_id, _)| {
+                (*owner_type == 400 && self.find_player(*owner_id).is_some()).then_some(*owner_id)
+            })
+            .collect::<Vec<_>>();
+        if transfer_type <= 2 && local_player_ids.len() != teammate_count {
+            return 2;
+        }
+        let source_region_id = player.server_region_id().unwrap_or_default();
+        if transfer_type <= 1
+            && members
+                .iter()
+                .filter(|(_, _, owner_region_id)| *owner_region_id == source_region_id)
+                .count()
+                != teammate_count
+        {
+            return 3;
+        }
+        if transfer_type == 0 {
+            let Some(source_region) = self.find_region(source_region_id) else {
+                return 4;
+            };
+            let (Ok(source_x), Ok(source_y)) =
+                (player.shape().get_tile_x(), player.shape().get_tile_y())
+            else {
+                return 4;
+            };
+            let mut start_x = source_x - 3;
+            let mut start_y = source_y - 3;
+            if source_x + 3 >= source_region.base().region.width {
+                start_x = source_region.base().region.width - 7;
+            } else if source_x - 3 <= 0 {
+                start_x = 0;
+            }
+            if source_y + 3 >= source_region.base().region.height {
+                start_y = source_region.base().region.height - 7;
+            } else if source_y - 3 <= 0 {
+                start_y = 0;
+            }
+            let all_inside = local_player_ids.iter().all(|teammate_id| {
+                self.find_player(*teammate_id).is_some_and(|teammate| {
+                    let (Ok(x), Ok(y)) =
+                        (teammate.shape().get_tile_x(), teammate.shape().get_tile_y())
+                    else {
+                        return false;
+                    };
+                    x >= start_x && x <= start_x + 7 && y >= start_y && y <= start_y + 7
+                })
+            });
+            if !all_inside {
+                return 4;
+            }
+        }
+        if transfer_type != 3 {
+            for teammate_id in local_player_ids {
+                let _ = self.change_player_region(
+                    teammate_id,
+                    region_id,
+                    tile_x,
+                    tile_y,
+                    direction,
+                    0,
+                    range,
+                    0,
+                    context,
+                );
+            }
+        }
+        0
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn script_set_team_region<
+        Context: ScriptRegionChangeContext + RealmAppellationScriptContext,
+    >(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        mut tile_x: i32,
+        mut tile_y: i32,
+        mut radius: i32,
+        mut direction: i32,
+        mut range: i32,
+        context: &mut Context,
+    ) {
+        if tile_x == SCRIPT_SCALAR_ERROR
+            || tile_y == SCRIPT_SCALAR_ERROR
+            || tile_x == 0
+            || tile_y == 0
+        {
+            tile_x = -1;
+            tile_y = -1;
+        }
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        if radius == SCRIPT_SCALAR_ERROR {
+            radius = 3;
+        }
+        if direction == SCRIPT_SCALAR_ERROR {
+            direction = player.shape().get_direction();
+        }
+        if range == SCRIPT_SCALAR_ERROR {
+            range = 2;
+        }
+        let Some(session_id) = self.script_team_session_id(player_id) else {
+            return;
+        };
+        let Some(members) = self.session_factory.team_member_descriptors(session_id) else {
+            return;
+        };
+        let Some(source_region_id) = player.server_region_id() else {
+            return;
+        };
+        let (Ok(source_x), Ok(source_y)) =
+            (player.shape().get_tile_x(), player.shape().get_tile_y())
+        else {
+            return;
+        };
+        let selected = members
+            .into_iter()
+            .filter_map(|(owner_type, teammate_id, _)| {
+                if owner_type != 400 || self.find_player(teammate_id).is_none() {
+                    return None;
+                }
+                (teammate_id == player_id
+                    || (self.find_player(teammate_id).is_some_and(|teammate| {
+                        teammate.server_region_id() == Some(source_region_id)
+                    }) && self.script_player_is_in_area(
+                        teammate_id,
+                        source_x,
+                        source_y,
+                        radius,
+                    )))
+                .then_some(teammate_id)
+            })
+            .collect::<Vec<_>>();
+        for teammate_id in selected {
+            let _ = self.change_player_region(
+                teammate_id,
+                region_id,
+                tile_x,
+                tile_y,
+                direction,
+                0,
+                range,
+                0,
+                context,
+            );
+        }
     }
 
     fn run_team_snapshot_queries(
