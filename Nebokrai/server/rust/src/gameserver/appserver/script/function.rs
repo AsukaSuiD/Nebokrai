@@ -139,6 +139,10 @@
 //! `2321 / GetGoodsProperty` разрешает исходное имя через `CGoodsFactory`,
 //! создаёт временный предмет тем же игровым генератором и читает указанную
 //! пару дополнения без изменения контейнеров игрока.
+//! Диапазон `2501..2504` связывает запрос смены страны с уже действующим
+//! ответом WorldServer, а вклад и YuanBao читает из канонического `CPlayer`.
+//! Установка вклада сохраняет ограничение `SetContribute`, пакет `0xBF724`
+//! вместе с силой подбора и возвращает фактически сохранённое значение.
 //! Соседняя группа `2204/2205/2212/2217/2218/2220` связывает подсчёты рюкзака
 //! и депо, выбранный предмет контейнера улучшения, локальное либо удалённое
 //! удаление и доверенный путь сценария окна `0xBF919` с подтверждением
@@ -545,6 +549,10 @@ pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
 pub(crate) const SCRIPT_FUNCTION_ADD_FU_MO_PROPERTY: i32 = 2320;
 pub(crate) const SCRIPT_FUNCTION_IS_TEAM_CAPTAIN: i32 = 2325;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
+pub(crate) const SCRIPT_FUNCTION_CHANGE_COUNTRY: i32 = 2501;
+pub(crate) const SCRIPT_FUNCTION_GET_CONTRIBUTION: i32 = 2502;
+pub(crate) const SCRIPT_FUNCTION_SET_CONTRIBUTION: i32 = 2503;
+pub(crate) const SCRIPT_FUNCTION_GET_YUAN_BAO: i32 = 2504;
 pub(crate) const SCRIPT_FUNCTION_ADD_INCREMENT_LOG: i32 = 2570;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
 pub(crate) const SCRIPT_FUNCTION_LIST_BANNED_PLAYER: i32 = 5106;
@@ -3918,6 +3926,11 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_GET_DEPOT_GOODS_FREE
         | SCRIPT_FUNCTION_GET_CONTAINER_ITEM_TYPE => Unused,
         SCRIPT_FUNCTION_OPEN_NEW_HELP_WINDOW => Unused,
+        SCRIPT_FUNCTION_CHANGE_COUNTRY | SCRIPT_FUNCTION_SET_CONTRIBUTION => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_CONTRIBUTION | SCRIPT_FUNCTION_GET_YUAN_BAO => Unused,
         SCRIPT_FUNCTION_GET_GOODS_PROPERTY_1 | SCRIPT_FUNCTION_GET_GOODS_PROPERTY_2 => {
             match index {
                 0 => Integer,
@@ -7469,6 +7482,48 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 ),
             })
         }
+        SCRIPT_FUNCTION_CHANGE_COUNTRY => {
+            let Some(country) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if game.find_player(player_id).is_some() {
+                let mut request = CMessage::new(0x0006_0301);
+                request.add_long(player_id);
+                request.add_byte(country as u8);
+                let _ = request.send(game, false);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GET_CONTRIBUTION => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: game.find_player(player_id).map_or(0, CPlayer::contribution),
+        }),
+        SCRIPT_FUNCTION_SET_CONTRIBUTION => {
+            let Some(requested) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let Some((stored, fetch_power)) = game.find_player_mut(player_id).map(|player| {
+                player.set_contribution(requested);
+                (player.contribution(), player.fetch_power())
+            }) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let mut message = CMessage::new(0x000b_f724);
+            message.add_long(requested);
+            message.add_ulong(fetch_power);
+            let _ = message.send_to_player(game.net_server(), player_id);
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: stored,
+            })
+        }
+        SCRIPT_FUNCTION_GET_YUAN_BAO => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: game
+                .find_player(player_id)
+                .map_or(0, |player| player.yuan_bao() as i32),
+        }),
         SCRIPT_FUNCTION_POST_COUNTRY_INFO => {
             let (Some(text), Some(country_id)) = (
                 string_arguments[0],
