@@ -18,6 +18,9 @@
 //! остаётся только у ещё не материализованных virtual/disconnect owners.
 //! После live/dead war-soul ветви тот же caller сохраняет GoodsAI/delete,
 //! wrapping ticket, packet expansion, Flash и инвертированный TaoZhuang gate.
+//! Country virtual slot вызывает concrete contender AI через CGame adapter:
+//! canonical player state, `0xBFF28/29`, region notice и top-info не уходят в
+//! отдельный runtime snapshot.
 //!
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
@@ -585,7 +588,8 @@ use crate::gameserver::appserver::servercityregion::{
     CServerCityRegion, CityGateRuntimeContext, CityReturnPointContext, CityReturnPointError,
 };
 use crate::gameserver::appserver::servercountryregion::{
-    CServerCountryRegion, CountryBattleStateBlock, CountryReturnPointContext,
+    CServerCountryRegion, CountryBattleStateBlock, CountryContendContext,
+    CountryContendEntryContext, CountryContendPlayer, CountryReturnPointContext,
     CountryReturnPointError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
@@ -603,6 +607,7 @@ use crate::gameserver::appserver::serverregion::{
     ServerRegionNpcSpawnReport, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
+use crate::gameserver::appserver::serverwarregion::ContendArithmeticBlock;
 use crate::gameserver::appserver::session::cequipmentcompose::{
     CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
     EquipmentComposeAuditLog, EquipmentComposeOutcome, EquipmentComposeReport,
@@ -2949,9 +2954,179 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) periodical_updates: Vec<PlayerPeriodicalUpdateReport>,
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
+    pub(crate) country_contend: Option<CountryRegionAiReport>,
     pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CountryRegionAiEffect {
+    ContendTime {
+        player_id: i32,
+        percentage: i32,
+        delivery: i32,
+    },
+    PlayerState {
+        player_id: i32,
+        state: bool,
+        around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    },
+    PlayerNotice {
+        player_id: i32,
+        string_id: &'static str,
+        delivery: i32,
+    },
+    CountryWonSymbol {
+        country: i32,
+        symbol_id: i32,
+    },
+    RegionNotice {
+        country: u8,
+        symbol_name: Vec<u8>,
+        delivery: i32,
+    },
+    TopInfo {
+        country: u8,
+        region_name: Vec<u8>,
+        symbol_name: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountryRegionAiReport {
+    pub(crate) region_id: i32,
+    pub(crate) result: Result<(), ContendArithmeticBlock>,
+    pub(crate) effects: Vec<CountryRegionAiEffect>,
+}
+
+struct GameCountryRegionAiContext<'a, Runtime> {
+    game: &'a mut CGame,
+    runtime: &'a mut Runtime,
+    region: CServerRegion,
+    effects: Vec<CountryRegionAiEffect>,
+}
+
+impl<Runtime: GameMainLoopRuntime> CountryContendEntryContext
+    for GameCountryRegionAiContext<'_, Runtime>
+{
+    fn now_millis(&mut self) -> u32 {
+        self.runtime.country_contend_now_milliseconds()
+    }
+
+    fn send_contend_time(&mut self, player_id: i32, time: i32) {
+        let mut message = CMessage::new(0x000b_ff29);
+        message.add_long(time);
+        let delivery = message.send_to_player(self.game.net_server(), player_id);
+        self.effects.push(CountryRegionAiEffect::ContendTime {
+            player_id,
+            percentage: time,
+            delivery,
+        });
+    }
+
+    fn set_known_player_contend_state(&mut self, player_id: i32, state: bool) {
+        let around_delivery =
+            self.game
+                .publish_war_player_contend_state(&self.region, player_id, state);
+        self.effects.push(CountryRegionAiEffect::PlayerState {
+            player_id,
+            state,
+            around_delivery,
+        });
+    }
+
+    fn notify_player(&mut self, player_id: i32, string_id: &'static str) {
+        let message = colored_player_notice_message(
+            0xffff_ffff,
+            0xffff_0000,
+            self.game.get_string_by_id(string_id.as_bytes()),
+        );
+        let delivery = message.send_to_player(self.game.net_server(), player_id);
+        self.effects.push(CountryRegionAiEffect::PlayerNotice {
+            player_id,
+            string_id,
+            delivery,
+        });
+    }
+}
+
+impl<Runtime: GameMainLoopRuntime> CountryContendContext
+    for GameCountryRegionAiContext<'_, Runtime>
+{
+    fn run_base_region_ai(&mut self, region: &mut CServerRegion) {
+        self.runtime.run_country_base_region_ai(self.game, region);
+        self.region = region.clone();
+    }
+
+    fn find_global_player(&mut self, player_id: i32) -> Option<CountryContendPlayer> {
+        self.game
+            .find_player(player_id)
+            .map(|player| CountryContendPlayer {
+                player_id,
+                faction_id: player.faction_id(),
+                country: player.country(),
+                shape_type: 400,
+                is_dead: player.is_dead(),
+            })
+    }
+
+    fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
+        self.set_known_player_contend_state(player_id, state);
+    }
+
+    fn on_country_win_one_symbol(&mut self, country: i32, symbol_id: i32) {
+        self.runtime
+            .on_country_win_one_symbol(self.game, self.region.id, country, symbol_id);
+        self.effects
+            .push(CountryRegionAiEffect::CountryWonSymbol { country, symbol_id });
+    }
+
+    fn send_country_symbol_captured_region_notice(&mut self, country: u8, symbol_name: &str) {
+        let country_name = self
+            .game
+            .globe_setup
+            .country_name(country)
+            .unwrap_or_default();
+        let text = format_legacy_text_fields(
+            self.game.get_string_by_id(b"GS0226"),
+            &[country_name, symbol_name.as_bytes()],
+            0x3ff,
+        );
+        let delivery = colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
+            .send_to_region(Some(&self.region), None, self.game);
+        self.effects.push(CountryRegionAiEffect::RegionNotice {
+            country,
+            symbol_name: symbol_name.as_bytes().to_vec(),
+            delivery,
+        });
+    }
+
+    fn send_country_symbol_captured_top_info(
+        &mut self,
+        country: u8,
+        region_name: &str,
+        symbol_name: &str,
+    ) {
+        let country_name = self
+            .game
+            .globe_setup
+            .country_name(country)
+            .unwrap_or_default();
+        let text = format_legacy_text_fields(
+            self.game.get_string_by_id(b"GS0227"),
+            &[country_name, region_name.as_bytes(), symbol_name.as_bytes()],
+            0x3ff,
+        );
+        let delivery = self.game.send_top_info_to_client(-1, 0, 1, 1, &text);
+        self.effects.push(CountryRegionAiEffect::TopInfo {
+            country,
+            region_name: region_name.as_bytes().to_vec(),
+            symbol_name: symbol_name.as_bytes().to_vec(),
+            delivery,
+        });
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3187,6 +3362,17 @@ pub(crate) trait GameMainLoopRuntime:
     fn player_done_goods_ai_and_delete_list(&mut self, game: &mut CGame, player_id: i32);
     fn player_done_flash(&mut self, game: &mut CGame, player_id: i32);
     fn player_done_tao_zhuang(&mut self, game: &mut CGame, player_id: i32);
+    /// Выполняет ещё не материализованный `CServerRegion::AI` prefix для
+    /// concrete country owner-а; actual region storage передаётся напрямую.
+    fn run_country_base_region_ai(&mut self, game: &mut CGame, region: &mut CServerRegion);
+    /// Concrete virtual slot country-region-а после записи symbol owner-а.
+    fn on_country_win_one_symbol(
+        &mut self,
+        game: &mut CGame,
+        region_id: i32,
+        country: i32,
+        symbol_id: i32,
+    );
     /// Выполняет оставшийся monster/NPC/region virtual AI после достигнутых
     /// player passes и до точного base-tail `ClearPlayerAI`.
     fn region_ai_before_clear_player(&mut self, game: &mut CGame, region_id: i32);
@@ -21158,6 +21344,37 @@ impl CGame {
         Some(report)
     }
 
+    /// Подключает уже materialized `CServerCountryRegion::AI` к virtual region
+    /// slot `CGame::AI`. Region временно вынимается только для безопасного
+    /// одновременного доступа adapter-а к canonical player/network owners.
+    pub(crate) fn run_country_region_ai<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<CountryRegionAiReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Country(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let projection = region.base.clone();
+        let mut context = GameCountryRegionAiContext {
+            game: self,
+            runtime,
+            region: projection,
+            effects: Vec::new(),
+        };
+        let result = region.ai(&mut context);
+        let effects = std::mem::take(&mut context.effects);
+        drop(context);
+        self.restore_region_owner(ServerRegionOwner::Country(region));
+        Some(CountryRegionAiReport {
+            region_id,
+            result,
+            effects,
+        })
+    }
+
     /// Exact `CGame::AI`: signed region-map order, reached player AI prefix и
     /// virtual region AI, после которого выполняется base-tail `ClearPlayerAI`
     /// того же owner-а.
@@ -21227,14 +21444,20 @@ impl CGame {
                     }
                 }
             }
-            let gods_battle = if self
+            let is_gods_battle = self
                 .find_region(region_id)
-                .is_some_and(ServerRegionOwner::is_gods_battle)
-            {
-                self.gods_battle_contend_ai(region_id, runtime)
+                .is_some_and(ServerRegionOwner::is_gods_battle);
+            let is_country = matches!(
+                self.find_region(region_id),
+                Some(ServerRegionOwner::Country(_))
+            );
+            let (country_contend, gods_battle) = if is_gods_battle {
+                (None, self.gods_battle_contend_ai(region_id, runtime))
+            } else if is_country {
+                (self.run_country_region_ai(region_id, runtime), None)
             } else {
                 runtime.region_ai_before_clear_player(self, region_id);
-                None
+                (None, None)
             };
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 continue;
@@ -21313,6 +21536,7 @@ impl CGame {
                             periodical_updates,
                             battle_fairy_follows,
                             player_ai_tails,
+                            country_contend,
                             gods_battle,
                             region_changes,
                             clear_player: Some(GameRegionClearPlayerOutcome::Expired { players }),
@@ -21333,6 +21557,7 @@ impl CGame {
                 periodical_updates,
                 battle_fairy_follows,
                 player_ai_tails,
+                country_contend,
                 gods_battle,
                 region_changes,
                 clear_player,

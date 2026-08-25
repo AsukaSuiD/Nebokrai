@@ -36,6 +36,8 @@
 //! проверка player/symbol рассматривает только первую запись player-а, а
 //! cancel-by-symbol удаляет все совпадения в порядке списка. AI собирает все
 //! завершённые снимки до callbacks и сохраняет wrapping `DWORD`/signed math.
+//! Реальный caller находится в `CGame::AI`: adapter передаёт live base-region,
+//! canonical players, state/notice wire и virtual country-symbol callback.
 //! `INT_MIN / -1` и недоказанные invalid x87 conversions остаются локальными
 //! typed-границами.
 //! `GetSecurity` до cell lookup проверяет исходный war-byte: false и
@@ -69,13 +71,13 @@ use super::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
     RegionSecurity,
 };
-use super::servercityregion::{city_gate_footprint_is_clear, CityGateRuntimeContext};
+use super::servercityregion::{CityGateRuntimeContext, city_gate_footprint_is_clear};
 use super::serverregion::{
     CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError, ServerReturnPlayer,
     ServerReturnSetupBlock,
 };
 use super::serverwarregion::{
-    read_region_array, ContendArithmeticBlock, ContendState, RegionDecodeInputBlock,
+    ContendArithmeticBlock, ContendState, RegionDecodeInputBlock, read_region_array,
 };
 
 const WC_DEFEND: i32 = 0;
