@@ -642,7 +642,7 @@ use crate::gameserver::appserver::player::{
     PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion, PlayerHonorResetReport,
     PlayerLoginGoodsLocation, PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation,
     PlayerReliveOwnedPrelude, PlayerSkillRequest, PlayerSkillRequestDelivery,
-    PlayerSkillRequestEffect, PlayerSkillRequestFacts, PlayerSkillRequestReport,
+    PlayerSkillRequestEffect, PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerTalkChannel,
     PlayerUncreatedCarriage, PlayerUncreatedPet, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
@@ -5107,6 +5107,31 @@ pub(crate) struct GameTeamLifecycleMutation {
     pub(crate) client_deliveries: Vec<i32>,
     pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
     pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameTeamControlAction {
+    AllocationScheme(i32),
+    Chat(Vec<u8>),
+}
+
+#[must_use = "team control report сохраняет session state и ordered effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameTeamControlMutation {
+    pub(crate) action: GameTeamControlAction,
+    pub(crate) session_id: i32,
+    pub(crate) team_id: u32,
+    pub(crate) actor_id: i32,
+    pub(crate) client_deliveries: Vec<i32>,
+    pub(crate) world_delivery: Result<i32, SendMessageError>,
+}
+
+#[must_use = "chat result различает cooldown и недоступный typed context"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GameTeamChatResult {
+    Sent(GameTeamControlMutation),
+    Cooldown,
+    MissingContext,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25980,11 +26005,7 @@ impl CGame {
         self.team_session_ids.get(&team_id).copied().unwrap_or(0)
     }
 
-    pub(crate) fn check_team_join(
-        &self,
-        leader_id: i32,
-        candidate_id: i32,
-    ) -> GameTeamJoinResult {
+    pub(crate) fn check_team_join(&self, leader_id: i32, candidate_id: i32) -> GameTeamJoinResult {
         if leader_id == candidate_id {
             return GameTeamJoinResult::SamePlayer;
         }
@@ -26053,7 +26074,11 @@ impl CGame {
         audit_join: bool,
     ) -> Option<GameTeamJoinMutation> {
         let leader_team_id = self.players.get(&leader_id)?.team_id();
-        let leader_region_id = self.players.get(&leader_id)?.server_region_id().unwrap_or_default();
+        let leader_region_id = self
+            .players
+            .get(&leader_id)?
+            .server_region_id()
+            .unwrap_or_default();
         let leader_name = self.players.get(&leader_id)?.player_name().to_vec();
         let candidate_region_id = self
             .players
@@ -26075,15 +26100,11 @@ impl CGame {
             self.players
                 .get_mut(&leader_id)?
                 .set_team_membership(team_id as i32);
-            self.players
-                .get_mut(&leader_id)?
-                .set_team_captain(true);
+            self.players.get_mut(&leader_id)?.set_team_captain(true);
             self.players
                 .get_mut(&candidate_id)?
                 .set_team_membership(team_id as i32);
-            self.players
-                .get_mut(&candidate_id)?
-                .set_team_captain(false);
+            self.players.get_mut(&candidate_id)?.set_team_captain(false);
 
             let mut started = CMessage::new(0x0006_0001);
             started.base_mut().add(&created.empty_snapshot);
@@ -26114,9 +26135,7 @@ impl CGame {
             self.players
                 .get_mut(&candidate_id)?
                 .set_team_membership(inserted.team_id as i32);
-            self.players
-                .get_mut(&candidate_id)?
-                .set_team_captain(false);
+            self.players.get_mut(&candidate_id)?.set_team_captain(false);
             client_deliveries.push(self.send_team_snapshot(candidate_id, &inserted.snapshot));
             (
                 inserted.session_id,
@@ -26173,9 +26192,7 @@ impl CGame {
         let removed: TeamMemberRemoved = self
             .session_factory
             .remove_team_member(session_id, player_id)?;
-        self.players
-            .get_mut(&player_id)?
-            .set_team_membership(0);
+        self.players.get_mut(&player_id)?.set_team_membership(0);
         let recipients = std::iter::once(player_id)
             .chain(removed.remaining_player_ids.iter().copied())
             .collect::<Vec<_>>();
@@ -26186,10 +26203,8 @@ impl CGame {
         changed.add_long(400);
         changed.add_long(player_id);
         let world_deliveries = vec![changed.send(self, false)];
-        let around_delivery = self.publish_team_recruitment_count(
-            removed.leader_id,
-            removed.remaining_player_ids.len(),
-        );
+        let around_delivery = self
+            .publish_team_recruitment_count(removed.leader_id, removed.remaining_player_ids.len());
         Some(GameTeamLifecycleMutation {
             action,
             session_id: removed.session_id,
@@ -26234,7 +26249,11 @@ impl CGame {
             .query_session(session_id)?
             .plug_ids_storage()
             .iter()
-            .filter_map(|id| self.session_factory.query_plug(*id).map(|plug| plug.owner_id()))
+            .filter_map(|id| {
+                self.session_factory
+                    .query_plug(*id)
+                    .map(|plug| plug.owner_id())
+            })
             .collect();
         let mut client = CMessage::new(0x000b_fd07);
         client.add_ulong(team_id as u32);
@@ -26321,6 +26340,98 @@ impl CGame {
             client_deliveries,
             around_delivery,
             world_deliveries,
+        })
+    }
+
+    pub(crate) fn change_team_allocation_scheme(
+        &mut self,
+        actor_id: i32,
+        allocation_scheme: i32,
+    ) -> Option<GameTeamControlMutation> {
+        let team_id = self.players.get(&actor_id)?.team_id();
+        if team_id == 0 {
+            return None;
+        }
+        let session_id = self.get_team_session_id(team_id as u32);
+        let (team_id, recipients) = self.session_factory.set_team_allocation_scheme(
+            session_id,
+            actor_id,
+            allocation_scheme,
+        )?;
+        let mut client = CMessage::new(0x000b_fd08);
+        client.add_ulong(team_id);
+        client.add_long(allocation_scheme);
+        let client_deliveries = recipients
+            .into_iter()
+            .map(|player_id| client.send_to_player(self.net_server(), player_id))
+            .collect();
+        let mut world = CMessage::new(0x0006_000a);
+        world.add_ulong(team_id);
+        world.add_long(allocation_scheme);
+        Some(GameTeamControlMutation {
+            action: GameTeamControlAction::AllocationScheme(allocation_scheme),
+            session_id,
+            team_id,
+            actor_id,
+            client_deliveries,
+            world_delivery: world.send(self, false),
+        })
+    }
+
+    pub(crate) fn send_team_chat(
+        &mut self,
+        actor_id: i32,
+        text: Vec<u8>,
+        now_ms: u32,
+    ) -> GameTeamChatResult {
+        let Some(team_id) = self.players.get(&actor_id).map(CPlayer::team_id) else {
+            return GameTeamChatResult::MissingContext;
+        };
+        if team_id == 0 {
+            return GameTeamChatResult::MissingContext;
+        }
+        let interval_ms = self.globe_setup.team_talk_interval_ms();
+        if !self
+            .players
+            .get_mut(&actor_id)
+            .expect("team chat actor разрешён до cooldown mutation")
+            .begin_talk(PlayerTalkChannel::Team, now_ms, interval_ms)
+        {
+            return GameTeamChatResult::Cooldown;
+        }
+        let session_id = self.get_team_session_id(team_id as u32);
+        if self
+            .session_factory
+            .query_session_plug_by_owner(session_id, 400, actor_id)
+            .is_none()
+        {
+            return GameTeamChatResult::MissingContext;
+        }
+        let Some(recipients) = self.session_factory.team_player_ids(session_id) else {
+            return GameTeamChatResult::MissingContext;
+        };
+        let team_id = team_id as u32;
+        let mut client = CMessage::new(0x000b_fd09);
+        client.add_ulong(team_id);
+        client.add_long(400);
+        client.add_long(actor_id);
+        add_legacy_c_string(client.base_mut(), &text);
+        let client_deliveries = recipients
+            .into_iter()
+            .map(|player_id| client.send_to_player(self.net_server(), player_id))
+            .collect();
+        let mut world = CMessage::new(0x0006_000b);
+        world.add_ulong(team_id);
+        world.add_long(400);
+        world.add_long(actor_id);
+        add_legacy_c_string(world.base_mut(), &text);
+        GameTeamChatResult::Sent(GameTeamControlMutation {
+            action: GameTeamControlAction::Chat(text),
+            session_id,
+            team_id,
+            actor_id,
+            client_deliveries,
+            world_delivery: world.send(self, false),
         })
     }
 

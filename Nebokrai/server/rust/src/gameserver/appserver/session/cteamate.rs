@@ -4,8 +4,9 @@
 //! `appserver/session/cteamate.cpp`. Материализован достигнутый invite/join
 //! prefix: plug identity, player owner, region/name snapshot и wire Serialize,
 //! который `OnPlugInserted` вкладывает в клиентский `0xBFD03`, а local exit
-//! доводит до player membership и `0xBFD05`. Lose/restore, AI и остальные
-//! change-state ветви сохранены ниже как RAW.
+//! доводит до player membership и `0xBFD05`. Достигнутые allocation/chat
+//! callbacks материализуют `0xBFD08/09` из typed session owner-ов. Lose/restore,
+//! AI и остальные change-state ветви сохранены ниже как RAW.
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CTeamate {

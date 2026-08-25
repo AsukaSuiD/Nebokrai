@@ -24,7 +24,9 @@
 //! lifecycle создаёт normal `(1, 20, 0)` session, typed seller/buyer plugs,
 //! exact owner/session relations и personal-shop shadow metadata. Local team
 //! creation/join теперь хранит typed `CTeam/CTeamate`, сохраняя общий ID
-//! allocator, insertion order и промежуточные serialization snapshots.
+//! allocator, insertion order и промежуточные serialization snapshots;
+//! allocation/chat переходы получают ordered teammate owners из той же
+//! session и не обходят typed plug registry.
 
 use std::collections::BTreeMap;
 
@@ -339,6 +341,33 @@ impl CSessionFactory {
         let previous = team.leader_id();
         team.set_leader(player_id);
         Some(previous)
+    }
+
+    pub(crate) fn set_team_allocation_scheme(
+        &mut self,
+        session_id: i32,
+        actor_id: i32,
+        allocation_scheme: i32,
+    ) -> Option<(u32, Vec<i32>)> {
+        self.query_session_plug_by_owner(session_id, 400, actor_id)?;
+        let team = self.teams.get(&session_id)?;
+        if team.leader_id() != actor_id {
+            return None;
+        }
+        let player_ids = self.team_player_ids(session_id)?;
+        let team = self.teams.get_mut(&session_id)?;
+        team.set_allocation_scheme(allocation_scheme);
+        Some((team.team_id(), player_ids))
+    }
+
+    pub(crate) fn team_player_ids(&self, session_id: i32) -> Option<Vec<i32>> {
+        let session = self.sessions.get(&session_id)?;
+        self.teams.get(&session_id)?;
+        session
+            .plug_ids_storage()
+            .iter()
+            .map(|plug_id| self.teammates.get(plug_id).map(CTeamate::owner_id))
+            .collect()
     }
 
     pub(crate) fn remove_team_member(

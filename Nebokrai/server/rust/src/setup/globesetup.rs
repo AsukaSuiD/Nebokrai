@@ -12,7 +12,7 @@
 //! BattleFairy и CiQing feature gates, а также полный ordinary-fairy setup
 //! `+0x85C..+0x8A8` читаются из подтверждённых byte offsets.
 //! Public-talk projection читает оба fixed goods-name, stack-count/money и
-//! country/world interval прямо из тех же `+0x768..+0x848` полей. Абсолютные
+//! chat intervals, включая team `+0x850`, прямо из тех же setup-полей. Абсолютные
 //! reads `0xEF4528/68/6C/70/B0/B4` и `0xEF4604/08` в `OnOtherMessage`
 //! подтверждают общий base `0xEF3DC0` и эти offsets по точному EXE.
 //! `dwPkCountPerKill +0x4F4` обслуживает GameServer kill-confirmation path;
@@ -117,6 +117,7 @@ const WORLD_TALK_INTERVAL_OFFSET: usize = 0x848;
 const NORMAL_TALK_INTERVAL_OFFSET: usize = 0x83C;
 const AREA_TALK_INTERVAL_OFFSET: usize = 0x840;
 const PRIVATE_TALK_INTERVAL_OFFSET: usize = 0x84C;
+const TEAM_TALK_INTERVAL_OFFSET: usize = 0x850;
 const UNION_TALK_INTERVAL_OFFSET: usize = 0x858;
 const REGION_CHAT_LEVEL_LIMIT_OFFSET: usize = 0x560;
 const BASE_PRICE_RATE_OFFSET: usize = 0x2EC;
@@ -823,6 +824,10 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn private_talk_interval_ms(&self) -> u32 {
         self.read_u32(PRIVATE_TALK_INTERVAL_OFFSET)
+    }
+
+    pub(crate) fn team_talk_interval_ms(&self) -> u32 {
+        self.read_u32(TEAM_TALK_INTERVAL_OFFSET)
     }
 
     pub(crate) fn union_talk_interval_ms(&self) -> u32 {

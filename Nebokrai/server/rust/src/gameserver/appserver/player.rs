@@ -1921,6 +1921,7 @@ pub(crate) enum PlayerTalkChannel {
     Country,
     World,
     Private,
+    Team,
     Union,
 }
 
@@ -2014,6 +2015,7 @@ pub(crate) struct CPlayer {
     world_talk_timestamp_ms: u32,
     country_talk_timestamp_ms: u32,
     private_talk_timestamp_ms: u32,
+    team_talk_timestamp_ms: u32,
     union_talk_timestamp_ms: u32,
     money: u32,
     client_ip: u32,
@@ -2350,6 +2352,7 @@ impl CPlayer {
             world_talk_timestamp_ms: 0,
             country_talk_timestamp_ms: 0,
             private_talk_timestamp_ms: 0,
+            team_talk_timestamp_ms: 0,
             union_talk_timestamp_ms: 0,
             money: 0,
             client_ip: 0,
@@ -7131,6 +7134,7 @@ impl CPlayer {
             PlayerTalkChannel::Country => &mut self.country_talk_timestamp_ms,
             PlayerTalkChannel::World => &mut self.world_talk_timestamp_ms,
             PlayerTalkChannel::Private => &mut self.private_talk_timestamp_ms,
+            PlayerTalkChannel::Team => &mut self.team_talk_timestamp_ms,
             PlayerTalkChannel::Union => &mut self.union_talk_timestamp_ms,
         };
         if now_ms.wrapping_sub(*timestamp) < interval_ms {

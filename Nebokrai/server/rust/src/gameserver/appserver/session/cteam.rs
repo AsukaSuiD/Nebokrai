@@ -3,9 +3,9 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/session/cteam.cpp`. Материализован reached local creation/join
 //! prefix: team/leader identity, default shared allocation и exact session +
-//! teammate serialization, local leave/leader/kick/disband lifecycle и их
-//! World/client publications. Remote reconstruction, AI/quest и остальные
-//! state transitions остаются RAW.
+//! teammate serialization, local leave/leader/kick/disband lifecycle,
+//! allocation/chat transitions и их World/client publications. Remote
+//! reconstruction, AI/quest и остальные state transitions остаются RAW.
 
 use crate::gameserver::appserver::session::csession::CSession;
 use crate::gameserver::appserver::session::cteamate::CTeamate;
@@ -72,6 +72,10 @@ impl CTeam {
 
     pub(crate) const fn allocation_scheme(&self) -> i32 {
         self.allocation_scheme
+    }
+
+    pub(crate) const fn set_allocation_scheme(&mut self, allocation_scheme: i32) {
+        self.allocation_scheme = allocation_scheme;
     }
 }
 

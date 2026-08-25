@@ -2,16 +2,16 @@
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/message/teammessage.cpp`. Материализован полный достигнутый
-//! recruitment-state selector `0x8FF08` и связная local team chain
-//! `0x8FF01..07`: invite/answer/password join, leave, leader transfer, kick и
-//! disband; typed `CTeam/CTeamate`, player membership, `0xBFD01/02/03/05/07`,
-//! recruitment count, World session messages и conditional `0x60209` audit.
-//! Остальные selectors и remote reconstruction сохранены ниже как RAW.
+//! полная client-side local team chain `0x8FF01..0B`: invite/answer/password
+//! join, leave, leader transfer, kick, disband, recruitment state,
+//! allocation, chat и invite-by-name; typed `CTeam/CTeamate`, player
+//! membership/cooldown, client publications, World session messages и
+//! conditional `0x60209` audit. Remote reconstruction сохранена ниже как RAW.
 
 use crate::gameserver::appserver::teamstate::CTeamState;
 use crate::gameserver::gameserver::game::{
-    CGame, GameTeamJoinMutation, GameTeamJoinResult, GameTeamLifecycleMutation,
-    colored_player_notice_message,
+    CGame, GameTeamChatResult, GameTeamControlMutation, GameTeamJoinMutation, GameTeamJoinResult,
+    GameTeamLifecycleMutation, colored_player_notice_message, game_tick_milliseconds,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -23,6 +23,9 @@ const LEAVE_TEAM: u32 = 0x0008_ff04;
 const SET_LEADER: u32 = 0x0008_ff05;
 const KICK_PLAYER: u32 = 0x0008_ff06;
 const DISBAND_TEAM: u32 = 0x0008_ff07;
+const SET_ALLOCATION_SCHEME: u32 = 0x0008_ff09;
+const TEAM_CHAT: u32 = 0x0008_ff0a;
+const INVITE_BY_NAME: u32 = 0x0008_ff0b;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameTeamMessageError {
@@ -31,6 +34,9 @@ pub(crate) enum GameTeamMessageError {
     MissingCandidateId,
     MissingInvitationResult,
     MissingTargetPlayerId,
+    MissingAllocationScheme,
+    MissingChatText,
+    MissingInvitedName,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,7 +55,13 @@ pub(crate) enum GameTeamMessageOutcome {
     LeaderChanged,
     PlayerKicked,
     TeamDisbanded,
+    AllocationSchemeChanged,
+    TeamChatSent,
+    TeamChatCooldown,
+    TeamChatSilenced,
+    NamedInvitationSent,
     LifecycleIgnored,
+    ControlIgnored,
 }
 
 #[must_use = "team-message report сохраняет state и client effects"]
@@ -65,6 +77,7 @@ pub(crate) struct GameTeamMessageReport {
     pub(crate) join_result: Option<GameTeamJoinResult>,
     pub(crate) mutation: Option<GameTeamJoinMutation>,
     pub(crate) lifecycle: Option<GameTeamLifecycleMutation>,
+    pub(crate) control: Option<GameTeamControlMutation>,
 }
 
 fn empty_report(player_id: Option<i32>) -> GameTeamMessageReport {
@@ -78,16 +91,27 @@ fn empty_report(player_id: Option<i32>) -> GameTeamMessageReport {
         join_result: None,
         mutation: None,
         lifecycle: None,
+        control: None,
+    }
+}
+
+fn notify_colored(
+    game: &CGame,
+    report: &mut GameTeamMessageReport,
+    player_id: i32,
+    string_id: &[u8],
+    color: u32,
+) {
+    if game.find_player(player_id).is_some() {
+        report.notification_deliveries.push(
+            colored_player_notice_message(color, 0, game.get_string_by_id(string_id))
+                .send_to_player(game.net_server(), player_id),
+        );
     }
 }
 
 fn notify(game: &CGame, report: &mut GameTeamMessageReport, player_id: i32, string_id: &[u8]) {
-    if game.find_player(player_id).is_some() {
-        report.notification_deliveries.push(
-            colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(string_id))
-                .send_to_player(game.net_server(), player_id),
-        );
-    }
+    notify_colored(game, report, player_id, string_id, 0xffff_ffff);
 }
 
 fn notify_invite_error(
@@ -284,6 +308,96 @@ pub(crate) fn dispatch_game_team_message(
             } else {
                 GameTeamMessageOutcome::LifecycleIgnored
             };
+            return Some(Ok(report));
+        }
+        SET_ALLOCATION_SCHEME => {
+            message.resolve_player_context(game);
+            let player_id = message.player_id();
+            let mut report = empty_report(player_id);
+            let Some(player_id) = player_id else {
+                return Some(Ok(report));
+            };
+            let Some(allocation_scheme) = message.base_mut().get_long() else {
+                return Some(Err(GameTeamMessageError::MissingAllocationScheme));
+            };
+            report.control = game.change_team_allocation_scheme(player_id, allocation_scheme);
+            report.outcome = if report.control.is_some() {
+                GameTeamMessageOutcome::AllocationSchemeChanged
+            } else {
+                GameTeamMessageOutcome::ControlIgnored
+            };
+            return Some(Ok(report));
+        }
+        TEAM_CHAT => {
+            message.resolve_player_context(game);
+            let player_id = message.player_id();
+            let mut report = empty_report(player_id);
+            let Some(player_id) = player_id else {
+                return Some(Ok(report));
+            };
+            let Some(player) = game.find_player(player_id) else {
+                return Some(Ok(report));
+            };
+            if player.team_id() == 0 {
+                report.outcome = GameTeamMessageOutcome::ControlIgnored;
+                return Some(Ok(report));
+            }
+            if player.silence_minutes() >= 1 {
+                notify_colored(game, &mut report, player_id, b"GS0330", 0xffff_0000);
+                report.outcome = GameTeamMessageOutcome::TeamChatSilenced;
+                return Some(Ok(report));
+            }
+            let Some(text) = message.base_mut().get_str_bytes(0x200) else {
+                return Some(Err(GameTeamMessageError::MissingChatText));
+            };
+            match game.send_team_chat(player_id, text, game_tick_milliseconds()) {
+                GameTeamChatResult::Sent(control) => {
+                    report.control = Some(control);
+                    report.outcome = GameTeamMessageOutcome::TeamChatSent;
+                }
+                GameTeamChatResult::Cooldown => {
+                    notify_colored(game, &mut report, player_id, b"GS0049", 0xffff_0000);
+                    report.outcome = GameTeamMessageOutcome::TeamChatCooldown;
+                }
+                GameTeamChatResult::MissingContext => {
+                    report.outcome = GameTeamMessageOutcome::ControlIgnored;
+                }
+            }
+            return Some(Ok(report));
+        }
+        INVITE_BY_NAME => {
+            let Some(candidate_name) = message.base_mut().get_str_bytes(0x100) else {
+                return Some(Err(GameTeamMessageError::MissingInvitedName));
+            };
+            let Some(leader_id) = message.base_mut().get_long() else {
+                return Some(Err(GameTeamMessageError::MissingLeaderId));
+            };
+            let mut report = empty_report(Some(leader_id));
+            let candidate_id = game
+                .find_player_by_name(&candidate_name)
+                .map(|player| player.player_id());
+            let Some(candidate_id) = candidate_id else {
+                notify(game, &mut report, leader_id, b"GS0096");
+                report.outcome = GameTeamMessageOutcome::JoinRejected;
+                return Some(Ok(report));
+            };
+            if game.find_player(leader_id).is_none() {
+                return Some(Ok(report));
+            }
+            let result = game.check_team_join(leader_id, candidate_id);
+            report.join_result = Some(result);
+            if result == GameTeamJoinResult::Succeed {
+                let mut invite = CMessage::new(0x000b_fd01);
+                invite.add_long(candidate_id);
+                invite.add_long(leader_id);
+                report
+                    .direct_deliveries
+                    .push(invite.send_to_player(game.net_server(), candidate_id));
+                report.outcome = GameTeamMessageOutcome::NamedInvitationSent;
+            } else {
+                notify_invite_error(game, &mut report, leader_id, result);
+                report.outcome = GameTeamMessageOutcome::JoinRejected;
+            }
             return Some(Ok(report));
         }
         SET_RECRUITMENT_STATE => {}
