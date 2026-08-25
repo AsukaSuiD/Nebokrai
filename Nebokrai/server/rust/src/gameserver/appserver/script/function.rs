@@ -496,6 +496,7 @@ pub(crate) const SCRIPT_FUNCTION_SET_TEAM_REGION: i32 = 2311;
 pub(crate) const SCRIPT_FUNCTION_IS_TEAMMATES_AROUND_ME: i32 = 2312;
 pub(crate) const SCRIPT_FUNCTION_SCRIPT_IS_RUNNING: i32 = 2316;
 pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
+pub(crate) const SCRIPT_FUNCTION_ADD_FU_MO_PROPERTY: i32 = 2320;
 pub(crate) const SCRIPT_FUNCTION_IS_TEAM_CAPTAIN: i32 = 2325;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
 pub(crate) const SCRIPT_FUNCTION_ADD_INCREMENT_LOG: i32 = 2570;
@@ -3403,6 +3404,10 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_SET_REGION_FOR_TEAM | SCRIPT_FUNCTION_SET_TEAM_REGION => match index {
             0..=5 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_ADD_FU_MO_PROPERTY => match index {
+            0 | 1 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_PLAYER_TALK => match index {
@@ -6476,6 +6481,19 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 runtime,
             );
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_ADD_FU_MO_PROPERTY => {
+            let property_type = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let value = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: if value == 0 {
+                    0
+                } else {
+                    script_player_id.map_or(-1, |player_id| {
+                        game.add_script_selected_fu_mo_property(player_id, property_type, value)
+                    })
+                },
+            })
         }
         SCRIPT_FUNCTION_CHANGE_REGION => {
             let Some(target_region_id) =

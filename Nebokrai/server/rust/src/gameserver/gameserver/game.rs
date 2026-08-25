@@ -20650,6 +20650,23 @@ impl CGame {
         .unwrap_or(0)
     }
 
+    pub(crate) fn add_script_selected_fu_mo_property(
+        &mut self,
+        player_id: i32,
+        property_type: i32,
+        value: i32,
+    ) -> i32 {
+        let Some(player) = self.find_player_mut(player_id) else {
+            return -1;
+        };
+        let Some(goods_id) = player.enhancement_selected_goods_id() else {
+            return -1;
+        };
+        player
+            .get_goods_by_id_mut(goods_id)
+            .map_or(-1, |goods| goods.set_fu_mo_property(property_type, value))
+    }
+
     pub(crate) fn recreate_script_selected_goods_addons<Context: OldClientGoodsCodec>(
         &mut self,
         player_id: i32,

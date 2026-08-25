@@ -38,7 +38,7 @@ use super::cgoodsbaseproperties::{
     GAP_FAIRY_MAIN_ABILITY, GAP_FAIRY_MAX_COMBINATED_TIMES, GAP_FAIRY_MAX_EXP, GAP_FAIRY_RIPE_ID,
     GAP_FAIRY_RIPE_MAX_LEVEL, GAP_FAIRY_RIPE_MIN_LEVEL, GAP_FAIRY_STATE, GAP_FAIRY_STRENGTH,
     GAP_FAIRY_STRENGTH_BASE_VALUE, GAP_FAIRY_WAKAN, GAP_FAIRY_WAKAN_BASE_VALUE, GAP_FAIRY_YOUNG_ID,
-    GAP_GOODS_LIFE_TYPE, GAP_GOODS_MAXIMUM_DURABILITY, GAP_GOODS_STACKING_LIMIT,
+    GAP_FUMO_PROPERTY, GAP_GOODS_LIFE_TYPE, GAP_GOODS_MAXIMUM_DURABILITY, GAP_GOODS_STACKING_LIMIT,
     GAP_GOODS_START_POINT, GAP_PARTICULAR_ATTRIBUTE, GAP_ROLE_MINIMUM_LEVEL_LIMIT,
     GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
@@ -1043,6 +1043,50 @@ impl CGoods {
         modifier: i32,
     ) -> bool {
         self.set_instance_addon_modifier(property_type, value_id, modifier)
+    }
+
+    /// `SetFuMoProperty` хранит выбранный тип и его величину в единственном
+    /// дополнении `GAP_FUMO_PROPERTY`. Повторный вызов полностью заменяет обе
+    /// пары значений, а не добавляет второе дополнение того же типа.
+    pub(crate) fn set_fu_mo_property(&mut self, property_type: i32, value: i32) -> i32 {
+        if let Some(property) = self
+            .addon_properties
+            .iter_mut()
+            .find(|property| property.property_type == GAP_FUMO_PROPERTY)
+        {
+            property
+                .values
+                .resize(2, GoodsAddonPropertyValue::default());
+            property.values[0] = GoodsAddonPropertyValue {
+                id: 1,
+                base_value: 0,
+                modifier: property_type,
+            };
+            property.values[1] = GoodsAddonPropertyValue {
+                id: 2,
+                base_value: 0,
+                modifier: value,
+            };
+            return 1;
+        }
+        self.addon_properties.push(GoodsAddonProperty {
+            property_type: GAP_FUMO_PROPERTY,
+            is_enabled: 1,
+            is_implicit_attribute: 0,
+            values: vec![
+                GoodsAddonPropertyValue {
+                    id: 1,
+                    base_value: 0,
+                    modifier: property_type,
+                },
+                GoodsAddonPropertyValue {
+                    id: 2,
+                    base_value: 0,
+                    modifier: value,
+                },
+            ],
+        });
+        1
     }
 
     /// Exact `CutAddonPropertyValue`: существующий modifier уменьшается и
