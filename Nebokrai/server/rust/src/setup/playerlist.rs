@@ -143,6 +143,12 @@ impl CPlayerList {
         self.player_experience.get(index).copied().unwrap_or(0)
     }
 
+    /// Exact `GetLevelNum`: selector возвращает число строк текущего
+    /// World-provided experience snapshot, а не максимальный level игрока.
+    pub(crate) fn level_count(&self) -> usize {
+        self.player_experience.len()
+    }
+
     pub(crate) fn clear_properties_upgrades(&mut self) {
         self.fighter_upgrades.clear();
         self.hunter_upgrades.clear();

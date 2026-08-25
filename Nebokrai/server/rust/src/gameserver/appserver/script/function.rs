@@ -397,7 +397,11 @@ pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
 pub(crate) const SCRIPT_FUNCTION_ADD_INCREMENT_LOG: i32 = 2570;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
+pub(crate) const SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE: i32 = 5411;
+pub(crate) const SCRIPT_FUNCTION_GET_MAXIMUM_LEVEL: i32 = 5412;
 pub(crate) const SCRIPT_FUNCTION_GET_AREA_ID: i32 = 5413;
+pub(crate) const SCRIPT_FUNCTION_GET_AREA_TYPE: i32 = 5414;
+pub(crate) const SCRIPT_FUNCTION_GET_WORLD_SERVER_ID: i32 = 5420;
 pub(crate) const SCRIPT_FUNCTION_PLAY_EFFECT: i32 = 5404;
 pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
 pub(crate) const SCRIPT_FUNCTION_POST_PLAYER_INFO: i32 = 3316;
@@ -3484,11 +3488,18 @@ pub(crate) fn script_function_parameter_kind(
             0..=1 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_TIME
         | SCRIPT_FUNCTION_SECOND
         | SCRIPT_FUNCTION_GET_COUNTRY
         | SCRIPT_FUNCTION_GET_ONLINE_PLAYERS
+        | SCRIPT_FUNCTION_GET_MAXIMUM_LEVEL
         | SCRIPT_FUNCTION_GET_AREA_ID
+        | SCRIPT_FUNCTION_GET_AREA_TYPE
+        | SCRIPT_FUNCTION_GET_WORLD_SERVER_ID
         | SCRIPT_FUNCTION_GET_PLAYER_SZL => Unused,
         SCRIPT_FUNCTION_CHANGE_PLAYER_SZL => match index {
             0 => Integer,
@@ -6748,6 +6759,36 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     integer_arguments: [Option<i32>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
     string_arguments: [Option<&[u8]>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
 ) -> ScriptFunctionDispatchOutcome {
+    match function_id {
+        SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE => {
+            let Some(player) = script_player_id.and_then(|player_id| game.find_player(player_id))
+            else {
+                return ScriptFunctionDispatchOutcome::Invalid;
+            };
+            let level = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .unwrap_or(i32::from(player.level())) as u8;
+            let legacy_return = game
+                .player_list()
+                .level_experience(level)
+                .wrapping_sub(player.experience()) as i32;
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+        }
+        SCRIPT_FUNCTION_GET_MAXIMUM_LEVEL => {
+            return ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.player_list().level_count() as i32,
+            };
+        }
+        SCRIPT_FUNCTION_GET_AREA_TYPE => {
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+        }
+        SCRIPT_FUNCTION_GET_WORLD_SERVER_ID => {
+            return ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.server_ids().1,
+            };
+        }
+        _ => {}
+    }
     if function_id == SCRIPT_FUNCTION_GET_MONSTER_REFRESH_TIME {
         let Some(region_id) = integer_arguments[0]
             .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
