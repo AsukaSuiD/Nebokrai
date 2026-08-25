@@ -196,6 +196,9 @@
 //! Talk pair `3301/3304` формирует exact `0xBF801` actor/name/text wire: NPC
 //! использует canonical around-send, monster family сохраняет 3x3 area scan,
 //! exact-name match и строгий AREA_WIDTH/HEIGHT recipient filter.
+//! `3308 / PlayerMessage` выполняет local named notice с принудительным type
+//! zero либо отправляет `0x5FA04`; существующий World/Game callback завершает
+//! online delivery или offline feedback исходному script-player.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -412,6 +415,7 @@ pub(crate) const SCRIPT_FUNCTION_DELETE_NPC: i32 = 3303;
 pub(crate) const SCRIPT_FUNCTION_MONSTER_TALK: i32 = 3304;
 pub(crate) const SCRIPT_FUNCTION_CREATE_MONSTER: i32 = 3305;
 pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER: i32 = 3306;
+pub(crate) const SCRIPT_FUNCTION_PLAYER_MESSAGE: i32 = 3308;
 pub(crate) const SCRIPT_FUNCTION_GET_MAP_INFO: i32 = 3309;
 pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER_RECT: i32 = 3313;
 pub(crate) const SCRIPT_FUNCTION_DELETE_NPC_BY_NAME: i32 = 3315;
@@ -3456,6 +3460,11 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_PLAYER_MESSAGE => match index {
+            0..=1 => String,
+            2..=3 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_DELETE_MONSTER_RECT => match index {
             0..=4 => Integer,
             5 => String,
@@ -5204,6 +5213,45 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 None => source_region_id,
             };
             let _ = game.delete_script_npc_by_name(region_id, name);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_PLAYER_MESSAGE => {
+            let (Some(target_name), Some(text)) = (
+                string_arguments[0].filter(|name| !name.is_empty() && name.len() <= 23),
+                string_arguments[1].filter(|text| text.len() <= 1023),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let color_argument =
+                integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR);
+            let color = color_argument.unwrap_or(-1);
+            let message_type = if color_argument.is_some() {
+                integer_arguments[3]
+                    .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                    .unwrap_or_default()
+            } else {
+                0
+            };
+            if let Some(target_id) = game
+                .find_player_by_name(target_name)
+                .map(CPlayer::player_id)
+            {
+                let _ = colored_player_notice_message(color as u32, 0, text)
+                    .send_to_player(game.net_server(), target_id);
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let Some(source_player_id) = script_player_id.filter(|player_id| *player_id > 0) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let mut request = CMessage::new(0x0005_fa04);
+            request.base_mut().add(target_name);
+            request.add_byte(0);
+            request.base_mut().add(text);
+            request.add_byte(0);
+            request.add_long(color);
+            request.add_long(message_type);
+            request.add_long(source_player_id);
+            let _ = request.send(game, false);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_SET_THING_COUNT => {
