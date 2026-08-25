@@ -179,6 +179,7 @@
 use crate::gameserver::appserver::country::country::{
     CountryExileRestTimeReport, CountryScalarMutationReport,
 };
+use crate::gameserver::appserver::exstate::ExtendedStateKind;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::organizingsystem::attackcitysys::AttackCityMembershipBlock;
 use crate::gameserver::appserver::player::{PlayerLeiTingThingCountOutcome, PlayerProgress};
@@ -252,6 +253,12 @@ pub(crate) const SCRIPT_FUNCTION_GET_CHANGE_BODY_STATE: i32 = 2520;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_BODY_CHECK: i32 = 2521;
 pub(crate) const SCRIPT_FUNCTION_CHECK_MODE: i32 = 2522;
 pub(crate) const SCRIPT_FUNCTION_GET_PROGRESS: i32 = 2576;
+pub(crate) const SCRIPT_FUNCTION_ADD_EX_STATE: i32 = 2550;
+pub(crate) const SCRIPT_FUNCTION_DELETE_EX_STATE: i32 = 2551;
+pub(crate) const SCRIPT_FUNCTION_GET_EX_STATE: i32 = 2552;
+pub(crate) const SCRIPT_FUNCTION_ADD_EX_STATE_NEW: i32 = 2553;
+pub(crate) const SCRIPT_FUNCTION_DELETE_EX_STATE_NEW: i32 = 2554;
+pub(crate) const SCRIPT_FUNCTION_GET_EX_STATE_NEW: i32 = 2555;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
@@ -3239,6 +3246,15 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_ADD_EX_STATE
+        | SCRIPT_FUNCTION_DELETE_EX_STATE
+        | SCRIPT_FUNCTION_GET_EX_STATE
+        | SCRIPT_FUNCTION_ADD_EX_STATE_NEW
+        | SCRIPT_FUNCTION_DELETE_EX_STATE_NEW
+        | SCRIPT_FUNCTION_GET_EX_STATE_NEW => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_IS_CHARGED
         | SCRIPT_FUNCTION_CHANGE_BODY_CHECK
         | SCRIPT_FUNCTION_CHECK_MODE
@@ -4399,6 +4415,49 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 .and_then(|player_id| game.find_player(player_id))
                 .map_or(-1, |player| player.current_progress() as i32),
         }),
+        SCRIPT_FUNCTION_ADD_EX_STATE
+        | SCRIPT_FUNCTION_DELETE_EX_STATE
+        | SCRIPT_FUNCTION_GET_EX_STATE
+        | SCRIPT_FUNCTION_ADD_EX_STATE_NEW
+        | SCRIPT_FUNCTION_DELETE_EX_STATE_NEW
+        | SCRIPT_FUNCTION_GET_EX_STATE_NEW => {
+            let Some(state_id) = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .map(|value| value as u32)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let Some(player_id) = script_player_id else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let kind = if matches!(
+                function_id,
+                SCRIPT_FUNCTION_ADD_EX_STATE_NEW
+                    | SCRIPT_FUNCTION_DELETE_EX_STATE_NEW
+                    | SCRIPT_FUNCTION_GET_EX_STATE_NEW
+            ) {
+                ExtendedStateKind::New
+            } else {
+                ExtendedStateKind::Original
+            };
+            let legacy_return = match function_id {
+                SCRIPT_FUNCTION_ADD_EX_STATE | SCRIPT_FUNCTION_ADD_EX_STATE_NEW => {
+                    let now_ms = runtime.country_contend_now_milliseconds();
+                    game.add_script_extended_state(player_id, state_id, kind, now_ms, runtime)
+                }
+                SCRIPT_FUNCTION_DELETE_EX_STATE | SCRIPT_FUNCTION_DELETE_EX_STATE_NEW => {
+                    let now_ms = runtime.country_contend_now_milliseconds();
+                    game.delete_script_extended_state(player_id, state_id, kind, now_ms, runtime)
+                }
+                SCRIPT_FUNCTION_GET_EX_STATE | SCRIPT_FUNCTION_GET_EX_STATE_NEW => game
+                    .find_player(player_id)
+                    .map_or(0, |player| player.get_extended_state(kind, state_id)),
+                _ => unreachable!("extended-state selector проверен"),
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: legacy_return as i32,
+            })
+        }
         SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE
         | SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE
         | SCRIPT_FUNCTION_GET_CHANGE_BODY_STATE => {

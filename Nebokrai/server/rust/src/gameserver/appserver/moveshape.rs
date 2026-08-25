@@ -47,6 +47,7 @@ use std::collections::BTreeMap;
 
 use super::ai::baseai::{AiShapeAction, CBaseAI};
 use super::chbystate::{ChangeBodyMutation, ChangeBodyState};
+use super::exstate::{ExtendedState, ExtendedStateKind, ExtendedStateMutation};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::shape::{
@@ -180,6 +181,7 @@ pub(crate) struct CMoveShape {
     item_skill_ids: Vec<u32>,
     ex_states: Vec<u8>,
     change_body_states: Vec<ChangeBodyState>,
+    extended_states: Vec<ExtendedState>,
     undead_states: Vec<UndeadState>,
     moveable_count: i32,
     moveable: bool,
@@ -194,6 +196,7 @@ impl Default for CMoveShape {
             item_skill_ids: Vec::new(),
             ex_states: Vec::new(),
             change_body_states: Vec::new(),
+            extended_states: Vec::new(),
             undead_states: Vec::new(),
             moveable_count: 0,
             moveable: true,
@@ -227,11 +230,15 @@ impl CMoveShape {
         for state in &self.change_body_states {
             state.update_serialized_runtime(&mut payload, now_ms);
         }
+        for state in &self.extended_states {
+            state.update_serialized_runtime(&mut payload, now_ms);
+        }
         payload
     }
 
     pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>) {
         self.change_body_states = ChangeBodyState::decode_all(&states, 0);
+        self.extended_states = ExtendedState::decode_all(&states, 0);
         self.ex_states = states;
     }
 
@@ -241,6 +248,7 @@ impl CMoveShape {
         self.item_skill_ids.clear();
         self.ex_states.clear();
         self.change_body_states.clear();
+        self.extended_states.clear();
         self.undead_states.clear();
     }
 
@@ -334,6 +342,139 @@ impl CMoveShape {
             .unwrap_or(0)
     }
 
+    pub(crate) fn add_extended_state(
+        &mut self,
+        kind: ExtendedStateKind,
+        state_id: u32,
+        factory: &CSkillFactory,
+        now_ms: u32,
+    ) -> ExtendedStateMutation {
+        let Some(mut added) = ExtendedState::from_factory(kind, state_id, factory, now_ms) else {
+            return ExtendedStateMutation {
+                removed: Vec::new(),
+                added: None,
+                legacy_return: 0,
+            };
+        };
+        let mut removed = Vec::new();
+        let mut index = 0;
+        while index < self.extended_states.len() {
+            if self.extended_states[index].kind == kind
+                && (self.extended_states[index].state_type == added.state_type
+                    || self.extended_states[index].level == state_id)
+            {
+                let state = self.extended_states.remove(index);
+                self.remove_extended_state_serialized(&state);
+                removed.push(state);
+            } else {
+                index += 1;
+            }
+        }
+        if self.ex_states.len() < 4 {
+            self.ex_states.clear();
+            self.ex_states.extend_from_slice(&0_u32.to_le_bytes());
+        }
+        let count = u32::from_le_bytes(self.ex_states[..4].try_into().expect("state count"));
+        self.ex_states[..4].copy_from_slice(&count.wrapping_add(1).to_le_bytes());
+        let offset = self.ex_states.len();
+        let size = match kind {
+            ExtendedStateKind::Original => 44,
+            ExtendedStateKind::New => 56,
+        };
+        self.ex_states.resize(offset + size, 0);
+        added.write_serialized(&mut self.ex_states, offset);
+        self.extended_states.push(added.clone());
+        ExtendedStateMutation {
+            removed,
+            added: Some(added),
+            legacy_return: 1,
+        }
+    }
+
+    pub(crate) fn delete_extended_state(
+        &mut self,
+        kind: ExtendedStateKind,
+        state_id: u32,
+    ) -> ExtendedStateMutation {
+        let Some(index) = self
+            .extended_states
+            .iter()
+            .position(|state| state.kind == kind && state.level == state_id)
+        else {
+            return ExtendedStateMutation {
+                removed: Vec::new(),
+                added: None,
+                legacy_return: 0,
+            };
+        };
+        let removed = self.extended_states.remove(index);
+        self.remove_extended_state_serialized(&removed);
+        ExtendedStateMutation {
+            removed: vec![removed],
+            added: None,
+            legacy_return: state_id,
+        }
+    }
+
+    fn remove_extended_state_serialized(&mut self, state: &ExtendedState) {
+        let span = state.serialized_span();
+        state.remove_serialized(&mut self.ex_states);
+        if let Some((offset, amount)) = span {
+            for state in &mut self.extended_states {
+                state.shift_serialized_offset_after(offset, amount);
+            }
+            for state in &mut self.change_body_states {
+                state.shift_serialized_offset_after(offset, amount);
+            }
+        }
+    }
+
+    pub(crate) fn get_extended_state(&self, kind: ExtendedStateKind, state_id: u32) -> u32 {
+        self.extended_states
+            .iter()
+            .any(|state| state.kind == kind && state.level == state_id)
+            .then_some(state_id)
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn extended_states(&self) -> &[ExtendedState] {
+        &self.extended_states
+    }
+
+    pub(crate) fn extended_states_mut(&mut self) -> &mut [ExtendedState] {
+        &mut self.extended_states
+    }
+
+    pub(crate) fn activate_loaded_extended_states(&mut self, now_ms: u32) -> Vec<ExtendedState> {
+        for state in &mut self.extended_states {
+            state.activate_loaded(now_ms);
+            state.update_serialized_runtime(&mut self.ex_states, now_ms);
+        }
+        self.extended_states.clone()
+    }
+
+    pub(crate) fn extended_state_tick(
+        &mut self,
+        now_ms: u32,
+    ) -> (
+        Vec<(ExtendedStateKind, u32)>,
+        Vec<(ExtendedStateKind, u32, u32, u32)>,
+    ) {
+        let mut expired = Vec::new();
+        let mut item_due = Vec::new();
+        for state in &mut self.extended_states {
+            if state.expired(now_ms) {
+                expired.push((state.kind, state.level));
+                continue;
+            }
+            if state.item_due(now_ms) {
+                state.restart_item_clock(now_ms);
+                item_due.push((state.kind, state.level, state.item_index, state.item_amount));
+            }
+        }
+        (expired, item_due)
+    }
+
     pub(crate) fn add_change_body_state(
         &mut self,
         state_id: u32,
@@ -355,7 +496,7 @@ impl CMoveShape {
             .position(|state| state.level == state_id)
             .map(|index| {
                 let removed = self.change_body_states.remove(index);
-                removed.remove_serialized(&mut self.ex_states);
+                self.remove_change_body_state_serialized(&removed);
                 removed
             });
         if self.ex_states.len() < 4 {
@@ -390,7 +531,7 @@ impl CMoveShape {
             };
         };
         let removed = self.change_body_states.remove(index);
-        removed.remove_serialized(&mut self.ex_states);
+        self.remove_change_body_state_serialized(&removed);
         ChangeBodyMutation {
             removed: Some(removed),
             added: None,
@@ -404,6 +545,19 @@ impl CMoveShape {
             .any(|state| state.level == state_id)
             .then_some(state_id)
             .unwrap_or_default()
+    }
+
+    fn remove_change_body_state_serialized(&mut self, state: &ChangeBodyState) {
+        let span = state.serialized_span();
+        state.remove_serialized(&mut self.ex_states);
+        if let Some((offset, amount)) = span {
+            for state in &mut self.extended_states {
+                state.shift_serialized_offset_after(offset, amount);
+            }
+            for state in &mut self.change_body_states {
+                state.shift_serialized_offset_after(offset, amount);
+            }
+        }
     }
 
     pub(crate) fn active_change_body_state(&self) -> Option<&ChangeBodyState> {

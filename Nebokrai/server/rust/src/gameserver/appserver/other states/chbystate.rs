@@ -164,6 +164,11 @@ impl ChangeBodyState {
         }
     }
 
+    pub(crate) fn serialized_span(&self) -> Option<(usize, usize)> {
+        self.serialized_offset
+            .map(|offset| (offset, 4 + CHANGE_BODY_PARAMETER_BYTES))
+    }
+
     pub(crate) fn write_serialized(&mut self, payload: &mut [u8], offset: usize) {
         let base = offset + 4;
         payload[offset..offset + 4].copy_from_slice(&CHANGE_BODY_STATE_ID.to_le_bytes());
@@ -243,6 +248,15 @@ impl ChangeBodyState {
         payload[base] = u8::from(self.has_changed_region);
         write_u32(payload, base + 8, self.remaining_time_ms(now_ms));
         payload[base + 19] = u8::from(self.online);
+    }
+
+    pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) {
+        if self
+            .serialized_offset
+            .is_some_and(|offset| removed_offset < offset)
+        {
+            self.serialized_offset = self.serialized_offset.map(|offset| offset - amount);
+        }
     }
 }
 

@@ -416,6 +416,7 @@ use crate::gameserver::appserver::cs2ccontainerobjectamountchange::CS2CContainer
 use crate::gameserver::appserver::cs2ccontainerobjectmove::{
     CS2CContainerObjectMove, ContainerObjectMoveOperation,
 };
+use crate::gameserver::appserver::exstate::{ExtendedState, ExtendedStateKind};
 use crate::gameserver::appserver::goods::cbattlefairyproperty::{
     BattleFairyExpUpResult, BattleFairyPlayerFacts, CBattleFairyProperty,
 };
@@ -1868,6 +1869,11 @@ pub(crate) trait RealmAppellationScriptContext: BattleFairyDeathContext {
         &mut self,
         player: &CPlayer,
     ) -> PlayerCombatProperties;
+
+    /// `AddExState` type `0x12F` сначала снимает concrete
+    /// `SKILL_GOD_BLESS`. Общий state registry ещё остаётся у runtime, но
+    /// вызов идёт из реального script owner-а до replacement нового state.
+    fn remove_script_god_bless_state(&mut self, player_id: i32);
 }
 
 pub(crate) trait BattleFairySkillResetContext {
@@ -16405,6 +16411,144 @@ impl CGame {
         i32::from(allowed)
     }
 
+    pub(crate) fn add_script_extended_state<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        state_id: u32,
+        kind: ExtendedStateKind,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> u32 {
+        if kind == ExtendedStateKind::Original
+            && self
+                .skill_factory
+                .query_skill_base_properties(kind.state_id(), state_id as i32)
+                .is_some_and(|properties| properties.query_property(20_010) == 0x12f)
+        {
+            context.remove_script_god_bless_state(player_id);
+        }
+        let mutation = {
+            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+            let Some(player) = players.get_mut(&player_id) else {
+                return 0;
+            };
+            player.add_extended_state(kind, state_id, skill_factory, now_ms)
+        };
+        for removed in &mutation.removed {
+            self.send_extended_state_visual(player_id, removed, false, now_ms);
+        }
+        if let Some(added) = mutation.added.as_ref() {
+            self.send_extended_state_visual(player_id, added, true, now_ms);
+        }
+        if !mutation.removed.is_empty() || mutation.added.is_some() {
+            self.refresh_script_change_body_properties(player_id, context);
+            self.send_script_player_state_changed(player_id);
+        }
+        mutation.legacy_return
+    }
+
+    pub(crate) fn delete_script_extended_state<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        state_id: u32,
+        kind: ExtendedStateKind,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> u32 {
+        let mutation = self
+            .find_player_mut(player_id)
+            .map(|player| player.delete_extended_state(kind, state_id));
+        let Some(mutation) = mutation else { return 0 };
+        for removed in &mutation.removed {
+            self.send_extended_state_visual(player_id, removed, false, now_ms);
+        }
+        if !mutation.removed.is_empty() {
+            self.refresh_script_change_body_properties(player_id, context);
+            self.send_script_player_state_changed(player_id);
+        }
+        mutation.legacy_return
+    }
+
+    fn send_extended_state_visual(
+        &mut self,
+        player_id: i32,
+        state: &ExtendedState,
+        begin: bool,
+        now_ms: u32,
+    ) {
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        let identity = player.shape().identity();
+        let mut message = CMessage::new(if begin { 0x0b_fe03 } else { 0x0b_fe04 });
+        message.add_long(identity.object_type);
+        message.add_long(player_id);
+        message.add_long(state.state_id() as i32);
+        message.add_ulong(state.level);
+        if begin {
+            message.add_ulong(state.remaining_time_ms(now_ms));
+            message.add_ulong(u32::from(state.state_type));
+        }
+        let _ = self.send_player_shape_around(player_id, None, &message);
+    }
+
+    fn update_extended_states<Context: RealmAppellationScriptContext>(
+        &mut self,
+        now_ms: u32,
+        context: &mut Context,
+    ) {
+        let player_ids: Vec<_> = self.players.keys().copied().collect();
+        for player_id in player_ids {
+            let (expired, item_due) = self
+                .find_player_mut(player_id)
+                .map(|player| player.extended_state_tick(now_ms))
+                .unwrap_or_default();
+            for (kind, state_id) in expired {
+                let _ =
+                    self.delete_script_extended_state(player_id, state_id, kind, now_ms, context);
+            }
+            for (kind, state_id, item_index, item_amount) in item_due {
+                let enough = self
+                    .find_player(player_id)
+                    .is_some_and(|player| player.check_item_in_packet(item_index) >= item_amount);
+                if !enough {
+                    let goods_name = self
+                        .goods_factory
+                        .query_goods_name(item_index)
+                        .unwrap_or_default();
+                    let text = format_legacy_text_fields(
+                        self.get_string_by_id(b"GS0128"),
+                        &[goods_name],
+                        0xff,
+                    );
+                    let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
+                        .send_to_player(self.net_server(), player_id);
+                    let _ = self
+                        .delete_script_extended_state(player_id, state_id, kind, now_ms, context);
+                    continue;
+                }
+                let consumptions = self
+                    .find_player_mut(player_id)
+                    .map(|player| player.remove_item_in_packet(item_index, item_amount))
+                    .unwrap_or_default();
+                let removed = consumptions.iter().fold(0_u32, |total, consumption| {
+                    total.wrapping_add(
+                        consumption
+                            .previous_amount
+                            .wrapping_sub(consumption.remaining_amount),
+                    )
+                });
+                for consumption in &consumptions {
+                    let _ = self.send_player_packet_consumption(consumption);
+                }
+                if removed != item_amount {
+                    let _ = self
+                        .delete_script_extended_state(player_id, state_id, kind, now_ms, context);
+                }
+            }
+        }
+    }
+
     pub(crate) fn add_script_change_body_state<Context: RealmAppellationScriptContext>(
         &mut self,
         player_id: i32,
@@ -17336,6 +17480,14 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_change_body_states(login_tick_ms);
+        let loaded_extended_states = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_extended_states(login_tick_ms);
+        for state in &loaded_extended_states {
+            self.send_extended_state_visual(expected_player_id, state, true, login_tick_ms);
+        }
         for state in &loaded_change_body_states {
             self.send_change_body_visual(expected_player_id, state, true);
         }
@@ -20395,6 +20547,7 @@ impl CGame {
         state.current_tick_ms = runtime.get_tick_ms();
         self.expire_script_faction_sessions(state.current_tick_ms);
         self.expire_change_body_states(state.current_tick_ms, runtime);
+        self.update_extended_states(state.current_tick_ms, runtime);
         state.calls_since_runtime_log = state.calls_since_runtime_log.wrapping_add(1);
         let mut stages = Vec::new();
 

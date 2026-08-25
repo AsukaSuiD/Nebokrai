@@ -11,6 +11,8 @@ pub(crate) mod appserver {
     #[path = "other states/chbystate.rs"]
     pub(crate) mod chbystate;
     pub(crate) mod citygate;
+    #[path = "other states/exstate.rs"]
+    pub(crate) mod exstate;
     pub(crate) mod container {
         pub(crate) mod camountlimitgoodscontainer;
         pub(crate) mod camountlimitgoodsshadowcontainer;

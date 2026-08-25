@@ -1490,11 +1490,15 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) minimum_attack: u32,
     pub(crate) maximum_attack: u32,
     pub(crate) attack_speed: u16,
+    pub(crate) dodge: u16,
     pub(crate) cch: u16,
     pub(crate) defense: u32,
     pub(crate) element_resistance: u32,
     pub(crate) burden: u16,
     pub(crate) reank: u16,
+    pub(crate) attack_avoid: u16,
+    pub(crate) element_avoid: u16,
+    pub(crate) full_miss: u16,
     pub(crate) element_modify: i32,
     pub(crate) blast_attack: u16,
     pub(crate) blast_element_attack: u16,
@@ -2805,12 +2809,16 @@ impl CPlayer {
             minimum_attack: read_player_wire_u32(wire, 0x1c),
             maximum_attack: read_player_wire_u32(wire, 0x20),
             attack_speed: read_player_wire_u16(wire, 0x24),
+            dodge: read_player_wire_u16(wire, 0x30),
             cch: read_player_wire_u16(wire, 0x28),
             burden: read_player_wire_u16(wire, 0x26),
             defense: read_player_wire_u32(wire, 0x2c),
             element_resistance: read_player_wire_u32(wire, 0x34),
             element_modify: read_player_wire_u32(wire, 0x48) as i32,
             reank: read_player_wire_u16(wire, 0x4c),
+            attack_avoid: read_player_wire_u16(wire, 0x4e),
+            element_avoid: read_player_wire_u16(wire, 0x50),
+            full_miss: read_player_wire_u16(wire, 0x52),
             blast_attack: read_player_wire_u16(wire, 0x54),
             blast_element_attack: read_player_wire_u16(wire, 0x56),
             blast_defense_scale_bits: read_player_wire_u32(wire, 0x5c),
@@ -3639,6 +3647,28 @@ impl CPlayer {
     }
 
     pub(crate) fn apply_change_body_properties(&mut self, mut properties: PlayerCombatProperties) {
+        for state in self.move_shape.extended_states() {
+            let add = |target: &mut u32, value: u16| {
+                *target = (*target)
+                    .saturating_add(u32::from(value))
+                    .min(i32::MAX as u32);
+            };
+            add(&mut properties.maximum_hp, state.maximum_hp);
+            add(&mut properties.maximum_mp, state.maximum_mp);
+            add(&mut properties.minimum_attack, state.minimum_attack);
+            add(&mut properties.maximum_attack, state.maximum_attack);
+            add(&mut properties.defense, state.defense);
+            add(&mut properties.element_resistance, state.element_resistance);
+            properties.element_modify = properties
+                .element_modify
+                .wrapping_add(i32::from(state.element_modify));
+            properties.cch = properties.cch.wrapping_add(state.cch);
+            properties.full_miss = properties.full_miss.wrapping_add(state.full_miss);
+            properties.attack_avoid = properties.attack_avoid.wrapping_add(state.attack_avoid);
+            properties.element_avoid = properties.element_avoid.wrapping_add(state.element_avoid);
+            properties.attack_speed = properties.attack_speed.wrapping_add(state.hit);
+            properties.dodge = properties.dodge.wrapping_add(state.dodge);
+        }
         if let Some(state) = self.move_shape.active_change_body_state() {
             let add = |target: &mut u32, value: u32| {
                 *target = u32::min((*target).saturating_add(value), i32::MAX as u32);
@@ -3656,6 +3686,50 @@ impl CPlayer {
                 .wrapping_add(state.blast_element_attack);
         }
         self.apply_recomputed_combat_properties(properties);
+    }
+
+    pub(crate) fn add_extended_state(
+        &mut self,
+        kind: super::exstate::ExtendedStateKind,
+        state_id: u32,
+        factory: &CSkillFactory,
+        now_ms: u32,
+    ) -> super::exstate::ExtendedStateMutation {
+        self.move_shape
+            .add_extended_state(kind, state_id, factory, now_ms)
+    }
+
+    pub(crate) fn delete_extended_state(
+        &mut self,
+        kind: super::exstate::ExtendedStateKind,
+        state_id: u32,
+    ) -> super::exstate::ExtendedStateMutation {
+        self.move_shape.delete_extended_state(kind, state_id)
+    }
+
+    pub(crate) fn get_extended_state(
+        &self,
+        kind: super::exstate::ExtendedStateKind,
+        state_id: u32,
+    ) -> u32 {
+        self.move_shape.get_extended_state(kind, state_id)
+    }
+
+    pub(crate) fn extended_state_tick(
+        &mut self,
+        now_ms: u32,
+    ) -> (
+        Vec<(super::exstate::ExtendedStateKind, u32)>,
+        Vec<(super::exstate::ExtendedStateKind, u32, u32, u32)>,
+    ) {
+        self.move_shape.extended_state_tick(now_ms)
+    }
+
+    pub(crate) fn activate_loaded_extended_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::exstate::ExtendedState> {
+        self.move_shape.activate_loaded_extended_states(now_ms)
     }
 
     pub(crate) fn realm_appellation_bonus_identity(
@@ -4180,6 +4254,7 @@ impl CPlayer {
             0x24,
             properties.attack_speed,
         );
+        write_u16(&mut self.combat_property_wire, 0x30, properties.dodge);
         write_u16(&mut self.combat_property_wire, 0x28, properties.cch);
         write_u16(&mut self.combat_property_wire, 0x26, properties.burden);
         write_u32(&mut self.combat_property_wire, 0x2c, properties.defense);
@@ -4194,6 +4269,17 @@ impl CPlayer {
             properties.element_modify as u32,
         );
         write_u16(&mut self.combat_property_wire, 0x4c, properties.reank);
+        write_u16(
+            &mut self.combat_property_wire,
+            0x4e,
+            properties.attack_avoid,
+        );
+        write_u16(
+            &mut self.combat_property_wire,
+            0x50,
+            properties.element_avoid,
+        );
+        write_u16(&mut self.combat_property_wire, 0x52, properties.full_miss);
         write_u16(
             &mut self.combat_property_wire,
             0x54,
