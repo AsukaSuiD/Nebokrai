@@ -68,7 +68,9 @@
 //! изменение самих max не выполняет этот clamp без конкретного caller-а.
 //! `UseItem` материализует exact requirement-коды, owned skill learning,
 //! packet consumption и четыре replaceable `tagExpendableEffect` combat
-//! mutation; timed `CState`, mount/recall и script VM остаются у caller runtime.
+//! mutation. Mount и ChangeBody guards/state замкнуты на canonical player/game
+//! owners; timed `CState`, recall и неподдержанные script VM selector-ы остаются
+//! у caller runtime.
 //! Как в связном `RefreshContainerOwners`, достигнутые equipment,
 //! ordinary-fairy и battle-fairy containers принадлежат player type `400` с
 //! его numeric ID. Ordinary fairy получает exact volume 14 и persisted
@@ -3745,8 +3747,13 @@ impl CPlayer {
                 PlayerProgress::Trading | PlayerProgress::OpenStall
             )
             && self.team_id == 0
+            && !self.is_rider()
             && !self.has_pet()
             && self.uncreated_carriage.original_name.is_empty()
+    }
+
+    pub(crate) fn has_change_body_state(&self) -> bool {
+        self.move_shape.active_change_body_state().is_some()
     }
 
     pub(crate) fn add_change_body_state(

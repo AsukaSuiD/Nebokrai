@@ -12,8 +12,10 @@
 //! Player item-use `0x8FA04` замыкает outer progress/death guard, packet slot,
 //! region forbidden goods и `CanUseItem`, mount/change-body ветви, полный
 //! consumable-addon loop, skill/player combat mutations и recall/state runtime
-//! boundaries. Goods-script входит прямо в `CGame::run_script_file` с GUID
-//! исходного packet item; terminal расход публикует `0xBF709/0xC0101/0xC0102`.
+//! boundaries. ChangeBody restriction/check читают live state и конфигурацию
+//! прямо из `CGame`; goods-script входит в `CGame::run_script_file` с GUID
+//! исходного packet item и выполняет state side effects через тот же owner.
+//! Terminal расход публикует `0xBF709/0xC0101/0xC0102`.
 //! Общий outer guard сохраняет исходный запрет player-message во время смены
 //! сервера/региона; `0x8FA02` вызывает полный reached `CPlayer::OnRelive(0)`
 //! через concrete `CGame` relive owner со всеми state/region/wire effects.
@@ -115,14 +117,6 @@ pub(crate) trait GamePlayerMessageRuntime:
     /// blocking state проверяет ordered `PLAYER_ITEM_BLOCKING_SKILL_IDS`.
     fn player_item_use_facts(&mut self, game: &CGame, player_id: i32) -> PlayerItemUseFacts;
 
-    /// Точный `CChangeBodyConf` lookup для уже разрешённого packet goods.
-    fn player_item_body_change_conflict(
-        &mut self,
-        game: &CGame,
-        player_id: i32,
-        goods_base_index: u32,
-    ) -> bool;
-
     /// Исполняет только ещё не owned concrete state/skill/relocation
     /// owner; container/player scalars и wire хвост остаются у dispatcher-а.
     fn apply_player_item_runtime_effect(
@@ -137,8 +131,6 @@ pub(crate) trait GamePlayerMessageRuntime:
 pub(crate) struct PlayerItemUseFacts {
     pub(crate) blocking_skill_state: bool,
     pub(crate) state_110000_exists: bool,
-    pub(crate) change_body_state_exists: bool,
-    pub(crate) change_body_check_passed: bool,
     pub(crate) fight_state_count: i32,
     pub(crate) mount_state_exists: bool,
     pub(crate) contend_use_forbidden: bool,
@@ -726,9 +718,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let identity_type = goods.identity().object_type;
             let base_index = goods.base_properties_index();
             report.item_goods_id = Some(goods_id);
-            if facts.change_body_state_exists
-                && runtime.player_item_body_change_conflict(game, player_id, base_index)
-            {
+            if game.change_body_item_conflicts(player_id, base_index) {
                 report
                     .deliveries
                     .push(GamePlayerMessageDelivery::Player(send_item_notice(
@@ -810,7 +800,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let mut return_after_use = false;
             let change_body_type =
                 goods.addon_property_value(game.goods_factory(), GAP_CHANGEBODY_TYPE, 1);
-            if change_body_type != 0 && !facts.change_body_check_passed {
+            if change_body_type != 0 && game.script_change_body_check(player_id, false) == 0 {
                 report
                     .deliveries
                     .push(GamePlayerMessageDelivery::Player(send_item_notice(

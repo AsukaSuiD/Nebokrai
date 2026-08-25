@@ -111,6 +111,9 @@
 //! Synthesis/new-skill/goods-destruction/change-body `0x21..0x24` проходят
 //! общий mutation-rules FIFO pass с полными decode reports, partial registries,
 //! точными logs и сохранёнными allocation-error sources.
+//! Item-use ChangeBody guard использует этот же configuration owner и live
+//! player state; прошедший addon script добавляет состояние через canonical
+//! script dispatcher, property recompute и around visual publication.
 //! DaKong/WordsFilter/JJC levels `0x2B/0x31/0x32` проходят общий lookup/filter
 //! FIFO pass с исходными clear/append, partial publication и success logs.
 //! TaoZhuang и CiQing/LingBao `0x34/0x35` проходят общий enhancement FIFO pass:
@@ -16557,6 +16560,18 @@ impl CGame {
             }
         }
         i32::from(allowed)
+    }
+
+    /// Item-use prefix проверяет restrictions только пока уже действует
+    /// `CChangeBodyState`; конфигурация и persisted state принадлежат этому же
+    /// Game owner-у, поэтому внешний snapshot здесь больше не нужен.
+    pub(crate) fn change_body_item_conflicts(&self, player_id: i32, goods_base_index: u32) -> bool {
+        self.find_player(player_id)
+            .is_some_and(CPlayer::has_change_body_state)
+            && self
+                .change_body_conf
+                .restrictions_goods()
+                .contains(&goods_base_index)
     }
 
     pub(crate) fn add_script_extended_state<Context: RealmAppellationScriptContext>(
