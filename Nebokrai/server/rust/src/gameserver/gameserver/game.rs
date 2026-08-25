@@ -5130,6 +5130,35 @@ pub(crate) enum GameReleaseDebug {
     ServerExited,
 }
 
+fn publish_game_release_debug(message: &GameReleaseDebug) {
+    match message {
+        GameReleaseDebug::ServerExiting => eprintln!("GameServer: завершение сервера"),
+        GameReleaseDebug::PlayerSaveFailed {
+            player_id,
+            processed,
+            total,
+        } => {
+            eprintln!("GameServer: не удалось сохранить игрока {player_id} [{processed} / {total}]")
+        }
+        GameReleaseDebug::PlayersSaved { processed, total } => {
+            eprintln!("GameServer: данные игроков отправлены [{processed} / {total}]")
+        }
+        GameReleaseDebug::CityRegionSaved => {
+            eprintln!("GameServer: городские регионы сохранены")
+        }
+        GameReleaseDebug::PlayersAndRegionsCleared => {
+            eprintln!("GameServer: игроки и регионы очищены")
+        }
+        GameReleaseDebug::ProxyRegionsCleared => {
+            eprintln!("GameServer: proxy-регионы очищены")
+        }
+        GameReleaseDebug::ScriptDataCleared => {
+            eprintln!("GameServer: script-данные очищены")
+        }
+        GameReleaseDebug::ServerExited => eprintln!("GameServer: сервер завершён"),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameReleaseEvent {
     Debug(GameReleaseDebug),
@@ -5158,7 +5187,7 @@ pub(crate) enum GameReleaseEvent {
         function_registry: usize,
         general_variables: usize,
     },
-    ExternalOwner(GameReleaseExternalOwner),
+    TechnicalReplacement(GameReleaseExternalOwner),
     SkillFactoryCleared,
     GoodsFactoryReleased,
     NetworkServerWorkerStopped {
@@ -5213,9 +5242,7 @@ pub(crate) struct GameReleaseReport {
 }
 
 pub(crate) trait GameReleaseRuntime {
-    fn put_debug_string(&mut self, message: GameReleaseDebug);
     fn save_city_region(&mut self, game: &CGame, region_id: i32);
-    fn release_external_owner(&mut self, owner: GameReleaseExternalOwner);
     fn exit_network_server_worker(&mut self, server: &mut CMyNetServer);
 }
 
@@ -25133,8 +25160,9 @@ impl CGame {
     }
 
     /// Полный достигнутый `Release` teardown. Manual deletes заменены Drop и
-    /// `take/clear`, а отсутствующие process-global owners вызываются строго в
-    /// исходной позиции через runtime; неизвестный legacy int не выдумывается.
+    /// `take/clear`; технически заменённые process-global CMySocket/CPKSys/
+    /// CBaseMessage отмечаются в report без фиктивного callback-а. Неизвестный
+    /// legacy int не выдумывается.
     pub(crate) async fn release<Runtime: GameThreadRuntime>(
         &mut self,
         runtime: &mut Runtime,
@@ -25142,7 +25170,7 @@ impl CGame {
         let mut events = Vec::new();
 
         let debug = GameReleaseDebug::ServerExiting;
-        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
+        publish_game_release_debug(&debug);
         events.push(GameReleaseEvent::Debug(debug));
 
         self.stop_reconnect_tasks().await;
@@ -25172,7 +25200,7 @@ impl CGame {
                     processed: index,
                     total: total_players,
                 };
-                GameReleaseRuntime::put_debug_string(runtime, debug.clone());
+                publish_game_release_debug(&debug);
                 events.push(GameReleaseEvent::Debug(debug));
                 // Safe Result-граница заменяет native exception catch, который
                 // немедленно erase-ил проблемный map node и продолжал обход.
@@ -25189,13 +25217,13 @@ impl CGame {
             processed: total_players,
             total: total_players,
         };
-        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
+        publish_game_release_debug(&debug);
         events.push(GameReleaseEvent::Debug(debug));
 
         runtime.save_city_region(self, 0);
         events.push(GameReleaseEvent::CityRegionSaved);
         let debug = GameReleaseDebug::CityRegionSaved;
-        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
+        publish_game_release_debug(&debug);
         events.push(GameReleaseEvent::Debug(debug));
 
         let players = self.players.len();
@@ -25205,7 +25233,7 @@ impl CGame {
         self.regions.clear();
         events.push(GameReleaseEvent::RegionsCleared { count: regions });
         let debug = GameReleaseDebug::PlayersAndRegionsCleared;
-        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
+        publish_game_release_debug(&debug);
         events.push(GameReleaseEvent::Debug(debug));
 
         let proxy_regions = self.proxy_regions.len();
@@ -25214,7 +25242,7 @@ impl CGame {
             count: proxy_regions,
         });
         let debug = GameReleaseDebug::ProxyRegionsCleared;
-        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
+        publish_game_release_debug(&debug);
         events.push(GameReleaseEvent::Debug(debug));
 
         let function_list = self.function_list_file_data.take().is_some();
@@ -25234,7 +25262,7 @@ impl CGame {
             general_variables,
         });
         let debug = GameReleaseDebug::ScriptDataCleared;
-        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
+        publish_game_release_debug(&debug);
         events.push(GameReleaseEvent::Debug(debug));
 
         self.skill_factory.clear_skill_cache();
@@ -25273,8 +25301,7 @@ impl CGame {
             present: network_server_present,
         });
 
-        runtime.release_external_owner(GameReleaseExternalOwner::SocketRuntime);
-        events.push(GameReleaseEvent::ExternalOwner(
+        events.push(GameReleaseEvent::TechnicalReplacement(
             GameReleaseExternalOwner::SocketRuntime,
         ));
         let released_net_sessions = self.net_session_manager.release();
@@ -25284,14 +25311,12 @@ impl CGame {
 
         self.increment_shop_list.release();
         events.push(GameReleaseEvent::IncrementShopReleased);
-        runtime.release_external_owner(GameReleaseExternalOwner::PkSystem);
-        events.push(GameReleaseEvent::ExternalOwner(
+        events.push(GameReleaseEvent::TechnicalReplacement(
             GameReleaseExternalOwner::PkSystem,
         ));
         self.quest_system = CQuestSystem::default();
         events.push(GameReleaseEvent::QuestSystemReleased);
-        runtime.release_external_owner(GameReleaseExternalOwner::BaseMessageRuntime);
-        events.push(GameReleaseEvent::ExternalOwner(
+        events.push(GameReleaseEvent::TechnicalReplacement(
             GameReleaseExternalOwner::BaseMessageRuntime,
         ));
 
@@ -25337,7 +25362,7 @@ impl CGame {
         });
 
         let debug = GameReleaseDebug::ServerExited;
-        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
+        publish_game_release_debug(&debug);
         events.push(GameReleaseEvent::Debug(debug));
         GameReleaseReport {
             events,
