@@ -133,6 +133,9 @@
 //! Журналы `2314/2315` не вычисляют аргументы при выключенных настройках;
 //! включённые ветви создают временные предметы через общую фабрику и отправляют
 //! полные записи `0x60204/0x60205` владельцу журнала WorldServer.
+//! `2319 / OpenNewHelpWindow` открывает клиентское окно пакетом `0xBF812` без
+//! аргументов и ответного состояния. Соседний ID `2318` в целевом EXE не
+//! поддерживается и намеренно не получает выдуманного обработчика.
 //! Соседняя группа `2204/2205/2212/2217/2218/2220` связывает подсчёты рюкзака
 //! и депо, выбранный предмет контейнера улучшения, локальное либо удалённое
 //! удаление и доверенный путь сценария окна `0xBF919` с подтверждением
@@ -529,6 +532,7 @@ pub(crate) const SCRIPT_FUNCTION_TALK_BOX_SMALL: i32 = 2324;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS_LOG: i32 = 2313;
 pub(crate) const SCRIPT_FUNCTION_ADD_GEM_EXCHANGE_LOG: i32 = 2314;
 pub(crate) const SCRIPT_FUNCTION_ADD_JEWELRY_MADE_LOG: i32 = 2315;
+pub(crate) const SCRIPT_FUNCTION_OPEN_NEW_HELP_WINDOW: i32 = 2319;
 pub(crate) const SCRIPT_FUNCTION_SET_REGION_FOR_TEAM: i32 = 2310;
 pub(crate) const SCRIPT_FUNCTION_SET_TEAM_REGION: i32 = 2311;
 pub(crate) const SCRIPT_FUNCTION_IS_TEAMMATES_AROUND_ME: i32 = 2312;
@@ -3904,6 +3908,7 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_GET_DEPOT_GOODS_NUMBER
         | SCRIPT_FUNCTION_GET_DEPOT_GOODS_FREE
         | SCRIPT_FUNCTION_GET_CONTAINER_ITEM_TYPE => Unused,
+        SCRIPT_FUNCTION_OPEN_NEW_HELP_WINDOW => Unused,
         SCRIPT_FUNCTION_GET_GOODS_PROPERTY_1 | SCRIPT_FUNCTION_GET_GOODS_PROPERTY_2 => {
             match index {
                 0 => Integer,
@@ -7423,6 +7428,12 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let _ = message.send_to_player(game.net_server(), player_id);
             }
             Some(ScriptFunctionDispatchOutcome::Yielded { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_OPEN_NEW_HELP_WINDOW => {
+            if game.find_player(player_id).is_some() {
+                let _ = CMessage::new(0x000b_f812).send_to_player(game.net_server(), player_id);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_POST_COUNTRY_INFO => {
             let (Some(text), Some(country_id)) = (
