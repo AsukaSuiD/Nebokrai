@@ -71,7 +71,7 @@ use super::super::shape::{CShape, ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::player::{CPlayer, PlayerExploitMutationReport};
 use crate::gameserver::gameserver::game::{
     CGame, GameWarRegionHandle, OldClientGoodsCodec, ScriptRegionChangeContext, ServerRegionOwner,
-    colored_player_notice_message,
+    colored_player_notice_message, format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
@@ -82,9 +82,6 @@ pub(crate) trait GameOrganizingWarRuntime:
     + RegionRandomContext
     + ScriptRegionChangeContext
 {
-    /// Публикует region-localized `0xBF806(..., GS0127(region name))`.
-    fn send_village_clear_player_notice(&mut self, region_id: i32, region_name: &[u8]);
-
     /// Исполняет virtual `CPlayer::UpdateProperty` после FourNation exploit.
     fn update_player_property(&mut self, player: &mut CPlayer);
 
@@ -2275,15 +2272,18 @@ impl<Runtime: GameOrganizingWarRuntime> VillageWarPhaseContext
         let GameWarRegionHandle::Local(region_id) = region else {
             return;
         };
-        let Some(name) = self
-            .game
-            .find_region(region_id)
-            .map(|region| region.name().to_vec())
-        else {
+        let Some(owner) = self.game.take_region_owner(region_id) else {
             return;
         };
-        self.runtime
-            .send_village_clear_player_notice(region_id, &name);
+        let name = owner.name().to_vec();
+        let text =
+            format_legacy_text_fields(self.game.get_string_by_id(b"GS0127"), &[&name], 0x3ff);
+        let _delivery = colored_player_notice_message(0xffda_edfe, 0, &text).send_to_region(
+            Some(owner.base()),
+            None,
+            self.game,
+        );
+        self.game.restore_region_owner(owner);
     }
 
     fn start_clear_player_out(&mut self, region: Self::Region, delay_ms: i32) {
