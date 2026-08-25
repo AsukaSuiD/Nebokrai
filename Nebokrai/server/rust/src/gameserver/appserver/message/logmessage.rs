@@ -7,7 +7,8 @@
 //! `0x7F901` теперь проходит тот же live main-loop runtime: status/captain/
 //! team читаются владельцем сообщения, полный `CPlayer` декодируется единым
 //! GameSave codec-ом, после чего `CGame` выполняет map/region membership,
-//! login script, property/client/Billing/honor и GoodsAI tail.
+//! login/honor script scheduling, property/client publication, Billing
+//! `0xEF201`, полный GoodsAI traversal и expired-equipment `0xBF928` tail.
 //! Legacy pending `s_mapPlayer` placeholder заменён уже существующим transport
 //! map-id: полноценный owned `CPlayer` появляется в canonical map только после
 //! успешного decode, а любой malformed/duplicate/membership отказ очищает
@@ -148,7 +149,7 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
         source_type: PLAYER_LOGIN,
         client_type: 0x000b_f401,
         player_id,
-        delivery: login.network_deliveries.first().copied().unwrap_or_default(),
+        delivery: login.client_deliveries.first().copied().unwrap_or_default(),
         login_status: Some(status),
         decoded_bytes,
         login: Some(login),

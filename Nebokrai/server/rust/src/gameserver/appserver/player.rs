@@ -19,6 +19,10 @@
 //! wire строго на первом false, как исходная цепочка. После чтения base-wire
 //! `bBFSummon` намеренно снова выводится из локального `m_dwWarSoulState`, а не
 //! принимается как независимый persisted fact.
+//! Initial-login tail обходит GoodsAI candidates в exact positional order:
+//! equipment, packet, hand, auction и depot. Для equipment-state `2` нулевая
+//! packed date прерывает только текущий container; просроченное состояние
+//! становится `3` до old-client `0xBF928`, как в `OnLogMessage`.
 //! `CMessage::Run` RVA `0x000149D0` дополнительно читает inherited father
 //! `+0x40` как текущий `CServerRegion*`; удалённый raw pointer выражен
 //! `Option<i32>` region identity в assembly-проекции.
@@ -1337,6 +1341,15 @@ impl From<PlayerLeiTingDecodeBlock> for PlayerGameSaveCodecError {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerGameSaveDecodeReport {
     pub(crate) consumed_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerLoginGoodsLocation {
+    Equipment,
+    Packet,
+    Hand,
+    Auction,
+    Depot,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5008,6 +5021,57 @@ impl CPlayer {
 
     pub(crate) const fn equipment(&self) -> &CEquipmentContainer {
         &self.equipment
+    }
+
+    /// Точный обход GoodsAI при первом входе: позиционные equipment/packet,
+    /// одиночный hand, позиционные auction и depot. Возврат `false` повторяет
+    /// исходный `break` только внутри текущего контейнера; следующий владелец
+    /// всё равно обрабатывается. Закрытый depot читается через собственное
+    /// базовое хранилище без временной смены lock-флага — безопасная замена
+    /// исходного `Unlock(saved password) → traversal → Lock`, не меняющая
+    /// наблюдаемое итоговое состояние блокировки.
+    pub(crate) fn visit_login_goods_mut(
+        &mut self,
+        mut visit: impl FnMut(PlayerLoginGoodsLocation, &mut CGoods) -> bool,
+    ) {
+        for position in 0..17 {
+            if let Some(goods) = self.equipment.get_goods_mut(position)
+                && !visit(PlayerLoginGoodsLocation::Equipment, goods)
+            {
+                break;
+            }
+        }
+        for position in 0..self.packet.size() {
+            if let Some(goods) = self.packet.get_goods_mut(position)
+                && !visit(PlayerLoginGoodsLocation::Packet, goods)
+            {
+                break;
+            }
+        }
+        let hand_id = self
+            .hand
+            .traversing_goods()
+            .next()
+            .map(|goods| goods.identity().ex_id);
+        if let Some(goods_id) = hand_id
+            && let Some(goods) = self.hand.find_mut(goods_id)
+        {
+            let _ = visit(PlayerLoginGoodsLocation::Hand, goods);
+        }
+        for position in 0..self.auction_listing.size() {
+            if let Some(goods) = self.auction_listing.get_goods_mut(position)
+                && !visit(PlayerLoginGoodsLocation::Auction, goods)
+            {
+                break;
+            }
+        }
+        for position in 0..self.depot.base().size() {
+            if let Some(goods) = self.depot.base_mut().get_goods_mut(position)
+                && !visit(PlayerLoginGoodsLocation::Depot, goods)
+            {
+                break;
+            }
+        }
     }
 
     pub(crate) const fn packet(&self) -> &CVolumeLimitGoodsContainer {

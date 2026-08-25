@@ -54,8 +54,10 @@
 //! World login `0x7F901` проходит из общего message FIFO через полный player
 //! GameSave decoder, transport-route validation, canonical player map и
 //! spatial region membership. Затем тот же main-loop runtime выполняет login
-//! script, полный property recompute, initial client/Billing публикацию,
-//! honor adjustment и GoodsAI регистрацию; save/faction/region/release callers
+//! property recompute и ещё не материализованные client/GoodsAI virtual owners;
+//! сам `CGame` ставит login/honor scripts в живой scheduler, публикует Billing
+//! `0xEF201`, обходит все подтверждённые goods containers и выполняет
+//! equipment-state `2→3` с `0xBF928`. Save/faction/region/release callers
 //! используют один обратный codec с live companion snapshot.
 //! Reached faction `Create/ApplyJoin` sessions хранят exact correlation,
 //! `1000/2000` ms timeout, client prompts и World requests; успешный create
@@ -539,7 +541,7 @@ use crate::gameserver::appserver::player::{
     PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange, PlayerReliveMutation, PlayerSkillDispatch,
     PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
     PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage,
-    PlayerUncreatedPet, PlayerYuanBaoChange,
+    PlayerLoginGoodsLocation, PlayerUncreatedPet, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1911,20 +1913,22 @@ pub(crate) trait GameRegionEnterContext: NationCombatContext {
     );
 }
 
-/// Внешняя половина initial-login owner-а: player codec, map и spatial
-/// membership исполняет `CGame`, а ещё не материализованные client snapshot,
-/// Billing account entry, login-script и GoodsAI получают тот же live runtime
-/// в исходном порядке, без disconnected callback-результатов.
-pub(crate) trait GamePlayerLoginContext: NationCombatContext {
-    fn run_player_login_script(&mut self, game: &mut CGame, player_id: i32);
+/// Внешняя половина initial-login owner-а: player codec, map, spatial
+/// membership, login/honor scripts и Billing account entry исполняет `CGame`.
+/// Ещё не материализованные полный client snapshot, virtual property recompute
+/// и GoodsAI tree получают тот же live runtime в исходном порядке.
+pub(crate) trait GamePlayerLoginContext: NationCombatContext + OldClientGoodsCodec {
     fn recompute_login_player_properties(&mut self, player: &CPlayer) -> PlayerCombatProperties;
-    fn publish_initial_player_login(
+    fn publish_initial_player_client_snapshot(
         &mut self,
         game: &mut CGame,
         player_id: i32,
         first_login: bool,
     ) -> Vec<i32>;
-    fn adjust_login_honor_rank(&mut self, game: &mut CGame, player_id: i32);
+    /// Переводит packed local `tm` equipment-state в исходное условие
+    /// `difftime(now, expiry) / 60 > 10079`. Time-zone/CRT conversion остаётся
+    /// системной runtime-границей; gameplay mutation и wire принадлежат CGame.
+    fn login_equipment_state_expired(&mut self, packed_local_time: i32) -> bool;
     fn register_login_goods_ai(&mut self, player_id: i32, goods: &CGoods);
 }
 
@@ -1944,8 +1948,19 @@ pub(crate) struct GamePlayerLoginReport {
     pub(crate) region_id: i32,
     pub(crate) first_login: bool,
     pub(crate) relocation: Option<(i32, i32)>,
-    pub(crate) network_deliveries: Vec<i32>,
+    pub(crate) login_script_id: Option<i32>,
+    pub(crate) client_deliveries: Vec<i32>,
+    pub(crate) billing_delivery: i32,
+    pub(crate) honor_script_id: Option<i32>,
     pub(crate) goods_ai_registrations: usize,
+    pub(crate) equipment_state_updates: Vec<PlayerLoginEquipmentStateUpdate>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerLoginEquipmentStateUpdate {
+    pub(crate) location: PlayerLoginGoodsLocation,
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) delivery: i32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16937,7 +16952,9 @@ impl CGame {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn complete_world_player_login<Context: GamePlayerLoginContext>(
+    pub(crate) fn complete_world_player_login<
+        Context: GamePlayerLoginContext + ScriptFunctionRuntime,
+    >(
         &mut self,
         expected_player_id: i32,
         mut player: CPlayer,
@@ -17023,9 +17040,20 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .mark_login_script_started();
-        if first_login {
-            context.run_player_login_script(self, expected_player_id);
-        }
+        let login_script_id = if first_login {
+            let path = self.quest_system.player_login_script.clone();
+            self.run_script_file(
+                &path,
+                ScriptExecutionContext {
+                    player_id: Some(expected_player_id),
+                    region_id: Some(region_id),
+                    ..ScriptExecutionContext::default()
+                },
+                context,
+            )
+        } else {
+            None
+        };
         let recomputed = context.recompute_login_player_properties(
             self.players
                 .get(&expected_player_id)
@@ -17035,29 +17063,94 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("login property callback не удаляет player owner")
             .apply_recomputed_combat_properties(recomputed);
-        let network_deliveries =
-            context.publish_initial_player_login(self, expected_player_id, first_login);
+        let client_deliveries = context.publish_initial_player_client_snapshot(
+            self,
+            expected_player_id,
+            first_login,
+        );
+        let mut billing = CMessage::new(0x000e_f201);
+        add_legacy_c_string(
+            billing.base_mut(),
+            self.players
+                .get(&expected_player_id)
+                .expect("client snapshot сохраняет player owner")
+                .account(),
+        );
+        billing.add_long(expected_player_id);
+        let billing_delivery = billing.send_to_bs(self, false).unwrap_or_default();
         let adjust_honor = self.globe_setup.use_appellation_function()
             && self
                 .players
                 .get(&expected_player_id)
                 .is_some_and(|player| player.honor_snapshot().rank_of_nobility_id != 0);
-        if adjust_honor {
-            context.adjust_login_honor_rank(self, expected_player_id);
-        }
+        let honor_script_id = adjust_honor
+            .then(|| {
+                self.run_script_file(
+                    b"scripts/circle/honorrank/adjusthonorrank.script",
+                    ScriptExecutionContext {
+                        player_id: Some(expected_player_id),
+                        region_id: Some(region_id),
+                        ..ScriptExecutionContext::default()
+                    },
+                    context,
+                )
+            })
+            .flatten();
 
         let mut goods_ai_registrations = 0usize;
-        let player = self
-            .players
-            .get(&expected_player_id)
-            .expect("initial publication сохраняет player owner");
-        for (_, goods) in player.equipment().traversing_goods() {
-            context.register_login_goods_ai(expected_player_id, goods);
-            goods_ai_registrations += 1;
+        let mut pending_equipment_state_updates = Vec::new();
+        {
+            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+            let player = players
+                .get_mut(&expected_player_id)
+                .expect("honor script scheduling сохраняет player owner");
+            player.visit_login_goods_mut(|location, goods| {
+                context.register_login_goods_ai(expected_player_id, goods);
+                goods_ai_registrations += 1;
+                if !matches!(
+                    location,
+                    PlayerLoginGoodsLocation::Equipment
+                        | PlayerLoginGoodsLocation::Packet
+                        | PlayerLoginGoodsLocation::Depot
+                ) || goods.addon_property_value(goods_factory, GAP_EQUIP_STATE, 1) != 2
+                {
+                    return true;
+                }
+                let packed_expiration =
+                    goods.addon_property_value(goods_factory, GAP_EQUIP_STATE, 2);
+                if packed_expiration == 0 {
+                    return false;
+                }
+                if context.login_equipment_state_expired(packed_expiration) {
+                    let _ = goods.set_addon_property_modifier_core(GAP_EQUIP_STATE, 1, 3);
+                    pending_equipment_state_updates.push((
+                        location,
+                        goods.identity(),
+                        context.encode_goods_for_old_client(goods),
+                    ));
+                }
+                true
+            });
         }
-        for goods in player.packet().base().traversing_goods() {
-            context.register_login_goods_ai(expected_player_id, goods);
-            goods_ai_registrations += 1;
+        let mut equipment_state_updates = Vec::new();
+        for (location, goods, payload) in pending_equipment_state_updates {
+            let mut update = CMessage::new(0x000b_f928);
+            update.add_long(expected_player_id);
+            update.base_mut().add_guid(goods.ex_id);
+            update.add_ulong(payload.len() as u32);
+            update.base_mut().add(&payload);
+            let delivery = if location == PlayerLoginGoodsLocation::Depot {
+                self.send_player_shape_around(expected_player_id, None, &update)
+                    .and_then(Result::ok)
+                    .unwrap_or_default()
+            } else {
+                update.send_to_player(self.net_server(), expected_player_id)
+            };
+            equipment_state_updates.push(PlayerLoginEquipmentStateUpdate {
+                location,
+                goods,
+                delivery,
+            });
         }
 
         Ok(GamePlayerLoginReport {
@@ -17067,8 +17160,12 @@ impl CGame {
             region_id,
             first_login,
             relocation,
-            network_deliveries,
+            login_script_id,
+            client_deliveries,
+            billing_delivery,
+            honor_script_id,
             goods_ai_registrations,
+            equipment_state_updates,
         })
     }
 
