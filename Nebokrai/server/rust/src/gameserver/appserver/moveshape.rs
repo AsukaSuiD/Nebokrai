@@ -43,6 +43,9 @@
 //! state заменяются по usage type либо ID, сохраняются exact tag `0x38/72`,
 //! wrapping lifetime/item clock и death flag. Property overlay, login restore,
 //! item consumption и `0xBFE03/04` замкнуты concrete player/CGame owner-ами.
+//! Эти и уже owned extended/change-body/ride state теперь получают AI из
+//! реального `CMoveShape::UpdateAbnormality` caller-а; неизвестные concrete
+//! state-классы остаются узкой runtime-границей после materialized pass.
 
 use std::collections::BTreeMap;
 
@@ -505,6 +508,13 @@ impl CMoveShape {
 
     pub(crate) const fn has_ride_state(&self) -> bool {
         self.ride_state.is_some()
+    }
+
+    pub(crate) const fn has_materialized_abnormality(&self) -> bool {
+        !self.change_body_states.is_empty()
+            || !self.extended_states.is_empty()
+            || !self.undead_states.is_empty()
+            || self.ride_state.is_some()
     }
 
     pub(crate) fn begin_ride_state(&mut self, mut state: RideState) -> Option<RideState> {
@@ -2305,7 +2315,7 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 
 // ============================================================================
 // FUNCTION: CMoveShape::UpdateAbnormality
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_MATERIALIZED_KNOWN_STATE_OWNERS
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:247

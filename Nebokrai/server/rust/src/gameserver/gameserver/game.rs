@@ -15,7 +15,9 @@
 //! `CPlayer::AI` pass и virtual region AI с base-tail clear countdown.
 //! Внутри player pass exact `PeriodicalUpdate` tail выполняет ping `0xBF809`,
 //! Nation died countdown и fairy hatcher до `CMoveShape::AI`; внешний runtime
-//! остаётся только у ещё не материализованных virtual/disconnect owners.
+//! остаётся только у ещё не материализованных virtual owners. Legacy
+//! disconnect timer доказательно process-dead: EXE содержит только constructor
+//! zeroing и AI read/clear, но ни одного runtime writer-а обоих полей.
 //! После live/dead war-soul ветви тот же caller сохраняет GoodsAI/delete,
 //! wrapping ticket, packet expansion, Flash и инвертированный TaoZhuang gate.
 //! `MountAllEquip` обновляет две exact 17-DWORD flash-таблицы при каждом
@@ -3840,6 +3842,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) region_id: i32,
     pub(crate) battle_fairy_deaths: Vec<BattleFairyDeathReport>,
     pub(crate) periodical_updates: Vec<PlayerPeriodicalUpdateReport>,
+    pub(crate) player_abnormalities: Vec<GamePlayerAbnormalityReport>,
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
     pub(crate) player_lost_timeouts: Vec<GamePlayerLostTimeoutReport>,
@@ -3874,6 +3877,18 @@ pub(crate) struct GamePlayerExitReport {
     pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
     pub(crate) player_snapshot_size: Option<usize>,
     pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerAbnormalityReport {
+    pub(crate) player_id: i32,
+    pub(crate) sampled_at_ms: Option<u32>,
+    pub(crate) change_body_states_ended: usize,
+    pub(crate) extended_states_ended: usize,
+    pub(crate) extended_items_consumed: u32,
+    pub(crate) appellation_states_ended: usize,
+    pub(crate) appellation_items_consumed: u32,
+    pub(crate) ride_ended: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4977,16 +4992,14 @@ pub(crate) trait GameMainLoopRuntime:
     fn wall_time_seconds(&mut self) -> u32;
     fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
-    /// Исполняет ещё внешний disconnect prefix `CPlayer::AI`; delayed lost
-    /// timestamp и его `OnExit/CS_DELETE` tail принадлежат `CGame`.
-    fn player_disconnect_ai_prefix(&mut self, game: &mut CGame, player_id: i32);
     /// Исполняет оставшийся criminal timestamp tail virtual
     /// `CPlayer::UpdateCurrentState` после owned combat countdown. Native
     /// вызывает этот slot дважды: из `PeriodicalUpdate` и `CMoveShape::AI`.
     fn player_update_criminal_state_tail(&mut self, game: &mut CGame, player_id: i32);
-    /// Исполняет `UpdateAbnormality` prefix `CMoveShape::AI` непосредственно
-    /// перед owned virtual `CPlayer::UpdateCurrentState`.
-    fn player_move_shape_update_abnormality(&mut self, game: &mut CGame, player_id: i32);
+    /// Исполняет только ещё не материализованные state-классы из
+    /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
+    /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
+    fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
     /// Исполняет current-state `AI` tail после owned `UpdateCurrentState` и
     /// возвращает post-AI restored-state current war-soul skill.
     fn player_move_shape_active_state_ai(
@@ -23929,117 +23942,130 @@ impl CGame {
         let _ = self.send_player_shape_around(player_id, None, &message);
     }
 
-    fn update_extended_states<Context: RealmAppellationScriptContext>(
+    fn update_player_extended_states<Context: RealmAppellationScriptContext>(
         &mut self,
+        player_id: i32,
         now_ms: u32,
         context: &mut Context,
-    ) {
-        let player_ids: Vec<_> = self.players.keys().copied().collect();
-        for player_id in player_ids {
-            let (expired, item_due) = self
-                .find_player_mut(player_id)
-                .map(|player| player.extended_state_tick(now_ms))
-                .unwrap_or_default();
-            for (kind, state_id) in expired {
-                let _ =
-                    self.delete_script_extended_state(player_id, state_id, kind, now_ms, context);
-            }
-            for (kind, state_id, item_index, item_amount) in item_due {
-                let enough = self
-                    .find_player(player_id)
-                    .is_some_and(|player| player.check_item_in_packet(item_index) >= item_amount);
-                if !enough {
-                    let goods_name = self
-                        .goods_factory
-                        .query_goods_name(item_index)
-                        .unwrap_or_default();
-                    let text = format_legacy_text_fields(
-                        self.get_string_by_id(b"GS0128"),
-                        &[goods_name],
-                        0xff,
-                    );
-                    let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
-                        .send_to_player(self.net_server(), player_id);
-                    let _ = self
-                        .delete_script_extended_state(player_id, state_id, kind, now_ms, context);
-                    continue;
-                }
-                let consumptions = self
-                    .find_player_mut(player_id)
-                    .map(|player| player.remove_item_in_packet(item_index, item_amount))
+    ) -> (usize, u32) {
+        let (expired, item_due) = self
+            .find_player_mut(player_id)
+            .map(|player| player.extended_state_tick(now_ms))
+            .unwrap_or_default();
+        let mut ended = 0;
+        let mut items_consumed = 0_u32;
+        for (kind, state_id) in expired {
+            ended += usize::from(
+                self.delete_script_extended_state(player_id, state_id, kind, now_ms, context) != 0,
+            );
+        }
+        for (kind, state_id, item_index, item_amount) in item_due {
+            let enough = self
+                .find_player(player_id)
+                .is_some_and(|player| player.check_item_in_packet(item_index) >= item_amount);
+            if !enough {
+                let goods_name = self
+                    .goods_factory
+                    .query_goods_name(item_index)
                     .unwrap_or_default();
-                let removed = consumptions.iter().fold(0_u32, |total, consumption| {
-                    total.wrapping_add(
-                        consumption
-                            .previous_amount
-                            .wrapping_sub(consumption.remaining_amount),
-                    )
-                });
-                for consumption in &consumptions {
-                    let _ = self.send_player_packet_consumption(consumption);
-                }
-                if removed != item_amount {
-                    let _ = self
-                        .delete_script_extended_state(player_id, state_id, kind, now_ms, context);
-                }
+                let text = format_legacy_text_fields(
+                    self.get_string_by_id(b"GS0128"),
+                    &[goods_name],
+                    0xff,
+                );
+                let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
+                    .send_to_player(self.net_server(), player_id);
+                ended += usize::from(
+                    self.delete_script_extended_state(player_id, state_id, kind, now_ms, context)
+                        != 0,
+                );
+                continue;
+            }
+            let consumptions = self
+                .find_player_mut(player_id)
+                .map(|player| player.remove_item_in_packet(item_index, item_amount))
+                .unwrap_or_default();
+            let removed = consumptions.iter().fold(0_u32, |total, consumption| {
+                total.wrapping_add(
+                    consumption
+                        .previous_amount
+                        .wrapping_sub(consumption.remaining_amount),
+                )
+            });
+            for consumption in &consumptions {
+                let _ = self.send_player_packet_consumption(consumption);
+            }
+            items_consumed = items_consumed.wrapping_add(removed);
+            if removed != item_amount {
+                ended += usize::from(
+                    self.delete_script_extended_state(player_id, state_id, kind, now_ms, context)
+                        != 0,
+                );
             }
         }
+        (ended, items_consumed)
     }
 
-    fn update_appellation_states<Context: RealmAppellationScriptContext>(
+    fn update_player_appellation_states<Context: RealmAppellationScriptContext>(
         &mut self,
+        player_id: i32,
         now_ms: u32,
         context: &mut Context,
-    ) {
-        let player_ids: Vec<_> = self.players.keys().copied().collect();
-        for player_id in player_ids {
-            let (ended, item_due) = self
-                .find_player_mut(player_id)
-                .map(|player| player.appellation_state_tick(now_ms))
-                .unwrap_or_default();
-            for state_id in ended {
-                let _ = self.delete_script_appellation_state(player_id, state_id, now_ms, context);
-            }
-            for (state_id, item_index, item_amount) in item_due {
-                let enough = self
-                    .find_player(player_id)
-                    .is_some_and(|player| player.check_item_in_packet(item_index) >= item_amount);
-                if !enough {
-                    let goods_name = self
-                        .goods_factory
-                        .query_goods_name(item_index)
-                        .unwrap_or_default();
-                    let text = format_legacy_text_fields(
-                        self.get_string_by_id(b"GS0128"),
-                        &[goods_name],
-                        0xff,
-                    );
-                    let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
-                        .send_to_player(self.net_server(), player_id);
-                    let _ =
-                        self.delete_script_appellation_state(player_id, state_id, now_ms, context);
-                    continue;
-                }
-                let consumptions = self
-                    .find_player_mut(player_id)
-                    .map(|player| player.remove_item_in_packet(item_index, item_amount))
+    ) -> (usize, u32) {
+        let (expired, item_due) = self
+            .find_player_mut(player_id)
+            .map(|player| player.appellation_state_tick(now_ms))
+            .unwrap_or_default();
+        let mut ended = 0;
+        let mut items_consumed = 0_u32;
+        for state_id in expired {
+            ended += usize::from(
+                self.delete_script_appellation_state(player_id, state_id, now_ms, context) != 0,
+            );
+        }
+        for (state_id, item_index, item_amount) in item_due {
+            let enough = self
+                .find_player(player_id)
+                .is_some_and(|player| player.check_item_in_packet(item_index) >= item_amount);
+            if !enough {
+                let goods_name = self
+                    .goods_factory
+                    .query_goods_name(item_index)
                     .unwrap_or_default();
-                let removed = consumptions.iter().fold(0_u32, |total, consumption| {
-                    total.wrapping_add(
-                        consumption
-                            .previous_amount
-                            .wrapping_sub(consumption.remaining_amount),
-                    )
-                });
-                for consumption in &consumptions {
-                    let _ = self.send_player_packet_consumption(consumption);
-                }
-                if removed != item_amount {
-                    let _ =
-                        self.delete_script_appellation_state(player_id, state_id, now_ms, context);
-                }
+                let text = format_legacy_text_fields(
+                    self.get_string_by_id(b"GS0128"),
+                    &[goods_name],
+                    0xff,
+                );
+                let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
+                    .send_to_player(self.net_server(), player_id);
+                ended += usize::from(
+                    self.delete_script_appellation_state(player_id, state_id, now_ms, context) != 0,
+                );
+                continue;
+            }
+            let consumptions = self
+                .find_player_mut(player_id)
+                .map(|player| player.remove_item_in_packet(item_index, item_amount))
+                .unwrap_or_default();
+            let removed = consumptions.iter().fold(0_u32, |total, consumption| {
+                total.wrapping_add(
+                    consumption
+                        .previous_amount
+                        .wrapping_sub(consumption.remaining_amount),
+                )
+            });
+            for consumption in &consumptions {
+                let _ = self.send_player_packet_consumption(consumption);
+            }
+            items_consumed = items_consumed.wrapping_add(removed);
+            if removed != item_amount {
+                ended += usize::from(
+                    self.delete_script_appellation_state(player_id, state_id, now_ms, context) != 0,
+                );
             }
         }
+        (ended, items_consumed)
     }
 
     fn send_ride_visual(&mut self, player_id: i32, state: &RideState, begin: bool) {
@@ -24117,26 +24143,27 @@ impl CGame {
         self.apply_player_state_properties(player_id, properties);
     }
 
-    fn update_ride_states<Context: RealmAppellationScriptContext>(
+    fn update_player_ride_state<Context: RealmAppellationScriptContext>(
         &mut self,
+        player_id: i32,
         now_ms: u32,
         context: &mut Context,
-    ) {
-        let due: Vec<_> = self
-            .players
-            .iter()
-            .filter(|(_, player)| player.ride_goods_check_due(now_ms))
-            .map(|(&player_id, _)| player_id)
-            .collect();
-        let goods_factory = self.goods_factory.clone();
-        for player_id in due {
-            let exists = self
-                .find_player_mut(player_id)
-                .is_some_and(|player| player.refresh_ride_goods_cache(&goods_factory));
-            if !exists && self.end_player_ride(player_id) {
-                self.refresh_ride_properties(player_id, context);
-            }
+    ) -> bool {
+        if !self
+            .find_player(player_id)
+            .is_some_and(|player| player.ride_goods_check_due(now_ms))
+        {
+            return false;
         }
+        let goods_factory = self.goods_factory.clone();
+        let exists = self
+            .find_player_mut(player_id)
+            .is_some_and(|player| player.refresh_ride_goods_cache(&goods_factory));
+        if !exists && self.end_player_ride(player_id) {
+            self.refresh_ride_properties(player_id, context);
+            return true;
+        }
+        false
     }
 
     pub(crate) fn add_script_change_body_state<Context: RealmAppellationScriptContext>(
@@ -24217,35 +24244,75 @@ impl CGame {
         }
     }
 
-    fn expire_change_body_states<Context: RealmAppellationScriptContext>(
+    fn update_player_change_body_states<Context: RealmAppellationScriptContext>(
         &mut self,
+        player_id: i32,
         now_ms: u32,
         context: &mut Context,
-    ) {
-        let expired: Vec<_> = self
-            .players
-            .iter()
-            .flat_map(|(&player_id, player)| {
-                player
-                    .expired_change_body_state_ids(now_ms)
-                    .into_iter()
-                    .map(move |state_id| (player_id, state_id))
-            })
-            .collect();
-        for (player_id, state_id) in expired {
+    ) -> usize {
+        let expired = self
+            .find_player(player_id)
+            .map(|player| player.expired_change_body_state_ids(now_ms))
+            .unwrap_or_default();
+        let mut ended = expired.len();
+        for state_id in expired {
             self.end_change_body_states(player_id, vec![state_id], Some(b"GS1145"), context);
         }
-        let dead_players: Vec<_> = self
-            .players
-            .iter()
-            .filter(|(_, player)| {
-                player.is_dead() && !player.change_body_death_end_ids().is_empty()
-            })
-            .map(|(&player_id, _)| player_id)
-            .collect();
-        for player_id in dead_players {
+        let death_ended = self
+            .find_player(player_id)
+            .filter(|player| player.is_dead())
+            .map(CPlayer::change_body_death_end_ids)
+            .unwrap_or_default();
+        if !death_ended.is_empty() {
+            ended = ended.wrapping_add(death_ended.len());
             self.change_body_after_player_death(player_id, context);
         }
+        ended
+    }
+
+    /// Материализованная часть `CMoveShape::UpdateAbnormality` для player:
+    /// state expiry, периодический расход предметов, visual/property effects
+    /// и ride equipment check выполняются из exact `CMoveShape::AI` caller-а.
+    fn update_player_abnormality<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<GamePlayerAbnormalityReport> {
+        let materialized = self
+            .find_player(player_id)
+            .is_some_and(CPlayer::has_materialized_abnormality);
+        let sampled_at_ms = materialized.then(|| runtime.get_tick_ms());
+        let Some(now_ms) = sampled_at_ms else {
+            return self
+                .find_player(player_id)
+                .map(|_| GamePlayerAbnormalityReport {
+                    player_id,
+                    sampled_at_ms: None,
+                    change_body_states_ended: 0,
+                    extended_states_ended: 0,
+                    extended_items_consumed: 0,
+                    appellation_states_ended: 0,
+                    appellation_items_consumed: 0,
+                    ride_ended: false,
+                });
+        };
+        let change_body_states_ended =
+            self.update_player_change_body_states(player_id, now_ms, runtime);
+        let (extended_states_ended, extended_items_consumed) =
+            self.update_player_extended_states(player_id, now_ms, runtime);
+        let (appellation_states_ended, appellation_items_consumed) =
+            self.update_player_appellation_states(player_id, now_ms, runtime);
+        let ride_ended = self.update_player_ride_state(player_id, now_ms, runtime);
+        Some(GamePlayerAbnormalityReport {
+            player_id,
+            sampled_at_ms,
+            change_body_states_ended,
+            extended_states_ended,
+            extended_items_consumed,
+            appellation_states_ended,
+            appellation_items_consumed,
+            ride_ended,
+        })
     }
 
     pub(crate) fn change_body_after_region_transition<Context: RealmAppellationScriptContext>(
@@ -29271,7 +29338,8 @@ impl CGame {
         let mut regions = Vec::with_capacity(region_ids.len());
         for region_id in region_ids {
             // `CPlayer::AI` начинает reached pass с проверки HP боевой феи,
-            // затем исполняет disconnect/lost prefix. Только не меняющий регион
+            // затем исполняет lost prefix. Legacy disconnect поля в этом EXE
+            // не имеют ни одного runtime writer-а. Только не меняющий регион
             // player проходит exact PeriodicalUpdate ordering, CMoveShape::AI и
             // post-AI alive-only follow; каждый потенциальный removal повторно
             // проверяется через live map.
@@ -29281,6 +29349,7 @@ impl CGame {
                 .unwrap_or_default();
             let mut battle_fairy_deaths = Vec::with_capacity(player_ids.len());
             let mut periodical_updates = Vec::with_capacity(player_ids.len());
+            let mut player_abnormalities = Vec::with_capacity(player_ids.len());
             let mut battle_fairy_follows = Vec::with_capacity(player_ids.len());
             let mut player_ai_tails = Vec::with_capacity(player_ids.len());
             let mut player_lost_timeouts = Vec::new();
@@ -29289,7 +29358,6 @@ impl CGame {
                 if let Some(death) = self.refresh_battle_fairy_death(player_id) {
                     battle_fairy_deaths.push(death);
                 }
-                runtime.player_disconnect_ai_prefix(self, player_id);
                 if let Some(timeout) = self.run_player_lost_timeout(player_id, runtime) {
                     player_lost_timeouts.push(timeout);
                 }
@@ -29318,7 +29386,12 @@ impl CGame {
                             nation_died_state,
                             fairy_hatcher,
                         });
-                        runtime.player_move_shape_update_abnormality(self, player_id);
+                        if let Some(abnormality) =
+                            self.update_player_abnormality(player_id, runtime)
+                        {
+                            player_abnormalities.push(abnormality);
+                        }
+                        runtime.player_move_shape_unmaterialized_state_ai(self, player_id);
                         if self.find_player(player_id).is_some() {
                             if let Some(fight_state) = self.update_player_current_state(
                                 player_id,
@@ -29662,6 +29735,7 @@ impl CGame {
                             region_id,
                             battle_fairy_deaths,
                             periodical_updates,
+                            player_abnormalities,
                             battle_fairy_follows,
                             player_ai_tails,
                             player_lost_timeouts,
@@ -29692,6 +29766,7 @@ impl CGame {
                 region_id,
                 battle_fairy_deaths,
                 periodical_updates,
+                player_abnormalities,
                 battle_fairy_follows,
                 player_ai_tails,
                 player_lost_timeouts,
@@ -29853,10 +29928,6 @@ impl CGame {
 
         state.current_tick_ms = runtime.get_tick_ms();
         self.expire_script_faction_sessions(state.current_tick_ms);
-        self.expire_change_body_states(state.current_tick_ms, runtime);
-        self.update_extended_states(state.current_tick_ms, runtime);
-        self.update_appellation_states(state.current_tick_ms, runtime);
-        self.update_ride_states(state.current_tick_ms, runtime);
         state.calls_since_runtime_log = state.calls_since_runtime_log.wrapping_add(1);
         let mut stages = Vec::new();
 

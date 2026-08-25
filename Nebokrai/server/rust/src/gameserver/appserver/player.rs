@@ -3995,6 +3995,10 @@ impl CPlayer {
         self.move_shape.has_ride_state()
     }
 
+    pub(crate) const fn has_materialized_abnormality(&self) -> bool {
+        self.move_shape.has_materialized_abnormality()
+    }
+
     pub(crate) const fn fight_state_count(&self) -> i32 {
         self.fight_state_count
     }
@@ -13994,20 +13998,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x000593E0
 // ADDRESS: 004593e0
 // PROTOTYPE: void __thiscall UpdateProperty(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AI
-// STATUS: PARTIALLY_IMPLEMENTED_BATTLE_FAIRY_DEATH_AND_FOLLOW_PREFIX
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:2264
-// RVA: 0x00059FF0
-// ADDRESS: 00459ff0
-// PROTOTYPE: void __thiscall AI(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
