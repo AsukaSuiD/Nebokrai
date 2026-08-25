@@ -96,8 +96,8 @@ use crate::gameserver::gameserver::game::{
     CiQingMountReport, CiQingOtherPersonReport, CiQingOtherPersonTarget, CiQingSetupQueryReport,
     ContainerScriptActionReport, EquipmentComposeContext, EquipmentDaKongContext,
     EquipmentUpgradeContext, FairyContext, FairyHatchReport, FairyImplantResultReport,
-    FairySetupQueryReport, FairySyncretizeResultReport, GoodsDestroyConfirmReport,
-    GoodsDestroyContext, GoodsDestroyOpenReport, HotkeyAssignmentReport, HotkeyChangeReport,
+    FairySetupQueryReport, FairySyncretizeResultReport, GameContainerMessageRuntime,
+    GoodsDestroyConfirmReport, GoodsDestroyOpenReport, HotkeyAssignmentReport, HotkeyChangeReport,
     HotkeyRemovalReport, PlayerEquipmentInspectionReport, SynthesisComposeReport, SynthesisContext,
     SynthesisOpenReport,
 };
@@ -155,7 +155,7 @@ pub(crate) trait GameGoodsMessageRuntime:
     + EquipmentComposeContext
     + EquipmentDaKongContext
     + EquipmentUpgradeContext
-    + GoodsDestroyContext
+    + GameContainerMessageRuntime
     + FairyContext
     + SynthesisContext
 {
@@ -673,9 +673,9 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 runtime,
             ))
         }
-        CONFIRM_GOODS_DESTROY => GameGoodsMessageOutcome::GoodsDestroyConfirm(
-            game.confirm_goods_destroy(player_id, runtime),
-        ),
+        CONFIRM_GOODS_DESTROY => {
+            GameGoodsMessageOutcome::GoodsDestroyConfirm(game.confirm_goods_destroy(player_id))
+        }
         CLOSE_EQUIPMENT_DA_KONG => {
             let session_id = match read_long(message, "equipment DaKong close session ID") {
                 Ok(value) => value,

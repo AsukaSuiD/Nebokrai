@@ -295,8 +295,9 @@
 //! fight/team state открытия и old-client codec остаются runtime facts.
 //! Goods destruction `0x8FC1C/1D` замыкает hand mutation и `0xC0101/0xC0102`,
 //! exact LogSystem byte `55`, World `0x60202` с bank/region/IP facts и client
-//! result. Только произвольный extend-ID `CPlayer::DeleteGoods` из open-route
-//! остаётся polymorphic границей до единого dispatcher-а всех containers.
+//! result. Произвольный extend-ID open-route теперь проходит единый owned
+//! `DeleteGoods` dispatcher всех player containers, включая enhancement source,
+//! equipment properties, частичный amount wire и silent miss.
 //! Hotkey `0x8FC08..0A` замыкает все 24 slots и возврат hand consumable:
 //! concrete `0xC0101` сохраняет move/rollback/delete, фактическую destination
 //! position/identity/amount и self-move normalization; success `0xBF908`
@@ -1761,17 +1762,6 @@ pub(crate) struct GoodsDestroyAuditLog {
     pub(crate) region_id: Option<i32>,
     pub(crate) tile_x: Result<i32, ShapeCoordinateBlock>,
     pub(crate) tile_y: Result<i32, ShapeCoordinateBlock>,
-}
-
-pub(crate) trait GoodsDestroyContext {
-    /// Вызывает полный polymorphic `CPlayer::DeleteGoods` для произвольного
-    /// extend ID. Эта граница обязательна, пока wallet/depot/shadow owners не
-    /// сведены в один Rust dispatcher; silent miss возвращает removed `0`.
-    fn delete_goods_for_destroy_open(
-        &mut self,
-        game: &mut CGame,
-        request: GoodsDestroyDeleteRequest,
-    ) -> GoodsDestroyDeleteReport;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22979,7 +22969,112 @@ impl CGame {
         message.send(self, false).into_iter().collect()
     }
 
-    pub(crate) fn open_goods_destroy<Context: GoodsDestroyContext>(
+    fn delete_goods_for_destroy_open<Context: GameContainerMessageRuntime>(
+        &mut self,
+        request: GoodsDestroyDeleteRequest,
+        context: &mut Context,
+    ) -> GoodsDestroyDeleteReport {
+        let Some(location) = self.players.get(&request.player_id).and_then(|player| {
+            player.owned_goods_location(request.container_extend_id, request.goods_id)
+        }) else {
+            return GoodsDestroyDeleteReport {
+                removed_amount: 0,
+                deliveries: Vec::new(),
+            };
+        };
+        let deletion = if location.extend_id == 2 {
+            let mut player = self
+                .players
+                .remove(&request.player_id)
+                .expect("goods location проверяет canonical player");
+            let goods = player
+                .equipment()
+                .find(request.goods_id)
+                .expect("equipment location проверена")
+                .clone();
+            if request.requested_amount < goods.amount() {
+                let mut deletion = player.delete_owned_goods(
+                    location,
+                    request.goods_id,
+                    request.requested_amount,
+                    &self.goods_factory,
+                );
+                if request.container_extend_id == 10
+                    && let Some(deletion) = &mut deletion
+                {
+                    deletion.location.extend_id = 10;
+                    deletion.location.position = 0;
+                }
+                self.players.insert(request.player_id, player);
+                deletion
+            } else {
+                let facts = context.enhancement_equipment_remove_facts(
+                    &player,
+                    &goods,
+                    self.globe_setup.pack_add_enabled(),
+                );
+                let mut recompute =
+                    |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+                let mut report = player.remove_equipment_goods(
+                    request.goods_id,
+                    &self.goods_factory,
+                    &self.skill_factory,
+                    facts,
+                    &mut recompute,
+                );
+                drop(recompute);
+                self.publish_player_equipment_remove_report(&mut report, context);
+                let deletion = match &report.outcome {
+                    EquipmentRemoveOutcome::Removed(removed) => Some(PlayerGoodsAiDeletion {
+                        location,
+                        goods: removed.goods.clone(),
+                        previous_amount: removed.goods.amount(),
+                        removed_amount: removed.goods.amount(),
+                        remaining_amount: 0,
+                        listeners: removed.event.listeners.clone(),
+                    }),
+                    _ => None,
+                };
+                self.players.insert(request.player_id, player);
+                if self.globe_setup.tao_zhuang_modify_enabled() {
+                    let _ = self.done_player_tao_zhuang(request.player_id);
+                }
+                deletion
+            }
+        } else {
+            self.players.get_mut(&request.player_id).and_then(|player| {
+                player.delete_owned_goods(
+                    location,
+                    request.goods_id,
+                    request.requested_amount,
+                    &self.goods_factory,
+                )
+            })
+        };
+        let Some(deletion) = deletion else {
+            return GoodsDestroyDeleteReport {
+                removed_amount: 0,
+                deliveries: Vec::new(),
+            };
+        };
+        let player = self
+            .players
+            .get(&request.player_id)
+            .expect("delete owner возвращён до wire");
+        let mut deliveries = vec![self.send_player_owned_goods_deletion(player, &deletion)];
+        if request.write_delete_log && deletion.remaining_amount == 0 {
+            let world = self.send_goods_deletion_audit(player, &deletion);
+            if let Ok(delivery) = world {
+                deliveries.push(delivery);
+            }
+        }
+        GoodsDestroyDeleteReport {
+            removed_amount: deletion.removed_amount,
+            deliveries,
+        }
+    }
+
+    pub(crate) fn open_goods_destroy<Context: GameContainerMessageRuntime>(
         &mut self,
         player_id: i32,
         container_extend_id: i32,
@@ -23000,8 +23095,7 @@ impl CGame {
         if container_extend_id != 0 {
             report.outcome = GoodsDestroyOpenOutcome::DeleteRequested;
             report.deletion = goods_id.map(|goods_id| {
-                context.delete_goods_for_destroy_open(
-                    self,
+                self.delete_goods_for_destroy_open(
                     GoodsDestroyDeleteRequest {
                         player_id,
                         container_extend_id,
@@ -23009,6 +23103,7 @@ impl CGame {
                         requested_amount,
                         write_delete_log: false,
                     },
+                    context,
                 )
             });
             return report;
@@ -23031,11 +23126,7 @@ impl CGame {
         report
     }
 
-    pub(crate) fn confirm_goods_destroy<Context: GoodsDestroyContext>(
-        &mut self,
-        player_id: i32,
-        _context: &mut Context,
-    ) -> GoodsDestroyConfirmReport {
+    pub(crate) fn confirm_goods_destroy(&mut self, player_id: i32) -> GoodsDestroyConfirmReport {
         let mut report = GoodsDestroyConfirmReport {
             player_id,
             outcome: GoodsDestroyConfirmOutcome::ConfigurationDisabled,
@@ -27778,12 +27869,12 @@ impl CGame {
         Some(report)
     }
 
-    fn publish_goods_ai_deletion(
+    fn send_player_owned_goods_deletion(
         &self,
         player: &CPlayer,
         deletion: &PlayerGoodsAiDeletion,
-    ) -> (i32, Result<i32, SendMessageError>) {
-        let client_delivery = if deletion.remaining_amount == 0 {
+    ) -> i32 {
+        if deletion.remaining_amount == 0 {
             let mut message = CS2CContainerObjectMove::default();
             message.set_operation(ContainerObjectMoveOperation::DeleteObject);
             message.set_source_container(
@@ -27812,7 +27903,26 @@ impl CGame {
             );
             message.set_object_amount(deletion.remaining_amount);
             message.send_to_player(self, player.player_id())
-        };
+        }
+    }
+
+    fn publish_goods_ai_deletion(
+        &self,
+        player: &CPlayer,
+        deletion: &PlayerGoodsAiDeletion,
+    ) -> (i32, Result<i32, SendMessageError>) {
+        let client_delivery = self.send_player_owned_goods_deletion(player, deletion);
+        (
+            client_delivery,
+            self.send_goods_deletion_audit(player, deletion),
+        )
+    }
+
+    fn send_goods_deletion_audit(
+        &self,
+        player: &CPlayer,
+        deletion: &PlayerGoodsAiDeletion,
+    ) -> Result<i32, SendMessageError> {
         let mut audit = CMessage::new(0x0006_0213);
         let base_index = deletion.goods.base_properties_index();
         audit.add_ulong(deletion.goods.goods_lifetime(&self.goods_factory));
@@ -27830,7 +27940,7 @@ impl CGame {
         audit.add_long(player.shape().get_tile_x().unwrap_or_default());
         audit.add_long(player.shape().get_tile_y().unwrap_or_default());
         audit.add_ulong(base_index);
-        (client_delivery, audit.send(self, false))
+        audit.send(self, false)
     }
 
     fn run_player_goods_ai<Runtime: GameMainLoopRuntime>(
@@ -27876,6 +27986,7 @@ impl CGame {
                         location,
                         goods: removed.goods.clone(),
                         previous_amount: removed.goods.amount(),
+                        removed_amount: removed.goods.amount(),
                         remaining_amount: 0,
                         listeners: removed.event.listeners.clone(),
                     }),
@@ -27887,9 +27998,12 @@ impl CGame {
                 }
                 removed
             } else {
-                self.players
-                    .get_mut(&player_id)?
-                    .delete_non_equipment_goods_ai(location, *goods_id)
+                self.players.get_mut(&player_id)?.delete_owned_goods(
+                    location,
+                    *goods_id,
+                    1,
+                    &self.goods_factory,
+                )
             };
             let Some(deletion) = deletion else {
                 continue;

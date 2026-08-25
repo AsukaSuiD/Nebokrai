@@ -1999,6 +1999,7 @@ pub(crate) struct PlayerGoodsAiDeletion {
     pub(crate) location: PlayerGoodsAiLocation,
     pub(crate) goods: CGoods,
     pub(crate) previous_amount: u32,
+    pub(crate) removed_amount: u32,
     pub(crate) remaining_amount: u32,
     pub(crate) listeners: Vec<ContainerListenerHandle>,
 }
@@ -8285,12 +8286,59 @@ impl CPlayer {
             })
     }
 
+    pub(crate) fn owned_goods_location(
+        &self,
+        extend_id: i32,
+        goods_id: CGuid,
+    ) -> Option<PlayerGoodsAiLocation> {
+        let location = |position| PlayerGoodsAiLocation {
+            extend_id,
+            position,
+        };
+        match extend_id {
+            1 | 2 | 3 | 9 | 11 | 12 | 13 | 14 | 16 | 17 => self
+                .goods_ai_location(goods_id)
+                .filter(|actual| actual.extend_id == extend_id),
+            4 => self
+                .wallet
+                .get_goods(0)
+                .filter(|goods| goods.identity().ex_id == goods_id)
+                .map(|_| location(0)),
+            5 => self
+                .yuan_bao
+                .get_goods(0)
+                .filter(|goods| goods.identity().ex_id == goods_id)
+                .map(|_| location(0)),
+            6 => self
+                .ji_fen
+                .get_goods(0)
+                .filter(|goods| goods.identity().ex_id == goods_id)
+                .map(|_| location(0)),
+            8 => self
+                .bank
+                .get_goods(0)
+                .filter(|goods| goods.identity().ex_id == goods_id)
+                .map(|_| location(0)),
+            10 => (self.enhancement_selected_goods_id() == Some(goods_id))
+                .then(|| self.goods_ai_location(goods_id))
+                .flatten(),
+            15 => self
+                .auction_wallet
+                .get_goods(0)
+                .filter(|goods| goods.identity().ex_id == goods_id)
+                .map(|_| location(0)),
+            _ => None,
+        }
+    }
+
     /// Полный non-equipment `DeleteGoods(..., 1, true)` storage core. Client
     /// wire и World audit формирует CGame после сохранения удалённого snapshot.
-    pub(crate) fn delete_non_equipment_goods_ai(
+    pub(crate) fn delete_owned_goods(
         &mut self,
         location: PlayerGoodsAiLocation,
         goods_id: CGuid,
+        requested_amount: u32,
+        factory: &CGoodsFactory,
     ) -> Option<PlayerGoodsAiDeletion> {
         macro_rules! delete_volume {
             ($container:expr) => {{
@@ -8298,10 +8346,12 @@ impl CPlayer {
                 let goods = container.get_goods(location.position)?.clone();
                 (goods.identity().ex_id == goods_id).then_some(())?;
                 let previous_amount = goods.amount();
-                let listeners = if previous_amount > 1 {
+                let removed_amount = requested_amount.min(previous_amount);
+                let remaining_amount = previous_amount.wrapping_sub(removed_amount);
+                let listeners = if remaining_amount != 0 {
                     container
                         .get_goods_mut(location.position)?
-                        .set_amount(previous_amount - 1);
+                        .set_amount(remaining_amount);
                     Vec::new()
                 } else {
                     let removed = container.remove_goods(goods_id)?;
@@ -8318,21 +8368,39 @@ impl CPlayer {
                     location,
                     goods,
                     previous_amount,
-                    remaining_amount: previous_amount.saturating_sub(1),
+                    removed_amount,
+                    remaining_amount,
                     listeners,
                 })
             }};
         }
         match location.extend_id {
             1 => delete_volume!(&mut self.packet),
+            2 => {
+                let goods = self.equipment.get_goods(location.position)?.clone();
+                (goods.identity().ex_id == goods_id).then_some(())?;
+                let previous_amount = goods.amount();
+                (requested_amount < previous_amount).then_some(())?;
+                self.equipment
+                    .find_mut(goods_id)?
+                    .set_amount(previous_amount.wrapping_sub(requested_amount));
+                Some(PlayerGoodsAiDeletion {
+                    location,
+                    goods,
+                    previous_amount,
+                    removed_amount: requested_amount,
+                    remaining_amount: previous_amount.wrapping_sub(requested_amount),
+                    listeners: Vec::new(),
+                })
+            }
             3 => {
                 let goods = self.hand.get_goods(location.position)?.clone();
                 (goods.identity().ex_id == goods_id).then_some(())?;
                 let previous_amount = goods.amount();
-                let listeners = if previous_amount > 1 {
-                    self.hand
-                        .find_mut(goods_id)?
-                        .set_amount(previous_amount - 1);
+                let removed_amount = requested_amount.min(previous_amount);
+                let remaining_amount = previous_amount.wrapping_sub(removed_amount);
+                let listeners = if remaining_amount != 0 {
+                    self.hand.find_mut(goods_id)?.set_amount(remaining_amount);
                     Vec::new()
                 } else {
                     self.hand.remove_goods(goods_id)?.listeners
@@ -8341,9 +8409,59 @@ impl CPlayer {
                     location,
                     goods,
                     previous_amount,
-                    remaining_amount: previous_amount.saturating_sub(1),
+                    removed_amount,
+                    remaining_amount,
                     listeners,
                 })
+            }
+            4 | 5 | 6 | 8 | 15 => {
+                macro_rules! delete_currency {
+                    ($container:expr) => {{
+                        let container = $container;
+                        let goods = container.get_goods(location.position)?.clone();
+                        (goods.identity().ex_id == goods_id).then_some(())?;
+                        let previous_amount = goods.amount();
+                        let removed_amount = requested_amount.min(previous_amount);
+                        let remaining_amount = previous_amount.wrapping_sub(removed_amount);
+                        let listeners = if removed_amount == 0 {
+                            Vec::new()
+                        } else {
+                            let template = goods.clone();
+                            let taken = container.take_goods(
+                                location.position,
+                                removed_amount,
+                                factory,
+                                |_| Some(template.clone()),
+                            )?;
+                            match taken {
+                                CurrencyGoodsTaken::Removed(removed) => removed.listeners,
+                                CurrencyGoodsTaken::Split(_) => Vec::new(),
+                            }
+                        };
+                        Some(PlayerGoodsAiDeletion {
+                            location,
+                            goods,
+                            previous_amount,
+                            removed_amount,
+                            remaining_amount,
+                            listeners,
+                        })
+                    }};
+                }
+                match location.extend_id {
+                    4 => {
+                        let deletion = delete_currency!(&mut self.wallet);
+                        if deletion.is_some() {
+                            self.money = self.wallet.currency_amount();
+                        }
+                        deletion
+                    }
+                    5 => delete_currency!(&mut self.yuan_bao),
+                    6 => delete_currency!(&mut self.ji_fen),
+                    8 => delete_currency!(&mut self.bank),
+                    15 => delete_currency!(&mut self.auction_wallet),
+                    _ => unreachable!(),
+                }
             }
             9 => delete_volume!(self.depot.base_mut()),
             11 => delete_volume!(self.fairy_container.base_mut()),
