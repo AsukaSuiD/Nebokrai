@@ -138,6 +138,14 @@ impl CGoods {
         self.shape.identity()
     }
 
+    pub(crate) const fn shape(&self) -> &CShape {
+        &self.shape
+    }
+
+    pub(crate) const fn shape_mut(&mut self) -> &mut CShape {
+        &mut self.shape
+    }
+
     pub(crate) const fn set_ex_id(&mut self, ex_id: CGuid) {
         self.shape.base_object_mut().set_ex_id(ex_id);
     }

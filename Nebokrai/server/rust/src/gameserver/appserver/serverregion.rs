@@ -112,6 +112,10 @@
 //! До вызова decoder-а setup остаётся отдельной typed-границей.
 //! Достигнутый player-leave call из `RemoveObject` попадает в тот же exact
 //! `ret 4` RVA `0x00201A70`, поэтому отдельного наблюдаемого эффекта не имеет.
+//! Packet↔ground проход владеет созданными им `CGoods`, точной 49-cell
+//! byte-occupancy таблицей `GetDropGoodsPos`, spatial/area membership,
+//! protection lookup и delete lifecycle. Остальные внешние ground owners
+//! остаются у resolver/runtime и не подменяются второй копией предмета.
 //! Оставшиеся отдельные `std::basic_streambuf`/`Unwind@` экспорты сняты общей
 //! технической классификацией; domain lifecycle и callbacks не затрагивались.
 //! Остальная поверхность файла ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -123,6 +127,7 @@ use encoding_rs::WINDOWS_1251;
 use super::area::{AreaAiContext, AreaAiReport, AreaWokenMonsterClass, CArea, WarSoulPoint};
 use super::baseobject::CBaseObject;
 use super::country::countryparam::CCountryParam;
+use super::goods::cgoods::CGoods;
 use super::monster::CMonster;
 use super::moveshape::{
     MoveShapePositionBlock, MoveShapePositionDispatch, MoveShapePositionFacts, MoveShapeResolver,
@@ -144,6 +149,58 @@ const NPC_TYPE: i32 = 500;
 const MONSTER_TYPE: i32 = 600;
 const GOODS_TYPE: i32 = 700;
 const WAR_SOUL_AREA_SPAN: i32 = 15;
+
+const DROP_GOODS_OFFSETS: [(i32, i32); 49] = [
+    (0, 0),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (-1, 0),
+    (1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+    (-2, -2),
+    (-1, -2),
+    (0, -2),
+    (1, -2),
+    (2, -2),
+    (-2, -1),
+    (2, -1),
+    (-2, 0),
+    (2, 0),
+    (-2, 1),
+    (2, 1),
+    (-2, 2),
+    (-1, 2),
+    (0, 2),
+    (1, 2),
+    (2, 2),
+    (-3, -3),
+    (-2, -3),
+    (-1, -3),
+    (0, -3),
+    (1, -3),
+    (2, -3),
+    (3, -3),
+    (-3, -2),
+    (3, -2),
+    (-3, -1),
+    (3, -1),
+    (-3, 0),
+    (3, 0),
+    (-3, 1),
+    (3, 1),
+    (-3, 2),
+    (3, 2),
+    (-3, 3),
+    (-2, 3),
+    (-1, 3),
+    (0, 3),
+    (1, 3),
+    (2, 3),
+    (3, 3),
+];
 
 const NEIGHBOR_AREAS: [(i32, i32); 9] = [
     (0, 0),
@@ -635,6 +692,7 @@ pub(crate) struct CServerRegion {
     next_monster_id: NextMonsterId,
     owned_npcs: BTreeMap<i32, CNpc>,
     next_npc_id: NextNpcId,
+    owned_goods: BTreeMap<CGuid, CGoods>,
     delete_shapes: Vec<ShapeIdentity>,
     remove_shapes: Vec<ShapeIdentity>,
     change_area_shapes: Vec<ShapeIdentity>,
@@ -1043,18 +1101,173 @@ impl CServerRegion {
         self.areas.len()
     }
 
-    pub(crate) fn run_area_ai<Context: AreaAiContext>(
+    pub(crate) fn begin_area_ai<Context: AreaAiContext>(
         &mut self,
         area_index: usize,
         goods_disappear_timer_ms: u32,
-        goods_protected_timer_ms: u32,
         context: &mut Context,
     ) -> Option<AreaAiReport> {
-        Some(self.areas.get_mut(area_index)?.ai(
-            goods_disappear_timer_ms,
-            goods_protected_timer_ms,
+        Some(
+            self.areas
+                .get_mut(area_index)?
+                .begin_ai(goods_disappear_timer_ms, context),
+        )
+    }
+
+    pub(crate) fn finish_area_ground_goods_expiration(&mut self, area_index: usize, ex_id: CGuid) {
+        if let Some(area) = self.areas.get_mut(area_index) {
+            area.finish_ground_goods_expiration(ex_id);
+        }
+    }
+
+    pub(crate) fn finish_area_ai<Context: AreaAiContext>(
+        &mut self,
+        area_index: usize,
+        goods_protected_timer_ms: u32,
+        context: &mut Context,
+        report: &mut AreaAiReport,
+    ) {
+        if let Some(area) = self.areas.get_mut(area_index) {
+            area.finish_ai(goods_protected_timer_ms, context, report);
+        }
+    }
+
+    /// Exact `GetDropGoodsPos` использует EXE-таблицу концентрических 7x7
+    /// offsets и выбирает первую клетку, где число ground goods меньше
+    /// текущего порога. `start_offset` продолжает обход для массового drop.
+    pub(crate) fn get_drop_goods_position(
+        &self,
+        origin_x: i32,
+        origin_y: i32,
+        mut start_offset: usize,
+    ) -> Result<Option<(i32, i32, u32)>, RegionCellAccessBlock> {
+        let mut occupancy = [0_u8; 49];
+        for goods in self.owned_goods.values() {
+            let (Ok(x), Ok(y)) = (goods.shape().get_tile_x(), goods.shape().get_tile_y()) else {
+                continue;
+            };
+            let dx = x.wrapping_sub(origin_x);
+            let dy = y.wrapping_sub(origin_y);
+            if let Some(index) = DROP_GOODS_OFFSETS
+                .iter()
+                .position(|offset| *offset == (dx, dy))
+            {
+                occupancy[index] = occupancy[index].wrapping_add(1);
+            }
+        }
+
+        let mut threshold = 1_i32;
+        for _ in 0..1000 {
+            while start_offset < DROP_GOODS_OFFSETS.len() {
+                let index = start_offset;
+                start_offset += 1;
+                if i32::from(occupancy[index]) >= threshold {
+                    continue;
+                }
+                let (dx, dy) = DROP_GOODS_OFFSETS[index];
+                let x = origin_x.wrapping_add(dx);
+                let y = origin_y.wrapping_add(dy);
+                let Some(cell) = self.region.get_cell(x, y)? else {
+                    continue;
+                };
+                if !matches!(cell.block(), 0 | 3) || self.region.get_switch_at(x, y)?.is_some() {
+                    continue;
+                }
+                if cell.block() == 3
+                    && self.owned_npcs.values().any(|npc| {
+                        npc.move_shape().shape().get_tile_x() == Ok(x)
+                            && npc.move_shape().shape().get_tile_y() == Ok(y)
+                    })
+                {
+                    continue;
+                }
+                let position = self.region.width.wrapping_mul(y).wrapping_add(x) as u32;
+                return Ok(Some((x, y, position)));
+            }
+            threshold = threshold.wrapping_add(1);
+            start_offset = 0;
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn add_owned_ground_goods<Context: ServerRegionMembershipContext>(
+        &mut self,
+        mut goods: CGoods,
+        tile_x: i32,
+        tile_y: i32,
+        particular_attribute: u32,
+        now_ms: u32,
+        area_width: i32,
+        area_height: i32,
+        context: &mut Context,
+    ) -> Result<ShapeIdentity, (RegionMembershipBlock, CGoods)> {
+        goods
+            .shape_mut()
+            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        let identity = goods.identity();
+        let facts = ShapeRuntimeFacts {
+            goods: Some(super::shape::GoodsAreaFacts {
+                particular_attribute,
+            }),
+            ..ShapeRuntimeFacts::default()
+        };
+        if let Err(error) = self.add_object(
+            goods.shape_mut(),
+            facts,
+            area_width,
+            area_height,
+            now_ms,
             context,
-        ))
+        ) {
+            return Err((error, goods));
+        }
+        self.owned_goods.insert(identity.ex_id, goods);
+        Ok(identity)
+    }
+
+    pub(crate) fn find_ground_goods(&self, ex_id: CGuid) -> Option<&CGoods> {
+        self.owned_goods.get(&ex_id)
+    }
+
+    pub(crate) fn find_ground_goods_mut(&mut self, ex_id: CGuid) -> Option<&mut CGoods> {
+        self.owned_goods.get_mut(&ex_id)
+    }
+
+    pub(crate) fn can_pick_up_ground_goods(
+        &self,
+        ex_id: CGuid,
+        player_id: i32,
+        player_team_id: i32,
+    ) -> bool {
+        let Some(goods) = self.owned_goods.get(&ex_id) else {
+            return false;
+        };
+        goods
+            .shape()
+            .area_index()
+            .and_then(|index| self.areas.get(index))
+            .is_some_and(|area| area.can_pick_up_goods(ex_id, player_id, player_team_id))
+    }
+
+    pub(crate) fn remove_owned_ground_goods(
+        &mut self,
+        ex_id: CGuid,
+        particular_attribute: u32,
+    ) -> Result<Option<CGoods>, RegionMembershipBlock> {
+        let Some(mut goods) = self.owned_goods.remove(&ex_id) else {
+            return Ok(None);
+        };
+        let facts = ShapeRuntimeFacts {
+            goods: Some(super::shape::GoodsAreaFacts {
+                particular_attribute,
+            }),
+            ..ShapeRuntimeFacts::default()
+        };
+        if let Err(error) = self.remove_object(goods.shape_mut(), facts) {
+            self.owned_goods.insert(ex_id, goods);
+            return Err(error);
+        }
+        Ok(Some(goods))
     }
 
     fn wake_up_area_monsters(
@@ -1104,6 +1317,10 @@ impl CServerRegion {
                 .owned_npcs
                 .get(&identity.id)
                 .map(|npc| npc.move_shape().shape().change_state()),
+            GOODS_TYPE => self
+                .owned_goods
+                .get(&identity.ex_id)
+                .map(|goods| goods.shape().change_state()),
             _ => None,
         }
     }
@@ -1118,6 +1335,10 @@ impl CServerRegion {
                 .owned_npcs
                 .get_mut(&identity.id)
                 .map(|npc| npc.move_shape_mut().shape_mut()),
+            GOODS_TYPE => self
+                .owned_goods
+                .get_mut(&identity.ex_id)
+                .map(CGoods::shape_mut),
             _ => None,
         };
         let Some(shape) = shape else {

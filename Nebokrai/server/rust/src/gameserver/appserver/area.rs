@@ -33,7 +33,9 @@
 //! `AI` RVA `0x00074500` сохраняет отдельный `timeGetTime` для каждой ordered
 //! goods/protection записи, around-delete с `CS_DELETE` и active→sleep/pet/
 //! carriage переклассификацию только в area без игроков. Ground-goods wire и
-//! derived monster AI facts приходят узкими callbacks из actual Game runtime.
+//! state принадлежат actual Game/region owner-у; после их публикации caller
+//! завершает удаление deadline через отдельный reached tail. Derived monster
+//! AI facts приходят узким callback из actual Game runtime.
 //! `OnRefreshMonster` RVA `0x00101A70`, вызываемый region AI только для area
 //! без plug-ов, в точном EXE является намеренным no-op (`ret 4`). Метод
 //! оставлен явным, чтобы не потерять подтверждённую границу owner-а и аргумент
@@ -123,7 +125,6 @@ pub(crate) enum AreaWokenMonsterClass {
 
 pub(crate) trait AreaAiContext {
     fn tick_ms(&mut self) -> u32;
-    fn expire_ground_goods(&mut self, ex_id: CGuid) -> bool;
     fn monster_ai_facts(&mut self, monster_id: i32) -> Option<AreaMonsterAiFacts>;
 }
 
@@ -245,6 +246,25 @@ impl CArea {
         }
     }
 
+    /// Exact `CArea::CanPickUpGoods`: отсутствие protection открывает pickup;
+    /// level `1` сравнивает team ID, остальные уровни — player owner ID.
+    pub(crate) fn can_pick_up_goods(
+        &self,
+        ex_id: CGuid,
+        player_id: i32,
+        player_team_id: i32,
+    ) -> bool {
+        let _guard = self.critical_section.lock();
+        let Some(protection) = self.goods_protection.get(&ex_id) else {
+            return true;
+        };
+        if protection.protection_level == 1 {
+            protection.owner_id == player_team_id
+        } else {
+            protection.owner_id == player_id
+        }
+    }
+
     /// Возвращает identity-кандидаты exact `GetActivedShapes` в исходном
     /// storage order. Живость проверяет owning region/runtime: только он
     /// соответствует старому `FindChildObject` и может удалить stale ID.
@@ -309,12 +329,12 @@ impl CArea {
         }
     }
 
-    /// Exact `CArea::AI`: deadline использует обычный unsigned `<`, а monster
-    /// storage меняется только когда area не содержит players.
-    pub(crate) fn ai<Context: AreaAiContext>(
+    /// Первый ordered pass exact `CArea::AI`: только определяет просроченные
+    /// goods. Owning Game публикует around-delete и ставит `CS_DELETE` до
+    /// продолжения protection/monster passes.
+    pub(crate) fn begin_ai<Context: AreaAiContext>(
         &mut self,
         goods_disappear_timer_ms: u32,
-        goods_protected_timer_ms: u32,
         context: &mut Context,
     ) -> AreaAiReport {
         let _guard = self.critical_section.lock();
@@ -324,12 +344,24 @@ impl CArea {
             let timestamp_ms = self.dropped_goods_timestamps[&ex_id];
             let now_ms = context.tick_ms();
             if now_ms >= timestamp_ms.wrapping_add(goods_disappear_timer_ms) {
-                let resolved = context.expire_ground_goods(ex_id);
-                self.dropped_goods_timestamps.remove(&ex_id);
-                report.expired_goods.push((ex_id, resolved));
+                // Wire publication и `CS_DELETE` принадлежат owning region/
+                // game. Deadline снимается reached tail-ом только после них.
+                report.expired_goods.push((ex_id, false));
             }
         }
+        report
+    }
 
+    /// Продолжает exact `CArea::AI` после завершения goods pass. Deadline
+    /// использует обычный unsigned `<`, а monster storage меняется только
+    /// когда area не содержит players.
+    pub(crate) fn finish_ai<Context: AreaAiContext>(
+        &mut self,
+        goods_protected_timer_ms: u32,
+        context: &mut Context,
+        report: &mut AreaAiReport,
+    ) {
+        let _guard = self.critical_section.lock();
         let protected_goods_ids: Vec<_> = self.goods_protection.keys().copied().collect();
         for ex_id in protected_goods_ids {
             let protection = self.goods_protection[&ex_id];
@@ -349,7 +381,7 @@ impl CArea {
                 && self.pets.is_empty()
                 && self.carriages.is_empty())
         {
-            return report;
+            return;
         }
 
         let mut index = 0;
@@ -376,19 +408,20 @@ impl CArea {
                 index += 1;
             }
         }
-        move_hibernated_monsters(
-            &mut self.pets,
-            &mut self.sleeping_monsters,
-            context,
-            &mut report,
-        );
+        move_hibernated_monsters(&mut self.pets, &mut self.sleeping_monsters, context, report);
         move_hibernated_monsters(
             &mut self.carriages,
             &mut self.sleeping_monsters,
             context,
-            &mut report,
+            report,
         );
-        report
+    }
+
+    /// Exact tail `CArea::AI`: deadline удаляется после around-delete и
+    /// назначения `CS_DELETE`, независимо от успешности dynamic resolve.
+    pub(crate) fn finish_ground_goods_expiration(&mut self, ex_id: CGuid) {
+        let _guard = self.critical_section.lock();
+        self.dropped_goods_timestamps.remove(&ex_id);
     }
 
     /// Сохраняет пустой контракт `CArea::OnRefreshMonster(long)` exact EXE.

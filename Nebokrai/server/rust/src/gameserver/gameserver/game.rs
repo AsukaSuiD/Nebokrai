@@ -299,6 +299,13 @@
 //! progress/movement, подключают listeners и публикуют `0xBF912/29/2A` с
 //! полным send-failure rollback; busy/team notices теперь также адресные.
 //! Только запрос team skill-state остаётся внешним state-owner fact.
+//! Container `0x90301` также замыкает packet↔ground вертикаль через owned
+//! region goods: split/full ownership, exact drop cell, protection/range,
+//! packet stack, rollback, listeners и ordered self/around `0xC0101` доходят
+//! из живого message dispatcher-а; optional World `0x60202` предшествует
+//! client send. Тот же owner завершает lifetime deadline
+//! после around-delete/`CS_DELETE`, затем обычный region delete tail удаляет
+//! spatial и object storage.
 //! GodsBattle runtime продолжает startup owner: player Add/Remove tail
 //! назначает persisted faction и поддерживает region membership, script XYD
 //! producer ждёт World echo, а изменившиеся slots публикуют `0xBF80C` только
@@ -625,10 +632,10 @@ use crate::gameserver::appserver::servernationregion::{
 };
 use crate::gameserver::appserver::serverregion::{
     AreaTransitionBlock, CServerRegion, RegionMembershipBlock, ServerRegionAreaTransitionContext,
-    ServerRegionClearPlayerTick, ServerRegionMonsterContext, ServerRegionMonsterRectBlock,
-    ServerRegionMonsterRefreshReport, ServerRegionNpcContext, ServerRegionNpcSetup,
-    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport, ServerRegionWeather,
-    ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
+    ServerRegionClearPlayerTick, ServerRegionMembershipContext, ServerRegionMonsterContext,
+    ServerRegionMonsterRectBlock, ServerRegionMonsterRefreshReport, ServerRegionNpcContext,
+    ServerRegionNpcSetup, ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport,
+    ServerRegionWeather, ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
@@ -2361,8 +2368,10 @@ pub(crate) trait PlayerEquipmentContext {
 /// registration остаются обязательными runtime facts. RideState overlay и
 /// personal-shop mount gate также принадлежат canonical player owner-у.
 pub(crate) trait GameContainerMessageRuntime:
-    OldClientGoodsCodec + PlayerEquipmentContext
+    OldClientGoodsCodec + PlayerEquipmentContext + ServerRegionMembershipContext
 {
+    fn container_tick_ms(&mut self) -> u32;
+
     fn enhancement_equipment_remove_facts(
         &mut self,
         player: &CPlayer,
@@ -2383,6 +2392,45 @@ pub(crate) trait GameContainerMessageRuntime:
     ) -> PlayerCombatProperties;
 
     fn register_enhancement_goods_ai(&mut self, goods: &CGoods);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GroundGoodsMoveBlock {
+    MissingPlayer,
+    MissingRegion,
+    RegionMismatch,
+    MissingGoods,
+    AmountMismatch,
+    DropForbidden,
+    NoDropPosition,
+    PickupOutOfRange,
+    PickupProtected,
+    PickupBusy,
+    PacketRemovalFailed,
+    PacketAdditionRejected,
+    RollbackFailed {
+        goods: CGoods,
+        region_error: RegionMembershipBlock,
+    },
+    Region(RegionMembershipBlock),
+}
+
+#[must_use = "ground-goods report сохраняет ownership и обе client/around публикации"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GroundGoodsMoveReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) source_position: u32,
+    pub(crate) destination_position: u32,
+    pub(crate) destination_goods: ShapeIdentity,
+    pub(crate) destination_amount: u32,
+    pub(crate) source_listeners:
+        Vec<crate::gameserver::appserver::container::ccontainer::ContainerListenerHandle>,
+    pub(crate) destination_listeners:
+        Vec<crate::gameserver::appserver::container::ccontainer::ContainerListenerHandle>,
+    pub(crate) audit_deliveries: Vec<i32>,
+    pub(crate) player_delivery: i32,
+    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4204,21 +4252,13 @@ pub(crate) trait GameMainLoopRuntime:
 }
 
 struct GameAreaAiContext<'a, Runtime> {
-    game: &'a mut CGame,
     runtime: &'a mut Runtime,
-    region_id: i32,
-    area_index: usize,
     monster_facts: BTreeMap<i32, Option<AreaMonsterAiFacts>>,
 }
 
 impl<Runtime: GameMainLoopRuntime> AreaAiContext for GameAreaAiContext<'_, Runtime> {
     fn tick_ms(&mut self) -> u32 {
         self.runtime.get_tick_ms()
-    }
-
-    fn expire_ground_goods(&mut self, ex_id: CGuid) -> bool {
-        self.runtime
-            .expire_area_ground_goods(self.game, self.region_id, self.area_index, ex_id)
     }
 
     fn monster_ai_facts(&mut self, monster_id: i32) -> Option<AreaMonsterAiFacts> {
@@ -6157,6 +6197,405 @@ impl CGame {
             removal,
             outcome,
             previous_last_operated,
+        })
+    }
+
+    fn send_ground_goods_move_log(
+        &self,
+        player_id: i32,
+        reason: u8,
+        goods: ShapeIdentity,
+        price: u32,
+        name: &[u8],
+        amount: u32,
+    ) -> Vec<i32> {
+        let Some(player) = self.find_player(player_id) else {
+            return Vec::new();
+        };
+        let mut audit = CMessage::new(0x0006_0202);
+        audit.add_byte(reason);
+        audit.add_long(player_id);
+        audit.base_mut().add_short(player.pk_count() as i16);
+        audit.add_ulong(player.money());
+        audit.add_ulong(player.depot_money());
+        audit.base_mut().add_guid(goods.ex_id);
+        audit.add_ulong(price);
+        add_legacy_c_string(audit.base_mut(), name);
+        audit.add_ulong(amount);
+        audit.add_long(player.server_region_id().unwrap_or_default());
+        audit.add_ulong(player.shape().get_tile_x().unwrap_or_default() as u32);
+        audit.add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
+        audit.add_ulong(player.client_ip());
+        audit.send(self, false).into_iter().collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn drop_packet_goods_to_region<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        context: &mut Context,
+    ) -> Result<GroundGoodsMoveReport, GroundGoodsMoveBlock> {
+        let player = self
+            .find_player(player_id)
+            .ok_or(GroundGoodsMoveBlock::MissingPlayer)?;
+        if player.server_region_id() != Some(region_id) {
+            return Err(GroundGoodsMoveBlock::RegionMismatch);
+        }
+        let source = player
+            .packet()
+            .get_goods(source_position)
+            .filter(|goods| goods.identity().ex_id == goods_id)
+            .ok_or(GroundGoodsMoveBlock::MissingGoods)?
+            .clone();
+        if source.amount() < amount || amount == 0 {
+            return Err(GroundGoodsMoveBlock::AmountMismatch);
+        }
+        if source.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) & 0x100
+            != 0
+        {
+            return Err(GroundGoodsMoveBlock::DropForbidden);
+        }
+        let origin_x = player.shape().get_tile_x().map_err(|error| {
+            GroundGoodsMoveBlock::Region(RegionMembershipBlock::ShapeCoordinate(error))
+        })?;
+        let origin_y = player.shape().get_tile_y().map_err(|error| {
+            GroundGoodsMoveBlock::Region(RegionMembershipBlock::ShapeCoordinate(error))
+        })?;
+
+        let mut owner = self
+            .take_region_owner(region_id)
+            .ok_or(GroundGoodsMoveBlock::MissingRegion)?;
+        let (tile_x, tile_y, destination_position) =
+            match owner.base().get_drop_goods_position(origin_x, origin_y, 0) {
+                Ok(Some(position)) => position,
+                Ok(None) => {
+                    self.restore_region_owner(owner);
+                    return Err(GroundGoodsMoveBlock::NoDropPosition);
+                }
+                Err(error) => {
+                    self.restore_region_owner(owner);
+                    return Err(GroundGoodsMoveBlock::Region(
+                        RegionMembershipBlock::RegionCell(error),
+                    ));
+                }
+            };
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .expect("player проверен непосредственно перед synchronous packet removal");
+        let mut split_template = source.clone();
+        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let Some(removed) =
+            player
+                .packet_mut()
+                .take_goods(source_position, amount, &self.goods_factory, |_| {
+                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                        .then(|| split_template.clone())
+                })
+        else {
+            self.players.insert(player_id, player);
+            self.restore_region_owner(owner);
+            return Err(GroundGoodsMoveBlock::PacketRemovalFailed);
+        };
+        let (detached, source_listeners) = match removed {
+            VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed))
+            | VolumeGoodsRemoveOutcome::RemovedButCellMissing(AmountLimitGoodsTaken::Removed(
+                removed,
+            )) => (removed.goods, removed.listeners),
+            VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Split(split))
+            | VolumeGoodsRemoveOutcome::RemovedButCellMissing(AmountLimitGoodsTaken::Split(
+                split,
+            )) => (split.goods, split.listeners),
+        };
+        let goods = detached.identity();
+        let particular_attribute =
+            detached.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32;
+        let old_client_payload = context.encode_goods_for_old_client(&detached);
+        let now_ms = context.container_tick_ms();
+        let (area_width, area_height) = self.area_dimensions();
+        if let Err((error, detached)) = owner.base_mut().add_owned_ground_goods(
+            detached,
+            tile_x,
+            tile_y,
+            particular_attribute,
+            now_ms,
+            area_width,
+            area_height,
+            context,
+        ) {
+            let mut incoming = Some(detached);
+            let _rollback = player.packet_mut().add_goods_at(
+                source_position,
+                &mut incoming,
+                &self.goods_factory,
+                true,
+            );
+            self.players.insert(player_id, player);
+            self.restore_region_owner(owner);
+            if let Some(goods) = incoming {
+                return Err(GroundGoodsMoveBlock::RollbackFailed {
+                    goods,
+                    region_error: error,
+                });
+            }
+            return Err(GroundGoodsMoveBlock::Region(error));
+        }
+        self.players.insert(player_id, player);
+        self.restore_region_owner(owner);
+
+        let audit_deliveries = if self.log_system.goods_drop_to_region_log_enabled() {
+            self.send_ground_goods_move_log(
+                player_id,
+                3,
+                goods,
+                source.price(),
+                source.name(),
+                amount,
+            )
+        } else {
+            Vec::new()
+        };
+
+        let mut moved = CS2CContainerObjectMove::default();
+        moved.set_operation(ContainerObjectMoveOperation::MoveObject);
+        moved.set_source_container(PLAYER_TYPE, player_id, source_position);
+        moved.set_source_container_extend_id(1);
+        moved.set_destination_container(200, region_id, destination_position);
+        moved.set_source_object(GOODS_TYPE, source.identity().ex_id, amount);
+        moved.set_destination_object(GOODS_TYPE, goods.ex_id);
+        moved.set_destination_object_amount(amount);
+        let player_delivery = moved.send_to_player(self, player_id);
+
+        let mut appeared = CS2CContainerObjectMove::default();
+        appeared.set_operation(ContainerObjectMoveOperation::NewObject);
+        appeared.set_destination_container(200, region_id, destination_position);
+        appeared.set_destination_object(GOODS_TYPE, goods.ex_id);
+        appeared.set_destination_object_amount(amount);
+        appeared.set_object_stream(old_client_payload);
+        let around_message = appeared.message();
+        let around_delivery = self.send_player_shape_around(player_id, None, &around_message);
+        Ok(GroundGoodsMoveReport {
+            goods,
+            amount,
+            source_position,
+            destination_position,
+            destination_goods: goods,
+            destination_amount: amount,
+            source_listeners,
+            destination_listeners: Vec::new(),
+            audit_deliveries,
+            player_delivery,
+            around_delivery,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn pick_up_ground_goods_to_packet<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<GroundGoodsMoveReport, GroundGoodsMoveBlock> {
+        let player = self
+            .find_player(player_id)
+            .ok_or(GroundGoodsMoveBlock::MissingPlayer)?;
+        if player.server_region_id() != Some(region_id) {
+            return Err(GroundGoodsMoveBlock::RegionMismatch);
+        }
+        let player_x = player.shape().get_tile_x().map_err(|error| {
+            GroundGoodsMoveBlock::Region(RegionMembershipBlock::ShapeCoordinate(error))
+        })?;
+        let player_y = player.shape().get_tile_y().map_err(|error| {
+            GroundGoodsMoveBlock::Region(RegionMembershipBlock::ShapeCoordinate(error))
+        })?;
+        let player_team_id = player.team_id();
+
+        let mut owner = self
+            .take_region_owner(region_id)
+            .ok_or(GroundGoodsMoveBlock::MissingRegion)?;
+        let Some(ground) = owner.base().find_ground_goods(goods_id) else {
+            self.restore_region_owner(owner);
+            return Err(GroundGoodsMoveBlock::MissingGoods);
+        };
+        let ground_x = match ground.shape().get_tile_x() {
+            Ok(value) => value,
+            Err(error) => {
+                self.restore_region_owner(owner);
+                return Err(GroundGoodsMoveBlock::Region(
+                    RegionMembershipBlock::ShapeCoordinate(error),
+                ));
+            }
+        };
+        let ground_y = match ground.shape().get_tile_y() {
+            Ok(value) => value,
+            Err(error) => {
+                self.restore_region_owner(owner);
+                return Err(GroundGoodsMoveBlock::Region(
+                    RegionMembershipBlock::ShapeCoordinate(error),
+                ));
+            }
+        };
+        if ground_x.abs_diff(player_x) >= 2 || ground_y.abs_diff(player_y) >= 2 {
+            self.restore_region_owner(owner);
+            return Err(GroundGoodsMoveBlock::PickupOutOfRange);
+        }
+        if !owner
+            .base()
+            .can_pick_up_ground_goods(goods_id, player_id, player_team_id)
+        {
+            self.restore_region_owner(owner);
+            return Err(GroundGoodsMoveBlock::PickupProtected);
+        }
+        let amount = ground.amount();
+        let audit_base_index = ground.base_properties_index();
+        let audit_price = ground.price();
+        let audit_name = ground.name().to_vec();
+        let particular_attribute =
+            ground.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32;
+        let detached = match owner
+            .base_mut()
+            .remove_owned_ground_goods(goods_id, particular_attribute)
+        {
+            Ok(Some(goods)) => goods,
+            Ok(None) => {
+                self.restore_region_owner(owner);
+                return Err(GroundGoodsMoveBlock::MissingGoods);
+            }
+            Err(error) => {
+                self.restore_region_owner(owner);
+                return Err(GroundGoodsMoveBlock::Region(error));
+            }
+        };
+
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .expect("player проверен непосредственно перед synchronous packet add");
+        let destination_listeners = player.packet().base().base().base().listeners().to_vec();
+        let mut incoming = Some(detached);
+        let addition = if destination_position == u32::MAX {
+            player
+                .packet_mut()
+                .add_goods(&mut incoming, &self.goods_factory, true)
+        } else {
+            player.packet_mut().add_goods_at(
+                destination_position,
+                &mut incoming,
+                &self.goods_factory,
+                true,
+            )
+        };
+        if incoming.is_some() || matches!(addition, VolumeGoodsAddOutcome::Rejected(_)) {
+            let detached = incoming
+                .take()
+                .expect("rejected packet add сохраняет ground goods owner");
+            let now_ms = context.container_tick_ms();
+            let (area_width, area_height) = self.area_dimensions();
+            let rollback = owner.base_mut().add_owned_ground_goods(
+                detached,
+                ground_x,
+                ground_y,
+                particular_attribute,
+                now_ms,
+                area_width,
+                area_height,
+                context,
+            );
+            self.players.insert(player_id, player);
+            self.restore_region_owner(owner);
+            if let Err((error, goods)) = rollback {
+                return Err(GroundGoodsMoveBlock::RollbackFailed {
+                    goods,
+                    region_error: error,
+                });
+            }
+            return Err(GroundGoodsMoveBlock::PacketAdditionRejected);
+        }
+        let (actual_destination_position, destination_goods, destination_amount) = match addition {
+            VolumeGoodsAddOutcome::Added(added) => {
+                let position = added.position.unwrap_or(destination_position);
+                let stored = player
+                    .packet()
+                    .get_goods(position)
+                    .expect("успешный packet add публикует destination goods");
+                (position, stored.identity(), stored.amount())
+            }
+            VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { target, .. }) => {
+                let position = player
+                    .packet()
+                    .query_goods_position(target.ex_id)
+                    .expect("успешный stack сохраняет destination cell");
+                let stored = player
+                    .packet()
+                    .get_goods(position)
+                    .expect("успешный stack сохраняет destination goods");
+                (position, stored.identity(), stored.amount())
+            }
+            VolumeGoodsAddOutcome::Stack(_) | VolumeGoodsAddOutcome::Rejected(_) => {
+                unreachable!("успешный packet add обязан забрать incoming goods")
+            }
+        };
+        self.players.insert(player_id, player);
+        self.restore_region_owner(owner);
+
+        let audit_deliveries = if self.log_system.goods_get_from_region_log_enabled()
+            && self.log_system.is_log_item(audit_base_index as i32)
+        {
+            self.send_ground_goods_move_log(
+                player_id,
+                0,
+                ShapeIdentity {
+                    object_type: GOODS_TYPE,
+                    id: 0,
+                    ex_id: goods_id,
+                },
+                audit_price,
+                &audit_name,
+                amount,
+            )
+        } else {
+            Vec::new()
+        };
+
+        let mut moved = CS2CContainerObjectMove::default();
+        moved.set_operation(ContainerObjectMoveOperation::MoveObject);
+        moved.set_source_container(200, region_id, source_position);
+        moved.set_destination_container(PLAYER_TYPE, player_id, actual_destination_position);
+        moved.set_destination_container_extend_id(1);
+        moved.set_source_object(GOODS_TYPE, goods_id, amount);
+        moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
+        moved.set_destination_object_amount(destination_amount);
+        let player_delivery = moved.send_to_player(self, player_id);
+
+        let mut disappeared = CS2CContainerObjectMove::default();
+        disappeared.set_operation(ContainerObjectMoveOperation::DeleteObject);
+        disappeared.set_source_container(200, region_id, source_position);
+        disappeared.set_source_object(GOODS_TYPE, goods_id, amount);
+        let around_message = disappeared.message();
+        let around_delivery = self.send_player_shape_around(player_id, None, &around_message);
+        Ok(GroundGoodsMoveReport {
+            goods: ShapeIdentity {
+                object_type: GOODS_TYPE,
+                id: 0,
+                ex_id: goods_id,
+            },
+            amount,
+            source_position,
+            destination_position: actual_destination_position,
+            destination_goods,
+            destination_amount,
+            source_listeners: Vec::new(),
+            destination_listeners,
+            audit_deliveries,
+            player_delivery,
+            around_delivery,
         })
     }
 
@@ -22250,7 +22689,7 @@ impl CGame {
             PLAYER_TYPE => self
                 .find_player(identity.id)
                 .map(|player| player.shape().change_state()),
-            MONSTER_TYPE | NPC_TYPE => region.owned_shape_change_state(identity),
+            MONSTER_TYPE | NPC_TYPE | GOODS_TYPE => region.owned_shape_change_state(identity),
             _ => runtime.external_region_shape_change_state(self, region, identity),
         }
     }
@@ -22268,7 +22707,7 @@ impl CGame {
                     .set_change_state(SHAPE_CHANGE_NONE);
                 true
             }),
-            MONSTER_TYPE | NPC_TYPE => region.reset_owned_shape_change_state(identity),
+            MONSTER_TYPE | NPC_TYPE | GOODS_TYPE => region.reset_owned_shape_change_state(identity),
             _ => false,
         };
         if !reset {
@@ -22317,19 +22756,70 @@ impl CGame {
                 });
                 monster_facts.insert(identity.id, facts);
             }
-            let mut context = GameAreaAiContext {
-                game: self,
-                runtime,
-                region_id: region.id,
-                area_index,
-                monster_facts,
+            let area_ai = {
+                let mut context = GameAreaAiContext {
+                    runtime,
+                    monster_facts: monster_facts.clone(),
+                };
+                region.begin_area_ai(area_index, goods_disappear_timer_ms, &mut context)
             };
-            if let Some(area_ai) = region.run_area_ai(
-                area_index,
-                goods_disappear_timer_ms,
-                goods_protected_timer_ms,
-                &mut context,
-            ) {
+            if let Some(mut area_ai) = area_ai {
+                for (ex_id, resolved) in &mut area_ai.expired_goods {
+                    if region.find_ground_goods(*ex_id).is_some() {
+                        {
+                            let goods = region
+                                .find_ground_goods(*ex_id)
+                                .expect("owned ground goods проверен выше");
+                            let position = goods
+                                .shape()
+                                .get_tile_x()
+                                .ok()
+                                .zip(goods.shape().get_tile_y().ok())
+                                .map(|(x, y)| {
+                                    region.region.width.wrapping_mul(y).wrapping_add(x) as u32
+                                })
+                                .unwrap_or_default();
+                            let mut deletion = CS2CContainerObjectMove::default();
+                            deletion.set_operation(ContainerObjectMoveOperation::DeleteObject);
+                            deletion.set_source_container(200, region.id, position);
+                            deletion.set_source_object(GOODS_TYPE, *ex_id, goods.amount());
+                            let message = deletion.message();
+                            if let Some(around) = GameServerAroundRuntime::new(
+                                self,
+                                &self.session_factory,
+                                self.globe_setup.area_width(),
+                                self.globe_setup.area_height(),
+                            ) {
+                                let _ = message.send_to_around(
+                                    Some(region),
+                                    goods.shape(),
+                                    None,
+                                    &around,
+                                );
+                            }
+                        }
+                        if let Some(goods) = region.find_ground_goods_mut(*ex_id) {
+                            goods.shape_mut().set_change_state(SHAPE_CHANGE_DELETE);
+                            *resolved = true;
+                        }
+                    } else {
+                        *resolved =
+                            runtime.expire_area_ground_goods(self, region.id, area_index, *ex_id);
+                    }
+                    region.finish_area_ground_goods_expiration(area_index, *ex_id);
+                }
+                {
+                    let mut context = GameAreaAiContext {
+                        runtime,
+                        monster_facts,
+                    };
+                    region.finish_area_ai(
+                        area_index,
+                        goods_protected_timer_ms,
+                        &mut context,
+                        &mut area_ai,
+                    );
+                }
                 report.area_ai.push(area_ai);
             }
             for identity in region.active_shape_candidates(area_index) {
@@ -22760,6 +23250,25 @@ impl CGame {
                         )
                     }
                     NPC_TYPE => Some(owner.base_mut().remove_owned_npc_by_id(identity.id)),
+                    GOODS_TYPE => {
+                        let particular_attribute = owner
+                            .base()
+                            .find_ground_goods(identity.ex_id)
+                            .map(|goods| {
+                                goods.addon_property_value(
+                                    &self.goods_factory,
+                                    GAP_PARTICULAR_ATTRIBUTE,
+                                    1,
+                                ) as u32
+                            })
+                            .unwrap_or_default();
+                        Some(
+                            owner
+                                .base_mut()
+                                .remove_owned_ground_goods(identity.ex_id, particular_attribute)
+                                .map(|goods| goods.is_some()),
+                        )
+                    }
                     _ => None,
                 };
                 let Some(result) = result else {
@@ -24338,6 +24847,13 @@ impl ShapeResolver for CGame {
                     .values()
                     .find_map(|region| region.base().find_npc_by_id(identity.id))?;
                 shape_view(npc.move_shape().shape(), ShapeFigure::default())
+            }
+            GOODS_TYPE => {
+                let goods = self
+                    .regions
+                    .values()
+                    .find_map(|region| region.base().find_ground_goods(identity.ex_id))?;
+                shape_view(goods.shape(), ShapeFigure::default())
             }
             _ => None,
         }

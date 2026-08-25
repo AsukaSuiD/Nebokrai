@@ -4,9 +4,10 @@
 //! `appserver/message packaging/cs2ccontainerobjectmove.cpp`. Реализация
 //! сохраняет полный fixed prefix, self-move normalization и разный tail:
 //! delete пишет только source amount, move/switch — обе amount, new — длину
-//! и old-client stream. `SendToAround` и `SendToSession` не требуются этому
-//! caller-у и остаются неизвестными до своих spatial/session подсистем; Rust
-//! `Drop` заменяет технический MSVC destructor без отдельного adapter-а.
+//! и old-client stream. Ground-goods owner использует тот же собранный
+//! `CMessage` для spatial around-send; выбор получателей остаётся у
+//! `GameServerAroundRuntime`. `SendToSession` пока не достигнут. Rust `Drop`
+//! заменяет технический MSVC destructor без отдельного adapter-а.
 
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -141,7 +142,7 @@ impl CS2CContainerObjectMove {
         }
     }
 
-    fn message(&self) -> CMessage {
+    pub(crate) fn message(&self) -> CMessage {
         let mut message = CMessage::new(CONTAINER_OBJECT_MOVE_MESSAGE);
         message.add_byte(self.operation as u8);
         if self.operation == ContainerObjectMoveOperation::RollBack {

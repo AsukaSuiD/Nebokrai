@@ -1,7 +1,7 @@
 //! Входной container dispatcher исторического GameServer.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
-//! `server/gameserver/appserver/message/containermessage.cpp`. Материализован
+//! `server/gameserver/appserver/message/containermessage.cpp`. Материализованы
 //! полные player packet/equipment ↔ enhancement-shadow и equipment-session
 //! upgrade/DaKong/compose, personal-shop seller и входной auction-listing
 //! проходы `0x90301`:
@@ -26,6 +26,11 @@
 //! а обратный маршрут возвращает его в packet/equipment после exact burden
 //! gate; оба сохраняют equipment callbacks, destination rollback и client move;
 //! полный persisted-player snapshot `0x6080E` остаётся у недоступного owner-а.
+//! Packet↔ground ветвь того же `0x90301` теперь достигает concrete region
+//! goods owner-а: Receive нормализует region/position/amount, сохраняет exact
+//! pickup guards и protection notice, проводит remove/add с rollback и
+//! возвращает container listeners вместе с self/around `0xC0101`. Остальные
+//! player extend ID наземного маршрута по-прежнему проходят в RAW boundary.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -43,7 +48,7 @@ use crate::gameserver::appserver::message::containermessage::EnhancementMoveRece
 };
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::player::{
-    EnhancementDeselectionBlock, EnhancementDeselectionReport, EnhancementSelectionBlock,
+    CPlayer, EnhancementDeselectionBlock, EnhancementDeselectionReport, EnhancementSelectionBlock,
     EnhancementSelectionReport, PlayerEquipmentAddReport, PlayerEquipmentDelivery,
     PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerProgress,
 };
@@ -53,7 +58,9 @@ use crate::gameserver::appserver::session::csessionfactory::{
 };
 use crate::gameserver::appserver::session::ctrader::{TraderOfferAdded, TraderOfferRemoved};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::gameserver::game::{CGame, GameContainerMessageRuntime};
+use crate::gameserver::gameserver::game::{
+    CGame, GameContainerMessageRuntime, GroundGoodsMoveBlock, GroundGoodsMoveReport,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 
@@ -209,10 +216,18 @@ pub(crate) enum GameContainerMessageOutcome {
         reason: crate::gameserver::gameserver::game::PlayerTradeOfferBlock,
         delivery: i32,
     },
+    GroundGoodsMoved(GroundGoodsMoveReport),
+    GroundGoodsRolledBack {
+        reason: GroundGoodsMoveBlock,
+        delivery: i32,
+        notification_delivery: Option<i32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EnhancementMessageRoute {
+    GroundDrop,
+    GroundPickup,
     EnhancementSelect,
     EnhancementClear,
     EnhancementTransfer,
@@ -469,12 +484,52 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             if request.destination_container_type == PLAYER_CONTAINER_TYPE {
                 request.destination_container_id = player_id;
             }
+            if let Some(region_id) = region_id
+                && let Some(region) = game.find_region(region_id)
+                && let Some(player) = game.find_player(player_id)
+            {
+                let tile_x = player.shape().get_tile_x().ok();
+                let tile_y = player.shape().get_tile_y().ok();
+                let position = tile_x.zip(tile_y).map(|(x, y)| {
+                    region.base().region.width.wrapping_mul(y).wrapping_add(x) as u32
+                });
+                if request.source_container_type == 200
+                    && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                {
+                    request.source_container_id = region_id;
+                    request.source_container_extend_id = 0;
+                    if let Some(position) = position {
+                        request.source_position = position;
+                    }
+                    if let Some(goods) = region.base().find_ground_goods(request.object_id) {
+                        request.amount = goods.amount();
+                    }
+                } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                    && request.destination_container_type == 200
+                {
+                    request.destination_container_id = region_id;
+                    request.destination_container_extend_id = 0;
+                    if let Some(position) = position {
+                        request.destination_position = position;
+                    }
+                }
+            }
             if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && matches!(request.source_container_extend_id, 3 | 4 | 5)
             {
                 request.source_position = 0;
             }
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == 200
+                && request.source_container_extend_id == 1
+            {
+                EnhancementMessageRoute::GroundDrop
+            } else if request.source_container_type == 200
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_extend_id == 1
+            {
+                EnhancementMessageRoute::GroundPickup
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_extend_id == 13
                 && matches!(request.source_container_extend_id, 1 | 2 | 14)
@@ -688,6 +743,89 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
             EnhancementMoveReceiveBlock::ForbiddenRoute,
         ))));
+    }
+
+    if matches!(
+        route,
+        EnhancementMessageRoute::GroundDrop | EnhancementMessageRoute::GroundPickup
+    ) {
+        if route == EnhancementMessageRoute::GroundPickup
+            && (!(0..=11).contains(&request.destination_container_extend_id)
+                || request.destination_container_extend_id == 5)
+        {
+            return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
+                InvalidExtendId,
+            ))));
+        }
+        let region_id = region_id.expect("ground route проверен после current region resolve");
+        if route == EnhancementMessageRoute::GroundPickup {
+            let progress = game
+                .find_player(player_id)
+                .map(CPlayer::current_progress)
+                .unwrap_or_default();
+            let notice_id: Option<&[u8]> = match progress {
+                PlayerProgress::OpenStall => Some(b"GS0108"),
+                PlayerProgress::Trading => Some(b"GS0109"),
+                PlayerProgress::Upgrade => Some(b"GS0110"),
+                _ => None,
+            };
+            if let Some(notice_id) = notice_id {
+                let notification_delivery = Some(send_notify(
+                    game,
+                    player_id,
+                    game.get_string_by_id(notice_id),
+                    0xffff_ffff,
+                    0,
+                ));
+                let delivery = send_rollback(game, player_id);
+                return Some(Ok(report(
+                    GameContainerMessageOutcome::GroundGoodsRolledBack {
+                        reason: GroundGoodsMoveBlock::PickupBusy,
+                        delivery,
+                        notification_delivery,
+                    },
+                )));
+            }
+        }
+        let transfer = if route == EnhancementMessageRoute::GroundDrop {
+            game.drop_packet_goods_to_region(
+                player_id,
+                region_id,
+                request.source_position,
+                request.object_id,
+                request.amount,
+                context,
+            )
+        } else {
+            game.pick_up_ground_goods_to_packet(
+                player_id,
+                region_id,
+                request.source_position,
+                request.object_id,
+                request.destination_position,
+                context,
+            )
+        };
+        return Some(Ok(report(match transfer {
+            Ok(transfer) => GameContainerMessageOutcome::GroundGoodsMoved(transfer),
+            Err(reason) => {
+                let notification_delivery =
+                    (reason == GroundGoodsMoveBlock::PickupProtected).then(|| {
+                        send_notify(
+                            game,
+                            player_id,
+                            game.get_string_by_id(b"GS0112"),
+                            0xffff_ffff,
+                            0,
+                        )
+                    });
+                GameContainerMessageOutcome::GroundGoodsRolledBack {
+                    reason,
+                    delivery: send_rollback(game, player_id),
+                    notification_delivery,
+                }
+            }
+        })));
     }
 
     if route == EnhancementMessageRoute::AuctionListingMove {
