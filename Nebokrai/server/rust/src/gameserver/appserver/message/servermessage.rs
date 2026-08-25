@@ -111,7 +111,8 @@
 //! Region selector `0x0E` проходит реальный FIFO через runtime factory-
 //! контекст: все шесть concrete subtype-ов используют общий base decoder,
 //! ordered display-list effect предшествует публикации `CGame` owner-а, а
-//! startup totals и GodsBattle region-set обновляются только после log effect.
+//! startup totals из region-owned monotonic spawn counters и GodsBattle
+//! region-set обновляются только после log effect.
 //! Runtime selector `0x10` ищет concrete owner по ID и перечитывает только его
 //! setup/forbid-goods tail; miss не читает tail и не пишет log.
 //! FourNationWar `0x25` декодирует exact 196-byte setup records и пять rects,
@@ -3401,8 +3402,6 @@ fn read_start_long(
 pub(crate) trait InitialRegionStartupContext:
     CityRegionDecodeContext + CountryRegionDecodeContext
 {
-    fn total_region_monsters(&self) -> i32;
-    fn total_region_npcs(&self) -> i32;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3509,11 +3508,13 @@ where
         add_region_list(owner.name(), region_id);
     }
     let gods_battle = owner.is_gods_battle();
+    let (spawned_monsters, spawned_npcs) = owner.base().total_spawned_shapes();
     let replaced = game.add_region(owner);
     add_log_text(b"Start Region : (%d) %s [m=%d n=%d] ...OK!");
 
-    let total_monsters = context.total_region_monsters();
-    let total_npcs = context.total_region_npcs();
+    let (previous_monsters, previous_npcs) = game.initial_region_totals();
+    let total_monsters = previous_monsters.wrapping_add(spawned_monsters);
+    let total_npcs = previous_npcs.wrapping_add(spawned_npcs);
     game.set_initial_region_totals(total_monsters, total_npcs);
     let gods_battle_registered =
         gods_battle && game.gods_battle_mgr_mut().add_region_set(region_id);

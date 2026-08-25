@@ -88,6 +88,9 @@
 //! message отправляется всегда, а шестой bool подавляет ранний guard-hook.
 //! Clock-вариант `AddNpc` получает отдельный tick на каждый объект batch-а:
 //! он одновременно питает born-time и concrete spatial membership owner.
+//! Монотонные `g_lTotalMonster/g_lTotalNpc` представлены per-region
+//! счётчиками с теми же позициями increment: monster после around-send, NPC
+//! до `AddObject`; startup owner складывает их без runtime callback-а.
 //! One-second AI fragment сохраняет wrapping respawn deadline, сначала пишет
 //! last-reset и затем восполняет только deficit `count-living_count`.
 //! Для всех concrete region owners этот fragment вызывается реальным
@@ -486,9 +489,6 @@ pub(crate) trait ServerRegionNpcContext: ServerRegionMembershipContext {
     /// Сохраняет `GS0233` owner-side log при отсутствии свободной позиции.
     fn log_npc_position_failure(&mut self, npc_name: &[u8]);
 
-    /// Счётчик увеличивается до `AddObject`, как `g_lTotalNpc` в exact EXE.
-    fn npc_spawned(&mut self);
-
     /// Материализует optional `0xBF502`; startup вызывает AddNpc с false.
     fn send_npc_entered_around(&mut self, npc: &CNpc);
 }
@@ -504,9 +504,6 @@ pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
     fn initialize_guard_monster(&mut self, monster_id: i32);
 
     fn send_monster_entered_around(&mut self, monster: &CMonster);
-
-    /// Exact low-level AddMonster увеличивает global total после around-send.
-    fn monster_spawned(&mut self);
 
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32);
 
@@ -689,8 +686,10 @@ pub(crate) struct CServerRegion {
     areas: Vec<CArea>,
     registry: ServerRegionRegistry,
     owned_monsters: BTreeMap<i32, CMonster>,
+    total_spawned_monsters: i32,
     next_monster_id: NextMonsterId,
     owned_npcs: BTreeMap<i32, CNpc>,
+    total_spawned_npcs: i32,
     next_npc_id: NextNpcId,
     owned_goods: BTreeMap<CGuid, CGoods>,
     delete_shapes: Vec<ShapeIdentity>,
@@ -1031,7 +1030,7 @@ impl CServerRegion {
                 .get(&id)
                 .expect("monster опубликован непосредственно перед send"),
         );
-        context.monster_spawned();
+        self.total_spawned_monsters = self.total_spawned_monsters.wrapping_add(1);
         Ok(id)
     }
 
@@ -1514,7 +1513,7 @@ impl CServerRegion {
                 npc.set_born_time(spawn_tick);
             }
 
-            context.npc_spawned();
+            self.total_spawned_npcs = self.total_spawned_npcs.wrapping_add(1);
             let facts = ShapeRuntimeFacts {
                 is_npc: true,
                 is_move_shape: true,
@@ -1822,6 +1821,12 @@ impl CServerRegion {
 
     pub(crate) const fn npc_name_list_count(&self) -> i32 {
         self.npc_name_list_count
+    }
+
+    /// Process-global counters оригинала становятся суммируемым монотонным
+    /// state каждого concrete region без изменения позиций increment-ов.
+    pub(crate) const fn total_spawned_shapes(&self) -> (i32, i32) {
+        (self.total_spawned_monsters, self.total_spawned_npcs)
     }
 
     pub(crate) fn npc_name_list_length(&self) -> i32 {
