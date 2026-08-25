@@ -178,6 +178,10 @@
 //! Парный `3009 / GetPlayerAllProperties` читает exact base/current wire
 //! slots PDB-layout, форматирует `GS0186..GS0188` в исходном vararg-порядке и
 //! публикует три цветных `BF806` тому же live script-player.
+//! Moderation family `3201..3203` сохраняет local-before-World lookup:
+//! named kick завершает `CGame::KickPlayer` и `GS0025`, ban публикует
+//! `0x5FF12`, а silence либо меняет exact player timestamp, либо проходит
+//! `0x5FF0C -> 0x7FC0B/0x5FF0D -> 0x7FC0C` через общий GM dispatcher.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -320,6 +324,9 @@ pub(crate) const SCRIPT_FUNCTION_DELETE_SKILL: i32 = 3102;
 pub(crate) const SCRIPT_FUNCTION_SET_SKILL_LEVEL: i32 = 3103;
 pub(crate) const SCRIPT_FUNCTION_ADD_SKILL: i32 = 3101;
 pub(crate) const SCRIPT_FUNCTION_GET_SKILL_LEVEL: i32 = 3104;
+pub(crate) const SCRIPT_FUNCTION_KICK_PLAYER: i32 = 3201;
+pub(crate) const SCRIPT_FUNCTION_BAN_PLAYER: i32 = 3202;
+pub(crate) const SCRIPT_FUNCTION_SILENCE_PLAYER: i32 = 3203;
 pub(crate) const SCRIPT_FUNCTION_CREATE_FACTION: i32 = 6001;
 pub(crate) const SCRIPT_FUNCTION_APPLY_JOIN_FACTION: i32 = 6002;
 pub(crate) const SCRIPT_FUNCTION_QUIT_JOIN_FACTION: i32 = 6003;
@@ -3284,6 +3291,15 @@ pub(crate) fn script_function_parameter_kind(
             0 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_KICK_PLAYER => match index {
+            0 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_BAN_PLAYER | SCRIPT_FUNCTION_SILENCE_PLAYER => match index {
+            0 => String,
+            1 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_CREATE_FACTION => match index {
             0 | 2 | 3 => Integer,
             1 => String,
@@ -5424,6 +5440,81 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                         .send_to_player(game.net_server(), requester_id);
                 }
             }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_KICK_PLAYER => {
+            let Some(requester_id) = script_player_id else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let Some(target_name) =
+                string_arguments[0].filter(|name| !name.is_empty() && name.len() <= 23)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if game.kick_player_by_name(target_name).is_some() {
+                let text = format_legacy_text_fields(
+                    game.get_string_by_id(b"GS0025"),
+                    &[target_name],
+                    0xff,
+                );
+                let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
+                    .send_to_player(game.net_server(), requester_id);
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 });
+            }
+
+            let mut request = CMessage::new(0x0005_ff07);
+            request.add_long(requester_id);
+            request.base_mut().add(target_name);
+            request.add_byte(0);
+            let _ = request.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_BAN_PLAYER => {
+            let (Some(requester_id), Some(target_name), Some(minutes)) = (
+                script_player_id,
+                string_arguments[0]
+                    .filter(|name| !name.is_empty() && name.len() <= 49 && !name.contains(&b'\'')),
+                integer_arguments[1]
+                    .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR && *value != 0),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let mut request = CMessage::new(0x0005_ff12);
+            request.add_long(requester_id);
+            request.base_mut().add(target_name);
+            request.add_byte(0);
+            request.add_long(minutes);
+            let _ = request.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_SILENCE_PLAYER => {
+            let Some(requester_id) = script_player_id.filter(|player_id| *player_id > 0) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let Some(target_name) = string_arguments[0]
+                .filter(|name| !name.is_empty() && name.len() <= u8::MAX as usize)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let minutes = integer_arguments[1]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .unwrap_or(1);
+            if minutes < 0 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            if game
+                .silence_player_by_name(target_name, minutes, || runtime.now_milliseconds())
+                .is_some()
+            {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+
+            let mut request = CMessage::new(0x0005_ff0c);
+            request.add_long(requester_id);
+            request.base_mut().add(target_name);
+            request.add_byte(0);
+            request.add_long(minutes);
+            let _ = request.send(game, false);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_FORCE_MOVE => {
