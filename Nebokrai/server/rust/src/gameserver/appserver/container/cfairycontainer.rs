@@ -531,6 +531,36 @@ impl CFairyContainer {
             .unwrap_or(FairyContainerRemoveOutcome::Missing)
     }
 
+    /// Positional `Remove(position, amount)` сохраняет тот же hatch-lock,
+    /// после чего делегирует full/partial ownership общему volume owner-у.
+    pub(crate) fn take<Create>(
+        &mut self,
+        position: u32,
+        amount: u32,
+        factory: &CGoodsFactory,
+        create_goods: Create,
+    ) -> FairyContainerRemoveOutcome
+    where
+        Create: FnMut(u32) -> Option<CGoods>,
+    {
+        let Some(goods) = self.base.get_goods(position) else {
+            return FairyContainerRemoveOutcome::Missing;
+        };
+        if goods
+            .fairy_properties()
+            .is_some_and(|fairy| fairy.hatch_start_time != 0)
+        {
+            return FairyContainerRemoveOutcome::Hatching {
+                position: Some(position),
+                goods_id: goods.identity().ex_id,
+            };
+        }
+        self.base
+            .take_goods(position, amount, factory, create_goods)
+            .map(FairyContainerRemoveOutcome::Removed)
+            .unwrap_or(FairyContainerRemoveOutcome::Missing)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn fairy_change_state(
         &mut self,

@@ -457,9 +457,10 @@ use crate::gameserver::appserver::container::cequipmentcontainer::{
 };
 use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::UpgradeEquipmentCell;
 use crate::gameserver::appserver::container::cfairycontainer::{
-    FairyContainerAmountChange, FairyContainerGoodsUpdate, FairyContainerMoveOperation,
-    FairyHatcherEntry, FairyImplantDelivery, FairyImplantReport, FairyIncubateLog,
-    FairyStateChangeEffect, FairyStateChangeOutcome, FairySyncreticProperty, FairySyncretizeConfig,
+    FairyContainerAddOutcome, FairyContainerAmountChange, FairyContainerGoodsUpdate,
+    FairyContainerMoveOperation, FairyContainerRemoveOutcome, FairyHatcherEntry,
+    FairyImplantDelivery, FairyImplantReport, FairyIncubateLog, FairyStateChangeEffect,
+    FairyStateChangeOutcome, FairySyncreticProperty, FairySyncretizeConfig,
     FairySyncretizeFragmentEffect, FairySyncretizeLog, FairySyncretizePlayer,
     FairySyncretizePlayerUpdate, FairySyncretizeRemoval, FairySyncretizeReport,
 };
@@ -2697,6 +2698,74 @@ pub(crate) struct PlayerHandMoveReport {
     pub(crate) addition: GroundHandAddition,
     pub(crate) previous_last_operated: (u32, u32),
     pub(crate) audit_deliveries: Vec<i32>,
+    pub(crate) delivery: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyStorageRemoval {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FairyStorageTransferRemoval {
+    Player(EnhancementTransferRemoval),
+    Fairy(FairyStorageRemoval),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FairyStorageTransferAddition {
+    Player(DepotStorageTransferAddition),
+    Fairy(FairyContainerAddOutcome),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FairyStorageTransferBlock {
+    MissingPlayer,
+    UnsupportedRoute,
+    MissingGoods,
+    AmountMismatch,
+    PartialMoveBusy(PlayerProgress),
+    BurdenRolledBack {
+        removal: FairyStorageTransferRemoval,
+        restored: FairyStorageTransferAddition,
+    },
+    BurdenRollbackFailed {
+        goods: CGoods,
+        removal: FairyStorageTransferRemoval,
+        rollback: FairyStorageTransferAddition,
+    },
+    PacketRemovalFailed,
+    EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
+    FairyRemovalFailed(FairyContainerRemoveOutcome),
+    RolledBack {
+        removal: FairyStorageTransferRemoval,
+        rejected: FairyStorageTransferAddition,
+        restored: FairyStorageTransferAddition,
+    },
+    RollbackFailed {
+        goods: CGoods,
+        removal: FairyStorageTransferRemoval,
+        rejected: FairyStorageTransferAddition,
+        rollback: FairyStorageTransferAddition,
+    },
+}
+
+#[must_use = "fairy transfer report сохраняет hatch-aware ownership и client wire"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FairyStorageTransferReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) source_extend_id: i32,
+    pub(crate) source_position: u32,
+    pub(crate) destination_extend_id: i32,
+    pub(crate) destination_position: u32,
+    pub(crate) removal: FairyStorageTransferRemoval,
+    pub(crate) addition: FairyStorageTransferAddition,
+    pub(crate) previous_last_operated: (u32, u32),
     pub(crate) delivery: i32,
 }
 
@@ -7287,6 +7356,354 @@ impl CGame {
             audit_deliveries,
             delivery,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn transfer_player_fairy_goods<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<FairyStorageTransferReport, FairyStorageTransferBlock> {
+        let supported = matches!(source_extend_id, 1 | 2) && destination_extend_id == 11
+            || source_extend_id == 11 && matches!(destination_extend_id, 1 | 2);
+        if !supported {
+            return Err(FairyStorageTransferBlock::UnsupportedRoute);
+        }
+        let player = self
+            .find_player(player_id)
+            .ok_or(FairyStorageTransferBlock::MissingPlayer)?;
+        let source = match source_extend_id {
+            1 => player.packet().get_goods(source_position),
+            2 => player.equipment().get_goods(source_position),
+            11 => player.fairy_container().base().get_goods(source_position),
+            _ => None,
+        }
+        .filter(|goods| goods.identity().ex_id == goods_id)
+        .ok_or(FairyStorageTransferBlock::MissingGoods)?;
+        if amount == 0
+            || source.amount() < amount
+            || source_extend_id == 2 && source.amount() != amount
+        {
+            return Err(FairyStorageTransferBlock::AmountMismatch);
+        }
+        if source.amount() != amount
+            && matches!(
+                player.current_progress(),
+                PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+            )
+        {
+            return Err(FairyStorageTransferBlock::PartialMoveBusy(
+                player.current_progress(),
+            ));
+        }
+        let source_identity = source.identity();
+        let mut burden_goods = source.clone();
+        burden_goods.set_amount(amount);
+        let burden_exceeded = source_extend_id == 11
+            && player
+                .current_burden(&self.goods_factory)
+                .wrapping_add(burden_goods.weight(&self.goods_factory))
+                > u32::from(player.combat_properties().burden);
+        let mut split_template = source.clone();
+        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .expect("player проверен перед fairy ownership pass");
+
+        let (removal, mut incoming) = if source_extend_id == 1 {
+            let removed = player.packet_mut().take_goods(
+                source_position,
+                amount,
+                &self.goods_factory,
+                |_| {
+                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                        .then(|| split_template.clone())
+                },
+            );
+            let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
+                self.players.insert(player_id, player);
+                return Err(FairyStorageTransferBlock::PacketRemovalFailed);
+            };
+            let (goods, removal) = Self::player_packet_taken(taken, source_position);
+            (FairyStorageTransferRemoval::Player(removal), Some(goods))
+        } else if source_extend_id == 2 {
+            let goods = player
+                .equipment()
+                .get_goods(source_position)
+                .expect("equipment source проверен до remove");
+            let facts = context.enhancement_equipment_remove_facts(
+                &player,
+                goods,
+                self.globe_setup.pack_add_enabled(),
+            );
+            let mut recompute =
+                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut report = player.remove_equipment_goods(
+                goods_id,
+                &self.goods_factory,
+                &self.skill_factory,
+                facts,
+                &mut recompute,
+            );
+            drop(recompute);
+            self.publish_player_equipment_remove_report(&mut report, context);
+            let outcome = std::mem::replace(
+                &mut report.outcome,
+                EquipmentRemoveOutcome::Missing {
+                    partial_effects: Default::default(),
+                },
+            );
+            let EquipmentRemoveOutcome::Removed(removed) = outcome else {
+                report.outcome = outcome;
+                self.players.insert(player_id, player);
+                return Err(FairyStorageTransferBlock::EquipmentRemovalFailed(report));
+            };
+            (
+                FairyStorageTransferRemoval::Player(EnhancementTransferRemoval::Equipment {
+                    event: removed.event,
+                    effects: report.effects,
+                    deliveries: report.deliveries,
+                }),
+                Some(removed.goods),
+            )
+        } else {
+            let outcome = player.fairy_container_mut().take(
+                source_position,
+                amount,
+                &self.goods_factory,
+                |_| {
+                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                        .then(|| split_template.clone())
+                },
+            );
+            let taken = match outcome {
+                FairyContainerRemoveOutcome::Removed(VolumeGoodsRemoveOutcome::Removed(taken)) => {
+                    taken
+                }
+                failed => {
+                    self.players.insert(player_id, player);
+                    return Err(FairyStorageTransferBlock::FairyRemovalFailed(failed));
+                }
+            };
+            let (goods, removal) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    FairyStorageRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    FairyStorageRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                    },
+                ),
+            };
+            (FairyStorageTransferRemoval::Fairy(removal), Some(goods))
+        };
+
+        if burden_exceeded {
+            let rollback = self.add_fairy_transfer_goods(
+                &mut player,
+                source_extend_id,
+                source_position,
+                &mut incoming,
+                context,
+            );
+            self.players.insert(player_id, player);
+            if let Some(goods) = incoming {
+                return Err(FairyStorageTransferBlock::BurdenRollbackFailed {
+                    goods,
+                    removal,
+                    rollback,
+                });
+            }
+            return Err(FairyStorageTransferBlock::BurdenRolledBack {
+                removal,
+                restored: rollback,
+            });
+        }
+
+        let addition = self.add_fairy_transfer_goods(
+            &mut player,
+            destination_extend_id,
+            destination_position,
+            &mut incoming,
+            context,
+        );
+        if incoming.is_some() {
+            let rejected = addition;
+            let rollback = self.add_fairy_transfer_goods(
+                &mut player,
+                source_extend_id,
+                source_position,
+                &mut incoming,
+                context,
+            );
+            self.players.insert(player_id, player);
+            if let Some(goods) = incoming {
+                return Err(FairyStorageTransferBlock::RollbackFailed {
+                    goods,
+                    removal,
+                    rejected,
+                    rollback,
+                });
+            }
+            return Err(FairyStorageTransferBlock::RolledBack {
+                removal,
+                rejected,
+                restored: rollback,
+            });
+        }
+
+        let (actual_position, destination_goods, destination_amount) =
+            Self::fairy_transfer_destination(&player, destination_position, &addition);
+        let previous_last_operated =
+            player.record_last_operated_goods(source_extend_id, source_position);
+        self.players.insert(player_id, player);
+        let mut moved = CS2CContainerObjectMove::default();
+        moved.set_operation(ContainerObjectMoveOperation::MoveObject);
+        moved.set_source_container(PLAYER_TYPE, player_id, source_position);
+        moved.set_source_container_extend_id(source_extend_id);
+        moved.set_destination_container(PLAYER_TYPE, player_id, actual_position);
+        moved.set_destination_container_extend_id(destination_extend_id);
+        moved.set_source_object(GOODS_TYPE, goods_id, amount);
+        moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
+        moved.set_destination_object_amount(destination_amount);
+        let delivery = moved.send_to_player(self, player_id);
+        Ok(FairyStorageTransferReport {
+            goods: source_identity,
+            amount,
+            source_extend_id,
+            source_position,
+            destination_extend_id,
+            destination_position: actual_position,
+            removal,
+            addition,
+            previous_last_operated,
+            delivery,
+        })
+    }
+
+    fn player_packet_taken(
+        taken: AmountLimitGoodsTaken,
+        source_position: u32,
+    ) -> (CGoods, EnhancementTransferRemoval) {
+        match taken {
+            AmountLimitGoodsTaken::Removed(removed) => (
+                removed.goods,
+                EnhancementTransferRemoval::Packet {
+                    owner_type: removed.owner_type,
+                    owner_id: removed.owner_id,
+                    position: removed.position.unwrap_or(source_position),
+                    amount: removed.amount,
+                    listeners: removed.listeners,
+                },
+            ),
+            AmountLimitGoodsTaken::Split(split) => (
+                split.goods,
+                EnhancementTransferRemoval::Packet {
+                    owner_type: split.owner_type,
+                    owner_id: split.owner_id,
+                    position: split.position.unwrap_or(source_position),
+                    amount: split.amount,
+                    listeners: split.listeners,
+                },
+            ),
+        }
+    }
+
+    fn add_fairy_transfer_goods<Context: GameContainerMessageRuntime>(
+        &self,
+        player: &mut CPlayer,
+        extend_id: i32,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        context: &mut Context,
+    ) -> FairyStorageTransferAddition {
+        if extend_id == 11 {
+            let owner_progress_allows = !matches!(
+                player.current_progress(),
+                PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+            );
+            let outcome = if position == u32::MAX {
+                player.fairy_container_mut().add(
+                    incoming,
+                    &self.goods_factory,
+                    owner_progress_allows,
+                )
+            } else {
+                player.fairy_container_mut().add_at(
+                    position,
+                    incoming,
+                    &self.goods_factory,
+                    owner_progress_allows,
+                )
+            };
+            return FairyStorageTransferAddition::Fairy(outcome);
+        }
+        FairyStorageTransferAddition::Player(
+            self.add_depot_transfer_goods(player, extend_id, position, incoming, context),
+        )
+    }
+
+    fn fairy_transfer_destination(
+        player: &CPlayer,
+        requested_position: u32,
+        addition: &FairyStorageTransferAddition,
+    ) -> (u32, ShapeIdentity, u32) {
+        match addition {
+            FairyStorageTransferAddition::Player(addition) => {
+                Self::depot_transfer_destination(player, requested_position, addition)
+            }
+            FairyStorageTransferAddition::Fairy(FairyContainerAddOutcome::Base(outcome)) => {
+                match outcome {
+                    VolumeGoodsAddOutcome::Added(added) => {
+                        let position = added.position.unwrap_or(requested_position);
+                        let goods = player
+                            .fairy_container()
+                            .base()
+                            .get_goods(position)
+                            .expect("fairy add сохранён");
+                        (position, goods.identity(), goods.amount())
+                    }
+                    VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
+                        target, ..
+                    }) => {
+                        let position = player
+                            .fairy_container()
+                            .base()
+                            .query_goods_position(target.ex_id)
+                            .expect("fairy stack position");
+                        let goods = player
+                            .fairy_container()
+                            .base()
+                            .get_goods(position)
+                            .expect("fairy stack сохранён");
+                        (position, goods.identity(), goods.amount())
+                    }
+                    _ => unreachable!("успешный fairy add забрал incoming"),
+                }
+            }
+            FairyStorageTransferAddition::Fairy(FairyContainerAddOutcome::Rejected(_)) => {
+                unreachable!("успешный fairy transfer не содержит reject")
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
