@@ -169,6 +169,9 @@
 //! signed arithmetic и вызывает достигнутый `CPlayer::SetMoney` wallet owner:
 //! state, create/change/delete container wire и old-client goods stream
 //! исполняются из того же `CScript::RunFunction` runtime caller-а.
+//! Соседний `3010 / ForceMove` ограничивает имя exact 23 байтами и проводит
+//! вычисленные X/Y/time через local player lookup, region spatial membership,
+//! around `0xBF708` и AI stand-event достигнутого `CMoveShape` owner-а.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -198,6 +201,7 @@ use crate::gameserver::appserver::country::country::{
 };
 use crate::gameserver::appserver::exstate::ExtendedStateKind;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::moveshape::MoveShapeCommandContext;
 use crate::gameserver::appserver::organizingsystem::attackcitysys::AttackCityMembershipBlock;
 use crate::gameserver::appserver::player::{
     CPlayer, PlayerLeiTingThingCountOutcome, PlayerProgress,
@@ -296,6 +300,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_REGION_ID: i32 = 3005;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_REGION: i32 = 3006;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_REGION_EX: i32 = 3007;
 pub(crate) const SCRIPT_FUNCTION_KICK_PLAYER_EX: i32 = 3008;
+pub(crate) const SCRIPT_FUNCTION_FORCE_MOVE: i32 = 3010;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_MONEY_BY_NAME: i32 = 3011;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
 pub(crate) const SCRIPT_FUNCTION_SET_MONEY_BY_NAME: i32 = 3013;
@@ -473,6 +478,7 @@ pub(crate) trait ScriptFunctionRuntime:
     + GodsBattleDeathContext
     + RealmAppellationScriptContext
     + ScriptAwardAuthenticationContext
+    + MoveShapeCommandContext
 {
 }
 
@@ -490,6 +496,7 @@ impl<T> ScriptFunctionRuntime for T where
         + GodsBattleDeathContext
         + RealmAppellationScriptContext
         + ScriptAwardAuthenticationContext
+        + MoveShapeCommandContext
 {
 }
 
@@ -3236,6 +3243,11 @@ pub(crate) fn script_function_parameter_kind(
             0 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_FORCE_MOVE => match index {
+            0 => String,
+            1..=3 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_CHANGE_MONEY_BY_NAME | SCRIPT_FUNCTION_SET_MONEY_BY_NAME => match index {
             0 => String,
             1 => Integer,
@@ -5286,6 +5298,21 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     player_id,
                     runtime.country_contend_now_milliseconds(),
                 );
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_FORCE_MOVE => {
+            let target_name = string_arguments[0].filter(|name| name.len() < 24);
+            let integer = |index: usize| {
+                integer_arguments[index].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            };
+            if let (Some(target_name), Some(x), Some(y), Some(duration_ms)) =
+                (target_name, integer(1), integer(2), integer(3))
+                && let Some(target_id) = game
+                    .find_player_by_name(target_name)
+                    .map(CPlayer::player_id)
+            {
+                let _ = game.force_move_script_player(target_id, x, y, duration_ms as u32, runtime);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }

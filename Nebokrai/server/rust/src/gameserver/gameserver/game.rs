@@ -514,7 +514,9 @@ use crate::gameserver::appserver::message::unibillmessage::{
     dispatch_increment_shop_billing_message,
 };
 use crate::gameserver::appserver::monster::CMonster;
-use crate::gameserver::appserver::moveshape::{CMoveShape, UndeadState};
+use crate::gameserver::appserver::moveshape::{
+    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, UndeadState,
+};
 use crate::gameserver::appserver::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationRect,
@@ -20188,6 +20190,53 @@ impl CGame {
             tile_y,
             facts,
         );
+        self.restore_region_owner(owner);
+        self.players.insert(player_id, player);
+        Some(result)
+    }
+
+    /// Runtime bridge script `3010`: удерживает target player и его concrete
+    /// region одним mutable проходом, чтобы `CMoveShape::ForceMove` одновременно
+    /// опубликовал around wire, переставил spatial membership и поставил AI
+    /// stand-event на вычисленную сценарием длительность.
+    pub(crate) fn force_move_script_player<Context: MoveShapeCommandContext>(
+        &mut self,
+        player_id: i32,
+        destination_x: i32,
+        destination_y: i32,
+        duration_ms: u32,
+        context: &mut Context,
+    ) -> Option<Result<bool, MoveShapeCommandBlock>> {
+        let mut player = self.players.remove(&player_id)?;
+        let Some(region_id) = player.server_region_id() else {
+            self.players.insert(player_id, player);
+            return None;
+        };
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            self.players.insert(player_id, player);
+            return None;
+        };
+        let area_width = self.globe_setup.area_width();
+        let area_height = self.globe_setup.area_height();
+        let result = {
+            let Some(around) =
+                GameServerAroundRuntime::new(self, &self.session_factory, area_width, area_height)
+            else {
+                self.restore_region_owner(owner);
+                self.players.insert(player_id, player);
+                return None;
+            };
+            player.force_move(
+                owner.base_mut(),
+                destination_x,
+                destination_y,
+                duration_ms,
+                area_width,
+                area_height,
+                &around,
+                context,
+            )
+        };
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
         Some(result)

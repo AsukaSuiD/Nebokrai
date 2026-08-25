@@ -274,14 +274,19 @@ use super::goods::cgoodsbaseproperties::{
     GOODS_TYPE_CONSUMABLE,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
-use super::moveshape::{CMoveShape, MoveShapePositionFacts, MoveShapeSkill};
+use super::moveshape::{
+    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionFacts,
+    MoveShapeSkill,
+};
 use super::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
+use super::serverregion::CServerRegion;
 use super::shape::{
     CShape, ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView,
 };
 use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
+use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::auctionnode::CGoodsNode;
 use crate::public::guid::CGuid;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
@@ -4209,6 +4214,29 @@ impl CPlayer {
 
     pub(crate) const fn movement_shape_mut(&mut self) -> &mut CShape {
         self.move_shape.shape_mut()
+    }
+
+    pub(crate) fn force_move<Context: MoveShapeCommandContext>(
+        &mut self,
+        server_region: &mut CServerRegion,
+        destination_x: i32,
+        destination_y: i32,
+        duration_ms: u32,
+        area_width: i32,
+        area_height: i32,
+        around: &GameServerAroundRuntime<'_>,
+        context: &mut Context,
+    ) -> Result<bool, MoveShapeCommandBlock> {
+        let facts = self.movement_position_facts(area_width, area_height);
+        self.move_shape.force_move(
+            Some(server_region),
+            destination_x,
+            destination_y,
+            duration_ms,
+            facts,
+            around,
+            context,
+        )
     }
 
     pub(crate) const fn figure(&self) -> ShapeFigure {
