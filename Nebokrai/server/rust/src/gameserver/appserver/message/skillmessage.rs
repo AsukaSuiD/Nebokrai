@@ -175,7 +175,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
             };
             let facts = game.player_skill_request_facts(player_id, region_id, request, runtime);
             let report = game
-                .request_player_skill(player_id, socket_id, request, facts, runtime)
+                .request_player_skill(player_id, socket_id, request, facts)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
             GameSkillMessageOutcome::PlayerSkill(report)
         }
@@ -312,7 +312,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
             };
             let facts = game.player_skill_request_facts(player_id, region_id, request, runtime);
             let report = game
-                .request_item_skill(player_id, socket_id, request, skill_level, facts, runtime)
+                .request_item_skill(player_id, socket_id, request, skill_level, facts)
                 .expect("resolved message player остаётся в CGame во время item-skill dispatch");
             GameSkillMessageOutcome::ItemSkill(report)
         }

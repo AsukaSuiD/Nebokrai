@@ -310,7 +310,6 @@ use super::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionFacts,
     MoveShapeSkill,
 };
-use super::pksys::FirstSkillPkReport;
 use super::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
@@ -1088,7 +1087,6 @@ pub(crate) struct PlayerSkillRequestReport {
     pub(crate) outcome: PlayerSkillRequestOutcome,
     pub(crate) effects: Vec<PlayerSkillRequestEffect>,
     pub(crate) deliveries: Vec<PlayerSkillRequestDelivery>,
-    pub(crate) pk_first_skill: Option<FirstSkillPkReport>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -10316,7 +10314,6 @@ impl CPlayer {
             outcome: PlayerSkillRequestOutcome::Unauthorized,
             effects: Vec::new(),
             deliveries: Vec::new(),
-            pk_first_skill: None,
         };
         if self.contend_state && facts.symbol_attackable {
             report.effects.push(PlayerSkillRequestEffect::Notification {

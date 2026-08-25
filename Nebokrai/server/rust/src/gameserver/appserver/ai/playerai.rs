@@ -8,7 +8,8 @@
 //! и ClearEmotion остаются у caller-а, чтобы не хранить raw pointers внутри AI.
 //! Owner теперь принадлежит canonical `CPlayer`: quest movement и оба skill
 //! message family кладут typed dispatch в его FIFO, а reached `CMoveShape::AI`
-//! получает именно этот owner и может потребить очереди без shadow map.
+//! передаёт front actual execution owner-у и удаляет его только по terminal
+//! outcome. Это сохраняет pending-команду между AI tick-ами без shadow map.
 //! Хвост `CPlayerAI::Run` после ещё внешнего `CBaseAI::Run` теперь хранит оба
 //! auto-inc clock, использует persisted player/faction facts и exact unsigned
 //! due-check. Auto-exp возвращает mutation в полный `CGame::CheckLevel` caller,
@@ -71,20 +72,56 @@ impl CPlayerAI {
             .push_back(PlayerAiDestination { direction, is_run });
     }
 
-    pub(crate) fn queue_player_skill(&mut self, dispatch: PlayerSkillDispatch) {
+    pub(crate) fn queue_player_skill(&mut self, dispatch: PlayerSkillDispatch) -> usize {
+        if self.player_skills.front().copied() == Some(dispatch) {
+            return 0;
+        }
+        let rejected = self.player_skills.len();
+        self.player_skills.clear();
         self.player_skills.push_back(dispatch);
+        rejected
     }
 
-    pub(crate) fn queue_battle_fairy_skill(&mut self, dispatch: BattleFairySkillDispatch) {
+    pub(crate) fn queue_battle_fairy_skill(&mut self, dispatch: BattleFairySkillDispatch) -> usize {
+        if self.battle_fairy_skills.front().copied() == Some(dispatch) {
+            return 0;
+        }
+        let replaced = self.battle_fairy_skills.len();
+        self.battle_fairy_skills.clear();
         self.battle_fairy_skills.push_back(dispatch);
+        replaced
     }
 
     pub(crate) fn player_skills(&self) -> &VecDeque<PlayerSkillDispatch> {
         &self.player_skills
     }
 
+    pub(crate) fn next_player_skill(&self) -> Option<PlayerSkillDispatch> {
+        self.player_skills.front().copied()
+    }
+
+    pub(crate) fn finish_player_skill(&mut self, expected: PlayerSkillDispatch) -> bool {
+        if self.player_skills.front().copied() != Some(expected) {
+            return false;
+        }
+        self.player_skills.pop_front();
+        true
+    }
+
     pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {
         &self.battle_fairy_skills
+    }
+
+    pub(crate) fn next_battle_fairy_skill(&self) -> Option<BattleFairySkillDispatch> {
+        self.battle_fairy_skills.front().copied()
+    }
+
+    pub(crate) fn finish_battle_fairy_skill(&mut self, expected: BattleFairySkillDispatch) -> bool {
+        if self.battle_fairy_skills.front().copied() != Some(expected) {
+            return false;
+        }
+        self.battle_fairy_skills.pop_front();
+        true
     }
 
     #[allow(clippy::too_many_arguments)]

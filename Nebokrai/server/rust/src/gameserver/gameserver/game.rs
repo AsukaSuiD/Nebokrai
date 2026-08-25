@@ -262,8 +262,10 @@
 //! объединяет TaoZhuang values и при изменении шлёт values-only `0xC0110`.
 //! Обычный skill request `0x90001` проходит через owned learned skills и
 //! emotion state: optional `GS0090`, concrete around `0xBF611`, self/point/
-//! object resolution и `0xBFE01` сохраняют native order до внешней очереди
-//! ещё не материализованного `CPlayerAI`.
+//! object resolution и `0xBFE01` сохраняют native order до owned очереди
+//! `CPlayerAI`. Main-loop передаёт оба normal/war-soul front конкретному
+//! `CSkill/CBaseAI` owner-у, удерживает pending и удаляет terminal-команду;
+//! подтверждённый first-contact только там запускает `CPKSys::OnFirstSkill`.
 //! Остальная skill family `0x90002..04` сохраняет current-skill End gate,
 //! script-data lookup/three path formats и item-skill state перед тем же AI
 //! dispatch; concrete `CSkill`, `RunScript` VM и `CPlayerAI` названы отдельными
@@ -641,25 +643,26 @@ use crate::gameserver::appserver::player::{
     BattleFairyFollowReport, BattleFairyObjectMove, BattleFairyObjectMoveOperation,
     BattleFairyPotentialAllocationDelivery, BattleFairyPotentialAllocationEffect,
     BattleFairyPotentialResetDelivery, BattleFairyPotentialResetEffect, BattleFairySkillAdded,
-    BattleFairySkillRequest, BattleFairySkillRequestDelivery, BattleFairySkillRequestEffect,
-    BattleFairySkillRequestFacts, BattleFairySkillRequestReport, BattleFairySkillResetDelivery,
-    BattleFairySkillResetEffect, BattleFairySkillResetReport, BattleFairySummonDelivery,
-    BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeDelivery,
-    BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, CiQingContainerAddition,
-    CiQingContainerConsumption, CiQingHandConsumption, CiQingPacketAddition,
-    CiQingPacketConsumption, EnhancementDeselectionBlock, EnhancementDeselectionReport,
-    EnhancementSelectionBlock, EnhancementSelectionReport, GoodsDestroyHandConsumption,
-    GoodsSessionPlayerRelease, HotkeyHandTransferOutcome, HotkeyHandTransferReport,
-    PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange, PlayerBankCurrencyAddOutcome,
-    PlayerCombatProperties, PlayerCriminalStateEnd, PlayerEquipmentAddEffect,
-    PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery,
-    PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
-    PlayerExitSilenceUpdate, PlayerFightStateTransition, PlayerGameSaveCodecError,
-    PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion, PlayerHonorResetReport,
-    PlayerLoginGoodsLocation, PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation,
-    PlayerReliveOwnedPrelude, PlayerSkillRequest, PlayerSkillRequestDelivery,
-    PlayerSkillRequestEffect, PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerTalkChannel,
-    PlayerUncreatedCarriage, PlayerUncreatedPet, PlayerYuanBaoChange,
+    BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestDelivery,
+    BattleFairySkillRequestEffect, BattleFairySkillRequestFacts, BattleFairySkillRequestReport,
+    BattleFairySkillResetDelivery, BattleFairySkillResetEffect, BattleFairySkillResetReport,
+    BattleFairySummonDelivery, BattleFairySummonEffect, BattleFairySummonReport,
+    BattleFairyUpgradeDelivery, BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer,
+    CiQingContainerAddition, CiQingContainerConsumption, CiQingHandConsumption,
+    CiQingPacketAddition, CiQingPacketConsumption, EnhancementDeselectionBlock,
+    EnhancementDeselectionReport, EnhancementSelectionBlock, EnhancementSelectionReport,
+    GoodsDestroyHandConsumption, GoodsSessionPlayerRelease, HotkeyHandTransferOutcome,
+    HotkeyHandTransferReport, PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange,
+    PlayerBankCurrencyAddOutcome, PlayerCombatProperties, PlayerCriminalStateEnd,
+    PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
+    PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
+    PlayerEquipmentRemoveRuntimeFacts, PlayerExitSilenceUpdate, PlayerFightStateTransition,
+    PlayerGameSaveCodecError, PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion,
+    PlayerHonorResetReport, PlayerLoginGoodsLocation, PlayerMurdererSignDecrease, PlayerProgress,
+    PlayerReliveMutation, PlayerReliveOwnedPrelude, PlayerSkillDispatch, PlayerSkillRequest,
+    PlayerSkillRequestDelivery, PlayerSkillRequestEffect, PlayerSkillRequestFacts,
+    PlayerSkillRequestReport, PlayerTalkChannel, PlayerUncreatedCarriage, PlayerUncreatedPet,
+    PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1676,6 +1679,35 @@ pub(crate) struct PlayerAiTailReport {
     pub(crate) packet_expansion_applied: Option<u32>,
     pub(crate) flash_update: Option<PlayerFlashUpdateReport>,
     pub(crate) tao_zhuang_ran: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum QueuedSkillExecutionState {
+    Pending,
+    Completed,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct QueuedSkillExecutionOutcome {
+    pub(crate) state: QueuedSkillExecutionState,
+    /// Runtime выставляет event только в tick фактического первого контакта.
+    pub(crate) first_contact: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameQueuedSkillDispatch {
+    Player(PlayerSkillDispatch),
+    BattleFairy(BattleFairySkillDispatch),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameQueuedSkillExecutionReport {
+    pub(crate) player_id: i32,
+    pub(crate) dispatch: GameQueuedSkillDispatch,
+    pub(crate) outcome: QueuedSkillExecutionOutcome,
+    pub(crate) removed_from_queue: bool,
+    pub(crate) pk_first_skill: Option<FirstSkillPkReport>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3993,6 +4025,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) player_abnormalities: Vec<GamePlayerAbnormalityReport>,
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
+    pub(crate) player_skill_executions: Vec<GameQueuedSkillExecutionReport>,
     pub(crate) player_energy_regenerations: Vec<PlayerEnergyRegenerationReport>,
     pub(crate) player_auto_progress: Vec<PlayerAutoProgressReport>,
     pub(crate) player_lost_timeouts: Vec<GamePlayerLostTimeoutReport>,
@@ -5298,10 +5331,27 @@ pub(crate) trait GameMainLoopRuntime:
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
     fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
-    /// Исполняет ещё не материализованный `CBaseAI::Run` prefix virtual
-    /// `CPlayerAI::Run` после owned `UpdateCurrentState`, используя canonical
-    /// player-owned FIFO. Возвращает post-AI restored-state current war-soul
-    /// skill; owned auto-exp/CheckLevel/energy tails идут сразу после.
+    /// Concrete `CSkill/CBaseAI` execution boundary одного normal FIFO front.
+    /// `Pending` оставляет команду для следующего tick; terminal outcome
+    /// удаляет только тот же front. `first_contact` является event этого tick.
+    fn execute_player_skill_dispatch(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+    ) -> QueuedSkillExecutionOutcome;
+    /// Отдельная war-soul очередь исполняется тем же tick независимо от
+    /// normal skill queue, как два native `m_qTarget*` owner-а.
+    fn execute_battle_fairy_skill_dispatch(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        dispatch: BattleFairySkillDispatch,
+    ) -> QueuedSkillExecutionOutcome;
+    /// Исполняет оставшийся `CBaseAI::Run` prefix virtual `CPlayerAI::Run`
+    /// после owned `UpdateCurrentState` и двух materialized FIFO front.
+    /// Возвращает post-AI restored-state current war-soul skill; owned
+    /// auto-exp/CheckLevel/energy tails идут сразу после.
     fn player_move_shape_active_state_ai(
         &mut self,
         game: &mut CGame,
@@ -30503,42 +30553,39 @@ impl CGame {
     /// Player mutation и effects сохраняют native order: optional contend
     /// notice, безусловный `ClearEmotion 0xBF611`, authorization, socket
     /// reject либо очередь concrete `CPlayerAI`.
-    pub(crate) fn request_player_skill<Context: GameClockContext>(
+    pub(crate) fn request_player_skill(
         &mut self,
         player_id: i32,
         socket_id: i32,
         request: PlayerSkillRequest,
         facts: PlayerSkillRequestFacts,
-        context: &mut Context,
     ) -> Option<PlayerSkillRequestReport> {
         let report = self
             .players
             .get_mut(&player_id)
             .map(|player| player.request_player_skill(request, facts, &self.skill_factory))?;
-        Some(self.deliver_player_skill_report(player_id, socket_id, report, context))
+        Some(self.deliver_player_skill_report(player_id, socket_id, report))
     }
 
-    pub(crate) fn request_item_skill<Context: GameClockContext>(
+    pub(crate) fn request_item_skill(
         &mut self,
         player_id: i32,
         socket_id: i32,
         request: PlayerSkillRequest,
         skill_level: i32,
         facts: PlayerSkillRequestFacts,
-        context: &mut Context,
     ) -> Option<PlayerSkillRequestReport> {
         let report = self.players.get_mut(&player_id).map(|player| {
             player.request_item_skill(request, skill_level, facts, &self.skill_factory)
         })?;
-        Some(self.deliver_player_skill_report(player_id, socket_id, report, context))
+        Some(self.deliver_player_skill_report(player_id, socket_id, report))
     }
 
-    fn deliver_player_skill_report<Context: GameClockContext>(
+    fn deliver_player_skill_report(
         &mut self,
         player_id: i32,
         socket_id: i32,
         mut report: PlayerSkillRequestReport,
-        context: &mut Context,
     ) -> PlayerSkillRequestReport {
         for effect in report.effects.clone() {
             match effect {
@@ -30597,25 +30644,20 @@ impl CGame {
                         ));
                 }
                 PlayerSkillRequestEffect::AiDispatch(dispatch) => {
-                    if let crate::gameserver::appserver::player::PlayerSkillDispatch::Object {
-                        target,
-                        ..
-                    } = dispatch
-                    {
-                        if target.object_type == 400 {
-                            report.pk_first_skill = self.player_on_first_skill(
-                                player_id,
-                                target.id,
-                                report.region_id,
-                                context,
-                            );
-                        }
-                    }
-                    self.players
+                    let rejected = self
+                        .players
                         .get_mut(&player_id)
                         .expect("skill dispatch сохраняет canonical player")
                         .player_ai_mut()
                         .queue_player_skill(dispatch);
+                    for _ in 0..rejected {
+                        let mut message = CMessage::new(0x000b_fe01);
+                        message.add_byte(0);
+                        message.add_byte(2);
+                        report.deliveries.push(PlayerSkillRequestDelivery::Player(
+                            message.send_to_player(self.net_server(), player_id),
+                        ));
+                    }
                     report.deliveries.push(PlayerSkillRequestDelivery::AiQueued);
                 }
             }
@@ -30623,9 +30665,8 @@ impl CGame {
         report
     }
 
-    /// Reached `CPKSys::OnFirstSkill` caller: выполняется непосредственно
-    /// перед canonical `CPlayerAI` queue и использует ту же object-target
-    /// identity. Все policy facts берутся из live player/region owners.
+    /// Reached `CPKSys::OnFirstSkill` caller: вызывается AI execution owner-ом
+    /// только после подтверждённого первого контакта object-target skill.
     fn player_on_first_skill<Context: GameClockContext>(
         &mut self,
         attacker_id: i32,
@@ -30711,6 +30752,87 @@ impl CGame {
             criminal_delivery,
             world_log_delivery,
         })
+    }
+
+    fn execute_queued_player_skills<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> Vec<GameQueuedSkillExecutionReport> {
+        let mut reports = Vec::with_capacity(2);
+        if let Some(dispatch) = player_ai.next_player_skill() {
+            let outcome = runtime.execute_player_skill_dispatch(self, player_id, dispatch);
+            let pk_first_skill = if outcome.first_contact {
+                match dispatch {
+                    PlayerSkillDispatch::Object { target, .. } if target.object_type == 400 => self
+                        .find_player(player_id)
+                        .and_then(CPlayer::server_region_id)
+                        .and_then(|region_id| {
+                            self.player_on_first_skill(
+                                player_id,
+                                target.id,
+                                Some(region_id),
+                                runtime,
+                            )
+                        }),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let removed_from_queue = match outcome.state {
+                QueuedSkillExecutionState::Pending => false,
+                QueuedSkillExecutionState::Completed | QueuedSkillExecutionState::Rejected => {
+                    player_ai.finish_player_skill(dispatch)
+                }
+            };
+            reports.push(GameQueuedSkillExecutionReport {
+                player_id,
+                dispatch: GameQueuedSkillDispatch::Player(dispatch),
+                outcome,
+                removed_from_queue,
+                pk_first_skill,
+            });
+        }
+        if let Some(dispatch) = player_ai.next_battle_fairy_skill() {
+            let outcome = runtime.execute_battle_fairy_skill_dispatch(self, player_id, dispatch);
+            let pk_first_skill = if outcome.first_contact {
+                match dispatch {
+                    BattleFairySkillDispatch::Object { target, .. }
+                        if target.object_type == 400 =>
+                    {
+                        self.find_player(player_id)
+                            .and_then(CPlayer::server_region_id)
+                            .and_then(|region_id| {
+                                self.player_on_first_skill(
+                                    player_id,
+                                    target.id,
+                                    Some(region_id),
+                                    runtime,
+                                )
+                            })
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let removed_from_queue = match outcome.state {
+                QueuedSkillExecutionState::Pending => false,
+                QueuedSkillExecutionState::Completed | QueuedSkillExecutionState::Rejected => {
+                    player_ai.finish_battle_fairy_skill(dispatch)
+                }
+            };
+            reports.push(GameQueuedSkillExecutionReport {
+                player_id,
+                dispatch: GameQueuedSkillDispatch::BattleFairy(dispatch),
+                outcome,
+                removed_from_queue,
+                pk_first_skill,
+            });
+        }
+        reports
     }
 
     fn send_player_around_excluding_self(
@@ -31041,7 +31163,8 @@ impl CGame {
                         ));
                 }
                 BattleFairySkillRequestEffect::AiDispatch(dispatch) => {
-                    self.players
+                    let _replaced = self
+                        .players
                         .get_mut(&player_id)
                         .expect("battle-fairy dispatch сохраняет canonical player")
                         .player_ai_mut()
@@ -32381,6 +32504,7 @@ impl CGame {
             let mut player_abnormalities = Vec::with_capacity(player_ids.len());
             let mut battle_fairy_follows = Vec::with_capacity(player_ids.len());
             let mut player_ai_tails = Vec::with_capacity(player_ids.len());
+            let mut player_skill_executions = Vec::with_capacity(player_ids.len());
             let mut player_energy_regenerations = Vec::with_capacity(player_ids.len());
             let mut player_auto_progress = Vec::with_capacity(player_ids.len());
             let mut player_lost_timeouts = Vec::new();
@@ -32448,11 +32572,18 @@ impl CGame {
                                 .find_player_mut(player_id)
                                 .expect("active-state caller проверил canonical player")
                                 .take_player_ai();
-                            restored = runtime.player_move_shape_active_state_ai(
-                                self,
+                            player_skill_executions.extend(self.execute_queued_player_skills(
                                 player_id,
                                 &mut player_ai,
-                            );
+                                runtime,
+                            ));
+                            if self.find_player(player_id).is_some() {
+                                restored = runtime.player_move_shape_active_state_ai(
+                                    self,
+                                    player_id,
+                                    &mut player_ai,
+                                );
+                            }
                             let progress_setup = (
                                 self.globe_setup.auto_inc_time_ms(),
                                 self.globe_setup.auto_inc_exp_1(),
@@ -32834,6 +32965,7 @@ impl CGame {
                             player_abnormalities,
                             battle_fairy_follows,
                             player_ai_tails,
+                            player_skill_executions,
                             player_energy_regenerations,
                             player_auto_progress,
                             player_lost_timeouts,
@@ -32868,6 +33000,7 @@ impl CGame {
                 player_abnormalities,
                 battle_fairy_follows,
                 player_ai_tails,
+                player_skill_executions,
                 player_energy_regenerations,
                 player_auto_progress,
                 player_lost_timeouts,
