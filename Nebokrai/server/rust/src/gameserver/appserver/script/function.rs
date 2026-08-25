@@ -182,6 +182,8 @@
 //! named kick завершает `CGame::KickPlayer` и `GS0025`, ban публикует
 //! `0x5FF12`, а silence либо меняет exact player timestamp, либо проходит
 //! `0x5FF0C -> 0x7FC0B/0x5FF0D -> 0x7FC0C` через общий GM dispatcher.
+//! `3309 / GetMapInfo` читает concrete cell текущего script-region и сохраняет
+//! приоритет war-marker над safe/fight security с legacy кодами `2/3/1/0`.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -391,6 +393,7 @@ pub(crate) const SCRIPT_FUNCTION_DISBAND_QUEST: i32 = 6202;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
 pub(crate) const SCRIPT_FUNCTION_UPDATE_QUEST_POSITION: i32 = 6207;
 pub(crate) const SCRIPT_FUNCTION_CREATE_NPC: i32 = 3302;
+pub(crate) const SCRIPT_FUNCTION_GET_MAP_INFO: i32 = 3309;
 pub(crate) const SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION: i32 = 8003;
 pub(crate) const SCRIPT_FUNCTION_IS_QUEST_ENABLED: i32 = 3500;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_ENABLED: i32 = 3501;
@@ -3417,6 +3420,10 @@ pub(crate) fn script_function_parameter_kind(
             1..=7 | 9..=11 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_MAP_INFO => match index {
+            0..=1 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_TIME
         | SCRIPT_FUNCTION_SECOND
         | SCRIPT_FUNCTION_GET_COUNTRY
@@ -5516,6 +5523,30 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             request.add_long(minutes);
             let _ = request.send(game, false);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GET_MAP_INFO => {
+            let (Some(region_id), Some(tile_x), Some(tile_y)) = (
+                script_region_id,
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            let legacy_return = game
+                .find_region(region_id)
+                .and_then(|owner| owner.base().region.get_cell(tile_x, tile_y).ok().flatten())
+                .map_or(-1, |cell| {
+                    if cell.city_war_marker() == 1 {
+                        2
+                    } else {
+                        match cell.security().value() {
+                            2 => 3,
+                            1 => 1,
+                            _ => 0,
+                        }
+                    }
+                });
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }
         SCRIPT_FUNCTION_FORCE_MOVE => {
             let target_name = string_arguments[0].filter(|name| name.len() < 24);
