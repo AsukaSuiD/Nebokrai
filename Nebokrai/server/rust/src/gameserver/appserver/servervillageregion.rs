@@ -16,6 +16,8 @@
 //! очищает contenders/goods, ставит 60-секундное вытеснение и лишь после этого
 //! обнуляет country/ownership/flag-owner. Message, player и goods side effects
 //! остаются явным context-контрактом до своих owners; прочие функции ниже raw.
+//! Inherited `CServerWarRegion::AI` вызывается реальным `CGame::AI` через
+//! Village adapter с canonical player/state/network effects.
 
 use super::organizingsystem::villagewarsys::CVillageWarSys;
 use super::serverregion::ServerRegionDecodeError;
@@ -330,30 +332,5 @@ impl CServerVillageRegion {
 // ID lookup 0x005D1988..0x005D199B, region/proxy 0x005D19A1..0x005D19E4,
 // gate и vcall slot +0xB0 0x005D19E6..0x005D19FA.
 //
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

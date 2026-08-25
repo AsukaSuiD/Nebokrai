@@ -21,6 +21,8 @@
 //! Country virtual slot вызывает concrete contender AI через CGame adapter:
 //! canonical player state, `0xBFF28/29`, region notice и top-info не уходят в
 //! отдельный runtime snapshot.
+//! Village slot аналогично вызывает inherited `CServerWarRegion::AI`, сохраняя
+//! schedule membership, flag owner, capture/victory callbacks и war-log tuple.
 //!
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
@@ -396,6 +398,7 @@
 //! optional World announcement `0x5FF0E` в одном synchronous owner-е.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 use std::ffi::CString;
 use std::fmt;
 use std::fs;
@@ -607,7 +610,10 @@ use crate::gameserver::appserver::serverregion::{
     ServerRegionNpcSpawnReport, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
-use crate::gameserver::appserver::serverwarregion::ContendArithmeticBlock;
+use crate::gameserver::appserver::serverwarregion::{
+    ContendAiError, ContendArithmeticBlock, ContendPlayerState, SymbolCaptureLog,
+    WarContendContext, WarContendEntryContext, WarRegionContext, WarRegionOwnership,
+};
 use crate::gameserver::appserver::session::cequipmentcompose::{
     CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
     EquipmentComposeAuditLog, EquipmentComposeOutcome, EquipmentComposeReport,
@@ -2954,6 +2960,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) periodical_updates: Vec<PlayerPeriodicalUpdateReport>,
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
+    pub(crate) village_contend: Option<VillageRegionAiReport>,
     pub(crate) country_contend: Option<CountryRegionAiReport>,
     pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
@@ -3126,6 +3133,323 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
             symbol_name: symbol_name.as_bytes().to_vec(),
             delivery,
         });
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VillageSymbolCaptureLog {
+    pub(crate) war_number: i32,
+    pub(crate) owned_faction_id: i32,
+    pub(crate) owned_union_id: i32,
+    pub(crate) faction_name: Vec<u8>,
+    pub(crate) faction_id: i32,
+    pub(crate) player_id: i32,
+    pub(crate) symbol_id: i32,
+    pub(crate) recorded_faction_id: i32,
+    pub(crate) union_id: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum VillageRegionAiEffect {
+    ContendTime {
+        player_id: i32,
+        percentage: i32,
+        delivery: i32,
+    },
+    PlayerState {
+        player_id: i32,
+        state: bool,
+        around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    },
+    PlayerNotice {
+        player_id: i32,
+        string_id: &'static str,
+        delivery: i32,
+    },
+    NeededGoodRegistered {
+        name: Vec<u8>,
+    },
+    FirstContenderNotice {
+        country: u8,
+        faction_name: Vec<u8>,
+        symbol_name: Vec<u8>,
+        delivery: i32,
+    },
+    FlagOwnerChanged {
+        faction_id: i32,
+    },
+    Victory {
+        faction_id: i32,
+        union_id: i32,
+        previous: WarRegionOwnership,
+        current: WarRegionOwnership,
+    },
+    RegionNotice {
+        delivery: i32,
+    },
+    TopInfo {
+        faction_name: Vec<u8>,
+        symbol_name: Vec<u8>,
+        delivery: Result<i32, SendMessageError>,
+    },
+    CaptureLog(VillageSymbolCaptureLog),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VillageRegionAiReport {
+    pub(crate) region_id: i32,
+    pub(crate) result: Result<(), ContendAiError<Infallible>>,
+    pub(crate) flag_owner_faction_id: i32,
+    pub(crate) effects: Vec<VillageRegionAiEffect>,
+}
+
+struct GameVillageRegionAiContext<'a, Runtime> {
+    game: &'a mut CGame,
+    runtime: &'a mut Runtime,
+    region: CServerRegion,
+    war_number: i32,
+    flag_owner_faction_id: i32,
+    needed_goods: Vec<String>,
+    effects: Vec<VillageRegionAiEffect>,
+}
+
+impl<Runtime: GameMainLoopRuntime> WarRegionContext for GameVillageRegionAiContext<'_, Runtime> {
+    type MembershipError = Infallible;
+
+    fn player_faction_id(&mut self, player_id: i32) -> Option<i32> {
+        self.game.find_player(player_id).map(CPlayer::faction_id)
+    }
+
+    fn is_apply_war_faction(&mut self, faction_id: i32) -> Result<bool, Self::MembershipError> {
+        Ok(self
+            .game
+            .village_war_sys()
+            .is_already_declar_for_war(self.war_number, faction_id))
+    }
+
+    fn send_contend_time(&mut self, player_id: i32, time: i32) {
+        let mut message = CMessage::new(0x000b_ff29);
+        message.add_long(time);
+        let delivery = message.send_to_player(self.game.net_server(), player_id);
+        self.effects.push(VillageRegionAiEffect::ContendTime {
+            player_id,
+            percentage: time,
+            delivery,
+        });
+    }
+
+    fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
+        let around_delivery =
+            self.game
+                .publish_war_player_contend_state(&self.region, player_id, state);
+        self.effects.push(VillageRegionAiEffect::PlayerState {
+            player_id,
+            state,
+            around_delivery,
+        });
+    }
+
+    fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool) {
+        if self
+            .game
+            .find_player(player_id)
+            .is_some_and(|player| player.server_region_id() == Some(region_id))
+        {
+            self.set_global_player_contend_state(player_id, state);
+        }
+    }
+}
+
+impl<Runtime: GameMainLoopRuntime> WarContendEntryContext
+    for GameVillageRegionAiContext<'_, Runtime>
+{
+    fn now_millis(&mut self) -> u32 {
+        self.runtime.country_contend_now_milliseconds()
+    }
+
+    fn is_owner(&mut self, faction_id: i32) -> bool {
+        let village_region_id = self
+            .game
+            .village_war_sys()
+            .get_village_region_id_by_time(self.war_number);
+        let owner = self
+            .game
+            .find_region(village_region_id)
+            .map(|region| region.base().owned_city_faction())
+            .or_else(|| {
+                self.game
+                    .find_proxy_region(village_region_id)
+                    .map(|region| region.owned_city_org().0)
+            })
+            .unwrap_or(0);
+        faction_id != 0 && faction_id == owner
+    }
+
+    fn player_has_good(&mut self, player_id: i32, good_name: &str) -> bool {
+        let goods_index = self
+            .game
+            .goods_factory()
+            .query_goods_id_by_original_name(Some(good_name.as_bytes()));
+        self.game
+            .find_player(player_id)
+            .is_some_and(|player| player.check_item_in_packet(goods_index) != 0)
+    }
+
+    fn set_known_player_contend_state(&mut self, player_id: i32, state: bool) {
+        self.set_global_player_contend_state(player_id, state);
+    }
+
+    fn notify_player(&mut self, player_id: i32, string_id: &'static str) {
+        let message = colored_player_notice_message(
+            0xffff_ffff,
+            0xffff_0000,
+            self.game.get_string_by_id(string_id.as_bytes()),
+        );
+        let delivery = message.send_to_player(self.game.net_server(), player_id);
+        self.effects.push(VillageRegionAiEffect::PlayerNotice {
+            player_id,
+            string_id,
+            delivery,
+        });
+    }
+
+    fn register_needed_good(&mut self, good_name: &str) {
+        if good_name.is_empty() {
+            return;
+        }
+        self.needed_goods.push(good_name.to_owned());
+        self.effects
+            .push(VillageRegionAiEffect::NeededGoodRegistered {
+                name: good_name.as_bytes().to_vec(),
+            });
+    }
+
+    fn send_first_faction_contender_notice(
+        &mut self,
+        country: u8,
+        faction_name: &str,
+        symbol_name: &str,
+    ) {
+        let country_name = self
+            .game
+            .globe_setup
+            .country_name(country)
+            .unwrap_or_default();
+        let text = format_legacy_text_fields(
+            self.game.get_string_by_id(b"GS0246"),
+            &[
+                country_name,
+                faction_name.as_bytes(),
+                symbol_name.as_bytes(),
+            ],
+            0x3ff,
+        );
+        let delivery = colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
+            .send_to_region(Some(&self.region), None, self.game);
+        self.effects
+            .push(VillageRegionAiEffect::FirstContenderNotice {
+                country,
+                faction_name: faction_name.as_bytes().to_vec(),
+                symbol_name: symbol_name.as_bytes().to_vec(),
+                delivery,
+            });
+    }
+}
+
+impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiContext<'_, Runtime> {
+    fn run_base_region_ai(&mut self, region: &mut CServerRegion) {
+        self.runtime.run_village_base_region_ai(self.game, region);
+        self.region = region.clone();
+    }
+
+    fn find_global_player(&mut self, player_id: i32) -> Option<ContendPlayerState> {
+        self.game
+            .find_player(player_id)
+            .map(|player| ContendPlayerState {
+                player_id,
+                faction_id: player.faction_id(),
+                union_id: player.union_id(),
+                country: player.country(),
+                faction_name: String::from_utf8_lossy(player.faction_name()).into_owned(),
+                shape_type: 400,
+                is_dead: player.is_dead(),
+            })
+    }
+
+    fn on_faction_win_one_symbol(&mut self, faction_id: i32, symbol_id: i32) {
+        if symbol_id == 0 {
+            self.flag_owner_faction_id = faction_id;
+            self.effects
+                .push(VillageRegionAiEffect::FlagOwnerChanged { faction_id });
+        }
+    }
+
+    fn on_faction_victory(
+        &mut self,
+        faction_id: i32,
+        union_id: i32,
+        current_owner: WarRegionOwnership,
+    ) -> WarRegionOwnership {
+        if self.region.city_state != 0 {
+            self.runtime.on_village_faction_victory(
+                self.game,
+                self.region.id,
+                faction_id,
+                union_id,
+            );
+        }
+        let current = current_owner;
+        self.effects.push(VillageRegionAiEffect::Victory {
+            faction_id,
+            union_id,
+            previous: current_owner,
+            current,
+        });
+        current
+    }
+
+    fn send_symbol_captured_region_notice(&mut self) {
+        let delivery = colored_text_message(
+            0xbf806,
+            0xffff_ffff,
+            0xffff_0000,
+            self.game.get_string_by_id(b"GS0241"),
+        )
+        .send_to_region(Some(&self.region), None, self.game);
+        self.effects
+            .push(VillageRegionAiEffect::RegionNotice { delivery });
+    }
+
+    fn send_symbol_captured_top_info(&mut self, faction_name: &str, symbol_name: &str) {
+        let text = format_legacy_text_fields(
+            self.game.get_string_by_id(b"GS0227"),
+            &[faction_name.as_bytes(), symbol_name.as_bytes()],
+            0x3ff,
+        );
+        let delivery = self.game.send_top_info_to_client(-1, 0, 1, 1, &text);
+        self.effects.push(VillageRegionAiEffect::TopInfo {
+            faction_name: faction_name.as_bytes().to_vec(),
+            symbol_name: symbol_name.as_bytes().to_vec(),
+            delivery,
+        });
+    }
+
+    fn write_symbol_capture_logs(&mut self, capture: SymbolCaptureLog<'_>) {
+        let capture = VillageSymbolCaptureLog {
+            war_number: capture.war_number,
+            owned_faction_id: capture.owned_faction_id,
+            owned_union_id: capture.owned_union_id,
+            faction_name: capture.faction_name.as_bytes().to_vec(),
+            faction_id: capture.faction_id,
+            player_id: capture.player_id,
+            symbol_id: capture.symbol_id,
+            recorded_faction_id: capture.recorded_faction_id,
+            union_id: capture.union_id,
+        };
+        self.runtime
+            .write_village_symbol_capture_log(self.game, self.region.id, &capture);
+        self.effects
+            .push(VillageRegionAiEffect::CaptureLog(capture));
     }
 }
 
@@ -3372,6 +3696,22 @@ pub(crate) trait GameMainLoopRuntime:
         region_id: i32,
         country: i32,
         symbol_id: i32,
+    );
+    fn run_village_base_region_ai(&mut self, game: &mut CGame, region: &mut CServerRegion);
+    /// Concrete `CServerVillageRegion::OnFactionVictory` external callback;
+    /// owner state сам village override синхронно не меняет.
+    fn on_village_faction_victory(
+        &mut self,
+        game: &mut CGame,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+    );
+    fn write_village_symbol_capture_log(
+        &mut self,
+        game: &mut CGame,
+        region_id: i32,
+        capture: &VillageSymbolCaptureLog,
     );
     /// Выполняет оставшийся monster/NPC/region virtual AI после достигнутых
     /// player passes и до точного base-tail `ClearPlayerAI`.
@@ -21375,6 +21715,45 @@ impl CGame {
         })
     }
 
+    /// Concrete Village override наследует `CServerWarRegion::AI`; adapter
+    /// удерживает outer flag-owner/goods и проводит все player/network effects
+    /// через canonical `CGame`, пока actual war storage временно вынут из map.
+    pub(crate) fn run_village_region_ai<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<VillageRegionAiReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Village(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let projection = region.war.base.clone();
+        let mut context = GameVillageRegionAiContext {
+            game: self,
+            runtime,
+            region: projection,
+            war_number: region.war.base.war_number,
+            flag_owner_faction_id: region.flag_owner_faction_id,
+            needed_goods: Vec::new(),
+            effects: Vec::new(),
+        };
+        let result = region.war.ai(&mut context);
+        let flag_owner_faction_id = context.flag_owner_faction_id;
+        let needed_goods = std::mem::take(&mut context.needed_goods);
+        let effects = std::mem::take(&mut context.effects);
+        drop(context);
+        region.flag_owner_faction_id = flag_owner_faction_id;
+        region.goods.extend(needed_goods);
+        self.restore_region_owner(ServerRegionOwner::Village(region));
+        Some(VillageRegionAiReport {
+            region_id,
+            result,
+            flag_owner_faction_id,
+            effects,
+        })
+    }
+
     /// Exact `CGame::AI`: signed region-map order, reached player AI prefix и
     /// virtual region AI, после которого выполняется base-tail `ClearPlayerAI`
     /// того же owner-а.
@@ -21451,13 +21830,19 @@ impl CGame {
                 self.find_region(region_id),
                 Some(ServerRegionOwner::Country(_))
             );
-            let (country_contend, gods_battle) = if is_gods_battle {
-                (None, self.gods_battle_contend_ai(region_id, runtime))
+            let is_village = matches!(
+                self.find_region(region_id),
+                Some(ServerRegionOwner::Village(_))
+            );
+            let (village_contend, country_contend, gods_battle) = if is_gods_battle {
+                (None, None, self.gods_battle_contend_ai(region_id, runtime))
             } else if is_country {
-                (self.run_country_region_ai(region_id, runtime), None)
+                (None, self.run_country_region_ai(region_id, runtime), None)
+            } else if is_village {
+                (self.run_village_region_ai(region_id, runtime), None, None)
             } else {
                 runtime.region_ai_before_clear_player(self, region_id);
-                (None, None)
+                (None, None, None)
             };
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 continue;
@@ -21536,6 +21921,7 @@ impl CGame {
                             periodical_updates,
                             battle_fairy_follows,
                             player_ai_tails,
+                            village_contend,
                             country_contend,
                             gods_battle,
                             region_changes,
@@ -21557,6 +21943,7 @@ impl CGame {
                 periodical_updates,
                 battle_fairy_follows,
                 player_ai_tails,
+                village_contend,
                 country_contend,
                 gods_battle,
                 region_changes,
