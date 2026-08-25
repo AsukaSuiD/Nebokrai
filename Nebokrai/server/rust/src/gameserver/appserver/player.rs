@@ -183,7 +183,9 @@
 //! clock остаются внешними runtime-фактами message caller-а.
 //! LeiTing owner хранит пять scalar-полей и ordered `tagThing` list; codec
 //! совпадает с WorldServer `Add/DecodeByteArrayLeiTing`, а reward-флаг
-//! выставляется только после exact energy/count threshold.
+//! выставляется только после exact energy/count threshold. Script `2650/2651`
+//! работает с тем же списком: успешное увеличение добавляет `point * delta`
+//! к энергии, применяет суточный порог `60` и публикуется единым snapshot.
 //! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
 //! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
 //! полиморфные session End/plug Exit принадлежат caller runtime-у.
@@ -1231,6 +1233,23 @@ pub(crate) struct PlayerLeiTingThing {
     pub(crate) count: u16,
     pub(crate) max_count: u16,
     pub(crate) point: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerLeiTingThingCountOutcome {
+    Missing,
+    Rejected {
+        current: u16,
+        requested: i32,
+        maximum: u16,
+    },
+    Updated {
+        previous_count: u16,
+        current_count: u16,
+        previous_energy: u32,
+        current_energy: u32,
+        daily_count_incremented: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3285,6 +3304,79 @@ impl CPlayer {
         }
         self.base_properties.fy_enable_flags |= mask;
         true
+    }
+
+    /// `GetOneThing((ushort)id)`: lookup намеренно сохраняет narrowing без
+    /// последующей проверки исходного signed ID, как ветвь `GetThingCnt`.
+    pub(crate) fn lei_ting_thing_count(&self, thing_id: i32) -> Option<u16> {
+        let narrowed = thing_id as u16;
+        self.lei_ting_things
+            .iter()
+            .find(|thing| thing.thing_id == narrowed)
+            .map(|thing| thing.count)
+    }
+
+    /// Полный reached `AddThingCnt(id, count, false)`. В отличие от getter-а,
+    /// setter после ushort lookup сравнивает сохранённый ID с исходным signed
+    /// аргументом. Разрешено только строго положительное увеличение; энергия
+    /// и суточные поля сохраняют wrapping-арифметику x86 owner-а. Closure —
+    /// только CRT/local-time граница `AddLTUp60Cnt`; wire исполняет script
+    /// caller после успешной mutation.
+    pub(crate) fn set_lei_ting_thing_count(
+        &mut self,
+        thing_id: i32,
+        requested_count: i32,
+        next_daily_stamp_if_same_local_day: impl FnOnce(u32) -> Option<u32>,
+    ) -> PlayerLeiTingThingCountOutcome {
+        let narrowed = thing_id as u16;
+        let Some(index) = self
+            .lei_ting_things
+            .iter()
+            .position(|thing| thing.thing_id == narrowed)
+        else {
+            return PlayerLeiTingThingCountOutcome::Missing;
+        };
+        let current = self.lei_ting_things[index];
+        if u32::from(current.thing_id) != thing_id as u32 {
+            return PlayerLeiTingThingCountOutcome::Missing;
+        }
+        let difference = requested_count.wrapping_sub(i32::from(current.count));
+        if difference < 1
+            || difference > i32::from(current.max_count)
+            || requested_count > i32::from(current.max_count)
+        {
+            return PlayerLeiTingThingCountOutcome::Rejected {
+                current: current.count,
+                requested: requested_count,
+                maximum: current.max_count,
+            };
+        }
+
+        self.lei_ting_things[index].count = requested_count as u16;
+        let previous_energy = self.base_properties.fy_energy;
+        self.base_properties.fy_energy =
+            previous_energy.wrapping_add(u32::from(current.point).wrapping_mul(difference as u32));
+        let daily_count_incremented = if self.base_properties.fy_energy >= 60 {
+            if let Some(next_stamp) =
+                next_daily_stamp_if_same_local_day(self.base_properties.lt_60_stamp)
+            {
+                self.base_properties.lt_up_60_count =
+                    self.base_properties.lt_up_60_count.wrapping_add(1);
+                self.base_properties.lt_60_stamp = next_stamp;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        PlayerLeiTingThingCountOutcome::Updated {
+            previous_count: current.count,
+            current_count: requested_count as u16,
+            previous_energy,
+            current_energy: self.base_properties.fy_energy,
+            daily_count_incremented,
+        }
     }
 
     pub(crate) const fn honor_snapshot(&self) -> PlayerHonorSnapshot {
@@ -9610,20 +9702,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::AddLTUp60Cnt
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:17679
-// RVA: 0x0002FD10
-// ADDRESS: 0042fd10
-// PROTOTYPE: void __thiscall AddLTUp60Cnt(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::SetMP
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -9814,20 +9892,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x00031EE0
 // ADDRESS: 00431ee0
 // PROTOTYPE: void __thiscall AddCiQingTaoZhuangPre(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::GetOneThing
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:17635
-// RVA: 0x00032000
-// ADDRESS: 00432000
-// PROTOTYPE: tagThing * __thiscall GetOneThing(ushort param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -10178,20 +10242,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x000369B0
 // ADDRESS: 004369b0
 // PROTOTYPE: bool __thiscall CheckAuctionMoneyMove(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddThingCnt
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:17649
-// RVA: 0x00036BD0
-// ADDRESS: 00436bd0
-// PROTOTYPE: bool __thiscall AddThingCnt(int param_1, int param_2, bool param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

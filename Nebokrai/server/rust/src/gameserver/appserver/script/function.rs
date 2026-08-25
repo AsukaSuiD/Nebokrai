@@ -83,6 +83,10 @@
 //! из того же CScript instance, ограничивает used-item lookup настоящей
 //! сумкой, изменяет addon/durability storage и публикует delete/amount/update
 //! wire; selected durability разрешается через live enhancement-shadow.
+//! Login-script family `2650/2651` разрешает persisted LeiTing `tagThing` из
+//! того же player owner-а. Setter сохраняет только положительное увеличение,
+//! energy/daily-stamp mutation и общий `0xBF73E + 0x5FD10` snapshot; getter
+//! возвращает count либо `-1`, а исходный setter result остаётся `-1`.
 //! PreciousBox `2221/2222/2237` сохраняет trusted action-script у player,
 //! client open/result/close wire, общий Game RNG, configuration roll,
 //! goods factory/upgrade/packet ownership и optional World announcement;
@@ -162,7 +166,7 @@ use crate::gameserver::appserver::country::country::{
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::organizingsystem::attackcitysys::AttackCityMembershipBlock;
-use crate::gameserver::appserver::player::PlayerProgress;
+use crate::gameserver::appserver::player::{PlayerLeiTingThingCountOutcome, PlayerProgress};
 use crate::gameserver::appserver::script::buffskillfunc::{
     BuffSkillScriptFunctionOutcome, SCRIPT_FUNCTION_ADD_JING_JIE_BUFF,
     run_buff_skill_script_function,
@@ -189,6 +193,7 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
 use crate::public::guid::CGuid;
+use crate::setup::leitingsetup::{CThingSetup, LeiTingLocalTime};
 
 pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
 pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
@@ -257,6 +262,8 @@ pub(crate) const SCRIPT_FUNCTION_SEND_TOTAL_HONOR_RANKS: i32 = 2634;
 pub(crate) const SCRIPT_FUNCTION_ADD_APPELLATION_STATE: i32 = 2635;
 pub(crate) const SCRIPT_FUNCTION_DEL_APPELLATION_STATE: i32 = 2636;
 pub(crate) const SCRIPT_FUNCTION_GET_APPELLATION_STATE: i32 = 2637;
+pub(crate) const SCRIPT_FUNCTION_SET_THING_COUNT: i32 = 2650;
+pub(crate) const SCRIPT_FUNCTION_GET_THING_COUNT: i32 = 2651;
 pub(crate) const SCRIPT_FUNCTION_GET_WAR_REGION_STATE: i32 = 6054;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_OWNING_REGION: i32 = 6055;
 pub(crate) const SCRIPT_FUNCTION_GET_WAR_START_TIME: i32 = 6056;
@@ -3206,6 +3213,14 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_SET_THING_COUNT => match index {
+            0 | 1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_THING_COUNT => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_ADD_JING_JIE_BUFF => match index {
             0 => Integer,
             _ => Unused,
@@ -4036,6 +4051,73 @@ fn run_village_war_menu_script_function(
     }
 }
 
+fn lei_ting_local_time(timestamp: i32) -> Option<LeiTingLocalTime> {
+    let timestamp = libc::time_t::from(timestamp);
+    let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
+    // `localtime_r` — потокобезопасная системная замена MSVC `_localtime`;
+    // non-null результат полностью инициализирует `tm` до копирования.
+    let result = unsafe { libc::localtime_r(&timestamp, local.as_mut_ptr()) };
+    if result.is_null() {
+        return None;
+    }
+    let local = unsafe { local.assume_init() };
+    Some(LeiTingLocalTime {
+        second: local.tm_sec,
+        minute: local.tm_min,
+        hour: local.tm_hour,
+        month_day: local.tm_mday,
+        month: local.tm_mon,
+        year_since_1900: local.tm_year,
+        week_day: local.tm_wday,
+        year_day: local.tm_yday,
+        daylight_saving: local.tm_isdst,
+    })
+}
+
+fn next_lei_ting_daily_stamp_if_same_local_day(current_stamp: u32) -> Option<u32> {
+    let now = chrono::Local::now().timestamp() as i32;
+    let current_local = lei_ting_local_time(now)?;
+    let stored_local = lei_ting_local_time(current_stamp as i32)?;
+    if current_local.year_since_1900 != stored_local.year_since_1900
+        || current_local.year_day != stored_local.year_day
+    {
+        return None;
+    }
+
+    let mut next_local = lei_ting_local_time(now.wrapping_add(86_400))?;
+    CThingSetup::set_daily_update_stamp(&mut next_local);
+    let mut native = libc::tm {
+        tm_sec: next_local.second,
+        tm_min: next_local.minute,
+        tm_hour: next_local.hour,
+        tm_mday: next_local.month_day,
+        tm_mon: next_local.month,
+        tm_year: next_local.year_since_1900,
+        tm_wday: next_local.week_day,
+        tm_yday: next_local.year_day,
+        tm_isdst: next_local.daylight_saving,
+        ..unsafe { std::mem::zeroed() }
+    };
+    // `mktime` сохраняет local-time/DST нормализацию CRT owner-а; legacy
+    // записывал даже `-1` простым DWORD cast.
+    Some(unsafe { libc::mktime(&mut native) } as i32 as u32)
+}
+
+fn publish_script_lei_ting_update(game: &CGame, player_id: i32) {
+    let payload = game
+        .find_player(player_id)
+        .expect("LeiTing mutation сохраняет player owner")
+        .encode_lei_ting();
+    let mut client = CMessage::new(0x000b_f73e);
+    client.base_mut().add(&payload);
+    let _ = client.send_to_player(game.net_server(), player_id);
+
+    let mut world = CMessage::new(0x0005_fd10);
+    world.add_long(player_id);
+    world.base_mut().add(&payload);
+    let _ = world.send(game, false);
+}
+
 fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -4083,6 +4165,42 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
         SCRIPT_FUNCTION_SECOND => Some(ScriptFunctionDispatchOutcome::Handled {
             legacy_return: i32::from(TagTime::local_now().second),
         }),
+        SCRIPT_FUNCTION_SET_THING_COUNT => {
+            let (Some(player_id), Some(thing_id), Some(requested_count)) = (
+                script_player_id.filter(|player_id| game.find_player(*player_id).is_some()),
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let outcome = game
+                .find_player_mut(player_id)
+                .expect("script-player проверен до LeiTing mutation")
+                .set_lei_ting_thing_count(
+                    thing_id,
+                    requested_count,
+                    next_lei_ting_daily_stamp_if_same_local_day,
+                );
+            if matches!(outcome, PlayerLeiTingThingCountOutcome::Updated { .. }) {
+                publish_script_lei_ting_update(game, player_id);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 })
+        }
+        SCRIPT_FUNCTION_GET_THING_COUNT => {
+            let (Some(player_id), Some(thing_id)) = (
+                script_player_id.filter(|player_id| game.find_player(*player_id).is_some()),
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game
+                    .find_player(player_id)
+                    .and_then(|player| player.lei_ting_thing_count(thing_id))
+                    .map(i32::from)
+                    .unwrap_or(-1),
+            })
+        }
         SCRIPT_FUNCTION_RELOAD => {
             let Some(profile) = string_arguments[0] else {
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
