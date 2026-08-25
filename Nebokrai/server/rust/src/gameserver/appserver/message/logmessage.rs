@@ -32,6 +32,7 @@ use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerExitReport, GamePlayerLoginBlock,
     GamePlayerLoginPreludeError, GamePlayerLoginPreludeReport, GamePlayerLoginReport,
     GroundGoodsMoveBlock, GroundGoodsMoveReport, colored_player_notice_message,
+    game_wall_time_seconds,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -377,7 +378,7 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
     }
     let now_ms = runtime.now_milliseconds();
     let login_prelude = game
-        .begin_player_login_validation(player_id, now_ms, runtime.wall_time_seconds())
+        .begin_player_login_validation(player_id, now_ms, game_wall_time_seconds() as u32)
         .map_err(|error| {
             let _delivery = reject_player_login(game, player_id, true);
             GameLogMessageError::PlayerLoginPrelude(error)

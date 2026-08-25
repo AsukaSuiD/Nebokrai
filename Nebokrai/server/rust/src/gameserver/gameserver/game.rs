@@ -552,8 +552,7 @@ use crate::gameserver::appserver::message::logmessage::{
 };
 use crate::gameserver::appserver::message::onmsg_c2s_auction::dispatch_client_auction_message;
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
-    WorldAuctionMessageError, WorldAuctionMessageReport, WorldAuctionRuntime,
-    dispatch_world_auction_message,
+    WorldAuctionMessageError, WorldAuctionMessageReport, dispatch_world_auction_message,
 };
 use crate::gameserver::appserver::message::organsysmessage::{
     GameOrganizingMessageError, GameOrganizingMessageReport, GameOrganizingWarRuntime,
@@ -1484,6 +1483,13 @@ pub(crate) struct FairyImplantationLog {
 
 pub(crate) trait GameClockContext {
     fn now_milliseconds(&mut self) -> u32;
+}
+
+pub(crate) fn game_wall_time_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 pub(crate) trait FairyContext: BattleFairyDeathContext + GameClockContext {}
@@ -5001,7 +5007,6 @@ pub(crate) trait GameMainLoopRuntime:
     + GameOtherMessageRuntime
     + GamePlayerMessageRuntime
     + IncrementShopBillingContext
-    + WorldAuctionRuntime
     + CountryReturnPointContext
     + NationContendContext
     + GodsBattleNpcContendContext
@@ -5010,7 +5015,6 @@ pub(crate) trait GameMainLoopRuntime:
 {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
-    fn wall_time_seconds(&mut self) -> u32;
     fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
     /// Исполняет только ещё не материализованные state-классы из
@@ -5204,7 +5208,6 @@ pub(crate) trait GameReleaseRuntime {
 
 pub(crate) trait GameThreadRuntime: GameMainLoopRuntime + GameReleaseRuntime {
     fn runtime_paths(&self) -> GameRuntimePaths;
-    fn sequence_seed_ms(&mut self) -> u32;
     fn initialize_com(&mut self);
     fn signal_game_thread_exit(&mut self);
     fn post_process_close(&mut self);
@@ -5520,10 +5523,7 @@ impl CGame {
         factory: &CGoodsFactory,
         goods_id: CGuid,
     ) -> bool {
-        let now_seconds = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now_seconds = game_wall_time_seconds();
         player.register_goods_ai_by_id(goods_id, factory, now_seconds)
     }
 
@@ -25637,10 +25637,7 @@ impl CGame {
                 .expect("honor script scheduling сохраняет player owner");
             let current_ticket = player.current_ticket();
             player.visit_login_goods_mut(|location, goods| {
-                let now_seconds = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
+                let now_seconds = game_wall_time_seconds();
                 if let Some(entry) = CPlayer::prepare_goods_ai_registration(
                     current_ticket,
                     goods,
@@ -29477,7 +29474,7 @@ impl CGame {
             None
         };
 
-        let sampled_wall_time_seconds = runtime.wall_time_seconds();
+        let sampled_wall_time_seconds = game_wall_time_seconds() as u32;
         let state_expired =
             self.auction_last_check_seconds.wrapping_add(4) < sampled_wall_time_seconds;
         if state_expired {
@@ -31027,17 +31024,18 @@ impl CGame {
     }
 }
 
-/// Safe process-owned замена `GameThreadFunc`: COM/platform notifications
-/// остаются runtime callbacks, а `CGame` всегда проходит Release даже после
-/// неуспешного Init, как исходный ненулевой singleton `GetGame`.
+/// Safe process-owned замена `GameThreadFunc`: wall-clock и sequence
+/// seed берутся из общих system/wrapping clock owners, COM/platform
+/// notifications остаются runtime callbacks, а `CGame` всегда проходит Release
+/// даже после неуспешного Init, как исходный ненулевой singleton `GetGame`.
 pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
     game: &mut CGame,
     runtime: &mut Runtime,
 ) -> GameThreadReport {
     runtime.initialize_com();
     let paths = runtime.runtime_paths();
-    let wall_time_seconds = runtime.wall_time_seconds();
-    let sequence_seed_ms = runtime.sequence_seed_ms();
+    let wall_time_seconds = game_wall_time_seconds() as u32;
+    let sequence_seed_ms = runtime.now_milliseconds();
     let initialization = game.init(&paths, wall_time_seconds, sequence_seed_ms).await;
 
     let mut main_loop_calls = 0usize;

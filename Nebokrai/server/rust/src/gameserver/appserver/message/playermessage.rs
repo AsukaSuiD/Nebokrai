@@ -8,7 +8,8 @@
 //! state/around publication, honor-country-appellation snapshot и attempt ID
 //! до server-trusted change-appellation script boundary. Client timing
 //! `0x8FA12/13/1A` замыкает quest countdown, heartbeat acknowledgement и exact
-//! 16-byte Windows `SYSTEMTIME`; wall/local clocks остаются runtime owner-ом.
+//! 16-byte Windows `SYSTEMTIME`; wall-clock берётся из общего process owner-а,
+//! а local Windows calendar/CRT conversion остаётся runtime-границей.
 //! Player item-use `0x8FA04` замыкает outer progress/death guard, packet slot,
 //! region forbidden goods и `CanUseItem`, mount/change-body ветви, полный
 //! consumable-addon loop, skill/player combat mutations и recall/state runtime
@@ -56,7 +57,7 @@ use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, PlayerReliveContext, PlayerReliveReport,
     PlayerTradeAbortReport, PlayerTradeReadyReport, colored_player_notice_message,
-    format_legacy_text_fields,
+    format_legacy_text_fields, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::guid::CGuid;
@@ -100,9 +101,6 @@ const LEI_TING_REWARD_SCRIPTS: [&[u8]; 9] = [
 pub(crate) trait GamePlayerMessageRuntime:
     PlayerReliveContext + GameContainerMessageRuntime + ScriptFunctionRuntime
 {
-    /// Возвращает legacy 32-bit `_time` seconds для quest countdown.
-    fn player_wall_time_seconds(&mut self) -> i32;
-
     /// Возвращает поля Windows `SYSTEMTIME` в native field order.
     fn player_local_system_time(&mut self) -> [u16; 8];
 
@@ -1514,7 +1512,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let remaining = game
                 .find_player(player_id)
                 .expect("quest-time player сохранён после context lookup")
-                .quest_time_remaining(runtime.player_wall_time_seconds());
+                .quest_time_remaining(game_wall_time_seconds() as i32);
             let mut response = CMessage::new(0x000b_f72b);
             response.add_long(remaining);
             report.deliveries.push(GamePlayerMessageDelivery::Player(

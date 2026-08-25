@@ -42,7 +42,7 @@ use crate::gameserver::appserver::player::{
     PlayerYuanBaoChange,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, PersonalShopRecollection, colored_player_notice_message,
+    CGame, PersonalShopRecollection, colored_player_notice_message, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::SendMessageError;
@@ -86,10 +86,6 @@ const CLIENT_GOODS_UPDATE_MESSAGE: i32 = 0x000b_f918;
 const PLAYER_TYPE: i32 = 400;
 const AUCTION_GOODS_EXTEND_ID: i32 = 14;
 const AUCTION_MONEY_EXTEND_ID: i32 = 15;
-
-pub(crate) trait WorldAuctionRuntime: IncrementShopBillingContext {
-    fn auction_wall_time_seconds(&mut self) -> u32;
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldAuctionMessageError {
@@ -253,7 +249,7 @@ pub(crate) fn dispatch_world_auction_message<Runtime, Tick>(
     mut tick_ms: Tick,
 ) -> Option<Result<WorldAuctionMessageReport, WorldAuctionMessageError>>
 where
-    Runtime: WorldAuctionRuntime,
+    Runtime: IncrementShopBillingContext,
     Tick: FnMut(&mut Runtime) -> u32,
 {
     match message.message_type() {
@@ -332,7 +328,7 @@ where
             };
             let enabled = enabled != 0;
             let last_check_seconds = if enabled {
-                runtime.auction_wall_time_seconds()
+                game_wall_time_seconds() as u32
             } else {
                 game.auction_last_check_seconds()
             };
@@ -917,7 +913,7 @@ where
                 }
                 let remaining = node
                     .add_ticket()
-                    .saturating_sub(runtime.auction_wall_time_seconds());
+                    .saturating_sub(game_wall_time_seconds() as u32);
                 let old_client_payload = if node.goods_bytes().is_empty() {
                     Vec::new()
                 } else {

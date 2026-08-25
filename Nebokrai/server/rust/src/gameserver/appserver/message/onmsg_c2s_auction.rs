@@ -25,13 +25,13 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_GOODS_AUCTION_SCALE, GAP_ROLE_MINIMUM_LEVEL_LIMIT, GOODS_TYPE_CONSUMABLE,
     GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
-use crate::gameserver::appserver::message::onmsg_w2s_auction::WorldAuctionRuntime;
+use crate::gameserver::appserver::message::unibillmessage::IncrementShopBillingContext;
 use crate::gameserver::appserver::player::{
     AuctionBuyGate, AuctionListingGate, AuctionSelfGoodsRefresh, CiQingPacketAddition,
     CiQingPacketConsumption,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, OldClientGoodsCodec, colored_player_notice_message,
+    CGame, OldClientGoodsCodec, colored_player_notice_message, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::auctionnode::{AuctionListingNodeFields, CGoodsNode, GoodsNodeSerializeError};
@@ -181,7 +181,7 @@ pub(crate) fn dispatch_client_auction_message<Runtime, Tick>(
     mut tick_ms: Tick,
 ) -> Option<ClientAuctionMessageReport>
 where
-    Runtime: OldClientGoodsCodec + WorldAuctionRuntime,
+    Runtime: OldClientGoodsCodec + IncrementShopBillingContext,
     Tick: FnMut(&mut Runtime) -> u32,
 {
     let selector = message.message_type();
@@ -618,7 +618,7 @@ fn dispatch_auction_listing<Runtime, Tick>(
     player_id: i32,
 ) -> ClientAuctionMessageReport
 where
-    Runtime: OldClientGoodsCodec + WorldAuctionRuntime,
+    Runtime: OldClientGoodsCodec + IncrementShopBillingContext,
     Tick: FnMut(&mut Runtime) -> u32,
 {
     let had_pending = game
@@ -811,10 +811,8 @@ where
                 .expect("auction listing player проверен перед node");
             (player.account().to_vec(), player.client_ip_text())
         };
-        let seller_time = runtime.auction_wall_time_seconds();
-        let end_time = runtime
-            .auction_wall_time_seconds()
-            .wrapping_add(auction_time);
+        let seller_time = game_wall_time_seconds() as u32;
+        let end_time = (game_wall_time_seconds() as u32).wrapping_add(auction_time);
         let mut goods_bytes = Vec::new();
         let encoded = goods.serialize(&mut goods_bytes, true);
         debug_assert!(encoded);
@@ -862,7 +860,7 @@ fn auction_yuan_listing_fee(
     fee as u32
 }
 
-fn finish_current_auction_listing<Runtime: OldClientGoodsCodec + WorldAuctionRuntime>(
+fn finish_current_auction_listing<Runtime: OldClientGoodsCodec + IncrementShopBillingContext>(
     game: &mut CGame,
     runtime: &mut Runtime,
     player_id: i32,
