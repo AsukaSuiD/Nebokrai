@@ -3259,6 +3259,10 @@ impl CPlayer {
         self.team_id = team_id;
     }
 
+    pub(crate) const fn is_team_captain(&self) -> bool {
+        self.team_captain
+    }
+
     pub(crate) const fn mark_login_script_started(&mut self) -> bool {
         let first_login = !self.login;
         self.login = true;

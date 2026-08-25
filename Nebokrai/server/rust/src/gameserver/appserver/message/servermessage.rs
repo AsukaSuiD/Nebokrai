@@ -18,9 +18,10 @@
 //! этим helper-ом не интерпретируются; полный switch не имитируется. Billing
 //! handoff закрывает старый owner, публикует новый, приоритетно ставит
 //! регистрацию и только затем включает control-send. `0x7F802` снимает оба
-//! changing-флага при отказе; при успехе адресно публикует `0xBF506`, выполняет
-//! remaining `OnLost` owner и удаляет player из source spatial/script maps до
-//! очистки client map-ID. Полный GameSave decode выполняет парный World owner.
+//! changing-флага при отказе; при успехе адресно публикует `0xBF506`, а затем
+//! вызывает общий reached `CPlayer::OnLost`: sequence/validation, scripts, JJC,
+//! `OnExit(true)`, spatial и client map-ID замыкаются одним owner-ом. Полный GameSave
+//! decode выполняет парный World owner.
 //! HonorEliminate `0x26` отдельно сохраняет оба подтверждённых sink-а:
 //! `AddLogText` и `PutStringToFile("HonorCompositior", ...)`; payload проверен
 //! по exact EXE и runtime-логам.
@@ -161,9 +162,8 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyCompos
 use crate::gameserver::appserver::goods::cgoodsfactory::{
     GoodsFactoryDecodeError, GoodsFactoryDecodeReport,
 };
-use crate::gameserver::appserver::player::{
-    CPlayer, PlayerConfirmedKillReport, PlayerHonorResetReport,
-};
+use crate::gameserver::appserver::message::logmessage::GamePlayerLostReport;
+use crate::gameserver::appserver::player::{PlayerConfirmedKillReport, PlayerHonorResetReport};
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
 use crate::gameserver::appserver::region::{RegionCellAccessBlock, RegionRandomPosition};
 use crate::gameserver::appserver::script::variablelist::{
@@ -190,9 +190,9 @@ use crate::gameserver::appserver::skills::skillfactory::{
     SkillFactoryDecodeError, SkillFactoryDecodeReport,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, GameNetworkInitializationError, GameSingleFilePublication, GodsBattleXydApplyReport,
-    MonsterBasePropertyRefreshReport, RealmAppellationScriptContext, ScriptRegionChangeContext,
-    ServerRegionOwner, colored_player_notice_message, format_legacy_text_fields,
+    CGame, GameMainLoopRuntime, GameNetworkInitializationError, GameSingleFilePublication,
+    GodsBattleXydApplyReport, MonsterBasePropertyRefreshReport, ServerRegionOwner,
+    colored_player_notice_message, format_legacy_text_fields,
 };
 use crate::gameserver::gameserver::honorranks::{HonorRanksDecodeError, HonorRanksDecodeReport};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
@@ -1115,14 +1115,6 @@ pub(crate) enum GameServerMessageReport {
     WarStartup(GameWarStartupMessageReport),
 }
 
-pub(crate) trait GameRegionChangeResponseContext {
-    fn script_player_is_team_captain(&mut self, player: &CPlayer) -> bool;
-
-    /// Remaining `OnLost` owners: sequence/validation registries, JJC and
-    /// virtual `OnExit(true)`. `CGame` performs region/script/map removal.
-    fn before_script_server_region_departure(&mut self, player: &mut CPlayer);
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameRegionChangeResponseOutcome {
     MissingPlayer,
@@ -1136,7 +1128,7 @@ pub(crate) enum GameRegionChangeResponseOutcome {
         captain: bool,
         team_id: i32,
         client_delivery: i32,
-        departure: Option<Result<(), RegionMembershipBlock>>,
+        lost: GamePlayerLostReport,
     },
 }
 
@@ -1298,10 +1290,7 @@ pub(crate) fn dispatch_server_message<Context>(
     mut now_ms: impl FnMut(&mut Context) -> u32,
 ) -> Option<Result<GameServerMessageReport, GameServerMessageError<Context::RuntimeError>>>
 where
-    Context: InitialRegionStartupContext
-        + GameRegionChangeResponseContext
-        + RealmAppellationScriptContext
-        + ScriptRegionChangeContext,
+    Context: GameMainLoopRuntime,
 {
     if message.message_type() == WORLD_PLAYER_SAVE_REQUEST {
         let id_index = game.id_index();
@@ -1395,10 +1384,7 @@ where
             let player = game
                 .find_player(player_id)
                 .expect("region-change player проверен до success wire");
-            (
-                script_context.script_player_is_team_captain(player),
-                player.team_id(),
-            )
+            (player.is_team_captain(), player.team_id())
         };
         let mut response = CMessage::new(0x000b_f506);
         response.base_mut().add(&address);
@@ -1407,12 +1393,7 @@ where
         response.add_byte(u8::from(captain));
         response.add_long(team_id);
         let client_delivery = response.send_to_player(game.net_server(), player_id);
-        game.change_body_after_player_lost(player_id, script_context);
-        script_context.before_script_server_region_departure(
-            game.find_player_mut(player_id)
-                .expect("client send не удаляет region-change player"),
-        );
-        let departure = game.finish_script_server_region_departure(player_id);
+        let lost = game.on_player_lost(player_id, script_context);
         return Some(Ok(GameServerMessageReport::RegionChange(
             GameRegionChangeResponseReport {
                 accepted: true,
@@ -1423,7 +1404,7 @@ where
                     captain,
                     team_id,
                     client_delivery,
-                    departure,
+                    lost,
                 },
             },
         )));

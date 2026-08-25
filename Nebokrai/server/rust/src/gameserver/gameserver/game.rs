@@ -576,8 +576,8 @@ use crate::gameserver::appserver::message::sequencestring::{
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::message::servermessage::{
-    GameRegionChangeResponseContext, GameServerMessageError, GameServerMessageReport,
-    InitialRegionStartupContext, WarScheduleSetupContext, dispatch_server_message,
+    GameServerMessageError, GameServerMessageReport, InitialRegionStartupContext,
+    WarScheduleSetupContext, dispatch_server_message,
 };
 use crate::gameserver::appserver::message::shapemessage::{
     GameShapeMessageError, GameShapeMessageReport, GameShapeMessageRuntime,
@@ -4990,7 +4990,6 @@ struct GameMainLoopState {
 pub(crate) trait GameMainLoopRuntime:
     GameMessageHandlers
     + InitialRegionStartupContext
-    + GameRegionChangeResponseContext
     + GameRegionEnterContext
     + GamePlayerLoginContext
     + GameOrganizingWarRuntime
@@ -16829,41 +16828,6 @@ impl CGame {
         self.restore_region_owner(source_owner);
         self.players.insert(player_id, player);
         report
-    }
-
-    /// Successful World `0x7F802` tail corresponding to `CPlayer::OnLost`
-    /// while `m_bInChangingServer` is set. The player leaves the source
-    /// spatial registry and all owned scripts before its client route is
-    /// released for the destination GameServer.
-    pub(crate) fn finish_script_server_region_departure(
-        &mut self,
-        player_id: i32,
-    ) -> Option<Result<(), RegionMembershipBlock>> {
-        let mut player = self.players.remove(&player_id)?;
-        let Some(region_id) = player.server_region_id() else {
-            self.players.insert(player_id, player);
-            return None;
-        };
-        let Some(mut owner) = self.take_region_owner(region_id) else {
-            self.players.insert(player_id, player);
-            return None;
-        };
-        let facts = ShapeRuntimeFacts {
-            is_player: true,
-            monster: None,
-            is_npc: false,
-            goods: None,
-            is_move_shape: true,
-            figure: player.figure(),
-        };
-        let removal = owner
-            .base_mut()
-            .remove_object(player.movement_shape_mut(), facts);
-        self.restore_region_owner(owner);
-        self.active_scripts
-            .retain(|_, script| script.player_id() != Some(player_id));
-        let _ = self.net_server().clear_player_map_id(player_id);
-        Some(removal)
     }
 
     /// Exact live `0x6FA01 -> CPlayer::OnLost` lifecycle. Общий caller
