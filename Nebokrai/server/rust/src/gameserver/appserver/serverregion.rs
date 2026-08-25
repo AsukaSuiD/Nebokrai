@@ -67,9 +67,9 @@
 //! Достигнутые movement commands вызывают здесь именно owner
 //! `CShape::SetTileXY`: region дополняет runtime area facts и передаёт virtual
 //! dispatch, не дублируя tile-center либо `CMoveShape::SetPosXY`.
-//! Aggressive monster tracing использует тот же owner: девяти-area player
-//! snapshot сохраняет storage order, а concrete `OnMove` временно вынимает
-//! monster из map, публикует `0xBF506` и меняет block/area membership.
+//! Aggressive monster tracing использует тот же owner: девяти-area player/pet
+//! snapshots сохраняют раздельный storage order, а concrete `OnMove` временно
+//! вынимает monster из map, публикует `0xBF506` и меняет block/area membership.
 //! Полный startup decoder сохраняет base/area/NPC/cache/monster/weather/
 //! setup/param wire-order. NPC и monster создаются собственными factory/spawn
 //! methods региона; decode context предоставляет только реальные RNG/AI/
@@ -1171,6 +1171,22 @@ impl CServerRegion {
             self.append_registered_player_ids(&self.areas[index], &mut player_ids);
         }
         player_ids
+    }
+
+    pub(crate) fn pet_ids_around_area(&self, area_index: usize) -> Vec<i32> {
+        let Some(center) = self.areas.get(area_index) else {
+            return Vec::new();
+        };
+        let center = ShapeAreaCoordinates {
+            x: center.x(),
+            y: center.y(),
+        };
+        let mut pet_ids = Vec::new();
+        for index in self.neighbor_area_indices(center) {
+            let _ = self.areas[index].append_pet_ids(&mut pet_ids);
+        }
+        pet_ids.retain(|pet_id| self.owned_monsters.contains_key(pet_id));
+        pet_ids
     }
 
     /// Exact area-array traversal `FindShapes(600)` без смены pointer owner-а.

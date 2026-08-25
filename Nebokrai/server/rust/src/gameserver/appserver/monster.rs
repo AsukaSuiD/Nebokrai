@@ -19,9 +19,9 @@
 //! owner хранит target, cast/reuse и передаёт monster-to-player удар в живой
 //! region/player/network/death проход. Очередь `CBaseAI` заменена typed
 //! single-event handoff только для этих синхронных combat caller-ов. Для
-//! aggressive melee AI `0/3` player-search и blocked-step tracing хранят здесь
-//! target/move delay; pet-target, idle wandering и multi-skill decision tree
-//! этим не подменяются.
+//! aggressive melee AI `0/3` player/pet search и blocked-step tracing хранят
+//! здесь target/move delay; pet hurt/death сохраняют target priority и master
+//! unlink. Idle wandering и multi-skill decision tree этим не подменяются.
 //! Login pet restoration и client control используют owned `tagMasterInfo`,
 //! taming sign, progress, раздельные Globe experience/property factors и
 //! reached follower-EXP level-up с `0xC0203`, а также узкое pet-control state;
@@ -362,6 +362,17 @@ impl CMonster {
     pub(crate) fn when_been_hurted_by(&mut self, attacker: ShapeIdentity) {
         self.last_combat_ai_event = Some(MonsterCombatAiEvent::Defense);
         if self.ai_target.is_none() && attacker.object_type == 400 {
+            self.ai_target = Some(attacker);
+        }
+    }
+
+    pub(crate) fn when_pet_been_hurted_by(&mut self, attacker: ShapeIdentity) {
+        self.last_combat_ai_event = Some(MonsterCombatAiEvent::Defense);
+        if self.ai_target.is_none()
+            || self
+                .ai_target
+                .is_some_and(|target| target.object_type != 400 && attacker.object_type == 400)
+        {
             self.ai_target = Some(attacker);
         }
     }

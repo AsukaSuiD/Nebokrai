@@ -30,6 +30,8 @@
 //! players/active monsters/pets/carriages/goods/NPC/other. Owning region
 //! выполняет старый `FindChildObject`, stale-storage cleanup и особый goods
 //! filter `m_lChangeState == CS_DELETE` перед virtual shape AI.
+//! `FindAroundPets` caller получает ordered pet-ID snapshot тех же девяти area
+//! и разрешает canonical monster только у owning region.
 //! `AI` RVA `0x00074500` сохраняет отдельный `timeGetTime` для каждой ordered
 //! goods/protection записи, around-delete с `CS_DELETE` и active→sleep/pet/
 //! carriage переклассификацию только в area без игроков. Ground-goods wire и
@@ -621,6 +623,15 @@ impl CArea {
             return false;
         }
         destination.extend_from_slice(&self.players);
+        true
+    }
+
+    pub(crate) fn append_pet_ids(&self, destination: &mut Vec<i32>) -> bool {
+        let _guard = self.critical_section.lock();
+        if self.parent != AreaParentLink::OwningServerRegion {
+            return false;
+        }
+        destination.extend_from_slice(&self.pets);
         true
     }
 

@@ -6,8 +6,8 @@
 //! exact hit/full-miss, physical/element/soul, blast/critical, avoid и PvP
 //! factor для player-vs-player, level-adjusted hit и monster
 //! defense/resistance/avoid без PvP factor для player-vs-monster, а также raw
-//! monster hit limits и player defense/resistance/avoid для обратного
-//! monster-vs-player удара. Активные polymorphic shield state-классы не
+//! monster hit limits и player/monster defense/resistance/avoid для обратных
+//! monster-vs-player и wild-monster-vs-pet ударов. Активные polymorphic shield state-классы не
 //! подменяются: их owner-ы остаются в unmaterialized state AI, а этот owner
 //! применяется к обычному defense snapshot без таких state.
 
@@ -273,6 +273,52 @@ pub(crate) fn defend_player_from_monster_base_attack(
         }
         attack.damage_modifier = 0;
         attack.full_miss = if full_miss { 1 } else { 2 };
+        return;
+    }
+
+    for power in &mut attack.damages {
+        match power.kind {
+            AttackPowerType::Physical => {
+                power.hp_damage = power.hp_damage.wrapping_sub(target.defense as i32 / 2);
+                power.hp_damage = avoid_damage(power.hp_damage, target.attack_avoid).max(0);
+            }
+            AttackPowerType::Element => {
+                power.hp_damage = power
+                    .hp_damage
+                    .wrapping_sub(target.element_resistance as i32 / 2);
+                power.hp_damage = avoid_damage(power.hp_damage, target.element_avoid).max(0);
+            }
+            AttackPowerType::Soul => {
+                power.hp_damage = power
+                    .hp_damage
+                    .wrapping_sub(i32::from(target.soul_resistance))
+                    .max(0);
+            }
+        }
+        if power.hp_damage > 0 {
+            power.hp_damage =
+                truncate_original(f64::from(power.hp_damage) * f64::from(attack.damage_factor))
+                    .max(1);
+        }
+    }
+}
+
+pub(crate) fn defend_monster_from_monster_base_attack(
+    attack: &mut AttackInformation,
+    target: MonsterCombatProperties,
+    setup: &GlobeSetupSnapshot,
+    random: &mut dyn FnMut(i32) -> i32,
+) {
+    let (minimum_hit, maximum_hit) = setup.monster_hit_limits();
+    let hit = maximum_hit
+        .wrapping_add(attack.hit_modifier)
+        .clamp(minimum_hit, maximum_hit);
+    if hit <= random(100) {
+        for power in &mut attack.damages {
+            power.hp_damage = 0;
+        }
+        attack.damage_modifier = 0;
+        attack.full_miss = 2;
         return;
     }
 
