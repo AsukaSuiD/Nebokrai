@@ -128,7 +128,8 @@
 //! в первом блоке очистки реально запускаемого `scripts/quest/nodupe.script`.
 //! `2306 / GameMessage` публикует `0xBF808` с текстом, видом окна и
 //! идентификатором сценария, после чего тот же экземпляр ожидает клиентский
-//! ответ `0x8FB02` и получает `$m_TalkRet`.
+//! ответ `0x8FB02` и получает `$m_TalkRet`. `2309 / Help` использует малое
+//! окно `0xBF71C` и тот же жизненный цикл ожидания, что `TalkBoxSmall`.
 //! Соседняя группа `2204/2205/2212/2217/2218/2220` связывает подсчёты рюкзака
 //! и депо, выбранный предмет контейнера улучшения, локальное либо удалённое
 //! удаление и доверенный путь сценария окна `0xBF919` с подтверждением
@@ -520,6 +521,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_TEAMER_NAME: i32 = 2303;
 pub(crate) const SCRIPT_FUNCTION_ADD_INFO: i32 = 2305;
 pub(crate) const SCRIPT_FUNCTION_GAME_MESSAGE: i32 = 2306;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX: i32 = 2307;
+pub(crate) const SCRIPT_FUNCTION_HELP: i32 = 2309;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX_SMALL: i32 = 2324;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS_LOG: i32 = 2313;
 pub(crate) const SCRIPT_FUNCTION_SET_REGION_FOR_TEAM: i32 = 2310;
@@ -3839,6 +3841,7 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_CHECK_GOODS
         | SCRIPT_FUNCTION_ADD_INFO
         | SCRIPT_FUNCTION_TALK_BOX
+        | SCRIPT_FUNCTION_HELP
         | SCRIPT_FUNCTION_TALK_BOX_SMALL
         | SCRIPT_FUNCTION_ADD_GOODS_LOG => match index {
             0 => String,
@@ -7447,7 +7450,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 _ => Some(ScriptFunctionDispatchOutcome::Invalid),
             }
         }
-        SCRIPT_FUNCTION_TALK_BOX | SCRIPT_FUNCTION_TALK_BOX_SMALL => {
+        SCRIPT_FUNCTION_TALK_BOX | SCRIPT_FUNCTION_HELP | SCRIPT_FUNCTION_TALK_BOX_SMALL => {
             if argument_count != 1 {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             }

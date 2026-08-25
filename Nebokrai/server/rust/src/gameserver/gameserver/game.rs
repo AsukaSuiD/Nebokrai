@@ -16503,10 +16503,11 @@ impl CGame {
         game_legacy_random(&mut self.random_state, maximum)
     }
 
-    /// Exact `RunScript` owner: загруженный instance получает wrapping ID и
-    /// попадает в ordered `g_Scripts`; команды исполняет только Script-stage
-    /// главного цикла. Повтор того же файла у того же player отклоняется как
-    /// исходным `ScriptIfExit`.
+    /// Точный владелец `RunScript`: загруженный экземпляр получает
+    /// переполняющийся идентификатор и попадает в упорядоченный `g_Scripts`;
+    /// команды исполняются только на сценарной стадии главного цикла. Повтор
+    /// того же файла у того же игрока отклоняется, как в исходном
+    /// `ScriptIfExit`.
     pub(crate) fn run_script_file<Runtime: ScriptFunctionRuntime>(
         &mut self,
         path: &[u8],
@@ -16531,7 +16532,7 @@ impl CGame {
             .iter()
             .filter_map(|(id, script)| {
                 (script.player_id() == Some(player_id)
-                    && matches!(script.waiting_function(), Some(2307 | 2324)))
+                    && matches!(script.waiting_function(), Some(2307 | 2309 | 2324)))
                 .then_some(*id)
             })
             .collect();
@@ -16694,7 +16695,8 @@ impl CGame {
         else {
             return false;
         };
-        let should_close = close_talk_box && matches!(script.waiting_function(), Some(2307 | 2324));
+        let should_close =
+            close_talk_box && matches!(script.waiting_function(), Some(2307 | 2309 | 2324));
         let should_close_runtime = script.is_countdown_runtime_waiting();
         self.active_scripts.remove(&script_id);
         if should_close {
