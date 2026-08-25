@@ -611,16 +611,16 @@ use crate::gameserver::appserver::player::{
     CiQingContainerAddition, CiQingContainerConsumption, CiQingHandConsumption,
     CiQingPacketAddition, CiQingPacketConsumption, EnhancementDeselectionBlock,
     EnhancementDeselectionReport, EnhancementSelectionBlock, EnhancementSelectionReport,
-    GoodsDestroyHandConsumption, HotkeyHandTransferOutcome, HotkeyHandTransferReport,
-    PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange, PlayerBankCurrencyAddOutcome,
-    PlayerCombatProperties, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
-    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
-    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerGameSaveCodecError,
-    PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion, PlayerHonorResetReport,
-    PlayerLoginGoodsLocation, PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation,
-    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
-    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet,
-    PlayerYuanBaoChange,
+    GoodsDestroyHandConsumption, GoodsSessionPlayerRelease, HotkeyHandTransferOutcome,
+    HotkeyHandTransferReport, PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange,
+    PlayerBankCurrencyAddOutcome, PlayerCombatProperties, PlayerEquipmentAddEffect,
+    PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery,
+    PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
+    PlayerGameSaveCodecError, PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion,
+    PlayerHonorResetReport, PlayerLoginGoodsLocation, PlayerMurdererSignDecrease, PlayerProgress,
+    PlayerReliveMutation, PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery,
+    PlayerSkillRequestEffect, PlayerSkillRequestFacts, PlayerSkillRequestReport,
+    PlayerUncreatedCarriage, PlayerUncreatedPet, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -2016,8 +2016,6 @@ pub(crate) trait BattleFairySkillResetContext {
 /// snapshot и skill-state остаются на runtime-границе. Region/player maps,
 /// session state и message wire исполняет непосредственно `CGame`.
 pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
-    fn finish_script_player_business(&mut self, player: &mut CPlayer);
-
     fn prepare_script_region_companions(
         &mut self,
         player: &mut CPlayer,
@@ -2158,6 +2156,7 @@ pub(crate) struct ScriptRegionChangeReport {
     pub(crate) range: i32,
     pub(crate) carriage_distance: i32,
     pub(crate) kind: ScriptRegionChangeKind,
+    pub(crate) business: Option<GamePlayerBusinessEndReport>,
     pub(crate) position_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
     pub(crate) direction_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
     pub(crate) region_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
@@ -2165,6 +2164,16 @@ pub(crate) struct ScriptRegionChangeReport {
     pub(crate) team_delivery: Option<Result<i32, SendMessageError>>,
     pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
     pub(crate) player_snapshot_size: Option<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerBusinessEndReport {
+    pub(crate) player_id: i32,
+    pub(crate) previous_progress: PlayerProgress,
+    pub(crate) session_id: Option<i32>,
+    pub(crate) session_end: Option<SessionEndReport>,
+    pub(crate) player_release: Option<GoodsSessionPlayerRelease>,
+    pub(crate) increment_close_delivery: Option<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3847,10 +3856,11 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GamePlayerLostTimeoutReport {
     pub(crate) player_id: i32,
     pub(crate) sampled_at_ms: u32,
+    pub(crate) business: Option<GamePlayerBusinessEndReport>,
     pub(crate) staged_for_delete: bool,
 }
 
@@ -16411,6 +16421,7 @@ impl CGame {
             range,
             carriage_distance,
             kind: ScriptRegionChangeKind::MissingPlayer,
+            business: None,
             position_delivery: None,
             direction_delivery: None,
             region_delivery: None,
@@ -16426,36 +16437,22 @@ impl CGame {
         {
             self.change_body_after_region_transition(player_id, context);
         }
-        let Some(mut player) = self.players.remove(&player_id) else {
-            return report;
-        };
-        let Some(source_region_id) = player.server_region_id() else {
-            self.players.insert(player_id, player);
+        let Some(source_region_id) = self
+            .find_player(player_id)
+            .and_then(CPlayer::server_region_id)
+        else {
             return report;
         };
         report.source_region_id = Some(source_region_id);
         let Some(mut source_owner) = self.take_region_owner(source_region_id) else {
             report.kind = ScriptRegionChangeKind::MissingSourceRegion;
-            self.players.insert(player_id, player);
             return report;
         };
-
-        let previous_progress = player.current_progress();
-        context.finish_script_player_business(&mut player);
-        if matches!(
-            previous_progress,
-            PlayerProgress::Trading
-                | PlayerProgress::OpenStall
-                | PlayerProgress::Upgrade
-                | PlayerProgress::DaKong
-                | PlayerProgress::Compose
-        ) && let Some(session_id) = self
-            .session_factory
-            .query_session_id_by_owner(400, player_id)
-        {
-            let _ = self.session_factory.end_session(session_id);
-        }
-        player.set_current_progress_snapshot(PlayerProgress::None);
+        report.business = self.finish_player_business(player_id);
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .expect("region-change player проверен перед business mutation");
 
         if !(0..8).contains(&direction) {
             direction = context.random_below(8);
@@ -16723,6 +16720,7 @@ impl CGame {
                 nation_timing_finished: false,
                 particular_goods: Vec::new(),
                 change_body_states_ended: 0,
+                business: None,
                 delay: None,
                 departure: None,
                 route_command,
@@ -16777,13 +16775,15 @@ impl CGame {
                 nation_timing_finished,
                 particular_goods,
                 change_body_states_ended,
+                business: None,
                 delay,
                 departure: None,
                 route_command: None,
             };
         }
 
-        runtime.player_on_exit(self, player_id, changing_server);
+        let business = self.finish_player_business(player_id);
+        runtime.player_on_exit_after_business(self, player_id, changing_server);
         let departure = self.remove_lost_player(player_id);
         GamePlayerLostReport {
             player_id,
@@ -16796,6 +16796,7 @@ impl CGame {
             nation_timing_finished,
             particular_goods,
             change_body_states_ended,
+            business,
             delay: None,
             departure,
             route_command: None,
@@ -16851,6 +16852,51 @@ impl CGame {
                 source,
             })
             .collect()
+    }
+
+    /// Reached `CPlayer::end_business`: session lookup/end остаётся в factory,
+    /// player progress всегда сбрасывается, а shopping/increment дополнительно
+    /// снимают один movement lock; increment публикует exact `0xC0404`.
+    fn finish_player_business(&mut self, player_id: i32) -> Option<GamePlayerBusinessEndReport> {
+        let previous_progress = self.find_player(player_id)?.current_progress();
+        let session_id = matches!(
+            previous_progress,
+            PlayerProgress::Trading
+                | PlayerProgress::OpenStall
+                | PlayerProgress::Upgrade
+                | PlayerProgress::DaKong
+                | PlayerProgress::Compose
+        )
+        .then(|| {
+            self.session_factory
+                .query_session_id_by_owner(400, player_id)
+        })
+        .flatten();
+        let session_end = session_id.and_then(|id| self.session_factory.end_session(id));
+        let player_release = matches!(
+            previous_progress,
+            PlayerProgress::Shopping | PlayerProgress::Increment
+        )
+        .then(|| {
+            self.find_player_mut(player_id)
+                .map(CPlayer::release_goods_session_state)
+        })
+        .flatten();
+        if player_release.is_none() {
+            self.find_player_mut(player_id)
+                .expect("business player проверен перед progress reset")
+                .set_current_progress_snapshot(PlayerProgress::None);
+        }
+        let increment_close_delivery = (previous_progress == PlayerProgress::Increment)
+            .then(|| CMessage::new(0x000c_0404).send_to_player(self.net_server(), player_id));
+        Some(GamePlayerBusinessEndReport {
+            player_id,
+            previous_progress,
+            session_id,
+            session_end,
+            player_release,
+            increment_close_delivery,
+        })
     }
 
     /// Client `8F801` acknowledgement completes a deferred local change. The
@@ -28548,7 +28594,8 @@ impl CGame {
         {
             return None;
         }
-        runtime.player_on_exit(self, player_id, false);
+        let business = self.finish_player_business(player_id);
+        runtime.player_on_exit_after_business(self, player_id, false);
         let staged_for_delete = self.find_player_mut(player_id).is_some_and(|player| {
             player
                 .movement_shape_mut()
@@ -28558,6 +28605,7 @@ impl CGame {
         Some(GamePlayerLostTimeoutReport {
             player_id,
             sampled_at_ms,
+            business,
             staged_for_delete,
         })
     }

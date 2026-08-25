@@ -11859,20 +11859,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::end_business
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:12095
-// RVA: 0x0002DBF0
-// ADDRESS: 0042dbf0
-// PROTOTYPE: void __thiscall end_business(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::GetSessionID
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer

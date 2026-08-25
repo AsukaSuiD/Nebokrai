@@ -27,9 +27,9 @@ use crate::gameserver::appserver::player::PlayerGameSaveCodecError;
 use crate::gameserver::appserver::player::{PlayerLostDelayStarted, PlayerParticularGoodsDrop};
 use crate::gameserver::appserver::serverregion::RegionMembershipBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerLoginBlock, GamePlayerLoginPreludeError,
-    GamePlayerLoginPreludeReport, GamePlayerLoginReport, GroundGoodsMoveBlock,
-    GroundGoodsMoveReport, colored_player_notice_message,
+    CGame, GameMainLoopRuntime, GamePlayerBusinessEndReport, GamePlayerLoginBlock,
+    GamePlayerLoginPreludeError, GamePlayerLoginPreludeReport, GamePlayerLoginReport,
+    GroundGoodsMoveBlock, GroundGoodsMoveReport, colored_player_notice_message,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -58,7 +58,13 @@ pub(crate) enum GameLogMessageOutcome {
 pub(crate) trait GamePlayerLostRuntime {
     fn detach_player_from_team_on_lost(&mut self, game: &mut CGame, player_id: i32) -> bool;
     fn quit_player_jjc_on_lost(&mut self, game: &mut CGame, player_id: i32) -> bool;
-    fn player_on_exit(&mut self, game: &mut CGame, player_id: i32, changing_server: bool);
+    /// Исполняет оставшийся `OnExit` tail после owned `end_business`.
+    fn player_on_exit_after_business(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        changing_server: bool,
+    );
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -88,6 +94,7 @@ pub(crate) struct GamePlayerLostReport {
     pub(crate) nation_timing_finished: bool,
     pub(crate) particular_goods: Vec<GamePlayerLostParticularGoodsDrop>,
     pub(crate) change_body_states_ended: usize,
+    pub(crate) business: Option<GamePlayerBusinessEndReport>,
     pub(crate) delay: Option<PlayerLostDelayStarted>,
     pub(crate) departure: Option<Result<(), RegionMembershipBlock>>,
     pub(crate) route_command: Option<i32>,
