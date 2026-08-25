@@ -5136,6 +5136,8 @@ pub(crate) enum GameReleaseEvent {
     ReconnectTasksStopped,
     PlayerSave {
         player_id: i32,
+        encoded: bool,
+        delivery: Option<Result<i32, SendMessageError>>,
         saved: bool,
     },
     CityRegionSaved,
@@ -5212,13 +5214,6 @@ pub(crate) struct GameReleaseReport {
 
 pub(crate) trait GameReleaseRuntime {
     fn put_debug_string(&mut self, message: GameReleaseDebug);
-    fn publish_player_save(
-        &mut self,
-        player_id: i32,
-        message_type: i32,
-        save_flag: i32,
-        snapshot: &[u8],
-    ) -> bool;
     fn save_city_region(&mut self, game: &CGame, region_id: i32);
     fn release_external_owner(&mut self, owner: GameReleaseExternalOwner);
     fn exit_network_server_worker(&mut self, server: &mut CMyNetServer);
@@ -25161,13 +25156,16 @@ impl CGame {
                 .players
                 .get(&player_id)
                 .is_some_and(|player| self.encode_player_game_save(player, &mut snapshot, runtime));
-            let saved = encoded
-                && runtime.publish_player_save(
-                    player_id,
-                    GAME_RELEASE_PLAYER_SAVE_MESSAGE,
-                    1,
-                    &snapshot,
-                );
+            let delivery = encoded.then(|| {
+                let mut save = CMessage::new(GAME_RELEASE_PLAYER_SAVE_MESSAGE);
+                save.add_long(player_id);
+                save.add_long(1);
+                save.base_mut().add(&snapshot);
+                save.send(self, false)
+            });
+            // Native Release не проверял return CMessage::Send: `Ok(0)` при
+            // уже отсутствующем World owner-е не становится codec exception.
+            let saved = encoded && delivery.as_ref().is_some_and(Result::is_ok);
             if !saved {
                 let debug = GameReleaseDebug::PlayerSaveFailed {
                     player_id,
@@ -25180,7 +25178,12 @@ impl CGame {
                 // немедленно erase-ил проблемный map node и продолжал обход.
                 self.players.remove(&player_id);
             }
-            events.push(GameReleaseEvent::PlayerSave { player_id, saved });
+            events.push(GameReleaseEvent::PlayerSave {
+                player_id,
+                encoded,
+                delivery,
+                saved,
+            });
         }
         let debug = GameReleaseDebug::PlayersSaved {
             processed: total_players,
