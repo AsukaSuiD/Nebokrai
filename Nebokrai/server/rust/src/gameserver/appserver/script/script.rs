@@ -49,12 +49,12 @@ use super::function::{
     SCRIPT_FUNCTION_CITY_WAR_DECLARE, SCRIPT_FUNCTION_DEL_APPELLATION_STATE,
     SCRIPT_FUNCTION_GET_APPELLATION_STATE, SCRIPT_FUNCTION_GET_COPY_NUMBER,
     SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE, SCRIPT_FUNCTION_GET_NAME,
-    SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID, SCRIPT_FUNCTION_GET_STRING_BY_ID,
-    SCRIPT_FUNCTION_GET_TEAMER_NAME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME,
-    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME,
-    SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME, SCRIPT_FUNCTION_LIST_BANNED_PLAYER,
-    SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAY_SOUND,
-    SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
+    SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID, SCRIPT_FUNCTION_GET_OWNED_REGION_UNION_ID,
+    SCRIPT_FUNCTION_GET_STRING_BY_ID, SCRIPT_FUNCTION_GET_TEAMER_NAME,
+    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME,
+    SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME,
+    SCRIPT_FUNCTION_LIST_BANNED_PLAYER, SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT,
+    SCRIPT_FUNCTION_PLAY_SOUND, SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
     SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
     ScriptFunctionParameterKind, ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome,
     dispatch_script_function, dispatch_script_string_function, owned_region_script_caller_is_live,
@@ -723,13 +723,14 @@ impl<'a> CScript<'a> {
                 legacy_return: 0,
             };
         }
-        if function_id == SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID
-            && !owned_region_script_caller_is_live(
-                game,
-                self.context.player_id,
-                self.context.region_id,
-            )
-        {
+        if matches!(
+            function_id,
+            SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID | SCRIPT_FUNCTION_GET_OWNED_REGION_UNION_ID
+        ) && !owned_region_script_caller_is_live(
+            game,
+            self.context.player_id,
+            self.context.region_id,
+        ) {
             return ScriptCommandOutcome::Handled {
                 function_id,
                 legacy_return: 0,

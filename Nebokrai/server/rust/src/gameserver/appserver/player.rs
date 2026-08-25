@@ -1978,11 +1978,13 @@ pub(crate) struct CPlayer {
     figure: ShapeFigure,
     faction_id: i32,
     faction_level: u16,
+    faction_experience: i32,
     faction_master_id: i32,
     faction_name: Vec<u8>,
     enemy_factions: BTreeSet<i32>,
     city_war_enemy_factions: BTreeSet<i32>,
     union_id: i32,
+    union_master_id: i32,
     team_id: i32,
     team_captain: bool,
     country: u8,
@@ -2327,11 +2329,13 @@ impl CPlayer {
             figure,
             faction_id: 0,
             faction_level: 0,
+            faction_experience: 0,
             faction_master_id: 0,
             faction_name: Vec::new(),
             enemy_factions: BTreeSet::new(),
             city_war_enemy_factions: BTreeSet::new(),
             union_id: 0,
+            union_master_id: 0,
             team_id,
             team_captain: false,
             country,
@@ -3498,6 +3502,10 @@ impl CPlayer {
         self.faction_level
     }
 
+    pub(crate) const fn faction_experience(&self) -> i32 {
+        self.faction_experience
+    }
+
     pub(crate) const fn is_faction_master(&self) -> bool {
         self.faction_id > 0 && self.faction_master_id == self.player_id()
     }
@@ -3508,6 +3516,10 @@ impl CPlayer {
 
     pub(crate) const fn union_id(&self) -> i32 {
         self.union_id
+    }
+
+    pub(crate) const fn is_union_master(&self) -> bool {
+        self.union_id > 0 && self.union_master_id == self.player_id()
     }
 
     pub(crate) const fn create_faction_operator(&self) -> bool {
@@ -3542,18 +3554,22 @@ impl CPlayer {
         &mut self,
         faction_id: i32,
         faction_level: u16,
+        faction_experience: i32,
         faction_master_id: i32,
         faction_name: &[u8],
         union_id: i32,
+        union_master_id: i32,
         enemy_factions: BTreeSet<i32>,
         city_war_enemy_factions: BTreeSet<i32>,
     ) {
         self.faction_id = faction_id;
         self.faction_level = faction_level;
+        self.faction_experience = faction_experience;
         self.faction_master_id = faction_master_id;
         self.faction_name.clear();
         self.faction_name.extend_from_slice(faction_name);
         self.union_id = union_id;
+        self.union_master_id = union_master_id;
         self.enemy_factions = enemy_factions;
         self.city_war_enemy_factions = city_war_enemy_factions;
     }

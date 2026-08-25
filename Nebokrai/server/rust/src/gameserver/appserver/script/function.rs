@@ -17,10 +17,14 @@
 //! обновление постройки.
 //! Запрос главы `6017` читает идентичность, обновляемую World `0x7FE06`, а не
 //! отдельную сценарную копию или постоянную заглушку `false`.
-//! Налоговые функции `6005/6006/6049/6050/6052/6053` используют текущий
-//! регион сценария. Меню проходит авторизацию World `0x6012B/0x6012C`, затем
+//! Налоговые функции `6005/6006` используют текущий регион сценария, а
+//! `6049/6050/6052/6053` — вычисленный ID региона. Меню проходит авторизацию
+//! World `0x6012B/0x6012C`, затем
 //! реальный `CNetSession`, клиентские ответы `0x90122/0x90123`, изменение
 //! кошелька или ставки и обратный снимок `0x6012D`.
+//! Запросы `6013/6014/6016/6018/6048` читают ту же авторитетную идентичность
+//! `0x7FE06`: уровень и опыт фракции, союз и его главу, а также владельца
+//! региона. Отдельные сценарные копии этих значений не создаются.
 //! `6043 / EnterContendState` сохраняет разговорный distance gate, вычисляет
 //! два числа и четыре строки до faction/region checks и входит в concrete
 //! City/Village `CServerWarRegion`; общий owner выполняет membership/goods,
@@ -499,8 +503,12 @@ pub(crate) const SCRIPT_FUNCTION_OPERATOR_CITY_GATE: i32 = 6004;
 pub(crate) const SCRIPT_FUNCTION_OBTAIN_TAX_PAYMENT: i32 = 6005;
 pub(crate) const SCRIPT_FUNCTION_ADJUST_TAX_RATE: i32 = 6006;
 pub(crate) const SCRIPT_FUNCTION_UPGRADE_FACTION: i32 = 6011;
+pub(crate) const SCRIPT_FUNCTION_GET_FACTION_LEVEL_BY_PLAYER_ID: i32 = 6013;
+pub(crate) const SCRIPT_FUNCTION_GET_FACTION_EXP_BY_PLAYER_ID: i32 = 6014;
 pub(crate) const SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME: i32 = 6015;
+pub(crate) const SCRIPT_FUNCTION_GET_UNION_ID_BY_PLAYER_NAME: i32 = 6016;
 pub(crate) const SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME: i32 = 6017;
+pub(crate) const SCRIPT_FUNCTION_IS_UNION_MASTER_BY_PLAYER_NAME: i32 = 6018;
 pub(crate) const SCRIPT_FUNCTION_GET_CITY_GATE_STATE: i32 = 6019;
 pub(crate) const SCRIPT_FUNCTION_OPERATE_CITY_GATE: i32 = 6020;
 pub(crate) const SCRIPT_FUNCTION_FACTION_DECLARE_WAR: i32 = 6030;
@@ -512,6 +520,7 @@ pub(crate) const SCRIPT_FUNCTION_CITY_WAR_DECLARE: i32 = 6044;
 pub(crate) const SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME: i32 = 6045;
 pub(crate) const SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME: i32 = 6046;
 pub(crate) const SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID: i32 = 6047;
+pub(crate) const SCRIPT_FUNCTION_GET_OWNED_REGION_UNION_ID: i32 = 6048;
 pub(crate) const SCRIPT_FUNCTION_GET_TOTAL_TAX_PAYMENT: i32 = 6049;
 pub(crate) const SCRIPT_FUNCTION_GET_TODAY_TAX_PAYMENT: i32 = 6050;
 pub(crate) const SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS: i32 = 6051;
@@ -3586,7 +3595,9 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_GET_MONEY_BY_NAME
         | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME
-        | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => match index {
+        | SCRIPT_FUNCTION_GET_UNION_ID_BY_PLAYER_NAME
+        | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME
+        | SCRIPT_FUNCTION_IS_UNION_MASTER_BY_PLAYER_NAME => match index {
             0 => String,
             _ => Unused,
         },
@@ -3629,6 +3640,9 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME
         | SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME
         | SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID
+        | SCRIPT_FUNCTION_GET_OWNED_REGION_UNION_ID
+        | SCRIPT_FUNCTION_GET_TOTAL_TAX_PAYMENT
+        | SCRIPT_FUNCTION_GET_TODAY_TAX_PAYMENT
         | SCRIPT_FUNCTION_GET_WAR_REGION_STATE
         | SCRIPT_FUNCTION_GET_COUNTRY_OWNING_REGION
         | SCRIPT_FUNCTION_GET_WAR_START_TIME => match index {
@@ -3639,6 +3653,12 @@ pub(crate) fn script_function_parameter_kind(
             0..=1 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_SET_TOTAL_TAX_PAYMENT | SCRIPT_FUNCTION_SET_TODAY_TAX_PAYMENT => {
+            match index {
+                0..=1 => Integer,
+                _ => Unused,
+            }
+        }
         SCRIPT_FUNCTION_ENTER_CONTEND_STATE => match index {
             0 | 1 => Integer,
             2..=5 => String,
@@ -4625,7 +4645,7 @@ fn run_village_war_menu_script_function(
                 },
             )))
         }
-        SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID => {
+        SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID | SCRIPT_FUNCTION_GET_OWNED_REGION_UNION_ID => {
             if !owned_region_script_caller_is_live(game, script_player_id, script_region_id) {
                 return Some(handled(0));
             }
@@ -4638,8 +4658,13 @@ fn run_village_war_menu_script_function(
                 region_id = script_region_id.unwrap_or_default();
             }
             Some(handled(
-                script_war_region_snapshot(game, region_id, true)
-                    .map_or(0, |region| region.owned_faction_id),
+                script_war_region_snapshot(game, region_id, true).map_or(0, |region| {
+                    if function_id == SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID {
+                        region.owned_faction_id
+                    } else {
+                        region.owned_union_id
+                    }
+                }),
             ))
         }
         SCRIPT_FUNCTION_GET_WAR_REGION_STATE => {
@@ -6282,7 +6307,8 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_GET_TOTAL_TAX_PAYMENT | SCRIPT_FUNCTION_GET_TODAY_TAX_PAYMENT => {
-            let value = script_region_id
+            let value = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
                 .and_then(|region_id| {
                     game.script_region_tax_value(
                         region_id,
@@ -6294,10 +6320,24 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 legacy_return: value as i32,
             })
         }
+        SCRIPT_FUNCTION_GET_FACTION_LEVEL_BY_PLAYER_ID => {
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game
+                    .find_player(player_id)
+                    .map_or(-1, |player| i32::from(player.faction_level())),
+            })
+        }
+        SCRIPT_FUNCTION_GET_FACTION_EXP_BY_PLAYER_ID => {
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game
+                    .find_player(player_id)
+                    .map_or(0, CPlayer::faction_experience),
+            })
+        }
         SCRIPT_FUNCTION_SET_TOTAL_TAX_PAYMENT | SCRIPT_FUNCTION_SET_TODAY_TAX_PAYMENT => {
             if let (Some(region_id), Some(value)) = (
-                script_region_id,
                 integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
             ) {
                 let _ = game.set_script_region_tax_value(
                     region_id,
@@ -6579,7 +6619,9 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
         }
         SCRIPT_FUNCTION_GET_MONEY_BY_NAME
         | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME
-        | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => {
+        | SCRIPT_FUNCTION_GET_UNION_ID_BY_PLAYER_NAME
+        | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME
+        | SCRIPT_FUNCTION_IS_UNION_MASTER_BY_PLAYER_NAME => {
             let Some(target_name) = string_arguments[0] else {
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };
@@ -6592,8 +6634,12 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 legacy_return: target.map_or(0, |player| match function_id {
                     SCRIPT_FUNCTION_GET_MONEY_BY_NAME => player.money() as i32,
                     SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME => player.faction_id(),
+                    SCRIPT_FUNCTION_GET_UNION_ID_BY_PLAYER_NAME => player.union_id(),
                     SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => {
                         i32::from(player.is_faction_master())
+                    }
+                    SCRIPT_FUNCTION_IS_UNION_MASTER_BY_PLAYER_NAME => {
+                        i32::from(player.is_union_master())
                     }
                     _ => unreachable!("faction identity selector отфильтрован match-arm"),
                 }),

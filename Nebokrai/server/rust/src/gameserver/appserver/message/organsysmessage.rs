@@ -23,9 +23,10 @@
 //! возвращаются в live player wallet, сохраняют signed wrapping/clamp старого
 //! `SetMoney` и публикуют container change клиенту; отклонённая заявка ответа
 //! не создаёт.
-//! `0x7FE06` декодирует полный organizing wire до owned-region tail, обновляет
-//! faction/master/name/union identity live player и только затем ретегирует
-//! `0xBFF06`; name/union входят в последующий war-contender lifecycle.
+//! `0x7FE06` декодирует полное сообщение OrganSys до хвоста принадлежащих
+//! регионов, обновляет у живого игрока фракцию, уровень, опыт, глав фракции и
+//! союза, имя и союз и только затем меняет тип на `0xBFF06`. Имя и союз входят
+//! в последующий жизненный цикл участников войны.
 //! Налоговая цепочка принимает авторизацию World `0x7FE28/0x7FE29`, создаёт
 //! управляемый `CNetSession`, коррелирует ответы клиента `0x90122/0x90123` и
 //! применяет авторитетный снимок прокси-региона `0x7FE2E`.
@@ -925,9 +926,11 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
             let player_id = read_i32(message, "player ID")?;
             let faction_id = read_i32(message, "faction ID")?;
             let mut faction_level = 0;
+            let mut faction_experience = 0;
             let mut faction_master_id = 0;
             let mut faction_name = Vec::new();
             let mut union_id = 0;
+            let mut union_master_id = 0;
             let mut enemy_factions = std::collections::BTreeSet::new();
             let mut city_war_enemy_factions = std::collections::BTreeSet::new();
             if faction_id > 0 {
@@ -937,7 +940,7 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                         field: "faction level",
                     },
                 )?;
-                let _experience = read_i32(message, "faction experience")?;
+                faction_experience = read_i32(message, "faction experience")?;
                 let _force = read_i32(message, "faction force")?;
                 let _contribute = read_i32(message, "faction contribute")?;
                 faction_name = message
@@ -950,7 +953,7 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                     .ok_or(FactionLifecycleDispatchError::InvalidPayload)?;
                 faction_master_id = read_i32(message, "faction master ID")?;
                 union_id = read_i32(message, "union ID")?;
-                let _union_master_id = read_i32(message, "union master ID")?;
+                union_master_id = read_i32(message, "union master ID")?;
                 for (field, destination) in [
                     ("enemy factions", &mut enemy_factions),
                     ("city-war enemy factions", &mut city_war_enemy_factions),
@@ -988,9 +991,11 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 player.restore_faction_identity(
                     faction_id,
                     faction_level,
+                    faction_experience,
                     faction_master_id,
                     &faction_name,
                     union_id,
+                    union_master_id,
                     enemy_factions,
                     city_war_enemy_factions,
                 );
