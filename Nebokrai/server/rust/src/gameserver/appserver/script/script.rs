@@ -136,12 +136,16 @@ pub(crate) fn legacy_atoi(value: &[u8]) -> i32 {
 
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
 
+/// Native `stRunScript` execution facts used by concrete callers. Monster
+/// death supplies its base index alongside player/region so queued death
+/// scripts retain the same runtime context instead of a filename-only call.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ScriptExecutionContext {
     pub(crate) player_id: Option<i32>,
     pub(crate) npc_id: Option<i32>,
     pub(crate) region_id: Option<i32>,
     pub(crate) used_item_id: Option<CGuid>,
+    pub(crate) died_monster_index: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

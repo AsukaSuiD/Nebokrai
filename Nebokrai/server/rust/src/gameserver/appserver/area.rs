@@ -265,6 +265,30 @@ impl CArea {
         }
     }
 
+    pub(crate) fn set_goods_protection(
+        &mut self,
+        ex_id: CGuid,
+        player_id: i32,
+        player_team_id: i32,
+        now_ms: u32,
+    ) {
+        let protection_level = i32::from(player_team_id != 0);
+        let owner_id = if protection_level == 0 {
+            player_id
+        } else {
+            player_team_id
+        };
+        let _guard = self.critical_section.lock();
+        self.goods_protection.insert(
+            ex_id,
+            AreaGoodsProtection {
+                timestamp_ms: now_ms,
+                protection_level: protection_level as u32,
+                owner_id,
+            },
+        );
+    }
+
     /// Возвращает identity-кандидаты exact `GetActivedShapes` в исходном
     /// storage order. Живость проверяет owning region/runtime: только он
     /// соответствует старому `FindChildObject` и может удалить stale ID.

@@ -20,6 +20,8 @@
 //! `CPlayerAI::Run` и полный `CheckLevel` tail;
 //! raw snapshot остаётся единым wire owner-ом без дублирующей config-модели.
 //! `CArea::AI` читает goods disappear/protection DWORD из `+0x34C/+0x350`;
+//! monster death/EXP читает protection, quota/corrective, continuous-kill и
+//! pet progression массивы непосредственно из подтверждённых ABI offsets;
 //! абсолютные VA `0xEF410C/0xEF4110` подтверждены целевым GameServer EXE.
 //! `bAllowClientChangePos +0x50D` загружается Game-side positional
 //! projection и напрямую gate-ит runtime `shapemessage 0x8F902`.
@@ -109,6 +111,19 @@ const FAIRY_SYNCRETIC_NEEDED_EXP_OFFSET: usize = 0x8A4;
 const FAIRY_SYNCRETIC_NEEDED_MONEY_OFFSET: usize = 0x8A8;
 const PK_COUNT_PER_KILL_OFFSET: usize = 0x4F4;
 const FIGHT_STATE_TIMER_OFFSET: usize = 0x364;
+const ATTACK_MONSTER_PROTECTION_OFFSET: usize = 0x36C;
+const EXPERIENCE_RATIO_OFFSET: usize = 0x3B8;
+const EXPERIENCE_DIFFERENCE_OFFSET: usize = 0x3D8;
+const EXPERIENCE_LIMIT_OFFSET: usize = 0x3DC;
+const EXPERIENCE_AMERCE_OFFSET: usize = 0x3E4;
+const EXPERIENCE_AMERCE_LIMIT_OFFSET: usize = 0x3E8;
+const EXPERIENCE_AMERCE_START_LEVEL_OFFSET: usize = 0x3EC;
+const EXPERIENCE_SCALE_OFFSET: usize = 0x4B4;
+const MONSTER_DROP_SCALE_OFFSET: usize = 0x4BC;
+const HIT_BASE_LEVEL_OFFSET: usize = 0x420;
+const HIT_TIME_OFFSET: usize = 0x424;
+const HIT_EXPERIENCE_PRIZE_OFFSET: usize = 0x428;
+const MAXIMUM_HIT_EXPERIENCE_PRIZE_OFFSET: usize = 0x42C;
 const CONTRIBUTION_DISTANCE_LIMIT_OFFSET: usize = 0x3E0;
 const TALK_WORLD_GOODS_NAME_OFFSET: usize = 0x768;
 const TALK_WORLD_GOODS_AMOUNT_OFFSET: usize = 0x7A8;
@@ -325,11 +340,12 @@ impl GlobeSetupSnapshot {
         Some(self.read_f32(DIED_DROP_TABLE_OFFSET + index * 4))
     }
 
-    pub(crate) fn pet_factors(&self, level: u32) -> Option<[f32; 10]> {
+    pub(crate) fn pet_progression(&self, level: u32) -> Option<(f32, [f32; 10])> {
         let level = usize::try_from(level).ok().filter(|level| *level < 10)?;
-        Some(std::array::from_fn(|index| {
-            self.read_f32(0x598 + index * 0x28 + level * 4)
-        }))
+        Some((
+            self.read_f32(0x598 + level * 4),
+            std::array::from_fn(|index| self.read_f32(0x598 + (index + 1) * 0x28 + level * 4)),
+        ))
     }
 
     pub(crate) fn base_price_rate(&self) -> f32 {
@@ -722,6 +738,35 @@ impl GlobeSetupSnapshot {
     /// `EnterCombatState` используют его вместе с process `g_ms == 80`.
     pub(crate) fn fight_state_timer_ms(&self) -> i32 {
         self.read_i32(FIGHT_STATE_TIMER_OFFSET)
+    }
+
+    pub(crate) fn attack_monster_protection_ms(&self) -> u32 {
+        self.read_u32(ATTACK_MONSTER_PROTECTION_OFFSET)
+    }
+
+    pub(crate) fn monster_experience_parameters(&self) -> ([f32; 8], f32, f32, f32, f32, i32, f32) {
+        (
+            std::array::from_fn(|index| self.read_f32(EXPERIENCE_RATIO_OFFSET + index * 4)),
+            self.read_f32(EXPERIENCE_DIFFERENCE_OFFSET),
+            self.read_f32(EXPERIENCE_LIMIT_OFFSET),
+            self.read_f32(EXPERIENCE_AMERCE_OFFSET),
+            self.read_f32(EXPERIENCE_AMERCE_LIMIT_OFFSET),
+            self.read_i32(EXPERIENCE_AMERCE_START_LEVEL_OFFSET),
+            self.read_f32(EXPERIENCE_SCALE_OFFSET),
+        )
+    }
+
+    pub(crate) fn monster_continuous_kill_parameters(&self) -> (i32, u32, f32, f32) {
+        (
+            self.read_i32(HIT_BASE_LEVEL_OFFSET),
+            self.read_i32(HIT_TIME_OFFSET) as u32,
+            self.read_f32(HIT_EXPERIENCE_PRIZE_OFFSET),
+            self.read_f32(MAXIMUM_HIT_EXPERIENCE_PRIZE_OFFSET),
+        )
+    }
+
+    pub(crate) fn monster_drop_goods_scale(&self) -> f32 {
+        self.read_f32(MONSTER_DROP_SCALE_OFFSET)
     }
 
     /// `dwOnePkCountTime +0x4F8` определяет восстановление remaining murder

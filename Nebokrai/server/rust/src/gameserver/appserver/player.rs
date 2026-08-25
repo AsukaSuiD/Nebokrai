@@ -230,8 +230,10 @@
 //! broadcast; оба отсутствующих side effect сохранены.
 //! `CEquipmentContainer::OnObjectRemoved` player-tail связывает снятие
 //! headgear с exact `SetWarSoulStaus(0)`, девятью skill detach, пересчётом
-//! свойств при уже отсутствующем slot-е, HP/MP clamp и `0xBF720`. Полный
+//! свойств при уже отсутствующем slot-е, HP/MP clamp и `0xBF720`; полный
 //! virtual property owner остаётся injected callback-границей.
+//! Monster-death caller восстанавливает transient continuous-kill clock/count,
+//! persisted `wHitTopLog`, milestone EXP и exact `0xBF706/0xBF707` wire.
 //! GodsBattle player snapshot теперь также хранит persisted faction/SZL;
 //! faction membership появляется только в concrete region AddObject-tail и
 //! удаляется его RemoveObject/DelObj-tail, не при восстановлении snapshot-а.
@@ -324,6 +326,7 @@ use crate::public::auctionnode::CGoodsNode;
 use crate::public::guid::CGuid;
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
+use crate::setup::hitlevelsetup::HitLevelEntry;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 const PLAYER_TYPE: i32 = 400;
@@ -336,6 +339,7 @@ const BASE_OCCUPATION_OFFSET: usize = 0x0e;
 const BASE_SEX_OFFSET: usize = 0x0f;
 const BASE_PK_COUNT_OFFSET: usize = 0x1c;
 const BASE_KILL_COUNT_OFFSET: usize = 0x20;
+const BASE_HIT_TOP_LOG_OFFSET: usize = 0x24;
 const BASE_CHARGED_OFFSET: usize = 0x38;
 const BASE_REMAIN_POINT_OFFSET: usize = 0x3a;
 const BASE_HOTKEY_OFFSET: usize = 0x3c;
@@ -1234,6 +1238,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) pk_country: bool,
     pub(crate) pk_count: u16,
     pub(crate) kill_count: u32,
+    pub(crate) hit_top_log: u16,
     pub(crate) experience: u32,
     pub(crate) vigour: u32,
     pub(crate) credit: u32,
@@ -2021,6 +2026,8 @@ pub(crate) struct CPlayer {
     jjc_pk_state: bool,
     fight_state_count: i32,
     lost_time_stamp_ms: u32,
+    continuous_kill_amount: u32,
+    continuous_kill_timestamp_ms: u32,
     organizing_wire: Vec<u8>,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
@@ -2137,6 +2144,13 @@ pub(crate) struct PlayerReliveOwnedPrelude {
     pub(crate) previous_moveable_count: i32,
     pub(crate) resulting_moveable_count: i32,
     pub(crate) moveable: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerContinuousKillUpdate {
+    pub(crate) amount: u32,
+    pub(crate) new_top_log: Option<u16>,
+    pub(crate) bonus_experience: u32,
 }
 
 fn apply_ride_goods_properties(
@@ -2360,6 +2374,8 @@ impl CPlayer {
             jjc_pk_state: false,
             fight_state_count: 0,
             lost_time_stamp_ms: 0,
+            continuous_kill_amount: 0,
+            continuous_kill_timestamp_ms: 0,
             organizing_wire: Vec::new(),
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
@@ -2971,6 +2987,11 @@ impl CPlayer {
         );
         write_player_wire_u16(
             &mut wire,
+            BASE_HIT_TOP_LOG_OFFSET,
+            self.base_properties.hit_top_log,
+        );
+        write_player_wire_u16(
+            &mut wire,
             BASE_REMAIN_POINT_OFFSET,
             self.base_properties.remain_point,
         );
@@ -3146,6 +3167,7 @@ impl CPlayer {
         self.base_properties.sex = wire[BASE_SEX_OFFSET];
         self.base_properties.pk_count = read_player_wire_u16(wire, BASE_PK_COUNT_OFFSET);
         self.base_properties.kill_count = read_player_wire_u32(wire, BASE_KILL_COUNT_OFFSET);
+        self.base_properties.hit_top_log = read_player_wire_u16(wire, BASE_HIT_TOP_LOG_OFFSET);
         self.base_properties.charged = wire[BASE_CHARGED_OFFSET] != 0;
         self.base_properties.remain_point = read_player_wire_u16(wire, BASE_REMAIN_POINT_OFFSET);
         for (index, hotkey) in self.base_properties.hotkeys.iter_mut().enumerate() {
@@ -10735,6 +10757,44 @@ impl CPlayer {
 
     pub(crate) const fn experience(&self) -> u32 {
         self.base_properties.experience
+    }
+
+    /// Exact `CPlayer::IncreaseContinuousKill`: первый hit после истёкшего
+    /// окна сбрасывает счётчик в ноль, а milestone меняет persisted
+    /// `wHitTopLog` до начисления его bonus experience и client publications.
+    pub(crate) fn increase_continuous_kill(
+        &mut self,
+        now_ms: u32,
+        hit_time_ms: u32,
+        hit_levels: &[HitLevelEntry],
+    ) -> PlayerContinuousKillUpdate {
+        let mut new_top_log = None;
+        let mut bonus_experience = 0;
+        if now_ms.wrapping_sub(self.continuous_kill_timestamp_ms) < hit_time_ms {
+            self.continuous_kill_amount = self.continuous_kill_amount.wrapping_add(1);
+            if u32::from(self.base_properties.hit_top_log) < self.continuous_kill_amount {
+                if let Some(level) = hit_levels
+                    .iter()
+                    .find(|level| level.hit == self.continuous_kill_amount)
+                {
+                    self.base_properties.hit_top_log = level.hit as u16;
+                    new_top_log = Some(self.base_properties.hit_top_log);
+                    bonus_experience = level.experience;
+                }
+            }
+        } else {
+            self.continuous_kill_amount = 0;
+        }
+        self.continuous_kill_timestamp_ms = now_ms;
+        PlayerContinuousKillUpdate {
+            amount: self.continuous_kill_amount,
+            new_top_log,
+            bonus_experience,
+        }
+    }
+
+    pub(crate) const fn continuous_kill_amount(&self) -> u32 {
+        self.continuous_kill_amount
     }
 
     pub(crate) const fn vigour(&self) -> u32 {

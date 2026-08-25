@@ -1042,6 +1042,27 @@ impl CServerRegion {
         self.owned_monsters.get_mut(&id)
     }
 
+    /// `CMonster::OnDied` tail: ordinary refresh-group membership is reduced
+    /// once before `Evanish` stages the still-owned shape for region AI.
+    pub(crate) fn finish_owned_monster_death(&mut self, id: i32) -> bool {
+        let Some(monster) = self.owned_monsters.get_mut(&id) else {
+            return false;
+        };
+        if !monster.is_tamed()
+            && let Some(refresh) = self
+                .monster_setups
+                .iter_mut()
+                .find(|setup| setup.index == monster.refresh_index())
+            && refresh.living_count > 0
+        {
+            refresh.living_count -= 1;
+        }
+        monster.stage_for_delete();
+        let identity = monster.move_shape().shape().identity();
+        self.stage_delete_shape(identity);
+        true
+    }
+
     pub(crate) fn owned_pet_ids(&self, player_id: i32) -> Vec<i32> {
         self.owned_monsters
             .iter()
@@ -1273,6 +1294,27 @@ impl CServerRegion {
 
     pub(crate) fn find_ground_goods_mut(&mut self, ex_id: CGuid) -> Option<&mut CGoods> {
         self.owned_goods.get_mut(&ex_id)
+    }
+
+    pub(crate) fn set_ground_goods_protection(
+        &mut self,
+        ex_id: CGuid,
+        player_id: i32,
+        player_team_id: i32,
+        now_ms: u32,
+    ) -> bool {
+        let Some(area_index) = self
+            .owned_goods
+            .get(&ex_id)
+            .and_then(|goods| goods.shape().area_index())
+        else {
+            return false;
+        };
+        let Some(area) = self.areas.get_mut(area_index) else {
+            return false;
+        };
+        area.set_goods_protection(ex_id, player_id, player_team_id, now_ms);
+        true
     }
 
     pub(crate) fn can_pick_up_ground_goods(

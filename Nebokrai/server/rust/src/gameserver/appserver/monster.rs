@@ -11,14 +11,21 @@
 //! key и разрешает текущий `MonsterProperties` у `CGame`; это устраняет
 //! dangling pointer, сохраняя observable refresh semantics. Spawn snapshot
 //! (имя, graphics, HP, speed) остаётся в concrete object, как в `AddMonster`.
-//! `InitSkills/InitAI`, combat, serialization и полный AI остаются RAW ниже.
+//! `InitSkills/InitAI`, serialization и полный autonomous AI остаются RAW
+//! ниже. Достигнутая player base-attack цепочка теперь хранит canonical HP,
+//! first-attacker protection, killed attack snapshot и combat AI target/event;
+//! `CGame` исполняет hurt/death, Nation/GodsBattle, reward/drop/script и
+//! region-delete tails. Очередь `CBaseAI` заменена typed single-event handoff
+//! только для этого синхронного combat caller-а; pathfinding/attack AI этим не
+//! подменяются.
 //! Login pet restoration и client control используют owned `tagMasterInfo`,
-//! taming sign, progress, Globe factor snapshot и узкое pet-control state;
+//! taming sign, progress, раздельные Globe experience/property factors и
+//! reached follower-EXP level-up с `0xC0203`, а также узкое pet-control state;
 //! async CPet decision tree этим не подменяется.
 
 use super::masterinfo::MasterInfo;
 use super::moveshape::CMoveShape;
-use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity};
+use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
 use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
@@ -46,6 +53,45 @@ pub(crate) struct CMonster {
     pet_mode: i32,
     pet_action: i32,
     pet_target: Option<ShapeIdentity>,
+    first_attack_player_id: i32,
+    last_attack_timer_ms: u32,
+    killed_by: Option<MonsterKillingAttack>,
+    ai_target: Option<ShapeIdentity>,
+    last_combat_ai_event: Option<MonsterCombatAiEvent>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct MonsterCombatProperties {
+    pub(crate) level: u8,
+    pub(crate) defense: u32,
+    pub(crate) element_resistance: u32,
+    pub(crate) soul_resistance: u16,
+    pub(crate) attack_avoid: u16,
+    pub(crate) element_avoid: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MonsterKillingAttack {
+    pub(crate) attacker_type: i32,
+    pub(crate) attacker_id: i32,
+    pub(crate) skill_id: u32,
+    pub(crate) skill_level: u8,
+    pub(crate) critical: bool,
+    pub(crate) blast_attack: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MonsterCombatAiEvent {
+    Defense,
+    Died,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PetExperienceUpdate {
+    pub(crate) level: u32,
+    pub(crate) experience: u32,
+    pub(crate) maximum_hp: u32,
+    pub(crate) hit_points: u32,
 }
 
 impl CMonster {
@@ -77,6 +123,11 @@ impl CMonster {
             pet_mode: 0,
             pet_action: 1,
             pet_target: None,
+            first_attack_player_id: 0,
+            last_attack_timer_ms: 0,
+            killed_by: None,
+            ai_target: None,
+            last_combat_ai_event: None,
         }
     }
 
@@ -115,6 +166,33 @@ impl CMonster {
 
     pub(crate) const fn pet_progress(&self) -> (u32, u32) {
         (self.pet_level, self.pet_experience)
+    }
+
+    pub(crate) fn increase_pet_experience(
+        &mut self,
+        experience: u32,
+        property: &MonsterProperties,
+        experience_factor: f32,
+        next_factors: Option<[f32; 10]>,
+    ) -> Option<PetExperienceUpdate> {
+        self.pet_experience = self.pet_experience.wrapping_add(experience);
+        if self.pet_level < 10 {
+            let threshold = self.pet_maximum_hp(property) as f32 * experience_factor;
+            if self.pet_experience as f32 > threshold && self.pet_level + 1 < 10 {
+                self.pet_level += 1;
+                self.pet_experience = 0;
+                if let Some(factors) = next_factors {
+                    self.adjust_pet_factors(factors);
+                }
+                self.hit_points = self.pet_maximum_hp(property);
+            }
+        }
+        (experience != 0).then(|| PetExperienceUpdate {
+            level: self.pet_level,
+            experience: self.pet_experience,
+            maximum_hp: self.pet_maximum_hp(property),
+            hit_points: self.hit_points,
+        })
     }
 
     pub(crate) fn adjust_pet_factors(&mut self, factors: [f32; 10]) {
@@ -172,6 +250,10 @@ impl CMonster {
         &self.original_name
     }
 
+    pub(crate) fn script_file(&self) -> &[u8] {
+        &self.script_file
+    }
+
     pub(crate) fn display_name(&self) -> &[u8] {
         let name = self.move_shape.shape().base_object().get_name();
         if name.is_empty() {
@@ -187,6 +269,83 @@ impl CMonster {
 
     pub(crate) const fn set_hit_points(&mut self, hit_points: u32) {
         self.hit_points = hit_points;
+    }
+
+    pub(crate) fn combat_properties(
+        &self,
+        property: &MonsterProperties,
+    ) -> MonsterCombatProperties {
+        let factor = |index: usize| f32::from_bits(self.factors[index]);
+        let scaled =
+            |value: u32, index: usize| ((value as f32) * factor(index)).round_ties_even() as u32;
+        MonsterCombatProperties {
+            level: property.level as u8,
+            defense: scaled(property.defence, 5),
+            element_resistance: scaled(property.element_resistant, 3),
+            soul_resistance: property.soul_resistant as u16,
+            attack_avoid: property.attack_avoid,
+            element_avoid: property.element_avoid,
+        }
+    }
+
+    /// Exact protection-owner tail of `CMonster::OnBeenHurted`. Nation
+    /// notification remains at `CGame`, before this mutation as in the EXE.
+    pub(crate) fn register_attacking_player(
+        &mut self,
+        attacker_player_id: i32,
+        now_ms: u32,
+        protection_ms: u32,
+    ) -> bool {
+        if self.first_attack_player_id != 0
+            && now_ms.wrapping_sub(self.last_attack_timer_ms) <= protection_ms
+        {
+            if self.first_attack_player_id != attacker_player_id {
+                return false;
+            }
+            self.last_attack_timer_ms = now_ms;
+            return true;
+        }
+        self.first_attack_player_id = attacker_player_id;
+        self.last_attack_timer_ms = now_ms;
+        true
+    }
+
+    pub(crate) const fn first_attack_player_id(&self) -> i32 {
+        self.first_attack_player_id
+    }
+
+    pub(crate) const fn refresh_index(&self) -> i32 {
+        self.refresh_index
+    }
+
+    pub(crate) fn set_killed_by(&mut self, attack: MonsterKillingAttack) {
+        self.killed_by = Some(attack);
+    }
+
+    pub(crate) const fn killed_by(&self) -> Option<MonsterKillingAttack> {
+        self.killed_by
+    }
+
+    pub(crate) fn when_been_hurted_by(&mut self, attacker: ShapeIdentity) {
+        self.last_combat_ai_event = Some(MonsterCombatAiEvent::Defense);
+        if self.ai_target.is_none() && attacker.object_type == 400 {
+            self.ai_target = Some(attacker);
+        }
+    }
+
+    pub(crate) fn when_been_killed(&mut self) {
+        self.last_combat_ai_event = Some(MonsterCombatAiEvent::Died);
+        self.ai_target = None;
+    }
+
+    /// Typed replacement for the reached `CBaseAI` combat-event pop. The
+    /// target selected by `CMonsterAI::WhenBeenHurted` remains canonical.
+    pub(crate) fn consume_combat_ai_event(
+        &mut self,
+    ) -> Option<(MonsterCombatAiEvent, Option<ShapeIdentity>)> {
+        self.last_combat_ai_event
+            .take()
+            .map(|event| (event, self.ai_target))
     }
 
     /// Guards reached from `CMonster::OnBeenHurted` before Nation first-hit
@@ -237,6 +396,18 @@ impl CMonster {
     pub(crate) fn figure(property: &MonsterProperties) -> ShapeFigure {
         let figure = property.figure as u8;
         ShapeFigure::from_directions([figure; 4])
+    }
+
+    pub(crate) fn shape_view(&self, property: &MonsterProperties) -> Option<ShapeView> {
+        let shape = self.move_shape.shape();
+        Some(ShapeView {
+            identity: shape.identity(),
+            tile_x: shape.get_tile_x().ok()?,
+            tile_y: shape.get_tile_y().ok()?,
+            pos_x_bits: shape.get_pos_x().to_bits(),
+            pos_y_bits: shape.get_pos_y().to_bits(),
+            figure: Self::figure(property),
+        })
     }
 }
 

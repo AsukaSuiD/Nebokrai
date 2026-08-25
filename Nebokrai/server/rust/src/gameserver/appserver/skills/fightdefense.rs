@@ -1,12 +1,15 @@
-//! Базовая PvP-защита GameServer (`SKILL_BASE_DEFENSE`).
+//! Базовая защита GameServer (`SKILL_BASE_DEFENSE`) для player-target и
+//! monster-target ветвей обычной атаки.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
 //! `appserver/skills/fightdefense.cpp`. Этот materialized проход сохраняет
 //! exact hit/full-miss, physical/element/soul, blast/critical, avoid и PvP
-//! factor для player-vs-player базовой атаки. Активные polymorphic shield
+//! factor для player-vs-player, а также level-adjusted hit и monster
+//! defense/resistance/avoid без PvP factor для player-vs-monster. Активные polymorphic shield
 //! state-классы не подменяются: их owner-ы остаются в unmaterialized state AI,
 //! а этот owner применяется к обычному defense snapshot без таких state.
 
+use crate::gameserver::appserver::monster::MonsterCombatProperties;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPowerType};
 use crate::setup::globesetup::GlobeSetupSnapshot;
@@ -25,6 +28,113 @@ fn avoid_damage(damage: i32, avoid: u16) -> i32 {
         truncate_original(f64::from(passed) * 0.01 * f64::from(damage))
     } else {
         damage
+    }
+}
+
+pub(crate) fn defend_monster_base_attack(
+    attack: &mut AttackInformation,
+    attacker: PlayerCombatProperties,
+    attacker_occupation: u8,
+    attacker_level: u8,
+    target: MonsterCombatProperties,
+    setup: &GlobeSetupSnapshot,
+    random: &mut dyn FnMut(i32) -> i32,
+) {
+    let (minimum_hit, maximum_hit) = setup.player_hit_limits(attacker_occupation);
+    let level_modifier = (i32::from(target.level)
+        .wrapping_sub(i32::from(attacker_level))
+        .wrapping_sub(3))
+    .wrapping_mul(15);
+    let hit = maximum_hit
+        .wrapping_add(level_modifier)
+        .wrapping_add(attack.hit_modifier)
+        .clamp(minimum_hit, maximum_hit);
+    if hit <= random(100) {
+        for power in &mut attack.damages {
+            power.hp_damage = 0;
+        }
+        attack.damage_modifier = 0;
+        attack.full_miss = 2;
+        return;
+    }
+
+    for power in &mut attack.damages {
+        match power.kind {
+            AttackPowerType::Physical => {
+                let defense = target.defense as i32;
+                if random(100) < i32::from(attacker.blast_attack) {
+                    power.hp_damage = truncate_original(
+                        f64::from(power.hp_damage) * f64::from(attacker.blast_attack_scale()),
+                    );
+                    power.hp_damage = if attack.critical {
+                        power.hp_damage.wrapping_add(truncate_original(
+                            f64::from(defense)
+                                * f64::from(attacker.blast_defense_scale())
+                                * f64::from(attacker.critical_rate())
+                                * -0.5,
+                        ))
+                    } else {
+                        power.hp_damage.wrapping_sub(truncate_original(
+                            f64::from(defense / 2) * f64::from(attacker.blast_defense_scale()),
+                        ))
+                    };
+                    attack.blast_attack = true;
+                } else if attack.critical {
+                    power.hp_damage = power.hp_damage.wrapping_add(truncate_original(
+                        f64::from(defense) * f64::from(attacker.critical_rate()) * -0.5,
+                    ));
+                } else {
+                    power.hp_damage = power.hp_damage.wrapping_sub(defense / 2);
+                }
+                power.hp_damage = avoid_damage(power.hp_damage, target.attack_avoid).max(1);
+            }
+            AttackPowerType::Element => {
+                let resistance = target.element_resistance as i32;
+                if random(100) < i32::from(attacker.blast_element_attack) {
+                    power.hp_damage = truncate_original(
+                        f64::from(power.hp_damage)
+                            * f64::from(attacker.element_blast_attack_scale()),
+                    );
+                    power.hp_damage = if attack.critical {
+                        power.hp_damage.wrapping_add(truncate_original(
+                            f64::from(resistance)
+                                * f64::from(attacker.element_blast_defense_scale())
+                                * f64::from(attacker.critical_rate())
+                                * -0.5,
+                        ))
+                    } else {
+                        power.hp_damage.wrapping_sub(truncate_original(
+                            f64::from(resistance / 2)
+                                * f64::from(attacker.element_blast_defense_scale()),
+                        ))
+                    };
+                    attack.blast_attack = true;
+                } else if attack.critical {
+                    power.hp_damage = power.hp_damage.wrapping_add(truncate_original(
+                        f64::from(resistance) * f64::from(attacker.critical_rate()) * -0.5,
+                    ));
+                } else {
+                    power.hp_damage = power.hp_damage.wrapping_sub(resistance / 2);
+                }
+                power.hp_damage = avoid_damage(power.hp_damage, target.element_avoid).max(1);
+            }
+            AttackPowerType::Soul => {
+                let resistance = i32::from(target.soul_resistance);
+                power.hp_damage = if attack.critical {
+                    power.hp_damage.wrapping_sub(truncate_original(
+                        f64::from(resistance) * f64::from(attacker.critical_rate()),
+                    ))
+                } else {
+                    power.hp_damage.wrapping_sub(resistance)
+                }
+                .max(0);
+            }
+        }
+        if power.hp_damage > 0 {
+            power.hp_damage =
+                truncate_original(f64::from(power.hp_damage) * f64::from(attack.damage_factor))
+                    .max(1);
+        }
     }
 }
 

@@ -270,6 +270,10 @@ impl CRegion {
         self.exp_scale_bits
     }
 
+    pub(crate) fn exp_scale(&self) -> f32 {
+        f32::from_bits(self.exp_scale_bits)
+    }
+
     pub(crate) fn set_name(&mut self, name: &[u8]) {
         self.base_object.set_name(name);
     }

@@ -623,6 +623,7 @@ use crate::gameserver::appserver::message::unibillmessage::{
     dispatch_increment_shop_billing_message,
 };
 use crate::gameserver::appserver::monster::CMonster;
+use crate::gameserver::appserver::monster::MonsterKillingAttack;
 use crate::gameserver::appserver::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver, UndeadState,
 };
@@ -750,7 +751,9 @@ use crate::gameserver::appserver::skills::baseattack::{
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     real_distance, time_reached,
 };
-use crate::gameserver::appserver::skills::fightdefense::defend_player_base_attack;
+use crate::gameserver::appserver::skills::fightdefense::{
+    defend_monster_base_attack, defend_player_base_attack,
+};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -26503,7 +26506,10 @@ impl CGame {
                     continue;
                 }
             };
-            let factors = self.globe_setup.pet_factors(record.level);
+            let factors = self
+                .globe_setup
+                .pet_progression(record.level)
+                .map(|(_, factors)| factors);
             let (shape, maximum_hp) = {
                 let pet = owner
                     .base_mut()
@@ -30885,6 +30891,97 @@ impl CGame {
         attackable
     }
 
+    fn guard_monster_attackable(
+        &self,
+        attacker_id: i32,
+        region_id: i32,
+        property: &crate::setup::monsterlist::MonsterProperties,
+    ) -> bool {
+        if property.kind != 5 {
+            return true;
+        }
+        let Some(player) = self.find_player(attacker_id) else {
+            return false;
+        };
+        let Some(region) = self.find_region(region_id) else {
+            return false;
+        };
+        let permissions = player.pk_permissions();
+        match property.ai as i32 {
+            8..=9 => permissions.player,
+            10..=11 => region.symbol_is_attackable(),
+            13 => {
+                if u32::from(player.country()) == property.race {
+                    permissions.player
+                } else {
+                    permissions.country
+                }
+            }
+            14 => u32::from(player.country()) != property.race && permissions.country,
+            15..=16 => {
+                if player.country() == region.base().country {
+                    permissions.player
+                } else {
+                    permissions.country
+                }
+            }
+            17..=18 => {
+                property.ai as i32 - 17
+                    != self
+                        .country_war_sys
+                        .get_war_camp(i32::from(player.country()))
+                    && permissions.country
+            }
+            23 => {
+                if player.gods_battle_faction() as u32 == property.race {
+                    permissions.player
+                } else {
+                    true
+                }
+            }
+            _ => true,
+        }
+    }
+
+    fn apply_guard_monster_first_attack(
+        &mut self,
+        attacker_id: i32,
+        region_id: i32,
+        property: &crate::setup::monsterlist::MonsterProperties,
+        now_ms: u32,
+    ) {
+        if property.kind != 5 {
+            return;
+        }
+        let starts_criminal = match property.ai as i32 {
+            8..=9 => true,
+            13..=14 | 19..=21 => self
+                .find_player(attacker_id)
+                .is_some_and(|player| u32::from(player.country()) == property.race),
+            15..=16 => self.find_player(attacker_id).is_some_and(|player| {
+                self.find_region(region_id)
+                    .is_some_and(|region| player.country() == region.base().country)
+            }),
+            23 => self
+                .find_player(attacker_id)
+                .is_some_and(|player| player.gods_battle_faction() as u32 == property.race),
+            _ => false,
+        };
+        if !starts_criminal {
+            return;
+        }
+        let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
+        let started = self
+            .find_player_mut(attacker_id)
+            .and_then(|player| player.enter_criminal_state(pk_count_per_kill, || now_ms));
+        if started == Some(true) {
+            let mut message = CMessage::new(0x000b_f60e);
+            message.add_long(attacker_id);
+            message.add_byte(1);
+            let _ = self.send_player_shape_around(attacker_id, None, &message);
+        }
+    }
+
     fn player_base_attack_level_block(
         &self,
         attacker_id: i32,
@@ -31028,6 +31125,423 @@ impl CGame {
         self.damage_player_equipment(player_id, 2, runtime);
     }
 
+    fn drop_monster_goods<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        monster_original_name: &[u8],
+        monster_level: i32,
+        origin_x: i32,
+        origin_y: i32,
+        beneficiary_id: i32,
+        runtime: &mut Runtime,
+    ) {
+        let Some(drop_list) = self
+            .monster_drop_registry
+            .get(monster_original_name)
+            .cloned()
+        else {
+            return;
+        };
+        let beneficiary = self
+            .find_player(beneficiary_id)
+            .map(|player| (player.level(), player.team_id()));
+        let mut drop_offset = 0usize;
+        for drop in drop_list.drops {
+            let mut maximum_odds = drop.maximum_odds;
+            if drop.level_attenuation != 0.0
+                && let Some((beneficiary_level, _)) = beneficiary
+            {
+                let level_delta = i32::from(beneficiary_level) - monster_level;
+                if level_delta > 0 {
+                    let attenuation = (level_delta as f32 * drop.level_attenuation)
+                        .min(drop.level_attenuation_limit);
+                    let remaining = 1.0 - attenuation;
+                    if remaining > 0.0 {
+                        maximum_odds = (maximum_odds as f32 / remaining).round_ties_even() as i32;
+                    } else {
+                        continue;
+                    }
+                }
+            }
+            if maximum_odds == 0 {
+                continue;
+            }
+            let odds = (drop.odds as f32 * self.globe_setup.monster_drop_goods_scale())
+                .round_ties_even() as i32;
+            if odds <= game_legacy_random(&mut self.random_state, maximum_odds) {
+                continue;
+            }
+            let amount = if drop.goods_index as u32 == self.goods_factory.get_gold_coin_index() {
+                let difference = drop.maximum_money.wrapping_sub(drop.minimum_money);
+                let spread = difference.wrapping_abs();
+                game_legacy_random(&mut self.random_state, spread).wrapping_add(drop.minimum_money)
+                    as u32
+            } else {
+                1
+            };
+            let mut created = self.create_goods_batch(drop.goods_index as u32, amount);
+            for mut goods in created.drain(..) {
+                if drop.level > 0 {
+                    let (factory, random_state) = (&self.goods_factory, &mut self.random_state);
+                    let _ = factory.upgrade_equipment(&mut goods, drop.level, |upper_bound| {
+                        game_legacy_random(random_state, upper_bound)
+                    });
+                }
+                let old_client_payload = runtime.encode_goods_for_old_client(&goods);
+                let item_amount = goods.amount();
+                let particular_attribute =
+                    goods.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1)
+                        as u32;
+                let identity = goods.identity();
+                let now_ms = runtime.now_milliseconds();
+                let Some(mut owner) = self.take_region_owner(region_id) else {
+                    return;
+                };
+                let position =
+                    owner
+                        .base()
+                        .get_drop_goods_position(origin_x, origin_y, drop_offset);
+                let Ok(Some((tile_x, tile_y, destination_position))) = position else {
+                    self.restore_region_owner(owner);
+                    continue;
+                };
+                drop_offset = drop_offset.wrapping_add(1);
+                let (area_width, area_height) = self.area_dimensions();
+                let added = owner.base_mut().add_owned_ground_goods(
+                    goods,
+                    tile_x,
+                    tile_y,
+                    particular_attribute,
+                    now_ms,
+                    area_width,
+                    area_height,
+                    runtime,
+                );
+                if added.is_err() {
+                    self.restore_region_owner(owner);
+                    continue;
+                }
+                if let Some((_, team_id)) = beneficiary {
+                    owner.base_mut().set_ground_goods_protection(
+                        identity.ex_id,
+                        beneficiary_id,
+                        team_id,
+                        now_ms,
+                    );
+                }
+                self.restore_region_owner(owner);
+
+                let mut appeared = CS2CContainerObjectMove::default();
+                appeared.set_operation(ContainerObjectMoveOperation::NewObject);
+                appeared.set_destination_container(200, region_id, destination_position);
+                appeared.set_destination_object(GOODS_TYPE, identity.ex_id);
+                appeared.set_destination_object_amount(item_amount);
+                appeared.set_object_stream(old_client_payload);
+                let _ = self.send_shape_position_around(
+                    region_id,
+                    origin_x,
+                    origin_y,
+                    &appeared.message(),
+                );
+            }
+        }
+    }
+
+    fn add_player_experience<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        experience_gain: u32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        if experience_gain == 0 {
+            return false;
+        }
+        let (previous_experience, previous_vigour) = match self.find_player(player_id) {
+            Some(player) => (player.experience(), player.vigour()),
+            None => return false,
+        };
+        let raw_vigour = f64::from(self.globe_setup.exp_to_vigour_x())
+            * f64::from(experience_gain.wrapping_add(600))
+            * 0.30103
+            - f64::from(self.globe_setup.exp_to_vigour_y());
+        let vigour_gain = if raw_vigour <= 0.0 {
+            0
+        } else {
+            (raw_vigour.round_ties_even() as u32).min(self.globe_setup.maximum_vigour_once())
+        };
+        let Some(player) = self.find_player_mut(player_id) else {
+            return false;
+        };
+        player.set_experience(previous_experience.wrapping_add(experience_gain));
+        player.set_vigour_clamped(previous_vigour.wrapping_add(vigour_gain));
+        let mutation = PlayerAutoProgress {
+            player_id,
+            sampled_at_ms: runtime.now_milliseconds(),
+            experience_gain,
+            vigour_gain,
+            previous_experience,
+            current_experience: player.experience(),
+            previous_vigour,
+            current_vigour: player.vigour(),
+        };
+        let _ = self.finish_player_auto_progress(mutation, runtime);
+        true
+    }
+
+    fn increase_player_continuous_kill<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<u32> {
+        let (_, hit_time_ms, _, _) = self.globe_setup.monster_continuous_kill_parameters();
+        let hit_levels = self.hit_level_setup.entries().to_vec();
+        let update = self.find_player_mut(player_id)?.increase_continuous_kill(
+            runtime.now_milliseconds(),
+            hit_time_ms,
+            &hit_levels,
+        );
+        if update.bonus_experience != 0 {
+            let _ = self.add_player_experience(player_id, update.bonus_experience, runtime);
+        }
+        if let Some(top_log) = update.new_top_log {
+            let mut message = CMessage::new(0x000b_f706);
+            message.add_short(top_log as i16);
+            let _ = message.send_to_player(self.net_server(), player_id);
+        }
+        let mut message = CMessage::new(0x000b_f707);
+        message.add_ulong(update.amount);
+        let _ = message.send_to_player(self.net_server(), player_id);
+        Some(update.amount)
+    }
+
+    fn increase_player_followers_experience(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        experience: u32,
+    ) {
+        let pets = self
+            .find_player(player_id)
+            .map(|player| player.active_pets().to_vec())
+            .unwrap_or_default();
+        if pets.is_empty() {
+            return;
+        }
+        let configurations: Vec<_> = pets
+            .iter()
+            .filter(|pet| pet.object_type == MONSTER_TYPE)
+            .filter_map(|pet| {
+                let monster = self
+                    .find_region(region_id)?
+                    .base()
+                    .find_monster_by_id(pet.id)?;
+                let property = self
+                    .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                    .clone();
+                let (experience_factor, _) =
+                    self.globe_setup.pet_progression(monster.pet_progress().0)?;
+                let next_factors = self
+                    .globe_setup
+                    .pet_progression(monster.pet_progress().0.wrapping_add(1))
+                    .map(|(_, factors)| factors);
+                Some((pet.id, property, experience_factor, next_factors))
+            })
+            .collect();
+        if configurations.is_empty() {
+            return;
+        }
+        let share = experience / configurations.len() as u32;
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return;
+        };
+        for (pet_id, property, experience_factor, next_factors) in configurations {
+            let Some(pet) = owner.base_mut().find_monster_by_id_mut(pet_id) else {
+                continue;
+            };
+            let Some(update) =
+                pet.increase_pet_experience(share, &property, experience_factor, next_factors)
+            else {
+                continue;
+            };
+            let shape = pet.move_shape().shape().clone();
+            let mut message = CMessage::new(0x000c_0203);
+            message.add_long(MONSTER_TYPE);
+            message.add_long(pet_id);
+            message.add_ulong(update.level);
+            message.add_ulong(update.experience);
+            message.add_ulong(update.maximum_hp);
+            message.add_ulong(update.hit_points);
+            let _ = self.send_game_shape_around(owner.base(), &shape, None, &message);
+        }
+        self.restore_region_owner(owner);
+    }
+
+    fn award_monster_experience<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        beneficiary_id: i32,
+        first_attacker_id: i32,
+        region_id: i32,
+        monster: &crate::setup::monsterlist::MonsterProperties,
+        runtime: &mut Runtime,
+    ) {
+        let Some(beneficiary) = self.find_player(beneficiary_id) else {
+            return;
+        };
+        let team_id = beneficiary.team_id();
+        let mut recipients: Vec<i32> = if team_id <= 0 {
+            (!beneficiary.is_dead())
+                .then_some(beneficiary_id)
+                .into_iter()
+                .collect()
+        } else {
+            self.players
+                .values()
+                .filter(|player| {
+                    player.team_id() == team_id
+                        && player.server_region_id() == Some(region_id)
+                        && !player.is_dead()
+                })
+                .map(CPlayer::player_id)
+                .collect()
+        };
+        if recipients.is_empty() {
+            return;
+        }
+        recipients.sort_unstable();
+        let average_level = recipients
+            .iter()
+            .filter_map(|id| self.find_player(*id))
+            .map(|player| f32::from(player.level()))
+            .sum::<f32>()
+            / recipients.len() as f32;
+        let alive_amount = recipients.len() as u32;
+        let region_scale = self
+            .find_region(region_id)
+            .map_or(1.0, |owner| owner.base().region.exp_scale());
+        let (ratios, exp_difference, exp_limit, amerce, amerce_limit, amerce_start, exp_scale) =
+            self.globe_setup.monster_experience_parameters();
+        let (hit_base_level, _, hit_prize, maximum_hit_prize) =
+            self.globe_setup.monster_continuous_kill_parameters();
+
+        for player_id in recipients {
+            let Some(player) = self.find_player(player_id) else {
+                continue;
+            };
+            let player_level = player.level();
+            let quota = if team_id <= 0 {
+                monster.experience
+            } else {
+                let factor = ((1.0 - exp_difference * (average_level - f32::from(player_level)))
+                    / alive_amount as f32)
+                    .max(exp_limit);
+                (monster.experience as f32
+                    * factor
+                    * ratios[(alive_amount.saturating_sub(1).min(7)) as usize])
+                    .round_ties_even() as u32
+            };
+            let level_delta = i32::from(player_level) - monster.level as i32;
+            let amerce_level = level_delta.wrapping_sub(amerce_start).max(0);
+            let corrective_factor = (1.0 - amerce_level as f32 * amerce).max(amerce_limit);
+            let mut corrected = (quota as f32 * corrective_factor)
+                .round_ties_even()
+                .max(0.0) as u32;
+            corrected = corrected.min(monster.experience);
+            if level_delta.max(0) <= hit_base_level && player_id == first_attacker_id {
+                let amount = player.continuous_kill_amount();
+                if amount != 0 {
+                    let prize = (amount as f32 * hit_prize).min(maximum_hit_prize);
+                    corrected = (corrected as f32 * (prize + 1.0))
+                        .round_ties_even()
+                        .max(0.0) as u32;
+                }
+            }
+            let experience_gain = ((corrected as f32) * exp_scale * region_scale)
+                .round_ties_even()
+                .max(0.0) as u32;
+            if self.add_player_experience(player_id, experience_gain, runtime) {
+                self.increase_player_followers_experience(player_id, region_id, experience_gain);
+            }
+        }
+    }
+
+    fn finish_monster_kill_effects<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        killer_id: i32,
+        target_x: i32,
+        target_y: i32,
+        monster_property: &crate::setup::monsterlist::MonsterProperties,
+        runtime: &mut Runtime,
+    ) {
+        let monster_snapshot = self.find_region(region_id).and_then(|owner| {
+            let monster = owner.base().find_monster_by_id(monster_id)?;
+            Some((
+                monster.first_attack_player_id(),
+                monster
+                    .killed_by()
+                    .filter(|attack| attack.attacker_type == PLAYER_TYPE)
+                    .map_or(killer_id, |attack| attack.attacker_id),
+                monster.original_name().to_vec(),
+                monster.script_file().to_vec(),
+            ))
+        });
+        let Some((first_attacker, killing_player, original_name, script_file)) = monster_snapshot
+        else {
+            return;
+        };
+        let beneficiary_id = [first_attacker, killing_player]
+            .into_iter()
+            .find(|candidate| {
+                self.find_player(*candidate).is_some_and(|player| {
+                    if player.is_dead() || player.server_region_id() != Some(region_id) {
+                        return false;
+                    }
+                    let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+                    else {
+                        return false;
+                    };
+                    real_distance(x, y, target_x, target_y)
+                        <= self.globe_setup.contribution_distance_limit()
+                })
+            });
+        if let Some(beneficiary_id) = beneficiary_id {
+            let (hit_base_level, _, _, _) = self.globe_setup.monster_continuous_kill_parameters();
+            if i32::from(self.find_player(beneficiary_id).map_or(0, CPlayer::level))
+                - hit_base_level
+                <= monster_property.level as i32
+            {
+                let _ = self.increase_player_continuous_kill(beneficiary_id, runtime);
+            }
+            self.award_monster_experience(
+                beneficiary_id,
+                first_attacker,
+                region_id,
+                monster_property,
+                runtime,
+            );
+        }
+        self.drop_monster_goods(
+            region_id,
+            &original_name,
+            monster_property.level as i32,
+            target_x,
+            target_y,
+            beneficiary_id.unwrap_or(0),
+            runtime,
+        );
+        let context = ScriptExecutionContext {
+            player_id: beneficiary_id,
+            region_id: Some(region_id),
+            died_monster_index: Some(monster_property.index),
+            ..ScriptExecutionContext::default()
+        };
+        if !script_file.is_empty() {
+            let _ = self.queue_script_file(&script_file, context);
+        }
+        let _ = self.queue_script_file(b"scripts/monster/monster_all.script", context);
+    }
+
     fn damage_player_armor<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -31074,10 +31588,21 @@ impl CGame {
         let target = match dispatch {
             PlayerSkillDispatch::Object { target, .. } if target.object_type == PLAYER_TYPE => self
                 .find_player(target.id)
-                .map(|target| (target.player_id(), target.shape_view())),
+                .and_then(|player| player.shape_view())
+                .map(|view| (target, view)),
+            PlayerSkillDispatch::Object { target, .. } if target.object_type == 600 => player
+                .server_region_id()
+                .and_then(|region_id| self.find_region(region_id))
+                .and_then(|owner| owner.base().find_monster_by_id(target.id))
+                .and_then(|monster| {
+                    let property = monster
+                        .base_property_key()
+                        .and_then(|key| self.find_monster_property_by_origin_name(key))?;
+                    monster.shape_view(property)
+                })
+                .map(|view| (target, view)),
             _ => None,
         };
-        let target = target.and_then(|(id, view)| view.map(|view| (id, view)));
 
         if player_ai.base_attack().is_none() {
             if matches!(dispatch, PlayerSkillDispatch::Object { .. }) && target.is_none() {
@@ -31093,23 +31618,28 @@ impl CGame {
                 let _ = self.send_base_attack_failure(player_id, 2);
                 return rejected();
             }
-            if let Some((target_id, _)) = target
-                && self.find_player(target_id).is_some_and(CPlayer::is_dead)
+            if let Some((target_identity, _)) = target
+                && target_identity.object_type == PLAYER_TYPE
+                && self
+                    .find_player(target_identity.id)
+                    .is_some_and(CPlayer::is_dead)
             {
                 let _ = self.send_base_attack_failure(player_id, 2);
                 return rejected();
             }
-            if let Some((target_id, _)) = target
+            if let Some((target_identity, _)) = target
+                && target_identity.object_type == PLAYER_TYPE
                 && let Some((string_id, limit)) =
-                    self.player_base_attack_level_block(player_id, target_id)
+                    self.player_base_attack_level_block(player_id, target_identity.id)
             {
                 self.send_base_attack_level_block(player_id, string_id, limit);
                 self.enter_player_combat_state(player_id);
                 let _ = self.send_base_attack_failure(player_id, 2);
                 return rejected();
             }
-            if let Some((target_id, _)) = target
-                && !self.player_base_attackable(player_id, target_id)
+            if let Some((target_identity, _)) = target
+                && target_identity.object_type == PLAYER_TYPE
+                && !self.player_base_attackable(player_id, target_identity.id)
             {
                 self.enter_player_combat_state(player_id);
                 let _ = self.send_base_attack_failure(player_id, 2);
@@ -31180,8 +31710,11 @@ impl CGame {
             };
         }
 
-        if let Some((target_id, _)) = target
-            && self.find_player(target_id).is_some_and(CPlayer::is_dead)
+        if let Some((target_identity, _)) = target
+            && target_identity.object_type == PLAYER_TYPE
+            && self
+                .find_player(target_identity.id)
+                .is_some_and(CPlayer::is_dead)
         {
             let _ = self.send_base_attack_failure(player_id, 2);
             if let Some(player) = self.find_player_mut(player_id) {
@@ -31189,8 +31722,25 @@ impl CGame {
             }
             return rejected();
         }
+        if let Some((target_identity, _)) = target
+            && target_identity.object_type == MONSTER_TYPE
+        {
+            let monster_unavailable = self
+                .find_player(player_id)
+                .and_then(CPlayer::server_region_id)
+                .and_then(|region_id| self.find_region(region_id))
+                .and_then(|owner| owner.base().find_monster_by_id(target_identity.id))
+                .is_none_or(|monster| monster.hit_points() == 0 || monster.move_shape().is_god());
+            if monster_unavailable {
+                let _ = self.send_base_attack_failure(player_id, 2);
+                if let Some(player) = self.find_player_mut(player_id) {
+                    player.set_current_skill_id(None);
+                }
+                return rejected();
+            }
+        }
         let (target_type, target_id, target_x, target_y) = match target {
-            Some((target_id, view)) => (PLAYER_TYPE, target_id, view.tile_x, view.tile_y),
+            Some((target, view)) => (target.object_type, target.id, view.tile_x, view.tile_y),
             None => match dispatch {
                 PlayerSkillDispatch::Point { x, y, .. } => (0, 0, x, y),
                 _ => (0, 0, 0, 0),
@@ -31384,6 +31934,323 @@ impl CGame {
             if let Some(attacker) = self.find_player_mut(player_id) {
                 attacker.movement_shape_mut().set_action(1);
             }
+        } else if target_type == MONSTER_TYPE {
+            let Some(region_id) = self
+                .find_player(player_id)
+                .and_then(CPlayer::server_region_id)
+            else {
+                return rejected();
+            };
+            let monster_property = self
+                .find_region(region_id)
+                .and_then(|owner| owner.base().find_monster_by_id(target_id))
+                .and_then(CMonster::base_property_key)
+                .and_then(|key| self.find_monster_property_by_origin_name(key))
+                .cloned();
+            let Some(monster_property) = monster_property else {
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            };
+            let monster_snapshot = self.find_region(region_id).and_then(|owner| {
+                let monster = owner.base().find_monster_by_id(target_id)?;
+                Some((
+                    monster.combat_properties(&monster_property),
+                    monster.hit_points(),
+                    monster.is_tamed(),
+                    monster.move_shape().is_god(),
+                    monster.master_info(),
+                ))
+            });
+            let Some((
+                monster_properties,
+                monster_health,
+                monster_tamed,
+                monster_god,
+                monster_master,
+            )) = monster_snapshot
+            else {
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            };
+            if monster_health == 0 || monster_god {
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            }
+            if !self.guard_monster_attackable(player_id, region_id, &monster_property) {
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            }
+            let owned_target_player = (monster_tamed
+                && monster_master.master_type == PLAYER_TYPE
+                && monster_master.master_id != 0)
+                .then_some(monster_master.master_id);
+            if owned_target_player
+                .is_some_and(|owner_id| !self.player_base_attackable(player_id, owner_id))
+            {
+                self.enter_player_combat_state(player_id);
+                let _ = self.send_base_attack_failure(player_id, 2);
+                return rejected();
+            }
+            if let Some(owner_id) = owned_target_player {
+                let _ = self.player_on_first_skill(player_id, owner_id, Some(region_id), runtime);
+            }
+            self.apply_guard_monster_first_attack(player_id, region_id, &monster_property, now_ms);
+
+            let (
+                mut attacker_properties,
+                attacker_occupation,
+                attacker_level,
+                attacker_team,
+                attacker_faction,
+                attacker_union,
+            ) = {
+                let attacker = self
+                    .find_player(player_id)
+                    .expect("base-attack attacker сохранён");
+                (
+                    attacker.combat_properties(),
+                    attacker.occupation(),
+                    attacker.level(),
+                    attacker.team_id(),
+                    attacker.faction_id(),
+                    attacker.union_id(),
+                )
+            };
+            let [
+                blast_attack,
+                blast_defense,
+                element_blast_attack,
+                element_blast_defense,
+                full_miss,
+            ] = self.globe_setup.base_combat_scales();
+            if attacker_properties.blast_attack_scale() < 1.0 {
+                attacker_properties.blast_attack_scale_bits = blast_attack.max(1.0).to_bits();
+            }
+            if attacker_properties.blast_defense_scale() < 0.01 {
+                attacker_properties.blast_defense_scale_bits = blast_defense.max(0.01).to_bits();
+            }
+            if attacker_properties.element_blast_attack_scale() < 1.0 {
+                attacker_properties.element_blast_attack_scale_bits =
+                    element_blast_attack.max(1.0).to_bits();
+            }
+            if attacker_properties.element_blast_defense_scale() < 0.01 {
+                attacker_properties.element_blast_defense_scale_bits =
+                    element_blast_defense.max(0.01).to_bits();
+            }
+            if attacker_properties.full_miss_scale() < 0.01 {
+                attacker_properties.full_miss_scale_bits = full_miss.max(0.01).to_bits();
+            }
+            if attacker_properties.critical_rate() < 1.0 {
+                attacker_properties.critical_rate_bits =
+                    self.globe_setup.critical_rate().max(1.0).to_bits();
+            }
+            let minimum = attacker_properties.minimum_attack as i32;
+            let maximum = attacker_properties.maximum_attack as i32;
+            let span = maximum.wrapping_sub(minimum).max(0).wrapping_add(1);
+            let physical = minimum.wrapping_add(game_legacy_random(&mut self.random_state, span));
+            let weapon_level = self
+                .find_player(player_id)
+                .and_then(|player| player.equipment().get_goods(2))
+                .map_or(0, |goods| {
+                    goods.addon_property_value(&self.goods_factory, GAP_WEAPON_DAMAGE_LEVEL, 1)
+                });
+            let (weapon_divisor, weapon_minimum) = self.globe_setup.weapon_damage_factors();
+            let delta = weapon_level
+                .wrapping_sub(i32::from(monster_properties.level))
+                .max(0);
+            let mut damage_factor = if weapon_divisor == 0.0 {
+                1.0
+            } else {
+                delta as f32 / weapon_divisor
+            };
+            damage_factor = damage_factor.min(1.0).max(weapon_minimum);
+            let mut attack = AttackInformation {
+                skill_id: BASE_ATTACK_SKILL_ID,
+                skill_level: skill_level as u8,
+                attacker_type: PLAYER_TYPE,
+                attacker_id: player_id,
+                attacker_team_id: attacker_team,
+                attacker_faction_id: attacker_faction,
+                attacker_union_id: attacker_union,
+                hit_modifier,
+                damage_factor,
+                damage_modifier: 0,
+                critical: false,
+                blast_attack: false,
+                full_miss: 0,
+                damages: vec![
+                    AttackPower {
+                        kind: AttackPowerType::Physical,
+                        hp_damage: physical.max(0),
+                        mp_damage: 0,
+                    },
+                    AttackPower {
+                        kind: AttackPowerType::Element,
+                        hp_damage: attacker_properties.add_element_attack as i32,
+                        mp_damage: 0,
+                    },
+                    AttackPower {
+                        kind: AttackPowerType::Soul,
+                        hp_damage: i32::from(attacker_properties.add_soul_attack),
+                        mp_damage: 0,
+                    },
+                ],
+            };
+            if game_legacy_random(&mut self.random_state, 100) < i32::from(attacker_properties.cch)
+            {
+                attack.critical = true;
+                let critical_rate = self.globe_setup.critical_rate();
+                for power in &mut attack.damages {
+                    power.hp_damage =
+                        ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
+                }
+            }
+            let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
+            defend_monster_base_attack(
+                &mut attack,
+                attacker_properties,
+                attacker_occupation,
+                attacker_level,
+                monster_properties,
+                &self.globe_setup,
+                &mut random,
+            );
+            first_contact = true;
+            let damage = attack.hp_damage().min(monster_health);
+            let current_health = monster_health - damage;
+            let mut owner = self
+                .take_region_owner(region_id)
+                .expect("monster target region сохранён");
+            if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id) {
+                monster.set_hit_points(current_health);
+                if attack.full_miss == 0 && damage != 0 {
+                    monster
+                        .move_shape_mut()
+                        .shape_mut()
+                        .set_action(if current_health == 0 { 6 } else { 5 });
+                    if current_health == 0 {
+                        monster.when_been_killed();
+                    } else {
+                        monster.when_been_hurted_by(ShapeIdentity {
+                            object_type: PLAYER_TYPE,
+                            id: player_id,
+                            ex_id: CGuid::GUID_INVALID,
+                        });
+                    }
+                }
+                if current_health == 0 {
+                    monster.set_killed_by(MonsterKillingAttack {
+                        attacker_type: PLAYER_TYPE,
+                        attacker_id: player_id,
+                        skill_id: attack.skill_id,
+                        skill_level: attack.skill_level,
+                        critical: attack.critical,
+                        blast_attack: attack.blast_attack,
+                    });
+                }
+            }
+            self.restore_region_owner(owner);
+
+            if attack.full_miss != 0 {
+                let mut missed = CMessage::new(0x000b_f612);
+                missed.add_byte(attack.full_miss);
+                missed.add_long(MONSTER_TYPE);
+                missed.add_long(target_id);
+                let _ = self.send_shape_position_around(region_id, target_x, target_y, &missed);
+            } else if damage != 0 {
+                if current_health == 0 {
+                    let mut died = CMessage::new(0x000b_f60b);
+                    died.add_long(PLAYER_TYPE);
+                    died.add_long(player_id);
+                    died.add_long(MONSTER_TYPE);
+                    died.add_long(target_id);
+                    died.add_ulong(damage);
+                    died.base_mut().add_char(1);
+                    Self::append_base_attack_tail(&mut died, &attack);
+                    let _ = self.send_shape_position_around(region_id, target_x, target_y, &died);
+                    if let Some(mut owner) = self.take_region_owner(region_id) {
+                        let _ = owner
+                            .base_mut()
+                            .find_monster_by_id_mut(target_id)
+                            .and_then(CMonster::consume_combat_ai_event);
+                        self.restore_region_owner(owner);
+                    }
+                    let _ =
+                        self.gods_battle_monster_died(region_id, target_id, PLAYER_TYPE, player_id);
+                    let _ = self.monster_on_died(region_id, target_id, player_id, runtime);
+                    if !monster_tamed {
+                        self.finish_monster_kill_effects(
+                            region_id,
+                            target_id,
+                            player_id,
+                            target_x,
+                            target_y,
+                            &monster_property,
+                            runtime,
+                        );
+                    } else if monster_master.master_type == PLAYER_TYPE {
+                        if let Some(master) = self.find_player_mut(monster_master.master_id) {
+                            master.remove_active_pet(MONSTER_TYPE, target_id);
+                        }
+                    }
+                    let monster_position = self.find_region(region_id).and_then(|owner| {
+                        let shape = owner
+                            .base()
+                            .find_monster_by_id(target_id)?
+                            .move_shape()
+                            .shape();
+                        Some((shape.get_pos_x() as u32, shape.get_pos_y() as u32))
+                    });
+                    if let Some((pos_x, pos_y)) = monster_position {
+                        let mut exit = CMessage::new(0x000b_f504);
+                        exit.add_long(MONSTER_TYPE);
+                        exit.add_long(target_id);
+                        exit.add_long(0);
+                        exit.add_ulong(pos_x);
+                        exit.add_ulong(pos_y);
+                        let _ =
+                            self.send_shape_position_around(region_id, target_x, target_y, &exit);
+                    }
+                    if let Some(mut owner) = self.take_region_owner(region_id) {
+                        owner.base_mut().finish_owned_monster_death(target_id);
+                        self.restore_region_owner(owner);
+                    }
+                } else {
+                    let mut hurt = CMessage::new(0x000b_f60a);
+                    hurt.add_long(PLAYER_TYPE);
+                    hurt.add_long(player_id);
+                    hurt.add_long(MONSTER_TYPE);
+                    hurt.add_long(target_id);
+                    hurt.add_byte(1);
+                    hurt.add_byte(0);
+                    hurt.add_ulong(damage);
+                    hurt.add_ulong(current_health);
+                    Self::append_base_attack_tail(&mut hurt, &attack);
+                    let _ = self.send_shape_position_around(region_id, target_x, target_y, &hurt);
+                    if let Some(mut owner) = self.take_region_owner(region_id) {
+                        let _ = owner
+                            .base_mut()
+                            .find_monster_by_id_mut(target_id)
+                            .and_then(CMonster::consume_combat_ai_event);
+                        self.restore_region_owner(owner);
+                    }
+                    let _ =
+                        self.monster_on_been_hurted(region_id, target_id, PLAYER_TYPE, player_id);
+                    if let Some(mut owner) = self.take_region_owner(region_id) {
+                        if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id) {
+                            monster.register_attacking_player(
+                                player_id,
+                                now_ms,
+                                self.globe_setup.attack_monster_protection_ms(),
+                            );
+                        }
+                        self.restore_region_owner(owner);
+                    }
+                }
+            }
+            if let Some(attacker) = self.find_player_mut(player_id) {
+                attacker.movement_shape_mut().set_action(1);
+            }
         }
         self.damage_player_weapon(player_id, runtime);
         player_ai.mark_base_attack_used(now_ms);
@@ -31409,7 +32276,8 @@ impl CGame {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == BASE_ATTACK_SKILL_ID,
                 PlayerSkillDispatch::Object { skill_id, target } => {
-                    skill_id == BASE_ATTACK_SKILL_ID && target.object_type == PLAYER_TYPE
+                    skill_id == BASE_ATTACK_SKILL_ID
+                        && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
                 }
             };
             let outcome = if concrete_base_attack {

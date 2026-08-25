@@ -252,6 +252,10 @@ impl CMessage {
         self.base.add_byte(value);
     }
 
+    pub(crate) fn add_short(&mut self, value: i16) {
+        self.base.add_short(value);
+    }
+
     pub(crate) fn add_long(&mut self, value: i32) {
         self.base.add_long(value);
     }
