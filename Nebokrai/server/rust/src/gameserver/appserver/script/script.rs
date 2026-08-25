@@ -44,12 +44,12 @@ use super::function::{
     SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID, SCRIPT_FUNCTION_GET_STRING_BY_ID,
     SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME,
     SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME,
-    SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAYER_MESSAGE,
-    SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
-    ScriptFunctionParameterKind, ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome,
-    dispatch_script_function, dispatch_script_string_function, owned_region_script_caller_is_live,
-    script_function_parameter_kind, script_player_npc_caller_exists,
-    village_war_script_caller_is_live,
+    SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAY_SOUND,
+    SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS,
+    ScriptFunctionDispatchOutcome, ScriptFunctionParameterKind, ScriptFunctionRuntime,
+    ScriptStringFunctionDispatchOutcome, dispatch_script_function, dispatch_script_string_function,
+    owned_region_script_caller_is_live, script_function_parameter_kind,
+    script_player_npc_caller_exists, village_war_script_caller_is_live,
 };
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
@@ -577,6 +577,18 @@ impl<'a> CScript<'a> {
             )
         {
             return ScriptCommandOutcome::InvalidExpression;
+        }
+        if function_id == SCRIPT_FUNCTION_PLAY_SOUND
+            && !owned_region_script_caller_is_live(
+                game,
+                self.context.player_id,
+                self.context.region_id,
+            )
+        {
+            return ScriptCommandOutcome::Handled {
+                function_id,
+                legacy_return: 0,
+            };
         }
         if function_id == SCRIPT_FUNCTION_ADD_JING_JIE_BUFF
             && !self

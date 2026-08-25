@@ -205,6 +205,9 @@
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
+//! Соседний `5410 / PlaySound` сохраняет тот же pre-evaluation caller gate,
+//! exact `0xBF509` C-string wire и переключает direct/around delivery только
+//! вычисленным вторым аргументом; отсутствующий и ошибочный флаг равны нулю.
 //! Reached rank NPC scripts `6051 / RequestPlayerRanks` проверяют player/NPC
 //! до выражения, затем передают limit и один clock sample в owned
 //! `CPlayerRanks`: двухсекундный per-player cooldown и `0xBFF30` client wire
@@ -406,6 +409,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_AREA_ID: i32 = 5413;
 pub(crate) const SCRIPT_FUNCTION_GET_AREA_TYPE: i32 = 5414;
 pub(crate) const SCRIPT_FUNCTION_GET_WORLD_SERVER_ID: i32 = 5420;
 pub(crate) const SCRIPT_FUNCTION_PLAY_EFFECT: i32 = 5404;
+pub(crate) const SCRIPT_FUNCTION_PLAY_SOUND: i32 = 5410;
 pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
 pub(crate) const SCRIPT_FUNCTION_POST_PLAYER_INFO: i32 = 3316;
 pub(crate) const SCRIPT_FUNCTION_POST_REGION_INFO: i32 = 5201;
@@ -3515,6 +3519,11 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_PLAY_EFFECT => match index {
             0..=2 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_PLAY_SOUND => match index {
+            0 => String,
+            1 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS => match index {
@@ -6932,6 +6941,19 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             .map_or(ScriptFunctionDispatchOutcome::Invalid, |_| {
                 ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
             });
+    }
+    if function_id == SCRIPT_FUNCTION_PLAY_SOUND {
+        let (Some(player_id), Some(region_id), Some(sound_file)) =
+            (script_player_id, script_region_id, string_arguments[0])
+        else {
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+        };
+        let send_around = integer_arguments[1]
+            .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            .unwrap_or_default()
+            != 0;
+        let _ = game.script_play_sound(player_id, region_id, sound_file, send_around);
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
     }
     if let Some(outcome) = run_village_war_menu_script_function(
         game,

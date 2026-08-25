@@ -12115,6 +12115,34 @@ impl CGame {
         Some(message.send_to_around_position(Some(region), tile_x, tile_y, None, &runtime))
     }
 
+    /// `5410 / PlaySound`: direct и spatial branches используют один exact
+    /// BF509 payload; ненулевой legacy flag включает рассылку из клетки
+    /// script-player-а всем зарегистрированным игрокам соседних area.
+    pub(crate) fn script_play_sound(
+        &self,
+        player_id: i32,
+        region_id: i32,
+        sound_file: &[u8],
+        send_around: bool,
+    ) -> Option<i32> {
+        let player = self.find_player(player_id)?;
+        let region = self.find_region(region_id)?.base();
+        let mut message = CMessage::new(0x000b_f509);
+        add_legacy_c_string(message.base_mut(), sound_file);
+        if !send_around {
+            return Some(message.send_to_player(self.net_server(), player_id));
+        }
+        let tile_x = player.shape().get_tile_x().ok()?;
+        let tile_y = player.shape().get_tile_y().ok()?;
+        let runtime = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        )?;
+        Some(message.send_to_around_position(Some(region), tile_x, tile_y, None, &runtime))
+    }
+
     fn equipment_da_kong_run_script<Context: ScriptFunctionRuntime>(
         &mut self,
         report: &mut EquipmentDaKongReport,
