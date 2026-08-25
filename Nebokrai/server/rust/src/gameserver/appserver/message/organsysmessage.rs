@@ -814,12 +814,13 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
         0x7fe06 => {
             let player_id = read_i32(message, "player ID")?;
             let faction_id = read_i32(message, "faction ID")?;
+            let mut faction_level = 0;
             let mut faction_master_id = 0;
             let mut faction_name = Vec::new();
             let mut union_id = 0;
             if faction_id > 0 {
                 let _logo_id = read_i32(message, "faction logo ID")?;
-                let _level = message.base_mut().get_word().ok_or(
+                faction_level = message.base_mut().get_word().ok_or(
                     FactionLifecycleDispatchError::UnexpectedEnd {
                         field: "faction level",
                     },
@@ -871,6 +872,7 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
             let correlated = if let Some(player) = game.find_player_mut(player_id) {
                 player.restore_faction_identity(
                     faction_id,
+                    faction_level,
                     faction_master_id,
                     &faction_name,
                     union_id,

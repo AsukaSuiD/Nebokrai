@@ -16,6 +16,7 @@
 //! reads `0xEF4528/68/6C/70/B0/B4` и `0xEF4604/08` в `OnOtherMessage`
 //! подтверждают общий base `0xEF3DC0` и эти offsets по точному EXE.
 //! `dwPkCountPerKill +0x4F4` обслуживает GameServer kill-confirmation path;
+//! `auto_inc_energy_time +0x828` обслуживает reached `CPlayerAI::Run` tail;
 //! raw snapshot остаётся единым wire owner-ом без дублирующей config-модели.
 //! `CArea::AI` читает goods disappear/protection DWORD из `+0x34C/+0x350`;
 //! абсолютные VA `0xEF410C/0xEF4110` подтверждены целевым GameServer EXE.
@@ -120,6 +121,9 @@ const REPAIR_FACTOR_OFFSET: usize = 0x2F4;
 // `CGlobeSetup::m_stSetup = 0xEF3DC0`.
 const GOODS_DISAPPEAR_TIMER_OFFSET: usize = 0x34C;
 const GOODS_PROTECTED_TIMER_OFFSET: usize = 0x350;
+// `CPlayerAI::Run` читает DWORD по VA `0xEF45E8` при том же base
+// `0xEF3DC0`; это exact interval между попытками восстановления energy.
+const AUTO_INC_ENERGY_TIME_OFFSET: usize = 0x828;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -407,6 +411,10 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn goods_protected_timer_ms(&self) -> u32 {
         self.read_u32(GOODS_PROTECTED_TIMER_OFFSET)
+    }
+
+    pub(crate) fn auto_inc_energy_time_ms(&self) -> u32 {
+        self.read_u32(AUTO_INC_ENERGY_TIME_OFFSET)
     }
 
     pub(crate) fn contend_damage_time_factor(&self) -> f32 {

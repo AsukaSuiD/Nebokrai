@@ -15,7 +15,9 @@
 //! `CPlayer::AI` pass и virtual region AI с base-tail clear countdown.
 //! Внутри player pass exact `PeriodicalUpdate` tail выполняет ping `0xBF809`,
 //! Nation died countdown и fairy hatcher до `CMoveShape::AI`; внешний runtime
-//! остаётся только у ещё не материализованных virtual owners. Legacy
+//! остаётся только у ещё не материализованных virtual owners. Достигнутый
+//! `CPlayerAI::Run` tail восстанавливает persisted energy по live faction
+//! level/setup clock и публикует изменившийся DWORD адресным `0xBF72C`. Legacy
 //! disconnect timer доказательно process-dead: EXE содержит только constructor
 //! zeroing и AI read/clear, но ни одного runtime writer-а обоих полей.
 //! После live/dead war-soul ветви тот же caller сохраняет GoodsAI/delete,
@@ -446,7 +448,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rustix::system::uname;
 
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::ai::playerai::{CPlayerAI, PlayerEnergyRegeneration};
 use crate::gameserver::appserver::area::{AreaAiContext, AreaAiReport, AreaMonsterAiFacts};
 use crate::gameserver::appserver::chbystate::ChangeBodyState;
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::{
@@ -1617,6 +1619,12 @@ pub(crate) struct PlayerAiTailReport {
     pub(crate) packet_expansion_applied: Option<u32>,
     pub(crate) flash_update: Option<PlayerFlashUpdateReport>,
     pub(crate) tao_zhuang_ran: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerEnergyRegenerationReport {
+    pub(crate) mutation: PlayerEnergyRegeneration,
+    pub(crate) delivery: i32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3837,6 +3845,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) player_abnormalities: Vec<GamePlayerAbnormalityReport>,
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
+    pub(crate) player_energy_regenerations: Vec<PlayerEnergyRegenerationReport>,
     pub(crate) player_lost_timeouts: Vec<GamePlayerLostTimeoutReport>,
     pub(crate) player_fight_states: Vec<GamePlayerFightStateReport>,
     pub(crate) base_region: Option<BaseRegionAiReport>,
@@ -4992,9 +5001,10 @@ pub(crate) trait GameMainLoopRuntime:
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
     fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
-    /// Исполняет current-state `AI` tail после owned `UpdateCurrentState` с
-    /// canonical player-owned `CPlayerAI` FIFO и возвращает post-AI
-    /// restored-state current war-soul skill.
+    /// Исполняет ещё не материализованные `CBaseAI::Run` и auto-exp prefix
+    /// virtual `CPlayerAI::Run` после owned `UpdateCurrentState`, используя
+    /// canonical player-owned FIFO. Возвращает post-AI restored-state current
+    /// war-soul skill; owned energy tail исполняется caller-ом сразу после.
     fn player_move_shape_active_state_ai(
         &mut self,
         game: &mut CGame,
@@ -29364,6 +29374,7 @@ impl CGame {
             let mut player_abnormalities = Vec::with_capacity(player_ids.len());
             let mut battle_fairy_follows = Vec::with_capacity(player_ids.len());
             let mut player_ai_tails = Vec::with_capacity(player_ids.len());
+            let mut player_energy_regenerations = Vec::with_capacity(player_ids.len());
             let mut player_lost_timeouts = Vec::new();
             let mut player_fight_states = Vec::new();
             for player_id in player_ids {
@@ -29421,9 +29432,23 @@ impl CGame {
                                 player_id,
                                 &mut player_ai,
                             );
+                            let interval_ms = self.globe_setup.auto_inc_energy_time_ms();
+                            let energy = self.find_player_mut(player_id).and_then(|player| {
+                                player_ai.regenerate_player_energy(player, interval_ms, &mut || {
+                                    runtime.get_tick_ms()
+                                })
+                            });
                             if let Some(player) = self.find_player_mut(player_id) {
                                 player.restore_player_ai(player_ai);
                                 ran_player_body = true;
+                            }
+                            if let Some(mutation) = energy {
+                                let mut message = CMessage::new(0x000b_f72c);
+                                message.add_ulong(mutation.current_energy);
+                                let delivery =
+                                    message.send_to_player(self.net_server(), mutation.player_id);
+                                player_energy_regenerations
+                                    .push(PlayerEnergyRegenerationReport { mutation, delivery });
                             }
                         }
                     }
@@ -29761,6 +29786,7 @@ impl CGame {
                             player_abnormalities,
                             battle_fairy_follows,
                             player_ai_tails,
+                            player_energy_regenerations,
                             player_lost_timeouts,
                             player_fight_states,
                             base_region,
@@ -29792,6 +29818,7 @@ impl CGame {
                 player_abnormalities,
                 battle_fairy_follows,
                 player_ai_tails,
+                player_energy_regenerations,
                 player_lost_timeouts,
                 player_fight_states,
                 base_region,

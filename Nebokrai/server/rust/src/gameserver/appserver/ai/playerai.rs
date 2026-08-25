@@ -7,14 +7,19 @@
 //! так очередь после вызова содержит не более четырёх элементов. Owner/health
 //! и ClearEmotion остаются у caller-а, чтобы не хранить raw pointers внутри AI.
 //! Owner теперь принадлежит canonical `CPlayer`: quest movement и оба skill
-//! message family кладут typed dispatch в его FIFO, а reached active-state AI
+//! message family кладут typed dispatch в его FIFO, а reached `CMoveShape::AI`
 //! получает именно этот owner и может потребить очереди без shadow map.
+//! Хвост `CPlayerAI::Run` после ещё внешних `CBaseAI::Run` и auto-exp теперь
+//! хранит собственный energy clock, использует persisted player/faction facts,
+//! exact unsigned due-check и возвращает изменение для адресного `0xBF72C`.
 //! Четырёхаргументный pathfinding `MoveTo`, target/skill execution и остальные
 //! методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::VecDeque;
 
-use crate::gameserver::appserver::player::{BattleFairySkillDispatch, PlayerSkillDispatch};
+use crate::gameserver::appserver::player::{
+    BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAiDestination {
@@ -27,6 +32,16 @@ pub(crate) struct CPlayerAI {
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
+    auto_inc_energy_last_time_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerEnergyRegeneration {
+    pub(crate) player_id: i32,
+    pub(crate) sampled_at_ms: u32,
+    pub(crate) increment: u32,
+    pub(crate) previous_energy: u32,
+    pub(crate) current_energy: u32,
 }
 
 impl CPlayerAI {
@@ -56,6 +71,57 @@ impl CPlayerAI {
 
     pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {
         &self.battle_fairy_skills
+    }
+
+    /// Exact energy tail `CPlayerAI::Run`: первый живой tick только заводит
+    /// clock; full energy не двигает его дальше. Due comparison намеренно не
+    /// wrap-safe (`last < now - interval`) — это наблюдаемая native-семантика.
+    pub(crate) fn regenerate_player_energy(
+        &mut self,
+        player: &mut CPlayer,
+        interval_ms: u32,
+        get_tick_ms: &mut dyn FnMut() -> u32,
+    ) -> Option<PlayerEnergyRegeneration> {
+        if player.is_dead() {
+            return None;
+        }
+        if self.auto_inc_energy_last_time_ms == 0 {
+            self.auto_inc_energy_last_time_ms = get_tick_ms();
+        }
+        let previous_energy = player.energy();
+        if previous_energy == player.maximum_energy() {
+            return None;
+        }
+        let sampled_at_ms = get_tick_ms();
+        if self.auto_inc_energy_last_time_ms >= sampled_at_ms.wrapping_sub(interval_ms) {
+            return None;
+        }
+        self.auto_inc_energy_last_time_ms = get_tick_ms();
+
+        let faction_bonus = if player.faction_id() == 0 {
+            0.0
+        } else {
+            (f64::from(player.level()) * f64::from(0.01_f32))
+                .min(1.0)
+                .mul_add(f64::from(player.faction_level()) * 0.5, 0.0)
+                .max(1.0)
+        };
+        // MSVC меняет x87 rounding mode на truncation перед `__ftol2`.
+        let increment =
+            ((f64::from(player.level()) * f64::from(0.1_f32) - 1.0) * 5.0 + faction_bonus + 10.0)
+                .trunc() as u32;
+        if increment == 0 {
+            return None;
+        }
+        player.set_energy(previous_energy.wrapping_add(increment));
+        let current_energy = player.energy();
+        (current_energy != previous_energy).then_some(PlayerEnergyRegeneration {
+            player_id: player.player_id(),
+            sampled_at_ms,
+            increment,
+            previous_energy,
+            current_energy,
+        })
     }
 }
 

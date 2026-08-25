@@ -347,6 +347,8 @@ const BASE_CONSTITUTION_OFFSET: usize = 0xc4;
 const BASE_INTELLIGENCE_OFFSET: usize = 0xc8;
 const BASE_VIGOUR_OFFSET: usize = 0xec;
 const BASE_MAXIMUM_VIGOUR_OFFSET: usize = 0xf0;
+const BASE_ENERGY_OFFSET: usize = 0xf4;
+const BASE_MAXIMUM_ENERGY_OFFSET: usize = 0xf8;
 const BASE_CREDIT_OFFSET: usize = 0xfc;
 const BASE_EXALT_OFFSET: usize = 0x100;
 const BASE_DISPLAY_HEAD_PIECE_OFFSET: usize = 0x104;
@@ -1243,6 +1245,8 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) rp: u16,
     pub(crate) maximum_rp: u16,
     pub(crate) maximum_vigour: u32,
+    pub(crate) energy: u32,
+    pub(crate) maximum_energy: u32,
     pub(crate) exalt: u32,
     pub(crate) fetch_power: u32,
     pub(crate) battle_fairy_recall: bool,
@@ -1905,6 +1909,7 @@ pub(crate) struct CPlayer {
     player_ai: CPlayerAI,
     figure: ShapeFigure,
     faction_id: i32,
+    faction_level: u16,
     faction_master_id: i32,
     faction_name: Vec<u8>,
     union_id: i32,
@@ -2228,6 +2233,7 @@ impl CPlayer {
             player_ai: CPlayerAI::default(),
             figure,
             faction_id: 0,
+            faction_level: 0,
             faction_master_id: 0,
             faction_name: Vec::new(),
             union_id: 0,
@@ -2949,6 +2955,11 @@ impl CPlayer {
                 BASE_MAXIMUM_VIGOUR_OFFSET,
                 self.base_properties.maximum_vigour,
             ),
+            (BASE_ENERGY_OFFSET, self.base_properties.energy),
+            (
+                BASE_MAXIMUM_ENERGY_OFFSET,
+                self.base_properties.maximum_energy,
+            ),
             (BASE_CREDIT_OFFSET, self.base_properties.credit),
             (BASE_EXALT_OFFSET, self.base_properties.exalt),
             (
@@ -3072,6 +3083,9 @@ impl CPlayer {
         self.base_properties.vigour = read_player_wire_u32(wire, BASE_VIGOUR_OFFSET);
         self.base_properties.maximum_vigour =
             read_player_wire_u32(wire, BASE_MAXIMUM_VIGOUR_OFFSET);
+        self.base_properties.energy = read_player_wire_u32(wire, BASE_ENERGY_OFFSET);
+        self.base_properties.maximum_energy =
+            read_player_wire_u32(wire, BASE_MAXIMUM_ENERGY_OFFSET);
         self.base_properties.credit = read_player_wire_u32(wire, BASE_CREDIT_OFFSET);
         self.base_properties.exalt = read_player_wire_u32(wire, BASE_EXALT_OFFSET);
         self.base_properties.display_head_piece = wire[BASE_DISPLAY_HEAD_PIECE_OFFSET] != 0;
@@ -3156,7 +3170,7 @@ impl CPlayer {
         self.faction_id = read_player_game_save_i32(source, cursor, "m_lFactionID")?;
         if self.faction_id > 0 {
             let _logo = read_player_game_save_i32(source, cursor, "m_lFactionLogoID")?;
-            let _level = read_player_game_save_u16(source, cursor, "m_wFactionLevel")?;
+            self.faction_level = read_player_game_save_u16(source, cursor, "m_wFactionLevel")?;
             let _experience = read_player_game_save_i32(source, cursor, "m_lFactionExperience")?;
             let _force = read_player_game_save_i32(source, cursor, "m_lForce")?;
             let _contribute = read_player_game_save_u32(source, cursor, "m_bFactionContribute")?;
@@ -3174,6 +3188,7 @@ impl CPlayer {
             let count = read_player_game_save_count(source, cursor, "m_OwnedRegions")?;
             let _ = read_player_game_save_slice(source, cursor, "m_OwnedRegions", count * 8)?;
         } else {
+            self.faction_level = 0;
             self.faction_name.clear();
             self.faction_master_id = 0;
             self.union_id = 0;
@@ -3307,6 +3322,10 @@ impl CPlayer {
         self.faction_id
     }
 
+    pub(crate) const fn faction_level(&self) -> u16 {
+        self.faction_level
+    }
+
     pub(crate) const fn is_faction_master(&self) -> bool {
         self.faction_id > 0 && self.faction_master_id == self.player_id()
     }
@@ -3350,11 +3369,13 @@ impl CPlayer {
     pub(crate) fn restore_faction_identity(
         &mut self,
         faction_id: i32,
+        faction_level: u16,
         faction_master_id: i32,
         faction_name: &[u8],
         union_id: i32,
     ) {
         self.faction_id = faction_id;
+        self.faction_level = faction_level;
         self.faction_master_id = faction_master_id;
         self.faction_name.clear();
         self.faction_name.extend_from_slice(faction_name);
@@ -4574,6 +4595,20 @@ impl CPlayer {
 
     pub(crate) const fn level(&self) -> u8 {
         self.base_properties.level
+    }
+
+    pub(crate) const fn energy(&self) -> u32 {
+        self.base_properties.energy
+    }
+
+    pub(crate) const fn maximum_energy(&self) -> u32 {
+        self.base_properties.maximum_energy
+    }
+
+    /// Exact `CPlayer::SetEnergy`: unsigned caller arithmetic сохраняется,
+    /// затем значение ограничивается текущим `dwMaxEnergy`.
+    pub(crate) fn set_energy(&mut self, energy: u32) {
+        self.base_properties.energy = energy.min(self.base_properties.maximum_energy);
     }
 
     pub(crate) const fn occupation(&self) -> u8 {
