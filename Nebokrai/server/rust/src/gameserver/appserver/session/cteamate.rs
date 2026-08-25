@@ -1,6 +1,56 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Player-owned team plug `CTeamate` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/session/cteamate.cpp`. Материализован достигнутый invite/join
+//! prefix: plug identity, player owner, region/name snapshot и wire Serialize,
+//! который `OnPlugInserted` вкладывает в клиентский `0xBFD03`. Lose/restore,
+//! AI и остальные change-state ветви сохранены ниже как RAW.
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CTeamate {
+    plug_id: i32,
+    owner_id: i32,
+    owner_region_id: i32,
+    owner_name: Vec<u8>,
+}
+
+impl CTeamate {
+    pub(crate) fn new(
+        plug_id: i32,
+        owner_id: i32,
+        owner_region_id: i32,
+        owner_name: &[u8],
+    ) -> Self {
+        Self {
+            plug_id,
+            owner_id,
+            owner_region_id,
+            owner_name: owner_name
+                .split(|byte| *byte == 0)
+                .next()
+                .unwrap_or_default()
+                .to_vec(),
+        }
+    }
+
+    pub(crate) const fn plug_id(&self) -> i32 {
+        self.plug_id
+    }
+
+    pub(crate) const fn owner_id(&self) -> i32 {
+        self.owner_id
+    }
+
+    pub(crate) fn serialize(&self, output: &mut Vec<u8>) {
+        output.extend_from_slice(&5_i32.to_le_bytes());
+        output.extend_from_slice(&400_i32.to_le_bytes());
+        output.extend_from_slice(&self.owner_id.to_le_bytes());
+        output.extend_from_slice(&0_i32.to_le_bytes());
+        output.extend_from_slice(&self.owner_region_id.to_le_bytes());
+        output.extend_from_slice(&self.owner_name);
+        output.push(0);
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -189,46 +239,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

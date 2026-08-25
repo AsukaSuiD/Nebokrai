@@ -22,8 +22,9 @@
 //! а ended equipment-session GC сохраняет session/plug order и owner identity
 //! для listener detach на MainLoop session-stage. Достигнутый personal-shop
 //! lifecycle создаёт normal `(1, 20, 0)` session, typed seller/buyer plugs,
-//! exact owner/session relations и personal-shop shadow metadata. Team и
-//! остальные polymorphic session-варианты ниже этим не объявляются готовыми.
+//! exact owner/session relations и personal-shop shadow metadata. Local team
+//! creation/join теперь хранит typed `CTeam/CTeamate`, сохраняя общий ID
+//! allocator, insertion order и промежуточные serialization snapshots.
 
 use std::collections::BTreeMap;
 
@@ -48,6 +49,8 @@ use super::cpersonalshopbuyer::CPersonalShopBuyer;
 use super::cpersonalshopseller::CPersonalShopSeller;
 use super::cplug::CPlug;
 use super::csession::CSession;
+use super::cteam::CTeam;
+use super::cteamate::CTeamate;
 use super::ctrader::CTrader;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -141,6 +144,26 @@ pub(crate) struct TerminalEquipmentPlugCollected {
     pub(crate) owner_id: i32,
 }
 
+#[must_use = "team creation сохраняет intermediate client/World snapshots"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TeamSessionCreated {
+    pub(crate) session_id: i32,
+    pub(crate) team_id: u32,
+    pub(crate) empty_snapshot: Vec<u8>,
+    pub(crate) leader_snapshot: Vec<u8>,
+    pub(crate) candidate_snapshot: Vec<u8>,
+    pub(crate) teammate_ids: Vec<i32>,
+}
+
+#[must_use = "team insertion сохраняет new owner snapshot и resulting count"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TeamMemberInserted {
+    pub(crate) session_id: i32,
+    pub(crate) team_id: u32,
+    pub(crate) snapshot: Vec<u8>,
+    pub(crate) teammate_count: usize,
+}
+
 #[derive(Debug)]
 pub(crate) struct CSessionFactory {
     sessions: BTreeMap<i32, CSession>,
@@ -151,6 +174,8 @@ pub(crate) struct CSessionFactory {
     personal_shop_seller_plugs: BTreeMap<i32, CPersonalShopSeller>,
     personal_shop_buyer_plugs: BTreeMap<i32, CPersonalShopBuyer>,
     trader_plugs: BTreeMap<i32, CTrader>,
+    teams: BTreeMap<i32, CTeam>,
+    teammates: BTreeMap<i32, CTeamate>,
     next_session_id: i32,
     next_plug_id: i32,
 }
@@ -166,6 +191,8 @@ impl Default for CSessionFactory {
             personal_shop_seller_plugs: BTreeMap::new(),
             personal_shop_buyer_plugs: BTreeMap::new(),
             trader_plugs: BTreeMap::new(),
+            teams: BTreeMap::new(),
+            teammates: BTreeMap::new(),
             next_session_id: 1,
             next_plug_id: 1,
         }
@@ -173,6 +200,119 @@ impl Default for CSessionFactory {
 }
 
 impl CSessionFactory {
+    pub(crate) fn create_team_session(
+        &mut self,
+        team_id: u32,
+        leader: (i32, i32, &[u8]),
+        candidate: (i32, i32, &[u8]),
+    ) -> Option<TeamSessionCreated> {
+        let session_id = self.next_session_id;
+        let leader_plug_id = self.next_plug_id;
+        let candidate_plug_id = self.next_plug_id.wrapping_add(1);
+        let mut session = CSession::normal(2, 8, 0);
+        let mut team = CTeam::new(team_id);
+        if !session.start() {
+            return None;
+        }
+        let empty_snapshot = team.serialize(&session, std::iter::empty());
+
+        let mut leader_base = CPlug::new();
+        leader_base.set_id(leader_plug_id);
+        leader_base.set_owner(400, leader.0);
+        leader_base.set_session(session_id);
+        leader_base.set_plug_type(5);
+        let leader_teammate = CTeamate::new(leader_plug_id, leader.0, leader.1, leader.2);
+        if !session.insert_plug(leader_plug_id) {
+            return None;
+        }
+        let leader_snapshot = team.serialize(&session, [&leader_teammate]);
+
+        let mut candidate_base = CPlug::new();
+        candidate_base.set_id(candidate_plug_id);
+        candidate_base.set_owner(400, candidate.0);
+        candidate_base.set_session(session_id);
+        candidate_base.set_plug_type(5);
+        let candidate_teammate =
+            CTeamate::new(candidate_plug_id, candidate.0, candidate.1, candidate.2);
+        if !session.insert_plug(candidate_plug_id) {
+            return None;
+        }
+        let candidate_snapshot = team.serialize(&session, [&leader_teammate, &candidate_teammate]);
+        team.set_leader(leader.0);
+
+        self.next_session_id = self.next_session_id.wrapping_add(1);
+        self.next_plug_id = self.next_plug_id.wrapping_add(2);
+        self.sessions.insert(session_id, session);
+        self.plugs.insert(leader_plug_id, leader_base);
+        self.plugs.insert(candidate_plug_id, candidate_base);
+        self.teammates.insert(leader_plug_id, leader_teammate);
+        self.teammates.insert(candidate_plug_id, candidate_teammate);
+        self.teams.insert(session_id, team);
+        Some(TeamSessionCreated {
+            session_id,
+            team_id,
+            empty_snapshot,
+            leader_snapshot,
+            candidate_snapshot,
+            teammate_ids: vec![leader.0, candidate.0],
+        })
+    }
+
+    pub(crate) fn insert_team_member(
+        &mut self,
+        session_id: i32,
+        owner_id: i32,
+        owner_region_id: i32,
+        owner_name: &[u8],
+    ) -> Option<TeamMemberInserted> {
+        if self
+            .query_session_plug_by_owner(session_id, 400, owner_id)
+            .is_some()
+            || !self.teams.contains_key(&session_id)
+        {
+            return None;
+        }
+        let plug_id = self.next_plug_id;
+        let mut base = CPlug::new();
+        base.set_id(plug_id);
+        base.set_owner(400, owner_id);
+        base.set_session(session_id);
+        base.set_plug_type(5);
+        let teammate = CTeamate::new(plug_id, owner_id, owner_region_id, owner_name);
+        if !self.sessions.get_mut(&session_id)?.insert_plug(plug_id) {
+            return None;
+        }
+        self.next_plug_id = self.next_plug_id.wrapping_add(1);
+        self.plugs.insert(plug_id, base);
+        self.teammates.insert(plug_id, teammate);
+        let session = self.sessions.get(&session_id)?;
+        let team = self.teams.get(&session_id)?;
+        let snapshot = team.serialize(
+            session,
+            session
+                .plug_ids_storage()
+                .iter()
+                .filter_map(|id| self.teammates.get(id)),
+        );
+        Some(TeamMemberInserted {
+            session_id,
+            team_id: team.team_id(),
+            snapshot,
+            teammate_count: session.plug_ids_storage().len(),
+        })
+    }
+
+    pub(crate) fn query_team(&self, session_id: i32) -> Option<&CTeam> {
+        self.teams.get(&session_id)
+    }
+
+    pub(crate) fn team_member_count(&self, session_id: i32) -> Option<usize> {
+        self.teams
+            .contains_key(&session_id)
+            .then(|| self.sessions.get(&session_id))
+            .flatten()
+            .map(|session| session.plug_ids_storage().len())
+    }
     /// Exact normal `(2, 2, 0)` player trade: первый plug принадлежит
     /// пригласившему, второй — отвечающему, как два последовательных
     /// `CreatePlug/InsertPlug` в `0x8FA07`.
@@ -1000,7 +1140,9 @@ impl CSessionFactory {
             self.personal_shop_seller_plugs.remove(plug_id);
             self.personal_shop_buyer_plugs.remove(plug_id);
             self.trader_plugs.remove(plug_id);
+            self.teammates.remove(plug_id);
         }
+        self.teams.remove(&session_id);
         plug_ids
     }
 

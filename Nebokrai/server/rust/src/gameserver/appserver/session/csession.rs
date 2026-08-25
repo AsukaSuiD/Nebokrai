@@ -108,6 +108,14 @@ impl CSession {
     pub(crate) const fn minimum_plugs(&self) -> u32 {
         self.minimum_plugs
     }
+
+    pub(crate) const fn maximum_plugs(&self) -> u32 {
+        self.maximum_plugs
+    }
+
+    pub(crate) const fn lifetime(&self) -> u32 {
+        self.lifetime
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

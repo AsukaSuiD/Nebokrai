@@ -112,6 +112,11 @@ impl CLogSystem {
         self.setting(24)
     }
 
+    /// Positional `bTeamJion` (опечатка исходного имени сохранена в PDB).
+    pub(crate) fn team_join_log_enabled(&self) -> bool {
+        self.setting(28)
+    }
+
     pub(crate) fn goods_lost_by_upgrade_enabled(&self) -> bool {
         self.setting(7)
     }

@@ -712,7 +712,7 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
 };
 use crate::gameserver::appserver::session::csessionfactory::{
     CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved, SessionEndReport,
-    TerminalEquipmentSessionCollected,
+    TeamMemberInserted, TeamSessionCreated, TerminalEquipmentSessionCollected,
 };
 use crate::gameserver::appserver::session::ctrader::{
     TraderContainerKind, TraderOfferAdded, TraderOfferBlock, TraderOfferRemoved,
@@ -5064,6 +5064,28 @@ pub(crate) struct GameWorldReconnectReport {
     pub(crate) encoded_players: Vec<i32>,
     pub(crate) failed_players: Vec<i32>,
     pub(crate) registration: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameTeamJoinResult {
+    Succeed,
+    UnknownError,
+    PlayerNotExist,
+    NoPermission,
+    MaxMemberLimit,
+    PlayerAlreadyInTeam,
+    SamePlayer,
+}
+
+#[must_use = "team mutation сохраняет session state и ordered network effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameTeamJoinMutation {
+    pub(crate) session_id: i32,
+    pub(crate) team_id: u32,
+    pub(crate) teammate_count: usize,
+    pub(crate) client_deliveries: Vec<i32>,
+    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25935,6 +25957,174 @@ impl CGame {
 
     pub(crate) fn get_team_session_id(&self, team_id: u32) -> i32 {
         self.team_session_ids.get(&team_id).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn check_team_join(
+        &self,
+        leader_id: i32,
+        candidate_id: i32,
+    ) -> GameTeamJoinResult {
+        if leader_id == candidate_id {
+            return GameTeamJoinResult::SamePlayer;
+        }
+        let Some(leader) = self.players.get(&leader_id) else {
+            return GameTeamJoinResult::PlayerNotExist;
+        };
+        let Some(candidate) = self.players.get(&candidate_id) else {
+            return GameTeamJoinResult::PlayerNotExist;
+        };
+        if leader.team_id() != 0 {
+            let session_id = self.get_team_session_id(leader.team_id() as u32);
+            let Some(team) = self.session_factory.query_team(session_id) else {
+                return GameTeamJoinResult::NoPermission;
+            };
+            if team.leader_id() != leader_id {
+                return GameTeamJoinResult::NoPermission;
+            }
+            if self
+                .session_factory
+                .query_session_plug_by_owner(session_id, 400, candidate_id)
+                .is_some()
+            {
+                return GameTeamJoinResult::SamePlayer;
+            }
+            let Some(count) = self.session_factory.team_member_count(session_id) else {
+                return GameTeamJoinResult::UnknownError;
+            };
+            if count > 7 {
+                return GameTeamJoinResult::MaxMemberLimit;
+            }
+        }
+        if candidate.team_id() != 0 {
+            GameTeamJoinResult::PlayerAlreadyInTeam
+        } else {
+            GameTeamJoinResult::Succeed
+        }
+    }
+
+    fn send_team_snapshot(&self, player_id: i32, snapshot: &[u8]) -> i32 {
+        let mut message = CMessage::new(0x000b_fd03);
+        message.base_mut().add(snapshot);
+        message.send_to_player(self.net_server(), player_id)
+    }
+
+    fn publish_team_recruitment_count(
+        &mut self,
+        leader_id: i32,
+        teammate_count: usize,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let state = self
+            .players
+            .get(&leader_id)?
+            .first_team_recruitment_state()?;
+        let mut message = CMessage::new(0x000b_fe05);
+        message.add_long(leader_id);
+        message.add_long(leader_id);
+        message.add_long(state.state_id());
+        message.add_ulong(state.additional_data(teammate_count));
+        self.send_player_shape_around(leader_id, None, &message)
+    }
+
+    pub(crate) fn join_team_accepted(
+        &mut self,
+        leader_id: i32,
+        candidate_id: i32,
+        audit_join: bool,
+    ) -> Option<GameTeamJoinMutation> {
+        let leader_team_id = self.players.get(&leader_id)?.team_id();
+        let leader_region_id = self.players.get(&leader_id)?.server_region_id().unwrap_or_default();
+        let leader_name = self.players.get(&leader_id)?.player_name().to_vec();
+        let candidate_region_id = self
+            .players
+            .get(&candidate_id)?
+            .server_region_id()
+            .unwrap_or_default();
+        let candidate_name = self.players.get(&candidate_id)?.player_name().to_vec();
+
+        let mut client_deliveries = Vec::new();
+        let mut world_deliveries = Vec::new();
+        let (session_id, team_id, teammate_count) = if leader_team_id == 0 {
+            let team_id = self.get_team_id(1);
+            let created: TeamSessionCreated = self.session_factory.create_team_session(
+                team_id,
+                (leader_id, leader_region_id, &leader_name),
+                (candidate_id, candidate_region_id, &candidate_name),
+            )?;
+            self.team_session_ids.insert(team_id, created.session_id);
+            self.players
+                .get_mut(&leader_id)?
+                .set_team_membership(team_id as i32);
+            self.players
+                .get_mut(&leader_id)?
+                .set_team_captain(true);
+            self.players
+                .get_mut(&candidate_id)?
+                .set_team_membership(team_id as i32);
+            self.players
+                .get_mut(&candidate_id)?
+                .set_team_captain(false);
+
+            let mut started = CMessage::new(0x0006_0001);
+            started.base_mut().add(&created.empty_snapshot);
+            world_deliveries.push(started.send(self, false));
+            client_deliveries.push(self.send_team_snapshot(leader_id, &created.leader_snapshot));
+            client_deliveries
+                .push(self.send_team_snapshot(candidate_id, &created.candidate_snapshot));
+
+            let mut leader_changed = CMessage::new(0x0006_0006);
+            leader_changed.add_ulong(team_id);
+            leader_changed.add_long(leader_id);
+            world_deliveries.push(leader_changed.send(self, false));
+            for player_id in &created.teammate_ids {
+                let mut changed = CMessage::new(0x000b_fd07);
+                changed.add_ulong(team_id);
+                changed.add_long(leader_id);
+                client_deliveries.push(changed.send_to_player(self.net_server(), *player_id));
+            }
+            (created.session_id, team_id, created.teammate_ids.len())
+        } else {
+            let session_id = self.get_team_session_id(leader_team_id as u32);
+            let inserted: TeamMemberInserted = self.session_factory.insert_team_member(
+                session_id,
+                candidate_id,
+                candidate_region_id,
+                &candidate_name,
+            )?;
+            self.players
+                .get_mut(&candidate_id)?
+                .set_team_membership(inserted.team_id as i32);
+            self.players
+                .get_mut(&candidate_id)?
+                .set_team_captain(false);
+            client_deliveries.push(self.send_team_snapshot(candidate_id, &inserted.snapshot));
+            (
+                inserted.session_id,
+                inserted.team_id,
+                inserted.teammate_count,
+            )
+        };
+        let around_delivery = self.publish_team_recruitment_count(leader_id, teammate_count);
+
+        if audit_join && self.log_system.team_join_log_enabled() {
+            let leader = self.players.get(&leader_id)?;
+            let mut audit = CMessage::new(0x0006_0209);
+            audit.add_byte(0);
+            audit.add_long(leader_id);
+            audit.add_long(candidate_id);
+            audit.add_long(leader.server_region_id().unwrap_or_default());
+            audit.add_long(leader.shape().get_tile_x().unwrap_or_default());
+            audit.add_long(leader.shape().get_tile_y().unwrap_or_default());
+            world_deliveries.push(audit.send(self, false));
+        }
+
+        Some(GameTeamJoinMutation {
+            session_id,
+            team_id,
+            teammate_count,
+            client_deliveries,
+            around_delivery,
+            world_deliveries,
+        })
     }
 
     pub(crate) fn find_player(&self, player_id: i32) -> Option<&CPlayer> {

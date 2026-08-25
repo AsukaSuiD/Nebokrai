@@ -1,6 +1,78 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Team session `CTeam` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/session/cteam.cpp`. Материализован reached local creation/join
+//! prefix: team/leader identity, default shared allocation и exact session +
+//! teammate serialization для World `0x60001` и client `0xBFD03`. Leave,
+//! remote reconstruction, AI/quest и остальные state transitions остаются RAW.
+
+use crate::gameserver::appserver::session::csession::CSession;
+use crate::gameserver::appserver::session::cteamate::CTeamate;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CTeam {
+    team_id: u32,
+    leader_id: i32,
+    allocation_scheme: i32,
+    team_name: Vec<u8>,
+    password: Vec<u8>,
+}
+
+impl CTeam {
+    pub(crate) const fn new(team_id: u32) -> Self {
+        Self {
+            team_id,
+            leader_id: 0,
+            allocation_scheme: 1,
+            team_name: Vec::new(),
+            password: Vec::new(),
+        }
+    }
+
+    pub(crate) const fn team_id(&self) -> u32 {
+        self.team_id
+    }
+
+    pub(crate) const fn leader_id(&self) -> i32 {
+        self.leader_id
+    }
+
+    pub(crate) const fn set_leader(&mut self, leader_id: i32) {
+        self.leader_id = leader_id;
+    }
+
+    pub(crate) fn serialize<'a>(
+        &self,
+        session: &CSession,
+        teammates: impl IntoIterator<Item = &'a CTeamate>,
+    ) -> Vec<u8> {
+        let teammates: Vec<&CTeamate> = teammates.into_iter().collect();
+        let mut output = Vec::new();
+        output.extend_from_slice(&1_i32.to_le_bytes());
+        output.extend_from_slice(&session.minimum_plugs().to_le_bytes());
+        output.extend_from_slice(&session.maximum_plugs().to_le_bytes());
+        output.extend_from_slice(&session.lifetime().to_le_bytes());
+        output.extend_from_slice(&self.team_id.to_le_bytes());
+        output.extend_from_slice(&self.team_name);
+        output.push(0);
+        output.extend_from_slice(&self.password);
+        output.push(0);
+        output.extend_from_slice(&self.leader_id.to_le_bytes());
+        output.extend_from_slice(
+            &u32::try_from(teammates.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
+        );
+        for teammate in teammates {
+            teammate.serialize(&mut output);
+        }
+        output
+    }
+
+    pub(crate) const fn allocation_scheme(&self) -> i32 {
+        self.allocation_scheme
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -399,14 +471,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

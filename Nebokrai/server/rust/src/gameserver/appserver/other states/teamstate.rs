@@ -41,6 +41,11 @@ impl CTeamState {
         (u32::from(!self.team_password.is_empty()) << 16) | 1
     }
 
+    pub(crate) fn additional_data(&self, teammates: usize) -> u32 {
+        (u32::from(!self.team_password.is_empty()) << 16)
+            | u32::try_from(teammates).unwrap_or(u32::MAX)
+    }
+
     pub(crate) fn team_name(&self) -> &[u8] {
         &self.team_name
     }

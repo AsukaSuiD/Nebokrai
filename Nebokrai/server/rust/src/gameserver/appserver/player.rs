@@ -3262,6 +3262,18 @@ impl CPlayer {
         self.team_id = team_id;
     }
 
+    /// `CTeam::OnPlugInserted/OnPlugEnded` меняют canonical player team ID.
+    pub(crate) const fn set_team_membership(&mut self, team_id: i32) {
+        self.team_id = team_id;
+        if team_id == 0 {
+            self.team_captain = false;
+        }
+    }
+
+    pub(crate) const fn set_team_captain(&mut self, captain: bool) {
+        self.team_captain = captain;
+    }
+
     pub(crate) const fn is_team_captain(&self) -> bool {
         self.team_captain
     }
