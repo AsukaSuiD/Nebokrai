@@ -30646,8 +30646,9 @@ impl CGame {
         result
     }
 
-    /// Script `3315` использует explicit/source region уже после вычисления
-    /// имени; ambiguous duplicate-name lookup безопасно остаётся no-op.
+    /// Сценарий `3315` использует явно заданный либо исходный регион уже после
+    /// вычисления имени; неоднозначный поиск повторяющегося имени безопасно
+    /// остаётся без побочного эффекта.
     pub(crate) fn delete_script_npc_by_name(&mut self, region_id: i32, name: &[u8]) -> Option<i32> {
         let mut owner = self.take_region_owner(region_id)?;
         let result = (|| {
@@ -30664,8 +30665,8 @@ impl CGame {
         result
     }
 
-    /// Script `3313` сначала фиксирует ordered rectangle snapshot, затем для
-    /// каждого совпадения публикует exit и ставит `CS_DELETE`.
+    /// Сценарий `3313` сначала фиксирует упорядоченный снимок прямоугольника,
+    /// затем для каждого совпадения публикует выход и ставит `CS_DELETE`.
     pub(crate) fn delete_script_monsters_in_rect(
         &mut self,
         region_id: i32,
@@ -30704,8 +30705,9 @@ impl CGame {
         deliveries
     }
 
-    /// `3301 / NpcTalk` сохраняет caller-supplied display name и публикует
-    /// один local-chat frame через обычный shape-around runtime.
+    /// `3301 / NpcTalk` сохраняет переданное вызывающей стороной отображаемое
+    /// имя и публикует один кадр локального чата через обычную рассылку вокруг
+    /// игрового объекта.
     pub(crate) fn script_npc_talk(
         &mut self,
         region_id: i32,
@@ -30739,9 +30741,10 @@ impl CGame {
         result
     }
 
-    /// `3304 / MonsterTalk` сначала выбирает exact-name monsters в девяти
-    /// area игрока, затем каждый monster независимо фильтрует получателей по
-    /// строгому `abs(dx/dy) < AREA_WIDTH/HEIGHT` и шлёт `0xBF801`.
+    /// `3304 / MonsterTalk` сначала выбирает монстров с точным совпадением
+    /// имени в девяти областях игрока, затем каждый монстр независимо
+    /// фильтрует получателей по строгому
+    /// `abs(dx/dy) < AREA_WIDTH/HEIGHT` и отправляет `0xBF801`.
     pub(crate) fn script_monsters_talk(
         &mut self,
         player_id: i32,
@@ -30815,8 +30818,56 @@ impl CGame {
         deliveries
     }
 
-    /// Exact recipient pass `OnGMMessage 0x7FC13`: unsigned `long` country
-    /// сравнивается с promoted player byte, обход сохраняет signed ID-order.
+    /// `3312 / AttackPlayer` повторяет два последовательных обхода девяти
+    /// областей вокруг сценарного игрока: сначала находит игрока по точному
+    /// имени, затем назначает его целью всем монстрам того же окна. Дальнейшие
+    /// движение, атака и сетевые сообщения принадлежат обычному циклу
+    /// искусственного интеллекта монстров.
+    pub(crate) fn script_monsters_attack_player(
+        &mut self,
+        player_id: i32,
+        target_name: &[u8],
+    ) -> usize {
+        let Some((region_id, area_index)) = self
+            .find_player(player_id)
+            .and_then(|player| Some((player.server_region_id()?, player.shape().area_index()?)))
+        else {
+            return 0;
+        };
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return 0;
+        };
+        let target = owner
+            .base()
+            .player_ids_around_area(area_index)
+            .into_iter()
+            .find_map(|candidate_id| {
+                self.find_player(candidate_id).and_then(|candidate| {
+                    (candidate.server_region_id() == Some(region_id)
+                        && candidate.player_name() == target_name)
+                        .then(|| candidate.shape().identity())
+                })
+            });
+        let Some(target) = target else {
+            self.restore_region_owner(owner);
+            return 0;
+        };
+        let monster_ids = owner.base().script_monster_ids_around_area(area_index);
+        let mut affected = 0usize;
+        for monster_id in monster_ids {
+            let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) else {
+                continue;
+            };
+            monster.set_ai_target(target);
+            affected = affected.wrapping_add(1);
+        }
+        self.restore_region_owner(owner);
+        affected
+    }
+
+    /// Точный проход получателей `OnGMMessage 0x7FC13`: беззнаковая страна
+    /// типа `long` сравнивается с расширенным байтом игрока, обход сохраняет
+    /// знаковый порядок идентификаторов.
     pub(crate) fn player_ids_in_country(&self, country: u32) -> Vec<i32> {
         self.players
             .iter()

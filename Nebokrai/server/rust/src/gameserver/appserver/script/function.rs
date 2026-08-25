@@ -143,6 +143,9 @@
 //! ответом WorldServer, а вклад и YuanBao читает из канонического `CPlayer`.
 //! Установка вклада сохраняет ограничение `SetContribute`, пакет `0xBF724`
 //! вместе с силой подбора и возвращает фактически сохранённое значение.
+//! `3312 / AttackPlayer` разрешает имя только среди игроков девяти соседних
+//! областей сценарного игрока и назначает найденную цель искусственному
+//! интеллекту монстров из того же пространственного окна.
 //! Соседняя группа `2204/2205/2212/2217/2218/2220` связывает подсчёты рюкзака
 //! и депо, выбранный предмет контейнера улучшения, локальное либо удалённое
 //! удаление и доверенный путь сценария окна `0xBF919` с подтверждением
@@ -590,6 +593,7 @@ pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER: i32 = 3306;
 pub(crate) const SCRIPT_FUNCTION_KILL_MONSTER: i32 = 3307;
 pub(crate) const SCRIPT_FUNCTION_PLAYER_MESSAGE: i32 = 3308;
 pub(crate) const SCRIPT_FUNCTION_GET_MAP_INFO: i32 = 3309;
+pub(crate) const SCRIPT_FUNCTION_ATTACK_PLAYER: i32 = 3312;
 pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER_RECT: i32 = 3313;
 pub(crate) const SCRIPT_FUNCTION_DELETE_NPC_BY_NAME: i32 = 3315;
 pub(crate) const SCRIPT_FUNCTION_REFRESH_BLOCK: i32 = 8000;
@@ -3705,6 +3709,10 @@ pub(crate) fn script_function_parameter_kind(
             0..=1 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_ATTACK_PLAYER => match index {
+            0 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_CREATE_MONSTER => match index {
             0 | 6 => String,
             1..=5 | 7 => Integer,
@@ -5099,8 +5107,9 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 .map_or(-1, |player| player.current_progress() as i32),
         }),
         SCRIPT_FUNCTION_IS_COMBAT_STATE => Some(ScriptFunctionDispatchOutcome::Handled {
-            // Exact virtual `CShape::GetAction +0x74`: только action `1`
-            // считается combat, а отсутствующий script-player возвращает -1.
+            // Точный виртуальный вызов `CShape::GetAction +0x74`: только
+            // действие `1` считается боевым, а отсутствие сценарного игрока
+            // возвращает `-1`.
             legacy_return: game
                 .find_player(player_id)
                 .map_or(-1, |player| i32::from(player.shape().get_action() == 1)),
@@ -5413,6 +5422,15 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 (script_player_id, string_arguments[0], string_arguments[1])
             {
                 let _ = game.script_monsters_talk(player_id, name, text);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_ATTACK_PLAYER => {
+            if let (Some(player_id), Some(target_name)) = (
+                script_player_id,
+                string_arguments[0].filter(|name| !name.is_empty()),
+            ) {
+                let _ = game.script_monsters_attack_player(player_id, target_name);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
