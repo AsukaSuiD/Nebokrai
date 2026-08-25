@@ -155,6 +155,10 @@
 //! `5FF02 → 7FC03 → 5FF03 → 7FC02` до continuation исходного CScript. Notice
 //! проходит существующий строгий маршрут
 //! `0x5FF16 → 0x7FC13 → 0xBF806` только игрокам выбранной страны.
+//! Player-identity pair `3003/3004` разделяет global и local lookup: только
+//! `IsPlayerOnline` при local miss и доступном World transport приостанавливает
+//! CScript по существующему `5FF05 → 7FC05` continuation contract; имя длиннее
+//! 255 байт и пустое имя возвращают zero без запроса.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -275,6 +279,8 @@ pub(crate) const SCRIPT_FUNCTION_CHANGE_PLAYER: i32 = 2999;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_GET_PLAYER: i32 = 3001;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
+pub(crate) const SCRIPT_FUNCTION_IS_PLAYER_ONLINE: i32 = 3003;
+pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_ID: i32 = 3004;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
 pub(crate) const SCRIPT_FUNCTION_DELETE_SKILL: i32 = 3102;
 pub(crate) const SCRIPT_FUNCTION_SET_SKILL_LEVEL: i32 = 3103;
@@ -3188,6 +3194,10 @@ pub(crate) fn script_function_parameter_kind(
             0 | 1 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_IS_PLAYER_ONLINE | SCRIPT_FUNCTION_GET_PLAYER_ID => match index {
+            0 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_GET_MONEY_BY_NAME
         | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME
         | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => match index {
@@ -4906,6 +4916,35 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let _ = request.send(game, false);
             Some(ScriptFunctionDispatchOutcome::Yielded { legacy_return: 0 })
         }
+        SCRIPT_FUNCTION_IS_PLAYER_ONLINE => {
+            let Some(target_name) = string_arguments[0]
+                .filter(|name| !name.is_empty() && name.len() <= u8::MAX as usize)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if let Some(target) = game.find_player_by_name(target_name) {
+                return Some(ScriptFunctionDispatchOutcome::Handled {
+                    legacy_return: target.player_id(),
+                });
+            }
+            if script_player_id.is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let mut request = CMessage::new(0x0005_ff05);
+            request.add_long(player_id);
+            request.base_mut().add(target_name);
+            request.add_byte(0);
+            request.add_long(script_id);
+            match request.send(game, false) {
+                Ok(1) => Some(ScriptFunctionDispatchOutcome::Yielded { legacy_return: 0 }),
+                _ => Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }),
+            }
+        }
+        SCRIPT_FUNCTION_GET_PLAYER_ID => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: string_arguments[0]
+                .and_then(|target_name| game.find_player_by_name(target_name))
+                .map_or(0, CPlayer::player_id),
+        }),
         SCRIPT_FUNCTION_CREATE_FACTION => {
             let (Some(required_level), Some(required_goods), Some(required_money), Some(country)) = (
                 integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
