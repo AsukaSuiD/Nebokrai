@@ -321,8 +321,8 @@ use crate::gameserver::gameserver::game::{
     GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
     GodsBattleSzlPlayerUpdate, NationCarriageReturnReport, NationCombatContext,
     NationContendEnterReport, PlayerReliveContext, RealmAppellationScriptContext,
-    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
-    colored_text_message, format_legacy_text_fields,
+    ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome, ScriptRegionChangeContext, ServerRegionOwner,
+    colored_player_notice_message, colored_text_message, format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
@@ -483,6 +483,8 @@ pub(crate) const SCRIPT_FUNCTION_RECREATE_GOODS_ADDON_PROPERTIES: i32 = 2230;
 pub(crate) const SCRIPT_FUNCTION_GET_DIED_MONSTER_INDEX: i32 = 2240;
 pub(crate) const SCRIPT_FUNCTION_GET_DIED_MONSTER_ORIGINAL_NAME: i32 = 2241;
 pub(crate) const SCRIPT_FUNCTION_GET_DIED_MONSTER_LEVEL: i32 = 2242;
+pub(crate) const SCRIPT_FUNCTION_OPEN_NPC_SHOP: i32 = 2300;
+pub(crate) const SCRIPT_FUNCTION_OPEN_DEPOT: i32 = 2301;
 pub(crate) const SCRIPT_FUNCTION_GET_TEAM_NUM: i32 = 2302;
 pub(crate) const SCRIPT_FUNCTION_GET_TEAMER_NAME: i32 = 2303;
 pub(crate) const SCRIPT_FUNCTION_ADD_INFO: i32 = 2305;
@@ -3385,6 +3387,11 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_CHECK_LEVEL
         | SCRIPT_FUNCTION_GET_ENERGY
         | SCRIPT_FUNCTION_GET_MAXIMUM_ENERGY => Unused,
+        SCRIPT_FUNCTION_OPEN_NPC_SHOP => match index {
+            0 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_OPEN_DEPOT => Unused,
         SCRIPT_FUNCTION_GET_NAME | SCRIPT_FUNCTION_GET_TEAMER_NAME => match index {
             0 => Integer,
             _ => Unused,
@@ -6375,6 +6382,37 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     level,
                     runtime,
                 ),
+            })
+        }
+        SCRIPT_FUNCTION_OPEN_NPC_SHOP => {
+            if argument_count != 1
+                || !script_player_npc_caller_exists(game, script_player_id, script_npc_id)
+            {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(trade_name) = string_arguments[0].filter(|name| !name.is_empty()) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let report = game.open_script_npc_shop(
+                player_id,
+                script_npc_id.expect("живой NPC проверен до открытия магазина"),
+                trade_name,
+            );
+            Some(if report.outcome == ScriptNpcShopOpenOutcome::Opened {
+                ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
+            } else {
+                ScriptFunctionDispatchOutcome::Invalid
+            })
+        }
+        SCRIPT_FUNCTION_OPEN_DEPOT => {
+            if argument_count != 0 || script_player_id.is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let report = game.open_script_depot(player_id);
+            Some(if report.outcome == ScriptDepotOpenOutcome::Opened {
+                ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
+            } else {
+                ScriptFunctionDispatchOutcome::Invalid
             })
         }
         SCRIPT_FUNCTION_GET_TEAM_NUM => {

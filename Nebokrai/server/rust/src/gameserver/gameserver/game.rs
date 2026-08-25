@@ -1941,6 +1941,44 @@ pub(crate) struct EquipmentSessionOpenReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScriptNpcShopOpenOutcome {
+    MissingContext,
+    Busy,
+    MissingTrade,
+    InvalidTradeGoods,
+    SendFailed,
+    Opened,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ScriptNpcShopOpenReport {
+    pub(crate) player_id: i32,
+    pub(crate) npc_id: i32,
+    pub(crate) outcome: ScriptNpcShopOpenOutcome,
+    pub(crate) delivery: Option<i32>,
+    pub(crate) transition: Option<GoodsSessionPlayerRelease>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScriptDepotOpenOutcome {
+    MissingPlayer,
+    Busy,
+    TooManyGoods,
+    InvalidGoods,
+    SendFailed,
+    Opened,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ScriptDepotOpenReport {
+    pub(crate) player_id: i32,
+    pub(crate) outcome: ScriptDepotOpenOutcome,
+    pub(crate) password_required: bool,
+    pub(crate) goods_amount: u32,
+    pub(crate) delivery: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsDestroyDeleteRequest {
     pub(crate) player_id: i32,
     pub(crate) container_extend_id: i32,
@@ -18512,6 +18550,173 @@ impl CGame {
         let text = self.get_string_by_id(string_id.as_bytes());
         colored_player_notice_message(0xffff_ffff, 0, text)
             .send_to_player(self.net_server(), player_id)
+    }
+
+    pub(crate) fn open_script_npc_shop(
+        &mut self,
+        player_id: i32,
+        npc_id: i32,
+        trade_name: &[u8],
+    ) -> ScriptNpcShopOpenReport {
+        let mut report = ScriptNpcShopOpenReport {
+            player_id,
+            npc_id,
+            outcome: ScriptNpcShopOpenOutcome::MissingContext,
+            delivery: None,
+            transition: None,
+        };
+        let Some(player) = self.find_player(player_id) else {
+            return report;
+        };
+        if player.current_progress() != PlayerProgress::None {
+            report.outcome = ScriptNpcShopOpenOutcome::Busy;
+            return report;
+        }
+        let Some(trade) = self.trade_list.get_trade(trade_name) else {
+            report.outcome = ScriptNpcShopOpenOutcome::MissingTrade;
+            return report;
+        };
+        let Ok(goods_count) = i32::try_from(trade.goods().len()) else {
+            report.outcome = ScriptNpcShopOpenOutcome::InvalidTradeGoods;
+            return report;
+        };
+        let mut message = CMessage::new(0x000b_fa01);
+        message.add_long(npc_id);
+        message.add_long(goods_count);
+        for goods in trade.goods() {
+            let Some(properties) = self
+                .goods_factory
+                .query_goods_base_properties(goods.goods_id)
+            else {
+                report.outcome = ScriptNpcShopOpenOutcome::InvalidTradeGoods;
+                return report;
+            };
+            if goods.page >= 4
+                || goods.position_x >= 8
+                || goods.position_y >= 11
+                || goods.amount == 0
+            {
+                report.outcome = ScriptNpcShopOpenOutcome::InvalidTradeGoods;
+                return report;
+            }
+            message.add_byte(goods.page);
+            message.add_byte(goods.position_x);
+            message.add_byte(goods.position_y);
+            message.add_byte(goods.amount);
+            message.add_ulong(properties.price());
+            message.add_ulong(properties.weight());
+            message.add_ulong(goods.goods_id);
+        }
+        report.transition = self
+            .find_player_mut(player_id)
+            .map(|player| player.begin_equipment_session(PlayerProgress::Shopping, true));
+        let delivery = message.send_to_player(self.net_server(), player_id);
+        report.delivery = Some(delivery);
+        if delivery == 0 {
+            report.outcome = ScriptNpcShopOpenOutcome::SendFailed;
+            if let Some(player) = self.find_player_mut(player_id) {
+                let _ = player.release_goods_session_state();
+            }
+            return report;
+        }
+        report.outcome = ScriptNpcShopOpenOutcome::Opened;
+        report
+    }
+
+    pub(crate) fn open_script_depot(&mut self, player_id: i32) -> ScriptDepotOpenReport {
+        let mut report = ScriptDepotOpenReport {
+            player_id,
+            outcome: ScriptDepotOpenOutcome::MissingPlayer,
+            password_required: false,
+            goods_amount: 0,
+            delivery: None,
+        };
+        let Some(player) = self.find_player(player_id) else {
+            return report;
+        };
+        if player.current_progress() != PlayerProgress::None {
+            report.outcome = ScriptDepotOpenOutcome::Busy;
+            return report;
+        }
+        let goods_amount = player.depot().goods_amount(&self.goods_factory);
+        report.goods_amount = goods_amount;
+        if goods_amount > 96 {
+            report.outcome = ScriptDepotOpenOutcome::TooManyGoods;
+            return report;
+        }
+        let password_required = !player.depot_password().is_empty();
+        report.password_required = password_required;
+        self.find_player_mut(player_id)
+            .expect("игрок проверен до подготовки склада")
+            .prepare_depot_storage(password_required);
+
+        let (depot_money, bank_guid, snapshots) = {
+            let player = self
+                .find_player(player_id)
+                .expect("игрок сохраняется во время снимка склада");
+            let snapshots = player
+                .depot()
+                .snapshot_goods()
+                .map(|(position, goods)| (position, goods.clone()))
+                .collect::<Vec<_>>();
+            (
+                player.depot_money(),
+                player
+                    .bank_snapshot_goods(0)
+                    .map_or(CGuid::GUID_INVALID, |goods| goods.identity().ex_id),
+                snapshots,
+            )
+        };
+        let mut message = CMessage::new(0x000b_fb01);
+        message.add_byte(u8::from(password_required));
+        message.add_ulong(depot_money);
+        message.base_mut().add_guid(bank_guid);
+        message.add_byte(goods_amount as u8);
+        for (position, goods) in snapshots {
+            let Some(properties) = self
+                .goods_factory
+                .query_goods_base_properties(goods.base_properties_index())
+            else {
+                self.find_player_mut(player_id)
+                    .expect("игрок сохраняется при отказе снимка склада")
+                    .close_depot_storage();
+                report.outcome = ScriptDepotOpenOutcome::InvalidGoods;
+                return report;
+            };
+            if goods.amount() == 0 || goods.amount() > u16::MAX as u32 || position >= 96 {
+                self.find_player_mut(player_id)
+                    .expect("игрок сохраняется при отказе снимка склада")
+                    .close_depot_storage();
+                report.outcome = ScriptDepotOpenOutcome::InvalidGoods;
+                return report;
+            }
+            let mut payload = Vec::new();
+            if !goods.serialize_for_old_client(&mut payload, &self.goods_factory, true) {
+                self.find_player_mut(player_id)
+                    .expect("игрок сохраняется при отказе снимка склада")
+                    .close_depot_storage();
+                report.outcome = ScriptDepotOpenOutcome::InvalidGoods;
+                return report;
+            }
+            message.add_byte(u8::from(properties.goods_type() == GOODS_TYPE_EQUIPMENT));
+            message.add_short(goods.amount() as i16);
+            message.add_byte(position as u8);
+            message.base_mut().add(&payload);
+        }
+        self.find_player_mut(player_id)
+            .expect("игрок сохраняется перед открытием склада")
+            .set_current_progress_snapshot(PlayerProgress::Banking);
+        let delivery = message.send_to_player(self.net_server(), player_id);
+        report.delivery = Some(delivery);
+        if delivery == 0 {
+            self.find_player_mut(player_id)
+                .expect("игрок сохраняется при откате открытия склада")
+                .close_depot_storage();
+            report.outcome = ScriptDepotOpenOutcome::SendFailed;
+            return report;
+        }
+        report.outcome = ScriptDepotOpenOutcome::Opened;
+        report
     }
 
     pub(crate) fn open_equipment_session(

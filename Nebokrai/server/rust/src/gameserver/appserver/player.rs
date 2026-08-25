@@ -3820,6 +3820,20 @@ impl CPlayer {
         self.current_progress = PlayerProgress::None;
     }
 
+    pub(crate) fn prepare_depot_storage(&mut self, password_required: bool) {
+        if password_required {
+            let _ = self.bank.lock();
+            let _ = self.depot.lock();
+        } else {
+            let _ = self.bank.unlock_if_authenticated(true);
+            let _ = self.depot.unlock_if_authenticated(true);
+        }
+    }
+
+    pub(crate) fn bank_snapshot_goods(&self, position: u32) -> Option<&CGoods> {
+        self.bank.snapshot_goods(position)
+    }
+
     pub(crate) const fn bank_locked(&self) -> bool {
         self.bank.is_locked()
     }

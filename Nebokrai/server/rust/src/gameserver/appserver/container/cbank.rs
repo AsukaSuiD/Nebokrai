@@ -77,6 +77,12 @@ impl CBank {
         self.wallet.get_goods(position)
     }
 
+    /// Снимок открытия склада читает денежный предмет после установки
+    /// блокировки паролем; эта операция не разрешает последующие изменения.
+    pub(crate) fn snapshot_goods(&self, position: u32) -> Option<&CGoods> {
+        self.wallet.get_goods(position)
+    }
+
     pub(crate) fn add_goods(
         &mut self,
         position: u32,

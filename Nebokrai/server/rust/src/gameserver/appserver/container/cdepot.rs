@@ -138,6 +138,18 @@ impl CDepot {
         self.base.get_goods(position)
     }
 
+    pub(crate) fn goods_amount(&self, factory: &CGoodsFactory) -> u32 {
+        self.base.goods_amount(factory)
+    }
+
+    pub(crate) fn snapshot_goods(&self) -> impl Iterator<Item = (u32, &CGoods)> {
+        self.base.base().traversing_goods().filter_map(|goods| {
+            self.base
+                .query_goods_position(goods.identity().ex_id)
+                .map(|position| (position, goods))
+        })
+    }
+
     pub(crate) fn remove_goods(&mut self, ex_id: CGuid) -> Option<VolumeGoodsRemoveOutcome> {
         if self.locked {
             return None;
