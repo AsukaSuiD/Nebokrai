@@ -68,10 +68,11 @@ use super::super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
-use crate::gameserver::appserver::player::{CPlayer, PlayerExploitMutationReport};
+use crate::gameserver::appserver::player::PlayerExploitMutationReport;
 use crate::gameserver::gameserver::game::{
-    CGame, GameWarRegionHandle, OldClientGoodsCodec, ScriptRegionChangeContext, ServerRegionOwner,
-    colored_player_notice_message, format_legacy_text_fields,
+    CGame, GameContainerMessageRuntime, GameWarRegionHandle, OldClientGoodsCodec,
+    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
+    format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
@@ -81,10 +82,8 @@ pub(crate) trait GameOrganizingWarRuntime:
     + FourNationRegionRuntime
     + RegionRandomContext
     + ScriptRegionChangeContext
+    + GameContainerMessageRuntime
 {
-    /// Исполняет virtual `CPlayer::UpdateProperty` после FourNation exploit.
-    fn update_player_property(&mut self, player: &mut CPlayer);
-
     fn on_four_nation_relive_block(&mut self, player_id: i32, block: FourNationReliveBlock);
 
     /// Возвращает первый совпавший ID в текущем observable traversal старого
@@ -182,8 +181,9 @@ pub(crate) struct FourNationExploitDispatchReport {
     pub(crate) player_found: bool,
     pub(crate) advertised_exploit: Option<u32>,
     pub(crate) mutation: Option<PlayerExploitMutationReport>,
-    pub(crate) property_delivery: Option<i32>,
-    pub(crate) property_update_called: bool,
+    pub(crate) exploit_property_delivery: Option<i32>,
+    pub(crate) combat_property_delivery: Option<i32>,
+    pub(crate) tao_zhuang_ran: bool,
     pub(crate) notice_text: Option<Vec<u8>>,
     pub(crate) notice_delivery: Option<i32>,
 }
@@ -1198,8 +1198,9 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
                         player_found: false,
                         advertised_exploit: None,
                         mutation: None,
-                        property_delivery: None,
-                        property_update_called: false,
+                        exploit_property_delivery: None,
+                        combat_property_delivery: None,
+                        tao_zhuang_ran: false,
                         notice_text: None,
                         notice_delivery: None,
                     },
@@ -1215,15 +1216,16 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
             property.base_mut().add_long(player_id);
             property.base_mut().add_str(Some(c"dwExploit"));
             property.base_mut().add_ulong(advertised_exploit);
-            let property_delivery = property.send_to_player(game.net_server(), player_id);
+            let exploit_property_delivery = property.send_to_player(game.net_server(), player_id);
             let mutation = {
                 let player = game
                     .find_player_mut(player_id)
                     .expect("player проверен до exact exploit mutation");
-                let mutation = player.set_exploit(advertised_exploit, maximum);
-                runtime.update_player_property(player);
-                mutation
+                player.set_exploit(advertised_exploit, maximum)
             };
+            let (combat_property_delivery, tao_zhuang_ran) = game
+                .update_player_properties(player_id, runtime)
+                .expect("player сохранён после exact exploit mutation");
 
             let notice_text = Some(format_four_nation_exploit_notice(
                 game.get_string_by_id(b"GS1177"),
@@ -1245,8 +1247,9 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
                     player_found: true,
                     advertised_exploit: Some(advertised_exploit),
                     mutation: Some(mutation),
-                    property_delivery: Some(property_delivery),
-                    property_update_called: true,
+                    exploit_property_delivery: Some(exploit_property_delivery),
+                    combat_property_delivery: Some(combat_property_delivery),
+                    tao_zhuang_ran,
                     notice_text,
                     notice_delivery,
                 },
@@ -2032,14 +2035,17 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
                 property.base_mut().add_ulong(advertised_exploit);
                 let _property_delivery =
                     property.send_to_player(self.game.net_server(), award.player_id);
-                {
+                let _mutation = {
                     let player = self
                         .game
                         .find_player_mut(award.player_id)
                         .expect("online award player проверен до mutation");
-                    let _mutation = player.set_exploit_property_value(advertised_exploit);
-                    self.runtime.update_player_property(player);
-                }
+                    player.set_exploit_property_value(advertised_exploit)
+                };
+                let _property_update = self
+                    .game
+                    .update_player_properties(award.player_id, self.runtime)
+                    .expect("online award player сохранён после exploit mutation");
 
                 let notice = format_legacy_integer_fields(
                     self.game.get_string_by_id(b"GS1135"),

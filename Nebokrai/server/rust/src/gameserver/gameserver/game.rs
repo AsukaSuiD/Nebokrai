@@ -26499,11 +26499,12 @@ impl CGame {
         Some(report)
     }
 
-    /// Exact virtual `CPlayer::UpdateProperty` caller из `goodsmessage
-    /// 0x8FC2E`: recompute меняет canonical combat snapshot,
-    /// `OnChangeProperties` публикует `0xBF721`, затем активный
-    /// `bTaoZhuangModify` запускает reached set-completion owner.
-    pub(crate) fn refresh_battle_fairy_player_property<Context: GameContainerMessageRuntime>(
+    /// Reached tail virtual `CPlayer::UpdateProperty`: equipment recompute
+    /// меняет canonical combat snapshot, `OnChangeProperties` публикует
+    /// `0xBF721`, затем активный `bTaoZhuangModify` запускает reached
+    /// set-completion owner. Один owner обслуживает callers из battle-fairy
+    /// goods message и обоих FourNation exploit paths.
+    pub(crate) fn update_player_properties<Context: GameContainerMessageRuntime>(
         &mut self,
         player_id: i32,
         context: &mut Context,

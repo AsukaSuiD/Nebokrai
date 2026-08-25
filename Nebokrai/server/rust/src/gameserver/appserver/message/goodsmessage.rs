@@ -926,7 +926,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 .is_some_and(|player| player.get_goods_by_id(goods_guid).is_some());
             let outcome = if goods_exists {
                 let (property_delivery, tao_zhuang_ran) = game
-                    .refresh_battle_fairy_player_property(player_id, runtime)
+                    .update_player_properties(player_id, runtime)
                     .expect("0x8FC2E player сохранён после four-container lookup");
                 BattleFairyPropertyRefreshOutcome::Updated {
                     property_delivery,
