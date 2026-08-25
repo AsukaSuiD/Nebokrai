@@ -56,7 +56,9 @@
 //! все block `3`, затем возвращает single-cell block живым `CMoveShape` и NPC.
 //! `m_listDeleteShape` теперь также имеет typed ordered identity storage:
 //! Nation clear напрямую ставит туда sleeping monsters, которых active AI
-//! scan не видит, сохраняя pointer-unique append исходника.
+//! scan не видит, сохраняя pointer-unique append исходника. CGame после scan
+//! выполняет `RemoveObject` и освобождает owned monster/NPC; player identities
+//! сохраняются до отдельного полного player/session deletion lifecycle.
 //! GM `0x7FC07` использует identity snapshot registry для проверки, что каждый
 //! потенциально более ранний `GetShape` candidate разрешим runtime owner-ом;
 //! неразрешённый goods/other shape блокирует сценарий до ложного player match.
@@ -988,6 +990,34 @@ impl CServerRegion {
 
     pub(crate) fn staged_delete_shapes(&self) -> &[ShapeIdentity] {
         &self.delete_shapes
+    }
+
+    pub(crate) fn retain_staged_delete_shapes(
+        &mut self,
+        mut retain: impl FnMut(ShapeIdentity) -> bool,
+    ) {
+        self.delete_shapes.retain(|identity| retain(*identity));
+    }
+
+    pub(crate) fn remove_owned_monster_by_id(
+        &mut self,
+        id: i32,
+        figure: ShapeFigure,
+    ) -> Result<bool, RegionMembershipBlock> {
+        let Some(mut monster) = self.owned_monsters.remove(&id) else {
+            return Ok(false);
+        };
+        let facts = ShapeRuntimeFacts {
+            monster: Some(super::shape::MonsterAreaClass::Active),
+            is_move_shape: true,
+            figure,
+            ..ShapeRuntimeFacts::default()
+        };
+        if let Err(error) = self.remove_object(monster.move_shape_mut().shape_mut(), facts) {
+            self.owned_monsters.insert(id, monster);
+            return Err(error);
+        }
+        Ok(true)
     }
 
     pub(crate) fn monster_base_property_keys(&self) -> impl Iterator<Item = &[u8]> {

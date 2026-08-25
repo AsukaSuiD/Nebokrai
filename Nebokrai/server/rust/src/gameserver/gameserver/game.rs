@@ -32,6 +32,8 @@
 //! `CGame`; runtime сохраняет только ещё не материализованный region-AI tail.
 //! После virtual region AI тот же caller применяет ordered `CS_CHANGEAREA` для
 //! canonical players и owned monsters/NPC до change-region/ClearPlayer tail.
+//! Перед area queue он завершает staged owned monster/NPC deletion; player
+//! deletion остаётся в очереди до полного CPlayer/session lifecycle owner-а.
 //!
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
@@ -2980,9 +2982,16 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) village_contend: Option<VillageRegionAiReport>,
     pub(crate) country_contend: Option<CountryRegionAiReport>,
     pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
+    pub(crate) deletions: Vec<GameRegionDeletionReport>,
     pub(crate) area_transitions: Vec<GameAreaTransitionReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameRegionDeletionReport {
+    pub(crate) identity: ShapeIdentity,
+    pub(crate) result: Result<bool, RegionMembershipBlock>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4057,8 +4066,8 @@ pub(crate) trait GameMainLoopRuntime:
         region_id: i32,
         capture: &VillageSymbolCaptureLog,
     );
-    /// Выполняет оставшийся weather/shape/delete region-AI tail после уже
-    /// достигнутого Base monster refresh и до точного `ClearPlayerAI`.
+    /// Выполняет оставшийся weather/shape-scan/remove-queue region-AI tail
+    /// после Base monster refresh; staged owned deletion применяет CGame.
     fn region_ai_before_clear_player(&mut self, game: &mut CGame, region_id: i32);
     fn wait(&mut self, duration_ms: u32);
     fn output_debug(&mut self, message: &'static str);
@@ -22353,6 +22362,36 @@ impl CGame {
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 continue;
             };
+            let staged_deletions = owner.base().staged_delete_shapes().to_vec();
+            let mut completed_deletions = BTreeSet::new();
+            let mut deletions = Vec::new();
+            for identity in staged_deletions {
+                let result = match identity.object_type {
+                    MONSTER_TYPE => {
+                        let figure = area_resolver
+                            .resolve_shape(identity)
+                            .map(|shape| shape.figure)
+                            .unwrap_or_default();
+                        Some(
+                            owner
+                                .base_mut()
+                                .remove_owned_monster_by_id(identity.id, figure),
+                        )
+                    }
+                    NPC_TYPE => Some(owner.base_mut().remove_owned_npc_by_id(identity.id)),
+                    _ => None,
+                };
+                let Some(result) = result else {
+                    continue;
+                };
+                if matches!(result, Ok(true)) {
+                    completed_deletions.insert(identity);
+                }
+                deletions.push(GameRegionDeletionReport { identity, result });
+            }
+            owner
+                .base_mut()
+                .retain_staged_delete_shapes(|identity| !completed_deletions.contains(&identity));
             let staged_area_transitions = owner.base().staged_area_transitions();
             let mut area_transitions = Vec::with_capacity(staged_area_transitions.len());
             for identity in staged_area_transitions {
@@ -22479,6 +22518,7 @@ impl CGame {
                             village_contend,
                             country_contend,
                             gods_battle,
+                            deletions,
                             area_transitions,
                             region_changes,
                             clear_player: Some(GameRegionClearPlayerOutcome::Expired { players }),
@@ -22505,6 +22545,7 @@ impl CGame {
                 village_contend,
                 country_contend,
                 gods_battle,
+                deletions,
                 area_transitions,
                 region_changes,
                 clear_player,
