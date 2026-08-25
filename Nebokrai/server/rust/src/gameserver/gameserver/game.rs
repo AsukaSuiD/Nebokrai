@@ -2230,6 +2230,27 @@ pub(crate) trait PlayerPropertyContext {
     ) -> PlayerCombatProperties;
 }
 
+/// Общая граница завершения смерти монстра. Она нужна и боевому проходу ИИ,
+/// и `KillMonster`: награда, добыча, свойства игрока и помещение предмета в
+/// регион используют одних владельцев и не расходятся по двум реализациям.
+pub(crate) trait MonsterDeathContext:
+    GameClockContext
+    + OldClientGoodsCodec
+    + ServerRegionMembershipContext
+    + PlayerPropertyContext
+    + NationCombatContext
+{
+}
+
+impl<T> MonsterDeathContext for T where
+    T: GameClockContext
+        + OldClientGoodsCodec
+        + ServerRegionMembershipContext
+        + PlayerPropertyContext
+        + NationCombatContext
+{
+}
+
 /// Exact virtual `CPlayer::UpdateProperty` после realm hidden-skill mutation.
 /// Runtime владеет ещё не сведёнными equipment/state/GlobeSetup источниками;
 /// CGame применяет возвращённый полный snapshot и сам публикует `0xBF721`.
@@ -30128,6 +30149,212 @@ impl CGame {
         result
     }
 
+    fn send_script_monster_kill_phrase(&self, region_id: i32, monster_id: i32) {
+        const PHRASE: &[u8] = b"\xbf\xbf\xa1\xa3\xa1\xa3\xcb\xa3\xce\xde\xc1\xc4\xb9\xfe\xa1\xa3";
+        let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) else {
+            return;
+        };
+        let Some(monster) = region.find_monster_by_id(monster_id) else {
+            return;
+        };
+        let shape = monster.move_shape().shape();
+        let (Ok(tile_x), Ok(tile_y)) = (shape.get_tile_x(), shape.get_tile_y()) else {
+            return;
+        };
+        let area_width = self.globe_setup.area_width();
+        let area_height = self.globe_setup.area_height();
+        if area_width <= 0 || area_height <= 0 {
+            return;
+        }
+        let mut player_ids = Vec::new();
+        for offset_x in -1..=1 {
+            for offset_y in -1..=1 {
+                region.find_player_ids_in_area(
+                    tile_x / area_width + offset_x,
+                    tile_y / area_height + offset_y,
+                    &mut player_ids,
+                );
+            }
+        }
+        let mut message = CMessage::new(0x000b_f801);
+        message.add_long(0);
+        message.add_long(MONSTER_TYPE);
+        message.add_long(monster_id);
+        message.base_mut().add(monster.display_name());
+        message.add_byte(0);
+        message.base_mut().add(PHRASE);
+        message.add_byte(0);
+        for player_id in player_ids {
+            let Some(player) = self.find_player(player_id) else {
+                continue;
+            };
+            let (Ok(player_x), Ok(player_y)) =
+                (player.shape().get_tile_x(), player.shape().get_tile_y())
+            else {
+                continue;
+            };
+            if i64::from(player_x).abs_diff(i64::from(tile_x)) < area_width as u64
+                && i64::from(player_y).abs_diff(i64::from(tile_y)) < area_height as u64
+            {
+                let _ = message.send_to_player(self.net_server(), player_id);
+            }
+        }
+    }
+
+    pub(crate) fn kill_script_monster<Runtime: MonsterDeathContext>(
+        &mut self,
+        player_id: i32,
+        monster_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let Some(region_id) = self
+            .find_player(player_id)
+            .and_then(CPlayer::server_region_id)
+        else {
+            return false;
+        };
+        let snapshot = self.find_region(region_id).and_then(|owner| {
+            let monster = owner.base().find_monster_by_id(monster_id)?;
+            let property = self
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                .clone();
+            let shape = monster.move_shape().shape();
+            let carriage = monster.is_carriage(&property);
+            Some((
+                property,
+                monster.hit_points(),
+                monster.is_tamed(),
+                carriage,
+                monster.move_shape().is_god(),
+                monster.master_info(),
+                shape.get_tile_x().ok()?,
+                shape.get_tile_y().ok()?,
+                shape.get_pos_x() as u32,
+                shape.get_pos_y() as u32,
+            ))
+        });
+        let Some((property, health, tamed, carriage, god, master, tile_x, tile_y, pos_x, pos_y)) =
+            snapshot
+        else {
+            return false;
+        };
+        self.send_script_monster_kill_phrase(region_id, monster_id);
+        if health == 0 || god {
+            return false;
+        }
+        let damage = health.min(i32::MAX as u32);
+        let current_health = health.wrapping_sub(damage);
+        let now_ms = runtime.now_milliseconds();
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+            let _ = monster.register_attacking_player(
+                player_id,
+                now_ms,
+                self.globe_setup.attack_monster_protection_ms(),
+            );
+            monster.set_hit_points(current_health);
+            monster
+                .move_shape_mut()
+                .shape_mut()
+                .set_action(if current_health == 0 { 6 } else { 5 });
+            if current_health == 0 {
+                monster.when_been_killed();
+                monster.set_killed_by(MonsterKillingAttack {
+                    attacker_type: PLAYER_TYPE,
+                    attacker_id: player_id,
+                    skill_id: 0,
+                    skill_level: 0,
+                    critical: false,
+                    blast_attack: false,
+                });
+            } else {
+                monster.when_been_hurted_by(ShapeIdentity {
+                    object_type: PLAYER_TYPE,
+                    id: player_id,
+                    ex_id: CGuid::GUID_INVALID,
+                });
+            }
+        }
+        self.restore_region_owner(owner);
+        if current_health != 0 {
+            let mut hurt = CMessage::new(0x000b_f60a);
+            hurt.add_long(PLAYER_TYPE);
+            hurt.add_long(player_id);
+            hurt.add_long(MONSTER_TYPE);
+            hurt.add_long(monster_id);
+            hurt.add_byte(1);
+            hurt.add_byte(0);
+            hurt.add_ulong(damage);
+            hurt.add_ulong(current_health);
+            hurt.base_mut().add_char(0);
+            hurt.base_mut().add_char(0);
+            hurt.add_long(0);
+            hurt.add_byte(0);
+            let _ = self.send_shape_position_around(region_id, tile_x, tile_y, &hurt);
+            let _ = self.monster_on_been_hurted(region_id, monster_id, PLAYER_TYPE, player_id);
+            return false;
+        }
+
+        let mut died = CMessage::new(0x000b_f60b);
+        died.add_long(PLAYER_TYPE);
+        died.add_long(player_id);
+        died.add_long(MONSTER_TYPE);
+        died.add_long(monster_id);
+        died.add_ulong(damage);
+        died.base_mut().add_char(1);
+        died.base_mut().add_char(0);
+        died.base_mut().add_char(0);
+        died.add_long(0);
+        died.add_byte(0);
+        let _ = self.send_shape_position_around(region_id, tile_x, tile_y, &died);
+        if let Some(mut owner) = self.take_region_owner(region_id) {
+            let _ = owner
+                .base_mut()
+                .find_monster_by_id_mut(monster_id)
+                .and_then(CMonster::consume_combat_ai_event);
+            self.restore_region_owner(owner);
+        }
+        let _ = self.gods_battle_monster_died(region_id, monster_id, PLAYER_TYPE, player_id);
+        let _ = self.monster_on_died(region_id, monster_id, player_id, runtime);
+        if carriage {
+            let _ = self.send_carriage_log_snapshot(
+                master.master_id,
+                property.index,
+                region_id,
+                tile_x,
+                tile_y,
+                3,
+            );
+            if master.master_type == PLAYER_TYPE
+                && let Some(master_player) = self.find_player_mut(master.master_id)
+            {
+                master_player.clear_active_carriage(monster_id);
+            }
+        } else if !tamed {
+            self.finish_monster_kill_effects(
+                region_id, monster_id, player_id, tile_x, tile_y, &property, runtime,
+            );
+        } else if master.master_type == PLAYER_TYPE
+            && let Some(master_player) = self.find_player_mut(master.master_id)
+        {
+            master_player.remove_active_pet(MONSTER_TYPE, monster_id);
+        }
+        let mut exit = CMessage::new(0x000b_f504);
+        exit.add_long(MONSTER_TYPE);
+        exit.add_long(monster_id);
+        exit.add_long(0);
+        exit.add_ulong(pos_x);
+        exit.add_ulong(pos_y);
+        let _ = self.send_shape_position_around(region_id, tile_x, tile_y, &exit);
+        if let Some(mut owner) = self.take_region_owner(region_id) {
+            owner.base_mut().finish_owned_monster_death(monster_id);
+            self.restore_region_owner(owner);
+        }
+        true
+    }
+
     /// Exact script `3306 / DeleteMonster` не запускает death owner: после
     /// around-exit monster лишь получает `CS_DELETE` для обычного AI cleanup.
     pub(crate) fn delete_script_monster(&mut self, player_id: i32, monster_id: i32) -> Option<i32> {
@@ -32802,7 +33029,7 @@ impl CGame {
         self.damage_player_equipment(player_id, 2, runtime);
     }
 
-    fn drop_monster_goods<Runtime: GameMainLoopRuntime>(
+    fn drop_monster_goods<Runtime: MonsterDeathContext>(
         &mut self,
         region_id: i32,
         monster_original_name: &[u8],
@@ -32924,7 +33151,7 @@ impl CGame {
         }
     }
 
-    fn add_player_experience<Runtime: GameMainLoopRuntime>(
+    fn add_player_experience<Runtime: MonsterDeathContext>(
         &mut self,
         player_id: i32,
         experience_gain: u32,
@@ -32965,7 +33192,7 @@ impl CGame {
         true
     }
 
-    fn increase_player_continuous_kill<Runtime: GameMainLoopRuntime>(
+    fn increase_player_continuous_kill<Runtime: MonsterDeathContext>(
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
@@ -33053,7 +33280,7 @@ impl CGame {
         self.restore_region_owner(owner);
     }
 
-    fn award_monster_experience<Runtime: GameMainLoopRuntime>(
+    fn award_monster_experience<Runtime: MonsterDeathContext>(
         &mut self,
         beneficiary_id: i32,
         first_attacker_id: i32,
@@ -33143,7 +33370,7 @@ impl CGame {
         }
     }
 
-    fn finish_monster_kill_effects<Runtime: GameMainLoopRuntime>(
+    fn finish_monster_kill_effects<Runtime: MonsterDeathContext>(
         &mut self,
         region_id: i32,
         monster_id: i32,

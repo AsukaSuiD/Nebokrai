@@ -319,10 +319,11 @@ use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
     EquipmentDaKongContext, EquipmentSessionOpenReport, GameClockContext,
     GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
-    GodsBattleSzlPlayerUpdate, NationCarriageReturnReport, NationCombatContext,
-    NationContendEnterReport, PlayerReliveContext, RealmAppellationScriptContext,
-    ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome, ScriptRegionChangeContext, ServerRegionOwner,
-    colored_player_notice_message, colored_text_message, format_legacy_text_fields,
+    GodsBattleSzlPlayerUpdate, MonsterDeathContext, NationCarriageReturnReport,
+    NationCombatContext, NationContendEnterReport, PlayerReliveContext,
+    RealmAppellationScriptContext, ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome,
+    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
+    colored_text_message, format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
@@ -531,6 +532,7 @@ pub(crate) const SCRIPT_FUNCTION_DELETE_NPC: i32 = 3303;
 pub(crate) const SCRIPT_FUNCTION_MONSTER_TALK: i32 = 3304;
 pub(crate) const SCRIPT_FUNCTION_CREATE_MONSTER: i32 = 3305;
 pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER: i32 = 3306;
+pub(crate) const SCRIPT_FUNCTION_KILL_MONSTER: i32 = 3307;
 pub(crate) const SCRIPT_FUNCTION_PLAYER_MESSAGE: i32 = 3308;
 pub(crate) const SCRIPT_FUNCTION_GET_MAP_INFO: i32 = 3309;
 pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER_RECT: i32 = 3313;
@@ -642,6 +644,7 @@ pub(crate) trait ScriptFunctionRuntime:
     + MoveShapeCommandContext
     + ServerRegionMonsterContext
     + PlayerReliveContext
+    + MonsterDeathContext
 {
 }
 
@@ -660,6 +663,7 @@ impl<T> ScriptFunctionRuntime for T where
         + MoveShapeCommandContext
         + ServerRegionMonsterContext
         + PlayerReliveContext
+        + MonsterDeathContext
 {
 }
 
@@ -3631,7 +3635,9 @@ pub(crate) fn script_function_parameter_kind(
             1..=5 | 7 => Integer,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_DELETE_NPC | SCRIPT_FUNCTION_DELETE_MONSTER => match index {
+        SCRIPT_FUNCTION_DELETE_NPC
+        | SCRIPT_FUNCTION_DELETE_MONSTER
+        | SCRIPT_FUNCTION_KILL_MONSTER => match index {
             0 => Integer,
             _ => Unused,
         },
@@ -5420,6 +5426,18 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             } else {
                 let _ = game.delete_script_monster(player_id, target_id);
             }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_KILL_MONSTER => {
+            if argument_count != 1 || script_player_id.is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(target_id) = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR && *value > 0)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let _ = game.kill_script_monster(player_id, target_id, runtime);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_DELETE_MONSTER_RECT => {
