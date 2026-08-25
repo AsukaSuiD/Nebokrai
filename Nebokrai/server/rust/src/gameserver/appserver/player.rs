@@ -11,6 +11,14 @@
 //! Organizing identity `m_lFactionID/m_lFacMasterID` обновляется из полного
 //! World `0x7FE06` wire; `IsFactionMaster` сохраняет exact positive-faction и
 //! player-ID equality contract.
+//! Полный World→Game `0x7F901` handoff теперь декодирует единый
+//! `CPlayer::DecordFromByteArray(..., true)` layout: shape/base/combat,
+//! skills/states, containers, variables, timers, companions, quests, country,
+//! organization и session. Обратный `AddGameSaveToByteArray` использует те же
+//! owned поля и live pet/carriage snapshot; container codec failure прекращает
+//! wire строго на первом false, как исходная цепочка. После чтения base-wire
+//! `bBFSummon` намеренно снова выводится из локального `m_dwWarSoulState`, а не
+//! принимается как независимый persisted fact.
 //! `CMessage::Run` RVA `0x000149D0` дополнительно читает inherited father
 //! `+0x40` как текущий `CServerRegion*`; удалённый raw pointer выражен
 //! `Option<i32>` region identity в assembly-проекции.
@@ -204,8 +212,8 @@
 
 use super::area::WarSoulPoint;
 use super::container::camountlimitgoodscontainer::{
-    AmountLimitGoodsAdded, AmountLimitGoodsRemoved, AmountLimitGoodsTaken,
-    CAmountLimitGoodsContainer,
+    AmountLimitGoodsAdded, AmountLimitGoodsCodecError, AmountLimitGoodsRemoved,
+    AmountLimitGoodsTaken, CAmountLimitGoodsContainer,
 };
 use super::container::camountlimitgoodsshadowcontainer::{
     AmountShadowAdded, CAmountLimitGoodsShadowContainer,
@@ -221,17 +229,22 @@ use super::container::ccontainer::PreviousContainer;
 use super::container::cdepot::CDepot;
 use super::container::cequipmentcontainer::{
     CEquipmentContainer, EquipmentAddOutcome, EquipmentAddRuntimeFacts, EquipmentAroundUpdate,
-    EquipmentColumn, EquipmentOwnerPlayerFacts, EquipmentRemoveOutcome,
-    EquipmentRemoveRuntimeFacts,
+    EquipmentColumn, EquipmentContainerCodecError, EquipmentOwnerPlayerFacts,
+    EquipmentRemoveOutcome, EquipmentRemoveRuntimeFacts, EquipmentUnserializedEntry,
 };
-use super::container::cfairycontainer::CFairyContainer;
+use super::container::cfairycontainer::{
+    CFairyContainer, FairyContainerCodecError,
+};
+use super::container::cjifen::CJiFen;
 use super::container::cgoodscontainer::GoodsStackMergeOutcome;
 use super::container::cgoodsshadowcontainer::{PlacedShadowGoods, ShadowRecordBlock};
 use super::container::cvolumelimitgoodscontainer::{
-    CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
+    CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsCodecError,
+    VolumeGoodsRemoveOutcome,
 };
 use super::container::cwallet::{
-    CWallet, CurrencyDecreaseOutcome, CurrencyGoodsAddOutcome, CurrencyIncreaseOutcome,
+    CWallet, CurrencyCodecError, CurrencyDecreaseOutcome, CurrencyGoodsAddOutcome,
+    CurrencyIncreaseOutcome,
 };
 use super::container::cyuanbao::CYuanBao;
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
@@ -254,8 +267,12 @@ use super::goods::cgoodsbaseproperties::{
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::moveshape::{CMoveShape, MoveShapePositionFacts, MoveShapeSkill};
-use super::script::variablelist::{CVariableList, GameVariableMutationOutcome};
-use super::shape::{CShape, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeView};
+use super::script::variablelist::{
+    CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
+};
+use super::shape::{
+    CShape, ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView,
+};
 use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
 use crate::public::auctionnode::CGoodsNode;
 use crate::public::guid::CGuid;
@@ -263,6 +280,55 @@ use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 const PLAYER_TYPE: i32 = 400;
+const PLAYER_BASE_PROPERTY_WIRE_SIZE: usize = 0x194;
+const BASE_LEVEL_OFFSET: usize = 0x04;
+const BASE_EXPERIENCE_OFFSET: usize = 0x08;
+const BASE_HEAD_PICTURE_OFFSET: usize = 0x0c;
+const BASE_FACE_PICTURE_OFFSET: usize = 0x0d;
+const BASE_OCCUPATION_OFFSET: usize = 0x0e;
+const BASE_SEX_OFFSET: usize = 0x0f;
+const BASE_PK_COUNT_OFFSET: usize = 0x1c;
+const BASE_KILL_COUNT_OFFSET: usize = 0x20;
+const BASE_REMAIN_POINT_OFFSET: usize = 0x3a;
+const BASE_HOTKEY_OFFSET: usize = 0x3c;
+const BASE_PK_NORMAL_OFFSET: usize = 0x9c;
+const BASE_PK_TEAM_OFFSET: usize = 0x9d;
+const BASE_PK_UNION_OFFSET: usize = 0x9e;
+const BASE_PK_BADMAN_OFFSET: usize = 0x9f;
+const BASE_PK_COUNTRY_OFFSET: usize = 0xa0;
+const BASE_HEALTH_OFFSET: usize = 0xa4;
+const BASE_MANA_OFFSET: usize = 0xa8;
+const BASE_MAXIMUM_HP_OFFSET: usize = 0xb0;
+const BASE_MAXIMUM_MP_OFFSET: usize = 0xb4;
+const BASE_STRENGTH_OFFSET: usize = 0xbc;
+const BASE_DEXTERITY_OFFSET: usize = 0xc0;
+const BASE_CONSTITUTION_OFFSET: usize = 0xc4;
+const BASE_INTELLIGENCE_OFFSET: usize = 0xc8;
+const BASE_VIGOUR_OFFSET: usize = 0xec;
+const BASE_CREDIT_OFFSET: usize = 0xfc;
+const BASE_DISPLAY_HEAD_PIECE_OFFSET: usize = 0x104;
+const BASE_QUEST_TIME_BEGIN_OFFSET: usize = 0x108;
+const BASE_QUEST_TIME_LIMIT_OFFSET: usize = 0x10c;
+const BASE_EXPLOIT_OFFSET: usize = 0x114;
+const BASE_FAIRY_CONTAINER_ENABLED_OFFSET: usize = 0x11c;
+const BASE_DAYS_HONOR_OFFSET: usize = 0x140;
+const BASE_WEEKS_HONOR_OFFSET: usize = 0x144;
+const BASE_MONTHS_HONOR_OFFSET: usize = 0x148;
+const BASE_TOTAL_HONOR_OFFSET: usize = 0x14c;
+const BASE_RANK_OF_NOBILITY_OFFSET: usize = 0x150;
+const BASE_APPELLATION_OFFSET: usize = 0x154;
+const BASE_MODE_OFFSET: usize = 0x158;
+const BASE_FETCH_POWER_OFFSET: usize = 0x164;
+const BASE_BATTLE_FAIRY_SUMMONED_OFFSET: usize = 0x16c;
+const BASE_BATTLE_FAIRY_RECALL_OFFSET: usize = 0x16d;
+const BASE_BATTLE_FAIRY_DIED_OFFSET: usize = 0x16e;
+const BASE_FY_ENERGY_OFFSET: usize = 0x17c;
+const BASE_FY_ENABLE_FLAGS_OFFSET: usize = 0x180;
+const BASE_LT_UP_60_COUNT_OFFSET: usize = 0x184;
+const BASE_REMAIN_JING_LI_DAN_COUNT_OFFSET: usize = 0x186;
+const BASE_LT_60_STAMP_OFFSET: usize = 0x188;
+const BASE_SZL_OFFSET: usize = 0x18c;
+const BASE_GODS_BATTLE_FACTION_OFFSET: usize = 0x190;
 const LEGACY_COMBAT_MAXIMUM: u32 = i32::MAX as u32;
 const CONTRIBUTION_MINIMUM: i32 = -2_000_000_000;
 const CONTRIBUTION_MAXIMUM: i32 = 2_000_000_000;
@@ -1163,12 +1229,114 @@ pub(crate) struct PlayerLeiTingThing {
     pub(crate) point: u16,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerUncreatedPet {
+    pub(crate) original_name: Vec<u8>,
+    pub(crate) health: u32,
+    pub(crate) level: u32,
+    pub(crate) experience: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerUncreatedCarriage {
+    pub(crate) original_name: Vec<u8>,
+    pub(crate) script: Vec<u8>,
+    pub(crate) health: u32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerLeiTingDecodeBlock {
     pub(crate) field: &'static str,
     pub(crate) offset: usize,
     pub(crate) needed: usize,
     pub(crate) available: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerGameSaveCodecError {
+    Shape(ShapeDecodeError),
+    Goods(AmountLimitGoodsCodecError),
+    Volume(VolumeGoodsCodecError),
+    Equipment(EquipmentContainerCodecError),
+    Fairy(FairyContainerCodecError),
+    Currency(CurrencyCodecError),
+    Variables(GameVariableSnapshotError),
+    LeiTing(PlayerLeiTingDecodeBlock),
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    NegativeCount {
+        field: &'static str,
+        count: i32,
+    },
+    StringTooLong {
+        field: &'static str,
+        length: usize,
+        maximum: usize,
+    },
+    CollectionTooLarge {
+        field: &'static str,
+        length: usize,
+    },
+    WrongObjectType {
+        object_type: i32,
+    },
+    EquipmentRejected {
+        position: u32,
+    },
+    CodecReturnedFalse {
+        field: &'static str,
+    },
+}
+
+impl From<ShapeDecodeError> for PlayerGameSaveCodecError {
+    fn from(value: ShapeDecodeError) -> Self {
+        Self::Shape(value)
+    }
+}
+
+impl From<AmountLimitGoodsCodecError> for PlayerGameSaveCodecError {
+    fn from(value: AmountLimitGoodsCodecError) -> Self {
+        Self::Goods(value)
+    }
+}
+
+impl From<VolumeGoodsCodecError> for PlayerGameSaveCodecError {
+    fn from(value: VolumeGoodsCodecError) -> Self {
+        Self::Volume(value)
+    }
+}
+
+impl From<CurrencyCodecError> for PlayerGameSaveCodecError {
+    fn from(value: CurrencyCodecError) -> Self {
+        Self::Currency(value)
+    }
+}
+
+impl From<FairyContainerCodecError> for PlayerGameSaveCodecError {
+    fn from(value: FairyContainerCodecError) -> Self {
+        Self::Fairy(value)
+    }
+}
+
+impl From<GameVariableSnapshotError> for PlayerGameSaveCodecError {
+    fn from(value: GameVariableSnapshotError) -> Self {
+        Self::Variables(value)
+    }
+}
+
+impl From<PlayerLeiTingDecodeBlock> for PlayerGameSaveCodecError {
+    fn from(value: PlayerLeiTingDecodeBlock) -> Self {
+        Self::LeiTing(value)
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlayerGameSaveDecodeReport {
+    pub(crate) consumed_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1585,6 +1753,7 @@ pub(crate) struct CPlayer {
     faction_name: Vec<u8>,
     union_id: i32,
     team_id: i32,
+    team_captain: bool,
     country: u8,
     server_region_id: Option<i32>,
     in_changing_server: bool,
@@ -1611,6 +1780,16 @@ pub(crate) struct CPlayer {
     friends: Vec<PlayerFriend>,
     quest_states: BTreeMap<u16, u8>,
     lei_ting_things: VecDeque<PlayerLeiTingThing>,
+    uncreated_pets: Vec<PlayerUncreatedPet>,
+    uncreated_carriage: PlayerUncreatedCarriage,
+    login: bool,
+    session_id: Vec<u8>,
+    title: Vec<u8>,
+    base_property_wire: [u8; PLAYER_BASE_PROPERTY_WIRE_SIZE],
+    jjc_data: [u8; 0x10],
+    jjc_pk_state: bool,
+    fight_state_count: i32,
+    organizing_wire: Vec<u8>,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
     combat_property_wire: [u8; PLAYER_COMBAT_PROPERTY_WIRE_SIZE],
@@ -1651,6 +1830,7 @@ pub(crate) struct CPlayer {
     packet: CVolumeLimitGoodsContainer,
     wallet: CWallet,
     yuan_bao: CYuanBao,
+    ji_fen: CJiFen,
     equipment: CEquipmentContainer,
     auction_listing: CVolumeLimitGoodsContainer,
     auction_goods: CVolumeLimitGoodsContainer,
@@ -1729,6 +1909,7 @@ impl CPlayer {
             faction_name: Vec::new(),
             union_id: 0,
             team_id,
+            team_captain: false,
             country,
             server_region_id,
             in_changing_server: false,
@@ -1756,6 +1937,16 @@ impl CPlayer {
             friends: Vec::new(),
             quest_states: BTreeMap::new(),
             lei_ting_things: VecDeque::new(),
+            uncreated_pets: Vec::new(),
+            uncreated_carriage: PlayerUncreatedCarriage::default(),
+            login: false,
+            session_id: Vec::new(),
+            title: Vec::new(),
+            base_property_wire: [0; PLAYER_BASE_PROPERTY_WIRE_SIZE],
+            jjc_data: [0; 0x10],
+            jjc_pk_state: false,
+            fight_state_count: 0,
+            organizing_wire: Vec::new(),
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
             combat_property_wire: [0; PLAYER_COMBAT_PROPERTY_WIRE_SIZE],
@@ -1796,6 +1987,7 @@ impl CPlayer {
             packet,
             wallet: CWallet::new(),
             yuan_bao: CYuanBao::new(),
+            ji_fen: CJiFen::new(),
             equipment: CEquipmentContainer::new(),
             auction_listing,
             auction_goods,
@@ -1822,8 +2014,759 @@ impl CPlayer {
         Some(player)
     }
 
+    /// Exact World→Game player handoff. Decoder восстанавливает единый
+    /// `CPlayer::DecordFromByteArray(..., true)` блок, а не отдельные игровые
+    /// фрагменты. Native GoodsAI tail намеренно отложен до успешной регистрации
+    /// player-а в map/region и исполняется `CGame::complete_world_player_login`
+    /// для достигнутых equipment и packet owners.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn decode_game_save(
+        source: &[u8],
+        cursor: &mut usize,
+        goods_factory: &CGoodsFactory,
+        skill_factory: &CSkillFactory,
+        variable_definitions: Option<&[u8]>,
+        now_ms: u32,
+        one_pk_count_time_ms: u32,
+        ordinary_threshold: &mut dyn FnMut(u32, u32) -> u32,
+        battle_threshold: &mut dyn FnMut(u32, u32) -> u32,
+    ) -> Result<(Self, PlayerGameSaveDecodeReport), PlayerGameSaveCodecError> {
+        let start = *cursor;
+        let mut move_shape = CMoveShape::default();
+        move_shape
+            .shape_mut()
+            .decode_from_byte_array(source, cursor, true)?;
+        let object_type = move_shape.shape().identity().object_type;
+        if object_type != PLAYER_TYPE {
+            return Err(PlayerGameSaveCodecError::WrongObjectType { object_type });
+        }
+        let server_region_id = move_shape.shape().get_region_id();
+
+        let mut player = Self::from_send_state(
+            move_shape,
+            ShapeFigure::default(),
+            0,
+            0,
+            Some(server_region_id),
+        )
+        .expect("player object type проверен до создания CPlayer");
+        player.base_property_wire =
+            read_player_game_save_array(source, cursor, "m_BaseProperty[0x194]")?;
+        player.apply_base_property_wire();
+        player.battle_fairy_summoned = player.war_soul_state != 0;
+        player.account = read_player_game_save_string(source, cursor, "strAccount", 0x100)?;
+        player.title = read_player_game_save_string(source, cursor, "strTitle", 0x100)?;
+        player.combat_property_wire =
+            read_player_game_save_array(source, cursor, "m_Property[0x9c]")?;
+        player.apply_combat_property_wire();
+        player.team_id = read_player_game_save_i32(source, cursor, "m_lTeamID")?;
+
+        player.ci_qing_list.clear();
+        let ci_qing_count = read_player_game_save_count(source, cursor, "m_setCiQingList")?;
+        for _ in 0..ci_qing_count {
+            player.ci_qing_list.insert(read_player_game_save_u32(
+                source,
+                cursor,
+                "m_setCiQingList entry",
+            )?);
+        }
+
+        player.move_shape.clear_persisted_runtime_state();
+        let skill_count = read_player_game_save_count(source, cursor, "skill count")?;
+        for _ in 0..skill_count {
+            let packed = read_player_game_save_u32(source, cursor, "tagSkillID")?;
+            let skill_id = packed & 0xffff;
+            let level = (packed >> 16) as i32;
+            let loaded = player.move_shape.add_skill(skill_id, level, skill_factory);
+            if loaded
+                && super::skills::realmappellation::is_bonus_skill(skill_id)
+                && (1..=4).contains(&level)
+            {
+                player.realm_appellation_skill_id = skill_id;
+                player.realm_appellation_skill_level = level;
+            }
+        }
+        let ex_state_length =
+            read_player_game_save_count(source, cursor, "m_vExStates length")?;
+        player.move_shape.replace_ex_states(
+            read_player_game_save_slice(source, cursor, "m_vExStates", ex_state_length)?.to_vec(),
+        );
+
+        player.friends.clear();
+        let friend_count = read_player_game_save_count(source, cursor, "m_listFriend")?;
+        for _ in 0..friend_count {
+            player.friends.push(PlayerFriend {
+                name: read_player_game_save_string(source, cursor, "tagFriend.strName", 0x94)?,
+                online: read_player_game_save_u8(source, cursor, "tagFriend.bOnline")? != 0,
+            });
+        }
+        player.decode_lei_ting(source, cursor)?;
+
+        let _cleared_hand = player.hand.clear_goods();
+        player.hand.set_goods_amount_limit(1);
+        player.hand.unserialize(
+            source,
+            cursor,
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+
+        let base_properties = player.base_properties;
+        let combat_properties = player.combat_properties;
+        let equipment = player.equipment.unserialize_with(
+            source,
+            cursor,
+            goods_factory,
+            true,
+            |source, cursor| {
+                let mut goods = CGoods::default();
+                goods.unserialize(
+                    source,
+                    cursor,
+                    true,
+                    goods_factory,
+                    &mut *ordinary_threshold,
+                    &mut *battle_threshold,
+                )?;
+                Ok(Some(goods))
+            },
+            |goods| EquipmentAddRuntimeFacts {
+                owner_player: Some(EquipmentOwnerPlayerFacts {
+                    can_mount_result: Self::can_use_item_from_properties(
+                        base_properties,
+                        combat_properties,
+                        goods,
+                        goods_factory,
+                    ),
+                }),
+                pack_add_enabled: false,
+                now: u64::from(now_ms),
+            },
+            &mut |_| {},
+            &mut |_, _, _| {},
+        );
+        let equipment = equipment.map_err(|failure| {
+            PlayerGameSaveCodecError::Equipment(failure.error)
+        })?;
+        if let Some(position) = equipment.entries.iter().find_map(|entry| match entry {
+            EquipmentUnserializedEntry::Rejected { position, .. }
+            | EquipmentUnserializedEntry::DecoderReturnedNull { position } => Some(*position),
+            EquipmentUnserializedEntry::Added { .. } => None,
+        }) {
+            return Err(PlayerGameSaveCodecError::EquipmentRejected { position });
+        }
+
+        let _released = player.packet.set_container_dimensions(8, 12);
+        player.packet.unserialize(
+            source,
+            cursor,
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        player.packet.apply_player_expansion_limit(player.equipment.expanded_package_num());
+
+        let _released = player.auction_goods.set_container_volume(0x12);
+        player.auction_goods.unserialize(
+            source,
+            cursor,
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        let _released = player.auction_listing.set_container_volume(2);
+        player.auction_listing.unserialize(
+            source,
+            cursor,
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        player.wallet.unserialize(
+            source,
+            cursor,
+            "m_cWallet marker",
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        player.auction_wallet.unserialize(
+            source,
+            cursor,
+            "m_cAuctionWallet marker",
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        player.yuan_bao.unserialize(
+            source,
+            cursor,
+            "m_cYuanBao marker",
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        player.ji_fen.unserialize(
+            source,
+            cursor,
+            "m_cJiFen marker",
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        player.money = player.wallet.currency_amount();
+
+        player.depot_password =
+            read_player_game_save_string(source, cursor, "m_strDepotPassword", 0x6c)?;
+        player.bank.unserialize(
+            source,
+            cursor,
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        let _released = player.depot.base_mut().set_container_volume(0xa1);
+        player.depot.unserialize(
+            source,
+            cursor,
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        let _released = player.fairy_container.base_mut().set_container_volume(0x0e);
+        player.fairy_container.unserialize(
+            source,
+            cursor,
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        let _released = player
+            .battle_fairy_container
+            .base_mut()
+            .set_container_volume(0x11);
+        player.battle_fairy_container.unserialize(
+            source,
+            cursor,
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        let _released = player.ci_qing.set_container_volume(8);
+        player.ci_qing.unserialize(
+            source,
+            cursor,
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+        let _released = player.ci_qing_compose.set_container_volume(3);
+        player.ci_qing_compose.unserialize(
+            source,
+            cursor,
+            goods_factory,
+            &mut *ordinary_threshold,
+            &mut *battle_threshold,
+        )?;
+
+        player.variable_list.decode_world_snapshot(
+            variable_definitions,
+            source,
+            cursor,
+        )?;
+        player.silence_minutes = read_player_game_save_i32(source, cursor, "m_lSilenceTime")?;
+        let murderer_state = read_player_game_save_u8(source, cursor, "murderer state")? != 0;
+        let murderer_remain =
+            read_player_game_save_u32(source, cursor, "murderer remain time")?;
+        player.restore_murderer_timestamp(
+            murderer_state,
+            murderer_remain,
+            now_ms,
+            one_pk_count_time_ms,
+        );
+        player.fight_state_count =
+            read_player_game_save_i32(source, cursor, "m_lFightStateCount")?;
+
+        player.uncreated_pets.clear();
+        let pet_count = read_player_game_save_count(source, cursor, "m_vUncreatedPets")?;
+        for _ in 0..pet_count {
+            player.uncreated_pets.push(PlayerUncreatedPet {
+                original_name: read_player_game_save_string(
+                    source,
+                    cursor,
+                    "tagPetInformation.strOriginalName",
+                    0x94,
+                )?,
+                health: read_player_game_save_u32(source, cursor, "tagPetInformation.dwHp")?,
+                level: read_player_game_save_u32(source, cursor, "tagPetInformation.dwLevel")?,
+                experience: read_player_game_save_u32(
+                    source,
+                    cursor,
+                    "tagPetInformation.dwExperience",
+                )?,
+            });
+        }
+        player.uncreated_carriage = PlayerUncreatedCarriage {
+            original_name: read_player_game_save_string(
+                source,
+                cursor,
+                "tagCarriageInfo.strOriginalName",
+                0x94,
+            )?,
+            script: read_player_game_save_string(
+                source,
+                cursor,
+                "tagCarriageInfo.strCarriageScript",
+                0x94,
+            )?,
+            health: read_player_game_save_u32(source, cursor, "tagCarriageInfo.dwHp")?,
+        };
+        player.recreate_carriage =
+            read_player_game_save_u8(source, cursor, "m_bReCreateCarriage")? != 0;
+        player.login = read_player_game_save_u8(source, cursor, "m_bLogin")? != 0;
+        player.city_war_died_state_time_ms =
+            read_player_game_save_i32(source, cursor, "m_lCityWarDiedStateTime")?;
+        player.died_state_start_time_ms =
+            u32::from(player.city_war_died_state_time_ms > 0).wrapping_mul(now_ms);
+        player.city_war_died_state = player.city_war_died_state_time_ms > 0
+            && player.base_properties.occupation != 6;
+
+        player.quest_states.clear();
+        let quest_count = read_player_game_save_count(source, cursor, "m_PlayerQuests")?;
+        for _ in 0..quest_count {
+            let quest_id = read_player_game_save_u16(source, cursor, "tagPlayerQuest.wQuestID")?;
+            let state = read_player_game_save_u8(source, cursor, "tagPlayerQuest.byComplete")?;
+            player.quest_states.insert(quest_id, state);
+        }
+        player.country = read_player_game_save_u8(source, cursor, "m_btCountry")?;
+        player.contribution = read_player_game_save_i32(source, cursor, "m_lContribute")?;
+        player.jjc_data = read_player_game_save_array(source, cursor, "m_jjcdata[0x10]")?;
+        player.jjc_pk_state = read_player_game_save_u8(source, cursor, "bJJcPkState")? != 0;
+        player.decode_organizing_snapshot(source, cursor)?;
+        player.session_id =
+            read_player_game_save_string(source, cursor, "m_strSessionID", 0x40)?;
+        player.refresh_reached_container_owners(player.player_id());
+
+        Ok((
+            player,
+            PlayerGameSaveDecodeReport {
+                consumed_bytes: cursor.saturating_sub(start),
+            },
+        ))
+    }
+
+    /// `AddGameSaveToByteArray`: тот же persisted layout без organization
+    /// snapshot (World обновляет его самостоятельно перед следующим handoff).
+    pub(crate) fn encode_game_save(
+        &self,
+        destination: &mut Vec<u8>,
+        goods_factory: &CGoodsFactory,
+        now_ms: u32,
+        one_pk_count_time_ms: u32,
+        pets: &[PlayerUncreatedPet],
+        carriage: &PlayerUncreatedCarriage,
+        recreate_carriage: bool,
+    ) -> Result<bool, PlayerGameSaveCodecError> {
+        if !self.shape().encode_to_byte_array(destination, true) {
+            return Err(PlayerGameSaveCodecError::CodecReturnedFalse { field: "CShape" });
+        }
+        destination.extend_from_slice(&self.synchronized_base_property_wire());
+        append_player_game_save_string(destination, "strAccount", &self.account, 0x100)?;
+        append_player_game_save_string(destination, "strTitle", &self.title, 0x100)?;
+        destination.extend_from_slice(&self.combat_property_wire);
+        destination.extend_from_slice(&self.team_id.to_le_bytes());
+
+        append_player_game_save_count(destination, "m_setCiQingList", self.ci_qing_list.len())?;
+        for base_index in &self.ci_qing_list {
+            destination.extend_from_slice(&base_index.to_le_bytes());
+        }
+        let skills: Vec<_> = self
+            .move_shape
+            .skills()
+            .values()
+            .filter(|skill| !(skill.skill_type() == 1 && skill.id() == 10))
+            .collect();
+        append_player_game_save_count(destination, "skill count", skills.len())?;
+        for skill in skills {
+            let packed = (skill.id() & 0xffff) | ((skill.level() as u32 & 0xffff) << 16);
+            destination.extend_from_slice(&packed.to_le_bytes());
+        }
+        append_player_game_save_count(
+            destination,
+            "m_vExStates length",
+            self.move_shape.ex_states().len(),
+        )?;
+        destination.extend_from_slice(self.move_shape.ex_states());
+        append_player_game_save_count(destination, "m_listFriend", self.friends.len())?;
+        for friend in &self.friends {
+            append_player_game_save_string(destination, "tagFriend.strName", &friend.name, 0x94)?;
+            destination.push(u8::from(friend.online));
+        }
+        destination.extend_from_slice(&self.encode_lei_ting());
+
+        destination.extend_from_slice(&0i32.to_le_bytes());
+        let mut equipment_serialized = true;
+        self.equipment.serialize_with(
+            destination,
+            goods_factory,
+            true,
+            |goods, include_child, destination| {
+                equipment_serialized &= goods.serialize(destination, include_child);
+            },
+        );
+        if !equipment_serialized {
+            return Err(PlayerGameSaveCodecError::CodecReturnedFalse {
+                field: "m_cEquipment",
+            });
+        }
+        macro_rules! serialize_container {
+            ($field:literal, $serialized:expr) => {
+                if !$serialized {
+                    return Err(PlayerGameSaveCodecError::CodecReturnedFalse { field: $field });
+                }
+            };
+        }
+        serialize_container!("m_cPacket", self.packet.serialize(destination, goods_factory));
+        serialize_container!(
+            "m_cAuctionGoodsContainer",
+            self.auction_goods.serialize(destination, goods_factory)
+        );
+        serialize_container!(
+            "m_cAuctionContainer",
+            self.auction_listing.serialize(destination, goods_factory)
+        );
+        serialize_container!("m_cWallet", self.wallet.serialize(destination));
+        serialize_container!(
+            "m_cAuctionWallet",
+            self.auction_wallet.serialize(destination)
+        );
+        serialize_container!("m_cYuanBao", self.yuan_bao.serialize(destination));
+        serialize_container!("m_cJiFen", self.ji_fen.serialize(destination));
+        append_player_game_save_string(
+            destination,
+            "m_strDepotPassword",
+            &self.depot_password,
+            0x6c,
+        )?;
+        serialize_container!("m_cBank", self.bank.serialize(destination));
+        serialize_container!("m_cDepot", self.depot.serialize(destination, goods_factory));
+        serialize_container!(
+            "m_cFairy",
+            self.fairy_container.serialize(destination, goods_factory)
+        );
+        serialize_container!(
+            "m_cBF",
+            self.battle_fairy_container
+                .serialize(destination, goods_factory)
+        );
+        serialize_container!("m_cCiQing", self.ci_qing.serialize(destination, goods_factory));
+        serialize_container!(
+            "m_cComposeCiQing",
+            self.ci_qing_compose.serialize(destination, goods_factory)
+        );
+        if !self.variable_list.encode_world_snapshot(destination) {
+            return Err(PlayerGameSaveCodecError::CodecReturnedFalse {
+                field: "m_pVariableList",
+            });
+        }
+        destination.extend_from_slice(&self.silence_minutes.to_le_bytes());
+        let murderer_state = self.base_properties.pk_count != 0 && self.murderer_time_stamp_ms != 0;
+        destination.push(u8::from(murderer_state));
+        let murderer_remain = if self.murderer_time_stamp_ms == 0 {
+            0
+        } else {
+            self.murderer_time_stamp_ms
+                .wrapping_add(one_pk_count_time_ms)
+                .wrapping_sub(now_ms)
+                .min(one_pk_count_time_ms)
+        };
+        destination.extend_from_slice(&murderer_remain.to_le_bytes());
+        destination.extend_from_slice(&self.fight_state_count.to_le_bytes());
+        append_player_game_save_count(destination, "m_vUncreatedPets", pets.len())?;
+        for pet in pets {
+            append_player_game_save_string(
+                destination,
+                "tagPetInformation.strOriginalName",
+                &pet.original_name,
+                0x94,
+            )?;
+            destination.extend_from_slice(&pet.health.to_le_bytes());
+            destination.extend_from_slice(&pet.level.to_le_bytes());
+            destination.extend_from_slice(&pet.experience.to_le_bytes());
+        }
+        append_player_game_save_string(
+            destination,
+            "tagCarriageInfo.strOriginalName",
+            &carriage.original_name,
+            0x94,
+        )?;
+        append_player_game_save_string(
+            destination,
+            "tagCarriageInfo.strCarriageScript",
+            &carriage.script,
+            0x94,
+        )?;
+        destination.extend_from_slice(&carriage.health.to_le_bytes());
+        destination.push(u8::from(recreate_carriage));
+        destination.push(u8::from(self.login));
+        destination.extend_from_slice(&self.city_war_died_state_time_ms.to_le_bytes());
+        append_player_game_save_count(destination, "m_PlayerQuests", self.quest_states.len())?;
+        for (quest_id, state) in &self.quest_states {
+            destination.extend_from_slice(&quest_id.to_le_bytes());
+            destination.push(*state);
+        }
+        destination.push(self.country);
+        destination.extend_from_slice(&self.contribution.to_le_bytes());
+        destination.extend_from_slice(&self.jjc_data);
+        destination.push(u8::from(self.jjc_pk_state));
+        append_player_game_save_string(destination, "m_strSessionID", &self.session_id, 0x40)?;
+        Ok(true)
+    }
+
+    fn synchronized_base_property_wire(&self) -> [u8; PLAYER_BASE_PROPERTY_WIRE_SIZE] {
+        let mut wire = self.base_property_wire;
+        wire[BASE_LEVEL_OFFSET] = self.base_properties.level;
+        write_player_wire_u32(&mut wire, BASE_EXPERIENCE_OFFSET, self.base_properties.experience);
+        wire[BASE_HEAD_PICTURE_OFFSET] = self.base_properties.head_picture as u8;
+        wire[BASE_FACE_PICTURE_OFFSET] = self.base_properties.face_picture as u8;
+        wire[BASE_OCCUPATION_OFFSET] = self.base_properties.occupation;
+        wire[BASE_SEX_OFFSET] = self.base_properties.sex;
+        write_player_wire_u16(&mut wire, BASE_PK_COUNT_OFFSET, self.base_properties.pk_count);
+        write_player_wire_u32(&mut wire, BASE_KILL_COUNT_OFFSET, self.base_properties.kill_count);
+        write_player_wire_u16(&mut wire, BASE_REMAIN_POINT_OFFSET, self.base_properties.remain_point);
+        for (index, hotkey) in self.base_properties.hotkeys.iter().copied().enumerate() {
+            write_player_wire_u32(&mut wire, BASE_HOTKEY_OFFSET + index * 4, hotkey);
+        }
+        for (offset, value) in [
+            (BASE_PK_NORMAL_OFFSET, self.base_properties.pk_normal),
+            (BASE_PK_TEAM_OFFSET, self.base_properties.pk_team),
+            (BASE_PK_UNION_OFFSET, self.base_properties.pk_union),
+            (BASE_PK_BADMAN_OFFSET, self.base_properties.pk_badman),
+            (BASE_PK_COUNTRY_OFFSET, self.base_properties.pk_country),
+            (
+                BASE_FAIRY_CONTAINER_ENABLED_OFFSET,
+                self.base_properties.fairy_container_enabled,
+            ),
+            (BASE_DISPLAY_HEAD_PIECE_OFFSET, self.base_properties.display_head_piece),
+            (BASE_BATTLE_FAIRY_SUMMONED_OFFSET, self.battle_fairy_summoned),
+            (
+                BASE_BATTLE_FAIRY_RECALL_OFFSET,
+                self.base_properties.battle_fairy_recall,
+            ),
+            (
+                BASE_BATTLE_FAIRY_DIED_OFFSET,
+                self.base_properties.battle_fairy_died,
+            ),
+        ] {
+            wire[offset] = u8::from(value);
+        }
+        for (offset, value) in [
+            (BASE_HEALTH_OFFSET, self.base_properties.health),
+            (BASE_MANA_OFFSET, self.base_properties.mana),
+            (BASE_MAXIMUM_HP_OFFSET, self.base_properties.base_maximum_hp),
+            (BASE_MAXIMUM_MP_OFFSET, self.base_properties.base_maximum_mp),
+            (BASE_STRENGTH_OFFSET, self.base_properties.base_strength),
+            (BASE_DEXTERITY_OFFSET, self.base_properties.base_dexterity),
+            (BASE_CONSTITUTION_OFFSET, self.base_properties.base_constitution),
+            (BASE_INTELLIGENCE_OFFSET, self.base_properties.base_intelligence),
+            (BASE_VIGOUR_OFFSET, self.base_properties.vigour),
+            (BASE_CREDIT_OFFSET, self.base_properties.credit),
+            (BASE_QUEST_TIME_BEGIN_OFFSET, self.base_properties.quest_time_begin as u32),
+            (BASE_QUEST_TIME_LIMIT_OFFSET, self.base_properties.quest_time_limit as u32),
+            (BASE_EXPLOIT_OFFSET, self.base_properties.exploit),
+            (BASE_DAYS_HONOR_OFFSET, self.base_properties.days_honor_eliminate),
+            (BASE_WEEKS_HONOR_OFFSET, self.base_properties.weeks_honor_eliminate),
+            (BASE_MONTHS_HONOR_OFFSET, self.base_properties.months_honor_eliminate),
+            (BASE_TOTAL_HONOR_OFFSET, self.base_properties.total_honor_eliminate),
+            (BASE_RANK_OF_NOBILITY_OFFSET, self.base_properties.rank_of_nobility_id),
+            (BASE_APPELLATION_OFFSET, self.base_properties.appellation_id),
+            (BASE_MODE_OFFSET, self.base_properties.mode),
+            (BASE_FETCH_POWER_OFFSET, self.base_properties.fetch_power),
+            (BASE_FY_ENERGY_OFFSET, self.base_properties.fy_energy),
+            (BASE_FY_ENABLE_FLAGS_OFFSET, self.base_properties.fy_enable_flags),
+            (BASE_LT_60_STAMP_OFFSET, self.base_properties.lt_60_stamp),
+            (BASE_SZL_OFFSET, self.base_properties.szl),
+            (
+                BASE_GODS_BATTLE_FACTION_OFFSET,
+                self.base_properties.gods_battle_faction as u32,
+            ),
+        ] {
+            write_player_wire_u32(&mut wire, offset, value);
+        }
+        write_player_wire_u16(
+            &mut wire,
+            BASE_LT_UP_60_COUNT_OFFSET,
+            self.base_properties.lt_up_60_count,
+        );
+        write_player_wire_u16(
+            &mut wire,
+            BASE_REMAIN_JING_LI_DAN_COUNT_OFFSET,
+            self.base_properties.remain_jing_li_dan_count,
+        );
+        wire
+    }
+
+    fn restore_murderer_timestamp(
+        &mut self,
+        murderer_state: bool,
+        murderer_remain: u32,
+        now_ms: u32,
+        one_pk_count_time_ms: u32,
+    ) {
+        if self.base_properties.pk_count == 0 {
+            self.murderer_time_stamp_ms = 0;
+            return;
+        }
+        if murderer_state || self.murderer_time_stamp_ms == 0 {
+            self.murderer_time_stamp_ms = now_ms;
+        }
+        if murderer_remain != 0 {
+            let remain = murderer_remain.min(one_pk_count_time_ms);
+            self.murderer_time_stamp_ms =
+                now_ms.wrapping_sub(one_pk_count_time_ms.wrapping_sub(remain));
+        }
+    }
+
+    fn apply_base_property_wire(&mut self) {
+        let wire = &self.base_property_wire;
+        self.base_properties.level = wire[BASE_LEVEL_OFFSET];
+        self.base_properties.experience = read_player_wire_u32(wire, BASE_EXPERIENCE_OFFSET);
+        self.base_properties.head_picture = i32::from(wire[BASE_HEAD_PICTURE_OFFSET]);
+        self.base_properties.face_picture = i32::from(wire[BASE_FACE_PICTURE_OFFSET]);
+        self.base_properties.occupation = wire[BASE_OCCUPATION_OFFSET];
+        self.base_properties.sex = wire[BASE_SEX_OFFSET];
+        self.base_properties.pk_count = read_player_wire_u16(wire, BASE_PK_COUNT_OFFSET);
+        self.base_properties.kill_count = read_player_wire_u32(wire, BASE_KILL_COUNT_OFFSET);
+        self.base_properties.remain_point = read_player_wire_u16(wire, BASE_REMAIN_POINT_OFFSET);
+        for (index, hotkey) in self.base_properties.hotkeys.iter_mut().enumerate() {
+            *hotkey = read_player_wire_u32(wire, BASE_HOTKEY_OFFSET + index * 4);
+        }
+        self.base_properties.pk_normal = wire[BASE_PK_NORMAL_OFFSET] != 0;
+        self.base_properties.pk_team = wire[BASE_PK_TEAM_OFFSET] != 0;
+        self.base_properties.pk_union = wire[BASE_PK_UNION_OFFSET] != 0;
+        self.base_properties.pk_badman = wire[BASE_PK_BADMAN_OFFSET] != 0;
+        self.base_properties.pk_country = wire[BASE_PK_COUNTRY_OFFSET] != 0;
+        self.base_properties.health = read_player_wire_u32(wire, BASE_HEALTH_OFFSET);
+        self.base_properties.mana = read_player_wire_u32(wire, BASE_MANA_OFFSET);
+        self.base_properties.base_maximum_hp = read_player_wire_u32(wire, BASE_MAXIMUM_HP_OFFSET);
+        self.base_properties.base_maximum_mp = read_player_wire_u32(wire, BASE_MAXIMUM_MP_OFFSET);
+        self.base_properties.base_strength = read_player_wire_u32(wire, BASE_STRENGTH_OFFSET);
+        self.base_properties.base_dexterity = read_player_wire_u32(wire, BASE_DEXTERITY_OFFSET);
+        self.base_properties.base_constitution =
+            read_player_wire_u32(wire, BASE_CONSTITUTION_OFFSET);
+        self.base_properties.base_intelligence =
+            read_player_wire_u32(wire, BASE_INTELLIGENCE_OFFSET);
+        self.base_properties.vigour = read_player_wire_u32(wire, BASE_VIGOUR_OFFSET);
+        self.base_properties.credit = read_player_wire_u32(wire, BASE_CREDIT_OFFSET);
+        self.base_properties.display_head_piece = wire[BASE_DISPLAY_HEAD_PIECE_OFFSET] != 0;
+        self.base_properties.quest_time_begin =
+            read_player_wire_u32(wire, BASE_QUEST_TIME_BEGIN_OFFSET) as i32;
+        self.base_properties.quest_time_limit =
+            read_player_wire_u32(wire, BASE_QUEST_TIME_LIMIT_OFFSET) as i32;
+        self.base_properties.exploit = read_player_wire_u32(wire, BASE_EXPLOIT_OFFSET);
+        self.base_properties.fairy_container_enabled =
+            wire[BASE_FAIRY_CONTAINER_ENABLED_OFFSET] != 0;
+        self.base_properties.days_honor_eliminate =
+            read_player_wire_u32(wire, BASE_DAYS_HONOR_OFFSET);
+        self.base_properties.weeks_honor_eliminate =
+            read_player_wire_u32(wire, BASE_WEEKS_HONOR_OFFSET);
+        self.base_properties.months_honor_eliminate =
+            read_player_wire_u32(wire, BASE_MONTHS_HONOR_OFFSET);
+        self.base_properties.total_honor_eliminate =
+            read_player_wire_u32(wire, BASE_TOTAL_HONOR_OFFSET);
+        self.base_properties.rank_of_nobility_id =
+            read_player_wire_u32(wire, BASE_RANK_OF_NOBILITY_OFFSET);
+        self.base_properties.appellation_id = read_player_wire_u32(wire, BASE_APPELLATION_OFFSET);
+        self.base_properties.mode = read_player_wire_u32(wire, BASE_MODE_OFFSET);
+        self.base_properties.fetch_power = read_player_wire_u32(wire, BASE_FETCH_POWER_OFFSET);
+        self.battle_fairy_summoned = wire[BASE_BATTLE_FAIRY_SUMMONED_OFFSET] != 0;
+        self.base_properties.battle_fairy_recall = wire[BASE_BATTLE_FAIRY_RECALL_OFFSET] != 0;
+        self.base_properties.battle_fairy_died = wire[BASE_BATTLE_FAIRY_DIED_OFFSET] != 0;
+        self.base_properties.fy_energy = read_player_wire_u32(wire, BASE_FY_ENERGY_OFFSET);
+        self.base_properties.fy_enable_flags = read_player_wire_u32(wire, BASE_FY_ENABLE_FLAGS_OFFSET);
+        self.base_properties.lt_up_60_count = read_player_wire_u16(wire, BASE_LT_UP_60_COUNT_OFFSET);
+        self.base_properties.remain_jing_li_dan_count =
+            read_player_wire_u16(wire, BASE_REMAIN_JING_LI_DAN_COUNT_OFFSET);
+        self.base_properties.lt_60_stamp = read_player_wire_u32(wire, BASE_LT_60_STAMP_OFFSET);
+        self.base_properties.szl = read_player_wire_u32(wire, BASE_SZL_OFFSET);
+        self.base_properties.gods_battle_faction =
+            read_player_wire_u32(wire, BASE_GODS_BATTLE_FACTION_OFFSET) as i32;
+    }
+
+    fn apply_combat_property_wire(&mut self) {
+        let wire = &self.combat_property_wire;
+        self.combat_properties = PlayerCombatProperties {
+            maximum_hp: read_player_wire_u32(wire, 0x00),
+            maximum_mp: read_player_wire_u32(wire, 0x04),
+            strength: read_player_wire_u32(wire, 0x0c),
+            dexterity: read_player_wire_u32(wire, 0x10),
+            constitution: read_player_wire_u32(wire, 0x14),
+            intelligence: read_player_wire_u32(wire, 0x18),
+            minimum_attack: read_player_wire_u32(wire, 0x1c),
+            maximum_attack: read_player_wire_u32(wire, 0x20),
+            attack_speed: read_player_wire_u16(wire, 0x24),
+            burden: read_player_wire_u16(wire, 0x26),
+            defense: read_player_wire_u32(wire, 0x2c),
+            element_resistance: read_player_wire_u32(wire, 0x34),
+            element_modify: read_player_wire_u32(wire, 0x48) as i32,
+            reank: read_player_wire_u16(wire, 0x4c),
+            blast_defense_scale_bits: read_player_wire_u32(wire, 0x5c),
+            full_miss_scale_bits: read_player_wire_u32(wire, 0x68),
+            critical_rate_bits: read_player_wire_u32(wire, 0x6c),
+        };
+    }
+
+    fn decode_organizing_snapshot(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+    ) -> Result<(), PlayerGameSaveCodecError> {
+        let start = *cursor;
+        self.faction_id = read_player_game_save_i32(source, cursor, "m_lFactionID")?;
+        if self.faction_id > 0 {
+            let _logo = read_player_game_save_i32(source, cursor, "m_lFactionLogoID")?;
+            let _level = read_player_game_save_u16(source, cursor, "m_wFactionLevel")?;
+            let _experience = read_player_game_save_i32(source, cursor, "m_lFactionExperience")?;
+            let _force = read_player_game_save_i32(source, cursor, "m_lForce")?;
+            let _contribute = read_player_game_save_u32(source, cursor, "m_bFactionContribute")?;
+            self.faction_name =
+                read_player_game_save_string(source, cursor, "m_strFactionName", 0x100)?;
+            let _title =
+                read_player_game_save_string(source, cursor, "m_strFactionTitle", 0x100)?;
+            self.faction_master_id =
+                read_player_game_save_i32(source, cursor, "m_lFactionMasterID")?;
+            self.union_id = read_player_game_save_i32(source, cursor, "m_lUnionID")?;
+            let _union_master =
+                read_player_game_save_i32(source, cursor, "m_lUnionMasterID")?;
+            for field in ["m_EnemyFactions", "m_CityWarEnemyFactions"] {
+                let count = read_player_game_save_count(source, cursor, field)?;
+                let _ = read_player_game_save_slice(source, cursor, field, count * 4)?;
+            }
+            let count = read_player_game_save_count(source, cursor, "m_OwnedRegions")?;
+            let _ = read_player_game_save_slice(source, cursor, "m_OwnedRegions", count * 8)?;
+        } else {
+            self.faction_name.clear();
+            self.faction_master_id = 0;
+            self.union_id = 0;
+        }
+        self.organizing_wire = source[start..*cursor].to_vec();
+        Ok(())
+    }
+
     pub(crate) const fn shape(&self) -> &CShape {
         self.move_shape.shape()
+    }
+
+    pub(crate) const fn restore_login_team(&mut self, captain: bool, team_id: i32) {
+        self.team_captain = captain;
+        self.team_id = team_id;
+    }
+
+    pub(crate) const fn mark_login_script_started(&mut self) -> bool {
+        let first_login = !self.login;
+        self.login = true;
+        first_login
     }
 
     pub(crate) const fn player_id(&self) -> i32 {
@@ -2704,30 +3647,44 @@ impl CPlayer {
     /// Exact scalar checks `CanUseItem`; catalog/instance addon fallback
     /// остаётся у `CGoods`, а result-коды являются частью `0xBF709` wire.
     pub(crate) fn can_use_item(&self, goods: &CGoods, factory: &CGoodsFactory) -> i32 {
+        Self::can_use_item_from_properties(
+            self.base_properties,
+            self.combat_properties,
+            goods,
+            factory,
+        )
+    }
+
+    fn can_use_item_from_properties(
+        base_properties: PlayerBaseProperties,
+        combat_properties: PlayerCombatProperties,
+        goods: &CGoods,
+        factory: &CGoodsFactory,
+    ) -> i32 {
         let required = |property| goods.addon_property_value(factory, property, 1) as u32;
         let level = required(GAP_ROLE_MINIMUM_LEVEL_LIMIT);
-        if level != 0 && u32::from(self.level()) < level {
+        if level != 0 && u32::from(base_properties.level) < level {
             return 1;
         }
         for (property, actual, result) in [
             (
                 GAP_ROLE_MINIMUM_STRENGTH_LIMIT,
-                self.combat_properties.strength,
+                combat_properties.strength,
                 2,
             ),
             (
                 GAP_ROLE_MINIMUM_AGILITY_LIMIT,
-                self.combat_properties.dexterity,
+                combat_properties.dexterity,
                 3,
             ),
             (
                 GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT,
-                self.combat_properties.constitution,
+                combat_properties.constitution,
                 4,
             ),
             (
                 GAP_ROLE_MINIMUM_WAKAN_LIMIT,
-                self.combat_properties.intelligence,
+                combat_properties.intelligence,
                 5,
             ),
         ] {
@@ -2737,11 +3694,11 @@ impl CPlayer {
             }
         }
         let occupation = required(GAP_REQUIRE_OCCUPATION);
-        if occupation != 0 && occupation != u32::from(self.base_properties.occupation) + 1 {
+        if occupation != 0 && occupation != u32::from(base_properties.occupation) + 1 {
             return 6;
         }
         let gender = required(GAP_REQUIRE_GENDER);
-        if gender != 0 && gender != u32::from(self.base_properties.sex) {
+        if gender != 0 && gender != u32::from(base_properties.sex) {
             return 7;
         }
         9
@@ -6559,6 +7516,7 @@ impl CPlayer {
         self.packet.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.wallet.set_owner(PLAYER_TYPE, player_id);
         self.yuan_bao.set_owner(PLAYER_TYPE, player_id);
+        self.ji_fen.set_owner(PLAYER_TYPE, player_id);
         self.equipment.base_mut().set_owner(PLAYER_TYPE, player_id);
         self.auction_listing
             .base_mut()
@@ -7280,6 +8238,174 @@ const fn clamp_combat_scalar(value: u32) -> u32 {
     } else {
         value
     }
+}
+
+fn read_player_game_save_slice<'a>(
+    source: &'a [u8],
+    cursor: &mut usize,
+    field: &'static str,
+    needed: usize,
+) -> Result<&'a [u8], PlayerGameSaveCodecError> {
+    let offset = *cursor;
+    let Some(end) = offset.checked_add(needed) else {
+        return Err(PlayerGameSaveCodecError::UnexpectedEnd {
+            field,
+            offset,
+            needed,
+            available: source.len().saturating_sub(offset),
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(PlayerGameSaveCodecError::UnexpectedEnd {
+            field,
+            offset,
+            needed,
+            available: source.len().saturating_sub(offset),
+        });
+    };
+    *cursor = end;
+    Ok(bytes)
+}
+
+fn read_player_game_save_array<const N: usize>(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<[u8; N], PlayerGameSaveCodecError> {
+    Ok(read_player_game_save_slice(source, cursor, field, N)?
+        .try_into()
+        .expect("player wire slice имеет запрошенную длину"))
+}
+
+fn read_player_game_save_u8(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u8, PlayerGameSaveCodecError> {
+    Ok(read_player_game_save_slice(source, cursor, field, 1)?[0])
+}
+
+fn read_player_game_save_u16(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u16, PlayerGameSaveCodecError> {
+    Ok(u16::from_le_bytes(read_player_game_save_array(
+        source, cursor, field,
+    )?))
+}
+
+fn read_player_game_save_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u32, PlayerGameSaveCodecError> {
+    Ok(u32::from_le_bytes(read_player_game_save_array(
+        source, cursor, field,
+    )?))
+}
+
+fn read_player_game_save_i32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<i32, PlayerGameSaveCodecError> {
+    Ok(i32::from_le_bytes(read_player_game_save_array(
+        source, cursor, field,
+    )?))
+}
+
+fn read_player_game_save_count(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<usize, PlayerGameSaveCodecError> {
+    let count = read_player_game_save_i32(source, cursor, field)?;
+    usize::try_from(count).map_err(|_| PlayerGameSaveCodecError::NegativeCount { field, count })
+}
+
+fn read_player_game_save_string(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+    maximum: usize,
+) -> Result<Vec<u8>, PlayerGameSaveCodecError> {
+    let offset = *cursor;
+    let tail = source.get(offset..).unwrap_or_default();
+    let Some(length) = tail.iter().position(|byte| *byte == 0) else {
+        return Err(PlayerGameSaveCodecError::UnexpectedEnd {
+            field,
+            offset,
+            needed: tail.len().saturating_add(1),
+            available: tail.len(),
+        });
+    };
+    if length >= maximum {
+        return Err(PlayerGameSaveCodecError::StringTooLong {
+            field,
+            length,
+            maximum,
+        });
+    }
+    *cursor += length + 1;
+    Ok(tail[..length].to_vec())
+}
+
+fn append_player_game_save_count(
+    destination: &mut Vec<u8>,
+    field: &'static str,
+    length: usize,
+) -> Result<(), PlayerGameSaveCodecError> {
+    let count = i32::try_from(length)
+        .map_err(|_| PlayerGameSaveCodecError::CollectionTooLarge { field, length })?;
+    destination.extend_from_slice(&count.to_le_bytes());
+    Ok(())
+}
+
+fn append_player_game_save_string(
+    destination: &mut Vec<u8>,
+    field: &'static str,
+    value: &[u8],
+    maximum: usize,
+) -> Result<(), PlayerGameSaveCodecError> {
+    let length = value
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(value.len());
+    if length >= maximum {
+        return Err(PlayerGameSaveCodecError::StringTooLong {
+            field,
+            length,
+            maximum,
+        });
+    }
+    destination.extend_from_slice(&value[..length]);
+    destination.push(0);
+    Ok(())
+}
+
+fn read_player_wire_u16(wire: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(
+        wire[offset..offset + 2]
+            .try_into()
+            .expect("base/property wire offset проверен layout-константой"),
+    )
+}
+
+fn read_player_wire_u32(wire: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(
+        wire[offset..offset + 4]
+            .try_into()
+            .expect("base/property wire offset проверен layout-константой"),
+    )
+}
+
+fn write_player_wire_u16(wire: &mut [u8], offset: usize, value: u16) {
+    wire[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
+    wire[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

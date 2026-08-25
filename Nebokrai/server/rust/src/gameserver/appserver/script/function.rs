@@ -4211,7 +4211,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 if faction_id > 0 {
                     let mut snapshot = Vec::new();
                     if game.find_player(player_id).is_some_and(|player| {
-                        runtime.encode_script_player_game_save(player, &mut snapshot)
+                        game.encode_player_game_save(player, &mut snapshot, runtime)
                     }) {
                         let mut request = CMessage::new(0x0006_0126);
                         request.add_long(faction_id);

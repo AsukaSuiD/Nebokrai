@@ -15,12 +15,12 @@
 //! ordered clear и mode-dependent release перенесены буквально; locked goods
 //! скрыты от public find/get. `GCM_TEST` не уничтожает отделённые goods: Rust
 //! возвращает их вызывающему, сохраняя ownership без legacy raw pointers.
-//! Listener messages, player AI tree и codec ниже остаются RAW до замыкания
-//! соседних owners.
+//! Полный persisted codec достигнут общим player GameSave-проходом; listener
+//! messages и player AI tree ниже остаются RAW до замыкания соседних owners.
 
 use super::ccontainer::ContainerListenerHandle;
 use super::cgoodscontainer::{CGoodsContainer, GoodsContainerMode, GoodsStackMergeOutcome};
-use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
@@ -88,6 +88,27 @@ pub(crate) struct CAmountLimitGoodsContainer {
     goods: IndexMap<CGuid, CGoods>,
     locked_goods: Vec<CGuid>,
     goods_amount_limit: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AmountLimitGoodsCodecError {
+    Goods(GoodsDecodeError),
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+    ContainerLimitExceeded {
+        count: u32,
+        limit: u32,
+    },
+}
+
+impl From<GoodsDecodeError> for AmountLimitGoodsCodecError {
+    fn from(value: GoodsDecodeError) -> Self {
+        Self::Goods(value)
+    }
 }
 
 impl Default for CAmountLimitGoodsContainer {
@@ -410,6 +431,94 @@ impl CAmountLimitGoodsContainer {
             GoodsContainerMode::Test => AmountLimitGoodsRelease::Detached { goods },
         }
     }
+
+    /// Exact amount-container persistence wire: число только известных
+    /// factory goods, затем каждый полный `CGoods` в insertion order.
+    pub(crate) fn serialize(&self, destination: &mut Vec<u8>, factory: &CGoodsFactory) -> bool {
+        let count = self.goods_amount(factory);
+        destination.extend_from_slice(&count.to_le_bytes());
+        for goods in self.goods.values() {
+            if factory
+                .query_goods_base_properties(goods.base_properties_index())
+                .is_some()
+                && !goods.serialize(destination, true)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Exact `Unserialize`: прежние objects очищаются до чтения count;
+    /// каждый goods восстанавливает derived fairy state из тех же setup
+    /// owners, после чего проходит обычный amount-limit storage owner.
+    pub(crate) fn unserialize<OrdinaryThreshold, BattleThreshold>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        factory: &CGoodsFactory,
+        mut ordinary_threshold: OrdinaryThreshold,
+        mut battle_threshold: BattleThreshold,
+    ) -> Result<(), AmountLimitGoodsCodecError>
+    where
+        OrdinaryThreshold: FnMut(u32, u32) -> u32,
+        BattleThreshold: FnMut(u32, u32) -> u32,
+    {
+        let _cleared = self.clear_goods();
+        let count = read_amount_wire_u32(source, cursor, "goods count")?;
+        if self.goods_amount_limit < count {
+            return Err(AmountLimitGoodsCodecError::ContainerLimitExceeded {
+                count,
+                limit: self.goods_amount_limit,
+            });
+        }
+        for _ in 0..count {
+            let mut goods = CGoods::default();
+            goods.unserialize(
+                source,
+                cursor,
+                true,
+                factory,
+                &mut ordinary_threshold,
+                &mut battle_threshold,
+            )?;
+            let _added = self.add_goods(goods, factory)
+                .map_err(|_| AmountLimitGoodsCodecError::ContainerLimitExceeded {
+                    count,
+                    limit: self.goods_amount_limit,
+                })?;
+        }
+        Ok(())
+    }
+}
+
+fn read_amount_wire_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u32, AmountLimitGoodsCodecError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(4) else {
+        return Err(AmountLimitGoodsCodecError::UnexpectedEnd {
+            field,
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(AmountLimitGoodsCodecError::UnexpectedEnd {
+            field,
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(u32::from_le_bytes(
+        bytes.try_into().expect("legacy DWORD содержит четыре байта"),
+    ))
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

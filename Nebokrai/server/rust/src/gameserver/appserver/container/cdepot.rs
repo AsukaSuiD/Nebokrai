@@ -15,7 +15,7 @@
 use super::camountlimitgoodscontainer::{AmountLimitGoodsCleared, AmountLimitGoodsRelease};
 use super::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeExpandOutcome, VolumeGoodsAddBlock, VolumeGoodsAddOutcome,
-    VolumeGoodsRemoveOutcome,
+    VolumeGoodsCodecError, VolumeGoodsRemoveOutcome,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
@@ -405,6 +405,32 @@ impl CDepot {
             initialized_anchors,
             legacy_success: true,
         }
+    }
+
+    pub(crate) fn serialize(&self, destination: &mut Vec<u8>, factory: &CGoodsFactory) -> bool {
+        self.base.serialize(destination, factory)
+    }
+
+    pub(crate) fn unserialize<OrdinaryThreshold, BattleThreshold>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        factory: &CGoodsFactory,
+        ordinary_threshold: OrdinaryThreshold,
+        battle_threshold: BattleThreshold,
+    ) -> Result<(), VolumeGoodsCodecError>
+    where
+        OrdinaryThreshold: FnMut(u32, u32) -> u32,
+        BattleThreshold: FnMut(u32, u32) -> u32,
+    {
+        self.locked = false;
+        self.base.unserialize(
+            source,
+            cursor,
+            factory,
+            ordinary_threshold,
+            battle_threshold,
+        )
     }
 }
 

@@ -13,12 +13,14 @@
 //! наблюдаемый legacy-контракт, а не внутренний pointer-дефект. Достигнутый
 //! battle-fairy caller собирает из outcome точный `CS2CContainerObjectMove`;
 //! increase/create публикации остаются за своими ещё отдельными сценариями.
+//! Marker + optional full-goods persisted codec достигнут общим player
+//! GameSave owner-ом и одинаково обслуживает wallet/YuanBao/JiFen.
 
 use std::marker::PhantomData;
 
 use super::ccontainer::ContainerListenerHandle;
 use super::cgoodscontainer::{CGoodsContainer, GoodsContainerMode, GoodsStackMergeOutcome};
-use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_STACKING_LIMIT;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -87,6 +89,23 @@ pub(crate) enum CurrencyGoodsAddBlock {
         actual: u32,
         position: u32,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CurrencyCodecError {
+    Goods(GoodsDecodeError),
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+}
+
+impl From<GoodsDecodeError> for CurrencyCodecError {
+    fn from(value: GoodsDecodeError) -> Self {
+        Self::Goods(value)
+    }
 }
 
 #[must_use = "результат add определяет ownership и listener-эффекты"]
@@ -405,6 +424,55 @@ impl<K: CurrencyKind> CSingleCurrencyContainer<K> {
         CurrencyGoodsCollected {
             count: usize::from(self.goods.take().is_some()),
         }
+    }
+
+    /// Wallet/YuanBao/JiFen persistence marker: `0` либо `1` и полный goods.
+    pub(crate) fn serialize(&self, destination: &mut Vec<u8>) -> bool {
+        let Some(goods) = &self.goods else {
+            destination.push(0);
+            return true;
+        };
+        destination.push(1);
+        goods.serialize(destination, true)
+    }
+
+    pub(crate) fn unserialize<OrdinaryThreshold, BattleThreshold>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        marker_field: &'static str,
+        factory: &CGoodsFactory,
+        ordinary_threshold: OrdinaryThreshold,
+        battle_threshold: BattleThreshold,
+    ) -> Result<(), CurrencyCodecError>
+    where
+        OrdinaryThreshold: FnMut(u32, u32) -> u32,
+        BattleThreshold: FnMut(u32, u32) -> u32,
+    {
+        let _released = self.release();
+        let offset = *cursor;
+        let Some(&marker) = source.get(offset) else {
+            return Err(CurrencyCodecError::UnexpectedEnd {
+                field: marker_field,
+                offset,
+                needed: 1,
+                available: source.len().saturating_sub(offset),
+            });
+        };
+        *cursor = offset + 1;
+        if marker != 0 {
+            let mut goods = CGoods::default();
+            goods.unserialize(
+                source,
+                cursor,
+                true,
+                factory,
+                ordinary_threshold,
+                battle_threshold,
+            )?;
+            self.goods = Some(goods);
+        }
+        Ok(())
     }
 }
 

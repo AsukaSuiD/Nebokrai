@@ -32,7 +32,7 @@ use super::cgoodscontainer::{CGoodsContainer, GoodsContainerMode};
 use crate::gameserver::appserver::goods::cbattlefairyproperty::{
     BattleFairyExpBlock, BattleFairyExpReport, BattleFairyExpUpResult, BattleFairyPlayerFacts,
 };
-use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsBasePropertyBlock};
+use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsBasePropertyBlock, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     EQUIP_PLACE_BODY, EQUIP_PLACE_BOOT, EQUIP_PLACE_FAIRY, EQUIP_PLACE_FROCK, EQUIP_PLACE_GLOVE,
     EQUIP_PLACE_HAND, EQUIP_PLACE_HEAD, EQUIP_PLACE_HEADGEAR, EQUIP_PLACE_JEWELRY,
@@ -332,6 +332,7 @@ pub(crate) enum EquipmentSwapOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EquipmentContainerCodecError {
+    Goods(GoodsDecodeError),
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
@@ -340,6 +341,12 @@ pub(crate) enum EquipmentContainerCodecError {
     NegativeGoodsCount {
         count: i32,
     },
+}
+
+impl From<GoodsDecodeError> for EquipmentContainerCodecError {
+    fn from(value: GoodsDecodeError) -> Self {
+        Self::Goods(value)
+    }
 }
 
 #[must_use = "entry outcome может вернуть rejected owned goods"]
@@ -1388,7 +1395,10 @@ impl CEquipmentContainer {
         on_cleared: &mut dyn FnMut(EquipmentColumn, &CGoods, &[ContainerListenerHandle]),
     ) -> Result<EquipmentUnserializeReport, EquipmentUnserializeFailure>
     where
-        Decode: FnMut(&[u8], &mut usize) -> Option<CGoods>,
+        Decode: FnMut(
+            &[u8],
+            &mut usize,
+        ) -> Result<Option<CGoods>, EquipmentContainerCodecError>,
         Runtime: FnMut(&CGoods) -> EquipmentAddRuntimeFacts,
     {
         let mut report = EquipmentUnserializeReport {
@@ -1411,7 +1421,10 @@ impl CEquipmentContainer {
                 Ok(position) => position as u32,
                 Err(error) => return Err(EquipmentUnserializeFailure { error, report }),
             };
-            let Some(goods) = decode_goods(source, cursor) else {
+            let Some(goods) = (match decode_goods(source, cursor) {
+                Ok(goods) => goods,
+                Err(error) => return Err(EquipmentUnserializeFailure { error, report }),
+            }) else {
                 report
                     .entries
                     .push(EquipmentUnserializedEntry::DecoderReturnedNull { position });

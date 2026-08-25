@@ -212,6 +212,46 @@ impl CVariableList {
         })
     }
 
+    /// Exact `AddToByteArray`: count, размер временного payload и сами records.
+    /// Строковые значения используют tag `-1`; scalar — `0`, массив — длину.
+    pub(crate) fn encode_world_snapshot(&self, destination: &mut Vec<u8>) -> bool {
+        let Ok(count) = i32::try_from(self.variables.len()) else {
+            return false;
+        };
+        destination.extend_from_slice(&count.to_le_bytes());
+        let mut payload = Vec::new();
+        for variable in &self.variables {
+            payload.extend_from_slice(&variable.name);
+            payload.push(0);
+            match &variable.value {
+                GameVariableValue::Integer(value) => {
+                    payload.extend_from_slice(&0i32.to_le_bytes());
+                    payload.extend_from_slice(&value.to_le_bytes());
+                }
+                GameVariableValue::String(value) => {
+                    payload.extend_from_slice(&(-1i32).to_le_bytes());
+                    payload.extend_from_slice(value);
+                    payload.push(0);
+                }
+                GameVariableValue::IntegerArray(values) => {
+                    let Ok(length) = i32::try_from(values.len()) else {
+                        return false;
+                    };
+                    payload.extend_from_slice(&length.to_le_bytes());
+                    for value in values {
+                        payload.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
+            }
+        }
+        let Ok(payload_length) = i32::try_from(payload.len()) else {
+            return false;
+        };
+        destination.extend_from_slice(&payload_length.to_le_bytes());
+        destination.extend_from_slice(&payload);
+        true
+    }
+
     fn load_definitions(&mut self, definitions: Option<&[u8]>) {
         self.variables.clear();
         let Some(definitions) = definitions else {

@@ -9,7 +9,8 @@
 
 use super::cgoodscontainer::CGoodsContainer;
 use super::cwallet::{
-    CWallet, CurrencyGoodsAddOutcome, CurrencyGoodsCollected, CurrencyGoodsRemoved,
+    CWallet, CurrencyCodecError, CurrencyGoodsAddOutcome, CurrencyGoodsCollected,
+    CurrencyGoodsRemoved,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
@@ -114,6 +115,33 @@ impl CBank {
     pub(crate) fn release(&mut self) -> CurrencyGoodsCollected {
         self.locked = true;
         self.wallet.release()
+    }
+
+    pub(crate) fn serialize(&self, destination: &mut Vec<u8>) -> bool {
+        self.wallet.serialize(destination)
+    }
+
+    pub(crate) fn unserialize<OrdinaryThreshold, BattleThreshold>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        factory: &CGoodsFactory,
+        ordinary_threshold: OrdinaryThreshold,
+        battle_threshold: BattleThreshold,
+    ) -> Result<(), CurrencyCodecError>
+    where
+        OrdinaryThreshold: FnMut(u32, u32) -> u32,
+        BattleThreshold: FnMut(u32, u32) -> u32,
+    {
+        self.locked = false;
+        self.wallet.unserialize(
+            source,
+            cursor,
+            "CBank marker",
+            factory,
+            ordinary_threshold,
+            battle_threshold,
+        )
     }
 }
 

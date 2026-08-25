@@ -36,7 +36,8 @@ use super::camountlimitgoodscontainer::{
     AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,
 };
 use super::cvolumelimitgoodscontainer::{
-    CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
+    CVolumeLimitGoodsContainer, VolumeGoodsAddOutcome, VolumeGoodsCodecError,
+    VolumeGoodsRemoveOutcome,
 };
 use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyCompose;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
@@ -284,6 +285,32 @@ impl CBattleFairyContainer {
 
     pub(crate) fn release(&mut self) -> AmountLimitGoodsRelease {
         self.base.release()
+    }
+
+    pub(crate) fn serialize(&self, destination: &mut Vec<u8>, factory: &CGoodsFactory) -> bool {
+        self.base.serialize(destination, factory)
+    }
+
+    pub(crate) fn unserialize<OrdinaryThreshold, BattleThreshold>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        factory: &CGoodsFactory,
+        ordinary_threshold: OrdinaryThreshold,
+        battle_threshold: BattleThreshold,
+    ) -> Result<(), VolumeGoodsCodecError>
+    where
+        OrdinaryThreshold: FnMut(u32, u32) -> u32,
+        BattleThreshold: FnMut(u32, u32) -> u32,
+    {
+        let _cleared = self.clear();
+        self.base.unserialize(
+            source,
+            cursor,
+            factory,
+            ordinary_threshold,
+            battle_threshold,
+        )
     }
 
     pub(crate) fn add(

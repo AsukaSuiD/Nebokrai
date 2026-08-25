@@ -177,6 +177,7 @@ pub(crate) struct CMoveShape {
     skills: BTreeMap<u32, MoveShapeSkill>,
     current_skill_id: Option<u32>,
     item_skill_ids: Vec<u32>,
+    ex_states: Vec<u8>,
     undead_states: Vec<UndeadState>,
     moveable_count: i32,
     moveable: bool,
@@ -189,6 +190,7 @@ impl Default for CMoveShape {
             skills: BTreeMap::new(),
             current_skill_id: None,
             item_skill_ids: Vec::new(),
+            ex_states: Vec::new(),
             undead_states: Vec::new(),
             moveable_count: 0,
             moveable: true,
@@ -211,6 +213,22 @@ impl CMoveShape {
 
     pub(crate) fn undead_states(&self) -> &[UndeadState] {
         &self.undead_states
+    }
+
+    pub(crate) fn ex_states(&self) -> &[u8] {
+        &self.ex_states
+    }
+
+    pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>) {
+        self.ex_states = states;
+    }
+
+    pub(crate) fn clear_persisted_runtime_state(&mut self) {
+        self.skills.clear();
+        self.current_skill_id = None;
+        self.item_skill_ids.clear();
+        self.ex_states.clear();
+        self.undead_states.clear();
     }
 
     /// Exact `AddUndeadState`: registry key `(56, stateID)`, затем удаление

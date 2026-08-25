@@ -6,7 +6,8 @@
 //! `JIFEN`. Отличающийся exact `Add` при пустом контейнере принимает первый
 //! `CGoods` без проверки catalog id, а после заполнения разрешает stack только
 //! для `JIFEN`. Этот legacy quirk выражен marker-policy общего core, а не
-//! исправлен молча. Codec/message границы ниже остаются RAW.
+//! исправлен молча. Persisted codec исполняет достигнутый generic owner из
+//! `cwallet`; собственная message-граница ниже остаётся RAW.
 
 use super::cwallet::{CSingleCurrencyContainer, CurrencyKind};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;

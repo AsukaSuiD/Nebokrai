@@ -51,6 +51,12 @@
 //! function/variable setter безопасно материализует исходный freed-owner
 //! контракт как `None`; старый `length + 1` NUL-padding заменён bounded `Vec` и
 //! C-string prefix adapter-ом.
+//! World login `0x7F901` проходит из общего message FIFO через полный player
+//! GameSave decoder, transport-route validation, canonical player map и
+//! spatial region membership. Затем тот же main-loop runtime выполняет login
+//! script, полный property recompute, initial client/Billing публикацию,
+//! honor adjustment и GoodsAI регистрацию; save/faction/region/release callers
+//! используют один обратный codec с live companion snapshot.
 //! Reached faction `Create/ApplyJoin` sessions хранят exact correlation,
 //! `1000/2000` ms timeout, client prompts и World requests; успешный create
 //! callback списывает обещанные packet goods и деньги через canonical player/
@@ -526,12 +532,14 @@ use crate::gameserver::appserver::player::{
     CiQingPacketConsumption, EnhancementDeselectionBlock, EnhancementDeselectionReport,
     EnhancementSelectionBlock, EnhancementSelectionReport, GoodsDestroyHandConsumption,
     HotkeyHandTransferOutcome, HotkeyHandTransferReport, PlayerCombatProperties,
+    PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
     PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
     PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
     PlayerEquipmentRemoveRuntimeFacts, PlayerHonorResetReport, PlayerProgress,
     PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange, PlayerReliveMutation, PlayerSkillDispatch,
     PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
-    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerYuanBaoChange,
+    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage,
+    PlayerUncreatedPet, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1882,13 +1890,12 @@ pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
 
     fn refresh_script_region_auto_protect(&mut self, player: &mut CPlayer);
 
-    /// Exact virtual `AddGameSaveToByteArray(..., true)` result. Failure
-    /// suppresses `0x5FA02`; no partial snapshot is published.
-    fn encode_script_player_game_save(
+    /// Live pet/carriage являются region/monster owner-ами; runtime возвращает
+    /// точный snapshot, после чего общий Rust codec пишет весь player wire.
+    fn snapshot_script_player_summons(
         &mut self,
         player: &CPlayer,
-        destination: &mut Vec<u8>,
-    ) -> bool;
+    ) -> (Vec<PlayerUncreatedPet>, PlayerUncreatedCarriage, bool);
 }
 
 pub(crate) trait GameRegionEnterContext: NationCombatContext {
@@ -1902,6 +1909,43 @@ pub(crate) trait GameRegionEnterContext: NationCombatContext {
         entry_token: i32,
         socket_id: i32,
     );
+}
+
+/// Внешняя половина initial-login owner-а: player codec, map и spatial
+/// membership исполняет `CGame`, а ещё не материализованные client snapshot,
+/// Billing account entry, login-script и GoodsAI получают тот же live runtime
+/// в исходном порядке, без disconnected callback-результатов.
+pub(crate) trait GamePlayerLoginContext: NationCombatContext {
+    fn run_player_login_script(&mut self, game: &mut CGame, player_id: i32);
+    fn recompute_login_player_properties(&mut self, player: &CPlayer) -> PlayerCombatProperties;
+    fn publish_initial_player_login(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        first_login: bool,
+    ) -> Vec<i32>;
+    fn adjust_login_honor_rank(&mut self, game: &mut CGame, player_id: i32);
+    fn register_login_goods_ai(&mut self, player_id: i32, goods: &CGoods);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerLoginBlock {
+    PlayerIdMismatch { expected: i32, decoded: i32 },
+    AlreadyRegistered { player_id: i32 },
+    MissingRegion { region_id: i32 },
+    Membership(RegionMembershipBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerLoginReport {
+    pub(crate) player_id: i32,
+    pub(crate) team_id: i32,
+    pub(crate) captain: bool,
+    pub(crate) region_id: i32,
+    pub(crate) first_login: bool,
+    pub(crate) relocation: Option<(i32, i32)>,
+    pub(crate) network_deliveries: Vec<i32>,
+    pub(crate) goods_ai_registrations: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3015,6 +3059,7 @@ pub(crate) trait GameMainLoopRuntime:
     + InitialRegionStartupContext
     + GameRegionChangeResponseContext
     + GameRegionEnterContext
+    + GamePlayerLoginContext
     + GameOrganizingWarRuntime
     + GameCountryWarRuntime
     + GameContainerMessageRuntime
@@ -3144,7 +3189,13 @@ pub(crate) struct GameReleaseReport {
 
 pub(crate) trait GameReleaseRuntime {
     fn put_debug_string(&mut self, message: GameReleaseDebug);
-    fn save_player(&mut self, player: &CPlayer, message_type: i32, save_flag: i32) -> bool;
+    fn publish_player_save(
+        &mut self,
+        player_id: i32,
+        message_type: i32,
+        save_flag: i32,
+        snapshot: &[u8],
+    ) -> bool;
     fn save_city_region(&mut self, game: &CGame, region_id: i32);
     fn release_external_owner(&mut self, owner: GameReleaseExternalOwner);
     fn exit_network_server_worker(&mut self, server: &mut CMyNetServer);
@@ -4298,6 +4349,52 @@ impl CGame {
             },
         )?;
         Ok(goods)
+    }
+
+    pub(crate) fn decode_player_game_save(
+        &self,
+        source: &[u8],
+        cursor: &mut usize,
+        now_ms: u32,
+    ) -> Result<(CPlayer, PlayerGameSaveDecodeReport), PlayerGameSaveCodecError> {
+        let mut ordinary_threshold =
+            |equip_level, level| self.fairy_exp_conf.dw_exp_up(equip_level, level);
+        let mut battle_threshold = |equip_level, level| {
+            self.battle_fairy_exp_config
+                .dw_exp_up(equip_level, level)
+        };
+        CPlayer::decode_game_save(
+            source,
+            cursor,
+            &self.goods_factory,
+            &self.skill_factory,
+            self.variable_list_file_data.as_deref(),
+            now_ms,
+            self.globe_setup.one_pk_count_time_ms(),
+            &mut ordinary_threshold,
+            &mut battle_threshold,
+        )
+    }
+
+    pub(crate) fn encode_player_game_save<Context: ScriptRegionChangeContext>(
+        &self,
+        player: &CPlayer,
+        destination: &mut Vec<u8>,
+        context: &mut Context,
+    ) -> bool {
+        let (pets, carriage, recreate_carriage) =
+            context.snapshot_script_player_summons(player);
+        player
+            .encode_game_save(
+                destination,
+                &self.goods_factory,
+                context.now_milliseconds(),
+                self.globe_setup.one_pk_count_time_ms(),
+                &pets,
+                &carriage,
+                recreate_carriage,
+            )
+            .unwrap_or(false)
     }
 
     pub(crate) fn select_player_enhancement_goods(
@@ -8393,7 +8490,7 @@ impl CGame {
             return false;
         };
         let mut snapshot = Vec::new();
-        if !context.encode_script_player_game_save(player, &mut snapshot) {
+        if !self.encode_player_game_save(player, &mut snapshot, context) {
             return false;
         }
         let mut request = CMessage::new(0x0006_0103);
@@ -8691,7 +8788,7 @@ impl CGame {
             return false;
         }
         let mut snapshot = Vec::new();
-        if !context.encode_script_player_game_save(player, &mut snapshot) {
+        if !self.encode_player_game_save(player, &mut snapshot, context) {
             return false;
         }
         let mut request = CMessage::new(0x0006_011f);
@@ -9630,7 +9727,7 @@ impl CGame {
         );
         player.begin_server_region_change();
         let mut snapshot = Vec::new();
-        if context.encode_script_player_game_save(&player, &mut snapshot) {
+        if self.encode_player_game_save(&player, &mut snapshot, context) {
             let mut request = CMessage::new(0x0005_fa02);
             request.add_long(player_id);
             request.add_long(target_region_id);
@@ -16597,14 +16694,14 @@ impl CGame {
     /// Полный достигнутый `Release` teardown. Manual deletes заменены Drop и
     /// `take/clear`, а отсутствующие process-global owners вызываются строго в
     /// исходной позиции через runtime; неизвестный legacy int не выдумывается.
-    pub(crate) async fn release<Runtime: GameReleaseRuntime>(
+    pub(crate) async fn release<Runtime: GameThreadRuntime>(
         &mut self,
         runtime: &mut Runtime,
     ) -> GameReleaseReport {
         let mut events = Vec::new();
 
         let debug = GameReleaseDebug::ServerExiting;
-        runtime.put_debug_string(debug.clone());
+        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
         events.push(GameReleaseEvent::Debug(debug));
 
         self.stop_reconnect_tasks().await;
@@ -16613,16 +16710,24 @@ impl CGame {
         let player_ids: Vec<i32> = self.players.keys().copied().collect();
         let total_players = player_ids.len();
         for (index, player_id) in player_ids.into_iter().enumerate() {
-            let saved = self.players.get(&player_id).is_some_and(|player| {
-                runtime.save_player(player, GAME_RELEASE_PLAYER_SAVE_MESSAGE, 1)
+            let mut snapshot = Vec::new();
+            let encoded = self.players.get(&player_id).is_some_and(|player| {
+                self.encode_player_game_save(player, &mut snapshot, runtime)
             });
+            let saved = encoded
+                && runtime.publish_player_save(
+                    player_id,
+                    GAME_RELEASE_PLAYER_SAVE_MESSAGE,
+                    1,
+                    &snapshot,
+                );
             if !saved {
                 let debug = GameReleaseDebug::PlayerSaveFailed {
                     player_id,
                     processed: index,
                     total: total_players,
                 };
-                runtime.put_debug_string(debug.clone());
+                GameReleaseRuntime::put_debug_string(runtime, debug.clone());
                 events.push(GameReleaseEvent::Debug(debug));
                 // Safe Result-граница заменяет native exception catch, который
                 // немедленно erase-ил проблемный map node и продолжал обход.
@@ -16634,13 +16739,13 @@ impl CGame {
             processed: total_players,
             total: total_players,
         };
-        runtime.put_debug_string(debug.clone());
+        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
         events.push(GameReleaseEvent::Debug(debug));
 
         runtime.save_city_region(self, 0);
         events.push(GameReleaseEvent::CityRegionSaved);
         let debug = GameReleaseDebug::CityRegionSaved;
-        runtime.put_debug_string(debug.clone());
+        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
         events.push(GameReleaseEvent::Debug(debug));
 
         let players = self.players.len();
@@ -16650,7 +16755,7 @@ impl CGame {
         self.regions.clear();
         events.push(GameReleaseEvent::RegionsCleared { count: regions });
         let debug = GameReleaseDebug::PlayersAndRegionsCleared;
-        runtime.put_debug_string(debug.clone());
+        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
         events.push(GameReleaseEvent::Debug(debug));
 
         let proxy_regions = self.proxy_regions.len();
@@ -16659,7 +16764,7 @@ impl CGame {
             count: proxy_regions,
         });
         let debug = GameReleaseDebug::ProxyRegionsCleared;
-        runtime.put_debug_string(debug.clone());
+        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
         events.push(GameReleaseEvent::Debug(debug));
 
         let function_list = self.function_list_file_data.take().is_some();
@@ -16679,7 +16784,7 @@ impl CGame {
             general_variables,
         });
         let debug = GameReleaseDebug::ScriptDataCleared;
-        runtime.put_debug_string(debug.clone());
+        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
         events.push(GameReleaseEvent::Debug(debug));
 
         self.skill_factory.clear_skill_cache();
@@ -16774,7 +16879,7 @@ impl CGame {
         });
 
         let debug = GameReleaseDebug::ServerExited;
-        runtime.put_debug_string(debug.clone());
+        GameReleaseRuntime::put_debug_string(runtime, debug.clone());
         events.push(GameReleaseEvent::Debug(debug));
         GameReleaseReport {
             events,
@@ -16823,6 +16928,148 @@ impl CGame {
     pub(crate) fn register_player(&mut self, mut player: CPlayer) -> Option<CPlayer> {
         player.initialize_variable_list(self.variable_list_file_data.as_deref());
         self.players.insert(player.player_id(), player)
+    }
+
+    pub(crate) fn discard_player_login(&mut self, player_id: i32) -> bool {
+        let removed = self.players.remove(&player_id).is_some();
+        let _ = self.net_server().clear_player_map_id(player_id);
+        removed
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn complete_world_player_login<Context: GamePlayerLoginContext>(
+        &mut self,
+        expected_player_id: i32,
+        mut player: CPlayer,
+        captain: bool,
+        team_id: i32,
+        context: &mut Context,
+    ) -> Result<GamePlayerLoginReport, GamePlayerLoginBlock> {
+        let decoded = player.player_id();
+        if decoded != expected_player_id {
+            return Err(GamePlayerLoginBlock::PlayerIdMismatch {
+                expected: expected_player_id,
+                decoded,
+            });
+        }
+        if self.players.contains_key(&expected_player_id) {
+            return Err(GamePlayerLoginBlock::AlreadyRegistered {
+                player_id: expected_player_id,
+            });
+        }
+        player.restore_login_team(captain, team_id);
+        let region_id = player.server_region_id().unwrap_or_default();
+        self.players.insert(expected_player_id, player);
+
+        let mut player = self
+            .players
+            .remove(&expected_player_id)
+            .expect("login player только что зарегистрирован");
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            self.players.insert(expected_player_id, player);
+            return Err(GamePlayerLoginBlock::MissingRegion { region_id });
+        };
+        let mut relocation = None;
+        if player.shape().get_pos_x() == -0.5 && player.shape().get_pos_y() == -0.5 {
+            if let Ok(position) = owner.base().region.get_random_pos(context) {
+                player
+                    .movement_shape_mut()
+                    .set_pos_xy_base(position.x as f32 + 0.5, position.y as f32 + 0.5);
+                relocation = Some((position.x, position.y));
+            }
+        }
+        let tile = (
+            player.shape().get_tile_x().unwrap_or_default(),
+            player.shape().get_tile_y().unwrap_or_default(),
+        );
+        if owner
+            .base()
+            .region
+            .get_block(tile.0, tile.1)
+            .unwrap_or_default()
+            != 0
+            && let Ok(position) = owner
+                .base()
+                .region
+                .get_random_pos_in_range(tile.0, tile.1, 3, 3, context)
+        {
+            player
+                .movement_shape_mut()
+                .set_pos_xy_base(position.x as f32 + 0.5, position.y as f32 + 0.5);
+            relocation = Some((position.x, position.y));
+        }
+        let facts = ShapeRuntimeFacts {
+            is_player: true,
+            monster: None,
+            is_npc: false,
+            goods: None,
+            is_move_shape: true,
+            figure: player.figure(),
+        };
+        let membership = owner.base_mut().add_object(
+            player.movement_shape_mut(),
+            facts,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+            context.now_milliseconds(),
+            context,
+        );
+        self.restore_region_owner(owner);
+        self.players.insert(expected_player_id, player);
+        membership.map_err(GamePlayerLoginBlock::Membership)?;
+
+        let first_login = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .mark_login_script_started();
+        if first_login {
+            context.run_player_login_script(self, expected_player_id);
+        }
+        let recomputed = context.recompute_login_player_properties(
+            self.players
+                .get(&expected_player_id)
+                .expect("login script не удаляет player owner"),
+        );
+        self.players
+            .get_mut(&expected_player_id)
+            .expect("login property callback не удаляет player owner")
+            .apply_recomputed_combat_properties(recomputed);
+        let network_deliveries =
+            context.publish_initial_player_login(self, expected_player_id, first_login);
+        let adjust_honor = self.globe_setup.use_appellation_function()
+            && self
+                .players
+                .get(&expected_player_id)
+                .is_some_and(|player| player.honor_snapshot().rank_of_nobility_id != 0);
+        if adjust_honor {
+            context.adjust_login_honor_rank(self, expected_player_id);
+        }
+
+        let mut goods_ai_registrations = 0usize;
+        let player = self
+            .players
+            .get(&expected_player_id)
+            .expect("initial publication сохраняет player owner");
+        for (_, goods) in player.equipment().traversing_goods() {
+            context.register_login_goods_ai(expected_player_id, goods);
+            goods_ai_registrations += 1;
+        }
+        for goods in player.packet().base().traversing_goods() {
+            context.register_login_goods_ai(expected_player_id, goods);
+            goods_ai_registrations += 1;
+        }
+
+        Ok(GamePlayerLoginReport {
+            player_id: expected_player_id,
+            team_id,
+            captain,
+            region_id,
+            first_login,
+            relocation,
+            network_deliveries,
+            goods_ai_registrations,
+        })
     }
 
     /// Exact `s_mapPlayer.size()` для GMA `0x80002`; x86 `size_type` — DWORD.
@@ -20139,7 +20386,7 @@ impl CGame {
             other_messages.push(report);
         } else if let Some(report) = dispatch_game_player_message(message, self, runtime) {
             player_messages.push(report);
-        } else if let Some(report) = dispatch_game_log_message(message, self) {
+        } else if let Some(report) = dispatch_game_log_message(message, self, runtime) {
             log_messages.push(report);
         } else {
             message.run(self, runtime);

@@ -23,7 +23,7 @@ use super::camountlimitgoodscontainer::{
 use super::ccontainer::ContainerListenerHandle;
 use super::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeGoodsAddBlock, VolumeGoodsAddOutcome,
-    VolumeGoodsRemoveOutcome,
+    VolumeGoodsCodecError, VolumeGoodsRemoveOutcome,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
@@ -73,11 +73,18 @@ pub(crate) enum FairyContainerRemoveOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FairyContainerCodecError {
+    Base(VolumeGoodsCodecError),
     UnexpectedEnd {
         position: u32,
         offset: usize,
         available: usize,
     },
+}
+
+impl From<VolumeGoodsCodecError> for FairyContainerCodecError {
+    fn from(value: VolumeGoodsCodecError) -> Self {
+        Self::Base(value)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -359,6 +366,72 @@ impl Default for CFairyContainer {
 }
 
 impl CFairyContainer {
+    /// Полный persisted codec fairy owner-а: positional base payload и пять
+    /// hatch timer-ов образуют один неделимый wire-блок player GameSave.
+    pub(crate) fn serialize(&self, destination: &mut Vec<u8>, factory: &CGoodsFactory) -> bool {
+        if !self.base.serialize(destination, factory) {
+            return false;
+        }
+        for position in HATCHER_POSITIONS {
+            let hatch_start_time = self
+                .base
+                .get_goods(position)
+                .and_then(CGoods::fairy_properties)
+                .map_or(0, |fairy| fairy.hatch_start_time);
+            destination.extend_from_slice(&hatch_start_time.to_le_bytes());
+        }
+        true
+    }
+
+    pub(crate) fn unserialize<OrdinaryThreshold, BattleThreshold>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        factory: &CGoodsFactory,
+        ordinary_threshold: OrdinaryThreshold,
+        battle_threshold: BattleThreshold,
+    ) -> Result<Vec<u32>, FairyContainerCodecError>
+    where
+        OrdinaryThreshold: FnMut(u32, u32) -> u32,
+        BattleThreshold: FnMut(u32, u32) -> u32,
+    {
+        self.base.unserialize(
+            source,
+            cursor,
+            factory,
+            ordinary_threshold,
+            battle_threshold,
+        )?;
+        let mut restored = Vec::new();
+        for position in HATCHER_POSITIONS {
+            let offset = *cursor;
+            let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
+                return Err(FairyContainerCodecError::UnexpectedEnd {
+                    position,
+                    offset,
+                    available: source.len().saturating_sub(offset),
+                });
+            };
+            *cursor += 4;
+            let hatch_start_time = u32::from_le_bytes(
+                bytes.try_into().expect("fairy hatch suffix содержит четыре байта"),
+            );
+            if hatch_start_time == 0 {
+                continue;
+            }
+            let Some(fairy) = self
+                .base
+                .get_goods_mut(position)
+                .and_then(CGoods::fairy_properties_mut)
+            else {
+                continue;
+            };
+            fairy.hatch_start_time = hatch_start_time;
+            restored.push(position);
+        }
+        Ok(restored)
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             base: CVolumeLimitGoodsContainer::new(),

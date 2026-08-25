@@ -3,8 +3,9 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cyuanbao.cpp`. Layout и порядок
 //! операций совпадают с `CWallet`, но допустимый catalog index берётся из
-//! `YUANBAO`. Общий storage/lifecycle реализован в `cwallet` marker-адаптером;
-//! собственные codec и `CS2CContainerObjectMove` границы ниже остаются RAW.
+//! `YUANBAO`. Общий storage/lifecycle и достигнутый persisted codec реализованы
+//! в `cwallet` marker-адаптером; собственная `CS2CContainerObjectMove` граница
+//! ниже остаётся RAW.
 
 use super::cwallet::{CSingleCurrencyContainer, CurrencyKind};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;

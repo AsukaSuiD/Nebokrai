@@ -12,13 +12,14 @@
 //! lifecycle материализованы. Batch query клонирует container для точной
 //! последовательной stack/cell simulation без изменения живого owner-а.
 //! Базовый expansion получает setup-policy явно и сохраняет
-//! exact release→resize→restore-owner order. Player packet checks, listener
-//! message assembly, codec, swap, clone и auction-scale mutation ниже остаются
-//! RAW до замыкания соответствующих setup/player/message/goods owners.
+//! exact release→resize→restore-owner order. Persisted codec и player
+//! packet expansion достигнуты общим GameSave owner-ом; listener messages,
+//! swap, clone и auction-scale mutation ниже остаются RAW до замыкания
+//! соответствующих player/message/goods owners.
 
 use super::camountlimitgoodscontainer::{
-    AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,
-    CAmountLimitGoodsContainer,
+    AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsCodecError,
+    AmountLimitGoodsRelease, AmountLimitGoodsTaken, CAmountLimitGoodsContainer,
 };
 use super::cgoodscontainer::GoodsStackMergeOutcome;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
@@ -67,6 +68,23 @@ pub(crate) enum VolumeExpandBlock {
     Disabled,
     ZeroAmount,
     ExceedsMaximum { current: u32, requested: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VolumeGoodsCodecError {
+    Amount(AmountLimitGoodsCodecError),
+    UnexpectedEnd {
+        field: &'static str,
+        offset: usize,
+        needed: usize,
+        available: usize,
+    },
+}
+
+impl From<AmountLimitGoodsCodecError> for VolumeGoodsCodecError {
+    fn from(value: AmountLimitGoodsCodecError) -> Self {
+        Self::Amount(value)
+    }
 }
 
 #[must_use = "успешный expansion содержит release ownership-эффект"]
@@ -400,6 +418,25 @@ impl CVolumeLimitGoodsContainer {
         }
     }
 
+    /// `SetExpantePosInvalid`: после базового `SetAllInactive` equipment
+    /// expansion открывает prefix дополнительных packet-ячеек.
+    pub(crate) fn apply_player_expansion_limit(&mut self, expanded: u32) {
+        self.set_all_inactive();
+        let active = EXPANSION_BASE_CELL
+            .saturating_add(expanded as usize)
+            .min(self.cells.len());
+        for cell in self
+            .cells
+            .iter_mut()
+            .skip(EXPANSION_BASE_CELL)
+            .take(active.saturating_sub(EXPANSION_BASE_CELL))
+        {
+            if *cell == VolumeCell::Inactive {
+                *cell = VolumeCell::Available;
+            }
+        }
+    }
+
     pub(crate) fn is_cell_inactive(&self, position: u32) -> bool {
         self.cells.get(position as usize) == Some(&VolumeCell::Inactive)
     }
@@ -516,6 +553,100 @@ impl CVolumeLimitGoodsContainer {
         self.cells.clear();
         released
     }
+
+    /// Volume wire хранит только реально размещённые factory goods: count,
+    /// DWORD position и полный `CGoods` в amount-container insertion order.
+    pub(crate) fn serialize(&self, destination: &mut Vec<u8>, factory: &CGoodsFactory) -> bool {
+        let count = self
+            .base
+            .traversing_goods()
+            .filter(|goods| {
+                factory
+                    .query_goods_base_properties(goods.base_properties_index())
+                    .is_some()
+                    && self.query_goods_position(goods.identity().ex_id).is_some()
+            })
+            .count() as u32;
+        destination.extend_from_slice(&count.to_le_bytes());
+        for goods in self.base.traversing_goods() {
+            if factory
+                .query_goods_base_properties(goods.base_properties_index())
+                .is_some()
+                && let Some(position) = self.query_goods_position(goods.identity().ex_id)
+            {
+                destination.extend_from_slice(&position.to_le_bytes());
+                if !goods.serialize(destination, true) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Exact clear/resize/count loop `CVolumeLimitGoodsContainer::Unserialize`.
+    /// Add-result исторический owner игнорировал, поэтому валидно декодированный
+    /// goods с недоступной позицией просто не становится частью container-а.
+    pub(crate) fn unserialize<OrdinaryThreshold, BattleThreshold>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        factory: &CGoodsFactory,
+        mut ordinary_threshold: OrdinaryThreshold,
+        mut battle_threshold: BattleThreshold,
+    ) -> Result<(), VolumeGoodsCodecError>
+    where
+        OrdinaryThreshold: FnMut(u32, u32) -> u32,
+        BattleThreshold: FnMut(u32, u32) -> u32,
+    {
+        let _cleared = self.clear_goods();
+        let count = read_volume_wire_u32(source, cursor, "goods count")?;
+        for _ in 0..count {
+            let position = read_volume_wire_u32(source, cursor, "goods position")?;
+            let mut goods = CGoods::default();
+            goods
+                .unserialize(
+                    source,
+                    cursor,
+                    true,
+                    factory,
+                    &mut ordinary_threshold,
+                    &mut battle_threshold,
+                )
+                .map_err(AmountLimitGoodsCodecError::Goods)?;
+            let mut incoming = Some(goods);
+            let _legacy_ignored = self.add_goods_at(position, &mut incoming, factory, true);
+        }
+        Ok(())
+    }
+}
+
+fn read_volume_wire_u32(
+    source: &[u8],
+    cursor: &mut usize,
+    field: &'static str,
+) -> Result<u32, VolumeGoodsCodecError> {
+    let offset = *cursor;
+    let available = source.len().saturating_sub(offset);
+    let Some(end) = offset.checked_add(4) else {
+        return Err(VolumeGoodsCodecError::UnexpectedEnd {
+            field,
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    let Some(bytes) = source.get(offset..end) else {
+        return Err(VolumeGoodsCodecError::UnexpectedEnd {
+            field,
+            offset,
+            needed: 4,
+            available,
+        });
+    };
+    *cursor = end;
+    Ok(u32::from_le_bytes(
+        bytes.try_into().expect("legacy DWORD содержит четыре байта"),
+    ))
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

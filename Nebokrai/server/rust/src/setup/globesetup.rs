@@ -498,6 +498,12 @@ impl GlobeSetupSnapshot {
         self.read_u32(PK_COUNT_PER_KILL_OFFSET)
     }
 
+    /// `dwOnePkCountTime +0x4F8` определяет восстановление remaining murder
+    /// timer в player GameSave handoff.
+    pub(crate) fn one_pk_count_time_ms(&self) -> u32 {
+        self.read_u32(0x4f8)
+    }
+
     pub(crate) fn increment_log_days(&self) -> u32 {
         self.read_u32(0x80c)
     }
