@@ -70,7 +70,6 @@ use crate::gameserver::appserver::session::csessionfactory::CSessionFactory;
 use crate::gameserver::appserver::shape::{CShape, ShapeCoordinateBlock};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::basemessage::{CBaseMessage, RleDecodeError, decode_rle, encode_rle};
-use crate::nets::netserver::mynetclient::CMyNetClient;
 use crate::nets::netserver::mynetserver::CMyNetServer;
 use crate::nets::serverclient::ServerClientMessageContext;
 use crate::public::crc32static::data_crc32;
@@ -164,9 +163,6 @@ pub(crate) enum GameMessageRoute {
 /// Синхронная граница доменного owner-а после numeric route selection.
 pub(crate) trait GameMessageHandlers {
     fn handle(&mut self, route: GameMessageRoute, message: &mut CMessage);
-
-    /// Typed-граница исходной server-message ветви `0x6F902`.
-    fn handle_world_client_reconnected(&mut self, game: &mut CGame, client: CMyNetClient);
 }
 
 pub(crate) struct GameServerAroundRuntime<'a> {

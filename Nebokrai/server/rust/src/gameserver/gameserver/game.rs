@@ -368,6 +368,9 @@
 //! Game-variant `CNetSessionManager` также принадлежит `CGame`: `MainLoop`
 //! напрямую выполняет ordered timeout/callback pass, а `Release` очищает
 //! его после socket cleanup в исходной lifecycle-позиции.
+//! World reconnect event также замкнут в этом FIFO: прежний client закрывается,
+//! новый получает `0x5FA01` с ordered player/save/region snapshot, после send
+//! включается control-send и публикуется исходная diagnostic строка.
 //! GM silence `0x7FC0B/0x7FC0E` достигает canonical player map из
 //! `ProcessMessage`: byte-name lookup, lazy expiry и оба World response-а
 //! исполняются до оставшегося внешним GM route owner-а. Адресный `0x7FC0F`
@@ -5048,6 +5051,17 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) log_messages: Vec<Result<GameLogMessageReport, GameLogMessageError>>,
     pub(crate) server_messages:
         Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
+    pub(crate) world_reconnections: Vec<GameWorldReconnectReport>,
+}
+
+#[must_use = "reconnect report сохраняет replacement, player snapshot и World delivery"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameWorldReconnectReport {
+    pub(crate) previous_client_closed: bool,
+    pub(crate) player_count: u32,
+    pub(crate) encoded_players: Vec<i32>,
+    pub(crate) failed_players: Vec<i32>,
+    pub(crate) registration: Result<i32, SendMessageError>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25154,6 +25168,63 @@ impl CGame {
         reconnect_world_with(setup, publisher).await
     }
 
+    /// Полный reached tail внутреннего события `0x6F902`: новый transport
+    /// заменяет прежний World owner, после чего `0x5FA01` несёт признак
+    /// reconnect и ordered snapshot всех live players вместе с region id.
+    pub(crate) fn accept_reconnected_world_client<Context: ScriptRegionChangeContext>(
+        &mut self,
+        client: CMyNetClient,
+        context: &mut Context,
+    ) -> GameWorldReconnectReport {
+        let previous_client_closed = self.close_and_remove_world_client();
+        self.attach_world_client(client);
+
+        let player_count = self.player_count();
+        let mut encoded_players = Vec::with_capacity(player_count as usize);
+        let mut failed_players = Vec::new();
+        let mut registration = CMessage::new(WORLD_REGISTRATION);
+        registration.add_byte(1);
+        let setup = self
+            .network_setup
+            .as_ref()
+            .expect("reconnect event создаётся только из опубликованного network setup");
+        registration.add_ulong(setup.listener.listen_port);
+        add_legacy_c_string(registration.base_mut(), &setup.local_ip);
+        registration.add_ulong(player_count);
+        for player_id in self.ordered_player_ids() {
+            let Some(player) = self.find_player(player_id) else {
+                registration.add_long(0);
+                failed_players.push(player_id);
+                continue;
+            };
+            let mut snapshot = Vec::new();
+            if !self.encode_player_game_save(player, &mut snapshot, context) {
+                registration.add_long(0);
+                failed_players.push(player_id);
+                continue;
+            }
+            registration.add_long(1);
+            registration.add_long(player_id);
+            registration.base_mut().add(&snapshot);
+            registration.add_long(player.server_region_id().unwrap_or_default());
+            registration.base_mut().update();
+            encoded_players.push(player_id);
+        }
+        let registration = registration.send(self, true);
+        self.world_client
+            .as_mut()
+            .expect("reconnected World client опубликован до registration")
+            .enable_control_send();
+        add_game_log_text(b"Reconnect to WorldServer Success!");
+        GameWorldReconnectReport {
+            previous_client_closed,
+            player_count,
+            encoded_players,
+            failed_players,
+            registration,
+        }
+    }
+
     /// Подключает новый Billing owner и публикует typed reconnect event.
     pub(crate) async fn reconnect_billing_server(&self) -> GameReconnectPublication {
         let Some(setup) = self.network_setup.as_ref().cloned() else {
@@ -31000,6 +31071,7 @@ impl CGame {
         let mut player_messages = Vec::new();
         let mut log_messages = Vec::new();
         let mut server_messages = Vec::new();
+        let mut world_reconnections = Vec::new();
         let world_messages = self
             .world_client
             .as_ref()
@@ -31093,7 +31165,7 @@ impl CGame {
                     );
                 }
                 GameServerEvent::WorldClientReconnected(client) => {
-                    runtime.handle_world_client_reconnected(self, client);
+                    world_reconnections.push(self.accept_reconnected_world_client(client, runtime));
                 }
                 GameServerEvent::BillingClientReconnected(client) => {
                     let _legacy_ignored = on_billing_client_reconnected(self, client);
@@ -31121,6 +31193,7 @@ impl CGame {
             player_messages,
             log_messages,
             server_messages,
+            world_reconnections,
         }
     }
 
