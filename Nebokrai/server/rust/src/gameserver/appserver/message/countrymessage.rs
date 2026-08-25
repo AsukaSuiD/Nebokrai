@@ -24,7 +24,9 @@
 //! target changing-state и wire `[target, caller, country]`; подтверждённый
 //! WorldServer `0x6030F` принимает пакет как намеренный no-op без ответа.
 //! `0x9050B` замыкает вход в country-war: ordered camp-area и region RNG,
-//! `ChangeRegion`, wrapping/clamped exploit и client `0xBF72E/0xBF816`.
+//! общий `CGame::change_player_region`, wrapping/clamped exploit и client
+//! `0xBF72E/0xBF816`. Exile relocation идёт через тот же session/spatial/
+//! client/World owner до timestamped country mutation и response.
 //! Ответ World `0x7FF01` применяет country только в диапазоне `1..4`, но для
 //! любого decoded результата найденного player публикует around `0xC0301`.
 //! `0x7FF04(country, player, job, active)` сначала меняет country-information,
@@ -59,39 +61,25 @@ use super::super::player::{
 use super::super::region::{RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition};
 use super::super::servercountryregion::{CountryBattleStateBlock, CountryRegionRuntimeContext};
 use super::super::shape::ShapeCoordinateBlock;
-use crate::gameserver::gameserver::game::{CGame, ServerRegionOwner};
+use crate::gameserver::gameserver::game::{
+    CGame, PlayerRegionChangeReport, RealmAppellationScriptContext, ScriptRegionChangeContext,
+    ServerRegionOwner,
+};
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use std::mem::size_of;
 
 pub(crate) trait GameCountryWarRuntime:
-    CountryRegionRuntimeContext + RegionRandomContext
+    CountryRegionRuntimeContext
+    + RegionRandomContext
+    + ScriptRegionChangeContext
+    + RealmAppellationScriptContext
 {
     /// Материализует virtual `UpdateContendPlayer` country-region owner-а.
     fn update_country_contend_player(&mut self, region_id: i32);
 
-    /// Исполняет `CPlayer::ChangeRegion(region, x, y, -1, 0, 0, 0)`; legacy
-    /// bool наблюдается в отчёте, но не gate-ит последующую exploit-награду.
-    fn change_country_war_player_region(
-        &mut self,
-        player_id: i32,
-        region_id: i32,
-        x: i32,
-        y: i32,
-    ) -> bool;
-
     /// Единственный `timeGetTime` sample, который `SetSilence` переводит в
     /// минуты после успешных country/player gates.
     fn country_governance_now_milliseconds(&mut self) -> u32;
-
-    /// Исполняет exile `ChangeRegion` с сохранённым текущим направлением.
-    fn change_exiled_player_region(
-        &mut self,
-        player_id: i32,
-        region_id: i32,
-        x: i32,
-        y: i32,
-        direction: i32,
-    ) -> bool;
 
     /// Отдельный `timeGetTime` sample на каждый exact `AddToExileList`.
     fn country_exile_now_milliseconds(&mut self) -> u32;
@@ -239,7 +227,7 @@ pub(crate) enum GameCountryExileOutcome {
     Response {
         guard_country: Option<u8>,
         extra_legacy_long: Option<i32>,
-        relocation: Option<bool>,
+        relocation: Option<PlayerRegionChangeReport>,
         mutation: Option<CountryExileMutationReport>,
         player_ids: Vec<i32>,
         delivery: Result<i32, SendMessageError>,
@@ -392,7 +380,7 @@ pub(crate) enum CountryWarEntryOutcome {
         region_id: i32,
         camp: i32,
         position: RegionRandomPosition,
-        change_region_result: bool,
+        region_change: PlayerRegionChangeReport,
         exploit: PlayerExploitMutationReport,
         exploit_delivery: i32,
         notice_delivery: i32,
@@ -519,8 +507,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
 > {
     let opcode = message.message_type() as u32;
     if opcode == 0x7ff16 {
-        let declaration_response =
-            dispatch_country_war_declaration_response(message, game, opcode);
+        let declaration_response = dispatch_country_war_declaration_response(message, game, opcode);
         return Some(Ok(GameCountryWarMessageReport {
             dispatched: None,
             governance: None,
@@ -812,10 +799,7 @@ fn dispatch_country_notice_message(
     let outcome = match opcode {
         0x7ff11 => {
             let country = message.base_mut().get_char().unwrap_or(0) as u8;
-            let text = message
-                .base_mut()
-                .get_str_bytes(0x100)
-                .unwrap_or_default();
+            let text = message.base_mut().get_str_bytes(0x100).unwrap_or_default();
             let mut response = CMessage::new(0x000b_f806);
             response.add_ulong(0xffff_00aa);
             response.add_ulong(0xaaff_ffff);
@@ -843,10 +827,7 @@ fn dispatch_country_notice_message(
         0x7ff13 => {
             let decoded_player_id = message.base_mut().get_long();
             let player_id = decoded_player_id.unwrap_or(0);
-            let text = message
-                .base_mut()
-                .get_str_bytes(0x100)
-                .unwrap_or_default();
+            let text = message.base_mut().get_str_bytes(0x100).unwrap_or_default();
             let extra_legacy_long = message.base_mut().get_long();
             let mut response = CMessage::new(0x000c_030d);
             response.base_mut().add(&text);
@@ -977,12 +958,16 @@ fn dispatch_country_exile_message<Runtime: GameCountryWarRuntime>(
             };
         };
         if current_region_id != Some(destination.region_id) {
-            relocation = Some(runtime.change_exiled_player_region(
+            relocation = Some(game.change_player_region(
                 player_id,
                 destination.region_id,
                 destination.x,
                 destination.y,
                 direction,
+                0,
+                0,
+                0,
+                runtime,
             ));
         }
         let sampled_at_ms = runtime.country_exile_now_milliseconds();
@@ -1391,8 +1376,17 @@ fn dispatch_country_war_entry_message<Runtime: GameCountryWarRuntime>(
             outcome: CountryWarEntryOutcome::CountryParametersUnavailable { increment, maximum },
         };
     };
-    let change_region_result =
-        runtime.change_country_war_player_region(player_id, war_region_id, position.x, position.y);
+    let region_change = game.change_player_region(
+        player_id,
+        war_region_id,
+        position.x,
+        position.y,
+        -1,
+        0,
+        0,
+        0,
+        runtime,
+    );
     let exploit = {
         let player = game
             .find_player_mut(player_id)
@@ -1417,7 +1411,7 @@ fn dispatch_country_war_entry_message<Runtime: GameCountryWarRuntime>(
             region_id: war_region_id,
             camp,
             position,
-            change_region_result,
+            region_change,
             exploit,
             exploit_delivery,
             notice_delivery,
