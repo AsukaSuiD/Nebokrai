@@ -165,35 +165,42 @@
 //! индивидуальный и общий сценарии несут один базовый индекс, а диспетчер
 //! возвращает его знаковое представление либо находит исходное имя и уровень в
 //! упорядоченном реестре `CMonsterList`.
-//! Следующий sanitation-блок `2002/2316/2317/2500` читает live player
-//! region/country и работает с тем же owned script registry; current-script
-//! removal завершается на command boundary без legacy use-after-free.
-//! `5108 / GetOnlinePlayers` замыкает уже существующий World contract
-//! `0x5FF01 → 0x7FC01`: scheduler ждёт remote count и повторяет исходное
-//! expression без повторной отправки запроса.
-//! Недельный reset из того же reached script читает локальные
-//! SYSTEMTIME-поля через `TagTime`, меняет owned general variables
-//! в scheduler-е и публикует `PostWorldInfo` по уже замкнутому
-//! `0x5FF0E → 0x7FC0D → 0xBF806/0xBF804` contract.
-//! Соседняя vigour-normalization ветвь читает/пишет живой
-//! `dwVigour`; `SetMe` передаёт direct DWORD write в `CGame`,
-//! после чего проходит обязательный `UpdateProperty` runtime и
-//! адресный `0xBF721` с уже изменённым vigour.
+//! Следующий блок проверки `2002/2316/2317/2500` читает живые регион и страну
+//! игрока и работает с тем же принадлежащим серверу реестром сценариев;
+//! удаление текущего сценария завершается на границе команды без прежнего
+//! обращения к освобождённой памяти.
+//! `5108 / GetOnlinePlayers` замыкает уже существующий контракт World
+//! `0x5FF01 → 0x7FC01`: планировщик ждёт удалённое число игроков и повторяет
+//! исходное выражение без повторной отправки запроса.
+//! Семейство `5103–5105/5109` из того же диспетчера публикует локальные
+//! списки GM и игроков, запрашивает межсерверные части списка GM и молчания,
+//! а также запускает `0x5FF13 → 0x7F803 → 0x5FA03`, поэтому сохранение всех
+//! игроков доходит до полного снимка GameSave и владельца сохранения World.
+//! Недельный сброс из того же достигнутого сценария читает локальные поля
+//! `SYSTEMTIME` через `TagTime`, меняет принадлежащие планировщику общие
+//! переменные и публикует `PostWorldInfo` по уже замкнутому контракту
+//! `0x5FF0E → 0x7FC0D → 0xBF806/0xBF804`.
+//! Соседняя ветвь нормализации бодрости читает и записывает живой
+//! `dwVigour`; `SetMe` передаёт прямую запись DWORD в `CGame`, после чего
+//! проходит обязательный вызов `UpdateProperty` и адресный `0xBF721` с уже
+//! изменённой бодростью.
 //! `2304 / ChangeRegion`, достигнутый следующим блоком `nodupe.script`,
-//! сохраняет все семь positional аргументов и их asymmetric defaults. Вызов
-//! проходит canonical `CGame`: business/session tail, same/local/proxy
-//! region state, `BF603/BF601/BF505`, faction/team wire, полный GameSave
-//! `5FA02`, World `7F802` и client `BF506`; локальная ветвь завершается через
-//! `CS_CHANGEREGION` AI queue и реальный `8F801` destination-enter caller.
-//! Следующая календарная ветвь того же script-а достигает `13..19/23` и
-//! `5001 / Reload`. Временные selectors сохраняют exact packed layout
+//! сохраняет все семь позиционных аргументов и их неодинаковые значения по
+//! умолчанию. Вызов проходит канонический `CGame`: хвост деловых и сеансовых
+//! состояний, прежний, локальный либо замещающий регион, `BF603/BF601/BF505`,
+//! сообщения фракции и команды, полный GameSave `5FA02`, World `7F802` и
+//! клиентский `BF506`; локальная ветвь завершается через очередь ИИ
+//! `CS_CHANGEREGION` и настоящий входной вызов назначения `8F801`.
+//! Следующая календарная ветвь того же сценария достигает `13..19/23` и
+//! `5001 / Reload`. Временные селекторы сохраняют точную упакованную раскладку
 //! `year:9/month:4/day:5/hour:5/minute:6/weekday:3`; `Year..DayOfWeek`
-//! принимают optional packed value, а `Second` всегда читает local clock.
-//! `Reload` публикует `0x5FF06 + player ID + profile C-string`; реальный World
-//! GM-dispatcher выполняет достигнутые `JJcConfig` и `IncrementShopList`
-//! reload owners и для IncrementShopList рассылает обновлённый GameServer
-//! snapshot. Недостижимый normal-script-ом null-player dereference исходника
-//! безопасно заменён no-op без сетевой публикации.
+//! принимают необязательное упакованное значение, а `Second` всегда читает
+//! местные часы.
+//! `Reload` публикует `0x5FF06 + ID игрока + строка C профиля`; настоящий
+//! диспетчер GM World выполняет достигнутых владельцев `JJcConfig` и
+//! `IncrementShopList`, а для `IncrementShopList` рассылает обновлённый снимок
+//! GameServer. Недостижимое обычным сценарием разыменование пустого игрока
+//! безопасно заменено отсутствием действия без сетевой публикации.
 //! Часовая ветвь `game_enter.script` добавляет `20/21`, `8003` и `3302` одним
 //! проходом того же CScript. Packed local time декодируется через CRT `mktime`;
 //! random position пишет player-owned `$m_Temp[0..1]`; все 12 вычисленных
@@ -333,6 +340,7 @@ use crate::gameserver::appserver::country::country::{
 };
 use crate::gameserver::appserver::exstate::ExtendedStateKind;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::message::gmmessage::publish_local_online_gm_list;
 use crate::gameserver::appserver::moveshape::MoveShapeCommandContext;
 use crate::gameserver::appserver::organizingsystem::attackcitysys::AttackCityMembershipBlock;
 use crate::gameserver::appserver::player::{
@@ -563,7 +571,11 @@ pub(crate) const SCRIPT_FUNCTION_GET_CONTRIBUTION: i32 = 2502;
 pub(crate) const SCRIPT_FUNCTION_SET_CONTRIBUTION: i32 = 2503;
 pub(crate) const SCRIPT_FUNCTION_GET_YUAN_BAO: i32 = 2504;
 pub(crate) const SCRIPT_FUNCTION_ADD_INCREMENT_LOG: i32 = 2570;
+pub(crate) const SCRIPT_FUNCTION_LIST_ONLINE_GM: i32 = 5103;
+pub(crate) const SCRIPT_FUNCTION_LIST_SILENCE_PLAYER: i32 = 5104;
+pub(crate) const SCRIPT_FUNCTION_SAVE_ALL_PLAYERS: i32 = 5105;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
+pub(crate) const SCRIPT_FUNCTION_LIST_ONLINE_PLAYER: i32 = 5109;
 pub(crate) const SCRIPT_FUNCTION_LIST_BANNED_PLAYER: i32 = 5106;
 pub(crate) const SCRIPT_FUNCTION_GET_COPY_NUMBER: i32 = 9314;
 pub(crate) const SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE: i32 = 5411;
@@ -3785,7 +3797,11 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_TIME
         | SCRIPT_FUNCTION_SECOND
         | SCRIPT_FUNCTION_GET_COUNTRY
+        | SCRIPT_FUNCTION_LIST_ONLINE_GM
+        | SCRIPT_FUNCTION_LIST_SILENCE_PLAYER
+        | SCRIPT_FUNCTION_SAVE_ALL_PLAYERS
         | SCRIPT_FUNCTION_GET_ONLINE_PLAYERS
+        | SCRIPT_FUNCTION_LIST_ONLINE_PLAYER
         | SCRIPT_FUNCTION_LIST_BANNED_PLAYER
         | SCRIPT_FUNCTION_GET_MAXIMUM_LEVEL
         | SCRIPT_FUNCTION_GET_AREA_ID
@@ -6878,6 +6894,48 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Yielded {
                 legacy_return: local_count,
             })
+        }
+        SCRIPT_FUNCTION_LIST_ONLINE_GM => {
+            if argument_count != 0 || game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let _ = publish_local_online_gm_list(game, player_id);
+            let mut request = CMessage::new(0x0005_ff14);
+            request.add_long(player_id);
+            let _ = request.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_LIST_SILENCE_PLAYER => {
+            if argument_count != 0 || game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let mut request = CMessage::new(0x0005_ff0f);
+            request.add_long(player_id);
+            let _ = request.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_SAVE_ALL_PLAYERS => {
+            if argument_count != 0 || game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let mut request = CMessage::new(0x0005_ff13);
+            request.add_long(player_id);
+            let _ = request.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_LIST_ONLINE_PLAYER => {
+            if argument_count != 0 || game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            for name in game.script_region_player_names(player_id) {
+                let mut response = CMessage::new(0x000b_f806);
+                response.add_long(-1);
+                response.add_long(0);
+                response.base_mut().add(&name);
+                response.add_byte(0);
+                let _ = response.send_to_player(game.net_server(), player_id);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_LIST_BANNED_PLAYER => {
             if argument_count != 0 || game.find_player(player_id).is_none() || script_id <= 0 {

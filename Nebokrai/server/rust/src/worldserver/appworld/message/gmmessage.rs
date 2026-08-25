@@ -1,23 +1,31 @@
 //! GM-сообщения `OnGMMessage` из `gmmessage.cpp`, подтверждённые
 //! `worldserver.exe` и `worldserver.pdb`.
 //!
-//! Dispatcher безусловно читает request ID, затем обслуживает queries, relays,
-//! region broadcast, reload, map kick, silence и ban для `0x5FF01..0x5FF16`.
-//! Неизвестный opcode завершается после request ID без эффектов.
-//! `0x5FF06` имеет достигнутого GameServer caller-а: script selector
-//! `5001 / Reload` передаёт player ID как request ID и profile C-string;
-//! dispatcher запускает тот же concrete reload owner, что и GM route.
+//! Диспетчер безусловно читает ID запроса, затем обслуживает запросы,
+//! ретрансляцию, рассылку регионам, перезагрузку, отключение карты, молчание
+//! и блокировку для `0x5FF01..0x5FF16`. Неизвестный код операции завершается
+//! после ID запроса без эффектов.
+//! `0x5FF06` имеет достигнутый вызов из GameServer: сценарный селектор
+//! `5001 / Reload` передаёт ID игрока как ID запроса и строку C профиля;
+//! диспетчер запускает того же конкретного владельца перезагрузки, что и
+//! маршрут GM.
 //!
-//! Online count/name queries отвечают исходному socket. Region query рассылает
-//! `0x7FC04` всем; kick-map проходит регионы по фактическому ID. Silence меняет
-//! player state до route, а missing target отвечает requester-у `WS0114`.
+//! Запросы числа и имён игроков в сети отвечают исходному сокету. Запрос
+//! региона рассылает `0x7FC04` всем; отключение карты проходит регионы по
+//! фактическому ID. Молчание меняет состояние игрока до маршрутизации, а при
+//! отсутствии цели запросивший игрок получает `WS0114`.
 //!
-//! Ban ищет account в полном player map, при пустом значении запрашивает БД и
-//! только затем отправляет `0x20001` LoginServer. Requester не проверяется и
-//! ответа не получает. Tiberius заменяет ADO, сохраняя этот порядок.
+//! Блокировка ищет учётную запись в полной карте игроков, при пустом значении
+//! запрашивает БД и только затем отправляет `0x20001` LoginServer. Запросивший
+//! игрок не проверяется и ответа не получает. Tiberius заменяет ADO, сохраняя
+//! этот порядок.
 //! Сценарный запрос списка блокировок `0x5FF17` проверяет принадлежность игрока
 //! исходному GameServer и передаёт ID игрока и сценария в LoginServer как
 //! `0x20002`; отказ очереди немедленно возвращается исходной карте.
+//! Список GM сохраняет маршрут `0x5FF14 → 0x7FC11 → 0x5FF15 → 0x7FC12`:
+//! ответ GameServer несёт ID запросившего игрока, ID исходной карты, число и
+//! строки; WorldServer выбирает адресатом исходную карту и не удаляет эти поля
+//! из пересылаемого пакета.
 
 use std::ffi::CString;
 
@@ -87,9 +95,8 @@ pub(crate) enum WorldGmTransportOutcome {
         request_type: i32,
         response_type: i32,
         request_id: i32,
-        discarded_value: i32,
         target_map_id: i32,
-        payload_complete: [bool; 3],
+        payload_complete: [bool; 2],
         wire: Vec<u8>,
         delivery: Result<i32, SendMessageError>,
     },
@@ -791,9 +798,7 @@ pub(crate) async fn on_gm_message(
             )
         }
         0x0005_FF15 => {
-            let decoded_discarded = message.base_mut().get_long();
             let decoded_target = message.base_mut().get_long();
-            let discarded_value = decoded_discarded.unwrap_or(0);
             let target_map_id = decoded_target.unwrap_or(0);
             message.set_message_type(0x0007_FC12);
             let wire = message.as_wire_bytes().to_vec();
@@ -803,13 +808,8 @@ pub(crate) async fn on_gm_message(
                     request_type: 0x0005_FF15,
                     response_type: 0x0007_FC12,
                     request_id,
-                    discarded_value,
                     target_map_id,
-                    payload_complete: [
-                        decoded_request_id.is_some(),
-                        decoded_discarded.is_some(),
-                        decoded_target.is_some(),
-                    ],
+                    payload_complete: [decoded_request_id.is_some(), decoded_target.is_some()],
                     wire,
                     delivery,
                 },

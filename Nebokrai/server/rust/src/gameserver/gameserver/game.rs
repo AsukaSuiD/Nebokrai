@@ -31010,6 +31010,31 @@ impl CGame {
             .collect()
     }
 
+    /// `5109 / ListOnlinePlayer` обходит все области текущего региона в
+    /// порядке `CArea::FindShapes(400)` и возвращает имена найденных игроков.
+    /// Снимок отделяет пространственный проход от последующих адресных
+    /// сообщений запросившему игроку.
+    pub(crate) fn script_region_player_names(&self, player_id: i32) -> Vec<Vec<u8>> {
+        let Some(region_id) = self
+            .find_player(player_id)
+            .and_then(|player| player.server_region_id())
+        else {
+            return Vec::new();
+        };
+        let Some(region) = self.find_region(region_id) else {
+            return Vec::new();
+        };
+        let mut player_ids = Vec::new();
+        region.base().find_all_player_ids(&mut player_ids);
+        player_ids
+            .into_iter()
+            .filter_map(|listed_player_id| {
+                self.find_player(listed_player_id)
+                    .map(|player| player.player_name().to_vec())
+            })
+            .collect()
+    }
+
     /// CountryWar start обходит canonical player map один раз и выбирает обе
     /// участвующие страны, не группируя получателей по стране.
     pub(crate) fn player_ids_in_countries(&self, countries: [u8; 2]) -> Vec<i32> {

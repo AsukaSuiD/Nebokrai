@@ -1,59 +1,63 @@
-//! GameServer GM message owner.
+//! Владелец GM-сообщений GameServer.
 //!
-//! Точная пара GameServer EXE/PDB и owner
+//! Точная пара GameServer EXE/PDB и файл-владелец
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x5FF15`, `0x7FC01..0x7FC06`, `0x7FC08..0x7FC11`,
-//! и `0x7FC13`: requester ID читается до switch,
-//! silence duration нормализуется к минимуму `1`, player map
-//! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
-//! уходят WorldServer. Адресный `0x7FC0F` сохраняет length guards,
-//! дописывает исходный ` By Game Server {local IP}` и посылает player-у
-//! `0xBF806`; recoverable allocation failure возвращает `GS0029`.
-//! Broadcast `0x7FC0D` сохраняет mode guard и публикует исходный
+//! ветви `0x7FC01..0x7FC06`, `0x7FC08..0x7FC13`: ID запросившего
+//! игрока читается до выбора ветви, длительность молчания нормализуется
+//! к минимуму `1`, а карта игроков обходится дважды в знаковом порядке ID.
+//! Ответы `0x5FF0D/0x5FF10`
+//! уходят WorldServer. Адресный `0x7FC0F` сохраняет проверки длины,
+//! дописывает исходный ` By Game Server {local IP}` и посылает игроку
+//! `0xBF806`; обрабатываемая ошибка выделения памяти возвращает `GS0029`.
+//! Рассылка `0x7FC0D` сохраняет проверку режима и публикует исходный
 //! `0xBF806` либо `0xBF804` через общий `SendAll`.
-//! Requester feedback `0x7FC0C` выбирает `GS0033/GS0034` и форматирует
-//! подтверждённые EXE-вызовом и shipped read-only language resource аргументы
-//! `%s/%d/%s`. Safe `Vec` заменяет raw `char[512]`; неизвестный format
-//! specifier не воспроизводит vararg/buffer UB, а остаётся typed boundary.
-//! Country broadcast `0x7FC13` сохраняет unsigned-long/byte compare,
-//! signed player ID-order и отдельный `SendToPlayer` для каждого адресата.
-//! Mass-kick `0x7FC09` оставляет requester и ставит `QuitClientByMapID` всем
-//! остальным canonical player ID в исходном ordered map-pass.
-//! Region-kick `0x7FC0A` обходит physical row-major area storage, сохраняет
-//! порядок и повторы `FindShapes(400)`, оставляет requester и ставит тот же
-//! `QuitClientByMapID` каждому найденному player ID. Owned `Vec` снимает общий
-//! ID-snapshot перед queue pass; это не меняет наблюдаемый порядок, потому что
-//! `KickPlayer` только ставит network command и не мутирует region registry.
-//! Named kick `0x7FC06` сохраняет 24-byte GetStr boundary, выполняет kick до
-//! exact World `0x5FF09` response и возвращает исходное имя в обоих outcomes.
-//! Around-kick `0x7FC07` сохраняет 256-byte name, context field, X-major 7×7
-//! scan, consecutive-only unique, ordered kicks и World
-//! `0x5FD02(context,requester,-1,0,GS0030(count))` после side effects.
-//! Presence feedback `0x7FC08` использует signed-char branch, `GS0025/GS0026`
+//! Ответ запросившему игроку `0x7FC0C` выбирает `GS0033/GS0034` и форматирует
+//! подтверждённые EXE-вызовом и поставляемой языковой таблицей аргументы
+//! `%s/%d/%s`. Безопасный `Vec` заменяет исходный `char[512]`; неизвестный
+//! спецификатор формата не воспроизводит неопределённое поведение переменных
+//! аргументов и буфера, а остаётся типизированной границей.
+//! Рассылка стране `0x7FC13` сохраняет сравнение `unsigned long` с байтом,
+//! знаковый порядок ID игроков и отдельный `SendToPlayer` для каждого адресата.
+//! Массовое отключение `0x7FC09` оставляет запросившего игрока и ставит
+//! `QuitClientByMapID` всем остальным каноническим ID в исходном проходе карты.
+//! Отключение региона `0x7FC0A` обходит физическое построчное хранилище областей, сохраняет
+//! порядок и повторы `FindShapes(400)`, оставляет запросившего игрока и ставит тот же
+//! `QuitClientByMapID` каждому найденному ID игрока. Принадлежащий владельцу
+//! `Vec` снимает общий снимок ID перед проходом очереди; это не меняет наблюдаемый порядок, потому что
+//! `KickPlayer` только ставит сетевую команду и не меняет реестр региона.
+//! Отключение по имени `0x7FC06` сохраняет 24-байтовую границу `GetStr`,
+//! выполняет отключение до точного ответа World `0x5FF09` и возвращает
+//! исходное имя при обоих исходах. Отключение вокруг `0x7FC07` сохраняет
+//! 256-байтовое имя, поле контекста, проход 7×7 с внешним циклом по X,
+//! устранение только последовательных повторов, упорядоченные отключения и World
+//! `0x5FD02(context,requester,-1,0,GS0030(count))` после побочных эффектов.
+//! Ответ о присутствии `0x7FC08` использует ветвь со знаковым `char`, `GS0025/GS0026`
 //! с подтверждённым `%s` и адресный `0xBF806(-1,0,text)`.
-//! Входящий list response `0x5FF15` сохраняет target-player cursor gate и
-//! публикует каждую полученную строку отдельным адресным `0xBF806`.
-//! Запрос `0x7FC11` обходит canonical GM map, оставляет только online entries,
-//! форматирует пять подтверждённых level-шаблонов, меняет ID того же пакета на
-//! `0x5FF15`, дописывает count/строки и возвращает его WorldServer.
-//! Script-continuation family читает `(value, script ID)` после requester-а,
-//! продолжает owned `CScript`; только `0x7FC01` подавляет вызов
-//! при отсутствующем player, остальные три передают исходный null-owner факт.
-//! Межсерверная ветвь `0x7FC03` читает target player ID, property с точной
-//! границей `0x20`, source map и script ID, вычисляет значение через того же
-//! `CPlayer` owner-а и возвращает WorldServer пакет `0x5FF03`; WorldServer
-//! маршрутизирует результат как `0x7FC02` исходному script continuation.
-//! Remote move `0x7FC10` сохраняет requester-before-switch, ищет target по
-//! имени и только для локального owner-а читает region/X/Y и вызывает полный
+//! Входящий ответ списка `0x7FC12` сохраняет проверку запросившего игрока,
+//! пропускает маршрутный ID карты и публикует каждую строку отдельным
+//! адресным `0xBF806`.
+//! Запрос `0x7FC11` обходит каноническую карту GM, оставляет только игроков в сети,
+//! форматирует пять подтверждённых шаблонов уровней, меняет ID того же пакета на
+//! `0x5FF15`, дописывает число и строки и возвращает его WorldServer.
+//! Семейство продолжения сценария читает `(value, script ID)` после ID
+//! запросившего игрока и продолжает принадлежащий серверу `CScript`; только
+//! `0x7FC01` подавляет вызов при отсутствующем игроке, остальные три сохраняют
+//! исходный факт пустого владельца.
+//! Межсерверная ветвь `0x7FC03` читает ID целевого игрока, свойство с точной
+//! границей `0x20`, исходную карту и ID сценария, вычисляет значение через того же
+//! владельца `CPlayer` и возвращает WorldServer пакет `0x5FF03`; WorldServer
+//! маршрутизирует результат как `0x7FC02` исходному продолжению сценария.
+//! Удалённый перенос `0x7FC10` сохраняет чтение запросившего игрока до выбора
+//! ветви, ищет цель по имени и только для локального владельца читает регион/X/Y и вызывает полный
 //! `ChangeRegion` с текущим направлением и нулевыми use/range/carriage.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! Ответ списка блокировок `0x7FC14` строго проверяет всю полезную нагрузку,
 //! продолжает только ожидающую `ListBanedPlayer 5106` и после этого публикует
 //! строки игроку отдельными `0xBF806`.
-//! `Vec` заменяет raw allocation; поле declared capacity сохраняет
+//! `Vec` заменяет исходное выделение памяти; поле объявленной ёмкости сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
-//! расхождение между двумя time-sensitive pass-ами. Непокрытые GM
-//! selectors остаются RAW ниже.
+//! расхождение между двумя зависящими от времени проходами. Непокрытые
+//! селекторы GM остаются в сохранённом RAW ниже.
 
 use crate::gameserver::gameserver::game::{
     CGame, GameClockContext, GameKickAroundOutcome, GameKickAroundReport, GameKickPlayerReport,
@@ -61,7 +65,8 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
-const GM_LIST_RESPONSE_MESSAGE: i32 = 0x0005_FF15;
+const GM_LIST_RESPONSE_MESSAGE: i32 = 0x0007_FC12;
+const GM_LIST_WORLD_RESPONSE_MESSAGE: i32 = 0x0005_FF15;
 const GM_SCRIPT_CONTINUE_IF_PRESENT_MESSAGE: i32 = 0x0007_FC01;
 const GM_SCRIPT_CONTINUE_MESSAGE_1: i32 = 0x0007_FC02;
 const GM_GET_PLAYER_PROPERTY_REQUEST: i32 = 0x0007_FC03;
@@ -107,7 +112,6 @@ pub(crate) enum GmMessageError {
     MissingMoveTileY,
     MissingScriptContinuationValue,
     MissingScriptContinuationId,
-    MissingListTargetPlayerId,
     MissingListReservedField,
     MissingListCount,
     MissingKickPlayerName,
@@ -295,8 +299,14 @@ pub(crate) struct GmListPublishedEntry {
     pub(crate) text: Vec<u8>,
 }
 
-/// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
-/// `None` оставляет прочие selectors их ещё RAW owner-у.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GmLocalListReport {
+    pub(crate) entries: Vec<GmListPublishedEntry>,
+    pub(crate) deliveries: Vec<i32>,
+}
+
+/// Материализует связанные ветви молчания, рассылки и адресного уведомления
+/// `OnGMMessage`. `None` оставляет прочие селекторы их сохранённому RAW-владельцу.
 pub(crate) fn dispatch_gm_message<
     Runtime: GameClockContext + ScriptRegionChangeContext + RealmAppellationScriptContext,
 >(
@@ -523,35 +533,10 @@ pub(crate) fn dispatch_gm_message<
     }
 
     if message_type == GM_LIST_REQUEST_MESSAGE {
-        let mut entries = Vec::new();
-        for info in game.gm_list().gm_info().values() {
-            if game.find_player_by_name(&info.name).is_none() {
-                continue;
-            }
-            let string_id = match info.level {
-                100 => b"GS0035".as_slice(),
-                90 => b"GS0036".as_slice(),
-                50 => b"GS0037".as_slice(),
-                40 => b"GSN0001".as_slice(),
-                30 => b"GSN0002".as_slice(),
-                level => {
-                    return Some(Err(GmMessageError::UnsupportedOnlineGmLevel { level }));
-                }
-            };
-            let text = match format_gm_template(
-                game.get_string_by_id(string_id),
-                &[GmFormatArgument::Text(&info.name)],
-            ) {
-                Ok(formatted) => formatted,
-                Err(()) => return Some(Err(GmMessageError::UnsupportedFeedbackFormat)),
-            };
-            entries.push(GmListPublishedEntry {
-                name: info.name.clone(),
-                level: info.level,
-                string_id,
-                text,
-            });
-        }
+        let entries = match collect_online_gm_entries(game) {
+            Ok(entries) => entries,
+            Err(error) => return Some(Err(error)),
+        };
         let count = match i32::try_from(entries.len()) {
             Ok(count) => count,
             Err(_) => {
@@ -562,7 +547,7 @@ pub(crate) fn dispatch_gm_message<
         };
         message
             .base_mut()
-            .set_message_type(GM_LIST_RESPONSE_MESSAGE);
+            .set_message_type(GM_LIST_WORLD_RESPONSE_MESSAGE);
         message.add_long(count);
         for entry in &entries {
             add_legacy_c_string(message, &entry.text);
@@ -576,9 +561,7 @@ pub(crate) fn dispatch_gm_message<
     }
 
     if message_type == GM_LIST_RESPONSE_MESSAGE {
-        let Some(target_player_id) = message.base_mut().get_long() else {
-            return Some(Err(GmMessageError::MissingListTargetPlayerId));
-        };
+        let target_player_id = requester_id;
         if game.find_player(target_player_id).is_none() {
             return Some(Ok(GmMessageReport::ListResponse {
                 requester_id,
@@ -993,6 +976,58 @@ pub(crate) fn dispatch_gm_message<
         declared_capacity,
         delivery,
     }))
+}
+
+/// Публикует локальную часть `5103 / ListOnlineGM` тому же игроку, который
+/// затем запрашивает списки остальных GameServer через `0x5FF14`.
+pub(crate) fn publish_local_online_gm_list(
+    game: &CGame,
+    player_id: i32,
+) -> Result<GmLocalListReport, GmMessageError> {
+    let entries = collect_online_gm_entries(game)?;
+    let deliveries = entries
+        .iter()
+        .map(|entry| {
+            let mut response = CMessage::new(PLAYER_SYSTEM_MESSAGE);
+            response.add_long(-1);
+            response.add_long(0);
+            add_legacy_c_string(&mut response, &entry.text);
+            response.send_to_player(game.net_server(), player_id)
+        })
+        .collect();
+    Ok(GmLocalListReport {
+        entries,
+        deliveries,
+    })
+}
+
+fn collect_online_gm_entries(game: &CGame) -> Result<Vec<GmListPublishedEntry>, GmMessageError> {
+    let mut entries = Vec::new();
+    for info in game.gm_list().gm_info().values() {
+        if game.find_player_by_name(&info.name).is_none() {
+            continue;
+        }
+        let string_id = match info.level {
+            100 => b"GS0035".as_slice(),
+            90 => b"GS0036".as_slice(),
+            50 => b"GS0037".as_slice(),
+            40 => b"GSN0001".as_slice(),
+            30 => b"GSN0002".as_slice(),
+            level => return Err(GmMessageError::UnsupportedOnlineGmLevel { level }),
+        };
+        let text = format_gm_template(
+            game.get_string_by_id(string_id),
+            &[GmFormatArgument::Text(&info.name)],
+        )
+        .map_err(|()| GmMessageError::UnsupportedFeedbackFormat)?;
+        entries.push(GmListPublishedEntry {
+            name: info.name.clone(),
+            level: info.level,
+            string_id,
+            text,
+        });
+    }
+    Ok(entries)
 }
 
 fn add_legacy_c_string(message: &mut CMessage, value: &[u8]) {
