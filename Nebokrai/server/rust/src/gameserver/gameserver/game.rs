@@ -3435,7 +3435,12 @@ impl<T> GodsBattleNpcContendContext for T where
 {
 }
 
-pub(crate) trait PlayerReliveContext: RegionRandomContext + ScriptFunctionRuntime {
+pub(crate) trait PlayerReliveContext:
+    RegionRandomContext
+    + GameContainerMessageRuntime
+    + ScriptRegionChangeContext
+    + RealmAppellationScriptContext
+{
     fn auto_start_player_passive_skills(&mut self, player: &mut CPlayer);
     fn player_enter_region_after_relive(&mut self, player: &mut CPlayer);
 }
@@ -3625,11 +3630,11 @@ pub(crate) enum PlayerReliveOutcome {
         region_change: PlayerRegionChangeReport,
         cannot_move_delivery: Option<i32>,
     },
-    ReturnPointBlocked(ServerReturnSetupBlock),
+    ReturnPointBlocked(GameReturnPointBlock),
     RandomPositionBlocked(RegionCellAccessBlock),
     ReturnPoint {
         mutation: PlayerReliveMutation,
-        return_point: GodsBattleReturnPointReport,
+        return_point: RegionReturnPoint,
         x: i32,
         y: i32,
         changed_region: bool,
@@ -22180,12 +22185,13 @@ impl CGame {
         })
     }
 
-    /// Full reached `CPlayer::OnRelive` path. Только ещё не материализованные
-    /// passive-skill и EnterRegion virtual owners остаются explicit callbacks;
-    /// companion cleanup, property recompute, movement, `OnChangeStates`,
-    /// resident/peace state, GodsBattle return, region change и client wires
-    /// исполняются concrete `CPlayer/CGame` owners.
-    pub(crate) fn relive_gods_battle_player<Context: PlayerReliveContext>(
+    /// Полный достигнутый путь `CPlayer::OnRelive`. Только ещё не
+    /// материализованные владельцы пассивных навыков и виртуального
+    /// `OnEnterRegion` остаются обратными вызовами среды; очистку спутников,
+    /// пересчёт свойств, движение, `OnChangeStates`, состояния покоя и мира,
+    /// виртуальный `GetReturnPoint`, смену региона и клиентские сообщения
+    /// исполняют владельцы `CPlayer` и `CGame`.
+    pub(crate) fn relive_player<Context: PlayerReliveContext>(
         &mut self,
         player_id: i32,
         relive_type: i32,
@@ -22211,7 +22217,7 @@ impl CGame {
         let (cleared_uncreated_pets, cleared_uncreated_carriage) = {
             let player = self
                 .find_player_mut(player_id)
-                .expect("relive player сохранён после synchronous dead-check");
+                .expect("игрок сохранён после синхронной проверки смерти");
             context.auto_start_player_passive_skills(player);
             let cleared = player.clear_relive_uncreated_companions();
             context.player_enter_region_after_relive(player);
@@ -22219,11 +22225,11 @@ impl CGame {
         };
         let (combat_property_delivery, tao_zhuang_ran) = self
             .update_player_properties(player_id, context)
-            .expect("relive player сохранён после EnterRegion");
+            .expect("игрок сохранён после OnEnterRegion");
         let (owned, mutation) = {
             let player = self
                 .find_player_mut(player_id)
-                .expect("relive player сохранён после property update");
+                .expect("игрок сохранён после пересчёта свойств");
             let owned = player
                 .unlock_movement_after_relive(cleared_uncreated_pets, cleared_uncreated_carriage);
             let mutation = player.apply_relive_scalars();
@@ -22276,7 +22282,7 @@ impl CGame {
                     message.add_long(player_id);
                     let player = self
                         .find_player(player_id)
-                        .expect("relive player сохранён до shape publication");
+                        .expect("игрок сохранён до публикации формы");
                     let delivery = self.send_shape_around_in_region(
                         owner.base(),
                         player.shape(),
@@ -22337,25 +22343,22 @@ impl CGame {
             .find_player(player_id)
             .and_then(CPlayer::server_region_id);
         let return_point = match region_id {
-            Some(region_id) => match self.gods_battle_return_point(region_id, player_id) {
-                Ok(Some(report)) => report,
-                Ok(None) => {
-                    return PlayerReliveReport {
-                        player_id,
-                        relive_type,
-                        prelude: Some(prelude),
-                        outcome: PlayerReliveOutcome::CurrentRegionMissing { mutation },
-                    };
+            Some(region_id) => {
+                let source_is_gods_battle = self
+                    .find_region(region_id)
+                    .is_some_and(ServerRegionOwner::is_gods_battle);
+                match self.select_player_return_point(region_id, player_id, source_is_gods_battle) {
+                    Ok(point) => point,
+                    Err(block) => {
+                        return PlayerReliveReport {
+                            player_id,
+                            relive_type,
+                            prelude: Some(prelude),
+                            outcome: PlayerReliveOutcome::ReturnPointBlocked(block),
+                        };
+                    }
                 }
-                Err(block) => {
-                    return PlayerReliveReport {
-                        player_id,
-                        relive_type,
-                        prelude: Some(prelude),
-                        outcome: PlayerReliveOutcome::ReturnPointBlocked(block),
-                    };
-                }
-            },
+            }
             None => {
                 return PlayerReliveReport {
                     player_id,
@@ -22365,33 +22368,19 @@ impl CGame {
                 };
             }
         };
-        let mut x = return_point.point.left.wrapping_add(
-            return_point
-                .point
-                .right
-                .wrapping_sub(return_point.point.left)
-                / 2,
-        );
-        let mut y = return_point.point.top.wrapping_add(
-            return_point
-                .point
-                .bottom
-                .wrapping_sub(return_point.point.top)
-                / 2,
-        );
-        let width = return_point
-            .point
-            .right
-            .wrapping_sub(return_point.point.left);
-        let height = return_point
-            .point
-            .bottom
-            .wrapping_sub(return_point.point.top);
+        let mut x = return_point
+            .left
+            .wrapping_add(return_point.right.wrapping_sub(return_point.left) / 2);
+        let mut y = return_point
+            .top
+            .wrapping_add(return_point.bottom.wrapping_sub(return_point.top) / 2);
+        let width = return_point.right.wrapping_sub(return_point.left);
+        let height = return_point.bottom.wrapping_sub(return_point.top);
         if width > 0 && height > 0 {
-            if let Some(owner) = self.find_region(return_point.point.region_id) {
+            if let Some(owner) = self.find_region(return_point.region_id) {
                 match owner.base().region.get_random_pos_in_range(
-                    return_point.point.left,
-                    return_point.point.top,
+                    return_point.left,
+                    return_point.top,
                     width,
                     height,
                     context,
@@ -22415,10 +22404,10 @@ impl CGame {
         let peace = self.enter_player_peace_state(player_id);
         let region_change = self.change_player_region(
             player_id,
-            return_point.point.region_id,
+            return_point.region_id,
             x,
             y,
-            return_point.point.direction,
+            return_point.direction,
             0,
             0,
             0,
@@ -22437,7 +22426,7 @@ impl CGame {
             let destination_region_id = self
                 .find_player(player_id)
                 .and_then(CPlayer::server_region_id)
-                .or(Some(return_point.point.region_id));
+                .or(Some(return_point.region_id));
             state_deliveries
                 .extend(self.publish_relive_died_state(destination_region_id, player_id));
         }

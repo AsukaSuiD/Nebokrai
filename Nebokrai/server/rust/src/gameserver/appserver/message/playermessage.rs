@@ -18,8 +18,9 @@
 //! исходного packet item и выполняет state side effects через тот же owner.
 //! Terminal расход публикует `0xBF709/0xC0101/0xC0102`.
 //! Общий outer guard сохраняет исходный запрет player-message во время смены
-//! сервера/региона; `0x8FA02` вызывает полный reached `CPlayer::OnRelive(0)`
-//! через concrete `CGame` relive owner со всеми state/region/wire effects.
+//! сервера или региона; `0x8FA02` вызывает полный достигнутый
+//! `CPlayer::OnRelive(0)` через владельца возрождения в `CGame` со всеми
+//! изменениями состояния, региона и сетевыми эффектами.
 //! LeiTing claim `0x8FA19` сохраняет packet-space gate, exact thresholds,
 //! `BF73E -> 5FD10 -> reward script` ordering; `0x8FA10` использует тот же
 //! server-trusted script runtime для help script.
@@ -602,7 +603,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             report.outcome = GamePlayerMessageOutcome::StatPointAllocated;
         }
         REQUEST_RELIVE => {
-            report.relive = Some(game.relive_gods_battle_player(player_id, 0, runtime));
+            report.relive = Some(game.relive_player(player_id, 0, runtime));
             report.outcome = GamePlayerMessageOutcome::Relived;
         }
         INTERACT_WITH_NPC => {

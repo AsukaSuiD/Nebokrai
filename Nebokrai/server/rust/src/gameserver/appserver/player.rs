@@ -10900,7 +10900,8 @@ impl CPlayer {
         self.combat_properties.maximum_mp
     }
 
-    /// Owned scalar tail `OnRelive` после external passive/enter/update hooks.
+    /// Собственный скалярный хвост `OnRelive` после внешних вызовов
+    /// пассивных навыков, входа в регион и пересчёта свойств.
     pub(crate) fn apply_relive_scalars(
         &mut self,
     ) -> Result<PlayerReliveMutation, ShapeCoordinateBlock> {
@@ -10921,9 +10922,9 @@ impl CPlayer {
         })
     }
 
-    /// Owned non-polymorphic mutations из reached `OnRelive`: transient
-    /// companion snapshots очищаются до `EnterRegion/UpdateProperty`, а один
-    /// nesting movement lock снимается после них.
+    /// Собственные неполиморфные изменения достигнутого `OnRelive`: временные
+    /// снимки спутников очищаются до `OnEnterRegion/UpdateProperty`, а один
+    /// уровень блокировки движения снимается после них.
     pub(crate) fn clear_relive_uncreated_companions(&mut self) -> (usize, bool) {
         let cleared_uncreated_pets = self.uncreated_pets.len();
         self.uncreated_pets.clear();
@@ -10950,8 +10951,8 @@ impl CPlayer {
         }
     }
 
-    /// Scalar mutation exact `EnterResidentState`; around wire принадлежит
-    /// `CGame`, где доступен живой region/session owner.
+    /// Точное скалярное изменение `EnterResidentState`; рассылкой соседям
+    /// владеет `CGame`, где доступны действующие регион и сессия.
     pub(crate) fn enter_resident_state(&mut self) -> u32 {
         let previous = self.criminal_state_timestamp_ms;
         self.criminal_state_timestamp_ms = 0;

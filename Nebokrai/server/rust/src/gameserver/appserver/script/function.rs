@@ -255,9 +255,13 @@
 //! тот же reached `GetMe/SetMe/ChangePlayer/SetPlayer` dispatcher: bool write
 //! нормализует любое ненулевое значение, затем исполняет общий property/wire
 //! tail и влияет на следующий exact `CanMountEquip` без shadow-state.
-//! Numeric selector получает вычисленные параметры из owned `CScript`; return
-//! либо dialog-yield возвращается в ту же execution chain. Остальные function
-//! ID и неподтверждённые wait/pause families ниже пока остаются RAW.
+//! Числовой селектор получает вычисленные параметры из собственного
+//! `CScript`; результат или приостановка диалога возвращается в ту же цепочку
+//! исполнения. Остальные идентификаторы функций и неподтверждённые семейства
+//! ожидания ниже пока остаются `RAW`.
+//! `ReLive 2400` вычисляет только первый аргумент, вызывает общего владельца
+//! `CPlayer::OnRelive` и всегда возвращает сценарный ноль; лишние аргументы
+//! не вычисляются.
 
 use crate::gameserver::appserver::country::country::{
     CountryExileRestTimeReport, CountryScalarMutationReport,
@@ -292,9 +296,9 @@ use crate::gameserver::gameserver::game::{
     EquipmentDaKongContext, EquipmentSessionOpenReport, GameClockContext,
     GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
     GodsBattleSzlPlayerUpdate, NationCarriageReturnReport, NationCombatContext,
-    NationContendEnterReport, RealmAppellationScriptContext, ScriptRegionChangeContext,
-    ServerRegionOwner, colored_player_notice_message, colored_text_message,
-    format_legacy_text_fields,
+    NationContendEnterReport, PlayerReliveContext, RealmAppellationScriptContext,
+    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
+    colored_text_message, format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
@@ -337,6 +341,7 @@ pub(crate) const SCRIPT_FUNCTION_SECOND: i32 = 23;
 pub(crate) const SCRIPT_FUNCTION_GET_STRING_BY_ID: i32 = 2000;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
+pub(crate) const SCRIPT_FUNCTION_RE_LIVE: i32 = 2400;
 pub(crate) const SCRIPT_FUNCTION_PLAYER_TALK: i32 = 2308;
 pub(crate) const SCRIPT_FUNCTION_GET_NAME: i32 = 2998;
 pub(crate) const SCRIPT_FUNCTION_IS_CHARGED: i32 = 2516;
@@ -576,6 +581,7 @@ pub(crate) trait ScriptFunctionRuntime:
     + ScriptAwardAuthenticationContext
     + MoveShapeCommandContext
     + ServerRegionMonsterContext
+    + PlayerReliveContext
 {
 }
 
@@ -593,6 +599,7 @@ impl<T> ScriptFunctionRuntime for T where
         + ScriptAwardAuthenticationContext
         + MoveShapeCommandContext
         + ServerRegionMonsterContext
+        + PlayerReliveContext
 {
 }
 
@@ -3292,6 +3299,10 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_PLAYER_TALK => match index {
             0 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_RE_LIVE => match index {
+            0 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_SET_PLAYER_LEVEL => match index {
@@ -6199,6 +6210,19 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 carriage_distance,
                 runtime,
             );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_RE_LIVE => {
+            let Some(relive_type) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                // Исходный диспетчер не вызывает `OnRelive`, если первый
+                // аргумент не вычислен, но всё равно возвращает сценарный ноль.
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if let Some(player_id) = script_player_id {
+                let _ = game.relive_player(player_id, relive_type, runtime);
+            }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_GET_COUNTRY => {
