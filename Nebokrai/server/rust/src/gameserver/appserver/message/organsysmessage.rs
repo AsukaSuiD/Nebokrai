@@ -43,6 +43,8 @@
 //! живой FIFO `CGame`: расписания остаются owned, local-before-proxy lookup
 //! мутирует concrete City/Village/base owners, а message/player/log effects
 //! исполняет тот же runtime-контекст, который обслуживает MainLoop. Nation
+//! relive замыкает owned business/session state, canonical player
+//! `0xBF603(type=400,id,...)` и spatial mutation до `bChMap0` log. Nation
 //! clear больше не делегируется opaque callback-у: area-ordered monster pass,
 //! delete-state/list и четыре удаления `GS1120` исполняются здесь с exact
 //! `0xBF504` around-result до каждой mutation.
@@ -74,27 +76,17 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 pub(crate) trait GameOrganizingWarRuntime:
-    CityRegionContext + VillageRegionContext + FourNationRegionRuntime + RegionRandomContext
+    CityRegionContext
+    + VillageRegionContext
+    + FourNationRegionRuntime
+    + RegionRandomContext
+    + ScriptRegionChangeContext
 {
     /// Публикует region-localized `0xBF806(..., GS0127(region name))`.
     fn send_village_clear_player_notice(&mut self, region_id: i32, region_name: &[u8]);
 
     /// Исполняет virtual `CPlayer::UpdateProperty` после FourNation exploit.
     fn update_player_property(&mut self, player: &mut CPlayer);
-
-    /// Exact `end_business` до same-region `ChangeRegion`; concrete session
-    /// factory и increment close-message остаются у process runtime.
-    fn end_four_nation_player_business(&mut self, player: &mut CPlayer);
-
-    /// Публикует уже собранный exact `0xBF603` в around-view
-    /// старой player position.
-    fn send_four_nation_relive_move(
-        &mut self,
-        message: &CMessage,
-        region: &CServerRegion,
-        player: &CPlayer,
-        game: &CGame,
-    );
 
     /// Conditional `bChMap0` log после position mutation.
     fn log_four_nation_same_region_change(
@@ -1587,12 +1579,12 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                 .expect("Nation m_vPlayers ID проверен до random position")
                 .shape()
                 .get_direction();
+            let _business = self.game.finish_player_business(player_id);
             {
                 let player = self
                     .game
                     .find_player_mut(player_id)
-                    .expect("Nation m_vPlayers ID остаётся live до end_business");
-                self.runtime.end_four_nation_player_business(player);
+                    .expect("end_business не удаляет Nation player owner");
                 player.prepare_nation_relive();
             }
             let previous = {
@@ -1625,7 +1617,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
 
             if previous != (destination.x, destination.y) {
                 let mut movement = CMessage::new(0xbf603);
-                movement.base_mut().add_long(player_id);
+                movement.base_mut().add_long(400);
                 movement.base_mut().add_long(player_id);
                 movement.base_mut().add_long(destination.x);
                 movement.base_mut().add_long(destination.y);
@@ -1634,12 +1626,17 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                     .game
                     .find_player(player_id)
                     .expect("Nation relive player остаётся live до around send");
-                self.runtime.send_four_nation_relive_move(
-                    &movement,
+                if let Err(block) = self.runtime.send_nation_player_around(
                     &region.war.base,
-                    player,
-                    self.game,
-                );
+                    player.shape(),
+                    None,
+                    &movement,
+                ) {
+                    self.runtime.on_four_nation_relive_block(
+                        player_id,
+                        FourNationReliveBlock::Coordinate(block),
+                    );
+                }
 
                 let facts = player.nation_relive_position_facts(area_width, area_height);
                 let result = {

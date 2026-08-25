@@ -17003,7 +17003,10 @@ impl CGame {
     /// Reached `CPlayer::end_business`: session lookup/end остаётся в factory,
     /// player progress всегда сбрасывается, а shopping/increment дополнительно
     /// снимают один movement lock; increment публикует exact `0xC0404`.
-    fn finish_player_business(&mut self, player_id: i32) -> Option<GamePlayerBusinessEndReport> {
+    pub(crate) fn finish_player_business(
+        &mut self,
+        player_id: i32,
+    ) -> Option<GamePlayerBusinessEndReport> {
         let previous_progress = self.find_player(player_id)?.current_progress();
         let session_id = matches!(
             previous_progress,
