@@ -44,12 +44,12 @@ use super::function::{
     SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR, SCRIPT_FUNCTION_ARGUMENT_CAPACITY,
     SCRIPT_FUNCTION_CITY_WAR_DECLARE, SCRIPT_FUNCTION_DEL_APPELLATION_STATE,
     SCRIPT_FUNCTION_GET_APPELLATION_STATE, SCRIPT_FUNCTION_GET_COPY_NUMBER,
-    SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE, SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID,
-    SCRIPT_FUNCTION_GET_STRING_BY_ID, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME,
-    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME,
-    SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME, SCRIPT_FUNCTION_LIST_BANNED_PLAYER,
-    SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAY_SOUND,
-    SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
+    SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE, SCRIPT_FUNCTION_GET_NAME,
+    SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID, SCRIPT_FUNCTION_GET_STRING_BY_ID,
+    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME,
+    SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME,
+    SCRIPT_FUNCTION_LIST_BANNED_PLAYER, SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT,
+    SCRIPT_FUNCTION_PLAY_SOUND, SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
     SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
     ScriptFunctionParameterKind, ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome,
     dispatch_script_function, dispatch_script_string_function, owned_region_script_caller_is_live,
@@ -142,9 +142,10 @@ const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
 const SCRIPT_FUNCTION_WAIT: i32 = 6;
 const SCRIPT_FUNCTION_RUN_TIME: i32 = 22;
 
-/// Native `stRunScript` execution facts used by concrete callers. Monster
-/// death supplies its base index alongside player/region so queued death
-/// scripts retain the same runtime context instead of a filename-only call.
+/// Контекст исполнения `stRunScript`, заполняемый конкретными вызывающими
+/// владельцами. Смерть монстра передаёт его базовый индекс вместе с игроком и
+/// регионом, поэтому отложенные сценарии сохраняют полный контекст, а не только
+/// имя файла.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ScriptExecutionContext {
     pub(crate) player_id: Option<i32>,
@@ -850,6 +851,7 @@ impl<'a> CScript<'a> {
             self.context.npc_id,
             self.context.region_id,
             self.context.used_item_id,
+            self.context.died_monster_index,
             self.script_id,
             self.path,
             function_id,
@@ -1057,10 +1059,10 @@ impl<'a> CScript<'a> {
         if let Some((name, parameters)) = split_function(expression) {
             let function_id = game.script_function_id(name)?;
             let first = parameters.first().copied();
-            let evaluated_player_id = if function_id == SCRIPT_FUNCTION_GET_STRING_BY_ID {
-                None
+            let evaluated_player_id = if function_id == SCRIPT_FUNCTION_GET_NAME {
+                first.and_then(|parameter| self.evaluate_integer(game, runtime, parameter))
             } else {
-                first.map(|parameter| self.evaluate_integer(game, runtime, parameter))
+                None
             };
             let evaluated_string = if function_id == SCRIPT_FUNCTION_GET_STRING_BY_ID {
                 first.and_then(|parameter| self.evaluate_string(game, runtime, parameter))
@@ -1070,8 +1072,9 @@ impl<'a> CScript<'a> {
             match dispatch_script_string_function(
                 game,
                 self.context.player_id,
+                self.context.died_monster_index,
                 function_id,
-                evaluated_player_id.flatten(),
+                evaluated_player_id,
                 evaluated_string.as_deref(),
             ) {
                 ScriptStringFunctionDispatchOutcome::Handled(value) => return Some(value),

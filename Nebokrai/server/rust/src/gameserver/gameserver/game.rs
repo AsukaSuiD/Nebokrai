@@ -370,15 +370,17 @@
 //! reads, refresh/watch gates и wrapping pacing. Ещё не материализованные
 //! concrete owner-ы подключаются через обязательный runtime trait; message
 //! dispatch уже исполняется живым `CGame`.
-//! AI pass также исполняет ordinary monster с единственным `CBaseAttack(1)`:
-//! retaliation и aggressive melee `0/3` player/pet search, chase/slip movement,
-//! canonical target/cast/reuse, player defense/HP/action, passive-pet retarget,
-//! pet defense/HP/AI/master unlink/delete, armor waste,
-//! `BF506/BFE01/BF60A/BF60B/BF612/BF504` и общий player-death tail проходят
-//! до живых owners. Passive/command pet retaliation также использует pet
-//! factors/tracing и завершает wild-monster reward/drop/script/delete через
-//! master beneficiary; player-target рекурсивно применяет master PvP/level/
-//! safe-cell policy и доходит до общего hurt/death/murder/equipment tail.
+//! Проход ИИ также исполняет обычного монстра с единственным `CBaseAttack(1)`:
+//! ответный и агрессивный ближний бой `0/3`, поиск игрока или питомца,
+//! преследование и скользящее движение, канонические цель, применение и
+//! повторное использование, защиту, HP и действие игрока, переназначение цели
+//! пассивного питомца, защиту, HP и ИИ питомца, разрыв связи с хозяином,
+//! удаление, износ брони, `BF506/BFE01/BF60A/BF60B/BF612/BF504` и общий хвост
+//! смерти игрока. Ответный бой пассивного или управляемого питомца использует
+//! те же коэффициенты и преследование и завершает награду, добычу, сценарии и
+//! удаление дикого монстра через игрока-получателя. Цель-игрок рекурсивно
+//! применяет правила PvP, уровня и безопасной клетки хозяина и доходит до
+//! общего хвоста урона, смерти, убийства и экипировки.
 //! Follow/stay action также проходит master pet-slot geometry, near movement
 //! либо far `BF603` relocation; lifecycle замыкает master loss/reclaim,
 //! age/wild notices и `Evanish` unlink/wire, active-mode search выбирает
@@ -833,8 +835,8 @@ use crate::setup::lingbao::CLingBaoSetup;
 use crate::setup::logsystem::CLogSystem;
 use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListDecodeError, MonsterListDecodeReport, MonsterProperties,
-    MonsterRegistry, decode_monster_list, get_monster_property_by_origin_name,
-    get_monster_property_by_origin_name_mut,
+    MonsterRegistry, decode_monster_list, get_monster_property_by_origin_index,
+    get_monster_property_by_origin_name, get_monster_property_by_origin_name_mut,
 };
 use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
 use crate::setup::playerlist::CPlayerList;
@@ -12962,6 +12964,13 @@ impl CGame {
         origin_name: &[u8],
     ) -> Option<&MonsterProperties> {
         get_monster_property_by_origin_name(&self.monster_registry, origin_name)
+    }
+
+    pub(crate) fn find_monster_property_by_origin_index(
+        &self,
+        origin_index: u32,
+    ) -> Option<&MonsterProperties> {
+        get_monster_property_by_origin_index(&self.monster_registry, origin_index)
     }
 
     pub(crate) fn find_monster_property_by_origin_name_mut(

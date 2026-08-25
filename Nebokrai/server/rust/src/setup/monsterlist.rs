@@ -1,15 +1,17 @@
-//! Общий wire-реестр `CMonsterList`, подтверждённый парными World/Game
-//! owners: World serializer — `worldserver.exe/.pdb`, Game decoder —
+//! Общий реестр обмена `CMonsterList`, подтверждённый парными владельцами
+//! World и Game: сериализатор World — `worldserver.exe/.pdb`, декодер Game —
 //! `gameserver.exe/.pdb`; исходник `server/setup/monsterlist.h/.cpp`.
 //!
-//! Wire пишет ordered monster map: 160-байтный scalar prefix, две C-строки и
-//! шестибайтные skills; затем ordered drop map с именами и 32-байтными records.
-//! Map keys задают порядок, но отдельно не передаются.
+//! Формат обмена пишет упорядоченную карту монстров: 160-байтный скалярный
+//! префикс, две C-строки и шестибайтные навыки; затем идёт упорядоченная карта
+//! добычи с именами и 32-байтными записями. Ключи карт задают порядок, но
+//! отдельно не передаются.
 //!
-//! `BTreeMap<Vec<u8>, _>` сохраняет byte-лексикографический порядок, `Vec` —
-//! порядок skills/drops. Первый внутренний NUL завершает legacy-строку.
-//! Game decode очищает оба registry до count и публикует только полностью
-//! прочитанные records; generic STL/SSO storage заменён owned Rust containers.
+//! `BTreeMap<Vec<u8>, _>` сохраняет байтовый лексикографический порядок, а
+//! `Vec` — порядок навыков и добычи. Первый внутренний NUL завершает старую
+//! строку. Декодер Game очищает оба реестра до чтения счётчика и публикует
+//! только полностью прочитанные записи; общее хранилище STL/SSO заменено
+//! контейнерами во владении Rust.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -594,12 +596,12 @@ fn parse_pair(token: &[u8], separator: u8) -> Option<(i32, i32)> {
     ))
 }
 
-/// Ищет свойство по legacy C-строке original name.
+/// Ищет свойство по старой C-строке исходного имени.
 ///
-/// Original owner сначала строил `std::string` до первого NUL и выполнял
-/// `map::find`; отсутствующий ключ возвращал null. `Vec<u8>` исключает
-/// lifetime/SSO-детали старой строки, а `Option` сохраняет именно этот
-/// различимый результат, не превращая его в разыменование null.
+/// Исходный владелец сначала строил `std::string` до первого NUL и выполнял
+/// `map::find`; отсутствующий ключ возвращал нулевой указатель. `Vec<u8>`
+/// исключает детали времени жизни и SSO старой строки, а `Option` сохраняет
+/// именно этот различимый результат без разыменования нулевого указателя.
 pub(crate) fn get_monster_property_by_origin_name<'registry>(
     monsters: &'registry MonsterRegistry,
     origin_name: &[u8],
@@ -609,6 +611,18 @@ pub(crate) fn get_monster_property_by_origin_name<'registry>(
         .next()
         .unwrap_or_default();
     monsters.get(c_string)
+}
+
+/// Ищет первое свойство с исходным индексом в порядке ключей реестра.
+/// `CMonsterList::GetPropertyByOrginIndex` выполнял такой же линейный проход
+/// по `std::map` и возвращал нулевой указатель при отсутствии совпадения.
+pub(crate) fn get_monster_property_by_origin_index(
+    monsters: &MonsterRegistry,
+    origin_index: u32,
+) -> Option<&MonsterProperties> {
+    monsters
+        .values()
+        .find(|properties| properties.index == origin_index)
 }
 
 pub(crate) fn get_monster_property_by_origin_name_mut<'registry>(

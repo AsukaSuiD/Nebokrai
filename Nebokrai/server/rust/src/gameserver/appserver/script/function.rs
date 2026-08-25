@@ -135,6 +135,10 @@
 //! удаляет либо пересоздаёт случайные дополнения с сохранением уровня,
 //! долговечности, камней и их итоговых эффектов. Изменения доходят до
 //! клиентского `0xBF918`, а удаление экипировки проходит общие свойства игрока.
+//! Функции `2240..2242` получают контекст из живого хвоста смерти монстра:
+//! индивидуальный и общий сценарии несут один базовый индекс, а диспетчер
+//! возвращает его знаковое представление либо находит исходное имя и уровень в
+//! упорядоченном реестре `CMonsterList`.
 //! Следующий sanitation-блок `2002/2316/2317/2500` читает live player
 //! region/country и работает с тем же owned script registry; current-script
 //! removal завершается на command boundary без legacy use-after-free.
@@ -476,6 +480,9 @@ pub(crate) const SCRIPT_FUNCTION_GET_GOODS_PRICE: i32 = 2227;
 pub(crate) const SCRIPT_FUNCTION_SET_GOODS_PROPERTY_1: i32 = 2228;
 pub(crate) const SCRIPT_FUNCTION_SET_GOODS_PROPERTY_2: i32 = 2229;
 pub(crate) const SCRIPT_FUNCTION_RECREATE_GOODS_ADDON_PROPERTIES: i32 = 2230;
+pub(crate) const SCRIPT_FUNCTION_GET_DIED_MONSTER_INDEX: i32 = 2240;
+pub(crate) const SCRIPT_FUNCTION_GET_DIED_MONSTER_ORIGINAL_NAME: i32 = 2241;
+pub(crate) const SCRIPT_FUNCTION_GET_DIED_MONSTER_LEVEL: i32 = 2242;
 pub(crate) const SCRIPT_FUNCTION_ADD_INFO: i32 = 2305;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX: i32 = 2307;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX_SMALL: i32 = 2324;
@@ -3282,6 +3289,7 @@ pub(crate) enum ScriptStringFunctionDispatchOutcome {
 pub(crate) fn dispatch_script_string_function(
     game: &CGame,
     script_player_id: Option<i32>,
+    died_monster_index: Option<u32>,
     function_id: i32,
     evaluated_player_id: Option<i32>,
     evaluated_string: Option<&[u8]>,
@@ -3299,6 +3307,13 @@ pub(crate) fn dispatch_script_string_function(
                     .query_goods_original_name(goods.base_properties_index())
             })
             .unwrap_or_default();
+        return ScriptStringFunctionDispatchOutcome::Handled(value.to_vec());
+    }
+    if function_id == SCRIPT_FUNCTION_GET_DIED_MONSTER_ORIGINAL_NAME {
+        let value = died_monster_index
+            .filter(|index| *index != 0)
+            .and_then(|index| game.find_monster_property_by_origin_index(index))
+            .map_or(&[][..], |properties| properties.original_name.as_slice());
         return ScriptStringFunctionDispatchOutcome::Handled(value.to_vec());
     }
     if function_id == SCRIPT_FUNCTION_GET_NAME {
@@ -3770,7 +3785,10 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_DELETE_SPLIT_GOODS
         | SCRIPT_FUNCTION_GET_GOODS_ORIGINAL_NAME
         | SCRIPT_FUNCTION_GET_GOODS_PRICE
-        | SCRIPT_FUNCTION_RECREATE_GOODS_ADDON_PROPERTIES => Unused,
+        | SCRIPT_FUNCTION_RECREATE_GOODS_ADDON_PROPERTIES
+        | SCRIPT_FUNCTION_GET_DIED_MONSTER_INDEX
+        | SCRIPT_FUNCTION_GET_DIED_MONSTER_ORIGINAL_NAME
+        | SCRIPT_FUNCTION_GET_DIED_MONSTER_LEVEL => Unused,
         SCRIPT_FUNCTION_ADD_QUEST
         | SCRIPT_FUNCTION_COMPLETE_QUEST
         | SCRIPT_FUNCTION_DISBAND_QUEST
@@ -7231,6 +7249,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     script_npc_id: Option<i32>,
     script_region_id: Option<i32>,
     used_item_id: Option<CGuid>,
+    died_monster_index: Option<u32>,
     script_id: i32,
     script_path: &[u8],
     function_id: i32,
@@ -7239,6 +7258,18 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     string_arguments: [Option<&[u8]>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
 ) -> ScriptFunctionDispatchOutcome {
     match function_id {
+        SCRIPT_FUNCTION_GET_DIED_MONSTER_INDEX => {
+            return ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: died_monster_index.unwrap_or_default() as i32,
+            };
+        }
+        SCRIPT_FUNCTION_GET_DIED_MONSTER_LEVEL => {
+            let legacy_return = died_monster_index
+                .filter(|index| *index != 0)
+                .and_then(|index| game.find_monster_property_by_origin_index(index))
+                .map_or(0, |properties| properties.level as i32);
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+        }
         SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE => {
             let Some(player) = script_player_id.and_then(|player_id| game.find_player(player_id))
             else {
