@@ -26,12 +26,14 @@
 //! а обратный маршрут возвращает его в packet/equipment после exact burden
 //! gate; оба сохраняют equipment callbacks, destination rollback и client move;
 //! полный persisted-player snapshot `0x6080E` остаётся у недоступного owner-а.
-//! Packet/equipment↔ground ветвь того же `0x90301` теперь достигает
+//! Packet/equipment/hand↔ground ветвь того же `0x90301` теперь достигает
 //! concrete region goods owner-а: Receive нормализует region/position/amount,
 //! сохраняет exact pickup/progress/burden guards, protection notice,
-//! equipment property/around effects, проводит remove/add с rollback и
+//! equipment property/around effects, one-slot hand split/stack, проводит
+//! remove/add с rollback и
 //! возвращает container listeners вместе с self/around `0xC0101`. Остальные
-//! player extend ID наземного маршрута по-прежнему проходят в RAW boundary.
+//! Валютные hand/wallet/YuanBao варианты намеренно остаются в RAW boundary
+//! до отдельного exact currency-normalization прохода.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -520,14 +522,35 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             {
                 request.source_position = 0;
             }
+            let source_is_non_currency_hand = request.source_container_extend_id == 3
+                && game
+                    .find_player(player_id)
+                    .and_then(|player| player.hand().get_goods(request.source_position))
+                    .is_some_and(|goods| {
+                        let index = goods.base_properties_index();
+                        index != game.goods_factory().get_gold_coin_index()
+                            && index != game.goods_factory().get_yuan_bao_index()
+                    });
+            let destination_is_non_currency_hand = request.destination_container_extend_id == 3
+                && request.destination_position == 0
+                && region_id
+                    .and_then(|region_id| game.find_region(region_id))
+                    .and_then(|region| region.base().find_ground_goods(request.object_id))
+                    .is_some_and(|goods| {
+                        let index = goods.base_properties_index();
+                        index != game.goods_factory().get_gold_coin_index()
+                            && index != game.goods_factory().get_yuan_bao_index()
+                    });
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == 200
-                && matches!(request.source_container_extend_id, 1 | 2)
+                && (matches!(request.source_container_extend_id, 1 | 2)
+                    || source_is_non_currency_hand)
             {
                 EnhancementMessageRoute::GroundDrop
             } else if request.source_container_type == 200
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && matches!(request.destination_container_extend_id, 1 | 2)
+                && (matches!(request.destination_container_extend_id, 1 | 2)
+                    || destination_is_non_currency_hand)
             {
                 EnhancementMessageRoute::GroundPickup
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
@@ -815,6 +838,9 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 let notice_id: Option<&[u8]> = match &reason {
                     GroundGoodsMoveBlock::PickupProtected => Some(b"GS0112"),
                     GroundGoodsMoveBlock::BurdenExceeded => Some(b"GS0259"),
+                    GroundGoodsMoveBlock::DropBusy(PlayerProgress::OpenStall) => Some(b"GS0113"),
+                    GroundGoodsMoveBlock::DropBusy(PlayerProgress::Trading) => Some(b"GS0114"),
+                    GroundGoodsMoveBlock::DropBusy(PlayerProgress::Upgrade) => Some(b"GS0115"),
                     _ => None,
                 };
                 let notification_delivery = notice_id.map(|notice_id| {
