@@ -1893,6 +1893,8 @@ pub(crate) struct CPlayer {
     city_war_died_state_time_ms: i32,
     died_state_start_time_ms: u32,
     murderer_time_stamp_ms: u32,
+    ping_time: i32,
+    last_ping_time_ms: u32,
     contribution: i32,
     silence_minutes: i32,
     silence_timestamp_minutes: u32,
@@ -2177,6 +2179,8 @@ impl CPlayer {
             city_war_died_state_time_ms: 0,
             died_state_start_time_ms: 0,
             murderer_time_stamp_ms: 0,
+            ping_time: 0,
+            last_ping_time_ms: 0,
             contribution: 0,
             silence_minutes: 0,
             silence_timestamp_minutes: 0,
@@ -5927,6 +5931,19 @@ impl CPlayer {
 
     pub(crate) const fn restart_died_state_clock(&mut self, now_ms: u32) {
         self.died_state_start_time_ms = now_ms;
+    }
+
+    /// Exact counter-prefix `CPlayer::PeriodicalUpdate`: исторический `long`
+    /// увеличивается до строгого порога `250`; caller только после этого
+    /// снимает `timeGetTime`, обнуляет counter и публикует `0xBF809`.
+    pub(crate) const fn advance_periodical_ping(&mut self) -> i32 {
+        self.ping_time = self.ping_time.wrapping_add(1);
+        self.ping_time
+    }
+
+    pub(crate) const fn complete_periodical_ping(&mut self, now_ms: u32) {
+        self.ping_time = 0;
+        self.last_ping_time_ms = now_ms;
     }
 
     pub(crate) const fn contribution(&self) -> i32 {

@@ -11,8 +11,11 @@
 //! VERIFIED_DISASSEMBLY`; точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, исходники
 //! `server/gameserver/gameserver/game.h/.cpp`.
-//! `CGame::AI` RVA `0x00005080` сохраняет signed region-map order, virtual
-//! region AI и base-tail clear countdown с warning/return side effects.
+//! `CGame::AI` RVA `0x00005080` сохраняет signed region-map order, reached
+//! `CPlayer::AI` pass и virtual region AI с base-tail clear countdown.
+//! Внутри player pass exact `PeriodicalUpdate` tail выполняет ping `0xBF809`,
+//! Nation died countdown и fairy hatcher до `CMoveShape::AI`; внешний runtime
+//! остаётся только у ещё не материализованных virtual/disconnect owners.
 //!
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
@@ -1515,6 +1518,20 @@ pub(crate) struct FairyHatcherRunReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerPeriodicalPingTick {
+    Waiting { count: i32 },
+    Sent { sampled_at_ms: u32, delivery: i32 },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerPeriodicalUpdateReport {
+    pub(crate) player_id: i32,
+    pub(crate) ping: PlayerPeriodicalPingTick,
+    pub(crate) nation_died_state: Option<NationPlayerDiedStateTick>,
+    pub(crate) fairy_hatcher: Option<FairyHatcherRunReport>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FairyImplantOutcome {
     Disabled,
     MissingFairy,
@@ -2849,7 +2866,6 @@ pub(crate) enum GameMainLoopStage {
     RuntimeLog,
     Script,
     Ai,
-    FairyHatcher,
     Message,
     Session,
     NetSession,
@@ -2918,6 +2934,7 @@ pub(crate) enum GameRegionClearPlayerOutcome {
 pub(crate) struct GameRegionAiReport {
     pub(crate) region_id: i32,
     pub(crate) battle_fairy_deaths: Vec<BattleFairyDeathReport>,
+    pub(crate) periodical_updates: Vec<PlayerPeriodicalUpdateReport>,
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
@@ -3140,15 +3157,18 @@ pub(crate) trait GameMainLoopRuntime:
     fn wall_time_seconds(&mut self) -> u32;
     fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
-    /// Исполняет ещё не сведённую середину `CPlayer::AI` между battle-fairy
-    /// death prefix и alive-only `ComputeWarSoulXY`: disconnect/lost timers,
-    /// `PeriodicalUpdate` и `CMoveShape::AI`. Возвращает post-AI restored-state
-    /// current war-soul skill; `None` точно означает отсутствие skill-а.
-    fn player_ai_before_war_soul_follow(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-    ) -> Option<bool>;
+    /// Исполняет disconnect/lost prefix `CPlayer::AI` до проверки
+    /// `m_bInChangingRegion`; owner вправе удалить player-а или перевести его
+    /// в terminal state, поэтому `CGame` после возврата повторяет lookup.
+    fn player_ai_before_periodical_update(&mut self, game: &mut CGame, player_id: i32);
+    /// Исполняет ещё внешние virtual base `PeriodicalUpdate` и
+    /// `OnDecreaseMurdererSign` непосредственно перед owned ping/countdown/
+    /// hatcher tail того же player-а.
+    fn player_periodical_update_prefix(&mut self, game: &mut CGame, player_id: i32);
+    /// Исполняет `CMoveShape::AI` после полного `PeriodicalUpdate` и возвращает
+    /// post-AI restored-state current war-soul skill; `None` точно означает
+    /// отсутствие skill-а.
+    fn player_move_shape_ai(&mut self, game: &mut CGame, player_id: i32) -> Option<bool>;
     /// Выполняет оставшийся monster/NPC/region virtual AI после достигнутых
     /// player passes и до точного base-tail `ClearPlayerAI`.
     fn region_ai_before_clear_player(&mut self, game: &mut CGame, region_id: i32);
@@ -6530,6 +6550,28 @@ impl CGame {
         let publication = self.publish_player_died_state(owner.base(), player_id, true, context);
         self.restore_region_owner(owner);
         publication
+    }
+
+    /// Exact ping fragment `CPlayer::PeriodicalUpdate`: counter меняется на
+    /// каждом eligible player AI, clock читается только на 251-м проходе, а
+    /// пустой `0xBF809` уходит тому же live player после записи timestamp.
+    pub(crate) fn periodical_update_player_ping<Context: NationCombatContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<PlayerPeriodicalPingTick> {
+        let count = self.find_player_mut(player_id)?.advance_periodical_ping();
+        if count <= 250 {
+            return Some(PlayerPeriodicalPingTick::Waiting { count });
+        }
+        let sampled_at_ms = context.now_milliseconds();
+        self.find_player_mut(player_id)?
+            .complete_periodical_ping(sampled_at_ms);
+        let delivery = CMessage::new(0x000b_f809).send_to_player(self.net_server(), player_id);
+        Some(PlayerPeriodicalPingTick::Sent {
+            sampled_at_ms,
+            delivery,
+        })
     }
 
     /// Exact death-state tail `CPlayer::PeriodicalUpdate`: `timeGetTime`
@@ -15569,86 +15611,80 @@ impl CGame {
         report
     }
 
-    /// Concrete `CPlayer::AI -> CFairyContainer::CheckHatcher` tail. Главный
-    /// loop вызывает его сразу после общего AI owner-а, сохраняя timer,
-    /// replacement, object-move и incubate-log в одном tick-е.
-    pub(crate) fn run_fairy_hatchers<Context: FairyContext>(
+    /// Concrete `CPlayer::PeriodicalUpdate -> CFairyContainer::CheckHatcher`
+    /// tail. Caller передаёт ровно текущего player-а после ping и nation died
+    /// countdown, сохраняя timer, replacement, object-move и incubate-log в
+    /// том же per-player AI pass.
+    pub(crate) fn run_fairy_hatcher<Context: FairyContext>(
         &mut self,
+        player_id: i32,
         context: &mut Context,
-    ) -> Vec<FairyHatcherRunReport> {
-        let player_ids: Vec<_> = self.players.keys().copied().collect();
-        let mut reports = Vec::new();
-        for player_id in player_ids {
-            let enabled = self
-                .players
-                .get(&player_id)
-                .is_some_and(CPlayer::fairy_container_enabled);
-            if !enabled {
-                continue;
-            }
-            let hatch_duration = self.globe_setup.fairy_hatch_time();
-            let incubate_log_enabled = self.log_system.fairy_incubate_enabled();
-            let entries = {
-                let (players, random_state, goods_factory, fairy_exp_conf, battle_fairy_exp_config) = (
-                    &mut self.players,
-                    &mut self.random_state,
-                    &self.goods_factory,
-                    &self.fairy_exp_conf,
-                    &self.battle_fairy_exp_config,
-                );
-                let player = players
-                    .get_mut(&player_id)
-                    .expect("fairy hatcher player ID собран из live map");
-                let owner_progress_allows = player.current_progress() == PlayerProgress::None;
-                let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
-                let mut create_goods = |goods_index| {
-                    goods_factory
-                        .create_goods_batch(
-                            goods_index,
-                            1,
-                            &mut random,
-                            || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
-                            |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
-                            |equip_level, level| {
-                                battle_fairy_exp_config.dw_exp_up(equip_level, level)
-                            },
-                        )
-                        .into_iter()
-                        .next()
-                };
-                let mut threshold =
-                    |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level);
-                let context_cell = std::cell::RefCell::new(&mut *context);
-                let mut current_tick = || context_cell.borrow_mut().current_fairy_tick();
-                let mut encode =
-                    |goods: &CGoods| context_cell.borrow_mut().encode_goods_for_old_client(goods);
-                player.fairy_container_mut().check_hatcher(
-                    &mut current_tick,
-                    hatch_duration,
-                    incubate_log_enabled,
-                    goods_factory,
-                    owner_progress_allows,
-                    &mut threshold,
-                    &mut create_goods,
-                    &mut encode,
-                )
-            };
-            let mut state_effect_deliveries = Vec::new();
-            let mut world_deliveries = Vec::new();
-            for entry in &entries {
-                deliver_fairy_state_change(&entry.transition, self, &mut state_effect_deliveries);
-                if let Some(log) = &entry.incubate_log {
-                    world_deliveries.push(self.send_fairy_incubate_log(log));
-                }
-            }
-            reports.push(FairyHatcherRunReport {
-                player_id,
-                entries,
-                state_effect_deliveries,
-                world_deliveries,
-            });
+    ) -> Option<FairyHatcherRunReport> {
+        if !self
+            .players
+            .get(&player_id)
+            .is_some_and(CPlayer::fairy_container_enabled)
+        {
+            return None;
         }
-        reports
+        let hatch_duration = self.globe_setup.fairy_hatch_time();
+        let incubate_log_enabled = self.log_system.fairy_incubate_enabled();
+        let entries = {
+            let (players, random_state, goods_factory, fairy_exp_conf, battle_fairy_exp_config) = (
+                &mut self.players,
+                &mut self.random_state,
+                &self.goods_factory,
+                &self.fairy_exp_conf,
+                &self.battle_fairy_exp_config,
+            );
+            let player = players
+                .get_mut(&player_id)
+                .expect("fairy hatcher player проверен в live map");
+            let owner_progress_allows = player.current_progress() == PlayerProgress::None;
+            let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
+            let mut create_goods = |goods_index| {
+                goods_factory
+                    .create_goods_batch(
+                        goods_index,
+                        1,
+                        &mut random,
+                        || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
+                        |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
+                        |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
+                    )
+                    .into_iter()
+                    .next()
+            };
+            let mut threshold = |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level);
+            let context_cell = std::cell::RefCell::new(&mut *context);
+            let mut current_tick = || context_cell.borrow_mut().current_fairy_tick();
+            let mut encode =
+                |goods: &CGoods| context_cell.borrow_mut().encode_goods_for_old_client(goods);
+            player.fairy_container_mut().check_hatcher(
+                &mut current_tick,
+                hatch_duration,
+                incubate_log_enabled,
+                goods_factory,
+                owner_progress_allows,
+                &mut threshold,
+                &mut create_goods,
+                &mut encode,
+            )
+        };
+        let mut state_effect_deliveries = Vec::new();
+        let mut world_deliveries = Vec::new();
+        for entry in &entries {
+            deliver_fairy_state_change(&entry.transition, self, &mut state_effect_deliveries);
+            if let Some(log) = &entry.incubate_log {
+                world_deliveries.push(self.send_fairy_incubate_log(log));
+            }
+        }
+        Some(FairyHatcherRunReport {
+            player_id,
+            entries,
+            state_effect_deliveries,
+            world_deliveries,
+        })
     }
 
     pub(crate) fn implant_fairy_experience<Context: FairyContext>(
@@ -21060,20 +21096,41 @@ impl CGame {
         let mut regions = Vec::with_capacity(region_ids.len());
         for region_id in region_ids {
             // `CPlayer::AI` начинает reached pass с проверки HP боевой феи,
-            // затем после ещё внешних PeriodicalUpdate/CMoveShape::AI вызывает
-            // alive-only follow. Runtime middle расположен между owned краями,
-            // поэтому disconnect/removal и post-AI death повторно проверяются.
+            // затем исполняет disconnect/lost prefix. Только не меняющий регион
+            // player проходит exact PeriodicalUpdate ordering, CMoveShape::AI и
+            // post-AI alive-only follow; каждый потенциальный removal повторно
+            // проверяется через live map.
             let player_ids = self
                 .find_region(region_id)
                 .map(|region| region.base().registered_player_ids())
                 .unwrap_or_default();
             let mut battle_fairy_deaths = Vec::with_capacity(player_ids.len());
+            let mut periodical_updates = Vec::with_capacity(player_ids.len());
             let mut battle_fairy_follows = Vec::with_capacity(player_ids.len());
             for player_id in player_ids {
                 if let Some(death) = self.refresh_battle_fairy_death(player_id) {
                     battle_fairy_deaths.push(death);
                 }
-                let restored = runtime.player_ai_before_war_soul_follow(self, player_id);
+                runtime.player_ai_before_periodical_update(self, player_id);
+                let mut restored = None;
+                if self
+                    .find_player(player_id)
+                    .is_some_and(|player| !player.in_changing_region())
+                {
+                    runtime.player_periodical_update_prefix(self, player_id);
+                    if let Some(ping) = self.periodical_update_player_ping(player_id, runtime) {
+                        let nation_died_state =
+                            self.periodical_update_nation_died_state(player_id, runtime);
+                        let fairy_hatcher = self.run_fairy_hatcher(player_id, runtime);
+                        periodical_updates.push(PlayerPeriodicalUpdateReport {
+                            player_id,
+                            ping,
+                            nation_died_state,
+                            fairy_hatcher,
+                        });
+                        restored = runtime.player_move_shape_ai(self, player_id);
+                    }
+                }
                 if self
                     .find_player(player_id)
                     .is_some_and(|player| !player.in_changing_region() && !player.is_dead())
@@ -21165,6 +21222,7 @@ impl CGame {
                         regions.push(GameRegionAiReport {
                             region_id,
                             battle_fairy_deaths,
+                            periodical_updates,
                             battle_fairy_follows,
                             gods_battle,
                             region_changes,
@@ -21183,6 +21241,7 @@ impl CGame {
             regions.push(GameRegionAiReport {
                 region_id,
                 battle_fairy_deaths,
+                periodical_updates,
                 battle_fairy_follows,
                 gods_battle,
                 region_changes,
@@ -21405,13 +21464,11 @@ impl CGame {
 
             let started = runtime.get_tick_ms();
             ai = self.ai(runtime);
-            let _fairy_hatchers = self.run_fairy_hatchers(runtime);
             state.profile.ai_ms = state
                 .profile
                 .ai_ms
                 .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
             stages.push(GameMainLoopStage::Ai);
-            stages.push(GameMainLoopStage::FairyHatcher);
 
             let started = runtime.get_tick_ms();
             messages = self.process_messages(runtime);
@@ -21444,8 +21501,6 @@ impl CGame {
             stages.push(GameMainLoopStage::Script);
             ai = self.ai(runtime);
             stages.push(GameMainLoopStage::Ai);
-            let _fairy_hatchers = self.run_fairy_hatchers(runtime);
-            stages.push(GameMainLoopStage::FairyHatcher);
             messages = self.process_messages(runtime);
             stages.push(GameMainLoopStage::Message);
             let terminal_equipment_sessions = self
