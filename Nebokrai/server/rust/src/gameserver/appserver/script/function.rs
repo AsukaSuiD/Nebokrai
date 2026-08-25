@@ -184,6 +184,9 @@
 //! `0x5FF0C -> 0x7FC0B/0x5FF0D -> 0x7FC0C` через общий GM dispatcher.
 //! `3309 / GetMapInfo` читает concrete cell текущего script-region и сохраняет
 //! приоритет war-marker над safe/fight security с legacy кодами `2/3/1/0`.
+//! Region collision selector `8000 / RefeashBlock` вычисляет только первый
+//! аргумент, находит canonical region owner и тем же runtime-вызовом очищает
+//! старые BLOCK_SHAPE и восстанавливает живые player/monster и все NPC tiles.
 //! `3305 / CreateMonster` проводит local spawn через canonical property,
 //! random-position, AI/spatial и around owners; чужой region сохраняет
 //! существующий `0x5FA0B -> 0x7F80A` межсерверный маршрут.
@@ -423,8 +426,9 @@ pub(crate) const SCRIPT_FUNCTION_PLAYER_MESSAGE: i32 = 3308;
 pub(crate) const SCRIPT_FUNCTION_GET_MAP_INFO: i32 = 3309;
 pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER_RECT: i32 = 3313;
 pub(crate) const SCRIPT_FUNCTION_DELETE_NPC_BY_NAME: i32 = 3315;
-pub(crate) const SCRIPT_FUNCTION_GET_MONSTER_REFRESH_TIME: i32 = 8101;
+pub(crate) const SCRIPT_FUNCTION_REFRESH_BLOCK: i32 = 8000;
 pub(crate) const SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION: i32 = 8003;
+pub(crate) const SCRIPT_FUNCTION_GET_MONSTER_REFRESH_TIME: i32 = 8101;
 pub(crate) const SCRIPT_FUNCTION_IS_QUEST_ENABLED: i32 = 3500;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_ENABLED: i32 = 3501;
 pub(crate) const SCRIPT_FUNCTION_QUEST_TIME_BEGIN: i32 = 3502;
@@ -3486,6 +3490,10 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_GET_MONSTER_REFRESH_TIME => match index {
             0..=1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_REFRESH_BLOCK => match index {
+            0 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE => match index {
@@ -6803,6 +6811,14 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             )
         });
         return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+    }
+    if function_id == SCRIPT_FUNCTION_REFRESH_BLOCK {
+        if let Some(region_id) =
+            integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+        {
+            let _ = game.refresh_script_region_blocks(region_id);
+        }
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
     }
     match run_buff_skill_script_function(
         game,

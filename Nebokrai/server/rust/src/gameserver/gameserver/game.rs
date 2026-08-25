@@ -519,7 +519,7 @@ use crate::gameserver::appserver::message::unibillmessage::{
 };
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::{
-    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, UndeadState,
+    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver, UndeadState,
 };
 use crate::gameserver::appserver::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
@@ -1304,6 +1304,23 @@ pub(crate) struct MonsterBasePropertyRefreshReport {
     pub(crate) monsters: usize,
     pub(crate) resolved: usize,
     pub(crate) missing: usize,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct RegionBlockRefreshResolver {
+    facts: BTreeMap<ShapeIdentity, (ShapeView, bool)>,
+}
+
+impl ShapeResolver for RegionBlockRefreshResolver {
+    fn resolve_shape(&self, identity: ShapeIdentity) -> Option<ShapeView> {
+        self.facts.get(&identity).map(|(shape, _)| *shape)
+    }
+}
+
+impl MoveShapeResolver for RegionBlockRefreshResolver {
+    fn move_shape_is_alive(&self, identity: ShapeIdentity) -> Option<bool> {
+        self.facts.get(&identity).map(|(_, is_alive)| *is_alive)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20422,6 +20439,44 @@ impl CGame {
         );
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
+        Some(result)
+    }
+
+    /// Exact script `8000 / RefeashBlock`: snapshot заменяет только временные
+    /// C++ pointers, пока canonical region mutably пересобирает BLOCK_SHAPE.
+    /// Координаты и `!IsDied` берутся у достигнутых player/monster/NPC owners.
+    pub(crate) fn refresh_script_region_blocks(
+        &mut self,
+        region_id: i32,
+    ) -> Option<Result<(), RegionMembershipBlock>> {
+        let region = self.find_region(region_id)?.base();
+        let identities = region.registered_shape_identities();
+        let mut resolver = RegionBlockRefreshResolver::default();
+        for identity in identities {
+            let fact = match identity.object_type {
+                PLAYER_TYPE => self
+                    .find_player(identity.id)
+                    .and_then(|player| player.shape_view().map(|shape| (shape, !player.is_dead()))),
+                MONSTER_TYPE => region.find_monster_by_id(identity.id).and_then(|monster| {
+                    shape_view(monster.move_shape().shape(), ShapeFigure::default())
+                        .map(|shape| (shape, !CMoveShape::is_died(monster.hit_points())))
+                }),
+                NPC_TYPE => region
+                    .find_npc_by_id(identity.id)
+                    .and_then(|npc| npc.shape_view().map(|shape| (shape, true))),
+                _ => None,
+            };
+            let Some((shape, is_alive)) = fact else {
+                continue;
+            };
+            resolver.facts.insert(identity, (shape, is_alive));
+        }
+
+        let mut owner = self
+            .take_region_owner(region_id)
+            .expect("script refresh сохраняет найденный region owner");
+        let result = owner.base_mut().refresh_blocks(&resolver);
+        self.restore_region_owner(owner);
         Some(result)
     }
 
