@@ -18961,6 +18961,39 @@ impl CGame {
         )
     }
 
+    /// Exact `CPlayer::SetMoney` boundary для script family `3011..3016`:
+    /// wallet остаётся canonical state owner-ом, а CGame публикует соответствующий
+    /// create/amount/delete packet с extend ID 4. Как и оригинал, caller считает
+    /// найденного игрока успехом даже при отказе wallet создать currency object.
+    pub(crate) fn set_script_player_money<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        requested: u32,
+        context: &mut Context,
+    ) -> bool {
+        let Some(previous) = self.find_player(player_id).map(CPlayer::money) else {
+            return false;
+        };
+        if requested < previous {
+            let Some(change) = self.decrease_player_money(player_id, previous - requested) else {
+                return false;
+            };
+            let _ = self.send_player_money_decrease(player_id, &change.outcome);
+        } else if requested > previous {
+            let amount = requested - previous;
+            let created = self.create_goods_batch(self.goods_factory.get_gold_coin_index(), amount);
+            let outcome = {
+                let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+                let Some(player) = players.get_mut(&player_id) else {
+                    return false;
+                };
+                player.increase_money(amount, goods_factory, created)
+            };
+            let _ = self.send_player_money_increase(player_id, &outcome, context);
+        }
+        true
+    }
+
     /// World `0x7FE34/0x7FE37` повторяет старый `GetMoney - signed fee`, затем
     /// `SetMoney(max(signed(result), 0))`. Обычная положительная плата идёт
     /// через тот же wallet/container wire, что остальные gameplay debits;

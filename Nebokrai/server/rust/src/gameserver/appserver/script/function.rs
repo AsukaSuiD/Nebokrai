@@ -165,6 +165,10 @@
 //! Соседний `3008 / KickPlayerEx` переиспользует этот 7×7 scan: локально
 //! публикует `BF806(GS0030)`, удалённо проходит
 //! `5FF08 → 7FC07 → 5FD02 → 7FA05` до requester-а.
+//! Money family `3011..3016` сохраняет локальный lookup по имени/ID, legacy
+//! signed arithmetic и вызывает достигнутый `CPlayer::SetMoney` wallet owner:
+//! state, create/change/delete container wire и old-client goods stream
+//! исполняются из того же `CScript::RunFunction` runtime caller-а.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -292,7 +296,12 @@ pub(crate) const SCRIPT_FUNCTION_GET_REGION_ID: i32 = 3005;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_REGION: i32 = 3006;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_REGION_EX: i32 = 3007;
 pub(crate) const SCRIPT_FUNCTION_KICK_PLAYER_EX: i32 = 3008;
+pub(crate) const SCRIPT_FUNCTION_CHANGE_MONEY_BY_NAME: i32 = 3011;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
+pub(crate) const SCRIPT_FUNCTION_SET_MONEY_BY_NAME: i32 = 3013;
+pub(crate) const SCRIPT_FUNCTION_CHANGE_MONEY_BY_ID: i32 = 3014;
+pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_ID: i32 = 3015;
+pub(crate) const SCRIPT_FUNCTION_SET_MONEY_BY_ID: i32 = 3016;
 pub(crate) const SCRIPT_FUNCTION_DELETE_SKILL: i32 = 3102;
 pub(crate) const SCRIPT_FUNCTION_SET_SKILL_LEVEL: i32 = 3103;
 pub(crate) const SCRIPT_FUNCTION_ADD_SKILL: i32 = 3101;
@@ -3227,10 +3236,23 @@ pub(crate) fn script_function_parameter_kind(
             0 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_CHANGE_MONEY_BY_NAME | SCRIPT_FUNCTION_SET_MONEY_BY_NAME => match index {
+            0 => String,
+            1 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_GET_MONEY_BY_NAME
         | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME
         | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => match index {
             0 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_CHANGE_MONEY_BY_ID | SCRIPT_FUNCTION_SET_MONEY_BY_ID => match index {
+            0..=1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_MONEY_BY_ID => match index {
+            0 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_CREATE_FACTION => match index {
@@ -5267,6 +5289,35 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
+        SCRIPT_FUNCTION_CHANGE_MONEY_BY_NAME | SCRIPT_FUNCTION_SET_MONEY_BY_NAME => {
+            let (Some(target_name), Some(value)) = (
+                string_arguments[0],
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let target_id = if target_name.is_empty() {
+                game.find_player(player_id).map(CPlayer::player_id)
+            } else {
+                game.find_player_by_name(target_name)
+                    .map(CPlayer::player_id)
+            };
+            let legacy_return = target_id.map_or(0, |target_id| {
+                let current = game
+                    .find_player(target_id)
+                    .expect("money target найден непосредственно перед mutation")
+                    .money();
+                let requested = if function_id == SCRIPT_FUNCTION_CHANGE_MONEY_BY_NAME {
+                    let changed = current.wrapping_add(value as u32);
+                    if (changed as i32) < 0 { 0 } else { changed }
+                } else {
+                    value.max(0) as u32
+                };
+                let _ = game.set_script_player_money(target_id, requested, runtime);
+                1
+            });
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
         SCRIPT_FUNCTION_GET_MONEY_BY_NAME
         | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME
         | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => {
@@ -5287,6 +5338,50 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     }
                     _ => unreachable!("faction identity selector отфильтрован match-arm"),
                 }),
+            })
+        }
+        SCRIPT_FUNCTION_CHANGE_MONEY_BY_ID | SCRIPT_FUNCTION_SET_MONEY_BY_ID => {
+            let (Some(requested_player_id), Some(value)) = (
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let target_id = if requested_player_id == 0 {
+                game.find_player(player_id).map(CPlayer::player_id)
+            } else {
+                game.find_player(requested_player_id)
+                    .map(CPlayer::player_id)
+            };
+            let legacy_return = target_id.map_or(0, |target_id| {
+                let current = game
+                    .find_player(target_id)
+                    .expect("money target найден непосредственно перед mutation")
+                    .money();
+                let requested = if function_id == SCRIPT_FUNCTION_CHANGE_MONEY_BY_ID {
+                    let changed = current.wrapping_add(value as u32);
+                    if (changed as i32) < 0 { 0 } else { changed }
+                } else {
+                    value.max(0) as u32
+                };
+                let _ = game.set_script_player_money(target_id, requested, runtime);
+                1
+            });
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_GET_MONEY_BY_ID => {
+            let Some(requested_player_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let target = if requested_player_id == 0 {
+                game.find_player(player_id)
+            } else {
+                game.find_player(requested_player_id)
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: target.map_or(0, |player| player.money() as i32),
             })
         }
         SCRIPT_FUNCTION_DELETE_SKILL => {
