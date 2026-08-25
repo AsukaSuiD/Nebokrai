@@ -47,7 +47,10 @@
 //! `0xBF603(type=400,id,...)` и spatial mutation до `bChMap0` log. Nation
 //! clear больше не делегируется opaque callback-у: area-ordered monster pass,
 //! delete-state/list и четыре удаления `GS1120` исполняются здесь с exact
-//! `0xBF504` around-result до каждой mutation.
+//! `0xBF504` around-result до каждой mutation. Безопасные typed-блоки relive/
+//! clear теперь доходят до общего GameServer error-log, а не требуют
+//! фиктивного process callback-а; неизвестным остаётся только traversal при
+//! дубликатах имени NPC старого `stdext::hash_map`.
 
 use std::error::Error;
 use std::ffi::CString;
@@ -75,6 +78,7 @@ use crate::gameserver::gameserver::game::{
     format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::public::tools::add_game_error_log_text;
 
 pub(crate) trait GameOrganizingWarRuntime:
     CityRegionContext
@@ -84,14 +88,10 @@ pub(crate) trait GameOrganizingWarRuntime:
     + ScriptRegionChangeContext
     + GameContainerMessageRuntime
 {
-    fn on_four_nation_relive_block(&mut self, player_id: i32, block: FourNationReliveBlock);
-
     /// Возвращает первый совпавший ID в текущем observable traversal старого
     /// `stdext::hash_map`; повторный вызов после removal видит новый head.
     fn find_four_nation_clear_npc_id(&mut self, region: &CServerRegion, name: &[u8])
     -> Option<i32>;
-
-    fn on_four_nation_clear_block(&mut self, block: FourNationClearBlock);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,6 +115,16 @@ pub(crate) enum FourNationClearBlock {
     NpcTraversalMismatch {
         npc_id: i32,
     },
+}
+
+fn report_four_nation_relive_block(player_id: i32, block: FourNationReliveBlock) {
+    let text = format!("FourNation: возврат игрока {player_id} остановлен: {block:?}");
+    add_game_error_log_text(text.as_bytes());
+}
+
+fn report_four_nation_clear_block(block: FourNationClearBlock) {
+    let text = format!("FourNation: очистка войны остановлена для объекта: {block:?}");
+    add_game_error_log_text(text.as_bytes());
 }
 
 pub(crate) trait WarFactionUpdateContext {
@@ -1532,7 +1542,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                 continue;
             }
             let Some(rect) = region.relive_rects().get(usize::from(country)).copied() else {
-                self.runtime.on_four_nation_relive_block(
+                report_four_nation_relive_block(
                     player_id,
                     FourNationReliveBlock::CountryOutsideRectangles { country },
                 );
@@ -1547,7 +1557,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
             ) {
                 Ok(destination) => destination,
                 Err(block) => {
-                    self.runtime.on_four_nation_relive_block(
+                    report_four_nation_relive_block(
                         player_id,
                         FourNationReliveBlock::RandomPosition(block),
                     );
@@ -1577,7 +1587,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                 let x = match player.shape().get_tile_x() {
                     Ok(x) => x,
                     Err(block) => {
-                        self.runtime.on_four_nation_relive_block(
+                        report_four_nation_relive_block(
                             player_id,
                             FourNationReliveBlock::Coordinate(block),
                         );
@@ -1587,7 +1597,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                 let y = match player.shape().get_tile_y() {
                     Ok(y) => y,
                     Err(block) => {
-                        self.runtime.on_four_nation_relive_block(
+                        report_four_nation_relive_block(
                             player_id,
                             FourNationReliveBlock::Coordinate(block),
                         );
@@ -1614,7 +1624,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                     None,
                     &movement,
                 ) {
-                    self.runtime.on_four_nation_relive_block(
+                    report_four_nation_relive_block(
                         player_id,
                         FourNationReliveBlock::Coordinate(block),
                     );
@@ -1634,7 +1644,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                     )
                 };
                 if let Err(block) = result {
-                    self.runtime.on_four_nation_relive_block(
+                    report_four_nation_relive_block(
                         player_id,
                         FourNationReliveBlock::Position(block),
                     );
@@ -1686,18 +1696,20 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
             let tile_x = match shape.get_tile_x() {
                 Ok(tile_x) => tile_x,
                 Err(block) => {
-                    self.runtime.on_four_nation_clear_block(
-                        FourNationClearBlock::MonsterCoordinate { monster_id, block },
-                    );
+                    report_four_nation_clear_block(FourNationClearBlock::MonsterCoordinate {
+                        monster_id,
+                        block,
+                    });
                     continue;
                 }
             };
             let tile_y = match shape.get_tile_y() {
                 Ok(tile_y) => tile_y,
                 Err(block) => {
-                    self.runtime.on_four_nation_clear_block(
-                        FourNationClearBlock::MonsterCoordinate { monster_id, block },
-                    );
+                    report_four_nation_clear_block(FourNationClearBlock::MonsterCoordinate {
+                        monster_id,
+                        block,
+                    });
                     continue;
                 }
             };
@@ -1745,9 +1757,9 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
             let Some(npc) = region.war.base.find_npc_by_id(npc_id).filter(|npc| {
                 npc.move_shape().shape().base_object().get_name() == npc_name.as_slice()
             }) else {
-                self.runtime.on_four_nation_clear_block(
-                    FourNationClearBlock::NpcTraversalMismatch { npc_id },
-                );
+                report_four_nation_clear_block(FourNationClearBlock::NpcTraversalMismatch {
+                    npc_id,
+                });
                 continue;
             };
             let shape = npc.move_shape().shape();
@@ -1760,11 +1772,10 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                 self.game
                     .send_shape_around_in_region(&region.war.base, shape, None, &removal);
             if let Err(block) = region.war.base.remove_owned_npc_by_id(identity.id) {
-                self.runtime
-                    .on_four_nation_clear_block(FourNationClearBlock::NpcRemoval {
-                        npc_id: identity.id,
-                        block,
-                    });
+                report_four_nation_clear_block(FourNationClearBlock::NpcRemoval {
+                    npc_id: identity.id,
+                    block,
+                });
             }
         }
     }

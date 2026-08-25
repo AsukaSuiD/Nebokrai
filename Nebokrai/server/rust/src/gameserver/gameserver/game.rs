@@ -337,8 +337,11 @@
 //! AI-type `0x17` death ведёт per-NPC counter, а manager gate замыкается в
 //! contender timer. Успешный timeout меняет faction, публикует World subtype
 //! `2`, исполняет `#fengyinNpc` award-script и рассылает region/top-info wire.
-//! Имена и форматирование остаются bounded byte/GBK, а подтверждённые legacy
-//! cancel/first-faction несоответствия сохранены в concrete region owner-е.
+//! Все достигнутые audit branches напрямую дописывают `godsbattleLog`,
+//! сохраняя raw byte/GBK имена и числовые факты; безопасный стабильный текст
+//! заменяет утраченные CRT format-symbol строки, не влияющие на gameplay.
+//! Подтверждённые legacy cancel/first-faction несоответствия сохранены в
+//! concrete region owner-е.
 //! GodsBattle return-point caller выбирает DiePos по `(region, faction)`,
 //! пишет typed audit и при miss исполняет обычный country/region fallback.
 //! Связанный `OnRelive` сохраняет dead/alive split, passive/region/property
@@ -3291,16 +3294,17 @@ pub(crate) trait GodsBattleDeathContext {
 pub(crate) trait GodsBattleNpcContendContext:
     ServerRegionMonsterContext + GodsBattlePlayerContext + ScriptFunctionRuntime + GameClockContext
 {
-    fn record_gods_battle_log(&mut self, event: GodsBattleNpcLog);
 }
 
-pub(crate) trait GodsBattleReturnPointContext {
-    fn record_gods_battle_log(&mut self, event: GodsBattleNpcLog);
-}
-
-pub(crate) trait PlayerReliveContext:
-    GodsBattleReturnPointContext + RegionRandomContext + ScriptFunctionRuntime
+impl<T> GodsBattleNpcContendContext for T where
+    T: ServerRegionMonsterContext
+        + GodsBattlePlayerContext
+        + ScriptFunctionRuntime
+        + GameClockContext
 {
+}
+
+pub(crate) trait PlayerReliveContext: RegionRandomContext + ScriptFunctionRuntime {
     fn auto_start_player_passive_skills(&mut self, player: &mut CPlayer);
     fn player_enter_region_after_relive(&mut self, player: &mut CPlayer);
     fn change_player_states_after_relive(&mut self, player: &mut CPlayer);
@@ -3360,6 +3364,103 @@ pub(crate) enum GodsBattleNpcLog {
         faction: i32,
         point: RegionReturnPoint,
     },
+}
+
+fn record_gods_battle_log(event: GodsBattleNpcLog) {
+    let mut text = Vec::new();
+    match event {
+        GodsBattleNpcLog::InvalidMonsterToken { token } => {
+            append_gods_battle_bytes(&mut text, b"invalid monster token=", &token);
+        }
+        GodsBattleNpcLog::MonsterSpawnFailed { npc_name, monster } => {
+            append_gods_battle_bytes(&mut text, b"monster spawn failed npc=", &npc_name);
+            append_gods_battle_bytes(&mut text, b" monster=", &monster);
+        }
+        GodsBattleNpcLog::MonsterSpawned {
+            npc_name,
+            monster,
+            faction,
+        } => {
+            append_gods_battle_bytes(&mut text, b"monster spawned npc=", &npc_name);
+            append_gods_battle_bytes(&mut text, b" monster=", &monster);
+            append_gods_battle_number(&mut text, b" faction=", faction);
+        }
+        GodsBattleNpcLog::FactionUpdated { npc_name, faction } => {
+            append_gods_battle_bytes(&mut text, b"faction updated npc=", &npc_name);
+            append_gods_battle_number(&mut text, b" faction=", faction);
+        }
+        GodsBattleNpcLog::MonsterWithoutNpc { monster } => {
+            append_gods_battle_bytes(&mut text, b"monster without npc=", &monster);
+        }
+        GodsBattleNpcLog::MissingKillCounter { npc_name } => {
+            append_gods_battle_bytes(&mut text, b"missing kill counter npc=", &npc_name);
+        }
+        GodsBattleNpcLog::MonsterKilled {
+            npc_name,
+            monster,
+            killer_type,
+            killer_id,
+        } => {
+            append_gods_battle_bytes(&mut text, b"monster killed npc=", &npc_name);
+            append_gods_battle_bytes(&mut text, b" monster=", &monster);
+            append_gods_battle_number(&mut text, b" killer_type=", killer_type);
+            append_gods_battle_number(&mut text, b" killer_id=", killer_id);
+        }
+        GodsBattleNpcLog::NoConfiguredMonsters { npc_name } => {
+            append_gods_battle_bytes(&mut text, b"no configured monsters npc=", &npc_name);
+        }
+        GodsBattleNpcLog::KillCountExceeded { npc_name } => {
+            append_gods_battle_bytes(&mut text, b"kill count exceeded npc=", &npc_name);
+        }
+        GodsBattleNpcLog::AwardVariableMissing {
+            player_id,
+            npc_name,
+        } => {
+            append_gods_battle_number(&mut text, b"award variable missing player=", player_id);
+            append_gods_battle_bytes(&mut text, b" npc=", &npc_name);
+        }
+        GodsBattleNpcLog::AwardScriptFailed {
+            player_id,
+            npc_name,
+        } => {
+            append_gods_battle_number(&mut text, b"award script failed player=", player_id);
+            append_gods_battle_bytes(&mut text, b" npc=", &npc_name);
+        }
+        GodsBattleNpcLog::NpcCaptured {
+            player_id,
+            npc_name,
+            faction,
+        } => {
+            append_gods_battle_number(&mut text, b"npc captured player=", player_id);
+            append_gods_battle_bytes(&mut text, b" npc=", &npc_name);
+            append_gods_battle_number(&mut text, b" faction=", faction);
+        }
+        GodsBattleNpcLog::ReturnPointSelected {
+            player_id,
+            faction,
+            point,
+        } => {
+            append_gods_battle_number(&mut text, b"return point player=", player_id);
+            append_gods_battle_number(&mut text, b" faction=", faction);
+            append_gods_battle_number(&mut text, b" region=", point.region_id);
+            append_gods_battle_number(&mut text, b" left=", point.left);
+            append_gods_battle_number(&mut text, b" top=", point.top);
+            append_gods_battle_number(&mut text, b" right=", point.right);
+            append_gods_battle_number(&mut text, b" bottom=", point.bottom);
+            append_gods_battle_number(&mut text, b" direction=", point.direction);
+        }
+    }
+    put_string_to_file("godsbattleLog", &text);
+}
+
+fn append_gods_battle_bytes(output: &mut Vec<u8>, label: &[u8], value: &[u8]) {
+    output.extend_from_slice(label);
+    output.extend_from_slice(legacy_c_string_prefix(value));
+}
+
+fn append_gods_battle_number(output: &mut Vec<u8>, label: &[u8], value: i32) {
+    output.extend_from_slice(label);
+    output.extend_from_slice(value.to_string().as_bytes());
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21018,7 +21119,7 @@ impl CGame {
                 .filter(|field| !field.is_empty())
                 .collect::<Vec<_>>();
             if fields.len() != 3 {
-                context.record_gods_battle_log(GodsBattleNpcLog::InvalidMonsterToken {
+                record_gods_battle_log(GodsBattleNpcLog::InvalidMonsterToken {
                     token: token.to_vec(),
                 });
                 spawn_blocks.push(GodsBattleMonsterTokenBlock::FieldCount {
@@ -21032,7 +21133,7 @@ impl CGame {
                 .find_monster_property_by_origin_name(original_name)
                 .cloned()
             else {
-                context.record_gods_battle_log(GodsBattleNpcLog::MonsterSpawnFailed {
+                record_gods_battle_log(GodsBattleNpcLog::MonsterSpawnFailed {
                     npc_name: configuration.name.clone(),
                     monster: original_name.to_vec(),
                 });
@@ -21056,7 +21157,7 @@ impl CGame {
             let monster_id = match spawn {
                 Ok(monster_id) => monster_id,
                 Err(block) => {
-                    context.record_gods_battle_log(GodsBattleNpcLog::MonsterSpawnFailed {
+                    record_gods_battle_log(GodsBattleNpcLog::MonsterSpawnFailed {
                         npc_name: configuration.name.clone(),
                         monster: original_name.to_vec(),
                     });
@@ -21067,7 +21168,7 @@ impl CGame {
             if let Some(property) = self.find_monster_property_by_origin_name_mut(original_name) {
                 property.race = faction as u32;
             }
-            context.record_gods_battle_log(GodsBattleNpcLog::MonsterSpawned {
+            record_gods_battle_log(GodsBattleNpcLog::MonsterSpawned {
                 npc_name: configuration.name.clone(),
                 monster: original_name.to_vec(),
                 faction,
@@ -21117,7 +21218,7 @@ impl CGame {
                 message.add_byte(2);
                 add_legacy_c_string(message.base_mut(), &npc_name);
                 message.add_ulong(faction as u32);
-                context.record_gods_battle_log(GodsBattleNpcLog::FactionUpdated {
+                record_gods_battle_log(GodsBattleNpcLog::FactionUpdated {
                     npc_name: npc_name.clone(),
                     faction,
                 });
@@ -21150,11 +21251,10 @@ impl CGame {
 
     /// Concrete GodsBattle virtual `GetReturnPoint`: faction-specific entry
     /// wins; a miss delegates to the already materialized base-region rule.
-    pub(crate) fn gods_battle_return_point<Context: GodsBattleReturnPointContext>(
+    pub(crate) fn gods_battle_return_point(
         &mut self,
         region_id: i32,
         player_id: i32,
-        context: &mut Context,
     ) -> Result<Option<GodsBattleReturnPointReport>, ServerReturnSetupBlock> {
         let Some(player) = self.find_player(player_id) else {
             return Ok(None);
@@ -21174,7 +21274,7 @@ impl CGame {
             return Ok(None);
         };
         if let Some(point) = self.gods_battle_mgr.return_point(region_id, faction) {
-            context.record_gods_battle_log(GodsBattleNpcLog::ReturnPointSelected {
+            record_gods_battle_log(GodsBattleNpcLog::ReturnPointSelected {
                 player_id,
                 faction,
                 point,
@@ -21355,7 +21455,7 @@ impl CGame {
             .find_player(player_id)
             .and_then(CPlayer::server_region_id);
         let return_point = match region_id {
-            Some(region_id) => match self.gods_battle_return_point(region_id, player_id, context) {
+            Some(region_id) => match self.gods_battle_return_point(region_id, player_id) {
                 Ok(Some(report)) => report,
                 Ok(None) => {
                     return PlayerReliveReport {
@@ -21694,13 +21794,12 @@ impl CGame {
         deliveries
     }
 
-    pub(crate) fn gods_battle_monster_died<Context: GodsBattleNpcContendContext>(
+    pub(crate) fn gods_battle_monster_died(
         &mut self,
         region_id: i32,
         monster_id: i32,
         killer_type: i32,
         killer_id: i32,
-        context: &mut Context,
     ) -> Option<GodsBattleMonsterDeathReport> {
         let (original_name, display_name) = self
             .find_region(region_id)
@@ -21727,7 +21826,7 @@ impl CGame {
             .npc_name_by_monster(&original_name)
             .map(ToOwned::to_owned)
         else {
-            context.record_gods_battle_log(GodsBattleNpcLog::MonsterWithoutNpc {
+            record_gods_battle_log(GodsBattleNpcLog::MonsterWithoutNpc {
                 monster: display_name,
             });
             return Some(GodsBattleMonsterDeathReport {
@@ -21743,7 +21842,7 @@ impl CGame {
             .gods_battle_mgr
             .increment_npc_killed_monster_count(&npc_name)
         else {
-            context.record_gods_battle_log(GodsBattleNpcLog::MissingKillCounter {
+            record_gods_battle_log(GodsBattleNpcLog::MissingKillCounter {
                 npc_name: npc_name.clone(),
             });
             return Some(GodsBattleMonsterDeathReport {
@@ -21755,7 +21854,7 @@ impl CGame {
                 player_notice_delivery: None,
             });
         };
-        context.record_gods_battle_log(GodsBattleNpcLog::MonsterKilled {
+        record_gods_battle_log(GodsBattleNpcLog::MonsterKilled {
             npc_name: npc_name.clone(),
             monster: display_name.clone(),
             killer_type,
@@ -21763,7 +21862,7 @@ impl CGame {
         });
         let total = self.gods_battle_mgr.npc_monster_count(&npc_name);
         if total == 0 {
-            context.record_gods_battle_log(GodsBattleNpcLog::NoConfiguredMonsters {
+            record_gods_battle_log(GodsBattleNpcLog::NoConfiguredMonsters {
                 npc_name: npc_name.clone(),
             });
             return Some(GodsBattleMonsterDeathReport {
@@ -21795,7 +21894,7 @@ impl CGame {
                         0xff,
                     )
                 } else {
-                    context.record_gods_battle_log(GodsBattleNpcLog::KillCountExceeded {
+                    record_gods_battle_log(GodsBattleNpcLog::KillCountExceeded {
                         npc_name: npc_name.clone(),
                     });
                     Vec::new()
@@ -22063,7 +22162,7 @@ impl CGame {
                 )
                 .map_or(0, |_| 1);
             if result == 0 {
-                context.record_gods_battle_log(GodsBattleNpcLog::AwardScriptFailed {
+                record_gods_battle_log(GodsBattleNpcLog::AwardScriptFailed {
                     player_id: contender.player_id,
                     npc_name: contender.symbol_name.clone(),
                 });
@@ -22071,7 +22170,7 @@ impl CGame {
             Some(result)
         } else {
             if award_variable_result == -99_999_999 {
-                context.record_gods_battle_log(GodsBattleNpcLog::AwardVariableMissing {
+                record_gods_battle_log(GodsBattleNpcLog::AwardVariableMissing {
                     player_id: contender.player_id,
                     npc_name: contender.symbol_name.clone(),
                 });
@@ -22079,7 +22178,7 @@ impl CGame {
             None
         };
         let top_info_delivery = self.send_top_info_to_client(-1, 0, 1, 1, &capture_text);
-        context.record_gods_battle_log(GodsBattleNpcLog::NpcCaptured {
+        record_gods_battle_log(GodsBattleNpcLog::NpcCaptured {
             player_id: contender.player_id,
             npc_name: contender.symbol_name.clone(),
             faction,
@@ -30570,7 +30669,7 @@ impl CGame {
             .find_region(source_region_id)
             .is_some_and(ServerRegionOwner::is_gods_battle)
         {
-            self.gods_battle_return_point(source_region_id, player_id, runtime)
+            self.gods_battle_return_point(source_region_id, player_id)
                 .map_err(GameReturnPointBlock::Base)
                 .and_then(|point| {
                     point
