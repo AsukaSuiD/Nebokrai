@@ -162,6 +162,9 @@
 //! Region-routing family `3005..3007` связывает named lookup
 //! `5FF04 → 7FC04`, локальный полный `ChangeRegion`, remote broadcast
 //! `5FF11 → 7FC10` и X-major 7×7 массовый перенос через тот же spatial owner.
+//! Соседний `3008 / KickPlayerEx` переиспользует этот 7×7 scan: локально
+//! публикует `BF806(GS0030)`, удалённо проходит
+//! `5FF08 → 7FC07 → 5FD02 → 7FA05` до requester-а.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -213,10 +216,11 @@ use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, S
 use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
     EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
-    GameContainerMessageRuntime, GodsBattleDeathContext, GodsBattleSzlPlayerUpdate,
-    NationCarriageReturnReport, NationCombatContext, NationContendEnterReport,
-    RealmAppellationScriptContext, ScriptRegionChangeContext, ServerRegionOwner,
-    colored_player_notice_message, colored_text_message, format_legacy_text_fields,
+    GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
+    GodsBattleSzlPlayerUpdate, NationCarriageReturnReport, NationCombatContext,
+    NationContendEnterReport, RealmAppellationScriptContext, ScriptRegionChangeContext,
+    ServerRegionOwner, colored_player_notice_message, colored_text_message,
+    format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
@@ -287,6 +291,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_ID: i32 = 3004;
 pub(crate) const SCRIPT_FUNCTION_GET_REGION_ID: i32 = 3005;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_REGION: i32 = 3006;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_REGION_EX: i32 = 3007;
+pub(crate) const SCRIPT_FUNCTION_KICK_PLAYER_EX: i32 = 3008;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
 pub(crate) const SCRIPT_FUNCTION_DELETE_SKILL: i32 = 3102;
 pub(crate) const SCRIPT_FUNCTION_SET_SKILL_LEVEL: i32 = 3103;
@@ -3218,6 +3223,10 @@ pub(crate) fn script_function_parameter_kind(
             1..=3 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_KICK_PLAYER_EX => match index {
+            0 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_GET_MONEY_BY_NAME
         | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME
         | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => match index {
@@ -5076,6 +5085,46 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 );
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_KICK_PLAYER_EX => {
+            let Some(target_name) = string_arguments[0]
+                .filter(|name| !name.is_empty() && name.len() <= u8::MAX as usize)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if script_player_id.is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let traversal = game.kick_players_around_name(target_name);
+            match traversal.outcome {
+                GameKickAroundOutcome::TargetMissing => {
+                    let mut request = CMessage::new(0x0005_ff08);
+                    request.add_long(player_id);
+                    request.base_mut().add(target_name);
+                    request.add_byte(0);
+                    match request.send(game, false) {
+                        Ok(1) => Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }),
+                        _ => Some(ScriptFunctionDispatchOutcome::Invalid),
+                    }
+                }
+                GameKickAroundOutcome::Completed => {
+                    let count = traversal.matched_player_ids.len() as i32;
+                    let count_text = count.to_string().into_bytes();
+                    let text = format_legacy_text_fields(
+                        game.get_string_by_id(b"GS0030"),
+                        &[&count_text],
+                        0xff,
+                    );
+                    let mut response = CMessage::new(0x000b_f806);
+                    response.add_long(-1);
+                    response.add_long(0);
+                    response.base_mut().add(&text);
+                    response.add_byte(0);
+                    let _ = response.send_to_player(game.net_server(), player_id);
+                    Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+                }
+                _ => Some(ScriptFunctionDispatchOutcome::Invalid),
+            }
         }
         SCRIPT_FUNCTION_CREATE_FACTION => {
             let (Some(required_level), Some(required_goods), Some(required_money), Some(country)) = (
