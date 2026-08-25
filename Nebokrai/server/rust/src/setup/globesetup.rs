@@ -156,6 +156,8 @@ const AUTO_INC_ENERGY_TIME_OFFSET: usize = 0x828;
 const AUTO_INC_TIME_OFFSET: usize = 0x81C;
 const AUTO_INC_EXP_1_OFFSET: usize = 0x820;
 const AUTO_INC_EXP_2_OFFSET: usize = 0x824;
+const CARRIAGE_STOP_DISTANCE_OFFSET: usize = 0x810;
+const CARRIAGE_DISAPPEAR_TIME_OFFSET: usize = 0x814;
 const EXP_TO_VIGOUR_X_OFFSET: usize = 0x75C;
 const EXP_TO_VIGOUR_Y_OFFSET: usize = 0x760;
 const MAXIMUM_VIGOUR_ONCE_OFFSET: usize = 0x764;
@@ -300,6 +302,14 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn pet_translate_distance(&self) -> f32 {
         self.read_f32(PET_TRANSLATE_DISTANCE_OFFSET)
+    }
+
+    pub(crate) fn carriage_stop_distance(&self) -> u32 {
+        self.read_u32(CARRIAGE_STOP_DISTANCE_OFFSET)
+    }
+
+    pub(crate) fn carriage_disappear_time_ms(&self) -> u32 {
+        self.read_u32(CARRIAGE_DISAPPEAR_TIME_OFFSET)
     }
 
     pub(crate) fn base_combat_scales(&self) -> [f32; 5] {

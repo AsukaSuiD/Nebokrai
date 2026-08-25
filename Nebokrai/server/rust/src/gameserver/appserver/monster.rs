@@ -26,7 +26,9 @@
 //! one-second master checks, 6-hour age counter и wild-timeout state, а
 //! `CGame` завершает active-mode master-centered target search и
 //! reclaim/notice/evanish effects. Idle wandering, специальные guard AI и
-//! multi-skill decision tree этим не подменяются.
+//! multi-skill decision tree этим не подменяются. Carriage owner хранит
+//! following/staying, one-second master binding и invalid-master timeout;
+//! `CGame` исполняет движение, notices и unlink/delete wire.
 //! Login pet restoration и client control используют owned `tagMasterInfo`,
 //! taming sign, progress, раздельные Globe experience/property factors и
 //! reached follower-EXP level-up с `0xC0203`, а также узкое pet-control state;
@@ -67,6 +69,10 @@ pub(crate) struct CMonster {
     pet_life_cycle_counter: u32,
     pet_invalid_master_ms: u32,
     pet_master_logout: bool,
+    carriage_action: i32,
+    carriage_invalid_master_ms: u32,
+    carriage_seek_master_ms: u32,
+    carriage_master_logout: bool,
     first_attack_player_id: i32,
     last_attack_timer_ms: u32,
     killed_by: Option<MonsterKillingAttack>,
@@ -192,6 +198,10 @@ impl CMonster {
             pet_life_cycle_counter: 0,
             pet_invalid_master_ms: 0,
             pet_master_logout: false,
+            carriage_action: 0,
+            carriage_invalid_master_ms: 0,
+            carriage_seek_master_ms: 0,
+            carriage_master_logout: false,
             first_attack_player_id: 0,
             last_attack_timer_ms: 0,
             killed_by: None,
@@ -230,6 +240,38 @@ impl CMonster {
 
     pub(crate) fn is_carriage(&self, property: &MonsterProperties) -> bool {
         !self.tamed && property.tamable == 1 && property.maximum_tame_attempt_count == 0
+    }
+
+    pub(crate) const fn carriage_action(&self) -> i32 {
+        self.carriage_action
+    }
+
+    pub(crate) const fn set_carriage_action(&mut self, action: i32) {
+        self.carriage_action = action;
+    }
+
+    pub(crate) const fn carriage_invalid_master_ms(&self) -> u32 {
+        self.carriage_invalid_master_ms
+    }
+
+    pub(crate) const fn set_carriage_invalid_master_ms(&mut self, timestamp_ms: u32) {
+        self.carriage_invalid_master_ms = timestamp_ms;
+    }
+
+    pub(crate) const fn carriage_master_logout(&self) -> bool {
+        self.carriage_master_logout
+    }
+
+    pub(crate) const fn set_carriage_master_logout(&mut self, logout: bool) {
+        self.carriage_master_logout = logout;
+    }
+
+    pub(crate) fn carriage_master_check_due(&mut self, now_ms: u32) -> bool {
+        if now_ms.wrapping_sub(self.carriage_seek_master_ms) < 1_000 {
+            return false;
+        }
+        self.carriage_seek_master_ms = now_ms;
+        true
     }
 
     pub(crate) const fn is_owned_pet(&self, player_id: i32) -> bool {

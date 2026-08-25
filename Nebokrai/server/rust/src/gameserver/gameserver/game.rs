@@ -32172,6 +32172,231 @@ impl CGame {
         handled
     }
 
+    /// Reached `CCarriage::OnSchedule`: following/staying movement, one-second
+    /// master rebinding, duplicate-owner eviction and disappearance timeout
+    /// execute against the same live player/region/monster owners.
+    fn run_owned_carriage_lifecycle<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        const FOLLOWING: i32 = 0;
+        const STAYING: i32 = 1;
+
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let snapshot = owner
+            .base()
+            .find_monster_by_id(monster_id)
+            .and_then(|monster| {
+                let property = self
+                    .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                    .clone();
+                monster.is_carriage(&property).then(|| {
+                    (
+                        property,
+                        monster.move_shape().shape().clone(),
+                        monster.hit_points(),
+                        monster.move_shape().is_moveable(),
+                        monster.master_info(),
+                        monster.carriage_action(),
+                    )
+                })
+            });
+        let Some((property, carriage_shape, health, moveable, master, action)) = snapshot else {
+            self.restore_region_owner(owner);
+            return false;
+        };
+        let now_ms = runtime.now_milliseconds();
+        let master_snapshot = (master.master_type == PLAYER_TYPE && master.master_id != 0)
+            .then(|| self.find_player(master.master_id))
+            .flatten()
+            .filter(|player| player.server_region_id() == Some(region_id))
+            .map(|player| (player.shape().clone(), player.active_carriage_id()));
+        let master_present = master_snapshot.is_some();
+        let mut master_owns = master_snapshot
+            .as_ref()
+            .is_some_and(|(_, carriage_id)| *carriage_id == monster_id);
+        let master_owns_other = master_snapshot
+            .as_ref()
+            .is_some_and(|(_, carriage_id)| *carriage_id != 0 && *carriage_id != monster_id);
+
+        let mut vanish = CMoveShape::is_died(health);
+        if !vanish && moveable {
+            if action == FOLLOWING
+                && let Some((master_shape, _)) = &master_snapshot
+                && let (Ok(carriage_x), Ok(carriage_y), Ok(master_x), Ok(master_y), Ok(rear)) = (
+                    carriage_shape.get_tile_x(),
+                    carriage_shape.get_tile_y(),
+                    master_shape.get_tile_x(),
+                    master_shape.get_tile_y(),
+                    master_shape.get_rear_direction(),
+                )
+            {
+                let distance = real_distance(carriage_x, carriage_y, master_x, master_y);
+                if distance > 2 {
+                    if distance <= self.globe_setup.carriage_stop_distance() as i32 {
+                        let start = ShapeAreaCoordinates {
+                            x: master_x,
+                            y: master_y,
+                        };
+                        if let Ok(first) = CShape::get_direction_position(rear, start)
+                            && let Ok(destination) = CShape::get_direction_position(rear, first)
+                            && (carriage_x, carriage_y) != (destination.x, destination.y)
+                            && let Some(around) = GameServerAroundRuntime::new(
+                                self,
+                                &self.session_factory,
+                                self.area_width,
+                                self.area_height,
+                            )
+                        {
+                            let _ = owner.base_mut().move_owned_monster(
+                                monster_id,
+                                destination.x,
+                                destination.y,
+                                0,
+                                CMonster::figure(&property),
+                                self.area_width,
+                                self.area_height,
+                                &around,
+                            );
+                        }
+                    } else {
+                        if master_owns {
+                            let _ = colored_player_notice_message(
+                                0xffff_ffff,
+                                0,
+                                self.get_string_by_id(b"GS0008"),
+                            )
+                            .send_to_player(self.net_server(), master.master_id);
+                        }
+                        if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id)
+                        {
+                            carriage.set_carriage_action(STAYING);
+                        }
+                    }
+                }
+            } else if action == STAYING
+                && let Some((master_shape, _)) = &master_snapshot
+                && let (Ok(carriage_x), Ok(carriage_y), Ok(master_x), Ok(master_y)) = (
+                    carriage_shape.get_tile_x(),
+                    carriage_shape.get_tile_y(),
+                    master_shape.get_tile_x(),
+                    master_shape.get_tile_y(),
+                )
+                && real_distance(carriage_x, carriage_y, master_x, master_y)
+                    <= self.globe_setup.carriage_stop_distance() as i32
+            {
+                if master_owns {
+                    let _ = colored_player_notice_message(
+                        0xffff_ffff,
+                        0,
+                        self.get_string_by_id(b"GS0009"),
+                    )
+                    .send_to_player(self.net_server(), master.master_id);
+                }
+                if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                    carriage.set_carriage_action(FOLLOWING);
+                }
+            }
+        }
+
+        let master_check_due = owner
+            .base_mut()
+            .find_monster_by_id_mut(monster_id)
+            .is_some_and(|carriage| carriage.carriage_master_check_due(now_ms));
+        if !vanish && master_check_due {
+            let carriage = owner
+                .base_mut()
+                .find_monster_by_id_mut(monster_id)
+                .expect("carriage master check сохраняет region owner");
+            if !master_present {
+                if !carriage.carriage_master_logout() {
+                    carriage.set_carriage_master_logout(true);
+                    if carriage.carriage_invalid_master_ms() == 0 {
+                        carriage.set_carriage_action(STAYING);
+                        carriage.set_carriage_invalid_master_ms(now_ms);
+                    }
+                }
+            } else {
+                if !carriage.carriage_master_logout() && master_owns_other {
+                    vanish = true;
+                } else if carriage.carriage_master_logout() {
+                    carriage.set_carriage_action(FOLLOWING);
+                    carriage.set_carriage_master_logout(false);
+                    if let Some(player) = self.find_player_mut(master.master_id) {
+                        player.bind_active_carriage(monster_id);
+                        master_owns = true;
+                    }
+                }
+                let close = master_snapshot.as_ref().is_some_and(|(master_shape, _)| {
+                    carriage_shape
+                        .get_tile_x()
+                        .ok()
+                        .zip(carriage_shape.get_tile_y().ok())
+                        .zip(
+                            master_shape
+                                .get_tile_x()
+                                .ok()
+                                .zip(master_shape.get_tile_y().ok()),
+                        )
+                        .is_some_and(|((cx, cy), (mx, my))| {
+                            real_distance(cx, cy, mx, my)
+                                <= self.globe_setup.carriage_stop_distance() as i32
+                        })
+                });
+                if close {
+                    carriage.set_carriage_invalid_master_ms(0);
+                } else if carriage.carriage_invalid_master_ms() == 0 {
+                    carriage.set_carriage_invalid_master_ms(now_ms);
+                }
+            }
+            if carriage.carriage_invalid_master_ms() != 0
+                && now_ms.wrapping_sub(carriage.carriage_invalid_master_ms())
+                    >= self.globe_setup.carriage_disappear_time_ms()
+            {
+                vanish = true;
+            }
+        }
+
+        if vanish {
+            if master_owns {
+                if !CMoveShape::is_died(health) {
+                    let _ = colored_player_notice_message(
+                        0xffff_ffff,
+                        0,
+                        self.get_string_by_id(b"GS0007"),
+                    )
+                    .send_to_player(self.net_server(), master.master_id);
+                }
+                if let Some(player) = self.find_player_mut(master.master_id) {
+                    player.clear_active_carriage(monster_id);
+                }
+            }
+            if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                carriage.stage_for_delete();
+            }
+            let mut vanished = CMessage::new(0x000b_f504);
+            vanished.add_long(MONSTER_TYPE);
+            vanished.add_long(monster_id);
+            vanished.add_long(0);
+            vanished
+                .base_mut()
+                .add(&carriage_shape.get_pos_x().to_bits().to_le_bytes());
+            vanished
+                .base_mut()
+                .add(&carriage_shape.get_pos_y().to_bits().to_le_bytes());
+            let _ = self.send_game_shape_around(owner.base(), &carriage_shape, None, &vanished);
+        }
+        if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+            carriage.set_base_attack_owned_tick(true);
+        }
+        self.restore_region_owner(owner);
+        true
+    }
+
     /// Reached `CMonsterAI/CPet::OnSchedule -> CBaseAttack(1)` path:
     /// retaliation, aggressive melee `dwAI 0/3` search/tracing и concrete
     /// pet-to-wild-monster либо policy-checked pet-to-player base attack.
@@ -36621,6 +36846,9 @@ impl CGame {
                 })
                 .unwrap_or_default();
             for monster_id in monster_ids {
+                if self.run_owned_carriage_lifecycle(region_id, monster_id, runtime) {
+                    continue;
+                }
                 if !self.run_owned_pet_follow(region_id, monster_id, runtime) {
                     let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                 }
