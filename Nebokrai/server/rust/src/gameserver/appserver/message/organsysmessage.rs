@@ -27,6 +27,9 @@
 //! регионов, обновляет у живого игрока фракцию, уровень, опыт, глав фракции и
 //! союза, имя и союз и только затем меняет тип на `0xBFF06`. Имя и союз входят
 //! в последующий жизненный цикл участников войны.
+//! Ответ рейтинга фракций `0x7FE1D` извлекает адресный ID игрока, меняет тип на
+//! клиентский `0xBFF1D` и сохраняет без повторного разбора заголовок и список,
+//! которые сформировал WorldServer.
 //! Налоговая цепочка принимает авторизацию World `0x7FE28/0x7FE29`, создаёт
 //! управляемый `CNetSession`, коррелирует ответы клиента `0x90122/0x90123` и
 //! применяет авторитетный снимок прокси-региона `0x7FE2E`.
@@ -227,6 +230,7 @@ pub(crate) enum GamePlayerQuestCommandError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameOrganizingMessageReport {
     FactionLifecycle(FactionLifecycleDispatchReport),
+    FactionBillboard(FactionBillboardDispatchReport),
     CityGate(CityGateDispatchReport),
     VillageApplication(WarApplicationResponseReport),
     CityApplication(WarApplicationResponseReport),
@@ -241,6 +245,7 @@ pub(crate) enum GameOrganizingMessageReport {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameOrganizingMessageError {
     FactionLifecycle(FactionLifecycleDispatchError),
+    FactionBillboard(FactionLifecycleDispatchError),
     CityGate(FactionLifecycleDispatchError),
     VillageApplication(FactionLifecycleDispatchError),
     CityApplication(FactionLifecycleDispatchError),
@@ -287,6 +292,12 @@ pub(crate) struct FactionLifecycleDispatchReport {
     pub(crate) player_id: i32,
     pub(crate) correlated: bool,
     pub(crate) delivery: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FactionBillboardDispatchReport {
+    pub(crate) player_id: i32,
+    pub(crate) delivery: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -534,6 +545,7 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x7fe07
             | 0x7fe18
             | 0x7fe19
+            | 0x7fe1d
             | 0x7fe1e
             | 0x7fe2a
             | 0x7fe28
@@ -592,6 +604,14 @@ pub(crate) fn dispatch_game_organizing_message<
             dispatch_war_application_response(message, game, runtime)
                 .map(GameOrganizingMessageReport::CityApplication)
                 .map_err(GameOrganizingMessageError::CityApplication),
+        );
+    }
+
+    if opcode == 0x7fe1d {
+        return Some(
+            dispatch_faction_billboard_response(message, game)
+                .map(GameOrganizingMessageReport::FactionBillboard)
+                .map_err(GameOrganizingMessageError::FactionBillboard),
         );
     }
 
@@ -667,6 +687,22 @@ pub(crate) fn dispatch_game_organizing_message<
     };
     game.restore_war_startup_owners(owners);
     Some(result)
+}
+
+fn dispatch_faction_billboard_response(
+    message: &mut CMessage,
+    game: &CGame,
+) -> Result<FactionBillboardDispatchReport, FactionLifecycleDispatchError> {
+    let player_id = message
+        .base_mut()
+        .get_long()
+        .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field: "player ID" })?;
+    message.set_message_type(0x000b_ff1d);
+    let delivery = message.send_to_player(game.net_server(), player_id);
+    Ok(FactionBillboardDispatchReport {
+        player_id,
+        delivery,
+    })
 }
 
 fn dispatch_region_tax_message<Runtime: RegionRandomContext + OldClientGoodsCodec>(

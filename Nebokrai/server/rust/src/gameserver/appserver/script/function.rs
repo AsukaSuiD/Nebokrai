@@ -7,8 +7,14 @@
 //! NPC в принадлежащее `CGame` состояние сеанса; создание и заявка завершаются
 //! только через действующий диспетчер ответов OrganSys от клиента и World.
 //! Отмена заявки сохраняет ту же проверку расстояния и World `0x60109`.
-//! Функция `6011` добавляет точный GameSave игрока в `0x60126`; авторитетное
-//! списание World `0x7FE1E` возвращается через тот же диспетчер OrganSys.
+//! Интерфейсные функции фракции `6007–6012` сохраняют проверку разговора с
+//! NPC. `6007` включает доску объявлений, `6009` отправляет доказанный запрос
+//! времени атаки, а `6010` проводит выбранный вид рейтинга через World и
+//! ответ `0x7FE1D → 0xBFF1D` до клиента. `6008` в таблице переходов EXE сразу
+//! возвращается без действий. Функция `6011` добавляет точный `GameSave`
+//! игрока в `0x60126`; авторитетное списание World `0x7FE1E` возвращается
+//! через тот же диспетчер OrganSys. `6012` передаёт World фракцию и игрока для
+//! открытия принадлежащего `CFaction` сеанса загрузки герба.
 //! Объявление войны `6030` держит операторский сеанс `2000` мс между страницей
 //! World, выбором клиента и авторитетным результатом со списанием.
 //! Городские ворота `6004/6019/6020` используют только локальный
@@ -502,7 +508,12 @@ pub(crate) const SCRIPT_FUNCTION_QUIT_JOIN_FACTION: i32 = 6003;
 pub(crate) const SCRIPT_FUNCTION_OPERATOR_CITY_GATE: i32 = 6004;
 pub(crate) const SCRIPT_FUNCTION_OBTAIN_TAX_PAYMENT: i32 = 6005;
 pub(crate) const SCRIPT_FUNCTION_ADJUST_TAX_RATE: i32 = 6006;
+pub(crate) const SCRIPT_FUNCTION_TURN_ON_LEAVE_WORD: i32 = 6007;
+pub(crate) const SCRIPT_FUNCTION_BUY_FACTION_LOGO: i32 = 6008;
+pub(crate) const SCRIPT_FUNCTION_ASK_ATTACK_CITY_TIME: i32 = 6009;
+pub(crate) const SCRIPT_FUNCTION_GET_FACTION_BILLBOARD: i32 = 6010;
 pub(crate) const SCRIPT_FUNCTION_UPGRADE_FACTION: i32 = 6011;
+pub(crate) const SCRIPT_FUNCTION_UPLOAD_FACTION_ICON: i32 = 6012;
 pub(crate) const SCRIPT_FUNCTION_GET_FACTION_LEVEL_BY_PLAYER_ID: i32 = 6013;
 pub(crate) const SCRIPT_FUNCTION_GET_FACTION_EXP_BY_PLAYER_ID: i32 = 6014;
 pub(crate) const SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME: i32 = 6015;
@@ -3631,6 +3642,10 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_FACTION_BILLBOARD => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_OPERATOR_CITY_GATE | SCRIPT_FUNCTION_OPERATE_CITY_GATE => match index {
             0..=2 => Integer,
             _ => Unused,
@@ -6290,6 +6305,33 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
+        SCRIPT_FUNCTION_TURN_ON_LEAVE_WORD | SCRIPT_FUNCTION_ASK_ATTACK_CITY_TIME => {
+            if country_war_script_caller_gate(game, script_player_id, script_npc_id).is_ok() {
+                let message_type = if function_id == SCRIPT_FUNCTION_TURN_ON_LEAVE_WORD {
+                    0x0006_011a
+                } else {
+                    0x0006_0134
+                };
+                let mut request = CMessage::new(message_type);
+                request.add_long(player_id);
+                let _ = request.send(game, false);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_BUY_FACTION_LOGO => {
+            // Таблица переходов точного EXE направляет этот ID сразу в общий
+            // успешный выход, не вычисляя аргументы и не создавая сообщения.
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GET_FACTION_BILLBOARD => {
+            if country_war_script_caller_gate(game, script_player_id, script_npc_id).is_ok() {
+                let mut request = CMessage::new(0x0006_0125);
+                request.add_long(player_id);
+                request.add_long(integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR));
+                let _ = request.send(game, false);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
         SCRIPT_FUNCTION_OBTAIN_TAX_PAYMENT | SCRIPT_FUNCTION_ADJUST_TAX_RATE => {
             if let Ok((_, _)) =
                 country_war_script_caller_gate(game, script_player_id, script_npc_id)
@@ -6353,7 +6395,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     .find_player(player_id)
                     .map(|player| player.faction_id())
                     .unwrap_or_default();
-                if faction_id > 0 {
+                if faction_id != 0 {
                     let mut snapshot = Vec::new();
                     if game.find_player(player_id).is_some_and(|player| {
                         game.encode_player_game_save(player, &mut snapshot, runtime)
@@ -6364,6 +6406,21 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                         request.base_mut().add(&snapshot);
                         let _ = request.send(game, false);
                     }
+                }
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_UPLOAD_FACTION_ICON => {
+            if country_war_script_caller_gate(game, script_player_id, script_npc_id).is_ok() {
+                let faction_id = game
+                    .find_player(player_id)
+                    .map(CPlayer::faction_id)
+                    .unwrap_or_default();
+                if faction_id != 0 {
+                    let mut request = CMessage::new(0x0006_0127);
+                    request.add_long(faction_id);
+                    request.add_long(player_id);
+                    let _ = request.send(game, false);
                 }
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
