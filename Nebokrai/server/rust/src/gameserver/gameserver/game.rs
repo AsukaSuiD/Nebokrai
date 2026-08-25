@@ -21300,6 +21300,58 @@ impl CGame {
         Some(message.send_to_around_position(Some(region), tile_x, tile_y, None, &runtime))
     }
 
+    /// `5403 / Weather` меняет погоду текущего региона сценарного игрока и
+    /// сразу публикует полный `0xBF507` всем игрокам этого региона.
+    pub(crate) fn script_change_weather(
+        &mut self,
+        player_id: i32,
+        weather_index: i32,
+    ) -> Option<i32> {
+        let region_id = self.find_player(player_id)?.server_region_id()?;
+        let mut owner = self.take_region_owner(region_id)?;
+        let weather = owner.base_mut().change_weather(weather_index).to_vec();
+        let mut message = CMessage::new(0x000b_f507);
+        message.add_ulong(weather.len() as u32);
+        for ServerRegionWeather {
+            weather_index,
+            fog_color,
+        } in weather
+        {
+            message.add_long(weather_index);
+            message.add_ulong(fog_color);
+        }
+        let delivery = message.send_to_region(Some(owner.base()), None, self);
+        self.restore_region_owner(owner);
+        Some(delivery)
+    }
+
+    /// `5405 / PlayAction` не меняет серверное поле действия: исходный вызов
+    /// только рассылает `0xBF508(тип, ID, 16-битное действие)` вокруг текущей
+    /// клетки.
+    pub(crate) fn script_play_action(&self, player_id: i32, action: i32) -> Option<i32> {
+        let player = self.find_player(player_id)?;
+        let region_id = player.server_region_id()?;
+        let tile_x = player.shape().get_tile_x().ok()?;
+        let tile_y = player.shape().get_tile_y().ok()?;
+        let runtime = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        )?;
+        let mut message = CMessage::new(0x000b_f508);
+        message.add_long(PLAYER_TYPE);
+        message.add_long(player_id);
+        message.add_short(action as i16);
+        Some(message.send_to_around_position(
+            self.find_region(region_id).map(ServerRegionOwner::base),
+            tile_x,
+            tile_y,
+            None,
+            &runtime,
+        ))
+    }
+
     /// `5410 / PlaySound`: direct и spatial branches используют один exact
     /// BF509 payload; ненулевой legacy flag включает рассылку из клетки
     /// script-player-а всем зарегистрированным игрокам соседних area.

@@ -774,6 +774,18 @@ impl CServerRegion {
         &self.current_weather
     }
 
+    /// `CServerRegion::ChangeWeather` заменяет текущую погоду единственной
+    /// записью с нулевым цветом тумана; сетевую публикацию выполняет владелец
+    /// `CGame`, располагающий настоящим сервером сеансов.
+    pub(crate) fn change_weather(&mut self, weather_index: i32) -> &[ServerRegionWeather] {
+        self.current_weather.clear();
+        self.current_weather.push(ServerRegionWeather {
+            weather_index,
+            fog_color: 0,
+        });
+        &self.current_weather
+    }
+
     /// State-owner `AddTaxMoney`: доля superior вычитается до доставки,
     /// локальный дневной итог clamp-ится к legacy 4_000_000_000.
     pub(crate) fn add_tax_money(&mut self, amount: u32) -> RegionTaxAddition {

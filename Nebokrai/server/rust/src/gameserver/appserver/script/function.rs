@@ -180,6 +180,9 @@
 //! диспетчер GM: первый рассылает отключение всем GameServer с исключением
 //! запросившего игрока, второй сначала обслуживает локальный регион, а при его
 //! отсутствии маршрутизирует запрос фактическому владельцу региона.
+//! В той же системной группе `5403 / Weather` заменяет погоду текущего региона
+//! и рассылает `0xBF507`, а `5405 / PlayAction` публикует 16-битное действие
+//! `0xBF508` вокруг игрока без изменения его серверного состояния.
 //! Недельный сброс из того же достигнутого сценария читает локальные поля
 //! `SYSTEMTIME` через `TagTime`, меняет принадлежащие планировщику общие
 //! переменные и публикует `PostWorldInfo` по уже замкнутому контракту
@@ -590,6 +593,8 @@ pub(crate) const SCRIPT_FUNCTION_GET_AREA_ID: i32 = 5413;
 pub(crate) const SCRIPT_FUNCTION_GET_AREA_TYPE: i32 = 5414;
 pub(crate) const SCRIPT_FUNCTION_GET_WORLD_SERVER_ID: i32 = 5420;
 pub(crate) const SCRIPT_FUNCTION_PLAY_EFFECT: i32 = 5404;
+pub(crate) const SCRIPT_FUNCTION_WEATHER: i32 = 5403;
+pub(crate) const SCRIPT_FUNCTION_PLAY_ACTION: i32 = 5405;
 pub(crate) const SCRIPT_FUNCTION_INVISIBLE: i32 = 5401;
 pub(crate) const SCRIPT_FUNCTION_GOD_MODE: i32 = 5402;
 pub(crate) const SCRIPT_FUNCTION_RESIDENT_MODE: i32 = 5406;
@@ -3830,6 +3835,10 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_PLAY_EFFECT => match index {
             0..=2 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_WEATHER | SCRIPT_FUNCTION_PLAY_ACTION => match index {
+            0 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_PLAY_SOUND => match index {
@@ -8190,6 +8199,21 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             .map_or(ScriptFunctionDispatchOutcome::Invalid, |_| {
                 ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
             });
+    }
+    if function_id == SCRIPT_FUNCTION_WEATHER {
+        let Some(player_id) = script_player_id else {
+            return ScriptFunctionDispatchOutcome::Invalid;
+        };
+        let weather_index = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+        let _ = game.script_change_weather(player_id, weather_index);
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+    }
+    if function_id == SCRIPT_FUNCTION_PLAY_ACTION {
+        if let Some(player_id) = script_player_id {
+            let action = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let _ = game.script_play_action(player_id, action);
+        }
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
     }
     if function_id == SCRIPT_FUNCTION_PLAY_SOUND {
         let (Some(player_id), Some(region_id), Some(sound_file)) =
