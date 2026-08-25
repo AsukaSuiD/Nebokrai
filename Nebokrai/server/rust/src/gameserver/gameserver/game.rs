@@ -2999,7 +2999,7 @@ pub(crate) enum AuctionGoodsInventoryBlock {
     RolledBack {
         removal: AuctionGoodsInventoryRemoval,
         bind_cleared: bool,
-        rejected: EnhancementTransferAddition,
+        rejected: DepotStorageTransferAddition,
         rollback: AuctionGoodsInventoryRollback,
     },
 }
@@ -3014,8 +3014,9 @@ pub(crate) struct AuctionGoodsInventoryReport {
     pub(crate) destination_position: u32,
     pub(crate) removal: AuctionGoodsInventoryRemoval,
     pub(crate) bind_cleared: bool,
-    pub(crate) addition: EnhancementTransferAddition,
+    pub(crate) addition: DepotStorageTransferAddition,
     pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) audit_deliveries: Vec<i32>,
     pub(crate) delivery: i32,
 }
 
@@ -6547,7 +6548,7 @@ impl CGame {
 
     /// Замыкает direct `0x90301` ownership transfer в двухъячеечный
     /// `m_cAuctionContainer`. Equipment source проходит тот же полный remove
-    /// callback/effect tail, что и другие достигнутые container transfers.
+    /// callback/effect tail, depot source — lock/anchor и World audit `8`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn move_player_goods_to_auction_listing<Context: GameContainerMessageRuntime>(
         &mut self,
@@ -6559,16 +6560,23 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<AuctionListingTransferReport, AuctionListingTransferBlock> {
-        if !matches!(source_extend_id, 1 | 2 | 14) {
+        if !matches!(source_extend_id, 1 | 2 | 9 | 14) {
             return Err(AuctionListingTransferBlock::UnsupportedSourceContainer {
                 extend_id: source_extend_id,
             });
         }
+        let depot_audit = (source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled())
+            .then(|| {
+                self.find_player(player_id)
+                    .and_then(|player| player.depot().get_goods(source_position))
+                    .map(|goods| (goods.price(), goods.name().to_vec()))
+            })
+            .flatten();
         let mut player = self
             .players
             .remove(&player_id)
             .ok_or(AuctionListingTransferBlock::MissingSourceGoods)?;
-        let result = self.move_player_goods_to_auction_listing_inner(
+        let mut result = self.move_player_goods_to_auction_listing_inner(
             &mut player,
             source_extend_id,
             source_position,
@@ -6578,6 +6586,12 @@ impl CGame {
             context,
         );
         self.players.insert(player_id, player);
+        if let Ok(report) = &mut result
+            && let Some((price, name)) = depot_audit
+        {
+            report.audit_deliveries =
+                self.send_ground_goods_move_log(player_id, 8, report.goods, price, &name, amount);
+        }
         result
     }
 
@@ -6604,6 +6618,7 @@ impl CGame {
         let goods = match source_extend_id {
             1 => player.packet().get_goods(source_position),
             2 => player.equipment().get_goods(source_position),
+            9 => player.depot().get_goods(source_position),
             14 => player.auction_goods().get_goods(source_position),
             _ => unreachable!("source extend проверен выше"),
         }
@@ -6622,6 +6637,11 @@ impl CGame {
             .is_none()
         {
             return Err(AuctionListingTransferBlock::MissingBaseProperties);
+        }
+        if destination_position == 0
+            && !CPlayer::auction_listing_goods_allowed(goods, &self.goods_factory)
+        {
+            return Err(AuctionListingTransferBlock::AuctionLimitRejected);
         }
         let goods_identity = goods.identity();
         let slot_zero_was_empty = player.auction_listing().get_goods(0).is_none();
@@ -6689,6 +6709,32 @@ impl CGame {
                     Some(goods),
                 )
             }
+            9 => {
+                let removed = player.depot_mut().take_goods(
+                    source_position,
+                    amount,
+                    &self.goods_factory,
+                    |_| None,
+                );
+                let Some(VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(
+                    removed,
+                ))) = removed
+                else {
+                    return Err(AuctionListingTransferBlock::DepotRemovalFailed);
+                };
+                let removal = DepotStorageRemoval {
+                    owner_type: removed.owner_type,
+                    owner_id: removed.owner_id,
+                    position: removed.position.unwrap_or(source_position),
+                    amount: removed.amount,
+                    listeners: removed.listeners,
+                    kind: DepotStorageRemovalKind::Removed,
+                };
+                (
+                    AuctionListingTransferRemoval::Depot(removal),
+                    Some(removed.goods),
+                )
+            }
             2 => {
                 let remove_facts =
                     context.enhancement_equipment_remove_facts(player, goods, pack_add_enabled);
@@ -6746,12 +6792,14 @@ impl CGame {
             destination,
             listing_slot_zero_was_empty: slot_zero_was_empty,
             previous_last_operated,
+            audit_deliveries: Vec::new(),
         })
     }
 
     /// Замыкает обратный direct `0x90301` из `m_cAuctionContainer` в
-    /// packet/equipment. Общий Move проверяет burden до source removal;
-    /// blocked destination возвращает предмет в исходную listing-ячейку.
+    /// packet/equipment/depot. Общий Move проверяет burden carried destination
+    /// до source removal; blocked destination возвращает предмет в исходную
+    /// listing-ячейку, depot success публикует World audit `7`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn withdraw_player_auction_listing_goods<Context: GameContainerMessageRuntime>(
         &mut self,
@@ -6763,18 +6811,26 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<AuctionListingWithdrawalReport, AuctionListingWithdrawalBlock> {
-        if !matches!(destination_extend_id, 1 | 2) {
+        if !matches!(destination_extend_id, 1 | 2 | 9) {
             return Err(
                 AuctionListingWithdrawalBlock::UnsupportedDestinationContainer {
                     extend_id: destination_extend_id,
                 },
             );
         }
+        let depot_audit = (destination_extend_id == 9
+            && self.log_system.goods_depot_set_log_enabled())
+        .then(|| {
+            self.find_player(player_id)
+                .and_then(|player| player.auction_listing().get_goods(source_position))
+                .map(|goods| (goods.price(), goods.name().to_vec()))
+        })
+        .flatten();
         let mut player = self
             .players
             .remove(&player_id)
             .ok_or(AuctionListingWithdrawalBlock::MissingSourceGoods)?;
-        let result = self.withdraw_player_auction_listing_goods_inner(
+        let mut result = self.withdraw_player_auction_listing_goods_inner(
             &mut player,
             source_position,
             goods_id,
@@ -6784,6 +6840,16 @@ impl CGame {
             context,
         );
         self.players.insert(player_id, player);
+        if let Ok(report) = &mut result
+            && matches!(
+                report.outcome,
+                AuctionListingWithdrawalOutcome::Moved { .. }
+            )
+            && let Some((price, name)) = depot_audit
+        {
+            report.audit_deliveries =
+                self.send_ground_goods_move_log(player_id, 7, report.goods, price, &name, amount);
+        }
         result
     }
 
@@ -6804,10 +6870,11 @@ impl CGame {
             .filter(|goods| goods.identity().ex_id == goods_id && goods.amount() == amount)
             .ok_or(AuctionListingWithdrawalBlock::MissingSourceGoods)?;
         let goods_identity = goods.identity();
-        if player
-            .current_burden(&self.goods_factory)
-            .wrapping_add(goods.weight(&self.goods_factory))
-            > u32::from(player.combat_properties().burden)
+        if destination_extend_id != 9
+            && player
+                .current_burden(&self.goods_factory)
+                .wrapping_add(goods.weight(&self.goods_factory))
+                > u32::from(player.combat_properties().burden)
         {
             return Err(AuctionListingWithdrawalBlock::BurdenExceeded);
         }
@@ -6831,31 +6898,19 @@ impl CGame {
             listeners: removed.listeners,
         };
         let mut incoming = Some(removed.goods);
-        let pack_add_enabled = self.globe_setup.pack_add_enabled();
-        let addition = self.add_enhancement_transfer_goods(
+        let addition = self.add_depot_transfer_goods(
             player,
             destination_extend_id,
             destination_position,
             &mut incoming,
-            pack_add_enabled,
             context,
         );
         let outcome = if incoming.is_none() {
-            let (destination_goods, amount) = match &addition {
-                EnhancementTransferAddition::Packet(VolumeGoodsAddOutcome::Added(added)) => {
-                    (added.identity, added.amount)
-                }
-                EnhancementTransferAddition::Packet(VolumeGoodsAddOutcome::Stack(
-                    GoodsStackMergeOutcome::Merged { target, amount },
-                )) => (*target, *amount),
-                EnhancementTransferAddition::Equipment(PlayerEquipmentAddReport {
-                    outcome: EquipmentAddOutcome::Added(added),
-                    ..
-                }) => (added.identity, added.amount),
-                _ => unreachable!("consumed destination goods требует successful add outcome"),
-            };
+            let (destination_position, destination_goods, amount) =
+                Self::depot_transfer_destination(player, destination_position, &addition);
             AuctionListingWithdrawalOutcome::Moved {
                 addition,
+                destination_position,
                 destination_goods,
                 amount,
             }
@@ -6899,6 +6954,7 @@ impl CGame {
             removal,
             outcome,
             previous_last_operated,
+            audit_deliveries: Vec::new(),
         })
     }
 
@@ -9086,7 +9142,7 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<AuctionGoodsInventoryReport, AuctionGoodsInventoryBlock> {
-        if !matches!(destination_extend_id, 1 | 2) {
+        if !matches!(destination_extend_id, 1 | 2 | 9) {
             return Err(AuctionGoodsInventoryBlock::UnsupportedDestination);
         }
         let player = self
@@ -9111,12 +9167,15 @@ impl CGame {
             ));
         }
         let source_identity = source.identity();
+        let audit_name = source.name().to_vec();
+        let audit_price = source.price();
         let mut burden_goods = source.clone();
         burden_goods.set_amount(amount);
-        let burden_exceeded = player
-            .current_burden(&self.goods_factory)
-            .wrapping_add(burden_goods.weight(&self.goods_factory))
-            > u32::from(player.combat_properties().burden);
+        let burden_exceeded = destination_extend_id != 9
+            && player
+                .current_burden(&self.goods_factory)
+                .wrapping_add(burden_goods.weight(&self.goods_factory))
+                > u32::from(player.combat_properties().burden);
         let mut split_template = source.clone();
         split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
         let mut player = self
@@ -9195,12 +9254,11 @@ impl CGame {
             && incoming
                 .as_mut()
                 .is_some_and(|goods| goods.set_addon_property_value_core(GAP_GOODS_BIND, 2, 0));
-        let addition = self.add_enhancement_transfer_goods(
+        let addition = self.add_depot_transfer_goods(
             &mut player,
             destination_extend_id,
             actual_destination_position,
             &mut incoming,
-            self.globe_setup.pack_add_enabled(),
             context,
         );
         if incoming.is_some() {
@@ -9216,11 +9274,23 @@ impl CGame {
             });
         }
 
-        let wrapped = DepotStorageTransferAddition::Player(addition.clone());
         let (actual_destination_position, destination_goods, destination_amount) =
-            Self::depot_transfer_destination(&player, actual_destination_position, &wrapped);
+            Self::depot_transfer_destination(&player, actual_destination_position, &addition);
         let previous_last_operated = player.record_last_operated_goods(14, source_position);
         self.players.insert(player_id, player);
+        let audit_deliveries =
+            if destination_extend_id == 9 && self.log_system.goods_depot_set_log_enabled() {
+                self.send_ground_goods_move_log(
+                    player_id,
+                    7,
+                    source_identity,
+                    audit_price,
+                    &audit_name,
+                    amount,
+                )
+            } else {
+                Vec::new()
+            };
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -9241,6 +9311,7 @@ impl CGame {
             bind_cleared,
             addition,
             previous_last_operated,
+            audit_deliveries,
             delivery,
         })
     }

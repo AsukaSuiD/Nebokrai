@@ -22,9 +22,10 @@
 //! Player trade использует тот же session-owned wire: три trader container-а,
 //! source metadata без раннего ownership transfer, Add/DeleteShadow обоим
 //! участникам и сброс обеих ready-state при каждом изменении предложения.
-//! Auction-listing принимает полный предмет из packet/equipment/auction-return,
-//! а обратный маршрут возвращает его в packet/equipment после exact burden
-//! gate; оба сохраняют equipment callbacks, destination rollback и client move;
+//! Auction-listing принимает полный предмет из packet/equipment/depot/auction-return,
+//! а обратный маршрут возвращает его в packet/equipment/depot после exact carried
+//! burden gate; оба сохраняют equipment callbacks, depot lock/anchor/audit,
+//! destination rollback и client move;
 //! полный persisted-player snapshot `0x6080E` остаётся у недоступного owner-а.
 //! Packet/equipment/hand↔ground ветвь того же `0x90301` теперь достигает
 //! concrete region goods owner-а: Receive нормализует region/position/amount,
@@ -70,8 +71,9 @@
 //! source remove, поэтому наблюдаемы remove/add rollback effects.
 //! Auction-return storage (`14`) имеет только исходящий generic route:
 //! packet destination заново выбирает `FindPositionForGoods`, очищает bind
-//! value-id `2`, equipment сохраняет positional add; burden, partial guards,
-//! equipment callbacks, rollback и self wire доходят до live owner-ов.
+//! value-id `2`, equipment сохраняет positional add, depot — lock/anchor/audit;
+//! burden, partial guards, equipment callbacks, rollback и self wire доходят
+//! до live owner-ов.
 //! Auction wallet (`15`) аналогично имеет только исходящий путь в wallet `4`:
 //! exact capacity gate выполняется и в Receive по полному auction balance, и
 //! повторно после source removal; partial currency ownership, rollback,
@@ -111,11 +113,12 @@ use crate::gameserver::gameserver::game::{
     AuctionGoodsInventoryBlock, AuctionGoodsInventoryReport, AuctionGoodsInventoryRollback,
     BankCurrencyTransferBlock, BankCurrencyTransferReport, BattleFairyTransferAddition,
     BattleFairyTransferBlock, BattleFairyTransferReport, CGame, CiQingComposeTransferAddition,
-    CiQingComposeTransferBlock, CiQingComposeTransferReport, DepotStorageTransferAddition,
-    DepotStorageTransferBlock, DepotStorageTransferReport, FairyStorageTransferAddition,
-    FairyStorageTransferBlock, FairyStorageTransferReport, GameContainerMessageRuntime,
-    GroundGoodsMoveBlock, GroundGoodsMoveReport, HandAuctionListingBlock, HandAuctionListingReport,
-    HandContainerMoveBlock, HandContainerMoveReport, PlayerHandMoveBlock, PlayerHandMoveReport,
+    CiQingComposeTransferBlock, CiQingComposeTransferReport, DepotStorageRemoval,
+    DepotStorageTransferAddition, DepotStorageTransferBlock, DepotStorageTransferReport,
+    FairyStorageTransferAddition, FairyStorageTransferBlock, FairyStorageTransferReport,
+    GameContainerMessageRuntime, GroundGoodsMoveBlock, GroundGoodsMoveReport,
+    HandAuctionListingBlock, HandAuctionListingReport, HandContainerMoveBlock,
+    HandContainerMoveReport, PlayerHandMoveBlock, PlayerHandMoveReport,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -249,6 +252,7 @@ pub(crate) enum GameContainerMessageOutcome {
     AuctionListingWithdrawn {
         withdrawal: AuctionListingWithdrawalReport,
         move_delivery: i32,
+        notification_delivery: Option<i32>,
     },
     AuctionListingWithdrawalRolledBack {
         reason: AuctionListingWithdrawalBlock,
@@ -388,6 +392,7 @@ pub(crate) enum AuctionListingTransferRemoval {
         amount: u32,
         listeners: Vec<ContainerListenerHandle>,
     },
+    Depot(DepotStorageRemoval),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -397,6 +402,7 @@ pub(crate) struct AuctionListingTransferReport {
     pub(crate) destination: VolumeGoodsAddOutcome,
     pub(crate) listing_slot_zero_was_empty: bool,
     pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) audit_deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -406,8 +412,10 @@ pub(crate) enum AuctionListingTransferBlock {
     MissingSourceGoods,
     InvalidCurrency,
     MissingBaseProperties,
+    AuctionLimitRejected,
     PacketRemovalFailed,
     AuctionGoodsRemovalFailed,
+    DepotRemovalFailed,
     EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
 }
 
@@ -423,16 +431,17 @@ pub(crate) struct AuctionListingWithdrawalRemoval {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AuctionListingWithdrawalOutcome {
     Moved {
-        addition: EnhancementTransferAddition,
+        addition: DepotStorageTransferAddition,
+        destination_position: u32,
         destination_goods: ShapeIdentity,
         amount: u32,
     },
     RolledBack {
-        rejected: EnhancementTransferAddition,
+        rejected: DepotStorageTransferAddition,
         restored: VolumeGoodsAddOutcome,
     },
     GoodsCollected {
-        rejected: EnhancementTransferAddition,
+        rejected: DepotStorageTransferAddition,
         rollback: VolumeGoodsAddOutcome,
         goods: ShapeIdentity,
         notification_delivery: i32,
@@ -446,6 +455,7 @@ pub(crate) struct AuctionListingWithdrawalReport {
     pub(crate) removal: AuctionListingWithdrawalRemoval,
     pub(crate) outcome: AuctionListingWithdrawalOutcome,
     pub(crate) previous_last_operated: Option<(u32, u32)>,
+    pub(crate) audit_deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -744,7 +754,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.source_container_extend_id == 14
-                && matches!(request.destination_container_extend_id, 1 | 2)
+                && matches!(request.destination_container_extend_id, 1 | 2 | 9)
             {
                 EnhancementMessageRoute::AuctionGoodsInventoryReturn
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
@@ -761,13 +771,13 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_extend_id == 13
-                && matches!(request.source_container_extend_id, 1 | 2 | 14)
+                && matches!(request.source_container_extend_id, 1 | 2 | 9 | 14)
             {
                 EnhancementMessageRoute::AuctionListingMove
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.source_container_extend_id == 13
-                && matches!(request.destination_container_extend_id, 1 | 2)
+                && matches!(request.destination_container_extend_id, 1 | 2 | 9)
             {
                 EnhancementMessageRoute::AuctionListingWithdrawal
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
@@ -1407,6 +1417,17 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         0,
                     ));
                 }
+                if let AuctionGoodsInventoryBlock::RolledBack { rejected, .. } = &reason
+                    && let Some(notice_id) = depot_add_rejection_notice(rejected)
+                {
+                    notification_deliveries.push(send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(notice_id),
+                        0xffff_ffff,
+                        0,
+                    ));
+                }
                 let rollback = match &reason {
                     AuctionGoodsInventoryBlock::BurdenExceeded { rollback, .. }
                     | AuctionGoodsInventoryBlock::PacketPositionUnavailable { rollback, .. }
@@ -1670,10 +1691,26 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 send_rollback(game, player_id)
             }
         };
+        let notification_delivery = match &withdrawal.outcome {
+            AuctionListingWithdrawalOutcome::RolledBack { rejected, .. }
+            | AuctionListingWithdrawalOutcome::GoodsCollected { rejected, .. } => {
+                depot_add_rejection_notice(rejected).map(|notice_id| {
+                    send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(notice_id),
+                        0xffff_ffff,
+                        0,
+                    )
+                })
+            }
+            AuctionListingWithdrawalOutcome::Moved { .. } => None,
+        };
         return Some(Ok(report(
             GameContainerMessageOutcome::AuctionListingWithdrawn {
                 withdrawal,
                 move_delivery,
+                notification_delivery,
             },
         )));
     }
@@ -2257,6 +2294,7 @@ fn send_auction_listing_withdrawal_moved(
     withdrawal: &AuctionListingWithdrawalReport,
 ) -> i32 {
     let AuctionListingWithdrawalOutcome::Moved {
+        destination_position,
         destination_goods,
         amount,
         ..
@@ -2273,7 +2311,7 @@ fn send_auction_listing_withdrawal_moved(
     message.add_long(request.destination_container_type);
     message.add_long(request.destination_container_id);
     message.add_long(request.destination_container_extend_id);
-    message.add_ulong(request.destination_position);
+    message.add_ulong(*destination_position);
     message.add_long(GOODS_OBJECT_TYPE);
     message.base_mut().add_guid(withdrawal.goods.ex_id);
     message.add_ulong(request.amount);
