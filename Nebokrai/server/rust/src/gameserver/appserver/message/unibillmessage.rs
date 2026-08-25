@@ -14,6 +14,9 @@
 //! Auth/refresh `0xFF001/0xFF004` выполняют player/account lookup, exact
 //! balance mutation и failure log; Win32 GUI-log заменён stderr, а совместимый
 //! `Bill` file sink сохранён общей реализацией `put_string_to_file`.
+//! Все достигнутые YuanBao balance mutation сразу публикуют concrete
+//! `C0101/C0102` для extend `5` через `CGame`; runtime предоставляет только
+//! обязательный old-client codec ветви создания currency goods.
 
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::player::{
@@ -33,10 +36,6 @@ const BILLING_AUTH_RESPONSE: i32 = 0x000F_F001;
 const BILLING_TRADE_RESPONSE: i32 = 0x000F_F003;
 const BILLING_REFRESH_RESPONSE: i32 = 0x000F_F004;
 const INCREMENT_PURCHASE_AUDIT: i32 = 0x0006_020D;
-
-pub(crate) trait IncrementShopBillingContext: GameContainerMessageRuntime {
-    fn publish_increment_shop_yuan_bao_change(&mut self, change: &PlayerYuanBaoChange) -> Vec<i32>;
-}
 
 pub(crate) fn auction_billing_local_system_time() -> AuctionLogSystemTime {
     let [
@@ -108,7 +107,7 @@ pub(crate) struct IncrementShopBillingReport {
     pub(crate) outcome: IncrementShopBillingOutcome,
 }
 
-pub(crate) fn dispatch_increment_shop_billing_message<Context: IncrementShopBillingContext>(
+pub(crate) fn dispatch_increment_shop_billing_message<Context: GameContainerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
@@ -237,7 +236,7 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: IncrementShopBill
     let yuan_bao_change = game
         .set_player_yuan_bao(player_id, last_point, currency_created)
         .expect("UniBill player проверен перед balance mutation");
-    report.yuan_bao_deliveries = context.publish_increment_shop_yuan_bao_change(&yuan_bao_change);
+    report.yuan_bao_deliveries = game.send_player_yuan_bao_change(&yuan_bao_change, context);
     report.yuan_bao_change = Some(yuan_bao_change);
 
     let created = game.create_goods_batch(goods_id, goods_amount);
@@ -307,7 +306,7 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: IncrementShopBill
     Some(Ok(report))
 }
 
-fn dispatch_billing_auth<Context: IncrementShopBillingContext>(
+fn dispatch_billing_auth<Context: GameContainerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
@@ -329,13 +328,13 @@ fn dispatch_billing_auth<Context: IncrementShopBillingContext>(
         .expect("billing auth player проверен перед balance mutation");
     report
         .yuan_bao_deliveries
-        .extend(context.publish_increment_shop_yuan_bao_change(&change));
+        .extend(game.send_player_yuan_bao_change(&change, context));
     report.yuan_bao_change = Some(change);
     report.outcome = IncrementShopBillingOutcome::BillingBalanceCompleted;
     Ok(report)
 }
 
-fn dispatch_billing_refresh<Context: IncrementShopBillingContext>(
+fn dispatch_billing_refresh<Context: GameContainerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
@@ -362,13 +361,13 @@ fn dispatch_billing_refresh<Context: IncrementShopBillingContext>(
         .expect("billing refresh account lookup вернул canonical player");
     report
         .yuan_bao_deliveries
-        .extend(context.publish_increment_shop_yuan_bao_change(&change));
+        .extend(game.send_player_yuan_bao_change(&change, context));
     report.yuan_bao_change = Some(change);
     report.outcome = IncrementShopBillingOutcome::BillingBalanceCompleted;
     Ok(report)
 }
 
-fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
+fn dispatch_auction_billing_trade<Context: GameContainerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
@@ -451,7 +450,7 @@ fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
         .expect("Billing auction buyer проверен перед balance");
     report
         .yuan_bao_deliveries
-        .extend(context.publish_increment_shop_yuan_bao_change(&buyer_change));
+        .extend(game.send_player_yuan_bao_change(&buyer_change, context));
     report.yuan_bao_change = Some(buyer_change);
 
     let seller_online = game.find_player(seller_id).is_some();
@@ -460,7 +459,7 @@ fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
             .expect("online auction seller проверен перед mutation");
         report
             .yuan_bao_deliveries
-            .extend(context.publish_increment_shop_yuan_bao_change(&seller_change));
+            .extend(game.send_player_yuan_bao_change(&seller_change, context));
         report.auction_seller_change = Some(seller_change);
     } else {
         let mut offline = CMessage::new(0x0006_0814);
@@ -477,7 +476,7 @@ fn dispatch_auction_billing_trade<Context: IncrementShopBillingContext>(
     Ok(report)
 }
 
-fn dispatch_player_billing_trade<Context: IncrementShopBillingContext>(
+fn dispatch_player_billing_trade<Context: GameContainerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
@@ -505,13 +504,13 @@ fn dispatch_player_billing_trade<Context: IncrementShopBillingContext>(
         .expect("Billing trade payer проверен перед balance mutation");
     report
         .yuan_bao_deliveries
-        .extend(context.publish_increment_shop_yuan_bao_change(&payer_change));
+        .extend(game.send_player_yuan_bao_change(&payer_change, context));
     report.yuan_bao_change = Some(payer_change);
     let receiver_change = set_billing_yuan_bao(game, receiver_id, receiver_yuan_bao)
         .expect("Billing trade receiver проверен перед balance mutation");
     report
         .yuan_bao_deliveries
-        .extend(context.publish_increment_shop_yuan_bao_change(&receiver_change));
+        .extend(game.send_player_yuan_bao_change(&receiver_change, context));
     report.auction_seller_change = Some(receiver_change);
 
     let session_id = read_billing_long(message, "player trade session id")?;
@@ -542,7 +541,7 @@ fn dispatch_player_billing_trade<Context: IncrementShopBillingContext>(
     Ok(report)
 }
 
-fn dispatch_personal_shop_billing_trade<Context: IncrementShopBillingContext>(
+fn dispatch_personal_shop_billing_trade<Context: GameContainerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
@@ -566,13 +565,13 @@ fn dispatch_personal_shop_billing_trade<Context: IncrementShopBillingContext>(
         .expect("Billing personal-shop buyer проверен перед balance");
     report
         .yuan_bao_deliveries
-        .extend(context.publish_increment_shop_yuan_bao_change(&buyer_change));
+        .extend(game.send_player_yuan_bao_change(&buyer_change, context));
     report.yuan_bao_change = Some(buyer_change);
     let seller_change = set_billing_yuan_bao(game, seller_id, seller_yuan_bao)
         .expect("Billing personal-shop seller проверен перед balance");
     report
         .yuan_bao_deliveries
-        .extend(context.publish_increment_shop_yuan_bao_change(&seller_change));
+        .extend(game.send_player_yuan_bao_change(&seller_change, context));
     report.auction_seller_change = Some(seller_change);
 
     let session_id = read_billing_long(message, "personal-shop session id")?;

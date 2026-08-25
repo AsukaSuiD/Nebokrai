@@ -36,15 +36,14 @@ use crate::gameserver::appserver::cs2ccontainerobjectmove::{
     CS2CContainerObjectMove, ContainerObjectMoveOperation,
 };
 use crate::gameserver::appserver::goods::cgoods::GoodsDecodeError;
-use crate::gameserver::appserver::message::unibillmessage::{
-    IncrementShopBillingContext, auction_billing_local_system_time,
-};
+use crate::gameserver::appserver::message::unibillmessage::auction_billing_local_system_time;
 use crate::gameserver::appserver::player::{
     AuctionSelfGoodsRefresh, PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange,
     PlayerYuanBaoChange,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, PersonalShopRecollection, colored_player_notice_message, game_wall_time_seconds,
+    CGame, GameContainerMessageRuntime, PersonalShopRecollection, colored_player_notice_message,
+    game_wall_time_seconds,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::message::SendMessageError;
@@ -251,7 +250,7 @@ pub(crate) fn dispatch_world_auction_message<Runtime, Tick>(
     mut tick_ms: Tick,
 ) -> Option<Result<WorldAuctionMessageReport, WorldAuctionMessageError>>
 where
-    Runtime: IncrementShopBillingContext,
+    Runtime: GameContainerMessageRuntime,
     Tick: FnMut(&mut Runtime) -> u32,
 {
     match message.message_type() {
@@ -1183,7 +1182,7 @@ where
             let change = game
                 .set_player_yuan_bao(player_id, requested, created_currency)
                 .expect("auction YuanBao player проверен перед mutation");
-            let deliveries = runtime.publish_increment_shop_yuan_bao_change(&change);
+            let deliveries = game.send_player_yuan_bao_change(&change, runtime);
             Some(Ok(WorldAuctionMessageReport::YuanBaoChanged {
                 player_id,
                 requested,

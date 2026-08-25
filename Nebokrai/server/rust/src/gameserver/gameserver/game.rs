@@ -600,7 +600,7 @@ use crate::gameserver::appserver::message::skillmessage::{
     dispatch_game_skill_message,
 };
 use crate::gameserver::appserver::message::unibillmessage::{
-    IncrementShopBillingContext, IncrementShopBillingMessageError, IncrementShopBillingReport,
+    IncrementShopBillingMessageError, IncrementShopBillingReport,
     dispatch_increment_shop_billing_message,
 };
 use crate::gameserver::appserver::monster::CMonster;
@@ -5129,7 +5129,6 @@ pub(crate) trait GameMainLoopRuntime:
     + GameSkillMessageRuntime
     + GameShapeMessageRuntime
     + GamePlayerMessageRuntime
-    + IncrementShopBillingContext
     + NationContendContext
     + GodsBattleNpcContendContext
     + ServerRegionAreaTransitionContext
@@ -25982,6 +25981,98 @@ impl CGame {
         players
             .get_mut(&player_id)
             .map(|player| player.set_yuan_bao(current, goods_factory, created_currency))
+    }
+
+    /// Замыкает listener-tail `CYuanBao` после Billing/World balance mutation.
+    /// Extend ID `5` отличает этот однослотовый currency owner от wallet `4`;
+    /// create требует тот же old-client goods codec, amount/delete — нет.
+    pub(crate) fn send_player_yuan_bao_change<Context: OldClientGoodsCodec>(
+        &self,
+        change: &PlayerYuanBaoChange,
+        context: &mut Context,
+    ) -> Vec<i32> {
+        use crate::gameserver::appserver::container::cwallet::{
+            CurrencyDecreaseOutcome, CurrencyIncreaseOutcome,
+        };
+        use crate::gameserver::appserver::player::PlayerYuanBaoChangeOutcome;
+
+        const YUAN_BAO_EXTEND_ID: i32 = 5;
+        match &change.outcome {
+            PlayerYuanBaoChangeOutcome::Unchanged => Vec::new(),
+            PlayerYuanBaoChangeOutcome::Increased(CurrencyIncreaseOutcome::Created(added)) => {
+                let Some(goods) = self.find_player(change.player_id).and_then(|player| {
+                    player.trade_source_goods(
+                        YUAN_BAO_EXTEND_ID,
+                        added.position,
+                        added.identity.ex_id,
+                    )
+                }) else {
+                    return Vec::new();
+                };
+                let mut message = CS2CContainerObjectMove::default();
+                message.set_operation(ContainerObjectMoveOperation::NewObject);
+                message.set_destination_container(added.owner_type, added.owner_id, added.position);
+                message.set_destination_container_extend_id(YUAN_BAO_EXTEND_ID);
+                message.set_destination_object(added.identity.object_type, added.identity.ex_id);
+                message.set_object_stream(context.encode_goods_for_old_client(goods));
+                vec![message.send_to_player(self, change.player_id)]
+            }
+            PlayerYuanBaoChangeOutcome::Increased(CurrencyIncreaseOutcome::Increased(amount)) => {
+                let mut message = CS2CContainerObjectAmountChange::default();
+                message.set_source_container(amount.owner_type, amount.owner_id, amount.position);
+                message.set_source_container_extend_id(YUAN_BAO_EXTEND_ID);
+                message.set_object(amount.identity.object_type, amount.identity.ex_id);
+                message.set_object_amount(amount.new_amount);
+                vec![message.send_to_player(self, change.player_id)]
+            }
+            PlayerYuanBaoChangeOutcome::Increased(
+                CurrencyIncreaseOutcome::NoChange
+                | CurrencyIncreaseOutcome::CapacityExceeded { .. }
+                | CurrencyIncreaseOutcome::InvalidStoredCurrency { .. }
+                | CurrencyIncreaseOutcome::CreationFailed,
+            )
+            | PlayerYuanBaoChangeOutcome::Decreased(
+                CurrencyDecreaseOutcome::NoChange
+                | CurrencyDecreaseOutcome::InvalidStoredCurrency { .. },
+            ) => Vec::new(),
+            PlayerYuanBaoChangeOutcome::Decreased(outcome) => {
+                let mut message = CS2CContainerObjectMove::default();
+                match outcome {
+                    CurrencyDecreaseOutcome::Decreased(amount) => {
+                        message.set_operation(ContainerObjectMoveOperation::MoveObject);
+                        message.set_source_container(
+                            amount.owner_type,
+                            amount.owner_id,
+                            amount.position,
+                        );
+                        message.set_source_container_extend_id(YUAN_BAO_EXTEND_ID);
+                        message.set_source_object(
+                            amount.identity.object_type,
+                            amount.identity.ex_id,
+                            amount.amount,
+                        );
+                    }
+                    CurrencyDecreaseOutcome::Removed(removed) => {
+                        message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+                        message.set_source_container(
+                            removed.owner_type,
+                            removed.owner_id,
+                            removed.position,
+                        );
+                        message.set_source_container_extend_id(YUAN_BAO_EXTEND_ID);
+                        let identity = removed.goods.identity();
+                        message.set_source_object(
+                            identity.object_type,
+                            identity.ex_id,
+                            removed.amount,
+                        );
+                    }
+                    CurrencyDecreaseOutcome::NoChange
+                    | CurrencyDecreaseOutcome::InvalidStoredCurrency { .. } => unreachable!(),
+                }
+                vec![message.send_to_player(self, change.player_id)]
+            }
+        }
     }
 
     pub(crate) fn increase_player_auction_money(
