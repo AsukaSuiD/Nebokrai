@@ -146,6 +146,9 @@
 //! `3312 / AttackPlayer` разрешает имя только среди игроков девяти соседних
 //! областей сценарного игрока и назначает найденную цель искусственному
 //! интеллекту монстров из того же пространственного окна.
+//! `3314 / MovePlayer` фиксирует игроков исходного прямоугольника в порядке
+//! областей региона, выбирает каждому случайную точку целевого прямоугольника
+//! и проводит через общий `CPlayer::ChangeRegion` со всеми его сообщениями.
 //! Соседняя группа `2204/2205/2212/2217/2218/2220` связывает подсчёты рюкзака
 //! и депо, выбранный предмет контейнера улучшения, локальное либо удалённое
 //! удаление и доверенный путь сценария окна `0xBF919` с подтверждением
@@ -595,6 +598,7 @@ pub(crate) const SCRIPT_FUNCTION_PLAYER_MESSAGE: i32 = 3308;
 pub(crate) const SCRIPT_FUNCTION_GET_MAP_INFO: i32 = 3309;
 pub(crate) const SCRIPT_FUNCTION_ATTACK_PLAYER: i32 = 3312;
 pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER_RECT: i32 = 3313;
+pub(crate) const SCRIPT_FUNCTION_MOVE_PLAYER: i32 = 3314;
 pub(crate) const SCRIPT_FUNCTION_DELETE_NPC_BY_NAME: i32 = 3315;
 pub(crate) const SCRIPT_FUNCTION_REFRESH_BLOCK: i32 = 8000;
 pub(crate) const SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION: i32 = 8003;
@@ -3713,6 +3717,10 @@ pub(crate) fn script_function_parameter_kind(
             0 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_MOVE_PLAYER => match index {
+            0..=9 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_CREATE_MONSTER => match index {
             0 | 6 => String,
             1..=5 | 7 => Integer,
@@ -5432,6 +5440,13 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             ) {
                 let _ = game.script_monsters_attack_player(player_id, target_name);
             }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_MOVE_PLAYER => {
+            let arguments = std::array::from_fn(|index| {
+                integer_arguments[index].unwrap_or(SCRIPT_INT_PARAMETER_ERROR)
+            });
+            let _ = game.move_script_players_in_rectangles(arguments, runtime);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_CREATE_MONSTER => {

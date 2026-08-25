@@ -17640,6 +17640,139 @@ impl CGame {
         report
     }
 
+    /// `3314 / MovePlayer` поддерживает как полную форму из десяти аргументов,
+    /// так и сокращённую пару регионов. Значение ошибки параметра во всех
+    /// четырёх координатах означает весь регион; отдельные координаты
+    /// ограничиваются его границами. Снимок игроков сохраняет порядок
+    /// `CArea::FindShapes(400)`, после чего каждый игрок проходит через общий
+    /// владелец `change_player_region`.
+    pub(crate) fn move_script_players_in_rectangles<
+        Context: ScriptRegionChangeContext + RealmAppellationScriptContext,
+    >(
+        &mut self,
+        mut arguments: [i32; 10],
+        context: &mut Context,
+    ) -> Vec<PlayerRegionChangeReport> {
+        const PARAMETER_ERROR: i32 = 0x09ff_fff9;
+
+        if arguments[0] == PARAMETER_ERROR || arguments[1] == PARAMETER_ERROR {
+            return Vec::new();
+        }
+        if arguments[2..].iter().all(|value| *value == PARAMETER_ERROR) {
+            arguments[5] = arguments[1];
+            arguments[1] = PARAMETER_ERROR;
+        }
+
+        let normalize = |rectangle: [i32; 4], width: i32, height: i32| {
+            if width <= 0 || height <= 0 {
+                return None;
+            }
+            let maximum_x = width.wrapping_sub(1);
+            let maximum_y = height.wrapping_sub(1);
+            let normalized = if rectangle.iter().all(|value| *value == PARAMETER_ERROR) {
+                [0, 0, maximum_x, maximum_y]
+            } else {
+                [
+                    rectangle[0].clamp(0, maximum_x),
+                    rectangle[1].clamp(0, maximum_y),
+                    rectangle[2].clamp(0, maximum_x),
+                    rectangle[3].clamp(0, maximum_y),
+                ]
+            };
+            (normalized[2] > normalized[0] && normalized[3] > normalized[1]).then_some(normalized)
+        };
+
+        let source_region_id = arguments[0];
+        let target_region_id = arguments[5];
+        if target_region_id == PARAMETER_ERROR {
+            return Vec::new();
+        }
+        let Some((source_rectangle, player_ids)) =
+            self.find_region(source_region_id).and_then(|owner| {
+                let region = owner.base();
+                let rectangle = normalize(
+                    [arguments[1], arguments[2], arguments[3], arguments[4]],
+                    region.region.width,
+                    region.region.height,
+                )?;
+                let mut player_ids = Vec::new();
+                region.find_all_player_ids(&mut player_ids);
+                Some((rectangle, player_ids))
+            })
+        else {
+            return Vec::new();
+        };
+        let Some(target_rectangle) = self.find_region(target_region_id).and_then(|owner| {
+            let region = owner.base();
+            normalize(
+                [arguments[6], arguments[7], arguments[8], arguments[9]],
+                region.region.width,
+                region.region.height,
+            )
+        }) else {
+            return Vec::new();
+        };
+
+        let player_ids = player_ids
+            .into_iter()
+            .filter(|player_id| {
+                self.find_player(*player_id).is_some_and(|player| {
+                    if player.server_region_id() != Some(source_region_id) {
+                        return false;
+                    }
+                    let (Ok(tile_x), Ok(tile_y)) =
+                        (player.shape().get_tile_x(), player.shape().get_tile_y())
+                    else {
+                        return false;
+                    };
+                    tile_x >= source_rectangle[0]
+                        && tile_x <= source_rectangle[2]
+                        && tile_y >= source_rectangle[1]
+                        && tile_y <= source_rectangle[3]
+                })
+            })
+            .collect::<Vec<_>>();
+        let target_width = target_rectangle[2].wrapping_sub(target_rectangle[0]);
+        let target_height = target_rectangle[3].wrapping_sub(target_rectangle[1]);
+        let mut reports = Vec::new();
+        for player_id in player_ids {
+            let destination = self.find_region(target_region_id).and_then(|owner| {
+                owner
+                    .base()
+                    .region
+                    .get_random_pos_in_range(
+                        target_rectangle[0],
+                        target_rectangle[1],
+                        target_width,
+                        target_height,
+                        context,
+                    )
+                    .ok()
+            });
+            let Some(destination) = destination else {
+                continue;
+            };
+            let Some(direction) = self
+                .find_player(player_id)
+                .map(|player| player.shape().get_direction())
+            else {
+                continue;
+            };
+            reports.push(self.change_player_region(
+                player_id,
+                target_region_id,
+                destination.x,
+                destination.y,
+                direction,
+                0,
+                0,
+                0,
+                context,
+            ));
+        }
+        reports
+    }
+
     pub(crate) fn jjc_on_matched(&mut self, first: JjcInfo, second: JjcInfo) {
         self.jjc_system.on_matched(first, second);
     }
