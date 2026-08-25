@@ -199,6 +199,9 @@
 //! Talk pair `3301/3304` формирует exact `0xBF801` actor/name/text wire: NPC
 //! использует canonical around-send, monster family сохраняет 3x3 area scan,
 //! exact-name match и строгий AREA_WIDTH/HEIGHT recipient filter.
+//! Игровой caller `2308 / PlayerTalk` дополняет ту же chat family: проверяет
+//! live player до выражения, формирует actor type `400` с canonical именем и
+//! отправляет `0xBF801` через фактический father-region spatial membership.
 //! `3308 / PlayerMessage` выполняет local named notice с принудительным type
 //! zero либо отправляет `0x5FA04`; существующий World/Game callback завершает
 //! online delivery или offline feedback исходному script-player.
@@ -304,6 +307,7 @@ pub(crate) const SCRIPT_FUNCTION_SECOND: i32 = 23;
 pub(crate) const SCRIPT_FUNCTION_GET_STRING_BY_ID: i32 = 2000;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
+pub(crate) const SCRIPT_FUNCTION_PLAYER_TALK: i32 = 2308;
 pub(crate) const SCRIPT_FUNCTION_GET_NAME: i32 = 2998;
 pub(crate) const SCRIPT_FUNCTION_IS_CHARGED: i32 = 2516;
 pub(crate) const SCRIPT_FUNCTION_SET_CHARGED: i32 = 2517;
@@ -3264,6 +3268,10 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_GET_NAME => match index {
             0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_PLAYER_TALK => match index {
+            0 => String,
             _ => Unused,
         },
         SCRIPT_FUNCTION_SET_PLAYER_LEVEL => match index {
@@ -6953,6 +6961,12 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             .unwrap_or_default()
             != 0;
         let _ = game.script_play_sound(player_id, region_id, sound_file, send_around);
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+    }
+    if function_id == SCRIPT_FUNCTION_PLAYER_TALK {
+        if let (Some(player_id), Some(text)) = (script_player_id, string_arguments[0]) {
+            let _ = game.script_player_talk(player_id, text);
+        }
         return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
     }
     if let Some(outcome) = run_village_war_menu_script_function(

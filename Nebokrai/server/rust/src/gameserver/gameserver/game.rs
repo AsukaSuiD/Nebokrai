@@ -12143,6 +12143,25 @@ impl CGame {
         Some(message.send_to_around_position(Some(region), tile_x, tile_y, None, &runtime))
     }
 
+    /// `2308 / PlayerTalk`: это script-authored local speech, поэтому здесь
+    /// нет client chat cooldown/cost/log route; сообщение сразу публикуется
+    /// из canonical player shape через обычный spatial around owner.
+    pub(crate) fn script_player_talk(
+        &mut self,
+        player_id: i32,
+        text: &[u8],
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let player = self.find_player(player_id)?;
+        let player_name = player.player_name().to_vec();
+        let mut message = CMessage::new(0x000b_f801);
+        message.add_long(0);
+        message.add_long(PLAYER_TYPE);
+        message.add_long(player_id);
+        add_legacy_c_string(message.base_mut(), &player_name);
+        add_legacy_c_string(message.base_mut(), text);
+        self.send_player_shape_around(player_id, None, &message)
+    }
+
     fn equipment_da_kong_run_script<Context: ScriptFunctionRuntime>(
         &mut self,
         report: &mut EquipmentDaKongReport,
