@@ -179,6 +179,10 @@
 //! RP/max-RP/vigour/max-vigour/credit/mode/exalt читаются из единого canonical
 //! player state без отдельного property snapshot; caller встроен в signed
 //! region/player traversal реального `CGame::AI` до оставшегося virtual tail.
+//! Там же alive/non-changing player проходит reached `ComputeWarSoulXY`:
+//! runtime исполняет честную ещё внешнюю середину Player AI и возвращает
+//! post-AI current-skill fact, а float follow, area-map mutation и around
+//! `0xBF605` принадлежат canonical owners.
 //! Summon/recall тем же property adapter-ом исполняет ordered notifications,
 //! around `0xBF605/0xBF930/0xBF92E` и terminal `0xBF721`; координаты move wire
 //! кодируются IEEE-754 float bits, как в `TellClientMove`, а не signed DWORD.
@@ -2914,6 +2918,7 @@ pub(crate) enum GameRegionClearPlayerOutcome {
 pub(crate) struct GameRegionAiReport {
     pub(crate) region_id: i32,
     pub(crate) battle_fairy_deaths: Vec<BattleFairyDeathReport>,
+    pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
@@ -3135,7 +3140,17 @@ pub(crate) trait GameMainLoopRuntime:
     fn wall_time_seconds(&mut self) -> u32;
     fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
-    /// Выполняет virtual region AI до точного base-tail `ClearPlayerAI`.
+    /// Исполняет ещё не сведённую середину `CPlayer::AI` между battle-fairy
+    /// death prefix и alive-only `ComputeWarSoulXY`: disconnect/lost timers,
+    /// `PeriodicalUpdate` и `CMoveShape::AI`. Возвращает post-AI restored-state
+    /// current war-soul skill; `None` точно означает отсутствие skill-а.
+    fn player_ai_before_war_soul_follow(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+    ) -> Option<bool>;
+    /// Выполняет оставшийся monster/NPC/region virtual AI после достигнутых
+    /// player passes и до точного base-tail `ClearPlayerAI`.
     fn region_ai_before_clear_player(&mut self, game: &mut CGame, region_id: i32);
     fn wait(&mut self, duration_ms: u32);
     fn output_debug(&mut self, message: &'static str);
@@ -21044,17 +21059,29 @@ impl CGame {
         let region_ids: Vec<_> = self.regions.keys().copied().collect();
         let mut regions = Vec::with_capacity(region_ids.len());
         for region_id in region_ids {
-            // `CPlayer::AI` начинает каждый reached player pass с проверки HP
-            // экипированной боевой феи; остальная virtual region AI пока
-            // остаётся runtime owner-ом и исполняется сразу после prefix-а.
+            // `CPlayer::AI` начинает reached pass с проверки HP боевой феи,
+            // затем после ещё внешних PeriodicalUpdate/CMoveShape::AI вызывает
+            // alive-only follow. Runtime middle расположен между owned краями,
+            // поэтому disconnect/removal и post-AI death повторно проверяются.
             let player_ids = self
                 .find_region(region_id)
                 .map(|region| region.base().registered_player_ids())
                 .unwrap_or_default();
-            let battle_fairy_deaths = player_ids
-                .into_iter()
-                .filter_map(|player_id| self.refresh_battle_fairy_death(player_id))
-                .collect();
+            let mut battle_fairy_deaths = Vec::with_capacity(player_ids.len());
+            let mut battle_fairy_follows = Vec::with_capacity(player_ids.len());
+            for player_id in player_ids {
+                if let Some(death) = self.refresh_battle_fairy_death(player_id) {
+                    battle_fairy_deaths.push(death);
+                }
+                let restored = runtime.player_ai_before_war_soul_follow(self, player_id);
+                if self
+                    .find_player(player_id)
+                    .is_some_and(|player| !player.in_changing_region() && !player.is_dead())
+                    && let Some(follow) = self.compute_war_soul_xy(player_id, restored)
+                {
+                    battle_fairy_follows.push(follow);
+                }
+            }
             let gods_battle = if self
                 .find_region(region_id)
                 .is_some_and(ServerRegionOwner::is_gods_battle)
@@ -21138,6 +21165,7 @@ impl CGame {
                         regions.push(GameRegionAiReport {
                             region_id,
                             battle_fairy_deaths,
+                            battle_fairy_follows,
                             gods_battle,
                             region_changes,
                             clear_player: Some(GameRegionClearPlayerOutcome::Expired { players }),
@@ -21155,6 +21183,7 @@ impl CGame {
             regions.push(GameRegionAiReport {
                 region_id,
                 battle_fairy_deaths,
+                battle_fairy_follows,
                 gods_battle,
                 region_changes,
                 clear_player,

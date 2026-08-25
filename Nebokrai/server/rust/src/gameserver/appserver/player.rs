@@ -12505,7 +12505,7 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 
 // ============================================================================
 // FUNCTION: CPlayer::AI
-// STATUS: PARTIALLY_IMPLEMENTED_BATTLE_FAIRY_DEATH_PREFIX
+// STATUS: PARTIALLY_IMPLEMENTED_BATTLE_FAIRY_DEATH_AND_FOLLOW_PREFIX
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:2264
