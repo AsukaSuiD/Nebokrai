@@ -44,7 +44,10 @@
 //! Packet/equipment↔depot direct move и compatible stack проходят через тот
 //! же dispatcher после password unlock: burden rollback, extension-anchor
 //! guards, equipment effects, GoodsAI, audit `7/8` и self wire достигают live
-//! owners. Hand↔packet/equipment и depot→hand обычный Put сохраняют positional
+//! owners. Direct packet↔equipment использует тот же ownership pass без depot
+//! audit: partial progress guards, exact post-remove burden, equipment effects,
+//! occupied-slot rollback и self wire остаются наблюдаемыми.
+//! Hand↔packet/equipment и depot→hand обычный Put сохраняют positional
 //! split, equipment callbacks, one-slot stack, depot lock/anchor/audit и
 //! двусторонний rollback. Для
 //! source-hand→packet/equipment/depot `OT_SWITCH_OBJECT` выполняется после
@@ -68,16 +71,13 @@
 
 use crate::gameserver::appserver::container::ccontainer::ContainerListenerHandle;
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
-use crate::gameserver::appserver::container::cdepot::{
-    CDepot, DepotGoodsAddBlock, DepotGoodsAddOutcome,
-};
+use crate::gameserver::appserver::container::cdepot::{DepotGoodsAddBlock, DepotGoodsAddOutcome};
 use crate::gameserver::appserver::container::cequipmentcontainer::EquipmentRemovedEvent;
 use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
     ShadowPresenceReport, ShadowRemovedReport,
 };
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
 use crate::gameserver::appserver::message::containermessage::EnhancementMoveReceiveBlock::{
     InvalidExtendId, InvalidObjectType, SameContainer, ZeroAmount,
 };
@@ -629,35 +629,6 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 && !ground_is_currency)
                 || (ground_is_currency
                     && !matches!(request.destination_container_extend_id, 1 | 2));
-            let depot_move_requires_swap = game.find_player(player_id).is_some_and(|player| {
-                let source = match request.source_container_extend_id {
-                    1 => player.packet().get_goods(request.source_position),
-                    2 => player.equipment().get_goods(request.source_position),
-                    9 => player.depot().get_goods(request.source_position),
-                    _ => None,
-                };
-                let destination = match request.destination_container_extend_id {
-                    1 => player.packet().get_goods(request.destination_position),
-                    2 => player.equipment().get_goods(request.destination_position),
-                    9 => player.depot().get_goods(request.destination_position),
-                    _ => None,
-                };
-                let (Some(source), Some(destination)) = (source, destination) else {
-                    return false;
-                };
-                if request.destination_container_extend_id == 9
-                    && CDepot::is_extension_item_position(request.destination_position)
-                {
-                    return false;
-                }
-                let factory = game.goods_factory();
-                source.base_properties_index() != destination.base_properties_index()
-                    || source.max_stack_number(factory) <= 1
-                    || destination.amount().wrapping_add(request.amount)
-                        > destination.max_stack_number(factory)
-                    || source.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1)
-                        != destination.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1)
-            });
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && (matches!(request.source_container_extend_id, 1 | 2)
@@ -707,11 +678,13 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 EnhancementMessageRoute::BankCurrencyTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && (matches!(request.source_container_extend_id, 1 | 2)
-                    && request.destination_container_extend_id == 9
-                    || request.source_container_extend_id == 9
-                        && matches!(request.destination_container_extend_id, 1 | 2))
-                && !depot_move_requires_swap
+                && matches!(
+                    (
+                        request.source_container_extend_id,
+                        request.destination_container_extend_id
+                    ),
+                    (1, 2) | (2, 1) | (1, 9) | (2, 9) | (9, 1) | (9, 2)
+                )
             {
                 EnhancementMessageRoute::DepotStorageTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
@@ -1239,23 +1212,34 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 ) {
                     Some(b"GS0259")
                 } else {
-                    match rejected {
-                        Some(DepotStorageTransferAddition::Depot(
-                            DepotGoodsAddOutcome::Rejected(
-                                DepotGoodsAddBlock::ExtensionSlotOccupied { .. },
-                            ),
-                        )) => Some(b"KR007"),
-                        Some(DepotStorageTransferAddition::Depot(
-                            DepotGoodsAddOutcome::Rejected(
-                                DepotGoodsAddBlock::ExtensionItemRequired { .. },
-                            ),
-                        )) => Some(b"KR008"),
-                        Some(DepotStorageTransferAddition::Depot(
-                            DepotGoodsAddOutcome::Rejected(
-                                DepotGoodsAddBlock::InvalidExtensionKind { .. },
-                            ),
-                        )) => Some(b"KR009"),
-                        _ => None,
+                    match &reason {
+                        DepotStorageTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
+                            Some(b"GS0113")
+                        }
+                        DepotStorageTransferBlock::PartialMoveBusy(PlayerProgress::Trading) => {
+                            Some(b"GS0114")
+                        }
+                        DepotStorageTransferBlock::PartialMoveBusy(PlayerProgress::Upgrade) => {
+                            Some(b"GS0115")
+                        }
+                        _ => match rejected {
+                            Some(DepotStorageTransferAddition::Depot(
+                                DepotGoodsAddOutcome::Rejected(
+                                    DepotGoodsAddBlock::ExtensionSlotOccupied { .. },
+                                ),
+                            )) => Some(b"KR007"),
+                            Some(DepotStorageTransferAddition::Depot(
+                                DepotGoodsAddOutcome::Rejected(
+                                    DepotGoodsAddBlock::ExtensionItemRequired { .. },
+                                ),
+                            )) => Some(b"KR008"),
+                            Some(DepotStorageTransferAddition::Depot(
+                                DepotGoodsAddOutcome::Rejected(
+                                    DepotGoodsAddBlock::InvalidExtensionKind { .. },
+                                ),
+                            )) => Some(b"KR009"),
+                            _ => None,
+                        },
                     }
                 };
                 let notification_delivery = notice_id.map(|notice_id| {

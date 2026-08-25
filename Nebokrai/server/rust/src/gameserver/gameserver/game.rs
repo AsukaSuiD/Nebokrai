@@ -2538,6 +2538,7 @@ pub(crate) enum DepotStorageTransferBlock {
     UnsupportedRoute,
     MissingGoods,
     AmountMismatch,
+    PartialMoveBusy(PlayerProgress),
     BurdenRollbackCompleted {
         removal: DepotStorageTransferRemoval,
         restored: DepotStorageTransferAddition,
@@ -6961,8 +6962,10 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<DepotStorageTransferReport, DepotStorageTransferBlock> {
-        let route_supported = matches!(source_extend_id, 1 | 2) && destination_extend_id == 9
-            || source_extend_id == 9 && matches!(destination_extend_id, 1 | 2);
+        let route_supported = matches!(
+            (source_extend_id, destination_extend_id),
+            (1, 2) | (2, 1) | (1, 9) | (2, 9) | (9, 1) | (9, 2)
+        );
         if !route_supported {
             return Err(DepotStorageTransferBlock::UnsupportedRoute);
         }
@@ -6983,14 +6986,28 @@ impl CGame {
         {
             return Err(DepotStorageTransferBlock::AmountMismatch);
         }
+        if source.amount() != amount
+            && matches!(
+                player.current_progress(),
+                PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+            )
+        {
+            return Err(DepotStorageTransferBlock::PartialMoveBusy(
+                player.current_progress(),
+            ));
+        }
         let mut burden_goods = source.clone();
         burden_goods.set_amount(amount);
-        let burden_exceeded = source_extend_id == 9
-            && matches!(destination_extend_id, 1 | 2)
-            && player
-                .current_burden(&self.goods_factory)
-                .wrapping_add(burden_goods.weight(&self.goods_factory))
-                > u32::from(player.combat_properties().burden);
+        let current_burden = player.current_burden(&self.goods_factory);
+        let burden_exceeded = matches!(destination_extend_id, 1 | 2)
+            && if source_extend_id == 9 {
+                current_burden.wrapping_add(burden_goods.weight(&self.goods_factory))
+                    > u32::from(player.combat_properties().burden)
+            } else {
+                // Exact Move проверяет burden после source GetGoods: для
+                // packet↔equipment detached weight возвращает прежний итог.
+                current_burden > u32::from(player.combat_properties().burden)
+            };
         let source_identity = source.identity();
         let audit_name = source.name().to_vec();
         let audit_price = source.price();
