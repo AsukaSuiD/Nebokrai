@@ -25,13 +25,12 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_GOODS_AUCTION_SCALE, GAP_ROLE_MINIMUM_LEVEL_LIMIT, GOODS_TYPE_CONSUMABLE,
     GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
-use crate::gameserver::appserver::message::unibillmessage::IncrementShopBillingContext;
 use crate::gameserver::appserver::player::{
     AuctionBuyGate, AuctionListingGate, AuctionSelfGoodsRefresh, CiQingPacketAddition,
     CiQingPacketConsumption,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, OldClientGoodsCodec, colored_player_notice_message, game_wall_time_seconds,
+    CGame, GameContainerMessageRuntime, colored_player_notice_message, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::auctionnode::{AuctionListingNodeFields, CGoodsNode, GoodsNodeSerializeError};
@@ -181,7 +180,7 @@ pub(crate) fn dispatch_client_auction_message<Runtime, Tick>(
     mut tick_ms: Tick,
 ) -> Option<ClientAuctionMessageReport>
 where
-    Runtime: OldClientGoodsCodec + IncrementShopBillingContext,
+    Runtime: GameContainerMessageRuntime,
     Tick: FnMut(&mut Runtime) -> u32,
 {
     let selector = message.message_type();
@@ -618,7 +617,7 @@ fn dispatch_auction_listing<Runtime, Tick>(
     player_id: i32,
 ) -> ClientAuctionMessageReport
 where
-    Runtime: OldClientGoodsCodec + IncrementShopBillingContext,
+    Runtime: GameContainerMessageRuntime,
     Tick: FnMut(&mut Runtime) -> u32,
 {
     let had_pending = game
@@ -860,7 +859,7 @@ fn auction_yuan_listing_fee(
     fee as u32
 }
 
-fn finish_current_auction_listing<Runtime: OldClientGoodsCodec + IncrementShopBillingContext>(
+fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
     game: &mut CGame,
     runtime: &mut Runtime,
     player_id: i32,
