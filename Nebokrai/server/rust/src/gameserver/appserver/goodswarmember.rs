@@ -1,19 +1,22 @@
 //! Состояние участников GoodsWar исторического GameServer.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `appserver/goodswarmember.cpp/.h`, подтверждает две ordered collections:
-//! member ID -> faction ID и множество участвующих faction ID, пять записей
-//! счётчика, signed clamp только сверху и World-сообщения `0x60139`.
-//! Constructor после очистки member map немедленно запрашивает полный список
-//! subtype `4`; удаление положительного member отправляет subtype `2`, а
-//! отрицательная парная запись удаляется без сообщения.
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец —
+//! `appserver/goodswarmember.cpp/.h`. Она подтверждает две упорядоченные
+//! коллекции: соответствие ID участника и ID фракции, а также множество ID
+//! участвующих фракций; отдельно хранятся пять записей счётчика. Ограничение
+//! знакового значения применяется только сверху, изменения передаются World
+//! сообщением `0x60139`.
+//! Конструктор после очистки списка участников немедленно запрашивает полный
+//! снимок с `subtype = 4`; удаление положительного ID отправляет `subtype = 2`,
+//! а отрицательная парная запись удаляется без сообщения.
 //!
-//! `BTreeMap/BTreeSet` заменяют MSVC tree plumbing с тем же sorted key-order.
-//! Имена счётчика остаются точными 20 wire bytes; client snapshot имеет opcode
-//! `0xC0316` и порядок `count`, затем `AddEx(20 bytes) + signed count`.
-//! Country-route `0x7FF20/0x7FF21` проходит живой FIFO целой family: subtype
-//! sentinel loops, clear-before-read, prefix publication, World delete-send и
-//! count clamp меняют тот же owner, который обслуживает client snapshot.
+//! `BTreeMap` и `BTreeSet` заменяют внутренние деревья MSVC с тем же порядком
+//! ключей. Имена в счётчике сохраняют точные 20 байт протокола; клиентский
+//! снимок имеет opcode `0xC0316` и порядок: `count`, затем `AddEx(20 bytes)` и
+//! знаковый счётчик. Маршрут страны `0x7FF20/0x7FF21` проходит живую очередь
+//! всего семейства: чтение до сигнального значения, очистка перед чтением,
+//! публикация принятого префикса, сообщение World об удалении и ограничение
+//! счётчика меняют того же владельца, который выдаёт клиентский снимок.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -92,7 +95,7 @@ impl CGoodsWarMember {
         Self::default()
     }
 
-    /// Constructor-side request полного member snapshot у WorldServer.
+    /// Запрос полного снимка участников у WorldServer при создании владельца.
     pub(crate) fn request_initial_state(&self, game: &CGame) -> Result<i32, SendMessageError> {
         let mut message = CMessage::new(GOODS_WAR_WORLD_MESSAGE);
         message.add_long(4);
@@ -111,7 +114,8 @@ impl CGoodsWarMember {
         }
     }
 
-    /// Исходный owner ограничивает только верхнюю границу; negative сохраняется.
+    /// Исходный владелец ограничивает только верхнюю границу; отрицательное
+    /// значение сохраняется.
     pub(crate) fn set_max_count(&mut self, count: i32) -> i32 {
         self.count_size = count.min(COUNT_CAPACITY as i32);
         self.count_size
@@ -131,8 +135,9 @@ impl CGoodsWarMember {
         self.faction_ids.contains(&faction_id)
     }
 
-    /// Сохраняет exact partial effects: positive erase и World send идут раньше
-    /// безусловной попытки удалить отрицательную парную запись.
+    /// Сохраняет точный порядок частичных эффектов: удаление положительной
+    /// записи и сообщение World предшествуют безусловной попытке удалить
+    /// отрицательную парную запись.
     pub(crate) fn delete_one_member(
         &mut self,
         member_id: i32,
@@ -159,7 +164,7 @@ impl CGoodsWarMember {
         self.faction_ids.insert(faction_id)
     }
 
-    /// Existing member mapping не перезаписывается.
+    /// Существующее соответствие участника не перезаписывается.
     pub(crate) fn insert_one_member(&mut self, member_id: i32, faction_id: i32) {
         self.members.entry(member_id).or_insert(faction_id);
     }
@@ -199,7 +204,8 @@ impl CGoodsWarMember {
 }
 
 /// Обрабатывает обе достигнутые GoodsWar country-route ветви, сохраняя
-/// sentinel loops, clear-before-read и prefix publication при short payload.
+/// чтение до сигнального значения, очистку перед чтением и публикацию принятого
+/// префикса при коротком сообщении.
 pub(crate) fn dispatch_game_goods_war_message(
     message: &mut CMessage,
     game: &mut CGame,

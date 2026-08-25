@@ -31,12 +31,18 @@
 //! Запросы `6013/6014/6016/6018/6048` читают ту же авторитетную идентичность
 //! `0x7FE06`: уровень и опыт фракции, союз и его главу, а также владельца
 //! региона. Отдельные сценарные копии этих значений не создаются.
-//! `6043 / EnterContendState` сохраняет разговорный distance gate, вычисляет
-//! два числа и четыре строки до faction/region checks и входит в concrete
-//! City/Village `CServerWarRegion`; общий owner выполняет membership/goods,
-//! contender replacement, player `0xBFF28/29`, `GS0229/43..46` и сохраняет
-//! village goods для последующего victory cleanup. Faction name/union для
-//! contender snapshot берутся из того же авторитетного World `0x7FE06`.
+//! Семейство GoodsWar `6057–6063` использует единый `CGoodsWarMember`: запросы
+//! участника и фракции читают живые снимки `0x7FF20`, удаление сохраняет
+//! запасной `died_monster_index`, список публикуется клиенту как `0xC0316`, а
+//! победа, заявка фракции и увеличение счётчика доходят до World сообщениями
+//! `0x6013A` и `0x60139`.
+//! `6043 / EnterContendState` сохраняет проверку расстояния разговора,
+//! вычисляет два числа и четыре строки до проверок фракции и региона, затем
+//! входит в конкретный городской или деревенский `CServerWarRegion`. Общий
+//! владелец проверяет членство и предметы, заменяет участника, отправляет игроку
+//! `0xBFF28/29` и `GS0229/43..46`, а также сохраняет деревенские предметы для
+//! последующей очистки после победы. Имя фракции и сведения о союзе для снимка
+//! участника берутся из того же авторитетного World `0x7FE06`.
 //! Достигнутые GodsBattle scripts связывают `5413 / GetAreaID` с настоящим
 //! login-server ID, а `11124/11128` — с persisted player SZL и уже существующим
 //! `CGame::UpdateSZL` effect-проходом: property/notice, merit-level downgrade
@@ -555,6 +561,13 @@ pub(crate) const SCRIPT_FUNCTION_GET_JING_LI_DAN: i32 = 2653;
 pub(crate) const SCRIPT_FUNCTION_GET_WAR_REGION_STATE: i32 = 6054;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_OWNING_REGION: i32 = 6055;
 pub(crate) const SCRIPT_FUNCTION_GET_WAR_START_TIME: i32 = 6056;
+pub(crate) const SCRIPT_FUNCTION_IS_GOODS_WAR_MEMBER: i32 = 6057;
+pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS_WAR_MEMBER: i32 = 6058;
+pub(crate) const SCRIPT_FUNCTION_GOODS_WAR_WIN: i32 = 6059;
+pub(crate) const SCRIPT_FUNCTION_ASK_GOODS_WAR_LIST: i32 = 6060;
+pub(crate) const SCRIPT_FUNCTION_IS_PLAYER_IN_WAR_FACTION: i32 = 6061;
+pub(crate) const SCRIPT_FUNCTION_APPLY_FOR_GOODS_WAR: i32 = 6062;
+pub(crate) const SCRIPT_FUNCTION_GOODS_WAR_WIN_COUNT: i32 = 6063;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_REGION: i32 = 2304;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
 pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS: i32 = 2201;
@@ -3357,6 +3370,80 @@ fn scalar_parameter_unavailable(
     }
 }
 
+fn run_goods_war_script_function(
+    game: &mut CGame,
+    script_player_id: Option<i32>,
+    died_monster_index: Option<u32>,
+    function_id: i32,
+    evaluated_identity: Option<i32>,
+) -> Option<ScriptFunctionDispatchOutcome> {
+    let evaluated_identity =
+        evaluated_identity.filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR);
+    match function_id {
+        SCRIPT_FUNCTION_IS_GOODS_WAR_MEMBER => {
+            let legacy_return = evaluated_identity
+                .and_then(|identity| {
+                    game.goods_war()
+                        .map(|owner| owner.is_goods_war_member(identity))
+                })
+                .unwrap_or_default();
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_DELETE_GOODS_WAR_MEMBER => {
+            let identity = evaluated_identity
+                .or_else(|| died_monster_index.map(|value| value as i32))
+                .unwrap_or_default();
+            if let Some(mut owner) = game.take_goods_war() {
+                let _ = owner.delete_one_member(identity, game);
+                game.restore_goods_war(owner);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GOODS_WAR_WIN => {
+            if let Some(faction_id) = script_player_id
+                .and_then(|player_id| game.find_player(player_id).map(CPlayer::faction_id))
+            {
+                let mut request = CMessage::new(0x0006_013a);
+                request.add_long(faction_id);
+                let _ = request.send(game, false);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_ASK_GOODS_WAR_LIST => {
+            if let (Some(player_id), Some(owner)) = (script_player_id, game.goods_war()) {
+                let _ = owner.request_goods_war_list(player_id, game);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_IS_PLAYER_IN_WAR_FACTION => {
+            let target_player_id = evaluated_identity.or(script_player_id);
+            let faction_id = target_player_id
+                .and_then(|player_id| game.find_player(player_id).map(CPlayer::faction_id));
+            let legacy_return = faction_id.is_some_and(|faction_id| {
+                game.goods_war()
+                    .is_some_and(|owner| owner.contains_faction_id(faction_id))
+            }) as i32;
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_APPLY_FOR_GOODS_WAR | SCRIPT_FUNCTION_GOODS_WAR_WIN_COUNT => {
+            if let Some(faction_id) = script_player_id
+                .and_then(|player_id| game.find_player(player_id).map(CPlayer::faction_id))
+            {
+                let mut request = CMessage::new(0x0006_0139);
+                request.add_long(if function_id == SCRIPT_FUNCTION_APPLY_FOR_GOODS_WAR {
+                    0x11
+                } else {
+                    0x12
+                });
+                request.add_long(faction_id);
+                let _ = request.send(game, false);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EquipmentSessionScriptFunctionOutcome {
     DifferentFunction,
@@ -3681,6 +3768,12 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_GET_CITY_GATE_STATE => match index {
             0..=1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_IS_GOODS_WAR_MEMBER
+        | SCRIPT_FUNCTION_DELETE_GOODS_WAR_MEMBER
+        | SCRIPT_FUNCTION_IS_PLAYER_IN_WAR_FACTION => match index {
+            0 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_DELETE_SKILL => match index {
@@ -8422,6 +8515,15 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
                 .and_then(|player_id| game.find_player(player_id))
                 .is_some_and(CPlayer::is_rider) as i32,
         };
+    }
+    if let Some(outcome) = run_goods_war_script_function(
+        game,
+        script_player_id,
+        died_monster_index,
+        function_id,
+        integer_arguments[0],
+    ) {
+        return outcome;
     }
     if let Some(outcome) = run_village_war_menu_script_function(
         game,
