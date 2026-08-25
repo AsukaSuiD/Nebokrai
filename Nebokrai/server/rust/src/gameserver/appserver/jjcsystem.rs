@@ -1,6 +1,61 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Process-owned состояние `CJJcSystem` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/jjcsystem.cpp`. Достигнутые World callbacks сохраняют две
+//! ordered map: region → пара участников и player → сведения соперника.
+//! Match/start/timeout/week/season и `CPlayer::OnLost -> QuitJJc` вызываются
+//! реальным `CGame::ProcessMessage`; player, region, script и network effects
+//! выполняет `CGame`. Не достигнутые без следующих script-function ID
+//! `ApplyJJc`, `EndPK` и `BackRegion` остаются в RAW-корпусе ниже.
+
+use std::collections::BTreeMap;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct JjcInfo {
+    pub(crate) jjc_level: u32,
+    pub(crate) old_region_id: i32,
+    pub(crate) pos_x: i32,
+    pub(crate) pos_y: i32,
+    pub(crate) opponent_id: i32,
+    pub(crate) jjc_region_id: i32,
+    pub(crate) start_time: i32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CJJcSystem {
+    pk_list: BTreeMap<i32, (i32, i32)>,
+    player_info: BTreeMap<i32, JjcInfo>,
+}
+
+impl CJJcSystem {
+    pub(crate) fn on_world_closed(&mut self) {
+        self.pk_list.clear();
+        self.player_info.clear();
+    }
+
+    pub(crate) fn on_matched(&mut self, first: JjcInfo, second: JjcInfo) {
+        self.pk_list
+            .insert(first.jjc_region_id, (second.opponent_id, first.opponent_id));
+        self.player_info.insert(second.opponent_id, first);
+        self.player_info.insert(first.opponent_id, second);
+    }
+
+    pub(crate) fn opponent_info(
+        &self,
+        selector: u32,
+        region_id: i32,
+        player_id: i32,
+    ) -> Option<i32> {
+        let info = self.player_info.get(&player_id)?;
+        let opponent = self.player_info.get(&info.opponent_id)?;
+        let _region_members = self.pk_list.get(&region_id);
+        match selector {
+            1 => Some(info.opponent_id),
+            2 => Some(opponent.jjc_level as i32),
+            _ => None,
+        }
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

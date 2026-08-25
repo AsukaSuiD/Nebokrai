@@ -59,10 +59,6 @@ pub(crate) enum GameLogMessageOutcome {
     PlayerLost,
 }
 
-pub(crate) trait GamePlayerLostRuntime {
-    fn quit_player_jjc_on_lost(&mut self, game: &mut CGame, player_id: i32) -> bool;
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GamePlayerLostParticularGoodsDrop {
     pub(crate) source: PlayerParticularGoodsDrop,

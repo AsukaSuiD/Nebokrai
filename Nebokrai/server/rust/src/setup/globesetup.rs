@@ -77,8 +77,10 @@ const JJC_ENABLED_OFFSET: usize = 0xCD4;
 const JJC_REGION_MIN_OFFSET: usize = 0xCD8;
 const JJC_REGION_MAX_OFFSET: usize = 0xCDC;
 const JJC_MAX_REGIONS_IN_USE_OFFSET: usize = 0xCE0;
+const JJC_DEFAULT_LEVEL_OFFSET: usize = 0xCE4;
 const JJC_PK_TIMEOUT_OFFSET: usize = 0xCE8;
 const JJC_RANK_INTERVAL_OFFSET: usize = 0xCF0;
+const JJC_BUFF_ID_OFFSET: usize = 0xCF4;
 const TRANSFER_MONEY_INTERVAL_OFFSET: usize = 0x110C;
 const GOODS_AI_OFFSET: usize = 0xC4C;
 const PACK_ADD_OFFSET: usize = 0xC4E;
@@ -625,6 +627,17 @@ impl GlobeSetupSnapshot {
             region_id_max: self.read_i32(JJC_REGION_MAX_OFFSET),
             max_regions_in_use: self.read_i32(JJC_MAX_REGIONS_IN_USE_OFFSET),
         }
+    }
+
+    /// Game-side поля того же ABI-блока, используемые reached
+    /// start/quit/season callbacks `CJJcSystem`.
+    pub(crate) fn jjc_game_config(&self) -> (i32, i32, i32, u32) {
+        (
+            self.read_i32(JJC_REGION_MIN_OFFSET),
+            self.read_i32(JJC_REGION_MAX_OFFSET),
+            self.read_i32(JJC_DEFAULT_LEVEL_OFFSET),
+            self.read_u32(JJC_BUFF_ID_OFFSET),
+        )
     }
 
     /// Возвращает `lTransferMoneyTime` для reconnect-gate `CDbMisc`.

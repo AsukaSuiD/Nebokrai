@@ -528,6 +528,7 @@ use crate::gameserver::appserver::goodswarmember::{
     CGoodsWarMember, GameGoodsWarMessageError, GameGoodsWarMessageReport,
     dispatch_game_goods_war_message,
 };
+use crate::gameserver::appserver::jjcsystem::{CJJcSystem, JjcInfo};
 use crate::gameserver::appserver::message::containermessage::{
     AuctionListingTransferBlock, AuctionListingTransferRemoval, AuctionListingTransferReport,
     AuctionListingWithdrawalBlock, AuctionListingWithdrawalOutcome,
@@ -559,10 +560,12 @@ use crate::gameserver::appserver::message::goodsmessage::{
 use crate::gameserver::appserver::message::incrementshopmessage::{
     GameIncrementShopMessageError, GameIncrementShopMessageReport, dispatch_increment_shop_message,
 };
+use crate::gameserver::appserver::message::jjcsystemmessage::{
+    GameJjcSystemMessageError, GameJjcSystemMessageReport, dispatch_game_jjc_system_message,
+};
 use crate::gameserver::appserver::message::logmessage::{
     GameLogMessageError, GameLogMessageReport, GamePlayerLostDisposition,
-    GamePlayerLostParticularGoodsDrop, GamePlayerLostReport, GamePlayerLostRuntime,
-    dispatch_game_log_message,
+    GamePlayerLostParticularGoodsDrop, GamePlayerLostReport, dispatch_game_log_message,
 };
 use crate::gameserver::appserver::message::onmsg_c2s_auction::dispatch_client_auction_message;
 use crate::gameserver::appserver::message::onmsg_w2s_auction::{
@@ -5057,6 +5060,8 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) depot_messages: Vec<DepotMessageReport>,
     pub(crate) increment_shop_messages:
         Vec<Result<GameIncrementShopMessageReport, GameIncrementShopMessageError>>,
+    pub(crate) jjc_system_messages:
+        Vec<Result<GameJjcSystemMessageReport, GameJjcSystemMessageError>>,
     pub(crate) increment_shop_billing_messages:
         Vec<Result<IncrementShopBillingReport, IncrementShopBillingMessageError>>,
     pub(crate) organizing_messages:
@@ -5087,6 +5092,16 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
 pub(crate) struct GameUnresolvedMessageRoute {
     pub(crate) message_type: i32,
     pub(crate) route: Option<GameMessageRoute>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GameJjcMutationReport {
+    pub(crate) player_id: i32,
+    pub(crate) opponent_id: Option<i32>,
+    pub(crate) player_script_id: Option<i32>,
+    pub(crate) opponent_script_id: Option<i32>,
+    pub(crate) world_delivery: Option<i32>,
+    pub(crate) changed: bool,
 }
 
 #[must_use = "reconnect report сохраняет replacement, player snapshot и World delivery"]
@@ -5256,7 +5271,6 @@ pub(crate) trait GameMainLoopRuntime:
     + NationContendContext
     + GodsBattleNpcContendContext
     + ServerRegionAreaTransitionContext
-    + GamePlayerLostRuntime
 {
     fn exit_requested(&self) -> bool;
     /// Исполняет только ещё не материализованные state-классы из
@@ -5740,6 +5754,7 @@ pub(crate) struct CGame {
     equipment_compose_list: EquipmentComposeList,
     words_filter: CWordsFilter,
     jjc_level_data: BTreeMap<i32, i32>,
+    jjc_system: CJJcSystem,
     tao_zhuang_setup: CTaoZhuangSetup,
     ci_qing_setup: CCiQingSetup,
     ling_bao_setup: CLingBaoSetup,
@@ -6361,6 +6376,7 @@ impl CGame {
             equipment_compose_list: EquipmentComposeList::default(),
             words_filter: CWordsFilter::default(),
             jjc_level_data: BTreeMap::new(),
+            jjc_system: CJJcSystem::default(),
             tao_zhuang_setup: CTaoZhuangSetup::default(),
             ci_qing_setup: CCiQingSetup::default(),
             ling_bao_setup: CLingBaoSetup::default(),
@@ -17108,6 +17124,172 @@ impl CGame {
         report
     }
 
+    pub(crate) fn jjc_on_matched(&mut self, first: JjcInfo, second: JjcInfo) {
+        self.jjc_system.on_matched(first, second);
+    }
+
+    pub(crate) fn jjc_on_world_closed(&mut self) {
+        self.jjc_system.on_world_closed();
+    }
+
+    pub(crate) fn jjc_notify_application(&self, player_id: i32, result: i32) -> i32 {
+        let string_id = match result {
+            1 => b"GSJJC0003".as_slice(),
+            2 => b"GSJJC0006".as_slice(),
+            3 => b"GSJJC0002".as_slice(),
+            4 => b"GSJJC0001".as_slice(),
+            5 => b"GSJJC0009".as_slice(),
+            _ => b"GSJJC0008".as_slice(),
+        };
+        colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(string_id))
+            .send_to_player(self.net_server(), player_id)
+    }
+
+    pub(crate) fn jjc_start_player<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<PlayerRegionChangeReport> {
+        let (_, _, _, buff_id) = self.globe_setup.jjc_game_config();
+        let direction = {
+            let player = self.players.get_mut(&player_id)?;
+            player.set_jjc_pk_state(true);
+            let _ = player.delete_undead_state(buff_id);
+            player.shape().get_direction()
+        };
+        Some(self.change_player_region(player_id, region_id, -1, -1, direction, 0, 0, 0, runtime))
+    }
+
+    pub(crate) fn jjc_timeout(&mut self, player_ids: [i32; 2]) -> [Option<i32>; 2] {
+        player_ids.map(|player_id| {
+            let region_id = self.players.get(&player_id)?.server_region_id()?;
+            self.queue_script_file(
+                b"scripts/quest/pvp_jjc_pk_timeout.script",
+                ScriptExecutionContext {
+                    player_id: Some(player_id),
+                    region_id: Some(region_id),
+                    ..ScriptExecutionContext::default()
+                },
+            )
+        })
+    }
+
+    fn send_jjc_data(&self, player_id: i32) -> Option<i32> {
+        let player = self.players.get(&player_id)?;
+        let mut message = CMessage::new(0x0006_0901);
+        message.add_long(player_id);
+        message.add_byte(player.level());
+        message.add_ulong(player.jjc_level());
+        message.add_ulong(player.jjc_score());
+        message.base_mut().add(player.jjc_data());
+        Some(message.send(self, false).unwrap_or_default())
+    }
+
+    pub(crate) fn jjc_week_update(&mut self) -> Vec<GameJjcMutationReport> {
+        let player_ids = self.ordered_player_ids();
+        player_ids
+            .into_iter()
+            .map(|player_id| {
+                if let Some(player) = self.players.get_mut(&player_id) {
+                    player.clear_jjc_week();
+                }
+                GameJjcMutationReport {
+                    player_id,
+                    world_delivery: self.send_jjc_data(player_id),
+                    changed: true,
+                    ..GameJjcMutationReport::default()
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn jjc_season_update(&mut self) -> Vec<GameJjcMutationReport> {
+        let (_, _, default_level, _) = self.globe_setup.jjc_game_config();
+        let player_ids = self.ordered_player_ids();
+        player_ids
+            .into_iter()
+            .map(|player_id| {
+                if let Some(player) = self.players.get_mut(&player_id) {
+                    player.clear_jjc_season(default_level);
+                }
+                GameJjcMutationReport {
+                    player_id,
+                    world_delivery: self.send_jjc_data(player_id),
+                    changed: true,
+                    ..GameJjcMutationReport::default()
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn quit_player_jjc(&mut self, player_id: i32) -> GameJjcMutationReport {
+        let mut report = GameJjcMutationReport {
+            player_id,
+            ..GameJjcMutationReport::default()
+        };
+        let (region_min, region_max, _, buff_id) = self.globe_setup.jjc_game_config();
+        let Some((region_id, changing_region, changing_server, pk_state)) =
+            self.players.get(&player_id).and_then(|player| {
+                Some((
+                    player.server_region_id()?,
+                    player.in_changing_region(),
+                    player.in_changing_server(),
+                    player.jjc_pk_state(),
+                ))
+            })
+        else {
+            return report;
+        };
+        let in_jjc_region = region_min <= region_id && region_id <= region_max;
+        if !in_jjc_region && changing_region && changing_server {
+            return report;
+        }
+        if in_jjc_region && !pk_state {
+            return report;
+        }
+        if in_jjc_region {
+            if let Some(player) = self.players.get_mut(&player_id) {
+                player.set_jjc_pk_state(false);
+            }
+            report.changed = true;
+            let opponent_id = self.jjc_system.opponent_info(1, region_id, player_id);
+            report.opponent_id = opponent_id;
+            let Some(opponent_id) = opponent_id.filter(|id| self.players.contains_key(id)) else {
+                return report;
+            };
+            if let Some(opponent) = self.players.get_mut(&opponent_id) {
+                opponent.set_jjc_pk_state(false);
+            }
+            report.opponent_script_id = self.queue_script_file(
+                b"scripts/quest/pvp_jjc_on_kill_1.script",
+                ScriptExecutionContext {
+                    player_id: Some(opponent_id),
+                    region_id: Some(region_id),
+                    ..ScriptExecutionContext::default()
+                },
+            );
+            report.player_script_id = self.queue_script_file(
+                b"scripts/quest/pvp_jjc_on_dead_1.script",
+                ScriptExecutionContext {
+                    player_id: Some(player_id),
+                    region_id: Some(region_id),
+                    ..ScriptExecutionContext::default()
+                },
+            );
+        }
+        if let Some(player) = self.players.get_mut(&player_id) {
+            let _ = player.delete_undead_state(buff_id);
+            player.set_jjc_pk_state(false);
+        }
+        let mut message = CMessage::new(0x0006_0903);
+        message.add_long(player_id);
+        message.add_long(region_id);
+        report.world_delivery = Some(message.send(self, false).unwrap_or_default());
+        report.changed = true;
+        report
+    }
+
     /// Exact live `0x6FA01 -> CPlayer::OnLost` lifecycle. Общий caller
     /// владеет validation/script/map/spatial и delayed-fight timestamp; JJC
     /// остаётся отдельным historical owner-ом. Вопреки прежнему adapter-у
@@ -17164,7 +17346,7 @@ impl CGame {
         self.active_scripts
             .retain(|_, script| script.player_id() != Some(player_id));
         let scripts_removed = scripts_before.wrapping_sub(self.active_scripts.len());
-        let jjc_quit = runtime.quit_player_jjc_on_lost(self, player_id);
+        let jjc_quit = self.quit_player_jjc(player_id).changed;
 
         let mut nation_timing_finished = false;
         let mut particular_goods = Vec::new();
@@ -32500,6 +32682,7 @@ impl CGame {
         let mut gma_messages = Vec::new();
         let mut depot_messages = Vec::new();
         let mut increment_shop_messages = Vec::new();
+        let mut jjc_system_messages = Vec::new();
         let mut increment_shop_billing_messages = Vec::new();
         let mut organizing_messages = Vec::new();
         let mut country_war_messages = Vec::new();
@@ -32531,6 +32714,7 @@ impl CGame {
                 &mut gma_messages,
                 &mut depot_messages,
                 &mut increment_shop_messages,
+                &mut jjc_system_messages,
                 &mut increment_shop_billing_messages,
                 &mut organizing_messages,
                 &mut country_war_messages,
@@ -32563,6 +32747,7 @@ impl CGame {
                 &mut gma_messages,
                 &mut depot_messages,
                 &mut increment_shop_messages,
+                &mut jjc_system_messages,
                 &mut increment_shop_billing_messages,
                 &mut organizing_messages,
                 &mut country_war_messages,
@@ -32597,6 +32782,7 @@ impl CGame {
                         &mut gma_messages,
                         &mut depot_messages,
                         &mut increment_shop_messages,
+                        &mut jjc_system_messages,
                         &mut increment_shop_billing_messages,
                         &mut organizing_messages,
                         &mut country_war_messages,
@@ -32630,6 +32816,7 @@ impl CGame {
             gma_messages,
             depot_messages,
             increment_shop_messages,
+            jjc_system_messages,
             increment_shop_billing_messages,
             organizing_messages,
             country_war_messages,
@@ -32661,6 +32848,9 @@ impl CGame {
         increment_shop_messages: &mut Vec<
             Result<GameIncrementShopMessageReport, GameIncrementShopMessageError>,
         >,
+        jjc_system_messages: &mut Vec<
+            Result<GameJjcSystemMessageReport, GameJjcSystemMessageError>,
+        >,
         increment_shop_billing_messages: &mut Vec<
             Result<IncrementShopBillingReport, IncrementShopBillingMessageError>,
         >,
@@ -32687,6 +32877,12 @@ impl CGame {
         >,
         unresolved_routes: &mut Vec<GameUnresolvedMessageRoute>,
     ) {
+        // `OnServerMessage(0x6F901)` очищает JJC match maps немедленно при
+        // потере World. Остальной reconnect lifecycle этого server-message
+        // owner-а пока сохраняется как unresolved route ниже.
+        if message.message_type() == 0x0006_f901 {
+            self.jjc_on_world_closed();
+        }
         if let Some(report) =
             dispatch_server_message(message, self, runtime, |runtime| runtime.now_milliseconds())
         {
@@ -32714,6 +32910,8 @@ impl CGame {
             depot_messages.push(report);
         } else if let Some(report) = dispatch_increment_shop_message(message, self) {
             increment_shop_messages.push(report);
+        } else if let Some(report) = dispatch_game_jjc_system_message(message, self, runtime) {
+            jjc_system_messages.push(report);
         } else if let Some(report) = dispatch_increment_shop_billing_message(message, self, runtime)
         {
             increment_shop_billing_messages.push(report);

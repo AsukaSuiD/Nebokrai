@@ -46,6 +46,7 @@ pub(crate) mod appserver {
         pub(crate) mod countrywarsys;
     }
     pub(crate) mod goodswarmember;
+    pub(crate) mod jjcsystem;
     pub(crate) mod goods {
         pub(crate) mod cbattlefairyproperty;
         pub(crate) mod cgoods;
@@ -66,6 +67,7 @@ pub(crate) mod appserver {
         pub(crate) mod gmmessage;
         pub(crate) mod goodsmessage;
         pub(crate) mod incrementshopmessage;
+        pub(crate) mod jjcsystemmessage;
         pub(crate) mod logmessage;
         pub(crate) mod onmsg_c2s_auction;
         pub(crate) mod onmsg_w2s_auction;

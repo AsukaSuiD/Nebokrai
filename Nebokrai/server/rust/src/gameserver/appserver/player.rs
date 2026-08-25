@@ -379,6 +379,8 @@ const BASE_FETCH_POWER_OFFSET: usize = 0x164;
 const BASE_BATTLE_FAIRY_SUMMONED_OFFSET: usize = 0x16c;
 const BASE_BATTLE_FAIRY_RECALL_OFFSET: usize = 0x16d;
 const BASE_BATTLE_FAIRY_DIED_OFFSET: usize = 0x16e;
+const BASE_JJC_LEVEL_OFFSET: usize = 0x170;
+const BASE_JJC_SCORE_OFFSET: usize = 0x174;
 const BASE_FY_ENERGY_OFFSET: usize = 0x17c;
 const BASE_FY_ENABLE_FLAGS_OFFSET: usize = 0x180;
 const BASE_LT_UP_60_COUNT_OFFSET: usize = 0x184;
@@ -1263,6 +1265,8 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) fetch_power: u32,
     pub(crate) battle_fairy_recall: bool,
     pub(crate) battle_fairy_died: bool,
+    pub(crate) jjc_level: u32,
+    pub(crate) jjc_score: u32,
     pub(crate) days_honor_eliminate: u32,
     pub(crate) weeks_honor_eliminate: u32,
     pub(crate) months_honor_eliminate: u32,
@@ -3037,6 +3041,8 @@ impl CPlayer {
             (BASE_APPELLATION_OFFSET, self.base_properties.appellation_id),
             (BASE_MODE_OFFSET, self.base_properties.mode),
             (BASE_FETCH_POWER_OFFSET, self.base_properties.fetch_power),
+            (BASE_JJC_LEVEL_OFFSET, self.base_properties.jjc_level),
+            (BASE_JJC_SCORE_OFFSET, self.base_properties.jjc_score),
             (BASE_FY_ENERGY_OFFSET, self.base_properties.fy_energy),
             (
                 BASE_FY_ENABLE_FLAGS_OFFSET,
@@ -3165,6 +3171,8 @@ impl CPlayer {
         self.battle_fairy_summoned = wire[BASE_BATTLE_FAIRY_SUMMONED_OFFSET] != 0;
         self.base_properties.battle_fairy_recall = wire[BASE_BATTLE_FAIRY_RECALL_OFFSET] != 0;
         self.base_properties.battle_fairy_died = wire[BASE_BATTLE_FAIRY_DIED_OFFSET] != 0;
+        self.base_properties.jjc_level = read_player_wire_u32(wire, BASE_JJC_LEVEL_OFFSET);
+        self.base_properties.jjc_score = read_player_wire_u32(wire, BASE_JJC_SCORE_OFFSET);
         self.base_properties.fy_energy = read_player_wire_u32(wire, BASE_FY_ENERGY_OFFSET);
         self.base_properties.fy_enable_flags =
             read_player_wire_u32(wire, BASE_FY_ENABLE_FLAGS_OFFSET);
@@ -4006,6 +4014,58 @@ impl CPlayer {
         state_id: u32,
     ) -> super::moveshape::UndeadStateMutation {
         self.move_shape.delete_undead_state(state_id)
+    }
+
+    pub(crate) fn delete_undead_state(
+        &mut self,
+        state_id: u32,
+    ) -> super::moveshape::UndeadStateMutation {
+        self.move_shape.delete_undead_state(state_id)
+    }
+
+    pub(crate) const fn jjc_pk_state(&self) -> bool {
+        self.jjc_pk_state
+    }
+
+    pub(crate) const fn set_jjc_pk_state(&mut self, active: bool) {
+        self.jjc_pk_state = active;
+    }
+
+    pub(crate) const fn jjc_level(&self) -> u32 {
+        self.base_properties.jjc_level
+    }
+
+    pub(crate) const fn jjc_score(&self) -> u32 {
+        self.base_properties.jjc_score
+    }
+
+    pub(crate) const fn jjc_data(&self) -> &[u8; 0x10] {
+        &self.jjc_data
+    }
+
+    /// Exact `JJcWeekClear`: первые четыре WORD — weekly counters; при
+    /// пятнадцати участиях score получает level-dependent award с x87
+    /// round-to-nearest-even и cap 1500.
+    pub(crate) fn clear_jjc_week(&mut self) {
+        let joined = u16::from_le_bytes([self.jjc_data[0], self.jjc_data[1]]);
+        if joined >= 15 {
+            let factor = if self.base_properties.jjc_level < 1001 {
+                100.0
+            } else {
+                300.0
+            };
+            let award = (f64::from(self.base_properties.jjc_level) * 0.001 * factor)
+                .round_ties_even()
+                .clamp(0.0, 1500.0) as u32;
+            self.base_properties.jjc_score = self.base_properties.jjc_score.wrapping_add(award);
+        }
+        self.jjc_data[..8].fill(0);
+    }
+
+    pub(crate) fn clear_jjc_season(&mut self, default_level: i32) {
+        self.jjc_data.fill(0);
+        self.base_properties.jjc_level = default_level as u32;
+        self.base_properties.jjc_score = 0;
     }
 
     pub(crate) fn get_appellation_state(&self, state_id: u32) -> u32 {
