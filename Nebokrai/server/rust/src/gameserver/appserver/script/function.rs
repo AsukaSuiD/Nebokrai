@@ -264,6 +264,7 @@ pub(crate) const SCRIPT_FUNCTION_DELETE_UNDEAD_STATE: i32 = 2557;
 pub(crate) const SCRIPT_FUNCTION_GET_UNDEAD_STATE: i32 = 2558;
 pub(crate) const SCRIPT_FUNCTION_SET_HOTKEY: i32 = 2560;
 pub(crate) const SCRIPT_FUNCTION_ADD_LOG: i32 = 2571;
+pub(crate) const SCRIPT_FUNCTION_IS_COMBAT_STATE: i32 = 2574;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
@@ -3270,7 +3271,8 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_IS_CHARGED
         | SCRIPT_FUNCTION_CHANGE_BODY_CHECK
         | SCRIPT_FUNCTION_CHECK_MODE
-        | SCRIPT_FUNCTION_GET_PROGRESS => Unused,
+        | SCRIPT_FUNCTION_GET_PROGRESS
+        | SCRIPT_FUNCTION_IS_COMBAT_STATE => Unused,
         SCRIPT_FUNCTION_CREATE_NPC => match index {
             0 | 8 => String,
             1..=7 | 9..=11 => Integer,
@@ -4431,6 +4433,13 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             legacy_return: script_player_id
                 .and_then(|player_id| game.find_player(player_id))
                 .map_or(-1, |player| player.current_progress() as i32),
+        }),
+        SCRIPT_FUNCTION_IS_COMBAT_STATE => Some(ScriptFunctionDispatchOutcome::Handled {
+            // Exact virtual `CShape::GetAction +0x74`: только action `1`
+            // считается combat, а отсутствующий script-player возвращает -1.
+            legacy_return: game
+                .find_player(player_id)
+                .map_or(-1, |player| i32::from(player.shape().get_action() == 1)),
         }),
         SCRIPT_FUNCTION_ADD_UNDEAD_STATE
         | SCRIPT_FUNCTION_DELETE_UNDEAD_STATE
