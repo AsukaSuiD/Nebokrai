@@ -75,6 +75,9 @@
 //! `9018/9019` сохраняет поиск без изменения состояния и странность записи:
 //! второй аргумент влияет только на подстановку страны, а применяемое значение
 //! всегда равно `true`; сообщение `0x60315` уходит до записи в локальную карту.
+//! `9014 / UpGradeTechLevel` сохраняет подтверждённое отсутствие изменения:
+//! точный EXE только проверяет наличие страны текущего игрока и возвращает
+//! `0` либо `-1`, не публикуя сообщение World.
 //! Соседние региональные запросы `8101/8102` достигают того же диспетчера:
 //! первый сохраняет 32-битную арифметику таймера возрождения монстра, второй
 //! читает число зарегистрированных игроков конкретного `CServerRegion`.
@@ -732,6 +735,7 @@ pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH_LEVEL: i32 = 9003;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TREASURY: i32 = 9009;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_MATERIAL: i32 = 9011;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_TECH: i32 = 9013;
+pub(crate) const SCRIPT_FUNCTION_UPGRADE_COUNTRY_TECH_LEVEL: i32 = 9014;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_CI: i32 = 9004;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_CI: i32 = 9005;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_KING_ID: i32 = 9006;
@@ -4253,6 +4257,7 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_CHECK_USED_GOODS
         | SCRIPT_FUNCTION_GET_CURRENT_DURABILITY
         | SCRIPT_FUNCTION_GET_SELECTED_DURABILITY => Unused,
+        SCRIPT_FUNCTION_UPGRADE_COUNTRY_TECH_LEVEL => Unused,
         SCRIPT_FUNCTION_FAIRY_EXP_UP => match index {
             0 => Integer,
             _ => Unused,
@@ -8870,6 +8875,14 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         ],
         [string_arguments[0], string_arguments[1]],
     ) {
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+    }
+    if function_id == SCRIPT_FUNCTION_UPGRADE_COUNTRY_TECH_LEVEL {
+        let legacy_return = script_player_id
+            .and_then(|player_id| game.find_player(player_id))
+            .map(CPlayer::country)
+            .filter(|country| game.country_handler().country(*country).is_some())
+            .map_or(-1, |_| 0);
         return ScriptFunctionDispatchOutcome::Handled { legacy_return };
     }
     handled!(

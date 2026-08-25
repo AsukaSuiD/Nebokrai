@@ -2,30 +2,36 @@
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 
-//! Runtime-state государства `CCountry` GameServer.
+//! Состояние государства `CCountry` во время работы GameServer.
 //!
-//! Startup wire подтверждён точными `worldserver.exe + worldserver.pdb` и
-//! `gameserver.exe + GameServer.pdb`; исходные owners
+//! Формат запуска подтверждён точными `worldserver.exe + worldserver.pdb` и
+//! `gameserver.exe + GameServer.pdb`; исходные владельцы
 //! `worldserver/appworld/country/country.cpp` и
-//! `gameserver/appserver/country/country.cpp/.h`. World пишет один byte
-//! minister count, затем ordered `(job:u8, player_id:i32)`; Game не очищает
-//! country-information map, заменяет king slot `1`, обнуляет slots `2..7` и
-//! накладывает переданные записи с last-wins семантикой.
+//! `gameserver/appserver/country/country.cpp/.h`. World пишет один байт числа
+//! министров, затем упорядоченные `(job:u8, player_id:i32)`; Game не очищает
+//! карту государственных должностей, заменяет ячейку короля `1`, обнуляет
+//! ячейки `2..7` и накладывает переданные записи по правилу «последняя
+//! побеждает».
 //!
-//! `HasJob` возвращает job первого ordered player-ID match-а либо ноль.
-//! `SetCountryTreasury` сохраняет local-before-send и exact World
-//! `0x60314(country, selector=1, value)`; `0x7FF04/05` обновляют CI/king state
-//! до client publication. Фактическую отправку выполняет
-//! dispatcher после освобождения mutable country borrow. `AddToExileList`
-//! заменяет прежнюю запись текущим `timeGetTime` sample и сохраняет ordered
-//! player-ID traversal для `0x6030E/0x7FF15`. Остальные governance, exile-time,
-//! quest-switch публикует World `0x60315` до локальной map-мутации, как original
-//! `SetQuestSwitch`; reader не создаёт отсутствующий ordered key. Scalar
-//! setters `power/tech-level/tech-exp/control/material`
-//! сохраняют local-before-send и selector `2/4/3/5/6` общего World `0x60314`.
-//! Exile rest-time использует один wrapping DWORD sample, signed миллисекунды,
-//! truncating деление и zero floor. Остальные governance/message методы ниже
-//! ещё сохраняют RAW. `BTreeMap` и owned state заменяют STL nodes/pointers.
+//! `HasJob` возвращает должность первого совпадения в упорядоченном обходе
+//! идентификаторов игроков либо ноль. `SetCountryTreasury` сохраняет локальное
+//! изменение до отправки и точное сообщение World
+//! `0x60314(country, selector=1, value)`; `0x7FF04/05` обновляют состояния
+//! `CI` и короля до публикации клиенту. Фактическую отправку выполняет
+//! диспетчер после освобождения изменяемого заимствования страны.
+//! `AddToExileList` заменяет
+//! прежнюю запись единственной текущей выборкой `timeGetTime` и сохраняет
+//! упорядоченный обход идентификаторов игроков для `0x6030E/0x7FF15`.
+//! Переключатель заданий публикует World `0x60315` до изменения локальной
+//! карты, как исходный `SetQuestSwitch`; чтение не создаёт отсутствующий ключ.
+//! Скалярные записи силы, уровня и опыта технологии, управления и материалов
+//! сохраняют локальное изменение до отправки и селекторы `2/4/3/5/6` общего
+//! сообщения World `0x60314`. Остаток времени изгнания использует одну выборку
+//! `DWORD` с переполнением, знаковые миллисекунды, деление с усечением и
+//! нижнюю границу ноль. `9014 / UpGradeTechLevel` в точном EXE только проверяет
+//! наличие страны игрока и не изменяет состояние. Остальные методы управления
+//! и сообщений ниже ещё сохраняют RAW. `BTreeMap` и владеющее состояние
+//! заменяют узлы и указатели STL.
 
 use std::collections::BTreeMap;
 use std::error::Error;
