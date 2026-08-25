@@ -47,6 +47,9 @@
 //! owners. Direct packet↔equipment использует тот же ownership pass без depot
 //! audit: partial progress guards, exact post-remove burden, equipment effects,
 //! occupied-slot rollback и self wire остаются наблюдаемыми.
+//! Depot↔ordinary-fairy/battle-fairy/CiQing-compose использует те же lock и
+//! extension-anchor owners, World audit `7/8`, special-container effects и
+//! rollback; burden добавляется только при возврате в carried containers.
 //! Hand↔packet/equipment и depot→hand обычный Put сохраняют positional
 //! split, equipment callbacks, one-slot stack, depot lock/anchor/audit и
 //! двусторонний rollback. Для
@@ -106,9 +109,10 @@ use crate::gameserver::appserver::session::ctrader::{TraderOfferAdded, TraderOff
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
     AuctionGoodsInventoryBlock, AuctionGoodsInventoryReport, AuctionGoodsInventoryRollback,
-    BankCurrencyTransferBlock, BankCurrencyTransferReport, BattleFairyTransferBlock,
-    BattleFairyTransferReport, CGame, CiQingComposeTransferBlock, CiQingComposeTransferReport,
-    DepotStorageTransferAddition, DepotStorageTransferBlock, DepotStorageTransferReport,
+    BankCurrencyTransferBlock, BankCurrencyTransferReport, BattleFairyTransferAddition,
+    BattleFairyTransferBlock, BattleFairyTransferReport, CGame, CiQingComposeTransferAddition,
+    CiQingComposeTransferBlock, CiQingComposeTransferReport, DepotStorageTransferAddition,
+    DepotStorageTransferBlock, DepotStorageTransferReport, FairyStorageTransferAddition,
     FairyStorageTransferBlock, FairyStorageTransferReport, GameContainerMessageRuntime,
     GroundGoodsMoveBlock, GroundGoodsMoveReport, HandAuctionListingBlock, HandAuctionListingReport,
     HandContainerMoveBlock, HandContainerMoveReport, PlayerHandMoveBlock, PlayerHandMoveReport,
@@ -664,26 +668,26 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     && !matches!(request.destination_container_extend_id, 1 | 2));
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && (matches!(request.source_container_extend_id, 1 | 2 | 3)
+                && (matches!(request.source_container_extend_id, 1 | 2 | 3 | 9)
                     && request.destination_container_extend_id == 17
                     || request.source_container_extend_id == 17
-                        && matches!(request.destination_container_extend_id, 1 | 2 | 3))
+                        && matches!(request.destination_container_extend_id, 1 | 2 | 3 | 9))
             {
                 EnhancementMessageRoute::CiQingComposeTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && (matches!(request.source_container_extend_id, 1 | 2 | 3)
+                && (matches!(request.source_container_extend_id, 1 | 2 | 3 | 9)
                     && request.destination_container_extend_id == 12
                     || request.source_container_extend_id == 12
-                        && matches!(request.destination_container_extend_id, 1 | 2 | 3))
+                        && matches!(request.destination_container_extend_id, 1 | 2 | 3 | 9))
             {
                 EnhancementMessageRoute::BattleFairyTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && (matches!(request.source_container_extend_id, 1 | 2 | 3)
+                && (matches!(request.source_container_extend_id, 1 | 2 | 3 | 9)
                     && request.destination_container_extend_id == 11
                     || request.source_container_extend_id == 11
-                        && matches!(request.destination_container_extend_id, 1 | 2 | 3))
+                        && matches!(request.destination_container_extend_id, 1 | 2 | 3 | 9))
             {
                 EnhancementMessageRoute::FairyStorageTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
@@ -1071,6 +1075,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     | CiQingComposeTransferBlock::BurdenRollbackFailed { .. } => Some(b"GS0259"),
                     CiQingComposeTransferBlock::DestinationRejectRollbackFailed { .. }
                     | CiQingComposeTransferBlock::RollbackFailed { .. } => Some(b"GPM019"),
+                    CiQingComposeTransferBlock::RolledBack { rejected, .. } => match rejected {
+                        CiQingComposeTransferAddition::Player(addition) => {
+                            depot_add_rejection_notice(addition)
+                        }
+                        _ => None,
+                    },
                     _ => None,
                 };
                 let notification_delivery = notice_id.map(|notice_id| {
@@ -1118,6 +1128,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     BattleFairyTransferBlock::BurdenRolledBack { .. }
                     | BattleFairyTransferBlock::BurdenRollbackFailed { .. } => Some(b"GS0259"),
                     BattleFairyTransferBlock::RollbackFailed { .. } => Some(b"GPM019"),
+                    BattleFairyTransferBlock::RolledBack { rejected, .. } => match rejected {
+                        BattleFairyTransferAddition::Player(addition) => {
+                            depot_add_rejection_notice(addition)
+                        }
+                        _ => None,
+                    },
                     _ => None,
                 };
                 let notification_delivery = notice_id.map(|notice_id| {
@@ -1165,6 +1181,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     FairyStorageTransferBlock::BurdenRolledBack { .. }
                     | FairyStorageTransferBlock::BurdenRollbackFailed { .. } => Some(b"GS0259"),
                     FairyStorageTransferBlock::RollbackFailed { .. } => Some(b"GPM019"),
+                    FairyStorageTransferBlock::RolledBack { rejected, .. } => match rejected {
+                        FairyStorageTransferAddition::Player(addition) => {
+                            depot_add_rejection_notice(addition)
+                        }
+                        _ => None,
+                    },
                     _ => None,
                 };
                 let notification_delivery = notice_id.map(|notice_id| {
@@ -2130,6 +2152,21 @@ fn send_notify(game: &CGame, player_id: i32, text: &[u8], first: u32, second: u3
     message.base_mut().add(text);
     message.add_byte(0);
     message.send_to_player(game.net_server(), player_id)
+}
+
+fn depot_add_rejection_notice(addition: &DepotStorageTransferAddition) -> Option<&'static [u8]> {
+    match addition {
+        DepotStorageTransferAddition::Depot(DepotGoodsAddOutcome::Rejected(
+            DepotGoodsAddBlock::ExtensionSlotOccupied { .. },
+        )) => Some(b"KR007"),
+        DepotStorageTransferAddition::Depot(DepotGoodsAddOutcome::Rejected(
+            DepotGoodsAddBlock::ExtensionItemRequired { .. },
+        )) => Some(b"KR008"),
+        DepotStorageTransferAddition::Depot(DepotGoodsAddOutcome::Rejected(
+            DepotGoodsAddBlock::InvalidExtensionKind { .. },
+        )) => Some(b"KR009"),
+        _ => None,
+    }
 }
 
 fn send_rollback(game: &CGame, player_id: i32) -> i32 {

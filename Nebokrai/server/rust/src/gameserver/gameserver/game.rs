@@ -2735,6 +2735,7 @@ pub(crate) struct FairyStorageRemoval {
 pub(crate) enum FairyStorageTransferRemoval {
     Player(EnhancementTransferRemoval),
     Hand(GroundHandRemoval),
+    Depot(DepotStorageRemoval),
     Fairy(FairyStorageRemoval),
 }
 
@@ -2763,6 +2764,7 @@ pub(crate) enum FairyStorageTransferBlock {
     },
     PacketRemovalFailed,
     HandRemovalFailed,
+    DepotRemovalFailed,
     EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
     FairyRemovalFailed(FairyContainerRemoveOutcome),
     RolledBack {
@@ -2790,6 +2792,7 @@ pub(crate) struct FairyStorageTransferReport {
     pub(crate) removal: FairyStorageTransferRemoval,
     pub(crate) addition: FairyStorageTransferAddition,
     pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) audit_deliveries: Vec<i32>,
     pub(crate) delivery: i32,
 }
 
@@ -2810,6 +2813,7 @@ pub(crate) struct BattleFairyStorageRemoval {
 pub(crate) enum BattleFairyTransferRemoval {
     Player(EnhancementTransferRemoval),
     Hand(GroundHandRemoval),
+    Depot(DepotStorageRemoval),
     BattleFairy(BattleFairyStorageRemoval),
 }
 
@@ -2841,6 +2845,7 @@ pub(crate) enum BattleFairyTransferBlock {
     },
     PacketRemovalFailed,
     HandRemovalFailed,
+    DepotRemovalFailed,
     EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
     BattleFairyRemovalFailed(BattleFairyEquipmentMutationReport),
     RolledBack {
@@ -2868,6 +2873,7 @@ pub(crate) struct BattleFairyTransferReport {
     pub(crate) removal: BattleFairyTransferRemoval,
     pub(crate) addition: BattleFairyTransferAddition,
     pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) audit_deliveries: Vec<i32>,
     pub(crate) delivery: i32,
 }
 
@@ -2884,6 +2890,7 @@ pub(crate) struct CiQingComposeStorageRemoval {
 pub(crate) enum CiQingComposeTransferRemoval {
     Player(EnhancementTransferRemoval),
     Hand(GroundHandRemoval),
+    Depot(DepotStorageRemoval),
     Compose(CiQingComposeStorageRemoval),
 }
 
@@ -2923,6 +2930,7 @@ pub(crate) enum CiQingComposeTransferBlock {
     },
     PacketRemovalFailed,
     HandRemovalFailed,
+    DepotRemovalFailed,
     EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
     ComposeRemovalFailed,
     RolledBack {
@@ -2950,6 +2958,7 @@ pub(crate) struct CiQingComposeTransferReport {
     pub(crate) removal: CiQingComposeTransferRemoval,
     pub(crate) addition: CiQingComposeTransferAddition,
     pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) audit_deliveries: Vec<i32>,
     pub(crate) delivery: i32,
 }
 
@@ -7732,8 +7741,8 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<FairyStorageTransferReport, FairyStorageTransferBlock> {
-        let supported = matches!(source_extend_id, 1 | 2 | 3) && destination_extend_id == 11
-            || source_extend_id == 11 && matches!(destination_extend_id, 1 | 2 | 3);
+        let supported = matches!(source_extend_id, 1 | 2 | 3 | 9) && destination_extend_id == 11
+            || source_extend_id == 11 && matches!(destination_extend_id, 1 | 2 | 3 | 9);
         if !supported {
             return Err(FairyStorageTransferBlock::UnsupportedRoute);
         }
@@ -7744,6 +7753,7 @@ impl CGame {
             1 => player.packet().get_goods(source_position),
             2 => player.equipment().get_goods(source_position),
             3 => player.hand().get_goods(source_position),
+            9 => player.depot().get_goods(source_position),
             11 => player.fairy_container().base().get_goods(source_position),
             _ => None,
         }
@@ -7766,6 +7776,8 @@ impl CGame {
             ));
         }
         let source_identity = source.identity();
+        let audit_name = source.name().to_vec();
+        let audit_price = source.price();
         let mut burden_goods = source.clone();
         burden_goods.set_amount(amount);
         let burden_exceeded = source_extend_id == 11
@@ -7876,6 +7888,45 @@ impl CGame {
                 ),
             };
             (FairyStorageTransferRemoval::Hand(removal), Some(goods))
+        } else if source_extend_id == 9 {
+            let removed =
+                player
+                    .depot_mut()
+                    .take_goods(source_position, amount, &self.goods_factory, |_| {
+                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                            .then(|| split_template.clone())
+                    });
+            let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
+                self.players.insert(player_id, player);
+                return Err(FairyStorageTransferBlock::DepotRemovalFailed);
+            };
+            let (goods, removal) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    DepotStorageRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                        kind: DepotStorageRemovalKind::Removed,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    DepotStorageRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                        kind: DepotStorageRemovalKind::Split {
+                            source: split.source,
+                        },
+                    },
+                ),
+            };
+            (FairyStorageTransferRemoval::Depot(removal), Some(goods))
         } else {
             let outcome = player.fairy_container_mut().take(
                 source_position,
@@ -7979,6 +8030,21 @@ impl CGame {
         let previous_last_operated =
             player.record_last_operated_goods(source_extend_id, source_position);
         self.players.insert(player_id, player);
+        let audit_deliveries = if destination_extend_id == 9
+            && self.log_system.goods_depot_set_log_enabled()
+            || source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled()
+        {
+            self.send_ground_goods_move_log(
+                player_id,
+                if destination_extend_id == 9 { 7 } else { 8 },
+                source_identity,
+                audit_price,
+                &audit_name,
+                amount,
+            )
+        } else {
+            Vec::new()
+        };
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -7999,6 +8065,7 @@ impl CGame {
             removal,
             addition,
             previous_last_operated,
+            audit_deliveries,
             delivery,
         })
     }
@@ -8130,8 +8197,8 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<BattleFairyTransferReport, BattleFairyTransferBlock> {
-        let supported = matches!(source_extend_id, 1 | 2 | 3) && destination_extend_id == 12
-            || source_extend_id == 12 && matches!(destination_extend_id, 1 | 2 | 3);
+        let supported = matches!(source_extend_id, 1 | 2 | 3 | 9) && destination_extend_id == 12
+            || source_extend_id == 12 && matches!(destination_extend_id, 1 | 2 | 3 | 9);
         if !supported {
             return Err(BattleFairyTransferBlock::UnsupportedRoute);
         }
@@ -8150,6 +8217,7 @@ impl CGame {
             1 => player.packet().get_goods(source_position),
             2 => player.equipment().get_goods(source_position),
             3 => player.hand().get_goods(source_position),
+            9 => player.depot().get_goods(source_position),
             12 => player
                 .battle_fairy_container()
                 .base()
@@ -8175,6 +8243,8 @@ impl CGame {
             ));
         }
         let source_identity = source.identity();
+        let audit_name = source.name().to_vec();
+        let audit_price = source.price();
         let mut burden_goods = source.clone();
         burden_goods.set_amount(amount);
         let burden_exceeded = source_extend_id == 12
@@ -8285,6 +8355,45 @@ impl CGame {
                 ),
             };
             (BattleFairyTransferRemoval::Hand(removal), Some(goods))
+        } else if source_extend_id == 9 {
+            let removed =
+                player
+                    .depot_mut()
+                    .take_goods(source_position, amount, &self.goods_factory, |_| {
+                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                            .then(|| split_template.clone())
+                    });
+            let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
+                self.players.insert(player_id, player);
+                return Err(BattleFairyTransferBlock::DepotRemovalFailed);
+            };
+            let (goods, removal) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    DepotStorageRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                        kind: DepotStorageRemovalKind::Removed,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    DepotStorageRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                        kind: DepotStorageRemovalKind::Split {
+                            source: split.source,
+                        },
+                    },
+                ),
+            };
+            (BattleFairyTransferRemoval::Depot(removal), Some(goods))
         } else {
             let Some(cell) = BattleFairyCell::from_position(source_position) else {
                 self.players.insert(player_id, player);
@@ -8414,6 +8523,21 @@ impl CGame {
         let previous_last_operated =
             player.record_last_operated_goods(source_extend_id, source_position);
         self.players.insert(player_id, player);
+        let audit_deliveries = if destination_extend_id == 9
+            && self.log_system.goods_depot_set_log_enabled()
+            || source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled()
+        {
+            self.send_ground_goods_move_log(
+                player_id,
+                if destination_extend_id == 9 { 7 } else { 8 },
+                source_identity,
+                audit_price,
+                &audit_name,
+                amount,
+            )
+        } else {
+            Vec::new()
+        };
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -8434,6 +8558,7 @@ impl CGame {
             removal,
             addition,
             previous_last_operated,
+            audit_deliveries,
             delivery,
         })
     }
@@ -8548,8 +8673,8 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<CiQingComposeTransferReport, CiQingComposeTransferBlock> {
-        let supported = matches!(source_extend_id, 1 | 2 | 3) && destination_extend_id == 17
-            || source_extend_id == 17 && matches!(destination_extend_id, 1 | 2 | 3);
+        let supported = matches!(source_extend_id, 1 | 2 | 3 | 9) && destination_extend_id == 17
+            || source_extend_id == 17 && matches!(destination_extend_id, 1 | 2 | 3 | 9);
         if !supported {
             return Err(CiQingComposeTransferBlock::UnsupportedRoute);
         }
@@ -8560,6 +8685,7 @@ impl CGame {
             1 => player.packet().get_goods(source_position),
             2 => player.equipment().get_goods(source_position),
             3 => player.hand().get_goods(source_position),
+            9 => player.depot().get_goods(source_position),
             17 => player.ci_qing_compose_goods(source_position),
             _ => None,
         }
@@ -8583,6 +8709,8 @@ impl CGame {
         }
 
         let source_identity = source.identity();
+        let audit_name = source.name().to_vec();
+        let audit_price = source.price();
         let mut burden_goods = source.clone();
         burden_goods.set_amount(amount);
         let burden_exceeded = source_extend_id == 17
@@ -8693,6 +8821,45 @@ impl CGame {
                 ),
             };
             (CiQingComposeTransferRemoval::Hand(removal), Some(goods))
+        } else if source_extend_id == 9 {
+            let removed =
+                player
+                    .depot_mut()
+                    .take_goods(source_position, amount, &self.goods_factory, |_| {
+                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                            .then(|| split_template.clone())
+                    });
+            let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
+                self.players.insert(player_id, player);
+                return Err(CiQingComposeTransferBlock::DepotRemovalFailed);
+            };
+            let (goods, removal) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    DepotStorageRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                        kind: DepotStorageRemovalKind::Removed,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    DepotStorageRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                        kind: DepotStorageRemovalKind::Split {
+                            source: split.source,
+                        },
+                    },
+                ),
+            };
+            (CiQingComposeTransferRemoval::Depot(removal), Some(goods))
         } else {
             let removed = player.take_ci_qing_compose_transfer_goods(
                 source_position,
@@ -8820,6 +8987,21 @@ impl CGame {
         let previous_last_operated =
             player.record_last_operated_goods(source_extend_id, source_position);
         self.players.insert(player_id, player);
+        let audit_deliveries = if destination_extend_id == 9
+            && self.log_system.goods_depot_set_log_enabled()
+            || source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled()
+        {
+            self.send_ground_goods_move_log(
+                player_id,
+                if destination_extend_id == 9 { 7 } else { 8 },
+                source_identity,
+                audit_price,
+                &audit_name,
+                amount,
+            )
+        } else {
+            Vec::new()
+        };
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -8840,6 +9022,7 @@ impl CGame {
             removal,
             addition,
             previous_last_operated,
+            audit_deliveries,
             delivery,
         })
     }
