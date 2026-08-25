@@ -16703,6 +16703,71 @@ impl CGame {
         Some(value)
     }
 
+    /// `ChangeMe` сохраняет особые ветви `wPkCount` и `dwExp`, адресный
+    /// `0xBF80B` до изменения и последующий полный `CheckLevel` для опыта.
+    pub(crate) fn change_script_player_property<Runtime>(
+        &mut self,
+        player_id: i32,
+        property: &[u8],
+        requested_delta: i32,
+        runtime: &mut Runtime,
+    ) -> Option<i32>
+    where
+        Runtime: PlayerPropertyContext + GameClockContext,
+    {
+        let player = self.find_player(player_id)?;
+        let _ = player.script_value(property)?;
+        if property.eq_ignore_ascii_case(b"wPkCount") {
+            let applied = i64::from(requested_delta)
+                .saturating_add(i64::from(player.pk_count()))
+                .clamp(0, i64::from(u16::MAX)) as u16;
+            let player = self.find_player_mut(player_id)?;
+            player.set_pk_count(applied);
+            player.update_murderer_sign(|| runtime.now_milliseconds());
+            let mut message = CMessage::new(0x000b_f70e);
+            message.add_long(player_id);
+            message.base_mut().add_word(applied);
+            message.add_ulong(player.kill_count());
+            let _ = self.send_player_shape_around(player_id, None, &message);
+            return Some(i32::from(applied));
+        }
+
+        let applied_delta = if property.eq_ignore_ascii_case(b"dwExp") {
+            let scaled =
+                f64::from(requested_delta) * f64::from(self.globe_setup.experience_script_scale());
+            if !scaled.is_finite() || scaled < f64::from(i32::MIN) || scaled > f64::from(i32::MAX) {
+                return None;
+            }
+            let mut scaled = scaled as i32;
+            let experience = self.find_player(player_id)?.experience();
+            if scaled < 0 && scaled.unsigned_abs() > experience {
+                scaled = if experience > i32::MAX as u32 {
+                    i32::MIN
+                } else {
+                    -(experience as i32)
+                };
+            }
+            scaled
+        } else {
+            requested_delta
+        };
+
+        let identity = self.find_player(player_id)?.shape().identity();
+        let mut message = CMessage::new(0x000b_f80b);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        add_legacy_c_string(message.base_mut(), property);
+        message.add_long(applied_delta);
+        let _ = message.send_to_player(self.net_server(), player_id);
+        let result = self
+            .find_player_mut(player_id)?
+            .change_script_value(property, applied_delta)?;
+        if property.eq_ignore_ascii_case(b"dwExp") {
+            let _ = self.check_script_player_level(player_id, runtime);
+        }
+        Some(result)
+    }
+
     /// Сценарные `SetEnergy/SetMaxEnergy` сохраняют исходное преобразование
     /// `int32 -> DWORD`; ограничение выполняет `CPlayer`, после чего клиент
     /// получает только соответствующее итоговое поле.

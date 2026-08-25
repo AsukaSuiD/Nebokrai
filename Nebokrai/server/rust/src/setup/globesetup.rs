@@ -123,6 +123,7 @@ const EXPERIENCE_AMERCE_OFFSET: usize = 0x3E4;
 const EXPERIENCE_AMERCE_LIMIT_OFFSET: usize = 0x3E8;
 const EXPERIENCE_AMERCE_START_LEVEL_OFFSET: usize = 0x3EC;
 const EXPERIENCE_SCALE_OFFSET: usize = 0x4B4;
+const EXPERIENCE_SCRIPT_SCALE_OFFSET: usize = 0x4B8;
 const MONSTER_DROP_SCALE_OFFSET: usize = 0x4BC;
 const HIT_BASE_LEVEL_OFFSET: usize = 0x420;
 const HIT_TIME_OFFSET: usize = 0x424;
@@ -792,6 +793,10 @@ impl GlobeSetupSnapshot {
             self.read_i32(EXPERIENCE_AMERCE_START_LEVEL_OFFSET),
             self.read_f32(EXPERIENCE_SCALE_OFFSET),
         )
+    }
+
+    pub(crate) fn experience_script_scale(&self) -> f32 {
+        self.read_f32(EXPERIENCE_SCRIPT_SCALE_OFFSET)
     }
 
     pub(crate) fn monster_continuous_kill_parameters(&self) -> (i32, u32, f32, f32) {

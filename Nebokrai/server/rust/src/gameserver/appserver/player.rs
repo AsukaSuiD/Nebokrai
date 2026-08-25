@@ -4837,6 +4837,8 @@ impl CPlayer {
             Some(i32::from(self.base_properties.sex))
         } else if property.eq_ignore_ascii_case(b"dwExp") {
             Some(self.experience() as i32)
+        } else if property.eq_ignore_ascii_case(b"wPkCount") {
+            Some(i32::from(self.pk_count()))
         } else if property.eq_ignore_ascii_case(b"lOccupation") {
             Some(i32::from(self.occupation()))
         } else if property.eq_ignore_ascii_case(b"dwAppellationID") {
@@ -10880,6 +10882,16 @@ impl CPlayer {
 
     pub(crate) const fn set_pk_count(&mut self, value: u16) {
         self.base_properties.pk_count = value;
+    }
+
+    /// `OnUpdateMurdererSign` сбрасывает часы при нулевом PK и запускает их
+    /// только при первом переходе к ненулевому значению.
+    pub(crate) fn update_murderer_sign(&mut self, now_ms: impl FnOnce() -> u32) {
+        if self.base_properties.pk_count == 0 {
+            self.murderer_time_stamp_ms = 0;
+        } else if self.murderer_time_stamp_ms == 0 {
+            self.murderer_time_stamp_ms = now_ms();
+        }
     }
 
     pub(crate) const fn set_occupation(&mut self, occupation: u8) {

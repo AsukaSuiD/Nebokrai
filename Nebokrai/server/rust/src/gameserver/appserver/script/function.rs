@@ -170,6 +170,9 @@
 //! Группа `2004..2008` вызывает того же владельца `CPlayer::CheckLevel` с
 //! нулевыми приростами, а текущая и максимальная энергия изменяются у живого
 //! игрока с точными ограничениями и ответами `0xBF72C/0xBF72D`.
+//! `ChangeMe 2001` использует общий каталог игрока, но отдельно сохраняет
+//! масштаб сценарного опыта, нижнюю границу опыта и жизненный цикл знака
+//! убийцы; результат доходит до `0xBF80B/0xBF70E` и полного `CheckLevel`.
 //! Достигнутый `xinlian/hy_pg.script` расширяет этот owner до `GetMe(lID/
 //! btCountry/lPos)`, named family `2999..3001` и `5203 / PostCountryInfo`.
 //! `ChangePlayer` замыкает shipped `Experience` alias без отдельного client
@@ -345,6 +348,7 @@ pub(crate) const SCRIPT_FUNCTION_HOUR_DIFF: i32 = 20;
 pub(crate) const SCRIPT_FUNCTION_MINUTE_DIFF: i32 = 21;
 pub(crate) const SCRIPT_FUNCTION_SECOND: i32 = 23;
 pub(crate) const SCRIPT_FUNCTION_GET_STRING_BY_ID: i32 = 2000;
+pub(crate) const SCRIPT_FUNCTION_CHANGE_ME: i32 = 2001;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
 pub(crate) const SCRIPT_FUNCTION_CHECK_LEVEL: i32 = 2004;
@@ -3302,7 +3306,7 @@ pub(crate) fn script_function_parameter_kind(
             0 => String,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_SET_ME => match index {
+        SCRIPT_FUNCTION_CHANGE_ME | SCRIPT_FUNCTION_SET_ME => match index {
             0 => String,
             1 => Integer,
             _ => Unused,
@@ -5441,6 +5445,20 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             let legacy_return = player.script_value(property).unwrap_or(0);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_CHANGE_ME => {
+            if argument_count != 2 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let (Some(property), Some(delta)) = (string_arguments[0], integer_arguments[1]) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            Some(
+                game.change_script_player_property(player_id, property, delta, runtime)
+                    .map_or(ScriptFunctionDispatchOutcome::Invalid, |legacy_return| {
+                        ScriptFunctionDispatchOutcome::Handled { legacy_return }
+                    }),
+            )
         }
         SCRIPT_FUNCTION_SET_ME => {
             if argument_count != 2 {
