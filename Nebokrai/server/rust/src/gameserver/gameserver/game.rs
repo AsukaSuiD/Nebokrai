@@ -3867,8 +3867,16 @@ pub(crate) struct GamePlayerLostTimeoutReport {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GamePlayerFightStateReport {
+    pub(crate) phase: GamePlayerFightStatePhase,
     pub(crate) transition: PlayerFightStateTransition,
     pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerFightStatePhase {
+    Relive,
+    PeriodicalUpdate,
+    MoveShapeAi,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4961,9 +4969,10 @@ pub(crate) trait GameMainLoopRuntime:
     /// Исполняет ещё внешний disconnect prefix `CPlayer::AI`; delayed lost
     /// timestamp и его `OnExit/CS_DELETE` tail принадлежат `CGame`.
     fn player_disconnect_ai_prefix(&mut self, game: &mut CGame, player_id: i32);
-    /// Исполняет ещё внешний virtual base-slot `PeriodicalUpdate`
-    /// непосредственно перед owned murderer/ping/countdown/hatcher tail.
-    fn player_periodical_update_virtual(&mut self, game: &mut CGame, player_id: i32);
+    /// Исполняет оставшийся criminal timestamp tail virtual
+    /// `CPlayer::UpdateCurrentState` после owned combat countdown. Native
+    /// вызывает этот slot дважды: из `PeriodicalUpdate` и `CMoveShape::AI`.
+    fn player_update_criminal_state_tail(&mut self, game: &mut CGame, player_id: i32);
     /// Исполняет `UpdateAbnormality` prefix `CMoveShape::AI` непосредственно
     /// перед owned virtual `CPlayer::UpdateCurrentState`.
     fn player_move_shape_update_abnormality(&mut self, game: &mut CGame, player_id: i32);
@@ -21200,6 +21209,7 @@ impl CGame {
 
     fn publish_player_fight_state(
         &mut self,
+        phase: GamePlayerFightStatePhase,
         transition: PlayerFightStateTransition,
     ) -> GamePlayerFightStateReport {
         let around_delivery = transition
@@ -21212,6 +21222,7 @@ impl CGame {
             })
             .flatten();
         GamePlayerFightStateReport {
+            phase,
             transition,
             around_delivery,
         }
@@ -21221,15 +21232,16 @@ impl CGame {
     /// `UpdateCurrentState` countdown transition.
     fn enter_player_peace_state(&mut self, player_id: i32) -> Option<GamePlayerFightStateReport> {
         let transition = self.find_player_mut(player_id)?.enter_peace_state();
-        Some(self.publish_player_fight_state(transition))
+        Some(self.publish_player_fight_state(GamePlayerFightStatePhase::Relive, transition))
     }
 
     fn update_player_current_state(
         &mut self,
         player_id: i32,
+        phase: GamePlayerFightStatePhase,
     ) -> Option<GamePlayerFightStateReport> {
         let transition = self.find_player_mut(player_id)?.update_fight_state()?;
-        Some(self.publish_player_fight_state(transition))
+        Some(self.publish_player_fight_state(phase, transition))
     }
 
     fn publish_relive_died_state<Context: PlayerReliveContext>(
@@ -29216,7 +29228,13 @@ impl CGame {
                     .find_player(player_id)
                     .is_some_and(|player| !player.in_changing_region())
                 {
-                    runtime.player_periodical_update_virtual(self, player_id);
+                    if let Some(fight_state) = self.update_player_current_state(
+                        player_id,
+                        GamePlayerFightStatePhase::PeriodicalUpdate,
+                    ) {
+                        player_fight_states.push(fight_state);
+                    }
+                    runtime.player_update_criminal_state_tail(self, player_id);
                     let murderer_sign = self.periodical_update_murderer_sign(player_id, runtime);
                     if let Some(ping) = self.periodical_update_player_ping(player_id, runtime) {
                         let nation_died_state =
@@ -29231,9 +29249,13 @@ impl CGame {
                         });
                         runtime.player_move_shape_update_abnormality(self, player_id);
                         if self.find_player(player_id).is_some() {
-                            if let Some(fight_state) = self.update_player_current_state(player_id) {
+                            if let Some(fight_state) = self.update_player_current_state(
+                                player_id,
+                                GamePlayerFightStatePhase::MoveShapeAi,
+                            ) {
                                 player_fight_states.push(fight_state);
                             }
+                            runtime.player_update_criminal_state_tail(self, player_id);
                             restored = runtime.player_move_shape_active_state_ai(self, player_id);
                             ran_player_body = true;
                         }
