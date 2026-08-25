@@ -1513,6 +1513,16 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) critical_rate_bits: u32,
 }
 
+/// Exact `GetPlayerAllProperties` diagnostic projection. Числа хранят raw
+/// DWORD vararg bits: конкретный `%d`/`%u` шаблона определяет их signed view.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerAllPropertiesDiagnosticSnapshot {
+    pub(crate) name: Vec<u8>,
+    pub(crate) summary_words: [u32; 15],
+    pub(crate) base_combat_words: [u32; 15],
+    pub(crate) current_combat_words: [u32; 20],
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerExpendableEffect {
     pub(crate) property_type: i32,
@@ -4421,6 +4431,79 @@ impl CPlayer {
 
     pub(crate) const fn combat_property_wire(&self) -> &[u8; PLAYER_COMBAT_PROPERTY_WIRE_SIZE] {
         &self.combat_property_wire
+    }
+
+    /// Selector `3009` читает не производную Rust-модель, а те же concrete
+    /// `tagBaseProperty`/`tagProperty` slots, которые использует EXE. Поэтому
+    /// неизвестные, но загруженные и пересчитанные поля сохраняются в выводе.
+    pub(crate) fn all_properties_diagnostic_snapshot(
+        &self,
+    ) -> PlayerAllPropertiesDiagnosticSnapshot {
+        let base = self.synchronized_base_property_wire();
+        let current = &self.combat_property_wire;
+        let base_u16 = |offset| u32::from(read_player_wire_u16(&base, offset));
+        let base_u32 = |offset| read_player_wire_u32(&base, offset);
+        let current_u16 = |offset| u32::from(read_player_wire_u16(current, offset));
+        let current_u32 = |offset| read_player_wire_u32(current, offset);
+        PlayerAllPropertiesDiagnosticSnapshot {
+            name: self.shape().base_object().get_name().to_vec(),
+            summary_words: [
+                u32::from(self.occupation()),
+                u32::from(self.level()),
+                self.experience(),
+                base_u32(BASE_HEALTH_OFFSET),
+                current_u32(0x00),
+                base_u32(BASE_MANA_OFFSET),
+                current_u32(0x04),
+                base_u16(0xac),
+                current_u16(0x0a),
+                base_u32(BASE_MAXIMUM_HP_OFFSET),
+                base_u32(BASE_MAXIMUM_MP_OFFSET),
+                base_u16(0xba),
+                base_u16(BASE_PK_COUNT_OFFSET),
+                base_u32(BASE_KILL_COUNT_OFFSET),
+                self.money(),
+            ],
+            base_combat_words: [
+                base_u32(BASE_STRENGTH_OFFSET),
+                base_u32(BASE_DEXTERITY_OFFSET),
+                base_u32(BASE_CONSTITUTION_OFFSET),
+                base_u32(BASE_INTELLIGENCE_OFFSET),
+                base_u32(0xcc),
+                base_u32(0xd0),
+                base_u16(0xd4),
+                base_u16(0xd6),
+                base_u16(0xd8),
+                base_u32(0xdc),
+                base_u16(0xe0),
+                base_u16(0xe2),
+                base_u32(0xe4),
+                base_u16(0xe8),
+                base_u16(0xea),
+            ],
+            current_combat_words: [
+                current_u32(0x0c),
+                current_u32(0x10),
+                current_u32(0x14),
+                current_u32(0x18),
+                current_u32(0x1c),
+                current_u32(0x20),
+                current_u16(0x24),
+                current_u16(0x26),
+                current_u16(0x28),
+                current_u32(0x2c),
+                current_u16(0x30),
+                i32::from(read_player_wire_u16(current, 0x32) as i16) as u32,
+                current_u32(0x34),
+                current_u16(0x38),
+                current_u16(0x3a),
+                current_u16(0x3c),
+                current_u32(0x40),
+                current_u16(0x44),
+                current_u32(0x48),
+                current_u16(0x4c),
+            ],
+        }
     }
 
     /// Граница восстановления exact `m_Property` из persisted player state.

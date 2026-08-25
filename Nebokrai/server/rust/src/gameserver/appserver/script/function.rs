@@ -175,6 +175,9 @@
 //! Diagnostic `3017 / GetPlayerAllVariables` требует live script-player,
 //! снимает insertion-order snapshot локального target `CVariableList` и
 //! публикует scalar/string/array строки точным зелёным `BF806` caller-у.
+//! Парный `3009 / GetPlayerAllProperties` читает exact base/current wire
+//! slots PDB-layout, форматирует `GS0186..GS0188` в исходном vararg-порядке и
+//! публикует три цветных `BF806` тому же live script-player.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -304,6 +307,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_REGION_ID: i32 = 3005;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_REGION: i32 = 3006;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_REGION_EX: i32 = 3007;
 pub(crate) const SCRIPT_FUNCTION_KICK_PLAYER_EX: i32 = 3008;
+pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_ALL_PROPERTIES: i32 = 3009;
 pub(crate) const SCRIPT_FUNCTION_FORCE_MOVE: i32 = 3010;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_MONEY_BY_NAME: i32 = 3011;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
@@ -3248,6 +3252,10 @@ pub(crate) fn script_function_parameter_kind(
             0 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_PLAYER_ALL_PROPERTIES => match index {
+            0 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_FORCE_MOVE => match index {
             0 => String,
             1..=3 => Integer,
@@ -4431,6 +4439,60 @@ fn format_script_variable_line(name: &[u8], index: Option<usize>, value: i32) ->
     line
 }
 
+#[derive(Clone, Copy)]
+enum ScriptDiagnosticFormatArgument<'a> {
+    Bytes(&'a [u8]),
+    Word(u32),
+}
+
+fn format_script_diagnostic(
+    template: &[u8],
+    arguments: &[ScriptDiagnosticFormatArgument<'_>],
+) -> Vec<u8> {
+    let template = template.split(|byte| *byte == 0).next().unwrap_or_default();
+    let mut output = Vec::with_capacity(template.len());
+    let mut argument_index = 0usize;
+    let mut offset = 0usize;
+    while offset < template.len() && output.len() < 0x18fff {
+        if template[offset] != b'%' {
+            output.push(template[offset]);
+            offset += 1;
+            continue;
+        }
+        let Some(conversion) = template.get(offset + 1).copied() else {
+            output.push(b'%');
+            break;
+        };
+        if conversion == b'%' {
+            output.push(b'%');
+            offset += 2;
+            continue;
+        }
+        let Some(argument) = arguments.get(argument_index).copied() else {
+            output.extend_from_slice(&template[offset..]);
+            break;
+        };
+        let rendered = match (conversion, argument) {
+            (b's', ScriptDiagnosticFormatArgument::Bytes(value)) => value.to_vec(),
+            (b'd', ScriptDiagnosticFormatArgument::Word(value)) => {
+                (value as i32).to_string().into_bytes()
+            }
+            (b'u', ScriptDiagnosticFormatArgument::Word(value)) => value.to_string().into_bytes(),
+            _ => {
+                output.push(b'%');
+                offset += 1;
+                continue;
+            }
+        };
+        let remaining = 0x18fffusize.saturating_sub(output.len());
+        output.extend_from_slice(&rendered[..rendered.len().min(remaining)]);
+        argument_index += 1;
+        offset += 2;
+    }
+    output.truncate(0x18fff);
+    output
+}
+
 fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -5321,6 +5383,46 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     player_id,
                     runtime.country_contend_now_milliseconds(),
                 );
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GET_PLAYER_ALL_PROPERTIES => {
+            if let (Some(requester_id), Some(target_name)) = (script_player_id, string_arguments[0])
+                && let Some(snapshot) = game
+                    .find_player_by_name(target_name)
+                    .map(CPlayer::all_properties_diagnostic_snapshot)
+            {
+                let mut summary_arguments = Vec::with_capacity(16);
+                summary_arguments.push(ScriptDiagnosticFormatArgument::Bytes(&snapshot.name));
+                summary_arguments.extend(
+                    snapshot
+                        .summary_words
+                        .iter()
+                        .copied()
+                        .map(ScriptDiagnosticFormatArgument::Word),
+                );
+                let base_arguments: Vec<_> = snapshot
+                    .base_combat_words
+                    .iter()
+                    .copied()
+                    .map(ScriptDiagnosticFormatArgument::Word)
+                    .collect();
+                let current_arguments: Vec<_> = snapshot
+                    .current_combat_words
+                    .iter()
+                    .copied()
+                    .map(ScriptDiagnosticFormatArgument::Word)
+                    .collect();
+                for (string_id, color, arguments) in [
+                    (b"GS0186".as_slice(), 0xffff_ff00, summary_arguments),
+                    (b"GS0187".as_slice(), 0xffff_ffff, base_arguments),
+                    (b"GS0188".as_slice(), 0xffff_00ff, current_arguments),
+                ] {
+                    let text =
+                        format_script_diagnostic(game.get_string_by_id(string_id), &arguments);
+                    let _ = colored_player_notice_message(color, 0, &text)
+                        .send_to_player(game.net_server(), requester_id);
+                }
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
