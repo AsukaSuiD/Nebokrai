@@ -27,11 +27,11 @@
 //! burden gate; оба сохраняют equipment callbacks, depot lock/anchor/audit,
 //! destination rollback и client move;
 //! полный persisted-player snapshot `0x6080E` остаётся у недоступного owner-а.
-//! Packet/equipment/hand/depot↔ground ветвь того же `0x90301` теперь достигает
+//! Packet/equipment/hand/depot/ordinary-fairy↔ground ветвь того же `0x90301` теперь достигает
 //! concrete region goods owner-а: Receive нормализует region/position/amount,
 //! сохраняет exact pickup/progress/burden guards, protection notice,
 //! equipment property/around effects, one-slot hand split/stack, depot
-//! lock/anchor и независимые ground/depot audits, проводит remove/add с rollback и
+//! lock/anchor, fairy hatch/lock и независимые ground/depot audits, проводит remove/add с rollback и
 //! возвращает container listeners вместе с self/around `0xC0101`.
 //! Currency-ветвь сохраняет отдельную `Move`-нормализацию: ground
 //! gold/YuanBao при non-packet/equipment destination попадают в
@@ -759,12 +759,13 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 EnhancementMessageRoute::AuctionGoodsInventoryReturn
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == 200
-                && (matches!(request.source_container_extend_id, 1 | 2 | 9) || source_is_reached)
+                && (matches!(request.source_container_extend_id, 1 | 2 | 9 | 11)
+                    || source_is_reached)
             {
                 EnhancementMessageRoute::GroundDrop
             } else if request.source_container_type == 200
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && (matches!(request.destination_container_extend_id, 1 | 2 | 9)
+                && (matches!(request.destination_container_extend_id, 1 | 2 | 9 | 11)
                     || destination_is_reached)
             {
                 EnhancementMessageRoute::GroundPickup

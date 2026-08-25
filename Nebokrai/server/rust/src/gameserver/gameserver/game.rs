@@ -2432,6 +2432,8 @@ pub(crate) enum GroundGoodsMoveBlock {
     CurrencyAdditionRejected(CurrencyGoodsAddOutcome),
     DepotRemovalFailed,
     DepotAdditionRejected(DepotStorageTransferAddition),
+    FairyRemovalFailed(FairyContainerRemoveOutcome),
+    FairyAdditionRejected(FairyStorageTransferAddition),
     ContainerRollbackCompleted {
         region_error: RegionMembershipBlock,
         removal: EnhancementTransferRemoval,
@@ -2452,6 +2454,11 @@ pub(crate) enum GroundGoodsMoveBlock {
         removal: DepotStorageRemoval,
         rollback: DepotStorageTransferAddition,
     },
+    FairyRollbackCompleted {
+        region_error: RegionMembershipBlock,
+        removal: FairyStorageRemoval,
+        rollback: FairyStorageTransferAddition,
+    },
     RollbackFailed {
         goods: CGoods,
         region_error: RegionMembershipBlock,
@@ -2463,6 +2470,8 @@ pub(crate) enum GroundGoodsMoveBlock {
         currency_addition: Option<CurrencyGoodsAddOutcome>,
         depot_removal: Option<DepotStorageRemoval>,
         depot_addition: Option<DepotStorageTransferAddition>,
+        fairy_removal: Option<FairyStorageRemoval>,
+        fairy_addition: Option<FairyStorageTransferAddition>,
     },
     Region(RegionMembershipBlock),
 }
@@ -3103,6 +3112,8 @@ pub(crate) struct GroundGoodsMoveReport {
     pub(crate) destination_currency_mutation: Option<CurrencyGoodsAddOutcome>,
     pub(crate) source_depot_mutation: Option<DepotStorageRemoval>,
     pub(crate) destination_depot_mutation: Option<DepotStorageTransferAddition>,
+    pub(crate) source_fairy_mutation: Option<FairyStorageRemoval>,
+    pub(crate) destination_fairy_mutation: Option<FairyStorageTransferAddition>,
     pub(crate) previous_last_operated: Option<(u32, u32)>,
     pub(crate) audit_deliveries: Vec<i32>,
     pub(crate) player_delivery: i32,
@@ -10229,6 +10240,7 @@ impl CGame {
             3 => player.hand().get_goods(source_position),
             4 | 5 => player.ground_currency_goods(source_extend_id),
             9 => player.depot().get_goods(source_position),
+            11 => player.fairy_container().base().get_goods(source_position),
             _ => None,
         }
         .filter(|goods| goods.identity().ex_id == goods_id)
@@ -10293,6 +10305,7 @@ impl CGame {
             source_hand_mutation,
             source_currency_mutation,
             source_depot_mutation,
+            source_fairy_mutation,
         ) = if source_extend_id == 1 {
             let mut split_template = source.clone();
             split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
@@ -10321,7 +10334,7 @@ impl CGame {
                         amount: removed.amount,
                         listeners: removed.listeners,
                     };
-                    (removed.goods, Some(mutation), None, None, None)
+                    (removed.goods, Some(mutation), None, None, None, None)
                 }
                 VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Split(split))
                 | VolumeGoodsRemoveOutcome::RemovedButCellMissing(AmountLimitGoodsTaken::Split(
@@ -10334,7 +10347,7 @@ impl CGame {
                         amount: split.amount,
                         listeners: split.listeners,
                     };
-                    (split.goods, Some(mutation), None, None, None)
+                    (split.goods, Some(mutation), None, None, None, None)
                 }
             }
         } else if source_extend_id == 2 {
@@ -10372,7 +10385,7 @@ impl CGame {
                 effects: report.effects,
                 deliveries: report.deliveries,
             };
-            (removed.goods, Some(mutation), None, None, None)
+            (removed.goods, Some(mutation), None, None, None, None)
         } else if source_extend_id == 3 {
             let mut split_template = source.clone();
             split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
@@ -10398,7 +10411,7 @@ impl CGame {
                         listeners: removed.listeners,
                         kind: GroundHandRemovalKind::Removed,
                     };
-                    (removed.goods, None, Some(mutation), None, None)
+                    (removed.goods, None, Some(mutation), None, None, None)
                 }
                 AmountLimitGoodsTaken::Split(split) => {
                     let mutation = GroundHandRemoval {
@@ -10411,7 +10424,7 @@ impl CGame {
                             source: split.source,
                         },
                     };
-                    (split.goods, None, Some(mutation), None, None)
+                    (split.goods, None, Some(mutation), None, None, None)
                 }
             }
         } else if source_extend_id == 9 {
@@ -10439,7 +10452,7 @@ impl CGame {
                         listeners: removed.listeners,
                         kind: DepotStorageRemovalKind::Removed,
                     };
-                    (removed.goods, None, None, None, Some(mutation))
+                    (removed.goods, None, None, None, Some(mutation), None)
                 }
                 AmountLimitGoodsTaken::Split(split) => {
                     let mutation = DepotStorageRemoval {
@@ -10452,7 +10465,51 @@ impl CGame {
                             source: split.source,
                         },
                     };
-                    (split.goods, None, None, None, Some(mutation))
+                    (split.goods, None, None, None, Some(mutation), None)
+                }
+            }
+        } else if source_extend_id == 11 {
+            let mut split_template = source.clone();
+            split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+            let outcome = player.fairy_container_mut().take(
+                source_position,
+                amount,
+                &self.goods_factory,
+                |_| {
+                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                        .then(|| split_template.clone())
+                },
+            );
+            let taken = match outcome {
+                FairyContainerRemoveOutcome::Removed(VolumeGoodsRemoveOutcome::Removed(taken)) => {
+                    taken
+                }
+                failed => {
+                    self.players.insert(player_id, player);
+                    self.restore_region_owner(owner);
+                    return Err(GroundGoodsMoveBlock::FairyRemovalFailed(failed));
+                }
+            };
+            match taken {
+                AmountLimitGoodsTaken::Removed(removed) => {
+                    let mutation = FairyStorageRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                    };
+                    (removed.goods, None, None, None, None, Some(mutation))
+                }
+                AmountLimitGoodsTaken::Split(split) => {
+                    let mutation = FairyStorageRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                    };
+                    (split.goods, None, None, None, None, Some(mutation))
                 }
             }
         } else {
@@ -10481,7 +10538,7 @@ impl CGame {
                         listeners: removed.listeners,
                         kind: GroundCurrencyRemovalKind::Removed,
                     };
-                    (removed.goods, None, None, Some(mutation), None)
+                    (removed.goods, None, None, Some(mutation), None, None)
                 }
                 CurrencyGoodsTaken::Split(split) => {
                     let mutation = GroundCurrencyRemoval {
@@ -10494,7 +10551,7 @@ impl CGame {
                             source: split.source,
                         },
                     };
-                    (split.goods, None, None, Some(mutation), None)
+                    (split.goods, None, None, Some(mutation), None, None)
                 }
             }
         };
@@ -10515,7 +10572,7 @@ impl CGame {
             context,
         ) {
             let mut incoming = Some(detached);
-            let (rollback, hand_rollback, currency_rollback, depot_rollback) =
+            let (rollback, hand_rollback, currency_rollback, depot_rollback, fairy_rollback) =
                 match source_extend_id {
                     1 => (
                         Some(EnhancementTransferAddition::Packet(
@@ -10526,6 +10583,7 @@ impl CGame {
                                 true,
                             ),
                         )),
+                        None,
                         None,
                         None,
                         None,
@@ -10542,6 +10600,7 @@ impl CGame {
                         None,
                         None,
                         None,
+                        None,
                     ),
                     3 => (
                         None,
@@ -10550,6 +10609,7 @@ impl CGame {
                             source_position,
                             &mut incoming,
                         )),
+                        None,
                         None,
                         None,
                     ),
@@ -10563,6 +10623,7 @@ impl CGame {
                             true,
                         ),
                         None,
+                        None,
                     ),
                     9 => (
                         None,
@@ -10571,6 +10632,20 @@ impl CGame {
                         Some(self.add_depot_transfer_goods(
                             &mut player,
                             9,
+                            source_position,
+                            &mut incoming,
+                            context,
+                        )),
+                        None,
+                    ),
+                    11 => (
+                        None,
+                        None,
+                        None,
+                        None,
+                        Some(self.add_fairy_transfer_goods(
+                            &mut player,
+                            11,
                             source_position,
                             &mut incoming,
                             context,
@@ -10592,6 +10667,8 @@ impl CGame {
                     currency_addition: currency_rollback,
                     depot_removal: source_depot_mutation,
                     depot_addition: depot_rollback,
+                    fairy_removal: source_fairy_mutation,
+                    fairy_addition: fairy_rollback,
                 });
             }
             return Err(
@@ -10617,11 +10694,19 @@ impl CGame {
                         removal,
                         rollback,
                     }
-                } else {
+                } else if let (Some(removal), Some(rollback)) =
+                    (source_depot_mutation, depot_rollback)
+                {
                     GroundGoodsMoveBlock::DepotRollbackCompleted {
                         region_error: error,
-                        removal: source_depot_mutation.expect("depot removal сохранён"),
-                        rollback: depot_rollback.expect("depot rollback выполнен"),
+                        removal,
+                        rollback,
+                    }
+                } else {
+                    GroundGoodsMoveBlock::FairyRollbackCompleted {
+                        region_error: error,
+                        removal: source_fairy_mutation.expect("fairy removal сохранён"),
+                        rollback: fairy_rollback.expect("fairy rollback выполнен"),
                     }
                 },
             );
@@ -10691,6 +10776,8 @@ impl CGame {
             destination_currency_mutation: None,
             source_depot_mutation,
             destination_depot_mutation: None,
+            source_fairy_mutation,
+            destination_fairy_mutation: None,
             previous_last_operated,
             audit_deliveries,
             player_delivery,
@@ -10820,6 +10907,8 @@ impl CGame {
                     currency_addition: None,
                     depot_removal: None,
                     depot_addition: None,
+                    fairy_removal: None,
+                    fairy_addition: None,
                 });
             }
             return Err(GroundGoodsMoveBlock::BurdenExceeded);
@@ -10835,6 +10924,7 @@ impl CGame {
             destination_hand_mutation,
             destination_currency_mutation,
             destination_depot_mutation,
+            destination_fairy_mutation,
         ) = if destination_extend_id == 1 {
             let addition = if destination_position == u32::MAX {
                 player
@@ -10853,6 +10943,7 @@ impl CGame {
                 None,
                 None,
                 None,
+                None,
             )
         } else if destination_extend_id == 2 {
             (
@@ -10867,11 +10958,13 @@ impl CGame {
                 None,
                 None,
                 None,
+                None,
             )
         } else if destination_extend_id == 3 {
             (
                 None,
                 Some(self.add_ground_hand_goods(&mut player, destination_position, &mut incoming)),
+                None,
                 None,
                 None,
             )
@@ -10883,6 +10976,21 @@ impl CGame {
                 Some(self.add_depot_transfer_goods(
                     &mut player,
                     9,
+                    destination_position,
+                    &mut incoming,
+                    context,
+                )),
+                None,
+            )
+        } else if destination_extend_id == 11 {
+            (
+                None,
+                None,
+                None,
+                None,
+                Some(self.add_fairy_transfer_goods(
+                    &mut player,
+                    11,
                     destination_position,
                     &mut incoming,
                     context,
@@ -10899,6 +11007,7 @@ impl CGame {
                     &self.goods_factory,
                     owner_progress_allows,
                 ),
+                None,
                 None,
             )
         };
@@ -10932,6 +11041,8 @@ impl CGame {
                     currency_addition: destination_currency_mutation.clone(),
                     depot_removal: None,
                     depot_addition: destination_depot_mutation.clone(),
+                    fairy_removal: None,
+                    fairy_addition: destination_fairy_mutation.clone(),
                 });
             }
             return Err(
@@ -10940,19 +11051,23 @@ impl CGame {
                     destination_hand_mutation,
                     destination_currency_mutation,
                     destination_depot_mutation,
+                    destination_fairy_mutation,
                 ) {
-                    (Some(EnhancementTransferAddition::Packet(_)), _, _, _) => {
+                    (Some(EnhancementTransferAddition::Packet(_)), _, _, _, _) => {
                         GroundGoodsMoveBlock::PacketAdditionRejected
                     }
-                    (Some(EnhancementTransferAddition::Equipment(report)), _, _, _) => {
+                    (Some(EnhancementTransferAddition::Equipment(report)), _, _, _, _) => {
                         GroundGoodsMoveBlock::EquipmentAdditionRejected(report)
                     }
-                    (None, Some(_), _, _) => GroundGoodsMoveBlock::HandAdditionRejected,
-                    (None, None, Some(outcome), _) => {
+                    (None, Some(_), _, _, _) => GroundGoodsMoveBlock::HandAdditionRejected,
+                    (None, None, Some(outcome), _, _) => {
                         GroundGoodsMoveBlock::CurrencyAdditionRejected(outcome)
                     }
-                    (None, None, None, Some(outcome)) => {
+                    (None, None, None, Some(outcome), _) => {
                         GroundGoodsMoveBlock::DepotAdditionRejected(outcome)
+                    }
+                    (None, None, None, None, Some(outcome)) => {
+                        GroundGoodsMoveBlock::FairyAdditionRejected(outcome)
                     }
                     _ => unreachable!("ground destination mutation получена"),
                 },
@@ -10963,8 +11078,9 @@ impl CGame {
             &destination_hand_mutation,
             &destination_currency_mutation,
             &destination_depot_mutation,
+            &destination_fairy_mutation,
         ) {
-            (Some(EnhancementTransferAddition::Packet(addition)), _, _, _) => match addition {
+            (Some(EnhancementTransferAddition::Packet(addition)), _, _, _, _) => match addition {
                 VolumeGoodsAddOutcome::Added(added) => {
                     let position = added.position.unwrap_or(destination_position);
                     let stored = player
@@ -10988,7 +11104,7 @@ impl CGame {
                     unreachable!("успешный packet add обязан забрать incoming goods")
                 }
             },
-            (Some(EnhancementTransferAddition::Equipment(report)), _, _, _) => {
+            (Some(EnhancementTransferAddition::Equipment(report)), _, _, _, _) => {
                 match &report.outcome {
                     EquipmentAddOutcome::Added(added) => {
                         (added.column.position(), added.identity, added.amount)
@@ -10998,7 +11114,7 @@ impl CGame {
                     }
                 }
             }
-            (None, Some(GroundHandAddition::Added(added)), _, _) => (
+            (None, Some(GroundHandAddition::Added(added)), _, _, _) => (
                 added.position.unwrap_or(destination_position),
                 added.identity,
                 added.amount,
@@ -11008,6 +11124,7 @@ impl CGame {
                 Some(GroundHandAddition::Stack(GoodsStackMergeOutcome::Merged { target, .. })),
                 _,
                 _,
+                _,
             ) => {
                 let stored = player
                     .hand()
@@ -11015,7 +11132,7 @@ impl CGame {
                     .expect("успешный hand stack сохраняет target");
                 (destination_position, stored.identity(), stored.amount())
             }
-            (None, None, Some(CurrencyGoodsAddOutcome::Added(added)), _) => {
+            (None, None, Some(CurrencyGoodsAddOutcome::Added(added)), _, _) => {
                 (added.position, added.identity, added.amount)
             }
             (
@@ -11025,6 +11142,7 @@ impl CGame {
                     target, ..
                 })),
                 _,
+                _,
             ) => {
                 let stored = player
                     .ground_currency_goods(destination_extend_id)
@@ -11032,8 +11150,11 @@ impl CGame {
                 debug_assert_eq!(stored.identity(), *target);
                 (0, stored.identity(), stored.amount())
             }
-            (None, None, None, Some(addition)) => {
+            (None, None, None, Some(addition), _) => {
                 Self::depot_transfer_destination(&player, destination_position, addition)
+            }
+            (None, None, None, None, Some(addition)) => {
+                Self::fairy_transfer_destination(&player, destination_position, addition)
             }
             _ => unreachable!("успешный destination add забирает incoming goods"),
         };
@@ -11116,6 +11237,8 @@ impl CGame {
             destination_currency_mutation,
             source_depot_mutation: None,
             destination_depot_mutation,
+            source_fairy_mutation: None,
+            destination_fairy_mutation,
             previous_last_operated: None,
             audit_deliveries,
             player_delivery,
