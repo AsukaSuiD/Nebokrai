@@ -124,6 +124,11 @@
 //! маршрутизирует удалённых участников через World и считает только
 //! незавершённые отображаемые задания. Ответ запуска удалённого сценария
 //! `0x7FE3A` возвращается в ту же очередь `CScript`, если игрок жив.
+//! `7000 / SetFacParaByPlayer` разрешает локального игрока по вычисленному
+//! имени и передаёт его ID, имя параметра и значение в World `0x6013E`, где
+//! действующий `CFaction` повторно проверяет главу и применяет параметр.
+//! `7001 / ChangeFacParaByPlayer` в таблице переходов EXE сразу возвращается
+//! без действий; отсутствующие там `7002/7003` не получают выдуманных ветвей.
 //! Соседний владелец `3500..3503/3507` меняет постоянные поля доступности и
 //! обратного отсчёта задания, публикует `0xBF728..2A` и возвращает тот же
 //! знаково переполненный остаток, который клиент может отдельно запросить через
@@ -668,6 +673,8 @@ pub(crate) const SCRIPT_FUNCTION_ADD_QUEST_FOR_TEAM: i32 = 6204;
 pub(crate) const SCRIPT_FUNCTION_RUN_SCRIPT_FOR_TEAM: i32 = 6205;
 pub(crate) const SCRIPT_FUNCTION_GET_VALID_QUEST_NUM: i32 = 6206;
 pub(crate) const SCRIPT_FUNCTION_UPDATE_QUEST_POSITION: i32 = 6207;
+pub(crate) const SCRIPT_FUNCTION_SET_FACTION_PARAMETER_BY_PLAYER: i32 = 7000;
+pub(crate) const SCRIPT_FUNCTION_CHANGE_FACTION_PARAMETER_BY_PLAYER: i32 = 7001;
 pub(crate) const SCRIPT_FUNCTION_NPC_TALK: i32 = 3301;
 pub(crate) const SCRIPT_FUNCTION_CREATE_NPC: i32 = 3302;
 pub(crate) const SCRIPT_FUNCTION_DELETE_NPC: i32 = 3303;
@@ -4178,6 +4185,11 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_SET_FACTION_PARAMETER_BY_PLAYER => match index {
+            0 | 1 => String,
+            2 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_UPDATE_QUEST_POSITION => match index {
             0..=4 => Integer,
             _ => Unused,
@@ -7519,6 +7531,33 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: game.valid_script_quest_count(target_player_id),
             })
+        }
+        SCRIPT_FUNCTION_SET_FACTION_PARAMETER_BY_PLAYER => {
+            let (Some(target_name), Some(parameter), Some(value)) = (
+                string_arguments[0],
+                string_arguments[1],
+                integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let target_player_id = if target_name.is_empty() {
+                script_player_id
+            } else {
+                game.find_player_by_name(target_name)
+                    .map(CPlayer::player_id)
+            };
+            if let Some(target_player_id) = target_player_id {
+                let mut request = CMessage::new(0x0006_013e);
+                request.add_long(target_player_id);
+                request.base_mut().add(parameter);
+                request.add_byte(0);
+                request.add_long(value);
+                let _ = request.send(game, false);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_CHANGE_FACTION_PARAMETER_BY_PLAYER => {
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_UPDATE_QUEST_POSITION => {
             let Some(target_player_id) =
