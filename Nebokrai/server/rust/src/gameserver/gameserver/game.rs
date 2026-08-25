@@ -1978,6 +1978,15 @@ pub(crate) struct ScriptDepotOpenReport {
     pub(crate) delivery: Option<i32>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ScriptGoodsDropReport {
+    pub(crate) requested: u32,
+    pub(crate) created: usize,
+    pub(crate) placed: Vec<ShapeIdentity>,
+    pub(crate) player_deliveries: Vec<i32>,
+    pub(crate) around_deliveries: Vec<Option<Result<i32, ShapeCoordinateBlock>>>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsDestroyDeleteRequest {
     pub(crate) player_id: i32,
@@ -30355,8 +30364,77 @@ impl CGame {
         true
     }
 
-    /// Exact script `3306 / DeleteMonster` не запускает death owner: после
-    /// around-exit monster лишь получает `CS_DELETE` для обычного AI cleanup.
+    pub(crate) fn drop_script_goods<Runtime: MonsterDeathContext>(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        original_name: &[u8],
+        amount: u32,
+        origin_x: i32,
+        origin_y: i32,
+        runtime: &mut Runtime,
+    ) -> ScriptGoodsDropReport {
+        let goods_index = self
+            .goods_factory
+            .query_goods_id_by_original_name(Some(original_name));
+        let mut created = self.create_goods_batch(goods_index, amount);
+        let mut report = ScriptGoodsDropReport {
+            requested: amount,
+            created: created.len(),
+            placed: Vec::new(),
+            player_deliveries: Vec::new(),
+            around_deliveries: Vec::new(),
+        };
+        for goods in created.drain(..) {
+            let old_client_payload = runtime.encode_goods_for_old_client(&goods);
+            let item_amount = goods.amount();
+            let particular_attribute =
+                goods.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32;
+            let identity = goods.identity();
+            let Some(mut owner) = self.take_region_owner(region_id) else {
+                break;
+            };
+            let position = owner.base().get_drop_goods_position(origin_x, origin_y, 0);
+            let Ok(Some((tile_x, tile_y, destination_position))) = position else {
+                self.restore_region_owner(owner);
+                break;
+            };
+            let (area_width, area_height) = self.area_dimensions();
+            let added = owner.base_mut().add_owned_ground_goods(
+                goods,
+                tile_x,
+                tile_y,
+                particular_attribute,
+                runtime.now_milliseconds(),
+                area_width,
+                area_height,
+                runtime,
+            );
+            self.restore_region_owner(owner);
+            if added.is_err() {
+                continue;
+            }
+            let mut appeared = CS2CContainerObjectMove::default();
+            appeared.set_operation(ContainerObjectMoveOperation::NewObject);
+            appeared.set_destination_container(200, region_id, destination_position);
+            appeared.set_destination_object(GOODS_TYPE, identity.ex_id);
+            appeared.set_destination_object_amount(item_amount);
+            appeared.set_object_stream(old_client_payload);
+            let around = appeared.message();
+            report
+                .player_deliveries
+                .push(appeared.send_to_player(self, player_id));
+            report
+                .around_deliveries
+                .push(self.send_player_shape_around(player_id, None, &around));
+            report.placed.push(identity);
+        }
+        report
+    }
+
+    /// Точная сценарная функция `3306 / DeleteMonster` не запускает владельца
+    /// смерти: после публикации выхода окружающим монстр лишь получает
+    /// `CS_DELETE` для обычной очистки искусственным интеллектом.
     pub(crate) fn delete_script_monster(&mut self, player_id: i32, monster_id: i32) -> Option<i32> {
         let region_id = self.find_player(player_id)?.server_region_id()?;
         let mut owner = self.take_region_owner(region_id)?;
@@ -33440,6 +33518,7 @@ impl CGame {
             player_id: beneficiary_id,
             region_id: Some(region_id),
             died_monster_index: Some(monster_property.index),
+            drop_goods_position: Some((target_x, target_y)),
             ..ScriptExecutionContext::default()
         };
         if !script_file.is_empty() {

@@ -147,9 +147,9 @@ const SCRIPT_FUNCTION_WAIT: i32 = 6;
 const SCRIPT_FUNCTION_RUN_TIME: i32 = 22;
 
 /// Контекст исполнения `stRunScript`, заполняемый конкретными вызывающими
-/// владельцами. Смерть монстра передаёт его базовый индекс вместе с игроком и
-/// регионом, поэтому отложенные сценарии сохраняют полный контекст, а не только
-/// имя файла.
+/// владельцами. Смерть монстра передаёт его базовый индекс, игрока, регион и
+/// точку выпадения предметов, поэтому отложенные сценарии сохраняют полный
+/// контекст, а не только имя файла.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ScriptExecutionContext {
     pub(crate) player_id: Option<i32>,
@@ -157,6 +157,7 @@ pub(crate) struct ScriptExecutionContext {
     pub(crate) region_id: Option<i32>,
     pub(crate) used_item_id: Option<CGuid>,
     pub(crate) died_monster_index: Option<u32>,
+    pub(crate) drop_goods_position: Option<(i32, i32)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -419,12 +420,13 @@ impl ActiveScript {
     }
 }
 
-/// Reached execution owner исходного `CScript`: instance читает одну
-/// непрерывную группу команд и передаёт вычисленные параметры в numeric
-/// `RunFunction` dispatcher. `call` и dialog yield возвращают управление
-/// owned scheduler-у, который сохраняет cursor и context. Безопасный subset
-/// включает `if/else`, `goto`, `call` и локальные присваивания; неизвестная
-/// команда завершает instance до side effects следующей строки.
+/// Достигнутый владелец исполнения исходного `CScript`: экземпляр читает одну
+/// непрерывную группу команд и передаёт вычисленные параметры в числовой
+/// диспетчер `RunFunction`. Команды `call` и приостановка диалога возвращают
+/// управление планировщику, который сохраняет позицию и контекст. Поддержанная
+/// часть языка включает `if/else`, `goto`, `call` и локальные присваивания;
+/// неизвестная команда завершает экземпляр до побочных эффектов следующей
+/// строки.
 pub(crate) struct CScript<'a> {
     source: &'a [u8],
     path: &'a [u8],
@@ -804,8 +806,9 @@ impl<'a> CScript<'a> {
         let mut string_arguments: [Option<Vec<u8>>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY] =
             std::array::from_fn(|_| None);
         if function_id == SCRIPT_FUNCTION_MONSTER_TALK {
-            // Exact EXE `3304` вычисляет text (index 1) раньше имени и не
-            // трогает хвост; side-effect expressions наблюдают тот же порядок.
+            // В точной реализации EXE функция `3304` вычисляет текст с индексом
+            // `1` раньше имени и не трогает хвост; выражения с побочными
+            // эффектами наблюдают тот же порядок.
             for index in [1_usize, 0] {
                 if let Some(parameter) = parameters.get(index) {
                     string_arguments[index] = self.evaluate_string(game, runtime, parameter);
@@ -856,6 +859,7 @@ impl<'a> CScript<'a> {
             self.context.region_id,
             self.context.used_item_id,
             self.context.died_monster_index,
+            self.context.drop_goods_position,
             self.script_id,
             self.path,
             function_id,

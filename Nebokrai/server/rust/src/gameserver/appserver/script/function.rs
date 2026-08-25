@@ -276,6 +276,11 @@
 //! тот же reached `GetMe/SetMe/ChangePlayer/SetPlayer` dispatcher: bool write
 //! нормализует любое ненулевое значение, затем исполняет общий property/wire
 //! tail и влияет на следующий exact `CanMountEquip` без shadow-state.
+//! `3307 / KillMonster` проводит цель через общего владельца смерти монстра:
+//! состояние, сетевое исчезновение, награда, добыча и сценарии смерти остаются
+//! в исходном порядке. Вызванный ими `3401 / DropGoods` наследует точку смерти,
+//! создаёт товары, занимает ячейки региона и публикует `CS2CContainerObjectMove`
+//! игроку и окружающим через настоящую цепочку исполнения `CScript`.
 //! Числовой селектор получает вычисленные параметры из собственного
 //! `CScript`; результат или приостановка диалога возвращается в ту же цепочку
 //! исполнения. Остальные идентификаторы функций и неподтверждённые семейства
@@ -518,6 +523,7 @@ pub(crate) const SCRIPT_FUNCTION_PLAY_SOUND: i32 = 5410;
 pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
 pub(crate) const SCRIPT_FUNCTION_POST_PLAYER_INFO: i32 = 3316;
 pub(crate) const SCRIPT_FUNCTION_IS_RIDER: i32 = 3317;
+pub(crate) const SCRIPT_FUNCTION_DROP_GOODS: i32 = 3401;
 pub(crate) const SCRIPT_FUNCTION_POST_REGION_INFO: i32 = 5201;
 pub(crate) const SCRIPT_FUNCTION_POST_WORLD_INFO: i32 = 5202;
 pub(crate) const SCRIPT_FUNCTION_POST_COUNTRY_INFO: i32 = 5203;
@@ -3651,6 +3657,11 @@ pub(crate) fn script_function_parameter_kind(
             5 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_DROP_GOODS => match index {
+            0 | 1 | 3 => Integer,
+            2 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_DELETE_NPC_BY_NAME => match index {
             0 => String,
             1 => Integer,
@@ -4842,6 +4853,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
     script_player_id: Option<i32>,
     script_npc_id: Option<i32>,
     script_region_id: Option<i32>,
+    drop_goods_position: Option<(i32, i32)>,
     script_id: i32,
     script_path: &[u8],
     function_id: i32,
@@ -5438,6 +5450,37 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             };
             let _ = game.kill_script_monster(player_id, target_id, runtime);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_DROP_GOODS => {
+            if !(3..=4).contains(&argument_count) {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let (Some(player_id), Some(region_id), Some(tile_x), Some(tile_y), Some(name)) = (
+                script_player_id.filter(|player_id| game.find_player(*player_id).is_some()),
+                script_region_id.filter(|region_id| game.find_region(*region_id).is_some()),
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                string_arguments[2].filter(|name| !name.is_empty()),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let amount = integer_arguments[3]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .unwrap_or(1);
+            if !(1..=MAXIMUM_SCRIPT_SPAWN_COUNT).contains(&amount) {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let (tile_x, tile_y) = drop_goods_position.unwrap_or((tile_x, tile_y));
+            let _ = game.drop_script_goods(
+                player_id,
+                region_id,
+                name,
+                amount as u32,
+                tile_x,
+                tile_y,
+                runtime,
+            );
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_DELETE_MONSTER_RECT => {
@@ -7417,6 +7460,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     script_region_id: Option<i32>,
     used_item_id: Option<CGuid>,
     died_monster_index: Option<u32>,
+    drop_goods_position: Option<(i32, i32)>,
     script_id: i32,
     script_path: &[u8],
     function_id: i32,
@@ -7669,6 +7713,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         script_player_id,
         script_npc_id,
         script_region_id,
+        drop_goods_position,
         script_id,
         script_path,
         function_id,
