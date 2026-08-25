@@ -28149,6 +28149,24 @@ impl CGame {
         message.send_to_around(Some(region), origin, Some(player_id), &runtime)
     }
 
+    pub(crate) fn send_shape_around_in_region(
+        &self,
+        region: &CServerRegion,
+        origin: &CShape,
+        excluded_player_id: Option<i32>,
+        message: &CMessage,
+    ) -> Result<i32, ShapeCoordinateBlock> {
+        let Some(runtime) = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        ) else {
+            return Ok(0);
+        };
+        message.send_to_around(Some(region), origin, excluded_player_id, &runtime)
+    }
+
     pub(crate) fn send_player_shape_around(
         &mut self,
         player_id: i32,

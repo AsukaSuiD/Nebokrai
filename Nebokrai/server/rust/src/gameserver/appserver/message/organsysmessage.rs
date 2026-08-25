@@ -67,7 +67,7 @@ use super::super::servercityregion::CityRegionContext;
 use super::super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
-use super::super::shape::{CShape, ShapeCoordinateBlock, ShapeIdentity};
+use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::player::{CPlayer, PlayerExploitMutationReport};
 use crate::gameserver::gameserver::game::{
     CGame, GameWarRegionHandle, OldClientGoodsCodec, ScriptRegionChangeContext, ServerRegionOwner,
@@ -86,15 +86,6 @@ pub(crate) trait GameOrganizingWarRuntime:
     fn update_player_property(&mut self, player: &mut CPlayer);
 
     fn on_four_nation_relive_block(&mut self, player_id: i32, block: FourNationReliveBlock);
-
-    /// Публикует exact `0xBF504(type,id,0)` вокруг monster/NPC до mutation.
-    fn send_four_nation_clear_around(
-        &mut self,
-        message: &CMessage,
-        region: &CServerRegion,
-        origin: &CShape,
-        game: &CGame,
-    ) -> i32;
 
     /// Возвращает первый совпавший ID в текущем observable traversal старого
     /// `stdext::hash_map`; повторный вызов после removal видит новый head.
@@ -1716,12 +1707,9 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
             removal.base_mut().add_long(identity.object_type);
             removal.base_mut().add_long(identity.id);
             removal.base_mut().add_long(0);
-            let _delivery = self.runtime.send_four_nation_clear_around(
-                &removal,
-                &region.war.base,
-                shape,
-                self.game,
-            );
+            let _delivery =
+                self.game
+                    .send_shape_around_in_region(&region.war.base, shape, None, &removal);
             region
                 .war
                 .base
@@ -1765,12 +1753,9 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
             removal.base_mut().add_long(identity.object_type);
             removal.base_mut().add_long(identity.id);
             removal.base_mut().add_long(0);
-            let _delivery = self.runtime.send_four_nation_clear_around(
-                &removal,
-                &region.war.base,
-                shape,
-                self.game,
-            );
+            let _delivery =
+                self.game
+                    .send_shape_around_in_region(&region.war.base, shape, None, &removal);
             if let Err(block) = region.war.base.remove_owned_npc_by_id(identity.id) {
                 self.runtime
                     .on_four_nation_clear_block(FourNationClearBlock::NpcRemoval {
