@@ -2844,6 +2844,85 @@ pub(crate) struct BattleFairyTransferReport {
     pub(crate) delivery: i32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingComposeStorageRemoval {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CiQingComposeTransferRemoval {
+    Player(EnhancementTransferRemoval),
+    Compose(CiQingComposeStorageRemoval),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CiQingComposeTransferAddition {
+    Player(DepotStorageTransferAddition),
+    Compose(CiQingContainerAddition),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CiQingComposeTransferBlock {
+    MissingPlayer,
+    UnsupportedRoute,
+    MissingGoods,
+    AmountMismatch,
+    PartialMoveBusy(PlayerProgress),
+    DestinationRejectsSourceSlot {
+        source_position: u32,
+        removal: CiQingComposeTransferRemoval,
+        restored: CiQingComposeTransferAddition,
+    },
+    DestinationRejectRollbackFailed {
+        goods: CGoods,
+        source_position: u32,
+        removal: CiQingComposeTransferRemoval,
+        rollback: CiQingComposeTransferAddition,
+    },
+    BurdenRolledBack {
+        removal: CiQingComposeTransferRemoval,
+        restored: CiQingComposeTransferAddition,
+    },
+    BurdenRollbackFailed {
+        goods: CGoods,
+        removal: CiQingComposeTransferRemoval,
+        rollback: CiQingComposeTransferAddition,
+    },
+    PacketRemovalFailed,
+    EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
+    ComposeRemovalFailed,
+    RolledBack {
+        removal: CiQingComposeTransferRemoval,
+        rejected: CiQingComposeTransferAddition,
+        restored: CiQingComposeTransferAddition,
+    },
+    RollbackFailed {
+        goods: CGoods,
+        removal: CiQingComposeTransferRemoval,
+        rejected: CiQingComposeTransferAddition,
+        rollback: CiQingComposeTransferAddition,
+    },
+}
+
+#[must_use = "CiQing compose transfer report сохраняет ownership и client wire"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CiQingComposeTransferReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) source_extend_id: i32,
+    pub(crate) source_position: u32,
+    pub(crate) destination_extend_id: i32,
+    pub(crate) destination_position: u32,
+    pub(crate) removal: CiQingComposeTransferRemoval,
+    pub(crate) addition: CiQingComposeTransferAddition,
+    pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) delivery: i32,
+}
+
 #[must_use = "ground-goods report сохраняет ownership и обе client/around публикации"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GroundGoodsMoveReport {
@@ -8142,6 +8221,309 @@ impl CGame {
                     .get_goods(position)
                     .expect("battle-fairy add сохранён");
                 (position, goods.identity(), goods.amount())
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn transfer_player_ci_qing_compose_goods<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+        context: &mut Context,
+    ) -> Result<CiQingComposeTransferReport, CiQingComposeTransferBlock> {
+        let supported = matches!(source_extend_id, 1 | 2) && destination_extend_id == 17
+            || source_extend_id == 17 && matches!(destination_extend_id, 1 | 2);
+        if !supported {
+            return Err(CiQingComposeTransferBlock::UnsupportedRoute);
+        }
+        let player = self
+            .find_player(player_id)
+            .ok_or(CiQingComposeTransferBlock::MissingPlayer)?;
+        let source = match source_extend_id {
+            1 => player.packet().get_goods(source_position),
+            2 => player.equipment().get_goods(source_position),
+            17 => player.ci_qing_compose_goods(source_position),
+            _ => None,
+        }
+        .filter(|goods| goods.identity().ex_id == goods_id)
+        .ok_or(CiQingComposeTransferBlock::MissingGoods)?;
+        if amount == 0
+            || source.amount() < amount
+            || source_extend_id == 2 && source.amount() != amount
+        {
+            return Err(CiQingComposeTransferBlock::AmountMismatch);
+        }
+        if source.amount() != amount
+            && matches!(
+                player.current_progress(),
+                PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+            )
+        {
+            return Err(CiQingComposeTransferBlock::PartialMoveBusy(
+                player.current_progress(),
+            ));
+        }
+
+        let source_identity = source.identity();
+        let mut burden_goods = source.clone();
+        burden_goods.set_amount(amount);
+        let burden_exceeded = source_extend_id == 17
+            && player
+                .current_burden(&self.goods_factory)
+                .wrapping_add(burden_goods.weight(&self.goods_factory))
+                > u32::from(player.combat_properties().burden);
+        let mut split_template = source.clone();
+        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .expect("player проверен перед CiQing compose ownership pass");
+
+        let (removal, mut incoming) = if source_extend_id == 1 {
+            let removed = player.packet_mut().take_goods(
+                source_position,
+                amount,
+                &self.goods_factory,
+                |_| {
+                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                        .then(|| split_template.clone())
+                },
+            );
+            let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
+                self.players.insert(player_id, player);
+                return Err(CiQingComposeTransferBlock::PacketRemovalFailed);
+            };
+            let (goods, removal) = Self::player_packet_taken(taken, source_position);
+            (CiQingComposeTransferRemoval::Player(removal), Some(goods))
+        } else if source_extend_id == 2 {
+            let goods = player
+                .equipment()
+                .get_goods(source_position)
+                .expect("equipment source проверен до remove");
+            let facts = context.enhancement_equipment_remove_facts(
+                &player,
+                goods,
+                self.globe_setup.pack_add_enabled(),
+            );
+            let mut recompute =
+                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut report = player.remove_equipment_goods(
+                goods_id,
+                &self.goods_factory,
+                &self.skill_factory,
+                facts,
+                &mut recompute,
+            );
+            drop(recompute);
+            self.publish_player_equipment_remove_report(&mut report, context);
+            let outcome = std::mem::replace(
+                &mut report.outcome,
+                EquipmentRemoveOutcome::Missing {
+                    partial_effects: Default::default(),
+                },
+            );
+            let EquipmentRemoveOutcome::Removed(removed) = outcome else {
+                report.outcome = outcome;
+                self.players.insert(player_id, player);
+                return Err(CiQingComposeTransferBlock::EquipmentRemovalFailed(report));
+            };
+            (
+                CiQingComposeTransferRemoval::Player(EnhancementTransferRemoval::Equipment {
+                    event: removed.event,
+                    effects: report.effects,
+                    deliveries: report.deliveries,
+                }),
+                Some(removed.goods),
+            )
+        } else {
+            let removed = player.take_ci_qing_compose_transfer_goods(
+                source_position,
+                amount,
+                &self.goods_factory,
+                |_| {
+                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                        .then(|| split_template.clone())
+                },
+            );
+            let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
+                self.players.insert(player_id, player);
+                return Err(CiQingComposeTransferBlock::ComposeRemovalFailed);
+            };
+            let (goods, removal) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    CiQingComposeStorageRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    CiQingComposeStorageRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                    },
+                ),
+            };
+            (CiQingComposeTransferRemoval::Compose(removal), Some(goods))
+        };
+
+        if burden_exceeded {
+            let rollback = self.add_ci_qing_compose_transfer_goods(
+                &mut player,
+                source_extend_id,
+                source_position,
+                &mut incoming,
+                context,
+            );
+            self.players.insert(player_id, player);
+            if let Some(goods) = incoming {
+                return Err(CiQingComposeTransferBlock::BurdenRollbackFailed {
+                    goods,
+                    removal,
+                    rollback,
+                });
+            }
+            return Err(CiQingComposeTransferBlock::BurdenRolledBack {
+                removal,
+                restored: rollback,
+            });
+        }
+
+        // Exact PutGoods проверяет именно source position, а не compose
+        // destination position. Сохраняем quirk после GetGoods: remove- и
+        // equipment-effects уже произошли и общий RollBack возвращает owner.
+        if destination_extend_id == 17 && source_position == 2 {
+            let rollback = self.add_ci_qing_compose_transfer_goods(
+                &mut player,
+                source_extend_id,
+                source_position,
+                &mut incoming,
+                context,
+            );
+            self.players.insert(player_id, player);
+            if let Some(goods) = incoming {
+                return Err(
+                    CiQingComposeTransferBlock::DestinationRejectRollbackFailed {
+                        goods,
+                        source_position,
+                        removal,
+                        rollback,
+                    },
+                );
+            }
+            return Err(CiQingComposeTransferBlock::DestinationRejectsSourceSlot {
+                source_position,
+                removal,
+                restored: rollback,
+            });
+        }
+
+        let addition = self.add_ci_qing_compose_transfer_goods(
+            &mut player,
+            destination_extend_id,
+            destination_position,
+            &mut incoming,
+            context,
+        );
+        if incoming.is_some() {
+            let rejected = addition;
+            let rollback = self.add_ci_qing_compose_transfer_goods(
+                &mut player,
+                source_extend_id,
+                source_position,
+                &mut incoming,
+                context,
+            );
+            self.players.insert(player_id, player);
+            if let Some(goods) = incoming {
+                return Err(CiQingComposeTransferBlock::RollbackFailed {
+                    goods,
+                    removal,
+                    rejected,
+                    rollback,
+                });
+            }
+            return Err(CiQingComposeTransferBlock::RolledBack {
+                removal,
+                rejected,
+                restored: rollback,
+            });
+        }
+
+        let (actual_position, destination_goods, destination_amount) =
+            Self::ci_qing_compose_transfer_destination(&player, destination_position, &addition);
+        let previous_last_operated =
+            player.record_last_operated_goods(source_extend_id, source_position);
+        self.players.insert(player_id, player);
+        let mut moved = CS2CContainerObjectMove::default();
+        moved.set_operation(ContainerObjectMoveOperation::MoveObject);
+        moved.set_source_container(PLAYER_TYPE, player_id, source_position);
+        moved.set_source_container_extend_id(source_extend_id);
+        moved.set_destination_container(PLAYER_TYPE, player_id, actual_position);
+        moved.set_destination_container_extend_id(destination_extend_id);
+        moved.set_source_object(GOODS_TYPE, goods_id, amount);
+        moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
+        moved.set_destination_object_amount(destination_amount);
+        let delivery = moved.send_to_player(self, player_id);
+        Ok(CiQingComposeTransferReport {
+            goods: source_identity,
+            amount,
+            source_extend_id,
+            source_position,
+            destination_extend_id,
+            destination_position: actual_position,
+            removal,
+            addition,
+            previous_last_operated,
+            delivery,
+        })
+    }
+
+    fn add_ci_qing_compose_transfer_goods<Context: GameContainerMessageRuntime>(
+        &self,
+        player: &mut CPlayer,
+        extend_id: i32,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        context: &mut Context,
+    ) -> CiQingComposeTransferAddition {
+        if extend_id == 17 {
+            return CiQingComposeTransferAddition::Compose(
+                player.add_ci_qing_compose_transfer_goods(incoming, position, &self.goods_factory),
+            );
+        }
+        CiQingComposeTransferAddition::Player(
+            self.add_depot_transfer_goods(player, extend_id, position, incoming, context),
+        )
+    }
+
+    fn ci_qing_compose_transfer_destination(
+        player: &CPlayer,
+        requested_position: u32,
+        addition: &CiQingComposeTransferAddition,
+    ) -> (u32, ShapeIdentity, u32) {
+        match addition {
+            CiQingComposeTransferAddition::Player(addition) => {
+                Self::depot_transfer_destination(player, requested_position, addition)
+            }
+            CiQingComposeTransferAddition::Compose(addition) => {
+                let goods = player
+                    .ci_qing_compose_goods(addition.position)
+                    .expect("успешный CiQing compose add сохранён");
+                (addition.position, goods.identity(), goods.amount())
             }
         }
     }

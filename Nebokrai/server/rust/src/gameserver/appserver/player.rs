@@ -5560,6 +5560,87 @@ impl CPlayer {
         )
     }
 
+    /// Ownership-ветвь generic `CC2SContainerObjectMove` для временного
+    /// compose-контейнера. В отличие от CiQing gameplay packets здесь не
+    /// нужен old-client object stream: итоговый `0xC0101` несёт только GUID
+    /// и amount, но positional/automatic Add и listener state остаются у
+    /// concrete container owner-а.
+    pub(crate) fn add_ci_qing_compose_transfer_goods(
+        &mut self,
+        incoming: &mut Option<CGoods>,
+        position: u32,
+        factory: &CGoodsFactory,
+    ) -> CiQingContainerAddition {
+        let player_id = self.player_id();
+        let source = incoming
+            .as_ref()
+            .expect("CiQing compose transfer add получает detached goods")
+            .identity();
+        let outcome = if position == u32::MAX {
+            self.ci_qing_compose.add_goods(
+                incoming,
+                factory,
+                self.current_progress == PlayerProgress::None,
+            )
+        } else {
+            self.ci_qing_compose.add_goods_at(
+                position,
+                incoming,
+                factory,
+                self.current_progress == PlayerProgress::None,
+            )
+        };
+        let (actual_position, resulting_amount) = match &outcome {
+            VolumeGoodsAddOutcome::Added(added) => {
+                let actual_position = added.position.unwrap_or(position);
+                let amount = self
+                    .ci_qing_compose
+                    .get_goods(actual_position)
+                    .map(CGoods::amount);
+                (actual_position, amount)
+            }
+            VolumeGoodsAddOutcome::Stack(
+                super::container::cgoodscontainer::GoodsStackMergeOutcome::Merged {
+                    target, ..
+                },
+            ) => {
+                let actual_position = self
+                    .ci_qing_compose
+                    .query_goods_position(target.ex_id)
+                    .unwrap_or(position);
+                let amount = self
+                    .ci_qing_compose
+                    .get_goods(actual_position)
+                    .map(CGoods::amount);
+                (actual_position, amount)
+            }
+            _ => (position, None),
+        };
+        CiQingContainerAddition {
+            player_id,
+            container_extend_id: 17,
+            position: actual_position,
+            source,
+            outcome,
+            old_client_payload: None,
+            resulting_amount,
+        }
+    }
+
+    pub(crate) fn take_ci_qing_compose_transfer_goods<Create>(
+        &mut self,
+        position: u32,
+        requested_amount: u32,
+        factory: &CGoodsFactory,
+        create_goods: Create,
+    ) -> Option<VolumeGoodsRemoveOutcome>
+    where
+        Create: FnMut(u32) -> Option<CGoods>,
+    {
+        self.ci_qing_compose
+            .take_goods(position, requested_amount, factory, create_goods)
+    }
+
     pub(crate) fn remove_ci_qing_compose_goods(
         &mut self,
         position: u32,

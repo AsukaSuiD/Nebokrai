@@ -57,6 +57,11 @@
 //! Packet/equipment↔battle-fairy (`12`) дополнительно сохраняет ранние
 //! `BFPropertyAdd`, partial material/gem remove, property/goods-update
 //! deliveries и их повторный rollback add до итогового move/rollback wire.
+//! Packet/equipment↔CiQing compose (`17`) достигает persisted трёхслотового
+//! owner-а: positional/automatic stack, partial remove, burden, equipment
+//! callbacks, rollback и self wire связаны целиком. Сохранён exact quirk
+//! `PutGoods`: source slot `2` запрещает помещение в compose уже после
+//! source remove, поэтому наблюдаемы remove/add rollback effects.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -90,10 +95,11 @@ use crate::gameserver::appserver::session::ctrader::{TraderOfferAdded, TraderOff
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
     BankCurrencyTransferBlock, BankCurrencyTransferReport, BattleFairyTransferBlock,
-    BattleFairyTransferReport, CGame, DepotStorageTransferAddition, DepotStorageTransferBlock,
-    DepotStorageTransferReport, FairyStorageTransferBlock, FairyStorageTransferReport,
-    GameContainerMessageRuntime, GroundGoodsMoveBlock, GroundGoodsMoveReport,
-    HandContainerMoveBlock, HandContainerMoveReport, PlayerHandMoveBlock, PlayerHandMoveReport,
+    BattleFairyTransferReport, CGame, CiQingComposeTransferBlock, CiQingComposeTransferReport,
+    DepotStorageTransferAddition, DepotStorageTransferBlock, DepotStorageTransferReport,
+    FairyStorageTransferBlock, FairyStorageTransferReport, GameContainerMessageRuntime,
+    GroundGoodsMoveBlock, GroundGoodsMoveReport, HandContainerMoveBlock, HandContainerMoveReport,
+    PlayerHandMoveBlock, PlayerHandMoveReport,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -291,6 +297,12 @@ pub(crate) enum GameContainerMessageOutcome {
         delivery: i32,
         notification_delivery: Option<i32>,
     },
+    CiQingComposeMoved(CiQingComposeTransferReport),
+    CiQingComposeRolledBack {
+        reason: CiQingComposeTransferBlock,
+        delivery: i32,
+        notification_delivery: Option<i32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -301,6 +313,7 @@ enum EnhancementMessageRoute {
     PlayerHandMove,
     FairyStorageTransfer,
     BattleFairyTransfer,
+    CiQingComposeTransfer,
     GroundDrop,
     GroundPickup,
     EnhancementSelect,
@@ -648,6 +661,14 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && (matches!(request.source_container_extend_id, 1 | 2)
+                    && request.destination_container_extend_id == 17
+                    || request.source_container_extend_id == 17
+                        && matches!(request.destination_container_extend_id, 1 | 2))
+            {
+                EnhancementMessageRoute::CiQingComposeTransfer
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && (matches!(request.source_container_extend_id, 1 | 2)
                     && request.destination_container_extend_id == 12
                     || request.source_container_extend_id == 12
                         && matches!(request.destination_container_extend_id, 1 | 2))
@@ -936,6 +957,54 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 reason,
                 delivery: send_rollback(game, player_id),
             },
+        })));
+    }
+
+    if route == EnhancementMessageRoute::CiQingComposeTransfer {
+        let transfer = game.transfer_player_ci_qing_compose_goods(
+            player_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_container_extend_id,
+            request.destination_position,
+            context,
+        );
+        return Some(Ok(report(match transfer {
+            Ok(transfer) => GameContainerMessageOutcome::CiQingComposeMoved(transfer),
+            Err(reason) => {
+                let notice_id: Option<&[u8]> = match &reason {
+                    CiQingComposeTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
+                        Some(b"GS0113")
+                    }
+                    CiQingComposeTransferBlock::PartialMoveBusy(PlayerProgress::Trading) => {
+                        Some(b"GS0114")
+                    }
+                    CiQingComposeTransferBlock::PartialMoveBusy(PlayerProgress::Upgrade) => {
+                        Some(b"GS0115")
+                    }
+                    CiQingComposeTransferBlock::BurdenRolledBack { .. }
+                    | CiQingComposeTransferBlock::BurdenRollbackFailed { .. } => Some(b"GS0259"),
+                    CiQingComposeTransferBlock::DestinationRejectRollbackFailed { .. }
+                    | CiQingComposeTransferBlock::RollbackFailed { .. } => Some(b"GPM019"),
+                    _ => None,
+                };
+                let notification_delivery = notice_id.map(|notice_id| {
+                    send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(notice_id),
+                        0xffff_ffff,
+                        0,
+                    )
+                });
+                GameContainerMessageOutcome::CiQingComposeRolledBack {
+                    reason,
+                    delivery: send_rollback(game, player_id),
+                    notification_delivery,
+                }
+            }
         })));
     }
 
