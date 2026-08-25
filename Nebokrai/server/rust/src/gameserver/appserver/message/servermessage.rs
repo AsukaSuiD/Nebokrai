@@ -77,6 +77,10 @@
 //! GameSave с живым pet/carriage context, затем отдельный `m_dwClientIP` и
 //! обновлённую длину. Ошибка codec сохраняет уже записанный partial snapshot,
 //! как игнорируемый virtual result оригинала, и не прерывает оставшиеся send-ы.
+//! World save notify `0x7F803` тем же GameSave owner-ом публикует отдельный
+//! `0x5FA03` batch на игрока с `m_lIDIndex/1/1/player ID`, а затем terminal
+//! `0xFF/map size`; парный World owner считает terminal-ответы и запускает
+//! существующий generate/cleanup/save-thread проход после всех GameServer.
 //! Player notice response `0x7F804` сохраняет World offline/online wire,
 //! локализует exact `"GS0332 "` либо формирует `source:text`, bounded заменяет
 //! небезопасный `sprintf` и адресно шлёт client `0xBF806` с исходными colors.
@@ -230,6 +234,7 @@ use crate::setup::tradelist::TradeListDecodeError;
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const SERVER_STARTUP_MESSAGE: i32 = 0x0007_F801;
 const WORLD_REGION_CHANGE_RESPONSE: i32 = 0x0007_F802;
+const WORLD_PLAYER_SAVE_REQUEST: i32 = 0x0007_F803;
 const WORLD_PLAYER_NOTICE_RESPONSE: i32 = 0x0007_F804;
 const GENERAL_VARIABLE_UPDATE_RESPONSE: i32 = 0x0007_F805;
 const MURDERER_UPDATE_RESPONSE: i32 = 0x0007_F806;
@@ -240,6 +245,7 @@ const PLAYER_COUNT_MESSAGE: i32 = 0x0007_F80B;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_RESPONSE: i32 = 0x0005_FA0A;
 const PLAYER_COUNT_RESPONSE: i32 = 0x0005_FA0C;
 const WORLD_PLAYER_DATA_RESPONSE: i32 = 0x0005_FA09;
+const WORLD_PLAYER_SAVE_RESPONSE: i32 = 0x0005_FA03;
 const GODS_BATTLE_TOP_TEN_RESPONSE: i32 = 0x0007_F80F;
 const GODS_BATTLE_XYD_RESPONSE: i32 = 0x0007_F80E;
 const GODS_BATTLE_TOP_TEN_CLIENT: i32 = 0x000B_F740;
@@ -385,6 +391,22 @@ pub(crate) struct GamePlayerDataSnapshotReport {
     pub(crate) frames: Vec<GamePlayerDataSnapshotFrame>,
     pub(crate) sent_players: u32,
     pub(crate) finish_delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerSaveFrame {
+    pub(crate) player_id: i32,
+    pub(crate) encoded: bool,
+    pub(crate) snapshot_bytes: usize,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerSaveReport {
+    pub(crate) id_index: u8,
+    pub(crate) frames: Vec<GamePlayerSaveFrame>,
+    pub(crate) advertised_players: u32,
+    pub(crate) terminal_delivery: Result<i32, SendMessageError>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1067,6 +1089,7 @@ pub(crate) enum GameServerMessageReport {
     StringTable(GameStringTableMessageReport),
     PlayerCount(GamePlayerCountResponseReport),
     PlayerDataSnapshot(GamePlayerDataSnapshotReport),
+    PlayerSave(GamePlayerSaveReport),
     GodsBattleTopTen(GameGodsBattleTopTenReport),
     GodsBattleXyd(GameGodsBattleXydReport),
     GeneralVariableUpdate(GameGeneralVariableUpdateReport),
@@ -1280,6 +1303,47 @@ where
         + RealmAppellationScriptContext
         + ScriptRegionChangeContext,
 {
+    if message.message_type() == WORLD_PLAYER_SAVE_REQUEST {
+        let id_index = game.id_index();
+        let advertised_players = game.player_count();
+        let mut frames = Vec::with_capacity(advertised_players as usize);
+        for player_id in game.ordered_player_ids() {
+            let Some(player) = game.find_player(player_id) else {
+                continue;
+            };
+            let mut snapshot = Vec::new();
+            let encoded = game.encode_player_game_save(player, &mut snapshot, script_context);
+            let snapshot_bytes = snapshot.len();
+
+            let mut frame = CMessage::new(WORLD_PLAYER_SAVE_RESPONSE);
+            frame.add_byte(id_index);
+            frame.add_long(1);
+            frame.add_long(1);
+            frame.add_long(player_id);
+            frame.base_mut().add(&snapshot);
+            frame.base_mut().update();
+            let delivery = frame.send(game, false);
+            frames.push(GamePlayerSaveFrame {
+                player_id,
+                encoded,
+                snapshot_bytes,
+                delivery,
+            });
+        }
+
+        let mut terminal = CMessage::new(WORLD_PLAYER_SAVE_RESPONSE);
+        terminal.add_byte(u8::MAX);
+        terminal.add_long(advertised_players as i32);
+        let terminal_delivery = terminal.send(game, false);
+        return Some(Ok(GameServerMessageReport::PlayerSave(
+            GamePlayerSaveReport {
+                id_index,
+                frames,
+                advertised_players,
+                terminal_delivery,
+            },
+        )));
+    }
     if message.message_type() == WORLD_REGION_CHANGE_RESPONSE {
         let Some(accepted) = message.base_mut().get_char() else {
             return Some(Err(GameServerMessageError::RegionChangeUnexpectedEnd {
@@ -1776,7 +1840,7 @@ where
         let begin_delivery = begin.send(game, false);
 
         let mut frames = Vec::with_capacity(declared_players as usize);
-        for player_id in game.reconnect_player_ids() {
+        for player_id in game.ordered_player_ids() {
             let Some(player) = game.find_player(player_id) else {
                 continue;
             };

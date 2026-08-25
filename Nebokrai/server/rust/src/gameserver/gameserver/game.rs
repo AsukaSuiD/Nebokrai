@@ -24856,9 +24856,9 @@ impl CGame {
         u32::try_from(self.players.len()).expect("x86 player map не может превысить DWORD")
     }
 
-    /// Снимок ordered ключей `s_mapPlayer` для reconnect-обхода WorldServer.
+    /// Снимок ordered ключей `s_mapPlayer` для WorldServer snapshot-обходов.
     /// В safe owner-е отсутствуют nullable map values исходного C++.
-    pub(crate) fn reconnect_player_ids(&self) -> Vec<i32> {
+    pub(crate) fn ordered_player_ids(&self) -> Vec<i32> {
         self.players.keys().copied().collect()
     }
 
