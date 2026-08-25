@@ -556,6 +556,7 @@ use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionReturnPoint,
 };
+use crate::gameserver::appserver::ridestate::{RIDE_STATE_ID, RideState};
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::{
     ActiveScript, CScriptFunctionRegistry, ScriptExecutionContext, ScriptLoopReport,
@@ -2296,9 +2297,10 @@ pub(crate) trait PlayerEquipmentContext {
 }
 
 /// Container transfer использует уже материализованные player/equipment
-/// owners. Ещё не восстановленные `CanMountEquip`, полный property recompute,
+/// owners. Ещё не восстановленные `CanMountEquip`, базовый property recompute,
 /// clock и GoodsAI registration остаются обязательными runtime facts, а не
-/// подменяются magic success или cached properties.
+/// подменяются magic success или cached properties; RideState overlay и
+/// personal-shop mount gate уже принадлежат canonical player owner-у.
 pub(crate) trait GameContainerMessageRuntime:
     OldClientGoodsCodec + PlayerEquipmentContext
 {
@@ -2322,10 +2324,6 @@ pub(crate) trait GameContainerMessageRuntime:
     ) -> PlayerCombatProperties;
 
     fn register_enhancement_goods_ai(&mut self, goods: &CGoods);
-
-    /// Concrete `CMoveShape::DoesStateExist(0x186A4)` остаётся у ещё сырого
-    /// state owner-а; personal-shop availability требует именно этот факт.
-    fn personal_shop_mount_state_exists(&mut self, player: &CPlayer) -> bool;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3549,7 +3547,7 @@ impl CGame {
     pub(crate) fn personal_shop_session_available<Context: GameContainerMessageRuntime>(
         &self,
         session_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> bool {
         if !self
             .session_factory
@@ -3570,7 +3568,7 @@ impl CGame {
         else {
             return false;
         };
-        if player.is_dead() || context.personal_shop_mount_state_exists(player) {
+        if player.is_dead() || player.is_rider() {
             return false;
         }
         let Some(region_id) = player.server_region_id() else {
@@ -16786,6 +16784,105 @@ impl CGame {
         }
     }
 
+    fn send_ride_visual(&mut self, player_id: i32, state: &RideState, begin: bool) {
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        let identity = player.shape().identity();
+        let mut message = CMessage::new(if begin { 0x0b_fe03 } else { 0x0b_fe04 });
+        message.add_long(identity.object_type);
+        message.add_long(player_id);
+        message.add_long(RIDE_STATE_ID as i32);
+        if begin {
+            message.add_ulong(0); // base `CState::GetClientStateTime()`
+            message.add_ulong(state.additional_data());
+        }
+        let _ = self.send_player_shape_around(player_id, None, &message);
+    }
+
+    pub(crate) fn begin_player_ride(
+        &mut self,
+        player_id: i32,
+        mount_type: u32,
+        level: u32,
+        role_limit: u32,
+        goods_name: &[u8],
+    ) -> bool {
+        let Some(state) = self
+            .find_player_mut(player_id)
+            .and_then(|player| player.begin_ride_state(mount_type, level, role_limit, goods_name))
+        else {
+            return false;
+        };
+        self.send_ride_visual(player_id, &state, true);
+        true
+    }
+
+    pub(crate) fn end_player_ride(&mut self, player_id: i32) -> bool {
+        let Some(state) = self
+            .find_player_mut(player_id)
+            .and_then(CPlayer::end_ride_state)
+        else {
+            return false;
+        };
+        self.send_ride_visual(player_id, &state, false);
+        true
+    }
+
+    pub(crate) fn apply_player_state_properties<Context: BattleFairyDeathContext>(
+        &mut self,
+        player_id: i32,
+        properties: PlayerCombatProperties,
+        context: &mut Context,
+    ) {
+        let coefficients = self.globe_setup.player_property_coefficients();
+        let goods_factory = self.goods_factory.clone();
+        let Some(player) = self.find_player_mut(player_id) else {
+            return;
+        };
+        player.apply_change_body_properties(properties, coefficients, &goods_factory);
+        let external = context.player_properties_external_facts(player_id);
+        if let Some(player) = self.find_player(player_id) {
+            let _ = self.send_player_properties_changed(player, external);
+        }
+    }
+
+    fn refresh_ride_properties<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) {
+        let Some(properties) = self
+            .find_player(player_id)
+            .map(|player| context.recompute_realm_appellation_player_properties(player))
+        else {
+            return;
+        };
+        self.apply_player_state_properties(player_id, properties, context);
+    }
+
+    fn update_ride_states<Context: RealmAppellationScriptContext>(
+        &mut self,
+        now_ms: u32,
+        context: &mut Context,
+    ) {
+        let due: Vec<_> = self
+            .players
+            .iter()
+            .filter(|(_, player)| player.ride_goods_check_due(now_ms))
+            .map(|(&player_id, _)| player_id)
+            .collect();
+        let goods_factory = self.goods_factory.clone();
+        for player_id in due {
+            let exists = self
+                .find_player_mut(player_id)
+                .is_some_and(|player| player.refresh_ride_goods_cache(&goods_factory));
+            if !exists && self.end_player_ride(player_id) {
+                self.refresh_ride_properties(player_id, context);
+            }
+        }
+    }
+
     pub(crate) fn add_script_change_body_state<Context: RealmAppellationScriptContext>(
         &mut self,
         player_id: i32,
@@ -16941,9 +17038,10 @@ impl CGame {
             None => return,
         };
         let coefficients = self.globe_setup.player_property_coefficients();
+        let goods_factory = self.goods_factory.clone();
         self.find_player_mut(player_id)
             .expect("ChangeBody recompute сохраняет player")
-            .apply_change_body_properties(properties, coefficients);
+            .apply_change_body_properties(properties, coefficients, &goods_factory);
         let external = context.player_properties_external_facts(player_id);
         if let Some(player) = self.find_player(player_id) {
             let _ = self.send_player_properties_changed(player, external);
@@ -17740,6 +17838,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_change_body_states(login_tick_ms);
+        let loaded_ride_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_ride_state();
         let loaded_extended_states = self
             .players
             .get_mut(&expected_player_id)
@@ -17758,6 +17861,9 @@ impl CGame {
         }
         for state in &loaded_change_body_states {
             self.send_change_body_visual(expected_player_id, state, true);
+        }
+        if let Some(state) = &loaded_ride_state {
+            self.send_ride_visual(expected_player_id, state, true);
         }
 
         let first_login = self
@@ -17785,10 +17891,11 @@ impl CGame {
                 .expect("login script не удаляет player owner"),
         );
         let coefficients = self.globe_setup.player_property_coefficients();
+        let goods_factory = self.goods_factory.clone();
         self.players
             .get_mut(&expected_player_id)
             .expect("login property callback не удаляет player owner")
-            .apply_change_body_properties(recomputed, coefficients);
+            .apply_change_body_properties(recomputed, coefficients, &goods_factory);
         let client_deliveries =
             context.publish_initial_player_client_snapshot(self, expected_player_id, first_login);
         let mut billing = CMessage::new(0x000e_f201);
@@ -21203,6 +21310,7 @@ impl CGame {
         self.expire_change_body_states(state.current_tick_ms, runtime);
         self.update_extended_states(state.current_tick_ms, runtime);
         self.update_appellation_states(state.current_tick_ms, runtime);
+        self.update_ride_states(state.current_tick_ms, runtime);
         state.calls_since_runtime_log = state.calls_since_runtime_log.wrapping_add(1);
         let mut stages = Vec::new();
 

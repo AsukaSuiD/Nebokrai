@@ -50,6 +50,7 @@ use super::ai::baseai::{AiShapeAction, CBaseAI};
 use super::chbystate::{ChangeBodyMutation, ChangeBodyState};
 use super::exstate::{ExtendedState, ExtendedStateKind, ExtendedStateMutation};
 use super::region::{CRegion, RegionCellAccessBlock};
+use super::ridestate::RideState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
@@ -380,8 +381,11 @@ pub(crate) struct CMoveShape {
     change_body_states: Vec<ChangeBodyState>,
     extended_states: Vec<ExtendedState>,
     undead_states: Vec<UndeadState>,
+    ride_state: Option<RideState>,
     moveable_count: i32,
     moveable: bool,
+    can_fight_count: i32,
+    can_fight: bool,
     is_god: bool,
 }
 
@@ -396,8 +400,11 @@ impl Default for CMoveShape {
             change_body_states: Vec::new(),
             extended_states: Vec::new(),
             undead_states: Vec::new(),
+            ride_state: None,
             moveable_count: 0,
             moveable: true,
+            can_fight_count: 0,
+            can_fight: true,
             is_god: false,
         }
     }
@@ -420,6 +427,25 @@ impl CMoveShape {
 
     pub(crate) const fn is_god(&self) -> bool {
         self.is_god
+    }
+
+    /// Exact nesting contract `SetFightable`: false добавляет запрет, true
+    /// снимает один; отрицательный legacy count нормализуется только перед
+    /// добавлением нового запрета.
+    pub(crate) const fn set_fightable(&mut self, fightable: bool) {
+        if !fightable {
+            if self.can_fight_count < 0 {
+                self.can_fight_count = 0;
+            }
+            self.can_fight_count = self.can_fight_count.wrapping_add(1);
+        } else {
+            self.can_fight_count = self.can_fight_count.wrapping_sub(1);
+        }
+        self.can_fight = self.can_fight_count < 1;
+    }
+
+    pub(crate) const fn can_fight(&self) -> bool {
+        self.can_fight
     }
 
     pub(crate) const fn skills(&self) -> &BTreeMap<u32, MoveShapeSkill> {
@@ -452,6 +478,7 @@ impl CMoveShape {
         self.change_body_states = ChangeBodyState::decode_all(&states, 0);
         self.extended_states = ExtendedState::decode_all(&states, 0);
         self.undead_states = UndeadState::decode_all(&states, 0);
+        self.ride_state = RideState::decode(&states);
         self.ex_states = states;
     }
 
@@ -463,6 +490,68 @@ impl CMoveShape {
         self.change_body_states.clear();
         self.extended_states.clear();
         self.undead_states.clear();
+        self.ride_state = None;
+        self.can_fight_count = 0;
+        self.can_fight = true;
+    }
+
+    pub(crate) const fn ride_state(&self) -> Option<&RideState> {
+        self.ride_state.as_ref()
+    }
+
+    pub(crate) const fn ride_state_mut(&mut self) -> Option<&mut RideState> {
+        self.ride_state.as_mut()
+    }
+
+    pub(crate) const fn has_ride_state(&self) -> bool {
+        self.ride_state.is_some()
+    }
+
+    pub(crate) fn begin_ride_state(&mut self, mut state: RideState) -> Option<RideState> {
+        if self.ride_state.is_some() {
+            return None;
+        }
+        if self.ex_states.len() < 4 {
+            self.ex_states.clear();
+            self.ex_states.extend_from_slice(&0_u32.to_le_bytes());
+        }
+        let count = u32::from_le_bytes(self.ex_states[..4].try_into().expect("state count"));
+        self.ex_states[..4].copy_from_slice(&count.wrapping_add(1).to_le_bytes());
+        state.append_serialized(&mut self.ex_states);
+        self.set_fightable(false);
+        self.ride_state = Some(state.clone());
+        Some(state)
+    }
+
+    pub(crate) fn end_ride_state(&mut self) -> Option<RideState> {
+        let state = self.ride_state.take()?;
+        if let Some((offset, amount)) = state.serialized_span()
+            && offset + amount <= self.ex_states.len()
+        {
+            self.ex_states.drain(offset..offset + amount);
+            if self.ex_states.len() >= 4 {
+                let count =
+                    u32::from_le_bytes(self.ex_states[..4].try_into().expect("state count"));
+                self.ex_states[..4].copy_from_slice(&count.saturating_sub(1).to_le_bytes());
+            }
+            for state in &mut self.extended_states {
+                state.shift_serialized_offset_after(offset, amount);
+            }
+            for state in &mut self.change_body_states {
+                state.shift_serialized_offset_after(offset, amount);
+            }
+            for state in &mut self.undead_states {
+                state.shift_serialized_offset_after(offset, amount);
+            }
+        }
+        self.set_fightable(true);
+        Some(state)
+    }
+
+    pub(crate) fn activate_loaded_ride_state(&mut self) -> Option<RideState> {
+        self.ride_state.as_ref()?;
+        self.set_fightable(false);
+        self.ride_state.clone()
     }
 
     /// Exact `AddUndeadState`: registry key `(56, stateID)`, затем удаление
@@ -579,6 +668,9 @@ impl CMoveShape {
             state.shift_serialized_offset_after(offset, amount);
         }
         for state in &mut self.undead_states {
+            state.shift_serialized_offset_after(offset, amount);
+        }
+        if let Some(state) = &mut self.ride_state {
             state.shift_serialized_offset_after(offset, amount);
         }
     }
@@ -722,6 +814,9 @@ impl CMoveShape {
             for state in &mut self.undead_states {
                 state.shift_serialized_offset_after(offset, amount);
             }
+            if let Some(state) = &mut self.ride_state {
+                state.shift_serialized_offset_after(offset, amount);
+            }
         }
     }
 
@@ -854,6 +949,9 @@ impl CMoveShape {
                 state.shift_serialized_offset_after(offset, amount);
             }
             for state in &mut self.undead_states {
+                state.shift_serialized_offset_after(offset, amount);
+            }
+            if let Some(state) = &mut self.ride_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
         }

@@ -423,6 +423,7 @@ pub(crate) const SCRIPT_FUNCTION_GM_MODE: i32 = 5407;
 pub(crate) const SCRIPT_FUNCTION_PLAY_SOUND: i32 = 5410;
 pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
 pub(crate) const SCRIPT_FUNCTION_POST_PLAYER_INFO: i32 = 3316;
+pub(crate) const SCRIPT_FUNCTION_IS_RIDER: i32 = 3317;
 pub(crate) const SCRIPT_FUNCTION_POST_REGION_INFO: i32 = 5201;
 pub(crate) const SCRIPT_FUNCTION_POST_WORLD_INFO: i32 = 5202;
 pub(crate) const SCRIPT_FUNCTION_POST_COUNTRY_INFO: i32 = 5203;
@@ -3469,7 +3470,8 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_CHANGE_BODY_CHECK
         | SCRIPT_FUNCTION_CHECK_MODE
         | SCRIPT_FUNCTION_GET_PROGRESS
-        | SCRIPT_FUNCTION_IS_COMBAT_STATE => Unused,
+        | SCRIPT_FUNCTION_IS_COMBAT_STATE
+        | SCRIPT_FUNCTION_IS_RIDER => Unused,
         SCRIPT_FUNCTION_CREATE_NPC => match index {
             0 | 8 => String,
             1..=7 | 9..=11 => Integer,
@@ -6998,6 +7000,13 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             let _ = game.script_player_talk(player_id, text);
         }
         return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+    }
+    if function_id == SCRIPT_FUNCTION_IS_RIDER {
+        return ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: script_player_id
+                .and_then(|player_id| game.find_player(player_id))
+                .is_some_and(CPlayer::is_rider) as i32,
+        };
     }
     if let Some(outcome) = run_village_war_menu_script_function(
         game,

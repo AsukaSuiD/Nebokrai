@@ -1,6 +1,151 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутый persisted/runtime owner `CRideState` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходные owners
+//! `appserver/other states/ridestate.h/.cpp`. State ID `100004`, variable
+//! wire `ID/type/level/roleLimit/goodsName\0`, additional-data packing и
+//! десятисекундный goods-check gate подтверждены EXE. Важный legacy quirk:
+//! `AI` не обновляет `m_dwCheckGoodsTimeStamp`, поэтому после первого gate
+//! проверяет packet каждый последующий AI turn. `Vec`/`Option` заменяют
+//! `CState*`, visual-effect allocation и cached raw goods pointer; gameplay
+//! ordering, GUID cache invalidation и wrapping DWORD compare сохранены.
+
+use crate::public::guid::CGuid;
+
+pub(crate) const RIDE_STATE_ID: u32 = 100_004;
+const RIDE_STATE_FIXED_BYTES: usize = 16;
+const RIDE_GOODS_NAME_CAPACITY: usize = 256;
+pub(crate) const RIDE_GOODS_CHECK_INTERVAL_MS: u32 = 10_000;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RideState {
+    mount_type: u32,
+    level: u32,
+    role_limit: u32,
+    goods_name: Vec<u8>,
+    cached_goods_id: CGuid,
+    check_goods_timestamp_ms: u32,
+    serialized_offset: Option<usize>,
+}
+
+impl RideState {
+    pub(crate) fn new(mount_type: u32, level: u32, role_limit: u32, goods_name: &[u8]) -> Self {
+        let prefix = goods_name
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(goods_name.len())
+            .min(RIDE_GOODS_NAME_CAPACITY - 1);
+        Self {
+            mount_type,
+            level,
+            role_limit,
+            goods_name: goods_name[..prefix].to_vec(),
+            cached_goods_id: CGuid::GUID_INVALID,
+            check_goods_timestamp_ms: 0,
+            serialized_offset: None,
+        }
+    }
+
+    pub(crate) const fn mount_type(&self) -> u32 {
+        self.mount_type
+    }
+
+    pub(crate) const fn level(&self) -> u32 {
+        self.level
+    }
+
+    pub(crate) const fn role_limit(&self) -> u32 {
+        self.role_limit
+    }
+
+    pub(crate) fn goods_name(&self) -> &[u8] {
+        &self.goods_name
+    }
+
+    pub(crate) const fn cached_goods_id(&self) -> CGuid {
+        self.cached_goods_id
+    }
+
+    pub(crate) const fn set_cached_goods_id(&mut self, goods_id: CGuid) {
+        self.cached_goods_id = goods_id;
+    }
+
+    pub(crate) const fn clear_cached_goods_id(&mut self) {
+        self.cached_goods_id = CGuid::GUID_INVALID;
+    }
+
+    pub(crate) const fn additional_data(&self) -> u32 {
+        self.mount_type.wrapping_shl(16) | self.level
+    }
+
+    /// Exact EXE `timestamp + 10000 <= timeGetTime`; timestamp намеренно не
+    /// обновляется после успешного gate.
+    pub(crate) const fn goods_check_due(&self, now_ms: u32) -> bool {
+        self.check_goods_timestamp_ms
+            .wrapping_add(RIDE_GOODS_CHECK_INTERVAL_MS)
+            <= now_ms
+    }
+
+    pub(crate) fn decode(payload: &[u8]) -> Option<Self> {
+        for offset in 4..payload.len().saturating_sub(RIDE_STATE_FIXED_BYTES - 1) {
+            if read_u32(payload, offset)? != RIDE_STATE_ID {
+                continue;
+            }
+            let name_start = offset + RIDE_STATE_FIXED_BYTES;
+            let available = payload.len().saturating_sub(name_start);
+            let Some(name_length) = payload[name_start..]
+                .iter()
+                .take(RIDE_GOODS_NAME_CAPACITY)
+                .position(|byte| *byte == 0)
+            else {
+                continue;
+            };
+            if name_length >= available {
+                continue;
+            }
+            return Some(Self {
+                mount_type: read_u32(payload, offset + 4)?,
+                level: read_u32(payload, offset + 8)?,
+                role_limit: read_u32(payload, offset + 12)?,
+                goods_name: payload[name_start..name_start + name_length].to_vec(),
+                cached_goods_id: CGuid::GUID_INVALID,
+                check_goods_timestamp_ms: 0,
+                serialized_offset: Some(offset),
+            });
+        }
+        None
+    }
+
+    pub(crate) fn append_serialized(&mut self, payload: &mut Vec<u8>) {
+        let offset = payload.len();
+        payload.extend_from_slice(&RIDE_STATE_ID.to_le_bytes());
+        payload.extend_from_slice(&self.mount_type.to_le_bytes());
+        payload.extend_from_slice(&self.level.to_le_bytes());
+        payload.extend_from_slice(&self.role_limit.to_le_bytes());
+        payload.extend_from_slice(&self.goods_name);
+        payload.push(0);
+        self.serialized_offset = Some(offset);
+    }
+
+    pub(crate) fn serialized_span(&self) -> Option<(usize, usize)> {
+        self.serialized_offset
+            .map(|offset| (offset, RIDE_STATE_FIXED_BYTES + self.goods_name.len() + 1))
+    }
+
+    pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) {
+        if self
+            .serialized_offset
+            .is_some_and(|offset| removed_offset < offset)
+        {
+            self.serialized_offset = self.serialized_offset.map(|offset| offset - amount);
+        }
+    }
+}
+
+fn read_u32(payload: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        payload.get(offset..offset + 4)?.try_into().ok()?,
+    ))
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -204,10 +349,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

@@ -258,6 +258,7 @@ use super::container::cyuanbao::CYuanBao;
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
 use super::goods::cgoodsbaseproperties::{
+    GAP_AGILITY_CORRECTION, GAP_ARMOR_CORRECTION, GAP_ATTACK_AVOID, GAP_ATTACK_SPEED_CORRECTION,
     GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON, GAP_BF_AGILITY_POTENTIAL,
     GAP_BF_ALL_SKILL, GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON, GAP_BF_ATTACK_POTENTIAL,
     GAP_BF_BATTLE_FAIRY, GAP_BF_BLAST, GAP_BF_BLAST_ADDON, GAP_BF_BLAST_POTENTIAL, GAP_BF_BRAVE,
@@ -267,10 +268,17 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BF_MP_ADDON, GAP_BF_POTENTIAL, GAP_BF_SKY, GAP_BF_SKY_SKILL, GAP_BF_SPRITE,
     GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISM,
     GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_POTENTIAL,
-    GAP_BF_WEAPON_LEVEL, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2, GAP_GEM_LEVEL, GAP_GOODS_BIND,
-    GAP_GOODS_PACKAGE_EXTENTION, GAP_REQUIRE_GENDER, GAP_REQUIRE_OCCUPATION,
-    GAP_ROLE_MINIMUM_AGILITY_LIMIT, GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT,
+    GAP_BF_WEAPON_LEVEL, GAP_BLAST_ATTACK, GAP_BLAST_ELEMENT_ATTACK,
+    GAP_BURDEN_UPPER_LIMIT_CORRECTION, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2,
+    GAP_CONSTITUTION_CORRECTION, GAP_DODGE_CORRECTION, GAP_ELEMENT_ATTACK_CORRECTION,
+    GAP_ELEMENT_AVOID, GAP_ELEMENT_RESISTANCE_CORRECTION, GAP_FATAL_BLOW_RATE_CORRECTION,
+    GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL, GAP_GOODS_BIND, GAP_GOODS_PACKAGE_EXTENTION,
+    GAP_HIT_RATE_CORRECTION, GAP_HP_RESTORE_SPEED_CORRECTION, GAP_HP_UPPER_LIMIT_CORRECTION,
+    GAP_MAXIMUM_ATTACK_CORRECTION, GAP_MINIMUM_ATTACK_CORRECTION, GAP_MOUNT_LEVEL, GAP_MOUNT_TYPE,
+    GAP_MP_RESTORE_SPEED_CORRECTION, GAP_MP_UPPER_LIMIT_CORRECTION, GAP_REQUIRE_GENDER,
+    GAP_REQUIRE_OCCUPATION, GAP_ROLE_MINIMUM_AGILITY_LIMIT, GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT,
     GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_ROLE_MINIMUM_STRENGTH_LIMIT, GAP_ROLE_MINIMUM_WAKAN_LIMIT,
+    GAP_STIFFEN_PROBABILITY_CORRECTION, GAP_STRENGTH_CORRECTION, GAP_WAKAN_CORRECTION,
     GOODS_TYPE_CONSUMABLE,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
@@ -1496,10 +1504,13 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) minimum_attack: u32,
     pub(crate) maximum_attack: u32,
     pub(crate) attack_speed: u16,
+    pub(crate) hit: u16,
     pub(crate) dodge: u16,
     pub(crate) cch: u16,
     pub(crate) defense: u32,
     pub(crate) element_resistance: u32,
+    pub(crate) hp_recovery: u16,
+    pub(crate) mp_recovery: u16,
     pub(crate) burden: u16,
     pub(crate) reank: u16,
     pub(crate) attack_avoid: u16,
@@ -1922,6 +1933,133 @@ pub(crate) struct PlayerReliveMutation {
     pub(crate) direction: i32,
     pub(crate) health: u32,
     pub(crate) mana: u32,
+}
+
+fn apply_ride_goods_properties(
+    properties: &mut PlayerCombatProperties,
+    goods: &CGoods,
+    factory: &CGoodsFactory,
+    coefficients: GlobePlayerPropertyCoefficients,
+    occupation: usize,
+) {
+    fn add_u32(target: &mut u32, delta: i32) {
+        *target = (i64::from(*target) + i64::from(delta)).clamp(0, i64::from(i32::MAX)) as u32;
+    }
+    fn add_u16(target: &mut u16, delta: i32) {
+        let value = i32::from(*target).wrapping_add(delta);
+        *target = if value < 0 { 0 } else { value as u16 };
+    }
+    fn derived(value: i32, coefficient: f32) -> i32 {
+        ((value as f32) * coefficient).round() as i32
+    }
+
+    let enabled = goods.enabled_addon_properties(factory);
+    // Native `UpdateProperty` вызывает MountEquipRide(true), затем false:
+    // первый pass принимает неотрицательные addon-ы, второй — отрицательные.
+    for positive_pass in [true, false] {
+        for &stored_type in &enabled {
+            let fumo = stored_type == GAP_FUMO_PROPERTY;
+            let (property_type, delta) = if fumo {
+                (
+                    goods.addon_property_value(factory, stored_type, 1),
+                    goods.addon_property_value(factory, stored_type, 2),
+                )
+            } else {
+                (
+                    stored_type,
+                    goods.addon_property_value(factory, stored_type, 1),
+                )
+            };
+            // GAP_FUMO_PROPERTY native-ветка существует только в первом
+            // `MountEquipRide(true)` pass и уже внутри принимает signed delta.
+            if (fumo && !positive_pass) || (!fumo && (delta >= 0) != positive_pass) {
+                continue;
+            }
+            match property_type {
+                GAP_MINIMUM_ATTACK_CORRECTION => add_u32(&mut properties.minimum_attack, delta),
+                GAP_MAXIMUM_ATTACK_CORRECTION => add_u32(&mut properties.maximum_attack, delta),
+                GAP_ELEMENT_ATTACK_CORRECTION => {
+                    let value = properties.element_modify.wrapping_add(delta);
+                    properties.element_modify = if delta < 0 && value < 0 { 0 } else { value };
+                }
+                GAP_ARMOR_CORRECTION => add_u32(&mut properties.defense, delta),
+                GAP_ATTACK_SPEED_CORRECTION => add_u16(&mut properties.attack_speed, delta),
+                GAP_HIT_RATE_CORRECTION => add_u16(&mut properties.hit, delta),
+                GAP_FATAL_BLOW_RATE_CORRECTION => add_u16(&mut properties.cch, delta),
+                GAP_DODGE_CORRECTION => add_u16(&mut properties.dodge, delta),
+                GAP_ELEMENT_RESISTANCE_CORRECTION => {
+                    add_u32(&mut properties.element_resistance, delta)
+                }
+                GAP_HP_RESTORE_SPEED_CORRECTION => add_u16(&mut properties.hp_recovery, delta),
+                GAP_MP_RESTORE_SPEED_CORRECTION => add_u16(&mut properties.mp_recovery, delta),
+                GAP_STRENGTH_CORRECTION => {
+                    add_u32(&mut properties.strength, delta);
+                    add_u32(
+                        &mut properties.maximum_attack,
+                        derived(delta, coefficients.str_to_max_attack[occupation]),
+                    );
+                    add_u16(
+                        &mut properties.burden,
+                        derived(delta, coefficients.str_to_burden[occupation]),
+                    );
+                }
+                GAP_AGILITY_CORRECTION => {
+                    add_u32(&mut properties.dexterity, delta);
+                    add_u32(
+                        &mut properties.minimum_attack,
+                        derived(delta, coefficients.dex_to_min_attack[occupation]),
+                    );
+                    add_u16(
+                        &mut properties.reank,
+                        derived(delta, coefficients.dex_to_stiff[occupation]),
+                    );
+                }
+                GAP_CONSTITUTION_CORRECTION => {
+                    add_u32(&mut properties.constitution, delta);
+                    add_u32(
+                        &mut properties.maximum_hp,
+                        derived(delta, coefficients.con_to_max_hp[occupation]),
+                    );
+                    add_u32(
+                        &mut properties.defense,
+                        derived(delta, coefficients.con_to_defense[occupation]),
+                    );
+                }
+                GAP_WAKAN_CORRECTION => {
+                    add_u32(&mut properties.intelligence, delta);
+                    properties.element_modify = properties
+                        .element_modify
+                        .wrapping_add(derived(delta, coefficients.int_to_element[occupation]));
+                    if delta < 0 && properties.element_modify < 0 {
+                        properties.element_modify = 0;
+                    }
+                    add_u32(
+                        &mut properties.maximum_mp,
+                        derived(delta, coefficients.int_to_max_mp[occupation]),
+                    );
+                    add_u32(
+                        &mut properties.element_resistance,
+                        derived(delta, coefficients.int_to_resistant[occupation]),
+                    );
+                }
+                GAP_HP_UPPER_LIMIT_CORRECTION => add_u32(&mut properties.maximum_hp, delta),
+                GAP_MP_UPPER_LIMIT_CORRECTION => add_u32(&mut properties.maximum_mp, delta),
+                GAP_STIFFEN_PROBABILITY_CORRECTION => add_u16(&mut properties.reank, delta),
+                GAP_BURDEN_UPPER_LIMIT_CORRECTION => add_u16(&mut properties.burden, delta),
+                GAP_ATTACK_AVOID => add_u16(&mut properties.attack_avoid, delta),
+                GAP_ELEMENT_AVOID => add_u16(&mut properties.element_avoid, delta),
+                GAP_FULL_MISS => add_u16(&mut properties.full_miss, delta),
+                GAP_BLAST_ATTACK => add_u16(&mut properties.blast_attack, delta),
+                GAP_BLAST_ELEMENT_ATTACK => {
+                    // Legacy case 96 берёт base из wBlastAttack, не из target.
+                    let mut value = properties.blast_attack;
+                    add_u16(&mut value, delta);
+                    properties.blast_element_attack = value;
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl CPlayer {
@@ -2825,11 +2963,14 @@ impl CPlayer {
             minimum_attack: read_player_wire_u32(wire, 0x1c),
             maximum_attack: read_player_wire_u32(wire, 0x20),
             attack_speed: read_player_wire_u16(wire, 0x24),
+            hit: read_player_wire_u16(wire, 0x2a),
             dodge: read_player_wire_u16(wire, 0x30),
             cch: read_player_wire_u16(wire, 0x28),
             burden: read_player_wire_u16(wire, 0x26),
             defense: read_player_wire_u32(wire, 0x2c),
             element_resistance: read_player_wire_u32(wire, 0x34),
+            hp_recovery: read_player_wire_u16(wire, 0x38),
+            mp_recovery: read_player_wire_u16(wire, 0x3a),
             element_modify: read_player_wire_u32(wire, 0x48) as i32,
             reank: read_player_wire_u16(wire, 0x4c),
             attack_avoid: read_player_wire_u16(wire, 0x4e),
@@ -3685,10 +3826,109 @@ impl CPlayer {
         self.move_shape.change_body_death_end_ids()
     }
 
+    pub(crate) const fn is_rider(&self) -> bool {
+        self.move_shape.has_ride_state()
+    }
+
+    pub(crate) const fn fight_state_count(&self) -> i32 {
+        self.fight_state_count
+    }
+
+    pub(crate) fn begin_ride_state(
+        &mut self,
+        mount_type: u32,
+        level: u32,
+        role_limit: u32,
+        goods_name: &[u8],
+    ) -> Option<super::ridestate::RideState> {
+        self.move_shape
+            .begin_ride_state(super::ridestate::RideState::new(
+                mount_type, level, role_limit, goods_name,
+            ))
+    }
+
+    pub(crate) fn end_ride_state(&mut self) -> Option<super::ridestate::RideState> {
+        self.move_shape.end_ride_state()
+    }
+
+    pub(crate) fn activate_loaded_ride_state(&mut self) -> Option<super::ridestate::RideState> {
+        self.move_shape.activate_loaded_ride_state()
+    }
+
+    pub(crate) fn ride_goods_check_due(&self, now_ms: u32) -> bool {
+        self.move_shape
+            .ride_state()
+            .is_some_and(|state| state.goods_check_due(now_ms))
+    }
+
+    /// Exact `CRideState::AI` packet scan: имя здесь не участвует, только
+    /// addon mount type/level. Успех обновляет безопасный GUID cache вместо
+    /// старого сырого `CGoods*`, но timestamp намеренно не меняется.
+    pub(crate) fn refresh_ride_goods_cache(&mut self, factory: &CGoodsFactory) -> bool {
+        let Some(state) = self.move_shape.ride_state() else {
+            return false;
+        };
+        let (mount_type, level, cached_id) =
+            (state.mount_type(), state.level(), state.cached_goods_id());
+        let matches = |goods: &CGoods| {
+            goods.addon_property_value(factory, GAP_MOUNT_TYPE, 1) == mount_type as i32
+                && goods.addon_property_value(factory, GAP_MOUNT_LEVEL, 1) == level as i32
+        };
+        let found = self
+            .packet
+            .base()
+            .find(cached_id)
+            .filter(|goods| matches(goods))
+            .or_else(|| {
+                self.packet
+                    .base()
+                    .traversing_goods()
+                    .find(|goods| matches(goods))
+            })
+            .map(|goods| goods.identity().ex_id);
+        if let Some(state) = self.move_shape.ride_state_mut() {
+            if let Some(goods_id) = found {
+                state.set_cached_goods_id(goods_id);
+            } else {
+                state.clear_cached_goods_id();
+            }
+        }
+        found.is_some()
+    }
+
+    fn ride_goods(&mut self, factory: &CGoodsFactory) -> Option<CGoods> {
+        let state = self.move_shape.ride_state()?.clone();
+        let base_index = factory.query_goods_id_by_original_name(Some(state.goods_name()));
+        if base_index == 0 {
+            return None;
+        }
+        let found = self
+            .packet
+            .base()
+            .find(state.cached_goods_id())
+            .filter(|goods| goods.base_properties_index() == base_index)
+            .or_else(|| {
+                self.packet
+                    .base()
+                    .traversing_goods()
+                    .find(|goods| goods.base_properties_index() == base_index)
+            })
+            .cloned();
+        if let Some(state) = self.move_shape.ride_state_mut() {
+            if let Some(goods) = &found {
+                state.set_cached_goods_id(goods.identity().ex_id);
+            } else {
+                state.clear_cached_goods_id();
+            }
+        }
+        found
+    }
+
     pub(crate) fn apply_change_body_properties(
         &mut self,
         mut properties: PlayerCombatProperties,
         coefficients: GlobePlayerPropertyCoefficients,
+        goods_factory: &CGoodsFactory,
     ) {
         let occupation = usize::from(self.base_properties.occupation).min(2);
         let signed = |target: &mut u32, value: i64| {
@@ -3838,6 +4078,15 @@ impl CPlayer {
             properties.blast_element_attack = properties
                 .blast_element_attack
                 .wrapping_add(state.blast_element_attack);
+        }
+        if let Some(goods) = self.ride_goods(goods_factory) {
+            apply_ride_goods_properties(
+                &mut properties,
+                &goods,
+                goods_factory,
+                coefficients,
+                usize::from(self.base_properties.occupation).min(2),
+            );
         }
         self.apply_recomputed_combat_properties(properties);
     }
@@ -4565,6 +4814,7 @@ impl CPlayer {
             0x24,
             properties.attack_speed,
         );
+        write_u16(&mut self.combat_property_wire, 0x2a, properties.hit);
         write_u16(&mut self.combat_property_wire, 0x30, properties.dodge);
         write_u16(&mut self.combat_property_wire, 0x28, properties.cch);
         write_u16(&mut self.combat_property_wire, 0x26, properties.burden);
@@ -4574,6 +4824,8 @@ impl CPlayer {
             0x34,
             properties.element_resistance,
         );
+        write_u16(&mut self.combat_property_wire, 0x38, properties.hp_recovery);
+        write_u16(&mut self.combat_property_wire, 0x3a, properties.mp_recovery);
         write_u32(
             &mut self.combat_property_wire,
             0x48,

@@ -159,12 +159,6 @@ pub(crate) enum PlayerItemRuntimeEffect {
         delay_ms: u32,
         step_ms: u32,
     },
-    Mount {
-        mount_type: u32,
-        level: u32,
-        role_limit: u32,
-        goods_name: Vec<u8>,
-    },
     RecallToReturnPoint,
     RecallInsideRegion,
     SkillWire {
@@ -688,7 +682,11 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 report.outcome = GamePlayerMessageOutcome::ItemUseBlocked;
                 return Some(Ok(report));
             }
-            let facts = runtime.player_item_use_facts(game, player_id);
+            let mut facts = runtime.player_item_use_facts(game, player_id);
+            if let Some(player) = game.find_player(player_id) {
+                facts.mount_state_exists = player.is_rider();
+                facts.fight_state_count = player.fight_state_count();
+            }
             if facts.blocking_skill_state {
                 report
                     .deliveries
@@ -830,48 +828,33 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             if mount_type != 0 {
                 consume = false;
                 if facts.mount_state_exists {
-                    let _ended = runtime.apply_player_item_runtime_effect(
-                        game,
-                        player_id,
-                        PlayerItemRuntimeEffect::EndState(0x0001_86a4),
-                    );
+                    let _ended = game.end_player_ride(player_id);
                     let properties = runtime.recompute_enhancement_player_properties(
                         game.find_player(player_id).expect("mount player сохранён"),
                     );
-                    game.find_player_mut(player_id)
-                        .expect("mount player сохранён для recompute")
-                        .apply_recomputed_combat_properties(properties);
+                    game.apply_player_state_properties(player_id, properties, runtime);
                 } else if game.find_player(player_id).is_some_and(|player| {
                     player.current_progress() != PlayerProgress::OpenStall
                         && facts.fight_state_count == 0
                         && player.appearance_and_mode().2 == 0
                 }) {
-                    let result = runtime.apply_player_item_runtime_effect(
-                        game,
+                    let applied = game.begin_player_ride(
                         player_id,
-                        PlayerItemRuntimeEffect::Mount {
-                            mount_type: mount_type as u32,
-                            level: goods.addon_property_value(
-                                game.goods_factory(),
-                                GAP_MOUNT_LEVEL,
-                                1,
-                            ) as u32,
-                            role_limit: goods.addon_property_value(
-                                game.goods_factory(),
-                                GAP_MOUNT_PLAYER_ROLE_LIMIT,
-                                1,
-                            ) as u32,
-                            goods_name: original_name.clone(),
-                        },
+                        mount_type as u32,
+                        goods.addon_property_value(game.goods_factory(), GAP_MOUNT_LEVEL, 1) as u32,
+                        goods.addon_property_value(
+                            game.goods_factory(),
+                            GAP_MOUNT_PLAYER_ROLE_LIMIT,
+                            1,
+                        ) as u32,
+                        &original_name,
                     );
-                    if result.applied {
+                    if applied {
                         let properties = runtime.recompute_enhancement_player_properties(
                             game.find_player(player_id)
                                 .expect("mounted player сохранён"),
                         );
-                        game.find_player_mut(player_id)
-                            .expect("mounted player сохранён для recompute")
-                            .apply_recomputed_combat_properties(properties);
+                        game.apply_player_state_properties(player_id, properties, runtime);
                         consume = goods.addon_property_value(
                             game.goods_factory(),
                             GAP_UNLIMITED_ACCESS,
