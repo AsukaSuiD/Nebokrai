@@ -119,7 +119,8 @@
 //! fact; владение spatial state остаётся у `CMoveShape`.
 //! `SummonBF` RVA `0x00101CB0` материализован единым Player→CGame→region
 //! проходом: guards, summon/recall state, ordered around effects и area-map
-//! action. Active pet пока count-derived fact; codec и goods-message decoder
+//! action. Active pets теперь хранят exact movement-shape refs и восстанавливаются
+//! из GameSave в region-owned monsters; codec и goods-message decoder
 //! остаются явной границей и report не подменяет исторические packet bytes.
 //! `BFPropertyAdd` соединяет восемь gear-ячеек с headgear battle fairy,
 //! `GlobeSetup` occupation coefficients и player combat state. Сохранены
@@ -7894,6 +7895,37 @@ impl CPlayer {
     /// этому caller-у нужен только подтверждённый факт её непустоты.
     pub(crate) const fn set_active_pet_count(&mut self, count: u32) {
         self.active_pet_count = count;
+    }
+
+    pub(crate) fn take_uncreated_pets(&mut self) -> Vec<PlayerUncreatedPet> {
+        std::mem::take(&mut self.uncreated_pets)
+    }
+
+    pub(crate) const fn current_pets_mode(&self) -> i32 {
+        self.move_shape.current_pets_mode()
+    }
+
+    pub(crate) fn set_current_pets_mode(&mut self, mode: i32) -> bool {
+        self.move_shape.set_current_pets_mode(mode)
+    }
+
+    pub(crate) fn add_active_pet(&mut self, object_type: i32, id: i32, figure: i32) {
+        self.move_shape.add_pet(object_type, id, figure);
+        self.active_pet_count = self.move_shape.pets().len() as u32;
+    }
+
+    pub(crate) fn remove_active_pet(&mut self, object_type: i32, id: i32) -> bool {
+        let removed = self.move_shape.remove_pet(object_type, id);
+        self.active_pet_count = self.move_shape.pets().len() as u32;
+        removed
+    }
+
+    pub(crate) fn active_pets(&self) -> &[super::moveshape::MoveShapePet] {
+        self.move_shape.pets()
+    }
+
+    pub(crate) fn learned_skill_level(&self, skill_id: u32) -> i32 {
+        self.move_shape.skill_level(skill_id)
     }
 
     pub(crate) const fn has_pet(&self) -> bool {

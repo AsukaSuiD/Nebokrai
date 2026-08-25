@@ -11,10 +11,14 @@
 //! key и разрешает текущий `MonsterProperties` у `CGame`; это устраняет
 //! dangling pointer, сохраняя observable refresh semantics. Spawn snapshot
 //! (имя, graphics, HP, speed) остаётся в concrete object, как в `AddMonster`.
-//! `InitSkills/InitAI`, combat, serialization и AI остаются RAW ниже.
+//! `InitSkills/InitAI`, combat, serialization и полный AI остаются RAW ниже.
+//! Login pet restoration и client control используют owned `tagMasterInfo`,
+//! taming sign, progress, Globe factor snapshot и узкое pet-control state;
+//! async CPet decision tree этим не подменяется.
 
+use super::masterinfo::MasterInfo;
 use super::moveshape::CMoveShape;
-use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure};
+use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity};
 use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
@@ -35,6 +39,13 @@ pub(crate) struct CMonster {
     leader_id: i32,
     died_remove: bool,
     factors: [u32; 10],
+    master_info: MasterInfo,
+    tamed: bool,
+    pet_level: u32,
+    pet_experience: u32,
+    pet_mode: i32,
+    pet_action: i32,
+    pet_target: Option<ShapeIdentity>,
 }
 
 impl CMonster {
@@ -59,6 +70,13 @@ impl CMonster {
             leader_id: 0,
             died_remove: false,
             factors: [1.0f32.to_bits(); 10],
+            master_info: MasterInfo::default(),
+            tamed: false,
+            pet_level: 0,
+            pet_experience: 0,
+            pet_mode: 0,
+            pet_action: 1,
+            pet_target: None,
         }
     }
 
@@ -68,6 +86,59 @@ impl CMonster {
 
     pub(crate) const fn move_shape_mut(&mut self) -> &mut CMoveShape {
         &mut self.move_shape
+    }
+
+    pub(crate) const fn master_info(&self) -> MasterInfo {
+        self.master_info
+    }
+
+    pub(crate) const fn set_master_info(&mut self, master_info: MasterInfo) {
+        self.master_info = master_info;
+    }
+
+    pub(crate) const fn set_tamed(&mut self, tamed: bool) {
+        self.tamed = tamed;
+    }
+
+    pub(crate) const fn is_owned_pet(&self, player_id: i32) -> bool {
+        self.master_info.master_type == 400 && self.master_info.master_id == player_id
+    }
+
+    pub(crate) const fn set_pet_progress(&mut self, level: u32, experience: u32) {
+        self.pet_level = level;
+        self.pet_experience = experience;
+    }
+
+    pub(crate) const fn pet_progress(&self) -> (u32, u32) {
+        (self.pet_level, self.pet_experience)
+    }
+
+    pub(crate) fn adjust_pet_factors(&mut self, factors: [f32; 10]) {
+        self.factors = factors.map(f32::to_bits);
+    }
+
+    pub(crate) fn pet_maximum_hp(&self, property: &MonsterProperties) -> u32 {
+        (property.maximum_hp as f32 * f32::from_bits(self.factors[6])).round_ties_even() as u32
+    }
+
+    pub(crate) const fn set_pet_mode(&mut self, mode: i32) {
+        self.pet_mode = mode;
+    }
+
+    pub(crate) const fn set_pet_action(&mut self, action: i32) {
+        self.pet_action = action;
+        if action != 0 {
+            self.pet_target = None;
+        }
+    }
+
+    pub(crate) const fn set_pet_target(&mut self, target: ShapeIdentity) {
+        self.pet_action = 0;
+        self.pet_target = Some(target);
+    }
+
+    pub(crate) fn evanish_pet(&mut self) {
+        self.stage_for_delete();
     }
 
     /// Назначает exact поля, которые `AddMonster` пишет до virtual `Init`.

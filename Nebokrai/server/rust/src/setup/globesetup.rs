@@ -217,6 +217,13 @@ impl Default for GlobeSetupSnapshot {
 }
 
 impl GlobeSetupSnapshot {
+    pub(crate) fn pet_factors(&self, level: u32) -> Option<[f32; 10]> {
+        let level = usize::try_from(level).ok().filter(|level| *level < 10)?;
+        Some(std::array::from_fn(|index| {
+            self.read_f32(0x598 + index * 0x28 + level * 4)
+        }))
+    }
+
     pub(crate) fn base_price_rate(&self) -> f32 {
         self.read_f32(BASE_PRICE_RATE_OFFSET)
     }

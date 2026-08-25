@@ -25,8 +25,11 @@
 //! CMyNetServer`, а runtime context сохраняет только ещё не материализованные
 //! concrete derived AI lookup и realtime clock.
 //!
-//! Combat, pets, общий AI tick и остальные поля/методы ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Для battle-fairy combine/reset материализованы `AddSkill`
+//! Combat, полный pet AI, общий AI tick и остальные поля/методы ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально). Достигнутый pet-control owner хранит исходный default
+//! passive mode и exact `(type,id,figure)` refs; Game message caller меняет
+//! region-owned monster mode/action/target и удаляет ref при dismiss.
+//! Для battle-fairy combine/reset материализованы `AddSkill`
 //! и оба name/ID overload-а `DelSkill/AddSkill`: factory подтверждает
 //! level/type/name, а `BTreeMap`
 //! хранит identity вместо четырёх raw pointer-vector-ов. При удалении current
@@ -355,6 +358,13 @@ pub(crate) struct MoveShapePositionFacts {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MoveShapePet {
+    pub(crate) object_type: i32,
+    pub(crate) id: i32,
+    pub(crate) figure: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MoveShapeCommandBlock {
     Coordinate(ShapeCoordinateBlock),
     RegionCell(RegionCellAccessBlock),
@@ -390,6 +400,8 @@ pub(crate) struct CMoveShape {
     can_fight_count: i32,
     can_fight: bool,
     is_god: bool,
+    pets: Vec<MoveShapePet>,
+    current_pets_mode: i32,
 }
 
 impl Default for CMoveShape {
@@ -409,11 +421,53 @@ impl Default for CMoveShape {
             can_fight_count: 0,
             can_fight: true,
             is_god: false,
+            pets: Vec::new(),
+            current_pets_mode: 1,
         }
     }
 }
 
 impl CMoveShape {
+    pub(crate) const fn current_pets_mode(&self) -> i32 {
+        self.current_pets_mode
+    }
+
+    pub(crate) fn set_current_pets_mode(&mut self, mode: i32) -> bool {
+        if self.current_pets_mode == mode {
+            return false;
+        }
+        self.current_pets_mode = mode;
+        true
+    }
+
+    pub(crate) fn add_pet(&mut self, object_type: i32, id: i32, figure: i32) {
+        self.pets.push(MoveShapePet {
+            object_type,
+            id,
+            figure,
+        });
+    }
+
+    pub(crate) fn remove_pet(&mut self, object_type: i32, id: i32) -> bool {
+        let Some(index) = self
+            .pets
+            .iter()
+            .position(|pet| pet.object_type == object_type && pet.id == id)
+        else {
+            return false;
+        };
+        self.pets.remove(index);
+        true
+    }
+
+    pub(crate) fn pets(&self) -> &[MoveShapePet] {
+        &self.pets
+    }
+
+    pub(crate) fn skill_level(&self, skill_id: u32) -> i32 {
+        self.skills.get(&skill_id).map_or(0, MoveShapeSkill::level)
+    }
+
     pub(crate) const fn shape(&self) -> &CShape {
         &self.shape
     }

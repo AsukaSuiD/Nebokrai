@@ -447,6 +447,10 @@
 //! PreciousBox script `2221/2222/2237` соединяет trusted повторный action,
 //! configuration RNG, goods create/upgrade/packet effects, `0xBF91A..1C` и
 //! optional World announcement `0x5FF0E` в одном synchronous owner-е.
+//! Pet GameSave/login/message lifecycle также замкнут через canonical owners:
+//! saved records создают region monsters с master/progress/Globe factors и
+//! `0xC0201`; client `0x90401/02` меняет mode/action/target либо выполняет
+//! dismiss с player ref и around `0xBF504`, а save снова читает live monsters.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -578,6 +582,9 @@ use crate::gameserver::appserver::message::organsysmessage::{
 use crate::gameserver::appserver::message::othermessage::{
     GameOtherMessageError, GameOtherMessageReport, dispatch_game_other_message,
 };
+use crate::gameserver::appserver::message::petmessage::{
+    GamePetMessageError, GamePetMessageReport, dispatch_game_pet_message,
+};
 use crate::gameserver::appserver::message::playermessage::{
     GamePlayerMessageError, GamePlayerMessageReport, GamePlayerMessageRuntime,
     dispatch_game_player_message, equipment_state_elapsed_seconds,
@@ -653,7 +660,8 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
-    RegionCellAccessBlock, RegionRandomContext, RegionReturnPoint, RegionSecurity,
+    RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
+    RegionSecurity,
 };
 use crate::gameserver::appserver::ridestate::{RIDE_STATE_ID, RideState};
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
@@ -2084,12 +2092,12 @@ pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
 
     fn refresh_script_region_auto_protect(&mut self, player: &mut CPlayer);
 
-    /// Live pet/carriage являются region/monster owner-ами; runtime возвращает
-    /// точный snapshot, после чего общий Rust codec пишет весь player wire.
-    fn snapshot_script_player_summons(
+    /// Carriage ещё остаётся внешним derived monster owner-ом. Pet snapshot
+    /// уже строится из canonical player refs и region-owned `CMonster`.
+    fn snapshot_script_player_carriage(
         &mut self,
         player: &CPlayer,
-    ) -> (Vec<PlayerUncreatedPet>, PlayerUncreatedCarriage, bool);
+    ) -> (PlayerUncreatedCarriage, bool);
 }
 
 pub(crate) trait GameRegionEnterContext: NationCombatContext {
@@ -2145,6 +2153,15 @@ pub(crate) struct GamePlayerLoginReport {
     pub(crate) equipment_state_updates: Vec<PlayerLoginEquipmentStateUpdate>,
     pub(crate) team_session_found: bool,
     pub(crate) team_snapshot_queued: bool,
+    pub(crate) pet_restore_notice_delivery: Option<i32>,
+    pub(crate) pet_restorations: Vec<GamePlayerPetRestoration>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerPetRestoration {
+    pub(crate) original_name: Vec<u8>,
+    pub(crate) monster_id: Option<i32>,
+    pub(crate) around_delivery: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5080,6 +5097,7 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) team_messages: Vec<Result<GameTeamMessageReport, GameTeamMessageError>>,
     pub(crate) shape_messages: Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
     pub(crate) other_messages: Vec<Result<GameOtherMessageReport, GameOtherMessageError>>,
+    pub(crate) pet_messages: Vec<Result<GamePetMessageReport, GamePetMessageError>>,
     pub(crate) player_messages: Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
     pub(crate) log_messages: Vec<Result<GameLogMessageReport, GameLogMessageError>>,
     pub(crate) server_messages:
@@ -6718,7 +6736,27 @@ impl CGame {
         destination: &mut Vec<u8>,
         context: &mut Context,
     ) -> bool {
-        let (pets, carriage, recreate_carriage) = context.snapshot_script_player_summons(player);
+        let (carriage, recreate_carriage) = context.snapshot_script_player_carriage(player);
+        let pets = player
+            .server_region_id()
+            .and_then(|region_id| self.find_region(region_id))
+            .map(|region| {
+                player
+                    .active_pets()
+                    .iter()
+                    .filter_map(|pet_ref| {
+                        let pet = region.base().find_monster_by_id(pet_ref.id)?;
+                        let (level, experience) = pet.pet_progress();
+                        Some(PlayerUncreatedPet {
+                            original_name: pet.original_name().to_vec(),
+                            health: pet.hit_points(),
+                            level,
+                            experience,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         player
             .encode_game_save(
                 destination,
@@ -17128,6 +17166,104 @@ impl CGame {
         self.jjc_system.on_matched(first, second);
     }
 
+    pub(crate) fn set_player_pet_mode(&mut self, player_id: i32, mode: i32) -> Option<usize> {
+        let region_id = {
+            let player = self.players.get_mut(&player_id)?;
+            if player.in_changing_server() || player.in_changing_region() {
+                return None;
+            }
+            if !player.set_current_pets_mode(mode) {
+                return Some(0);
+            }
+            player.server_region_id()?
+        };
+        let mut owner = self.take_region_owner(region_id)?;
+        let changed = owner.base_mut().set_owned_pets_mode(player_id, mode);
+        self.restore_region_owner(owner);
+        Some(changed)
+    }
+
+    pub(crate) fn set_player_pets_action(&mut self, player_id: i32, action: i32) -> Option<usize> {
+        let player = self.players.get(&player_id)?;
+        if player.in_changing_server() || player.in_changing_region() {
+            return None;
+        }
+        let region_id = player.server_region_id()?;
+        let mut owner = self.take_region_owner(region_id)?;
+        let changed = owner.base_mut().set_owned_pets_action(player_id, action);
+        self.restore_region_owner(owner);
+        Some(changed)
+    }
+
+    pub(crate) fn set_player_pets_target(
+        &mut self,
+        player_id: i32,
+        target_type: i32,
+        target_id: i32,
+    ) -> Option<usize> {
+        let player = self.players.get(&player_id)?;
+        if player.in_changing_server() || player.in_changing_region() {
+            return None;
+        }
+        let region_id = player.server_region_id()?;
+        let mut owner = self.take_region_owner(region_id)?;
+        let changed = owner.base_mut().set_owned_pets_target(
+            player_id,
+            ShapeIdentity {
+                object_type: target_type,
+                id: target_id,
+                ex_id: CGuid::GUID_INVALID,
+            },
+        );
+        self.restore_region_owner(owner);
+        Some(changed)
+    }
+
+    pub(crate) fn dismiss_player_pet(
+        &mut self,
+        player_id: i32,
+        pet_type: i32,
+        pet_id: i32,
+    ) -> Option<i32> {
+        let player = self.players.get(&player_id)?;
+        if player.in_changing_server() || player.in_changing_region() {
+            return None;
+        }
+        let region_id = player.server_region_id()?;
+        let mut owner = self.take_region_owner(region_id)?;
+        let pet_shape = {
+            let Some(pet) = owner.base_mut().find_monster_by_id_mut(pet_id) else {
+                self.restore_region_owner(owner);
+                return None;
+            };
+            if pet_type != 600 || !pet.is_owned_pet(player_id) {
+                self.restore_region_owner(owner);
+                return None;
+            }
+            pet.evanish_pet();
+            pet.move_shape().shape().clone()
+        };
+        if let Some(player) = self.players.get_mut(&player_id) {
+            let _ = player.remove_active_pet(pet_type, pet_id);
+        }
+        let identity = pet_shape.identity();
+        let mut message = CMessage::new(0x000b_f504);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(0);
+        message
+            .base_mut()
+            .add(&pet_shape.get_pos_x().to_bits().to_le_bytes());
+        message
+            .base_mut()
+            .add(&pet_shape.get_pos_y().to_bits().to_le_bytes());
+        let delivery = self
+            .send_game_shape_around(owner.base(), &pet_shape, None, &message)
+            .ok();
+        self.restore_region_owner(owner);
+        delivery
+    }
+
     pub(crate) fn jjc_on_world_closed(&mut self) {
         self.jjc_system.on_world_closed();
     }
@@ -26157,6 +26293,155 @@ impl CGame {
         self.login_validate_times.remove(&player_id);
     }
 
+    fn restore_player_login_pets<Context: ServerRegionMonsterContext>(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        context: &mut Context,
+    ) -> (Option<i32>, Vec<GamePlayerPetRestoration>) {
+        let records = self
+            .players
+            .get_mut(&player_id)
+            .map(CPlayer::take_uncreated_pets)
+            .unwrap_or_default();
+        if records.is_empty() {
+            return (None, Vec::new());
+        }
+        let notice_delivery = Some(
+            colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0156"))
+                .send_to_player(self.net_server(), player_id),
+        );
+        let (taming_level, current_pets) = self.players.get(&player_id).map_or((0, 0), |player| {
+            (
+                player.learned_skill_level(0xd4),
+                player.active_pets().len() as u32,
+            )
+        });
+        let amount = if taming_level == 0 {
+            records.len()
+        } else {
+            let limit = self
+                .skill_factory
+                .query_skill_base_properties(0xd4, taming_level)
+                .map_or(records.len() as u32, |properties| {
+                    properties.query_property(31_001)
+                });
+            records
+                .len()
+                .min(limit.saturating_sub(current_pets) as usize)
+        };
+        let player_name = self
+            .players
+            .get(&player_id)
+            .map(|player| player.player_name().to_vec())
+            .unwrap_or_default();
+        let (player_tile_x, player_tile_y) = self
+            .players
+            .get(&player_id)
+            .map(|player| {
+                (
+                    player.shape().get_tile_x().unwrap_or_default(),
+                    player.shape().get_tile_y().unwrap_or_default(),
+                )
+            })
+            .unwrap_or_default();
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return (notice_delivery, Vec::new());
+        };
+        let (area_width, area_height) = self.area_dimensions();
+        let mut restorations = Vec::with_capacity(amount);
+        for record in records.into_iter().take(amount) {
+            let Some(property) = self
+                .find_monster_property_by_origin_name(&record.original_name)
+                .cloned()
+            else {
+                restorations.push(GamePlayerPetRestoration {
+                    original_name: record.original_name,
+                    monster_id: None,
+                    around_delivery: None,
+                });
+                continue;
+            };
+            let position = owner
+                .base()
+                .region
+                .get_random_pos_in_range(player_tile_x - 3, player_tile_y - 3, 7, 7, context)
+                .unwrap_or(RegionRandomPosition {
+                    x: player_tile_x,
+                    y: player_tile_y,
+                    found: false,
+                });
+            let monster_id = match owner.base_mut().add_monster(
+                &property,
+                position.x,
+                position.y,
+                -1,
+                true,
+                false,
+                context.now_milliseconds(),
+                area_width,
+                area_height,
+                context,
+            ) {
+                Ok(monster_id) => monster_id,
+                Err(_) => {
+                    restorations.push(GamePlayerPetRestoration {
+                        original_name: record.original_name,
+                        monster_id: None,
+                        around_delivery: None,
+                    });
+                    continue;
+                }
+            };
+            let factors = self.globe_setup.pet_factors(record.level);
+            let (shape, maximum_hp) = {
+                let pet = owner
+                    .base_mut()
+                    .find_monster_by_id_mut(monster_id)
+                    .expect("add_monster публикует owned monster до возврата ID");
+                pet.set_tamed(property.tamable == 1 && property.maximum_tame_attempt_count > 0);
+                pet.set_master_info(crate::gameserver::appserver::masterinfo::MasterInfo {
+                    master_type: 400,
+                    master_id: player_id,
+                    ..crate::gameserver::appserver::masterinfo::MasterInfo::default()
+                });
+                pet.set_pet_mode(1);
+                pet.set_pet_progress(record.level, record.experience);
+                if let Some(factors) = factors {
+                    pet.adjust_pet_factors(factors);
+                }
+                pet.set_hit_points(record.health);
+                (
+                    pet.move_shape().shape().clone(),
+                    pet.pet_maximum_hp(&property),
+                )
+            };
+            if let Some(player) = self.players.get_mut(&player_id) {
+                player.add_active_pet(600, monster_id, property.figure as u8 as i32);
+            }
+            let mut message = CMessage::new(0x000c_0201);
+            message.add_long(600);
+            message.add_long(monster_id);
+            message.add_long(400);
+            message.add_long(player_id);
+            add_legacy_c_string(message.base_mut(), &player_name);
+            message.add_ulong(record.level);
+            message.add_ulong(record.experience);
+            message.add_ulong(record.health);
+            message.add_ulong(maximum_hp);
+            let around_delivery = self
+                .send_game_shape_around(owner.base(), &shape, None, &message)
+                .ok();
+            restorations.push(GamePlayerPetRestoration {
+                original_name: record.original_name,
+                monster_id: Some(monster_id),
+                around_delivery,
+            });
+        }
+        self.restore_region_owner(owner);
+        (notice_delivery, restorations)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn complete_world_player_login<
         Context: GamePlayerLoginContext + ScriptFunctionRuntime,
@@ -26287,6 +26572,8 @@ impl CGame {
         if let Some(state) = &loaded_ride_state {
             self.send_ride_visual(expected_player_id, state, true);
         }
+        let (pet_restore_notice_delivery, pet_restorations) =
+            self.restore_player_login_pets(expected_player_id, region_id, context);
 
         let first_login = self
             .players
@@ -26435,6 +26722,8 @@ impl CGame {
             equipment_state_updates,
             team_session_found,
             team_snapshot_queued,
+            pet_restore_notice_delivery,
+            pet_restorations,
         })
     }
 
@@ -32774,6 +33063,7 @@ impl CGame {
         let mut team_messages = Vec::new();
         let mut shape_messages = Vec::new();
         let mut other_messages = Vec::new();
+        let mut pet_messages = Vec::new();
         let mut player_messages = Vec::new();
         let mut log_messages = Vec::new();
         let mut server_messages = Vec::new();
@@ -32806,6 +33096,7 @@ impl CGame {
                 &mut team_messages,
                 &mut shape_messages,
                 &mut other_messages,
+                &mut pet_messages,
                 &mut player_messages,
                 &mut log_messages,
                 &mut server_messages,
@@ -32839,6 +33130,7 @@ impl CGame {
                 &mut team_messages,
                 &mut shape_messages,
                 &mut other_messages,
+                &mut pet_messages,
                 &mut player_messages,
                 &mut log_messages,
                 &mut server_messages,
@@ -32874,6 +33166,7 @@ impl CGame {
                         &mut team_messages,
                         &mut shape_messages,
                         &mut other_messages,
+                        &mut pet_messages,
                         &mut player_messages,
                         &mut log_messages,
                         &mut server_messages,
@@ -32908,6 +33201,7 @@ impl CGame {
             team_messages,
             shape_messages,
             other_messages,
+            pet_messages,
             player_messages,
             log_messages,
             server_messages,
@@ -32951,6 +33245,7 @@ impl CGame {
         team_messages: &mut Vec<Result<GameTeamMessageReport, GameTeamMessageError>>,
         shape_messages: &mut Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
         other_messages: &mut Vec<Result<GameOtherMessageReport, GameOtherMessageError>>,
+        pet_messages: &mut Vec<Result<GamePetMessageReport, GamePetMessageError>>,
         player_messages: &mut Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
         log_messages: &mut Vec<Result<GameLogMessageReport, GameLogMessageError>>,
         server_messages: &mut Vec<
@@ -33009,6 +33304,8 @@ impl CGame {
             shape_messages.push(report);
         } else if let Some(report) = dispatch_game_other_message(message, self, runtime) {
             other_messages.push(report);
+        } else if let Some(report) = dispatch_game_pet_message(message, self) {
+            pet_messages.push(report);
         } else if let Some(report) = dispatch_game_player_message(message, self, runtime) {
             player_messages.push(report);
         } else if let Some(report) = dispatch_game_log_message(message, self, runtime) {

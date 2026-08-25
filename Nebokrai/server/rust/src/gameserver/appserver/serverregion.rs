@@ -1042,6 +1042,49 @@ impl CServerRegion {
         self.owned_monsters.get_mut(&id)
     }
 
+    pub(crate) fn owned_pet_ids(&self, player_id: i32) -> Vec<i32> {
+        self.owned_monsters
+            .iter()
+            .filter_map(|(id, monster)| monster.is_owned_pet(player_id).then_some(*id))
+            .collect()
+    }
+
+    pub(crate) fn set_owned_pets_mode(&mut self, player_id: i32, mode: i32) -> usize {
+        let mut changed = 0usize;
+        for monster in self.owned_monsters.values_mut() {
+            if monster.is_owned_pet(player_id) {
+                monster.set_pet_mode(mode);
+                changed = changed.wrapping_add(1);
+            }
+        }
+        changed
+    }
+
+    pub(crate) fn set_owned_pets_action(&mut self, player_id: i32, action: i32) -> usize {
+        let mut changed = 0usize;
+        for monster in self.owned_monsters.values_mut() {
+            if monster.is_owned_pet(player_id) {
+                monster.set_pet_action(action);
+                changed = changed.wrapping_add(1);
+            }
+        }
+        changed
+    }
+
+    pub(crate) fn set_owned_pets_target(&mut self, player_id: i32, target: ShapeIdentity) -> usize {
+        if !self.registry.contains(target) {
+            return 0;
+        }
+        let mut changed = 0usize;
+        for monster in self.owned_monsters.values_mut() {
+            if monster.is_owned_pet(player_id) {
+                monster.set_pet_target(target);
+                changed = changed.wrapping_add(1);
+            }
+        }
+        changed
+    }
+
     /// Snapshot для script `3313`: inclusive tile rectangle и optional exact
     /// original-name filter обходят canonical monster ID order до mutations.
     pub(crate) fn script_monster_ids_in_rect(

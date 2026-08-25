@@ -1,6 +1,22 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Typed `tagMasterInfo` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/masterinfo.cpp`. Десять последовательных DWORD сохраняются
+//! буквально; Rust assignment заменяет native копирующий цикл.
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct MasterInfo {
+    pub(crate) master_type: i32,
+    pub(crate) master_id: i32,
+    pub(crate) master_guild_id: i32,
+    pub(crate) master_team_id: i32,
+    pub(crate) master_union_id: i32,
+    pub(crate) master_country_id: i32,
+    pub(crate) permitted_to_kill_player: i32,
+    pub(crate) permitted_to_kill_teammate: i32,
+    pub(crate) permitted_to_kill_guild_member: i32,
+    pub(crate) permitted_to_kill_criminal: i32,
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -49,13 +65,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
