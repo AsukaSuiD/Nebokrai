@@ -5203,10 +5203,6 @@ pub(crate) trait GameReleaseRuntime {
 
 pub(crate) trait GameThreadRuntime: GameMainLoopRuntime + GameReleaseRuntime {
     fn runtime_paths(&self) -> GameRuntimePaths;
-    fn initialize_com(&mut self);
-    fn signal_game_thread_exit(&mut self);
-    fn post_process_close(&mut self);
-    fn uninitialize_com(&mut self);
 }
 
 #[must_use = "GameThread report сохраняет Init/MainLoop/Release lifecycle"]
@@ -31023,14 +31019,14 @@ impl CGame {
 }
 
 /// Safe process-owned замена `GameThreadFunc`: wall-clock и sequence
-/// seed берутся из общих system/wrapping clock owners, COM/platform
-/// notifications остаются runtime callbacks, а `CGame` всегда проходит Release
-/// даже после неуспешного Init, как исходный ненулевой singleton `GetGame`.
+/// seed берутся из общих system/wrapping clock owners, а `CGame` всегда
+/// проходит Release даже после неуспешного Init, как исходный ненулевой
+/// singleton `GetGame`. COM не нужен Rust network/DB owner-ам; Win32 exit-event и
+/// `WM_CLOSE` заменены прямым await/возвратом этой функции после Release.
 pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
     game: &mut CGame,
     runtime: &mut Runtime,
 ) -> GameThreadReport {
-    runtime.initialize_com();
     let paths = runtime.runtime_paths();
     let wall_time_seconds = game_wall_time_seconds() as u32;
     let sequence_seed_ms = runtime.now_milliseconds();
@@ -31048,9 +31044,6 @@ pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
     }
 
     let release = game.release(runtime).await;
-    runtime.signal_game_thread_exit();
-    runtime.post_process_close();
-    runtime.uninitialize_com();
     GameThreadReport {
         initialization,
         main_loop_calls,
