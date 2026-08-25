@@ -16790,6 +16790,22 @@ impl CGame {
         }
     }
 
+    /// Exact selector `2560`: slot проверяется до mutation, skill type `1`
+    /// кодируется старшим битом, затем тот же `0xBF908` подтверждает значение.
+    pub(crate) fn set_script_player_hotkey(&mut self, player_id: i32, slot: u8, value: u32) {
+        let Some(player) = self.find_player_mut(player_id) else {
+            return;
+        };
+        if !player.set_hotkey(slot, value) {
+            return;
+        }
+        let mut message = CMessage::new(0x0b_f908);
+        message.add_byte(b'-');
+        message.add_byte(slot);
+        message.add_ulong(value);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
     fn send_change_body_visual(&mut self, player_id: i32, state: &ChangeBodyState, begin: bool) {
         let Some(player) = self.find_player(player_id) else {
             return;

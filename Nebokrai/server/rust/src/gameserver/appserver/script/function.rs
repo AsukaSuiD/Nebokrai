@@ -262,6 +262,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_EX_STATE_NEW: i32 = 2555;
 pub(crate) const SCRIPT_FUNCTION_ADD_UNDEAD_STATE: i32 = 2556;
 pub(crate) const SCRIPT_FUNCTION_DELETE_UNDEAD_STATE: i32 = 2557;
 pub(crate) const SCRIPT_FUNCTION_GET_UNDEAD_STATE: i32 = 2558;
+pub(crate) const SCRIPT_FUNCTION_SET_HOTKEY: i32 = 2560;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
@@ -3261,6 +3262,10 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_SET_HOTKEY => match index {
+            0..=2 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_IS_CHARGED
         | SCRIPT_FUNCTION_CHANGE_BODY_CHECK
         | SCRIPT_FUNCTION_CHECK_MODE
@@ -4449,6 +4454,17 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: legacy_return as i32,
             })
+        }
+        SCRIPT_FUNCTION_SET_HOTKEY => {
+            let position = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let hotkey_type = integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let index = integer_arguments[2].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            if !(0..=23).contains(&position) {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let value = (index as u32) | if hotkey_type == 1 { 0x8000_0000 } else { 0 };
+            game.set_script_player_hotkey(player_id, position as u8, value);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_ADD_EX_STATE
         | SCRIPT_FUNCTION_DELETE_EX_STATE
