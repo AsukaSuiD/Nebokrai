@@ -5011,7 +5011,6 @@ pub(crate) trait GameMainLoopRuntime:
 {
     fn exit_requested(&self) -> bool;
     fn tick_interval_ms(&self) -> u32;
-    fn get_tick_ms(&mut self) -> u32;
     fn wall_time_seconds(&mut self) -> u32;
     fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
@@ -5076,7 +5075,7 @@ struct GameAreaAiContext<'a, Runtime> {
 
 impl<Runtime: GameMainLoopRuntime> AreaAiContext for GameAreaAiContext<'_, Runtime> {
     fn tick_ms(&mut self) -> u32 {
-        self.runtime.get_tick_ms()
+        self.runtime.now_milliseconds()
     }
 
     fn monster_ai_facts(&mut self, monster_id: i32) -> Option<AreaMonsterAiFacts> {
@@ -16933,14 +16932,14 @@ impl CGame {
         let mut particular_goods = Vec::new();
         let mut change_body_states_ended = 0;
         if !changing_server {
-            nation_timing_finished =
-                self.finish_nation_war_timing_on_player_lost(player_id, || runtime.get_tick_ms());
+            nation_timing_finished = self
+                .finish_nation_war_timing_on_player_lost(player_id, || runtime.now_milliseconds());
             particular_goods = self.drop_particular_goods_on_player_lost(player_id, runtime);
             change_body_states_ended = self.change_body_after_player_lost(player_id, runtime);
         }
 
         if !changing_server && !changing_region && fight_state_count > 0 {
-            let sampled_at_ms = runtime.get_tick_ms();
+            let sampled_at_ms = runtime.now_milliseconds();
             let fight_state_timer_ms = self.globe_setup.fight_state_timer_ms();
             let delay = self
                 .find_player_mut(player_id)
@@ -17048,7 +17047,7 @@ impl CGame {
         let silence = self
             .find_player_mut(player_id)
             .expect("OnExit player проверен reached caller-ом")
-            .update_silence_on_exit(|| runtime.get_tick_ms());
+            .update_silence_on_exit(|| runtime.now_milliseconds());
         let (pos_x_bits, pos_y_bits) = self
             .find_player(player_id)
             .map(|player| {
@@ -21633,7 +21632,7 @@ impl CGame {
         {
             return None;
         }
-        let checked_at_ms = runtime.get_tick_ms();
+        let checked_at_ms = runtime.now_milliseconds();
         let criminal_time_ms = self.globe_setup.criminal_time_ms();
         let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
         let transition = self.find_player(player_id)?.criminal_state_end_due(
@@ -24614,7 +24613,7 @@ impl CGame {
         let materialized = self
             .find_player(player_id)
             .is_some_and(CPlayer::has_materialized_abnormality);
-        let sampled_at_ms = materialized.then(|| runtime.get_tick_ms());
+        let sampled_at_ms = materialized.then(|| runtime.now_milliseconds());
         let Some(now_ms) = sampled_at_ms else {
             return self
                 .find_player(player_id)
@@ -29443,7 +29442,7 @@ impl CGame {
         {
             return None;
         }
-        let sampled_at_ms = runtime.get_tick_ms();
+        let sampled_at_ms = runtime.now_milliseconds();
         let fight_state_timer_ms = self.globe_setup.fight_state_timer_ms();
         if !self
             .find_player(player_id)
@@ -29484,7 +29483,7 @@ impl CGame {
             };
         }
 
-        let sampled_tick_ms = runtime.get_tick_ms();
+        let sampled_tick_ms = runtime.now_milliseconds();
         let elapsed_ms = sampled_tick_ms.wrapping_sub(self.auction_tick_ms);
         if elapsed_ms <= 999 {
             return GameAuctionRunReport {
@@ -29769,7 +29768,7 @@ impl CGame {
                     SHAPE_CHANGE_REGION => region.stage_region_transition(identity),
                     _ => {
                         if identity.object_type == NPC_TYPE {
-                            let now_ms = runtime.get_tick_ms();
+                            let now_ms = runtime.now_milliseconds();
                             if let Some(expiration) =
                                 self.run_region_npc_ai(region, identity.id, now_ms)
                             {
@@ -29800,7 +29799,7 @@ impl CGame {
         let period = (1_000i32 / tick_interval_ms) as u32;
         let periodic_due = (ai_tick as u32) % period == 0;
         let monster_refresh = if periodic_due {
-            let now_ms = runtime.get_tick_ms();
+            let now_ms = runtime.now_milliseconds();
             Some(region.refresh_monster_groups(
                 now_ms,
                 self.globe_setup.area_width(),
@@ -30094,7 +30093,7 @@ impl CGame {
                                     progress_setup.3,
                                     progress_setup.4,
                                     progress_setup.5,
-                                    &mut || runtime.get_tick_ms(),
+                                    &mut || runtime.now_milliseconds(),
                                 )
                             });
                             if let Some(report) = progress.and_then(|mutation| {
@@ -30105,7 +30104,7 @@ impl CGame {
                             let interval_ms = self.globe_setup.auto_inc_energy_time_ms();
                             let energy = self.find_player_mut(player_id).and_then(|player| {
                                 player_ai.regenerate_player_energy(player, interval_ms, &mut || {
-                                    runtime.get_tick_ms()
+                                    runtime.now_milliseconds()
                                 })
                             });
                             if let Some(player) = self.find_player_mut(player_id) {
@@ -30338,7 +30337,7 @@ impl CGame {
             let staged_area_transitions = owner.base().staged_area_transitions();
             let mut area_transitions = Vec::with_capacity(staged_area_transitions.len());
             for identity in staged_area_transitions {
-                let now_ms = runtime.get_tick_ms();
+                let now_ms = runtime.now_milliseconds();
                 let result = match identity.object_type {
                     PLAYER_TYPE => self.players.remove(&identity.id).map(|mut player| {
                         let facts = ShapeRuntimeFacts {
@@ -30409,7 +30408,9 @@ impl CGame {
                 })
                 .collect();
             let clear_player = if owner.base().kick_out_player {
-                let tick = owner.base_mut().clear_player_ai_at(runtime.get_tick_ms());
+                let tick = owner
+                    .base_mut()
+                    .clear_player_ai_at(runtime.now_milliseconds());
                 match tick {
                     ServerRegionClearPlayerTick::Waiting {
                         remaining_ms,
@@ -30652,13 +30653,13 @@ impl CGame {
     ) -> GameMainLoopReport<Runtime::RuntimeError> {
         let mut state = self.main_loop_state;
         if !state.initialized {
-            state.current_tick_ms = runtime.get_tick_ms();
+            state.current_tick_ms = runtime.now_milliseconds();
             state.runtime_log_tick_ms = state.current_tick_ms;
             state.refresh_info_tick_ms = state.current_tick_ms;
             state.initialized = true;
         }
 
-        state.current_tick_ms = runtime.get_tick_ms();
+        state.current_tick_ms = runtime.now_milliseconds();
         self.expire_script_faction_sessions(state.current_tick_ms);
         state.calls_since_runtime_log = state.calls_since_runtime_log.wrapping_add(1);
         let mut stages = Vec::new();
@@ -30718,31 +30719,31 @@ impl CGame {
         let messages;
         let net_sessions;
         if self.setup.watch_runtime_info {
-            let started = runtime.get_tick_ms();
+            let started = runtime.now_milliseconds();
             let _scripts = self.run_script_loop(runtime);
             state.profile.script_ms = state
                 .profile
                 .script_ms
-                .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
+                .wrapping_add(runtime.now_milliseconds().wrapping_sub(started));
             stages.push(GameMainLoopStage::Script);
 
-            let started = runtime.get_tick_ms();
+            let started = runtime.now_milliseconds();
             ai = self.ai(runtime);
             state.profile.ai_ms = state
                 .profile
                 .ai_ms
-                .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
+                .wrapping_add(runtime.now_milliseconds().wrapping_sub(started));
             stages.push(GameMainLoopStage::Ai);
 
-            let started = runtime.get_tick_ms();
+            let started = runtime.now_milliseconds();
             messages = self.process_messages(runtime);
             state.profile.message_ms = state
                 .profile
                 .message_ms
-                .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
+                .wrapping_add(runtime.now_milliseconds().wrapping_sub(started));
             stages.push(GameMainLoopStage::Message);
 
-            let started = runtime.get_tick_ms();
+            let started = runtime.now_milliseconds();
             let terminal_equipment_sessions = self
                 .session_factory
                 .garbage_collect_terminal_equipment_sessions();
@@ -30750,15 +30751,15 @@ impl CGame {
             state.profile.session_ms = state
                 .profile
                 .session_ms
-                .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
+                .wrapping_add(runtime.now_milliseconds().wrapping_sub(started));
             stages.push(GameMainLoopStage::Session);
 
-            let started = runtime.get_tick_ms();
+            let started = runtime.now_milliseconds();
             net_sessions = self.net_session_manager.run();
             state.profile.net_session_ms = state
                 .profile
                 .net_session_ms
-                .wrapping_add(runtime.get_tick_ms().wrapping_sub(started));
+                .wrapping_add(runtime.now_milliseconds().wrapping_sub(started));
             stages.push(GameMainLoopStage::NetSession);
         } else {
             let _scripts = self.run_script_loop(runtime);
@@ -30780,10 +30781,10 @@ impl CGame {
         stages.push(GameMainLoopStage::Auction);
 
         if !state.pacing_initialized {
-            state.pacing_deadline_ms = runtime.get_tick_ms();
+            state.pacing_deadline_ms = runtime.now_milliseconds();
             state.pacing_initialized = true;
         }
-        let pacing_tick_ms = runtime.get_tick_ms();
+        let pacing_tick_ms = runtime.now_milliseconds();
         state.current_tick_ms = pacing_tick_ms;
         let interval_ms = runtime.tick_interval_ms();
         if pacing_tick_ms.wrapping_sub(state.pacing_deadline_ms) < interval_ms {
@@ -30799,7 +30800,7 @@ impl CGame {
         let signed_lag_ms = pacing_tick_ms.wrapping_sub(state.pacing_deadline_ms) as i32;
         if 1_000 < signed_lag_ms {
             runtime.output_debug("warning!!! 1 second not call AI()\n");
-            let resync_tick_ms = runtime.get_tick_ms();
+            let resync_tick_ms = runtime.now_milliseconds();
             state.pacing_deadline_ms = resync_tick_ms;
             stages.push(GameMainLoopStage::LagWarning { resync_tick_ms });
         }
@@ -31006,16 +31007,18 @@ impl CGame {
         >,
     ) {
         if let Some(report) =
-            dispatch_server_message(message, self, runtime, |runtime| runtime.get_tick_ms())
+            dispatch_server_message(message, self, runtime, |runtime| runtime.now_milliseconds())
         {
             server_messages.push(report);
         } else if dispatch_client_auction_message(message, self, runtime, |runtime| {
-            runtime.get_tick_ms()
+            runtime.now_milliseconds()
         })
         .is_some()
         {
         } else if let Some(report) =
-            dispatch_world_auction_message(message, self, runtime, |runtime| runtime.get_tick_ms())
+            dispatch_world_auction_message(message, self, runtime, |runtime| {
+                runtime.now_milliseconds()
+            })
         {
             auction_messages.push(report);
         } else if let Some(report) = dispatch_player_shop_message(message, self, runtime) {

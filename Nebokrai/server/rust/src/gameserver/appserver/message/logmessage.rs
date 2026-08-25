@@ -375,7 +375,7 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
         let _delivery = reject_player_login(game, player_id, true);
         return Err(GameLogMessageError::MissingClientRoute { player_id });
     }
-    let now_ms = runtime.get_tick_ms();
+    let now_ms = runtime.now_milliseconds();
     let login_prelude = game
         .begin_player_login_validation(player_id, now_ms, runtime.wall_time_seconds())
         .map_err(|error| {
