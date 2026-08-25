@@ -26,9 +26,10 @@
 //! а обратный маршрут возвращает его в packet/equipment после exact burden
 //! gate; оба сохраняют equipment callbacks, destination rollback и client move;
 //! полный persisted-player snapshot `0x6080E` остаётся у недоступного owner-а.
-//! Packet↔ground ветвь того же `0x90301` теперь достигает concrete region
-//! goods owner-а: Receive нормализует region/position/amount, сохраняет exact
-//! pickup guards и protection notice, проводит remove/add с rollback и
+//! Packet/equipment↔ground ветвь того же `0x90301` теперь достигает
+//! concrete region goods owner-а: Receive нормализует region/position/amount,
+//! сохраняет exact pickup/progress/burden guards, protection notice,
+//! equipment property/around effects, проводит remove/add с rollback и
 //! возвращает container listeners вместе с self/around `0xC0101`. Остальные
 //! player extend ID наземного маршрута по-прежнему проходят в RAW boundary.
 //!
@@ -521,12 +522,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             }
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == 200
-                && request.source_container_extend_id == 1
+                && matches!(request.source_container_extend_id, 1 | 2)
             {
                 EnhancementMessageRoute::GroundDrop
             } else if request.source_container_type == 200
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && request.destination_container_extend_id == 1
+                && matches!(request.destination_container_extend_id, 1 | 2)
             {
                 EnhancementMessageRoute::GroundPickup
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
@@ -788,20 +789,22 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             }
         }
         let transfer = if route == EnhancementMessageRoute::GroundDrop {
-            game.drop_packet_goods_to_region(
+            game.drop_player_goods_to_region(
                 player_id,
                 region_id,
+                request.source_container_extend_id,
                 request.source_position,
                 request.object_id,
                 request.amount,
                 context,
             )
         } else {
-            game.pick_up_ground_goods_to_packet(
+            game.pick_up_ground_goods_to_player(
                 player_id,
                 region_id,
                 request.source_position,
                 request.object_id,
+                request.destination_container_extend_id,
                 request.destination_position,
                 context,
             )
@@ -809,16 +812,20 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         return Some(Ok(report(match transfer {
             Ok(transfer) => GameContainerMessageOutcome::GroundGoodsMoved(transfer),
             Err(reason) => {
-                let notification_delivery =
-                    (reason == GroundGoodsMoveBlock::PickupProtected).then(|| {
-                        send_notify(
-                            game,
-                            player_id,
-                            game.get_string_by_id(b"GS0112"),
-                            0xffff_ffff,
-                            0,
-                        )
-                    });
+                let notice_id: Option<&[u8]> = match &reason {
+                    GroundGoodsMoveBlock::PickupProtected => Some(b"GS0112"),
+                    GroundGoodsMoveBlock::BurdenExceeded => Some(b"GS0259"),
+                    _ => None,
+                };
+                let notification_delivery = notice_id.map(|notice_id| {
+                    send_notify(
+                        game,
+                        player_id,
+                        game.get_string_by_id(notice_id),
+                        0xffff_ffff,
+                        0,
+                    )
+                });
                 GameContainerMessageOutcome::GroundGoodsRolledBack {
                     reason,
                     delivery: send_rollback(game, player_id),

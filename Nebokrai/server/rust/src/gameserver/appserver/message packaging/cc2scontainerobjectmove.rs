@@ -22,7 +22,6 @@
 //
 //
 
-
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::Receive
 // STATUS: PARTIAL_IMPLEMENTATION
@@ -69,7 +68,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::GetGoods
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: ground→packet pickup, packet/equipment enhancement и equipment-session select, same-source clear и cross-container remove в CPlayer/CGame
+// MATERIALIZED: ground→packet/equipment pickup, packet/equipment enhancement и equipment-session select, same-source clear и cross-container remove в CPlayer/CGame
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:374
@@ -112,7 +111,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::PutGoods
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: packet→ground drop, enhancement и typed upgrade/DaKong/compose session shadow placement, shadow→packet/equipment add/rollback в CPlayer/CGame
+// MATERIALIZED: packet/equipment→ground drop, enhancement и typed upgrade/DaKong/compose session shadow placement, shadow→packet/equipment add/rollback в CPlayer/CGame
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:645
@@ -138,6 +137,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
 
 // COMPONENT_VARIANT_END: GameServer
