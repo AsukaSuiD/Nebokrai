@@ -3550,30 +3550,16 @@ pub(crate) struct GodsBattleDeathSzlReport {
     pub(crate) region_notice_delivery: Option<i32>,
 }
 
-pub(crate) trait NationCombatContext: ServerRegionNpcContext + GameClockContext {
-    /// Выполняет concrete player-origin `CMessage::SendToAround`, включая
-    /// соседние areas и удалённых team members исходного runtime-а.
-    fn send_nation_player_around(
-        &mut self,
-        region: &CServerRegion,
-        origin: &CShape,
-        excluded_player_id: Option<i32>,
-        message: &CMessage,
-    ) -> Result<i32, ShapeCoordinateBlock>;
-}
+pub(crate) trait NationCombatContext: ServerRegionNpcContext + GameClockContext {}
+
+impl<T> NationCombatContext for T where T: ServerRegionNpcContext + GameClockContext {}
 
 pub(crate) trait NationContendContext:
     NationCombatContext + ServerRegionMonsterContext
 {
-    /// Выполняет concrete `CMessage::SendToAround` для двух magic-stone
-    /// сообщений до virtual удаления исходного NPC.
-    fn send_nation_magic_stone_around(
-        &mut self,
-        region: &CServerRegion,
-        origin: &CShape,
-        message: &CMessage,
-    ) -> i32;
 }
+
+impl<T> NationContendContext for T where T: NationCombatContext + ServerRegionMonsterContext {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NationMonsterDamageOutcome {
@@ -12739,11 +12725,10 @@ impl CGame {
         })
     }
 
-    pub(crate) fn nation_cancel_contend_by_player_id<Context: NationCombatContext>(
+    pub(crate) fn nation_cancel_contend_by_player_id(
         &mut self,
         region_id: i32,
         player_id: i32,
-        context: &mut Context,
     ) -> Option<NationContendCancelReport> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
@@ -12756,12 +12741,8 @@ impl CGame {
             let outcome = region.cancel_contend_by_player_id(player_id);
             let (delivery, state_delivery) =
                 if matches!(outcome, NationContendCancelOutcome::MissingReset) {
-                    let state_delivery = self.set_nation_player_contend_state(
-                        &region.war.base,
-                        player_id,
-                        false,
-                        context,
-                    );
+                    let state_delivery =
+                        self.set_nation_player_contend_state(&region.war.base, player_id, false);
                     (
                         Some(self.send_nation_contend_time(player_id, 0)),
                         state_delivery,
@@ -12781,10 +12762,9 @@ impl CGame {
         })
     }
 
-    pub(crate) fn nation_cancel_all_contenders<Context: NationCombatContext>(
+    pub(crate) fn nation_cancel_all_contenders(
         &mut self,
         region_id: i32,
-        context: &mut Context,
     ) -> Option<NationContendCancelAllReport> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(region) = owner else {
@@ -12796,7 +12776,7 @@ impl CGame {
         for player_id in region.contender_player_ids() {
             time_deliveries.push(self.send_nation_contend_time(player_id, 0));
             if let Some(delivery) =
-                self.set_nation_player_contend_state(&region.war.base, player_id, false, context)
+                self.set_nation_player_contend_state(&region.war.base, player_id, false)
             {
                 state_deliveries.push((player_id, delivery));
             }
@@ -12823,7 +12803,7 @@ impl CGame {
             NationContendCancelOutcome::MissingReset
         ) {
             if let Some(delivery) =
-                self.set_nation_player_contend_state(&region.war.base, player_id, false, context)
+                self.set_nation_player_contend_state(&region.war.base, player_id, false)
             {
                 state_deliveries.push(delivery);
             }
@@ -12836,7 +12816,7 @@ impl CGame {
             context.now_milliseconds(),
         );
         if let Some(delivery) =
-            self.set_nation_player_contend_state(&region.war.base, player_id, true, context)
+            self.set_nation_player_contend_state(&region.war.base, player_id, true)
         {
             state_deliveries.push(delivery);
         }
@@ -12960,7 +12940,6 @@ impl CGame {
                                     &region.war.base,
                                     *cancelled_player_id,
                                     false,
-                                    runtime,
                                 ) {
                                     state_deliveries.push((*cancelled_player_id, delivery));
                                 }
@@ -13139,16 +13118,20 @@ impl CGame {
         explosion
             .base_mut()
             .add(&(npc_tile_y as f32 + 0.5).to_le_bytes());
-        let explosion_delivery =
-            Some(context.send_nation_magic_stone_around(&region.war.base, shape, &explosion));
+        let explosion_delivery = Some(
+            self.send_game_shape_around(&region.war.base, shape, None, &explosion)
+                .expect("координаты magic-stone проверены до around publication"),
+        );
 
         let identity = shape.identity();
         let mut removal = CMessage::new(0xbf504);
         removal.add_long(identity.object_type);
         removal.add_long(identity.id);
         removal.add_long(0);
-        let removal_delivery =
-            Some(context.send_nation_magic_stone_around(&region.war.base, shape, &removal));
+        let removal_delivery = Some(
+            self.send_game_shape_around(&region.war.base, shape, None, &removal)
+                .expect("magic-stone не меняет координаты между двумя publications"),
+        );
 
         if let Err(error) = region.war.base.remove_owned_npc_by_id(npc_id) {
             return NationMagicStoneTransitionReport {
@@ -13232,12 +13215,29 @@ impl CGame {
         )
     }
 
-    fn set_nation_player_contend_state<Context: NationCombatContext>(
+    pub(crate) fn send_game_shape_around(
+        &self,
+        region: &CServerRegion,
+        origin: &CShape,
+        excluded_player_id: Option<i32>,
+        message: &CMessage,
+    ) -> Result<i32, ShapeCoordinateBlock> {
+        let Some(runtime) = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        ) else {
+            return Ok(0);
+        };
+        message.send_to_around(Some(region), origin, excluded_player_id, &runtime)
+    }
+
+    fn set_nation_player_contend_state(
         &mut self,
         region: &CServerRegion,
         player_id: i32,
         contend_state: bool,
-        context: &mut Context,
     ) -> Option<Result<i32, ShapeCoordinateBlock>> {
         let player = self.find_player_mut(player_id)?;
         if !player.set_contend_state(contend_state) {
@@ -13249,7 +13249,7 @@ impl CGame {
         let player = self
             .find_player(player_id)
             .expect("player сохранён между mutation и synchronous around-send");
-        Some(context.send_nation_player_around(region, player.shape(), None, &message))
+        Some(self.send_game_shape_around(region, player.shape(), None, &message))
     }
 
     /// Concrete `CPlayer::SetContendState` effect для war-symbol entry:
@@ -13271,23 +13271,14 @@ impl CGame {
         let player = self
             .find_player(player_id)
             .expect("war contender сохранён до synchronous around-send");
-        let Some(runtime) = GameServerAroundRuntime::new(
-            self,
-            &self.session_factory,
-            self.globe_setup.area_width(),
-            self.globe_setup.area_height(),
-        ) else {
-            return Some(Ok(0));
-        };
-        Some(message.send_to_around(Some(region), player.shape(), None, &runtime))
+        Some(self.send_game_shape_around(region, player.shape(), None, &message))
     }
 
-    fn publish_player_died_state<Context: NationCombatContext>(
+    fn publish_player_died_state(
         &mut self,
         region: &CServerRegion,
         player_id: i32,
         state: bool,
-        context: &mut Context,
     ) -> Option<NationPlayerDiedStatePublication> {
         self.find_player_mut(player_id)?
             .set_city_war_died_state(state);
@@ -13299,7 +13290,7 @@ impl CGame {
             .find_player(player_id)
             .expect("player сохранён между self и synchronous around-send");
         let around_delivery =
-            context.send_nation_player_around(region, player.shape(), Some(player_id), &message);
+            self.send_game_shape_around(region, player.shape(), Some(player_id), &message);
         Some(NationPlayerDiedStatePublication {
             player_id,
             state,
@@ -13350,12 +13341,8 @@ impl CGame {
         } else {
             match region.cancel_contend_by_player_id(player_id) {
                 NationContendCancelOutcome::MissingReset => {
-                    contend_state_delivery = self.set_nation_player_contend_state(
-                        &region.war.base,
-                        player_id,
-                        false,
-                        context,
-                    );
+                    contend_state_delivery =
+                        self.set_nation_player_contend_state(&region.war.base, player_id, false);
                     contend_time_delivery = Some(self.send_nation_contend_time(player_id, 0));
                     notice_delivery = Some(
                         self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS0136")),
@@ -13395,10 +13382,9 @@ impl CGame {
 
     /// Две достижимые `OnRelive` ветви сходятся в этом exact tail: positive
     /// remaining time активирует state и публикует self, затем around.
-    pub(crate) fn publish_nation_died_state_after_relive<Context: NationCombatContext>(
+    pub(crate) fn publish_nation_died_state_after_relive(
         &mut self,
         player_id: i32,
-        context: &mut Context,
     ) -> Option<NationPlayerDiedStatePublication> {
         let player = self.find_player(player_id)?;
         if player.city_war_died_state_time_ms() <= 0 {
@@ -13406,7 +13392,7 @@ impl CGame {
         }
         let region_id = player.server_region_id()?;
         let owner = self.take_region_owner(region_id)?;
-        let publication = self.publish_player_died_state(owner.base(), player_id, true, context);
+        let publication = self.publish_player_died_state(owner.base(), player_id, true);
         self.restore_region_owner(owner);
         publication
     }
@@ -13489,8 +13475,7 @@ impl CGame {
         let time_delivery = self.set_player_died_state_time(player_id, 0);
         let region_id = self.find_player(player_id)?.server_region_id()?;
         let owner = self.take_region_owner(region_id)?;
-        let state_publication =
-            self.publish_player_died_state(owner.base(), player_id, false, context);
+        let state_publication = self.publish_player_died_state(owner.base(), player_id, false);
         self.restore_region_owner(owner);
         let state_publication = state_publication?;
         Some(NationPlayerDiedStateTick::Expired {
@@ -16107,8 +16092,7 @@ impl CGame {
             changed.add_long(identity.id);
             add_legacy_c_string(changed.base_mut(), property);
             changed.add_long(value);
-            let _ =
-                context.send_nation_player_around(region.base(), player.shape(), None, &changed);
+            let _ = self.send_game_shape_around(region.base(), player.shape(), None, &changed);
         }
         let recomputed = {
             let player = self.players.get_mut(&player_id)?;
@@ -16711,7 +16695,7 @@ impl CGame {
                 movement.add_long(tile_x);
                 movement.add_long(tile_y);
                 movement.add_long(use_goods);
-                report.position_delivery = Some(context.send_nation_player_around(
+                report.position_delivery = Some(self.send_game_shape_around(
                     source_owner.base(),
                     player.shape(),
                     None,
@@ -16734,7 +16718,7 @@ impl CGame {
                 changed.add_byte(direction as u8);
                 changed.add_long(400);
                 changed.add_long(player_id);
-                report.direction_delivery = Some(context.send_nation_player_around(
+                report.direction_delivery = Some(self.send_game_shape_around(
                     source_owner.base(),
                     player.shape(),
                     None,
@@ -16805,7 +16789,7 @@ impl CGame {
             changed.add_long(target.war_region_type);
             changed.add_byte(target.country);
             changed.add_ulong(target.region.exp_scale_bits());
-            report.region_delivery = Some(context.send_nation_player_around(
+            report.region_delivery = Some(self.send_game_shape_around(
                 source_owner.base(),
                 player.shape(),
                 None,

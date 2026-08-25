@@ -1608,7 +1608,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                     .game
                     .find_player(player_id)
                     .expect("Nation relive player остаётся live до around send");
-                if let Err(block) = self.runtime.send_nation_player_around(
+                if let Err(block) = self.game.send_game_shape_around(
                     &region.war.base,
                     player.shape(),
                     None,
