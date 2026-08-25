@@ -7,12 +7,14 @@
 //! используется точным двойником `CYuanBao`, который отличается только
 //! factory-index-ом.
 //!
-//! Query, add/stack, remove, direct increase/decrease и lifecycle возвращают
+//! Query, add/stack, remove, positional full/partial take, direct
+//! increase/decrease и lifecycle возвращают
 //! typed reports для будущего listener/message dispatcher-а. Exact decrease
 //! при запросе больше balance выполняет unsigned wrapping subtraction — это
 //! наблюдаемый legacy-контракт, а не внутренний pointer-дефект. Достигнутый
-//! battle-fairy caller собирает из outcome точный `CS2CContainerObjectMove`;
-//! increase/create публикации остаются за своими ещё отдельными сценариями.
+//! battle-fairy и ground currency callers собирают из outcomes точный
+//! `CS2CContainerObjectMove`; increase/create публикации остаются за своими
+//! ещё отдельными сценариями.
 //! Marker + optional full-goods persisted codec достигнут общим player
 //! GameSave owner-ом и одинаково обслуживает wallet/YuanBao/JiFen.
 
@@ -63,6 +65,25 @@ pub(crate) struct CurrencyGoodsRemoved {
     pub(crate) amount: u32,
     pub(crate) listeners: Vec<ContainerListenerHandle>,
     pub(crate) goods: CGoods,
+}
+
+#[must_use = "report сохраняет split ownership и listener-эффекты"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CurrencyGoodsSplit {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) source: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+    pub(crate) goods: CGoods,
+}
+
+#[must_use = "результат take владеет отделённой currency goods"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CurrencyGoodsTaken {
+    Removed(CurrencyGoodsRemoved),
+    Split(CurrencyGoodsSplit),
 }
 
 #[must_use = "report подтверждает уничтожение прежнего currency goods"]
@@ -312,6 +333,54 @@ impl<K: CurrencyKind> CSingleCurrencyContainer<K> {
             listeners: self.base.base().listeners().to_vec(),
             goods,
         })
+    }
+
+    /// Exact positional `Remove(0, amount)` для container-move: full remove
+    /// передаёт исходный object, partial создаёт новый GUID/owner и уменьшает
+    /// stored currency только после успешного создания split.
+    pub(crate) fn take_goods<Create>(
+        &mut self,
+        position: u32,
+        requested: u32,
+        factory: &CGoodsFactory,
+        mut create_goods: Create,
+    ) -> Option<CurrencyGoodsTaken>
+    where
+        Create: FnMut(u32) -> Option<CGoods>,
+    {
+        if position != 0 || requested == 0 {
+            return None;
+        }
+        let stored = self.goods.as_ref()?;
+        if stored.amount() < requested {
+            return None;
+        }
+        if stored.amount() == requested {
+            return self
+                .remove_goods(stored.identity().ex_id)
+                .map(CurrencyGoodsTaken::Removed);
+        }
+        if stored.max_stack_number(factory) <= 1 {
+            return None;
+        }
+        let mut split = create_goods(stored.base_properties_index())?;
+        split.copy_addon_properties_core_from(stored);
+        split.set_amount(requested);
+        let source = stored.identity();
+        let remaining = stored.amount().wrapping_sub(requested);
+        self.goods
+            .as_mut()
+            .expect("currency проверена до split")
+            .set_amount(remaining);
+        Some(CurrencyGoodsTaken::Split(CurrencyGoodsSplit {
+            owner_type: self.base.owner_type(),
+            owner_id: self.base.owner_id(),
+            position,
+            source,
+            amount: requested,
+            listeners: self.base.base().listeners().to_vec(),
+            goods: split,
+        }))
     }
 
     /// Exact owner не проверяет `requested <= current`: unsigned subtraction

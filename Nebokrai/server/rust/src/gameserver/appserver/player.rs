@@ -258,7 +258,7 @@ use super::container::cvolumelimitgoodscontainer::{
 };
 use super::container::cwallet::{
     CWallet, CurrencyCodecError, CurrencyDecreaseOutcome, CurrencyGoodsAddOutcome,
-    CurrencyIncreaseOutcome,
+    CurrencyGoodsTaken, CurrencyIncreaseOutcome,
 };
 use super::container::cyuanbao::CYuanBao;
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
@@ -5955,6 +5955,61 @@ impl CPlayer {
 
     pub(crate) const fn money(&self) -> u32 {
         self.money
+    }
+
+    pub(crate) fn ground_currency_goods(&self, extend_id: i32) -> Option<&CGoods> {
+        match extend_id {
+            4 => self.wallet.get_goods(0),
+            5 => self.yuan_bao.get_goods(0),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn take_ground_currency_goods<Create>(
+        &mut self,
+        extend_id: i32,
+        requested: u32,
+        factory: &CGoodsFactory,
+        mut create_goods: Create,
+    ) -> Option<CurrencyGoodsTaken>
+    where
+        Create: FnMut(u32) -> Option<CGoods>,
+    {
+        let taken = match extend_id {
+            4 => self
+                .wallet
+                .take_goods(0, requested, factory, &mut create_goods),
+            5 => self
+                .yuan_bao
+                .take_goods(0, requested, factory, &mut create_goods),
+            _ => None,
+        };
+        if extend_id == 4 {
+            self.money = self.wallet.currency_amount();
+        }
+        taken
+    }
+
+    pub(crate) fn add_ground_currency_goods(
+        &mut self,
+        extend_id: i32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> Option<CurrencyGoodsAddOutcome> {
+        let outcome = match extend_id {
+            4 => self
+                .wallet
+                .add_goods(0, incoming, factory, owner_progress_allows),
+            5 => self
+                .yuan_bao
+                .add_goods(0, incoming, factory, owner_progress_allows),
+            _ => return None,
+        };
+        if extend_id == 4 {
+            self.money = self.wallet.currency_amount();
+        }
+        Some(outcome)
     }
 
     pub(crate) fn decrease_money(

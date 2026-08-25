@@ -302,7 +302,8 @@
 //! Container `0x90301` также замыкает packet/equipment/hand↔ground
 //! вертикаль через owned region goods: split/full ownership, exact drop
 //! cell, protection/range,
-//! burden, packet/hand stack, equipment properties, rollback, listeners и
+//! burden, packet/hand/currency stack, wallet/YuanBao normalization,
+//! equipment properties, rollback, listeners и
 //! ordered self/around `0xC0101` доходят из живого message
 //! dispatcher-а; optional World `0x60202` предшествует
 //! client send. Тот же owner завершает lifetime deadline
@@ -461,6 +462,9 @@ use crate::gameserver::appserver::container::cfairycontainer::{
 use crate::gameserver::appserver::container::cgoodscontainer::GoodsStackMergeOutcome;
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::{
     VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome,
+};
+use crate::gameserver::appserver::container::cwallet::{
+    CurrencyGoodsAddOutcome, CurrencyGoodsTaken,
 };
 use crate::gameserver::appserver::country::countryhandler::CCountryHandler;
 use crate::gameserver::appserver::country::countryparam::CCountryParam;
@@ -2419,6 +2423,8 @@ pub(crate) enum GroundGoodsMoveBlock {
     EquipmentAdditionRejected(PlayerEquipmentAddReport),
     HandRemovalFailed,
     HandAdditionRejected,
+    CurrencyRemovalFailed,
+    CurrencyAdditionRejected(CurrencyGoodsAddOutcome),
     ContainerRollbackCompleted {
         region_error: RegionMembershipBlock,
         removal: EnhancementTransferRemoval,
@@ -2429,6 +2435,11 @@ pub(crate) enum GroundGoodsMoveBlock {
         removal: GroundHandRemoval,
         rollback: GroundHandAddition,
     },
+    CurrencyRollbackCompleted {
+        region_error: RegionMembershipBlock,
+        removal: GroundCurrencyRemoval,
+        rollback: CurrencyGoodsAddOutcome,
+    },
     RollbackFailed {
         goods: CGoods,
         region_error: RegionMembershipBlock,
@@ -2436,6 +2447,8 @@ pub(crate) enum GroundGoodsMoveBlock {
         container_mutation: Option<EnhancementTransferAddition>,
         hand_removal: Option<GroundHandRemoval>,
         hand_addition: Option<GroundHandAddition>,
+        currency_removal: Option<GroundCurrencyRemoval>,
+        currency_addition: Option<CurrencyGoodsAddOutcome>,
     },
     Region(RegionMembershipBlock),
 }
@@ -2453,6 +2466,8 @@ pub(crate) struct GroundGoodsMoveReport {
     pub(crate) destination_mutation: Option<EnhancementTransferAddition>,
     pub(crate) source_hand_mutation: Option<GroundHandRemoval>,
     pub(crate) destination_hand_mutation: Option<GroundHandAddition>,
+    pub(crate) source_currency_mutation: Option<GroundCurrencyRemoval>,
+    pub(crate) destination_currency_mutation: Option<CurrencyGoodsAddOutcome>,
     pub(crate) previous_last_operated: Option<(u32, u32)>,
     pub(crate) audit_deliveries: Vec<i32>,
     pub(crate) player_delivery: i32,
@@ -2479,6 +2494,22 @@ pub(crate) struct GroundHandRemoval {
 pub(crate) enum GroundHandAddition {
     Added(AmountLimitGoodsAdded),
     Stack(GoodsStackMergeOutcome),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GroundCurrencyRemovalKind {
+    Removed,
+    Split { source: ShapeIdentity },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GroundCurrencyRemoval {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+    pub(crate) kind: GroundCurrencyRemovalKind,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6323,6 +6354,7 @@ impl CGame {
             1 => player.packet().get_goods(source_position),
             2 => player.equipment().get_goods(source_position),
             3 => player.hand().get_goods(source_position),
+            4 | 5 => player.ground_currency_goods(source_extend_id),
             _ => None,
         }
         .filter(|goods| goods.identity().ex_id == goods_id)
@@ -6381,128 +6413,172 @@ impl CGame {
             .players
             .remove(&player_id)
             .expect("player проверен непосредственно перед synchronous packet removal");
-        let (detached, source_mutation, source_hand_mutation) = if source_extend_id == 1 {
-            let mut split_template = source.clone();
-            split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
-            let Some(removed) = player.packet_mut().take_goods(
-                source_position,
-                amount,
-                &self.goods_factory,
-                |_| {
-                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
-                        .then(|| split_template.clone())
-                },
-            ) else {
-                self.players.insert(player_id, player);
-                self.restore_region_owner(owner);
-                return Err(GroundGoodsMoveBlock::PacketRemovalFailed);
-            };
-            match removed {
-                VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed))
-                | VolumeGoodsRemoveOutcome::RemovedButCellMissing(
-                    AmountLimitGoodsTaken::Removed(removed),
-                ) => {
-                    let mutation = EnhancementTransferRemoval::Packet {
-                        owner_type: removed.owner_type,
-                        owner_id: removed.owner_id,
-                        position: removed.position.unwrap_or(source_position),
-                        amount: removed.amount,
-                        listeners: removed.listeners,
-                    };
-                    (removed.goods, Some(mutation), None)
-                }
-                VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Split(split))
-                | VolumeGoodsRemoveOutcome::RemovedButCellMissing(AmountLimitGoodsTaken::Split(
-                    split,
-                )) => {
-                    let mutation = EnhancementTransferRemoval::Packet {
-                        owner_type: split.owner_type,
-                        owner_id: split.owner_id,
-                        position: split.position.unwrap_or(source_position),
-                        amount: split.amount,
-                        listeners: split.listeners,
-                    };
-                    (split.goods, Some(mutation), None)
-                }
-            }
-        } else if source_extend_id == 2 {
-            let pack_add_enabled = self.globe_setup.pack_add_enabled();
-            let remove_facts =
-                context.enhancement_equipment_remove_facts(&player, &source, pack_add_enabled);
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
-            let mut report = player.remove_equipment_goods(
-                goods_id,
-                &self.goods_factory,
-                &self.skill_factory,
-                remove_facts,
-                &mut recompute,
-            );
-            drop(recompute);
-            self.publish_player_equipment_remove_report(&mut report, context);
-            let outcome = std::mem::replace(
-                &mut report.outcome,
-                EquipmentRemoveOutcome::Missing {
-                    partial_effects: Default::default(),
-                },
-            );
-            let removed = match outcome {
-                EquipmentRemoveOutcome::Removed(removed) => removed,
-                outcome => {
-                    report.outcome = outcome;
-                    self.players.insert(player_id, player);
-                    self.restore_region_owner(owner);
-                    return Err(GroundGoodsMoveBlock::EquipmentRemovalFailed(report));
-                }
-            };
-            let mutation = EnhancementTransferRemoval::Equipment {
-                event: removed.event,
-                effects: report.effects,
-                deliveries: report.deliveries,
-            };
-            (removed.goods, Some(mutation), None)
-        } else {
-            let mut split_template = source.clone();
-            split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
-            let Some(removed) =
-                player
-                    .hand_mut()
-                    .take_goods(source_position, amount, &self.goods_factory, |_| {
+        let (detached, source_mutation, source_hand_mutation, source_currency_mutation) =
+            if source_extend_id == 1 {
+                let mut split_template = source.clone();
+                split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+                let Some(removed) = player.packet_mut().take_goods(
+                    source_position,
+                    amount,
+                    &self.goods_factory,
+                    |_| {
                         (split_template.identity().ex_id != CGuid::GUID_INVALID)
                             .then(|| split_template.clone())
-                    })
-            else {
-                self.players.insert(player_id, player);
-                self.restore_region_owner(owner);
-                return Err(GroundGoodsMoveBlock::HandRemovalFailed);
+                    },
+                ) else {
+                    self.players.insert(player_id, player);
+                    self.restore_region_owner(owner);
+                    return Err(GroundGoodsMoveBlock::PacketRemovalFailed);
+                };
+                match removed {
+                    VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Removed(removed))
+                    | VolumeGoodsRemoveOutcome::RemovedButCellMissing(
+                        AmountLimitGoodsTaken::Removed(removed),
+                    ) => {
+                        let mutation = EnhancementTransferRemoval::Packet {
+                            owner_type: removed.owner_type,
+                            owner_id: removed.owner_id,
+                            position: removed.position.unwrap_or(source_position),
+                            amount: removed.amount,
+                            listeners: removed.listeners,
+                        };
+                        (removed.goods, Some(mutation), None, None)
+                    }
+                    VolumeGoodsRemoveOutcome::Removed(AmountLimitGoodsTaken::Split(split))
+                    | VolumeGoodsRemoveOutcome::RemovedButCellMissing(
+                        AmountLimitGoodsTaken::Split(split),
+                    ) => {
+                        let mutation = EnhancementTransferRemoval::Packet {
+                            owner_type: split.owner_type,
+                            owner_id: split.owner_id,
+                            position: split.position.unwrap_or(source_position),
+                            amount: split.amount,
+                            listeners: split.listeners,
+                        };
+                        (split.goods, Some(mutation), None, None)
+                    }
+                }
+            } else if source_extend_id == 2 {
+                let pack_add_enabled = self.globe_setup.pack_add_enabled();
+                let remove_facts =
+                    context.enhancement_equipment_remove_facts(&player, &source, pack_add_enabled);
+                let mut recompute =
+                    |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+                let mut report = player.remove_equipment_goods(
+                    goods_id,
+                    &self.goods_factory,
+                    &self.skill_factory,
+                    remove_facts,
+                    &mut recompute,
+                );
+                drop(recompute);
+                self.publish_player_equipment_remove_report(&mut report, context);
+                let outcome = std::mem::replace(
+                    &mut report.outcome,
+                    EquipmentRemoveOutcome::Missing {
+                        partial_effects: Default::default(),
+                    },
+                );
+                let removed = match outcome {
+                    EquipmentRemoveOutcome::Removed(removed) => removed,
+                    outcome => {
+                        report.outcome = outcome;
+                        self.players.insert(player_id, player);
+                        self.restore_region_owner(owner);
+                        return Err(GroundGoodsMoveBlock::EquipmentRemovalFailed(report));
+                    }
+                };
+                let mutation = EnhancementTransferRemoval::Equipment {
+                    event: removed.event,
+                    effects: report.effects,
+                    deliveries: report.deliveries,
+                };
+                (removed.goods, Some(mutation), None, None)
+            } else if source_extend_id == 3 {
+                let mut split_template = source.clone();
+                split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+                let Some(removed) = player.hand_mut().take_goods(
+                    source_position,
+                    amount,
+                    &self.goods_factory,
+                    |_| {
+                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                            .then(|| split_template.clone())
+                    },
+                ) else {
+                    self.players.insert(player_id, player);
+                    self.restore_region_owner(owner);
+                    return Err(GroundGoodsMoveBlock::HandRemovalFailed);
+                };
+                match removed {
+                    AmountLimitGoodsTaken::Removed(removed) => {
+                        let mutation = GroundHandRemoval {
+                            owner_type: removed.owner_type,
+                            owner_id: removed.owner_id,
+                            position: removed.position.unwrap_or(source_position),
+                            amount: removed.amount,
+                            listeners: removed.listeners,
+                            kind: GroundHandRemovalKind::Removed,
+                        };
+                        (removed.goods, None, Some(mutation), None)
+                    }
+                    AmountLimitGoodsTaken::Split(split) => {
+                        let mutation = GroundHandRemoval {
+                            owner_type: split.owner_type,
+                            owner_id: split.owner_id,
+                            position: split.position.unwrap_or(source_position),
+                            amount: split.amount,
+                            listeners: split.listeners,
+                            kind: GroundHandRemovalKind::Split {
+                                source: split.source,
+                            },
+                        };
+                        (split.goods, None, Some(mutation), None)
+                    }
+                }
+            } else {
+                let mut split_template = source.clone();
+                split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+                let Some(removed) = player.take_ground_currency_goods(
+                    source_extend_id,
+                    amount,
+                    &self.goods_factory,
+                    |_| {
+                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                            .then(|| split_template.clone())
+                    },
+                ) else {
+                    self.players.insert(player_id, player);
+                    self.restore_region_owner(owner);
+                    return Err(GroundGoodsMoveBlock::CurrencyRemovalFailed);
+                };
+                match removed {
+                    CurrencyGoodsTaken::Removed(removed) => {
+                        let mutation = GroundCurrencyRemoval {
+                            owner_type: removed.owner_type,
+                            owner_id: removed.owner_id,
+                            position: removed.position,
+                            amount: removed.amount,
+                            listeners: removed.listeners,
+                            kind: GroundCurrencyRemovalKind::Removed,
+                        };
+                        (removed.goods, None, None, Some(mutation))
+                    }
+                    CurrencyGoodsTaken::Split(split) => {
+                        let mutation = GroundCurrencyRemoval {
+                            owner_type: split.owner_type,
+                            owner_id: split.owner_id,
+                            position: split.position,
+                            amount: split.amount,
+                            listeners: split.listeners,
+                            kind: GroundCurrencyRemovalKind::Split {
+                                source: split.source,
+                            },
+                        };
+                        (split.goods, None, None, Some(mutation))
+                    }
+                }
             };
-            match removed {
-                AmountLimitGoodsTaken::Removed(removed) => {
-                    let mutation = GroundHandRemoval {
-                        owner_type: removed.owner_type,
-                        owner_id: removed.owner_id,
-                        position: removed.position.unwrap_or(source_position),
-                        amount: removed.amount,
-                        listeners: removed.listeners,
-                        kind: GroundHandRemovalKind::Removed,
-                    };
-                    (removed.goods, None, Some(mutation))
-                }
-                AmountLimitGoodsTaken::Split(split) => {
-                    let mutation = GroundHandRemoval {
-                        owner_type: split.owner_type,
-                        owner_id: split.owner_id,
-                        position: split.position.unwrap_or(source_position),
-                        amount: split.amount,
-                        listeners: split.listeners,
-                        kind: GroundHandRemovalKind::Split {
-                            source: split.source,
-                        },
-                    };
-                    (split.goods, None, Some(mutation))
-                }
-            }
-        };
         let goods = detached.identity();
         let particular_attribute =
             detached.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32;
@@ -6520,7 +6596,7 @@ impl CGame {
             context,
         ) {
             let mut incoming = Some(detached);
-            let (rollback, hand_rollback) = match source_extend_id {
+            let (rollback, hand_rollback, currency_rollback) = match source_extend_id {
                 1 => (
                     Some(EnhancementTransferAddition::Packet(
                         player.packet_mut().add_goods_at(
@@ -6530,6 +6606,7 @@ impl CGame {
                             true,
                         ),
                     )),
+                    None,
                     None,
                 ),
                 2 => (
@@ -6542,10 +6619,22 @@ impl CGame {
                         context,
                     )),
                     None,
+                    None,
                 ),
                 3 => (
                     None,
                     Some(self.add_ground_hand_goods(&mut player, source_position, &mut incoming)),
+                    None,
+                ),
+                4 | 5 => (
+                    None,
+                    None,
+                    player.add_ground_currency_goods(
+                        source_extend_id,
+                        &mut incoming,
+                        &self.goods_factory,
+                        true,
+                    ),
                 ),
                 _ => unreachable!("ground source extend проверен до removal"),
             };
@@ -6559,6 +6648,8 @@ impl CGame {
                     container_mutation: rollback,
                     hand_removal: source_hand_mutation,
                     hand_addition: hand_rollback,
+                    currency_removal: source_currency_mutation,
+                    currency_addition: currency_rollback,
                 });
             }
             return Err(
@@ -6568,11 +6659,19 @@ impl CGame {
                         removal,
                         rollback,
                     }
-                } else {
+                } else if let (Some(removal), Some(rollback)) =
+                    (source_hand_mutation, hand_rollback)
+                {
                     GroundGoodsMoveBlock::HandRollbackCompleted {
                         region_error: error,
-                        removal: source_hand_mutation.expect("hand removal сохранён"),
-                        rollback: hand_rollback.expect("hand rollback выполнен"),
+                        removal,
+                        rollback,
+                    }
+                } else {
+                    GroundGoodsMoveBlock::CurrencyRollbackCompleted {
+                        region_error: error,
+                        removal: source_currency_mutation.expect("currency removal сохранён"),
+                        rollback: currency_rollback.expect("currency rollback выполнен"),
                     }
                 },
             );
@@ -6587,7 +6686,11 @@ impl CGame {
                 player_id,
                 3,
                 goods,
-                source.price(),
+                if source_is_currency {
+                    amount
+                } else {
+                    source.price()
+                },
                 source.name(),
                 amount,
             )
@@ -6624,6 +6727,8 @@ impl CGame {
             destination_mutation: None,
             source_hand_mutation,
             destination_hand_mutation: None,
+            source_currency_mutation,
+            destination_currency_mutation: None,
             previous_last_operated,
             audit_deliveries,
             player_delivery,
@@ -6694,15 +6799,25 @@ impl CGame {
             self.restore_region_owner(owner);
             return Err(GroundGoodsMoveBlock::PickupProtected);
         }
-        let burden_exceeded = player_current_burden
-            .wrapping_add(ground.weight(&self.goods_factory))
-            > player_max_burden;
+        let burden_exceeded = matches!(destination_extend_id, 1 | 2)
+            && player_current_burden.wrapping_add(ground.weight(&self.goods_factory))
+                > player_max_burden;
         let amount = ground.amount();
         let audit_base_index = ground.base_properties_index();
         let audit_price = ground.price();
         let audit_name = ground.name().to_vec();
         let particular_attribute =
             ground.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32;
+        let (destination_extend_id, destination_position) =
+            if matches!(destination_extend_id, 1 | 2) {
+                (destination_extend_id, destination_position)
+            } else if audit_base_index == self.goods_factory.get_gold_coin_index() {
+                (4, 0)
+            } else if audit_base_index == self.goods_factory.get_yuan_bao_index() {
+                (5, 0)
+            } else {
+                (destination_extend_id, destination_position)
+            };
         let detached = match owner
             .base_mut()
             .remove_owned_ground_goods(goods_id, particular_attribute)
@@ -6739,6 +6854,8 @@ impl CGame {
                     container_mutation: None,
                     hand_removal: None,
                     hand_addition: None,
+                    currency_removal: None,
+                    currency_addition: None,
                 });
             }
             return Err(GroundGoodsMoveBlock::BurdenExceeded);
@@ -6749,38 +6866,61 @@ impl CGame {
             .remove(&player_id)
             .expect("player проверен непосредственно перед synchronous container add");
         let mut incoming = Some(detached);
-        let (destination_mutation, destination_hand_mutation) = if destination_extend_id == 1 {
-            let addition = if destination_position == u32::MAX {
-                player
-                    .packet_mut()
-                    .add_goods(&mut incoming, &self.goods_factory, true)
+        let (destination_mutation, destination_hand_mutation, destination_currency_mutation) =
+            if destination_extend_id == 1 {
+                let addition = if destination_position == u32::MAX {
+                    player
+                        .packet_mut()
+                        .add_goods(&mut incoming, &self.goods_factory, true)
+                } else {
+                    player.packet_mut().add_goods_at(
+                        destination_position,
+                        &mut incoming,
+                        &self.goods_factory,
+                        true,
+                    )
+                };
+                (
+                    Some(EnhancementTransferAddition::Packet(addition)),
+                    None,
+                    None,
+                )
+            } else if destination_extend_id == 2 {
+                (
+                    Some(self.add_enhancement_transfer_goods(
+                        &mut player,
+                        2,
+                        destination_position,
+                        &mut incoming,
+                        self.globe_setup.pack_add_enabled(),
+                        context,
+                    )),
+                    None,
+                    None,
+                )
+            } else if destination_extend_id == 3 {
+                (
+                    None,
+                    Some(self.add_ground_hand_goods(
+                        &mut player,
+                        destination_position,
+                        &mut incoming,
+                    )),
+                    None,
+                )
             } else {
-                player.packet_mut().add_goods_at(
-                    destination_position,
-                    &mut incoming,
-                    &self.goods_factory,
-                    true,
+                let owner_progress_allows = player.current_progress() == PlayerProgress::None;
+                (
+                    None,
+                    None,
+                    player.add_ground_currency_goods(
+                        destination_extend_id,
+                        &mut incoming,
+                        &self.goods_factory,
+                        owner_progress_allows,
+                    ),
                 )
             };
-            (Some(EnhancementTransferAddition::Packet(addition)), None)
-        } else if destination_extend_id == 2 {
-            (
-                Some(self.add_enhancement_transfer_goods(
-                    &mut player,
-                    2,
-                    destination_position,
-                    &mut incoming,
-                    self.globe_setup.pack_add_enabled(),
-                    context,
-                )),
-                None,
-            )
-        } else {
-            (
-                None,
-                Some(self.add_ground_hand_goods(&mut player, destination_position, &mut incoming)),
-            )
-        };
         if incoming.is_some() {
             let detached = incoming
                 .take()
@@ -6807,76 +6947,101 @@ impl CGame {
                     container_mutation: destination_mutation.clone(),
                     hand_removal: None,
                     hand_addition: destination_hand_mutation.clone(),
+                    currency_removal: None,
+                    currency_addition: destination_currency_mutation.clone(),
                 });
             }
-            return Err(match (destination_mutation, destination_hand_mutation) {
-                (Some(EnhancementTransferAddition::Packet(_)), _) => {
-                    GroundGoodsMoveBlock::PacketAdditionRejected
-                }
-                (Some(EnhancementTransferAddition::Equipment(report)), _) => {
-                    GroundGoodsMoveBlock::EquipmentAdditionRejected(report)
-                }
-                (None, Some(_)) => GroundGoodsMoveBlock::HandAdditionRejected,
-                _ => unreachable!("ground destination mutation получена"),
-            });
-        }
-        let (actual_destination_position, destination_goods, destination_amount) =
-            match (&destination_mutation, &destination_hand_mutation) {
-                (Some(EnhancementTransferAddition::Packet(addition)), _) => match addition {
-                    VolumeGoodsAddOutcome::Added(added) => {
-                        let position = added.position.unwrap_or(destination_position);
-                        let stored = player
-                            .packet()
-                            .get_goods(position)
-                            .expect("успешный packet add публикует destination goods");
-                        (position, stored.identity(), stored.amount())
+            return Err(
+                match (
+                    destination_mutation,
+                    destination_hand_mutation,
+                    destination_currency_mutation,
+                ) {
+                    (Some(EnhancementTransferAddition::Packet(_)), _, _) => {
+                        GroundGoodsMoveBlock::PacketAdditionRejected
                     }
-                    VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
-                        target, ..
-                    }) => {
-                        let position = player
-                            .packet()
-                            .query_goods_position(target.ex_id)
-                            .expect("успешный stack сохраняет destination cell");
-                        let stored = player
-                            .packet()
-                            .get_goods(position)
-                            .expect("успешный stack сохраняет destination goods");
-                        (position, stored.identity(), stored.amount())
+                    (Some(EnhancementTransferAddition::Equipment(report)), _, _) => {
+                        GroundGoodsMoveBlock::EquipmentAdditionRejected(report)
                     }
-                    VolumeGoodsAddOutcome::Stack(_) | VolumeGoodsAddOutcome::Rejected(_) => {
-                        unreachable!("успешный packet add обязан забрать incoming goods")
+                    (None, Some(_), _) => GroundGoodsMoveBlock::HandAdditionRejected,
+                    (None, None, Some(outcome)) => {
+                        GroundGoodsMoveBlock::CurrencyAdditionRejected(outcome)
                     }
+                    _ => unreachable!("ground destination mutation получена"),
                 },
-                (Some(EnhancementTransferAddition::Equipment(report)), _) => {
-                    match &report.outcome {
-                        EquipmentAddOutcome::Added(added) => {
-                            (added.column.position(), added.identity, added.amount)
-                        }
-                        EquipmentAddOutcome::Blocked(_) => {
-                            unreachable!("успешный equipment add обязан забрать incoming goods")
-                        }
-                    }
-                }
-                (None, Some(GroundHandAddition::Added(added))) => (
-                    added.position.unwrap_or(destination_position),
-                    added.identity,
-                    added.amount,
-                ),
-                (
-                    None,
-                    Some(GroundHandAddition::Stack(GoodsStackMergeOutcome::Merged {
-                        target, ..
-                    })),
-                ) => {
+            );
+        }
+        let (actual_destination_position, destination_goods, destination_amount) = match (
+            &destination_mutation,
+            &destination_hand_mutation,
+            &destination_currency_mutation,
+        ) {
+            (Some(EnhancementTransferAddition::Packet(addition)), _, _) => match addition {
+                VolumeGoodsAddOutcome::Added(added) => {
+                    let position = added.position.unwrap_or(destination_position);
                     let stored = player
-                        .hand()
-                        .find(target.ex_id)
-                        .expect("успешный hand stack сохраняет target");
-                    (destination_position, stored.identity(), stored.amount())
+                        .packet()
+                        .get_goods(position)
+                        .expect("успешный packet add публикует destination goods");
+                    (position, stored.identity(), stored.amount())
                 }
-                _ => unreachable!("успешный hand add забирает incoming goods"),
-            };
+                VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { target, .. }) => {
+                    let position = player
+                        .packet()
+                        .query_goods_position(target.ex_id)
+                        .expect("успешный stack сохраняет destination cell");
+                    let stored = player
+                        .packet()
+                        .get_goods(position)
+                        .expect("успешный stack сохраняет destination goods");
+                    (position, stored.identity(), stored.amount())
+                }
+                VolumeGoodsAddOutcome::Stack(_) | VolumeGoodsAddOutcome::Rejected(_) => {
+                    unreachable!("успешный packet add обязан забрать incoming goods")
+                }
+            },
+            (Some(EnhancementTransferAddition::Equipment(report)), _, _) => match &report.outcome {
+                EquipmentAddOutcome::Added(added) => {
+                    (added.column.position(), added.identity, added.amount)
+                }
+                EquipmentAddOutcome::Blocked(_) => {
+                    unreachable!("успешный equipment add обязан забрать incoming goods")
+                }
+            },
+            (None, Some(GroundHandAddition::Added(added)), _) => (
+                added.position.unwrap_or(destination_position),
+                added.identity,
+                added.amount,
+            ),
+            (
+                None,
+                Some(GroundHandAddition::Stack(GoodsStackMergeOutcome::Merged { target, .. })),
+                _,
+            ) => {
+                let stored = player
+                    .hand()
+                    .find(target.ex_id)
+                    .expect("успешный hand stack сохраняет target");
+                (destination_position, stored.identity(), stored.amount())
+            }
+            (None, None, Some(CurrencyGoodsAddOutcome::Added(added))) => {
+                (added.position, added.identity, added.amount)
+            }
+            (
+                None,
+                None,
+                Some(CurrencyGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
+                    target, ..
+                })),
+            ) => {
+                let stored = player
+                    .ground_currency_goods(destination_extend_id)
+                    .expect("успешный currency stack сохраняет target");
+                debug_assert_eq!(stored.identity(), *target);
+                (0, stored.identity(), stored.amount())
+            }
+            _ => unreachable!("успешный destination add забирает incoming goods"),
+        };
         self.players.insert(player_id, player);
         self.restore_region_owner(owner);
 
@@ -6891,7 +7056,15 @@ impl CGame {
                     id: 0,
                     ex_id: goods_id,
                 },
-                audit_price,
+                if matches!(
+                    audit_base_index,
+                    index if index == self.goods_factory.get_gold_coin_index()
+                        || index == self.goods_factory.get_yuan_bao_index()
+                ) {
+                    amount
+                } else {
+                    audit_price
+                },
                 &audit_name,
                 amount,
             )
@@ -6930,6 +7103,8 @@ impl CGame {
             destination_mutation,
             source_hand_mutation: None,
             destination_hand_mutation,
+            source_currency_mutation: None,
+            destination_currency_mutation,
             previous_last_operated: None,
             audit_deliveries,
             player_delivery,

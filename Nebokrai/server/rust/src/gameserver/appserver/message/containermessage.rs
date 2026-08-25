@@ -31,9 +31,13 @@
 //! сохраняет exact pickup/progress/burden guards, protection notice,
 //! equipment property/around effects, one-slot hand split/stack, проводит
 //! remove/add с rollback и
-//! возвращает container listeners вместе с self/around `0xC0101`. Остальные
-//! Валютные hand/wallet/YuanBao варианты намеренно остаются в RAW boundary
-//! до отдельного exact currency-normalization прохода.
+//! возвращает container listeners вместе с self/around `0xC0101`.
+//! Currency-ветвь сохраняет отдельную `Move`-нормализацию: ground
+//! gold/YuanBao при non-packet/equipment destination попадают в
+//! wallet/YuanBao extend `4/5`, а source currency containers сохраняют
+//! свой balance/object ownership и partial split. JiFen extend `6`
+//! отсутствует в точном `GetGoods` switch этого `0x90301` owner-а и остаётся
+//! вне данного runtime-маршрута.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -522,35 +526,37 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             {
                 request.source_position = 0;
             }
-            let source_is_non_currency_hand = request.source_container_extend_id == 3
-                && game
-                    .find_player(player_id)
-                    .and_then(|player| player.hand().get_goods(request.source_position))
-                    .is_some_and(|goods| {
-                        let index = goods.base_properties_index();
-                        index != game.goods_factory().get_gold_coin_index()
-                            && index != game.goods_factory().get_yuan_bao_index()
-                    });
-            let destination_is_non_currency_hand = request.destination_container_extend_id == 3
+            let source_is_reached = game
+                .find_player(player_id)
+                .is_some_and(|player| match request.source_container_extend_id {
+                    3 => player.hand().get_goods(0).is_some(),
+                    4 | 5 => player
+                        .ground_currency_goods(request.source_container_extend_id)
+                        .is_some(),
+                    _ => false,
+                });
+            let ground_base_index = region_id
+                .and_then(|region_id| game.find_region(region_id))
+                .and_then(|region| region.base().find_ground_goods(request.object_id))
+                .map(|goods| goods.base_properties_index());
+            let ground_is_currency = ground_base_index.is_some_and(|index| {
+                index == game.goods_factory().get_gold_coin_index()
+                    || index == game.goods_factory().get_yuan_bao_index()
+            });
+            let destination_is_reached = (request.destination_container_extend_id == 3
                 && request.destination_position == 0
-                && region_id
-                    .and_then(|region_id| game.find_region(region_id))
-                    .and_then(|region| region.base().find_ground_goods(request.object_id))
-                    .is_some_and(|goods| {
-                        let index = goods.base_properties_index();
-                        index != game.goods_factory().get_gold_coin_index()
-                            && index != game.goods_factory().get_yuan_bao_index()
-                    });
+                && !ground_is_currency)
+                || (ground_is_currency
+                    && !matches!(request.destination_container_extend_id, 1 | 2));
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == 200
-                && (matches!(request.source_container_extend_id, 1 | 2)
-                    || source_is_non_currency_hand)
+                && (matches!(request.source_container_extend_id, 1 | 2) || source_is_reached)
             {
                 EnhancementMessageRoute::GroundDrop
             } else if request.source_container_type == 200
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && (matches!(request.destination_container_extend_id, 1 | 2)
-                    || destination_is_non_currency_hand)
+                    || destination_is_reached)
             {
                 EnhancementMessageRoute::GroundPickup
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
