@@ -78,6 +78,9 @@
 //! `9014 / UpGradeTechLevel` сохраняет подтверждённое отсутствие изменения:
 //! точный EXE только проверяет наличие страны текущего игрока и возвращает
 //! `0` либо `-1`, не публикуя сообщение World.
+//! `9200 / SetNewDay` из того же исполнения отправляет пустое сообщение
+//! `0x60313`; достигнутый диспетчер World проводит все страны через
+//! `CCountryHandler::set_new_day(10)` с налогами, изгнанием и сменой срока.
 //! Соседние региональные запросы `8101/8102` достигают того же диспетчера:
 //! первый сохраняет 32-битную арифметику таймера возрождения монстра, второй
 //! читает число зарегистрированных игроков конкретного `CServerRegion`.
@@ -747,6 +750,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_IDENTITY: i32 = 9020;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_SWITCH: i32 = 9018;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_SWITCH: i32 = 9019;
 pub(crate) const SCRIPT_FUNCTION_EXILE_TIME: i32 = 9021;
+pub(crate) const SCRIPT_FUNCTION_SET_NEW_COUNTRY_DAY: i32 = 9200;
 pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
 pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_SZL: i32 = 11124;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_PLAYER_SZL: i32 = 11128;
@@ -4257,7 +4261,7 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_CHECK_USED_GOODS
         | SCRIPT_FUNCTION_GET_CURRENT_DURABILITY
         | SCRIPT_FUNCTION_GET_SELECTED_DURABILITY => Unused,
-        SCRIPT_FUNCTION_UPGRADE_COUNTRY_TECH_LEVEL => Unused,
+        SCRIPT_FUNCTION_UPGRADE_COUNTRY_TECH_LEVEL | SCRIPT_FUNCTION_SET_NEW_COUNTRY_DAY => Unused,
         SCRIPT_FUNCTION_FAIRY_EXP_UP => match index {
             0 => Integer,
             _ => Unused,
@@ -8884,6 +8888,11 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             .filter(|country| game.country_handler().country(*country).is_some())
             .map_or(-1, |_| 0);
         return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+    }
+    if function_id == SCRIPT_FUNCTION_SET_NEW_COUNTRY_DAY {
+        let request = CMessage::new(0x0006_0313);
+        let _ = request.send(game, false);
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
     }
     handled!(
         run_country_scalar_query_script_function(
