@@ -115,12 +115,19 @@
 //! Достигнутая там же notice-family `3316/5201/5202` единообразно вычисляет
 //! text/color/background: личный круг использует `0xBF811` и opaque-black
 //! default, региональный — `0xBF806`, мировой сохраняет World `0x5FF0E` relay.
-//! Quest family `6200/6201/6202/6203/6207` сохраняет ushort narrowing,
-//! computed target-player selector, persisted completion/removal, transient
-//! position wire и межсерверный add/remove round-trip для удалённого target-а.
-//! Соседний `3500..3503/3507` owner меняет persisted quest-enabled/countdown
-//! поля, публикует `0xBF728..2A` и возвращает тот же signed-wrap remainder,
-//! который client может отдельно запросить через уже достигнутый `0xBF72B`.
+//! Семейство заданий `6200/6201/6202/6203/6207` сохраняет сужение до `ushort`,
+//! вычисленный выбор целевого игрока, постоянные завершение и удаление,
+//! временное сообщение позиции и межсерверный путь добавления или удаления для
+//! удалённого игрока.
+//! Командное продолжение `6204/6205/6206` обходит настоящие плаги `CTeam` в
+//! исходном порядке, применяет `CShape::Distance`, при нулевой дистанции
+//! маршрутизирует удалённых участников через World и считает только
+//! незавершённые отображаемые задания. Ответ запуска удалённого сценария
+//! `0x7FE3A` возвращается в ту же очередь `CScript`, если игрок жив.
+//! Соседний владелец `3500..3503/3507` меняет постоянные поля доступности и
+//! обратного отсчёта задания, публикует `0xBF728..2A` и возвращает тот же
+//! знаково переполненный остаток, который клиент может отдельно запросить через
+//! уже достигнутый `0xBF72B`.
 //! Семейство повозки `3504..3506/3508` через тот же достигнутый диспетчер
 //! передаёт вычисленные имена каноническим владельцам создания и привязки к
 //! игроку, публикации `C0205/BF504`, журналирования в World, живых запросов
@@ -657,6 +664,9 @@ pub(crate) const SCRIPT_FUNCTION_ADD_QUEST: i32 = 6200;
 pub(crate) const SCRIPT_FUNCTION_COMPLETE_QUEST: i32 = 6201;
 pub(crate) const SCRIPT_FUNCTION_DISBAND_QUEST: i32 = 6202;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
+pub(crate) const SCRIPT_FUNCTION_ADD_QUEST_FOR_TEAM: i32 = 6204;
+pub(crate) const SCRIPT_FUNCTION_RUN_SCRIPT_FOR_TEAM: i32 = 6205;
+pub(crate) const SCRIPT_FUNCTION_GET_VALID_QUEST_NUM: i32 = 6206;
 pub(crate) const SCRIPT_FUNCTION_UPDATE_QUEST_POSITION: i32 = 6207;
 pub(crate) const SCRIPT_FUNCTION_NPC_TALK: i32 = 3301;
 pub(crate) const SCRIPT_FUNCTION_CREATE_NPC: i32 = 3302;
@@ -4155,6 +4165,19 @@ pub(crate) fn script_function_parameter_kind(
             0 | 1 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_ADD_QUEST_FOR_TEAM => match index {
+            0..=2 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_RUN_SCRIPT_FOR_TEAM => match index {
+            0 | 2 => Integer,
+            1 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_VALID_QUEST_NUM => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_UPDATE_QUEST_POSITION => match index {
             0..=4 => Integer,
             _ => Unused,
@@ -7446,6 +7469,56 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 .map(|player| player.quest_state(quest_id))
                 .unwrap_or(-1);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_ADD_QUEST_FOR_TEAM => {
+            let (Some(target_player_id), Some(distance)) = (
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            let target_player_id = if target_player_id == 0 {
+                player_id
+            } else {
+                target_player_id
+            };
+            game.add_script_quest_for_team(
+                target_player_id,
+                integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR) as u16,
+                distance,
+            );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 })
+        }
+        SCRIPT_FUNCTION_RUN_SCRIPT_FOR_TEAM => {
+            let (Some(target_player_id), Some(script), Some(distance)) = (
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                string_arguments[1],
+                integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            let target_player_id = if target_player_id == 0 {
+                player_id
+            } else {
+                target_player_id
+            };
+            game.run_script_for_team(target_player_id, script, distance);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 })
+        }
+        SCRIPT_FUNCTION_GET_VALID_QUEST_NUM => {
+            let Some(target_player_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            let target_player_id = if target_player_id == 0 {
+                player_id
+            } else {
+                target_player_id
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.valid_script_quest_count(target_player_id),
+            })
         }
         SCRIPT_FUNCTION_UPDATE_QUEST_POSITION => {
             let Some(target_player_id) =

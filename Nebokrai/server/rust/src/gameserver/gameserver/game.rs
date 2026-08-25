@@ -16521,6 +16521,18 @@ impl CGame {
         self.queue_script_file(path, context)
     }
 
+    pub(crate) fn queue_player_script(&mut self, player_id: i32, path: &[u8]) -> Option<i32> {
+        let region_id = self.find_player(player_id)?.server_region_id();
+        self.queue_script_file(
+            path,
+            ScriptExecutionContext {
+                player_id: Some(player_id),
+                region_id,
+                ..ScriptExecutionContext::default()
+            },
+        )
+    }
+
     fn queue_script_file(&mut self, path: &[u8], context: ScriptExecutionContext) -> Option<i32> {
         let player_id = context.player_id?;
         let path = legacy_c_string_prefix(path).to_vec();
@@ -28614,6 +28626,84 @@ impl CGame {
         self.script_team_session_id(player_id)
             .and_then(|session_id| self.session_factory.query_team(session_id))
             .map_or(-1, |team| i32::from(team.leader_id() == player_id))
+    }
+
+    fn script_team_quest_targets(
+        &self,
+        player_id: i32,
+        distance: i32,
+        require_alive: bool,
+    ) -> Option<Vec<(i32, bool)>> {
+        let session_id = self.script_team_session_id(player_id)?;
+        let members = self.session_factory.team_member_descriptors(session_id)?;
+        let source_shape = (distance != 0)
+            .then(|| self.find_player(player_id).and_then(CPlayer::shape_view))
+            .flatten();
+        Some(
+            members
+                .into_iter()
+                .filter_map(|(owner_type, member_id, _)| {
+                    if owner_type != 400 {
+                        return None;
+                    }
+                    let Some(member) = self.find_player(member_id) else {
+                        return (distance == 0).then_some((member_id, false));
+                    };
+                    if require_alive && member.is_dead() {
+                        return None;
+                    }
+                    if distance != 0
+                        && !source_shape
+                            .zip(member.shape_view())
+                            .is_some_and(|(source, target)| source.distance(target) <= distance)
+                    {
+                        return None;
+                    }
+                    Some((member_id, true))
+                })
+                .collect(),
+        )
+    }
+
+    pub(crate) fn add_script_quest_for_team(
+        &mut self,
+        player_id: i32,
+        quest_id: u16,
+        distance: i32,
+    ) {
+        let Some(targets) = self.script_team_quest_targets(player_id, distance, false) else {
+            return;
+        };
+        for (target_id, _) in targets {
+            self.add_script_player_quest(target_id, quest_id);
+        }
+    }
+
+    pub(crate) fn run_script_for_team(&mut self, player_id: i32, script: &[u8], distance: i32) {
+        let Some(targets) = self.script_team_quest_targets(player_id, distance, true) else {
+            return;
+        };
+        for (target_id, local) in targets {
+            if local {
+                let _ = self.queue_player_script(target_id, script);
+            } else {
+                let mut request = CMessage::new(0x0006_013d);
+                request.add_long(target_id);
+                request.base_mut().add(script);
+                request.add_byte(0);
+                let _ = request.send(self, false);
+            }
+        }
+    }
+
+    pub(crate) fn valid_script_quest_count(&self, player_id: i32) -> i32 {
+        self.find_player(player_id).map_or(-1, |player| {
+            player.valid_script_quest_count(|quest_id| {
+                self.quest_system
+                    .quest_data_by_id(quest_id)
+                    .is_some_and(|quest| quest.display)
+            })
+        })
     }
 
     fn script_player_is_in_area(&self, player_id: i32, x: i32, y: i32, range: i32) -> bool {

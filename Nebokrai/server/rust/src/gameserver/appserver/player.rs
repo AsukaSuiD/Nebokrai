@@ -3453,6 +3453,18 @@ impl CPlayer {
         self.quest_states.contains_key(&quest_id)
     }
 
+    pub(crate) fn valid_script_quest_count(
+        &self,
+        mut is_displayed_quest: impl FnMut(u16) -> bool,
+    ) -> i32 {
+        self.quest_states
+            .iter()
+            .filter(|(quest_id, state)| **state != 1 && is_displayed_quest(**quest_id))
+            .count()
+            .try_into()
+            .unwrap_or(i32::MAX)
+    }
+
     pub(crate) fn add_friend_state(&mut self, name: &[u8]) -> PlayerFriendAddOutcome {
         let name = name.split(|byte| *byte == 0).next().unwrap_or_default();
         if self.friends.len() >= 0x28 {

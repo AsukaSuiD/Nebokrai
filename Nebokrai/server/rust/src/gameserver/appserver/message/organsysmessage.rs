@@ -1,28 +1,28 @@
-//! Владелец GameServer dispatcher-а organizing messages `OnOrgasysMessage`.
+//! Владелец диспетчера сообщений организаций GameServer `OnOrgasysMessage`.
 //!
-//! Весь dispatcher RVA `0x000895A0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме фазовых
-//! cases faction lifecycle `0x90101/05/06/1A/1B` и
-//! `0x7FE01/06/07/18/19/1E`,
-//! AttackCity `0x7FE1F..0x7FE25`, Village `0x7FE2F..0x7FE33`, faction
-//! update `0x7FE35/0x7FE36`, player-quest route `0x7FE38/0x7FE39`,
-//! FourNation `0x7FE3C..0x7FE45` и control tail `0x7FE46..0x7FE4A` со статусом
-//! `IMPLEMENTED`. Точная пара
+//! Весь диспетчер с RVA `0x000895A0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме ветвей
+//! жизненного цикла фракции `0x90101/05/06/1A/1B` и
+//! `0x7FE01/06/07/18/19/1E`, городских войн `0x7FE1F..0x7FE25`, деревенских
+//! войн `0x7FE2F..0x7FE33`, обновления фракций `0x7FE35/0x7FE36`, маршрута
+//! заданий игрока `0x7FE38/0x7FE39`, FourNation `0x7FE3C..0x7FE45` и хвоста
+//! управления `0x7FE46..0x7FE4A` со статусом `IMPLEMENTED`. Точная пара —
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\organsysmessage.cpp`.
-//! Lifecycle cases проверяют session/password/player correlation, передают
-//! create snapshot World, ретегируют list page в `0xBFF07` и замыкают
-//! application `0x60108`; универсальный legacy session manager заменён
-//! минимальным owned state в `CGame` с теми же timeout и operator-флагами.
-//! Upgrade charge `0x7FE1E` списывает World-authoritative money/goods через
-//! canonical wallet и packet-container effects живого игрока.
-//! Declare-war pages ретегируются в `0xBFF19`, selection несёт snapshot в
-//! `0x6011F`, а terminal `0x7FE19` публикует клиенту `0xBFF31` после debit.
-//! World city-gate authorization `0x7FE2A` возвращается в concrete city owner,
-//! обновляет gate/build state и отправляет исходные `GS0042/GS0043` notices.
+//! Ветви жизненного цикла проверяют соответствие сеанса, пароля и игрока,
+//! передают World снимок создания, меняют тип страницы списка на `0xBFF07` и
+//! замыкают заявку `0x60108`. Универсальный прежний диспетчер сеансов заменён
+//! минимальным состоянием в `CGame` с теми же сроками ожидания и флагами
+//! операций. Списание развития `0x7FE1E` проводит авторитетные для World деньги
+//! и предметы через основной кошелёк и контейнер живого игрока.
+//! Страницы объявления войны меняют тип на `0xBFF19`, выбор несёт снимок в
+//! `0x6011F`, а конечный `0x7FE19` после списания публикует клиенту `0xBFF31`.
+//! Разрешение World на управление городскими воротами `0x7FE2A` возвращается
+//! конкретному владельцу города, обновляет ворота и постройку и отправляет
+//! исходные уведомления `GS0042/GS0043`.
 //! Принятые World заявки деревенской/городской войны `0x7FE34/0x7FE37`
-//! возвращаются в live player wallet, сохраняют signed wrapping/clamp старого
-//! `SetMoney` и публикуют container change клиенту; отклонённая заявка ответа
-//! не создаёт.
+//! возвращаются в кошелёк живого игрока, сохраняют знаковое переполнение и
+//! ограничение старого `SetMoney` и публикуют клиенту изменение контейнера;
+//! отклонённая заявка ответа не создаёт.
 //! `0x7FE06` декодирует полное сообщение OrganSys до хвоста принадлежащих
 //! регионов, обновляет у живого игрока фракцию, уровень, опыт, глав фракции и
 //! союза, имя и союз и только затем меняет тип на `0xBFF06`. Имя и союз входят
@@ -30,6 +30,10 @@
 //! Ответ рейтинга фракций `0x7FE1D` извлекает адресный ID игрока, меняет тип на
 //! клиентский `0xBFF1D` и сохраняет без повторного разбора заголовок и список,
 //! которые сформировал WorldServer.
+//! Команда `0x7FE3A` получает от WorldServer ID игрока и путь сценария, повторно
+//! проверяет живого локального игрока и ставит файл в принадлежащую `CGame`
+//! очередь `CScript`; погибший или уже вышедший игрок не получает поздний
+//! эффект.
 //! Налоговая цепочка принимает авторизацию World `0x7FE28/0x7FE29`, создаёт
 //! управляемый `CNetSession`, коррелирует ответы клиента `0x90122/0x90123` и
 //! применяет авторитетный снимок прокси-региона `0x7FE2E`.
@@ -221,6 +225,15 @@ pub(crate) struct GamePlayerQuestCommandReport {
     pub(crate) player_found: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerRunScriptReport {
+    pub(crate) player_id: i32,
+    pub(crate) script: Vec<u8>,
+    pub(crate) player_found: bool,
+    pub(crate) player_alive: bool,
+    pub(crate) queued_script_id: Option<i32>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GamePlayerQuestCommandError {
     MissingPlayerId,
@@ -239,6 +252,7 @@ pub(crate) enum GameOrganizingMessageReport {
     FourNationPhase(FourNationPhaseDispatchReport),
     Control(OrganizingControlDispatchReport),
     PlayerQuest(GamePlayerQuestCommandReport),
+    PlayerRunScript(GamePlayerRunScriptReport),
     RegionTax(RegionTaxDispatchReport),
 }
 
@@ -253,6 +267,7 @@ pub(crate) enum GameOrganizingMessageError {
     Phase(WarPhaseDispatchError),
     Control(OrganizingControlDispatchError),
     PlayerQuest(GamePlayerQuestCommandError),
+    PlayerRunScript(FactionLifecycleDispatchError),
     RegionTax(FactionLifecycleDispatchError),
 }
 
@@ -522,6 +537,35 @@ fn dispatch_game_player_quest_command(
     })
 }
 
+fn dispatch_game_player_run_script(
+    message: &mut CMessage,
+    game: &mut CGame,
+) -> Result<GamePlayerRunScriptReport, FactionLifecycleDispatchError> {
+    let player_id = message
+        .base_mut()
+        .get_long()
+        .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field: "player ID" })?;
+    let script = message.base_mut().get_str_bytes(0x100).ok_or(
+        FactionLifecycleDispatchError::UnexpectedEnd {
+            field: "script path",
+        },
+    )?;
+    let player_found = game.find_player(player_id).is_some();
+    let player_alive = game
+        .find_player(player_id)
+        .is_some_and(|player| !player.is_dead());
+    let queued_script_id = player_alive
+        .then(|| game.queue_player_script(player_id, &script))
+        .flatten();
+    Ok(GamePlayerRunScriptReport {
+        player_id,
+        script,
+        player_found,
+        player_alive,
+        queued_script_id,
+    })
+}
+
 /// Подключает всю достигнутую OrganSys family к живому `CGame` owner-у.
 pub(crate) fn dispatch_game_organizing_message<
     Runtime: GameOrganizingWarRuntime + ScriptRegionChangeContext + OldClientGoodsCodec,
@@ -559,6 +603,7 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x7fe37
             | 0x7fe38
             | 0x7fe39
+            | 0x7fe3a
             | 0x7fe3c..=0x7fe3f
             | 0x7fe41
             | 0x7fe43..=0x7fe45
@@ -572,6 +617,14 @@ pub(crate) fn dispatch_game_organizing_message<
             dispatch_game_player_quest_command(opcode, message, game)
                 .map(GameOrganizingMessageReport::PlayerQuest)
                 .map_err(GameOrganizingMessageError::PlayerQuest),
+        );
+    }
+
+    if opcode == 0x7fe3a {
+        return Some(
+            dispatch_game_player_run_script(message, game)
+                .map(GameOrganizingMessageReport::PlayerRunScript)
+                .map_err(GameOrganizingMessageError::PlayerRunScript),
         );
     }
 

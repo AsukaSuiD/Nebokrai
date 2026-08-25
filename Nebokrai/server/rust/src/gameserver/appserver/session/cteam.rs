@@ -1,14 +1,16 @@
-//! Team session `CTeam` GameServer.
+//! Сеанс команды `CTeam` в GameServer.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `appserver/session/cteam.cpp`. Материализован reached local creation/join
-//! prefix: team/leader identity, default shared allocation и exact session +
-//! teammate serialization, local leave/leader/kick/disband lifecycle,
-//! allocation/chat transitions, remote snapshot reconstruction и их
-//! World/client publications. AI/quest и остальные state transitions остаются
-//! RAW. Static `QuestTeamData/CompleteTeamData` заменены owned retry-очередью
-//! `CGame`: login ставит team ID, session-stage отправляет `0x60008`, а
-//! успешный `0x7FD08` снимает запрос.
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец —
+//! `appserver/session/cteam.cpp`. Материализованы локальные создание и
+//! вступление, идентичность команды и главы, общее распределение по умолчанию,
+//! точная сериализация сеанса и участников, а также локальные выход, смена
+//! главы, исключение, роспуск, распределение, чат и восстановление удалённого
+//! снимка с публикациями World и клиенту. Обход заданий и сценариев команды
+//! выполняет `CGame`, потому что он владеет картой локальных игроков, очередью
+//! сценариев и маршрутом World. Остальные переходы состояния и ИИ остаются
+//! RAW. Статические `QuestTeamData/CompleteTeamData` заменены принадлежащей
+//! `CGame` очередью повторов: вход задаёт ID команды, стадия сеанса отправляет
+//! `0x60008`, а успешный `0x7FD08` снимает запрос.
 
 use crate::gameserver::appserver::session::csession::CSession;
 use crate::gameserver::appserver::session::cteamate::CTeamate;
