@@ -372,8 +372,9 @@
 //! master beneficiary; player-target рекурсивно применяет master PvP/level/
 //! safe-cell policy и доходит до общего hurt/death/murder/equipment tail.
 //! Follow/stay action также проходит master pet-slot geometry, near movement
-//! либо far `BF603` relocation. Guard policy, idle/multi-skill и остальной
-//! tamed decision tree остаются на derived shape-AI границе.
+//! либо far `BF603` relocation; lifecycle замыкает master loss/reclaim,
+//! age/wild notices и `Evanish` unlink/wire. Guard policy, idle/multi-skill и
+//! остальной tamed decision tree остаются на derived shape-AI границе.
 //! `Release` сохраняет player-save/catch, city-save, registry/script/factory,
 //! network и singleton teardown order; Rust `clear/take/Drop` заменяет manual
 //! delete, а ещё внешние process-global owners вызываются typed runtime-ом.
@@ -634,8 +635,9 @@ use crate::gameserver::appserver::message::unibillmessage::{
     IncrementShopBillingMessageError, IncrementShopBillingReport,
     dispatch_increment_shop_billing_message,
 };
-use crate::gameserver::appserver::monster::CMonster;
-use crate::gameserver::appserver::monster::MonsterKillingAttack;
+use crate::gameserver::appserver::monster::{
+    CMonster, MonsterKillingAttack, PetLifecycleFacts, PetLifecycleNotice,
+};
 use crate::gameserver::appserver::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver, UndeadState,
 };
@@ -31596,6 +31598,136 @@ impl CGame {
         }
     }
 
+    /// Reached one-second/lifecycle tail `CPet::OnSchedule`: master lookup,
+    /// safe-cell mode, return-to-master, 6-hour warnings, wild timeout и
+    /// `Evanish -> owner unlink -> BF504` остаются одним runtime проходом.
+    fn run_owned_pet_lifecycle<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<bool> {
+        const MONSTER_TAMING_SKILL_ID: u32 = 0xD4;
+        const SKILL_USAGE_PET_AMOUNT_LIMIT: u32 = 31_001;
+
+        let mut owner = self.take_region_owner(region_id)?;
+        let snapshot = owner
+            .base()
+            .find_monster_by_id(monster_id)
+            .and_then(|monster| {
+                if !monster.is_tamed() {
+                    return None;
+                }
+                let property =
+                    self.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+                Some((
+                    monster.master_info(),
+                    monster.shape_view(property)?,
+                    monster.move_shape().shape().clone(),
+                    CMonster::figure(property),
+                    monster.display_name().to_vec(),
+                    CMoveShape::is_died(monster.hit_points()),
+                ))
+            });
+        let Some((master, pet_view, pet_shape, pet_figure, pet_name, pet_dead)) = snapshot else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        if pet_dead {
+            self.restore_region_owner(owner);
+            return Some(false);
+        }
+
+        let master_snapshot = (master.master_type == PLAYER_TYPE && master.master_id != 0)
+            .then(|| self.find_player(master.master_id))
+            .flatten()
+            .filter(|player| player.server_region_id() == Some(region_id))
+            .and_then(|player| {
+                Some((
+                    player.shape_view()?,
+                    player.learned_skill_level(MONSTER_TAMING_SKILL_ID),
+                    player.active_pets().len() as u32,
+                ))
+            });
+        let master_present = master_snapshot.is_some();
+        let master_close = master_snapshot.is_some_and(|(view, _, _)| view.distance(pet_view) < 33);
+        let reclaimable = master_snapshot.is_some_and(|(_, level, pet_count)| {
+            level != 0
+                && self
+                    .skill_factory
+                    .query_skill_base_properties(MONSTER_TAMING_SKILL_ID, level)
+                    .is_some_and(|properties| {
+                        pet_count < properties.query_property(SKILL_USAGE_PET_AMOUNT_LIMIT)
+                    })
+        });
+        let safe_cell = owner
+            .base()
+            .region
+            .get_security(pet_view.tile_x, pet_view.tile_y)
+            .ok()
+            == Some(RegionSecurity::SAFE);
+        let outcome = owner
+            .base_mut()
+            .find_monster_by_id_mut(monster_id)
+            .expect("pet snapshot принадлежит вынутому region owner-у")
+            .tick_pet_lifecycle(PetLifecycleFacts {
+                now_ms: runtime.now_milliseconds(),
+                wild_time_ms: self.globe_setup.pet_wild_time_ms(),
+                master_present,
+                master_close,
+                safe_cell,
+                reclaimable,
+            });
+
+        if let Some(notice) = outcome.notice
+            && master_present
+        {
+            let text = match notice {
+                PetLifecycleNotice::AgeWarning => self.get_string_by_id(b"GS0010").to_vec(),
+                PetLifecycleNotice::AgeExpired => {
+                    format_legacy_text_fields(self.get_string_by_id(b"GS0011"), &[&pet_name], 0x3ff)
+                }
+                PetLifecycleNotice::BecameWild => {
+                    format_legacy_text_fields(self.get_string_by_id(b"GS0012"), &[&pet_name], 0x3ff)
+                }
+            };
+            let _ = colored_player_notice_message(0xffff_0000, 0xffff_ffff, &text)
+                .send_to_player(self.net_server(), master.master_id);
+        }
+        if outcome.reclaim
+            && let Some(player) = self.find_player_mut(master.master_id)
+            && !player
+                .active_pets()
+                .iter()
+                .any(|pet| pet.object_type == MONSTER_TYPE && pet.id == monster_id)
+        {
+            player.add_active_pet(MONSTER_TYPE, monster_id, i32::from(pet_figure.get(0)));
+        }
+        if outcome.vanish {
+            if master_present && let Some(player) = self.find_player_mut(master.master_id) {
+                let _ = player.remove_active_pet(MONSTER_TYPE, monster_id);
+            }
+            owner
+                .base_mut()
+                .find_monster_by_id_mut(monster_id)
+                .expect("lifecycle pet остаётся owned до region delete tail")
+                .evanish_pet();
+            let mut vanished = CMessage::new(0x000b_f504);
+            vanished.add_long(MONSTER_TYPE);
+            vanished.add_long(monster_id);
+            vanished.add_long(0);
+            vanished
+                .base_mut()
+                .add(&pet_shape.get_pos_x().to_bits().to_le_bytes());
+            vanished
+                .base_mut()
+                .add(&pet_shape.get_pos_y().to_bits().to_le_bytes());
+            let _ = self.send_game_shape_around(owner.base(), &pet_shape, None, &vanished);
+        }
+        self.restore_region_owner(owner);
+        Some(outcome.vanish)
+    }
+
     /// Reached `CPet::OnFallowingSchedule`: pet slot определяет устойчивую
     /// точку позади master-а; близкий pet идёт туда обычным `BF605`, а далёкий
     /// переносится в свободную клетку `7x7` с exact `BF603` ordering.
@@ -36091,6 +36223,7 @@ impl CGame {
                 if !self.run_owned_pet_follow(region_id, monster_id, runtime) {
                     let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                 }
+                let _ = self.run_owned_pet_lifecycle(region_id, monster_id, runtime);
             }
             let is_gods_battle = self
                 .find_region(region_id)

@@ -22,8 +22,10 @@
 //! aggressive melee AI `0/3` player/pet search и blocked-step tracing хранят
 //! здесь target/move delay; pet hurt/death сохраняют target priority и master
 //! unlink. Passive/command pet target теперь доходит через pet-scaled
-//! base-attack до wild monster death/beneficiary owner-а. Idle wandering,
-//! guard policy и multi-skill decision tree этим не подменяются.
+//! base-attack до wild monster death/beneficiary owner-а; pet schedule хранит
+//! one-second master checks, 6-hour age counter и wild-timeout state, а
+//! `CGame` завершает reclaim/notice/evanish effects. Idle wandering, guard
+//! policy и multi-skill decision tree этим не подменяются.
 //! Login pet restoration и client control используют owned `tagMasterInfo`,
 //! taming sign, progress, раздельные Globe experience/property factors и
 //! reached follower-EXP level-up с `0xC0203`, а также узкое pet-control state;
@@ -59,6 +61,11 @@ pub(crate) struct CMonster {
     pet_mode: i32,
     pet_action: i32,
     pet_target: Option<ShapeIdentity>,
+    pet_seek_master_ms: u32,
+    pet_life_cycle_ms: u32,
+    pet_life_cycle_counter: u32,
+    pet_invalid_master_ms: u32,
+    pet_master_logout: bool,
     first_attack_player_id: i32,
     last_attack_timer_ms: u32,
     killed_by: Option<MonsterKillingAttack>,
@@ -126,6 +133,30 @@ pub(crate) struct MonsterTraceMoveDelay {
     pub(crate) delay_ms: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PetLifecycleFacts {
+    pub(crate) now_ms: u32,
+    pub(crate) wild_time_ms: u32,
+    pub(crate) master_present: bool,
+    pub(crate) master_close: bool,
+    pub(crate) safe_cell: bool,
+    pub(crate) reclaimable: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PetLifecycleNotice {
+    AgeWarning,
+    AgeExpired,
+    BecameWild,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PetLifecycleOutcome {
+    pub(crate) notice: Option<PetLifecycleNotice>,
+    pub(crate) reclaim: bool,
+    pub(crate) vanish: bool,
+}
+
 impl CMonster {
     pub(crate) fn with_constructor_defaults() -> Self {
         let mut move_shape = CMoveShape::default();
@@ -155,6 +186,11 @@ impl CMonster {
             pet_mode: 0,
             pet_action: 1,
             pet_target: None,
+            pet_seek_master_ms: 0,
+            pet_life_cycle_ms: 0,
+            pet_life_cycle_counter: 0,
+            pet_invalid_master_ms: 0,
+            pet_master_logout: false,
             first_attack_player_id: 0,
             last_attack_timer_ms: 0,
             killed_by: None,
@@ -255,6 +291,89 @@ impl CMonster {
 
     pub(crate) const fn pet_action(&self) -> i32 {
         self.pet_action
+    }
+
+    /// Stateful часть exact `CPet::OnSchedule`; lookup master/region/skill и
+    /// observable wire/delete effects остаются у `CGame` caller-а.
+    pub(crate) fn tick_pet_lifecycle(&mut self, facts: PetLifecycleFacts) -> PetLifecycleOutcome {
+        const SEEK_MASTER_INTERVAL_MS: u32 = 1_000;
+        const LIFE_CYCLE_INTERVAL_MS: u32 = 21_600_000;
+
+        let mut outcome = PetLifecycleOutcome::default();
+        if !self.tamed {
+            return outcome;
+        }
+        if self.pet_seek_master_ms != 0
+            && facts.now_ms.wrapping_sub(self.pet_seek_master_ms) < SEEK_MASTER_INTERVAL_MS
+        {
+            return outcome;
+        }
+        if self.pet_life_cycle_ms == 0 {
+            self.pet_life_cycle_ms = facts.now_ms;
+        }
+        if facts.now_ms.wrapping_sub(self.pet_life_cycle_ms) >= LIFE_CYCLE_INTERVAL_MS {
+            self.pet_life_cycle_counter = self.pet_life_cycle_counter.wrapping_add(1);
+            self.pet_life_cycle_ms = facts.now_ms;
+            if self.pet_life_cycle_counter < 4 {
+                if facts.master_present {
+                    outcome.notice = Some(PetLifecycleNotice::AgeWarning);
+                }
+            } else {
+                if facts.master_present {
+                    outcome.notice = Some(PetLifecycleNotice::AgeExpired);
+                }
+                outcome.vanish = true;
+                return outcome;
+            }
+        }
+
+        self.pet_seek_master_ms = facts.now_ms;
+        if !facts.master_present {
+            self.pet_master_logout = true;
+            if self.pet_invalid_master_ms == 0 {
+                self.pet_action = 2;
+                if facts.safe_cell {
+                    self.clear_ai_target();
+                    self.pet_mode = 0;
+                } else {
+                    if self.pet_mode == 2 {
+                        self.clear_ai_target();
+                    }
+                    self.pet_mode = 1;
+                }
+                self.pet_seek_master_ms = 0;
+                self.pet_invalid_master_ms = facts.now_ms;
+            }
+        } else {
+            if self.pet_master_logout && facts.reclaimable {
+                if self.pet_mode == 2 || self.ai_target.is_some() {
+                    self.clear_ai_target();
+                }
+                self.pet_invalid_master_ms = 0;
+                self.pet_seek_master_ms = 0;
+                self.pet_mode = 1;
+                self.pet_action = 1;
+                self.pet_master_logout = false;
+                outcome.reclaim = true;
+            }
+            if facts.master_close {
+                self.pet_invalid_master_ms = 0;
+                return outcome;
+            }
+            if self.pet_invalid_master_ms == 0 {
+                self.pet_invalid_master_ms = facts.now_ms;
+            }
+        }
+
+        if self.pet_invalid_master_ms != 0
+            && facts.now_ms.wrapping_sub(self.pet_invalid_master_ms) >= facts.wild_time_ms
+        {
+            if facts.master_present {
+                outcome.notice = Some(PetLifecycleNotice::BecameWild);
+            }
+            outcome.vanish = true;
+        }
+        outcome
     }
 
     pub(crate) const fn set_pet_target(&mut self, target: ShapeIdentity) {
