@@ -242,6 +242,18 @@ impl CRegion {
         self.country
     }
 
+    pub(crate) const fn notify_interval_ms(&self) -> Option<i32> {
+        self.notify
+    }
+
+    pub(crate) const fn last_notify_kill_time_ms(&self) -> u32 {
+        self.last_notify_kill_time
+    }
+
+    pub(crate) const fn set_last_notify_kill_time_ms(&mut self, value: u32) {
+        self.last_notify_kill_time = value;
+    }
+
     pub(crate) fn file_name(&self) -> &[u8] {
         &self.file_name
     }

@@ -100,6 +100,10 @@ impl CMonster {
         self.tamed = tamed;
     }
 
+    pub(crate) const fn is_tamed(&self) -> bool {
+        self.tamed
+    }
+
     pub(crate) const fn is_owned_pet(&self, player_id: i32) -> bool {
         self.master_info.master_type == 400 && self.master_info.master_id == player_id
     }

@@ -123,6 +123,22 @@ impl CLogSystem {
         self.setting(30)
     }
 
+    pub(crate) fn goods_lost_by_dead_enabled(&self) -> bool {
+        self.setting(8)
+    }
+
+    pub(crate) fn experience_decrease_enabled(&self) -> bool {
+        self.setting(22)
+    }
+
+    pub(crate) fn player_died_enabled(&self) -> bool {
+        self.setting(27)
+    }
+
+    pub(crate) fn player_killed_enabled(&self) -> bool {
+        self.setting(31)
+    }
+
     pub(crate) fn goods_lost_by_upgrade_enabled(&self) -> bool {
         self.setting(7)
     }

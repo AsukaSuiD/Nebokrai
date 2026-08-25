@@ -633,7 +633,8 @@ use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
 };
 use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::gameserver::appserver::pksys::{
-    CPKSys, FirstSkillPkDisposition, FirstSkillPkFacts, FirstSkillPkReport,
+    CPKSys, DiedLostGoodsDisposition, FirstSkillPkDisposition, FirstSkillPkFacts,
+    FirstSkillPkReport, KillPkDisposition, KillPkFacts,
 };
 use crate::gameserver::appserver::player::{
     AuctionSelfGoodsRefresh, BattleFairyCombineDelivery, BattleFairyCombineEffect,
@@ -654,15 +655,15 @@ use crate::gameserver::appserver::player::{
     GoodsDestroyHandConsumption, GoodsSessionPlayerRelease, HotkeyHandTransferOutcome,
     HotkeyHandTransferReport, PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange,
     PlayerBankCurrencyAddOutcome, PlayerCombatProperties, PlayerCriminalStateEnd,
-    PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
-    PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
-    PlayerEquipmentRemoveRuntimeFacts, PlayerExitSilenceUpdate, PlayerFightStateTransition,
-    PlayerGameSaveCodecError, PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion,
-    PlayerHonorResetReport, PlayerLoginGoodsLocation, PlayerMurdererSignDecrease, PlayerProgress,
-    PlayerReliveMutation, PlayerReliveOwnedPrelude, PlayerSkillDispatch, PlayerSkillRequest,
-    PlayerSkillRequestDelivery, PlayerSkillRequestEffect, PlayerSkillRequestFacts,
-    PlayerSkillRequestReport, PlayerTalkChannel, PlayerUncreatedCarriage, PlayerUncreatedPet,
-    PlayerYuanBaoChange,
+    PlayerDeathGoodsCandidate, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
+    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
+    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerExitSilenceUpdate,
+    PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
+    PlayerGoodsAiDeletion, PlayerHonorResetReport, PlayerLoginGoodsLocation,
+    PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation, PlayerReliveOwnedPrelude,
+    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
+    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerTalkChannel, PlayerUncreatedCarriage,
+    PlayerUncreatedPet, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1693,6 +1694,17 @@ pub(crate) struct QueuedSkillExecutionOutcome {
     pub(crate) state: QueuedSkillExecutionState,
     /// Runtime выставляет event только в tick фактического первого контакта.
     pub(crate) first_contact: bool,
+    /// Concrete damage owner сообщает killing blow только после фактического
+    /// перехода target-player HP в dead state.
+    pub(crate) killing_blow: Option<PlayerKillingBlow>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerKillingBlow {
+    pub(crate) victim_id: i32,
+    pub(crate) attacker_type: i32,
+    pub(crate) attacker_id: i32,
+    pub(crate) attacker_faction_id: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1708,6 +1720,41 @@ pub(crate) struct GameQueuedSkillExecutionReport {
     pub(crate) outcome: QueuedSkillExecutionOutcome,
     pub(crate) removed_from_queue: bool,
     pub(crate) pk_first_skill: Option<FirstSkillPkReport>,
+    pub(crate) death: Option<GamePlayerDeathReport>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerMurderReport {
+    pub(crate) victim_id: i32,
+    pub(crate) murderer_id: Option<i32>,
+    pub(crate) kill_count: Option<u32>,
+    pub(crate) pk_disposition: Option<KillPkDisposition>,
+    pub(crate) pk_count: Option<u16>,
+    pub(crate) contribution_updates: Vec<(i32, i32)>,
+    pub(crate) client_deliveries: Vec<i32>,
+    pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
+    pub(crate) jjc: Option<GameJjcMutationReport>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerDeathReport {
+    pub(crate) victim_id: i32,
+    pub(crate) region_id: i32,
+    pub(crate) murder: GamePlayerMurderReport,
+    pub(crate) nation: Option<NationPlayerDeathReport>,
+    pub(crate) gods_battle: Option<GodsBattleDeathSzlReport>,
+    pub(crate) security: RegionSecurity,
+    pub(crate) lost_experience: u32,
+    pub(crate) exp_delivery: Option<i32>,
+    pub(crate) drops: Vec<Result<GroundGoodsMoveReport, GroundGoodsMoveBlock>>,
+    pub(crate) drop_disposition: Option<DiedLostGoodsDisposition>,
+    pub(crate) peace: Option<GamePlayerFightStateReport>,
+    pub(crate) quest_script_id: Option<i32>,
+    pub(crate) pet_deliveries: Vec<i32>,
+    pub(crate) attacker_notice_delivery: Option<i32>,
+    pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
+    pub(crate) property_delivery: Option<i32>,
+    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -13650,7 +13697,6 @@ impl CGame {
         player_id: i32,
         context: &mut Context,
     ) -> Option<NationPlayerDeathReport> {
-        self.change_body_after_player_death(player_id, context);
         let region_id = self.find_player(player_id)?.server_region_id()?;
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
@@ -22936,7 +22982,6 @@ impl CGame {
         victim_id: i32,
         context: &mut Context,
     ) -> Option<GodsBattleDeathSzlReport> {
-        self.change_body_after_player_death(victim_id, context);
         let (killer_level, killer_szl, killer_faction, killer_team, killer_region) =
             self.find_player(killer_id).map(|player| {
                 (
@@ -30781,6 +30826,9 @@ impl CGame {
             } else {
                 None
             };
+            let death = outcome
+                .killing_blow
+                .and_then(|blow| self.player_on_death(blow, runtime));
             let removed_from_queue = match outcome.state {
                 QueuedSkillExecutionState::Pending => false,
                 QueuedSkillExecutionState::Completed | QueuedSkillExecutionState::Rejected => {
@@ -30793,6 +30841,7 @@ impl CGame {
                 outcome,
                 removed_from_queue,
                 pk_first_skill,
+                death,
             });
         }
         if let Some(dispatch) = player_ai.next_battle_fairy_skill() {
@@ -30818,6 +30867,9 @@ impl CGame {
             } else {
                 None
             };
+            let death = outcome
+                .killing_blow
+                .and_then(|blow| self.player_on_death(blow, runtime));
             let removed_from_queue = match outcome.state {
                 QueuedSkillExecutionState::Pending => false,
                 QueuedSkillExecutionState::Completed | QueuedSkillExecutionState::Rejected => {
@@ -30830,9 +30882,1013 @@ impl CGame {
                 outcome,
                 removed_from_queue,
                 pk_first_skill,
+                death,
             });
         }
         reports
+    }
+
+    fn send_player_contribution_update(&self, player_id: i32) -> Option<i32> {
+        let player = self.find_player(player_id)?;
+        let mut message = CMessage::new(0x000b_f724);
+        message.add_long(player.contribution());
+        message.add_ulong(player.fetch_power());
+        Some(message.send_to_player(self.net_server(), player_id))
+    }
+
+    fn send_player_other_info(&self, player_id: i32, text: &[u8]) -> i32 {
+        let mut message = CMessage::new(0x000b_f816);
+        message.add_byte(0);
+        add_legacy_c_string(message.base_mut(), text);
+        message.send_to_player(self.net_server(), player_id)
+    }
+
+    fn resolve_death_murderer(
+        &self,
+        region_id: i32,
+        attacker_type: i32,
+        attacker_id: i32,
+    ) -> Option<i32> {
+        if attacker_type == PLAYER_TYPE {
+            return self.find_player(attacker_id).map(CPlayer::player_id);
+        }
+        if attacker_type != MONSTER_TYPE {
+            return None;
+        }
+        let monster = self
+            .find_region(region_id)?
+            .base()
+            .find_monster_by_id(attacker_id)?;
+        if !monster.is_tamed() {
+            return None;
+        }
+        let master = monster.master_info();
+        (master.master_type == PLAYER_TYPE)
+            .then(|| self.find_player(master.master_id))?
+            .map(CPlayer::player_id)
+    }
+
+    fn contribution_base(&self, level: u8) -> i32 {
+        let (level_origin, multiple, base, maximum) =
+            self.contribute_setup.contribution_base_parameters();
+        let calculated = i32::from(level)
+            .wrapping_sub(level_origin)
+            .wrapping_mul(multiple)
+            .wrapping_add(base);
+        calculated.min(maximum)
+    }
+
+    fn spawn_contribution_item_monsters<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        base_contribution: i32,
+        runtime: &mut Runtime,
+    ) {
+        let (_, _, item_modifier) = self.contribute_setup.country_city_modifiers();
+        let value = contribution_percent(base_contribution, item_modifier);
+        let Some(item) = u32::try_from(value)
+            .ok()
+            .and_then(|value| self.contribute_setup.item_for_value(value))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(property) = runtime.monster_property(&item.name) else {
+            return;
+        };
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return;
+        };
+        for _ in 0..item.count {
+            let position = owner
+                .base()
+                .region
+                .get_random_pos_in_range(tile_x - 5, tile_y - 5, 10, 10, runtime)
+                .ok();
+            let Some(position) = position.filter(|position| position.found) else {
+                continue;
+            };
+            let now_ms = runtime.now_milliseconds();
+            let _ = owner.base_mut().add_monster(
+                &property,
+                position.x,
+                position.y,
+                0,
+                false,
+                false,
+                now_ms,
+                self.area_width,
+                self.area_height,
+                runtime,
+            );
+        }
+        self.restore_region_owner(owner);
+    }
+
+    fn apply_victim_region_contribution_loss<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        victim_id: i32,
+        region_country: u8,
+        no_contribute: bool,
+        runtime: &mut Runtime,
+    ) -> Vec<i32> {
+        let Some((victim_country, victim_level, current, region_id, tile_x, tile_y)) =
+            self.find_player(victim_id).and_then(|player| {
+                Some((
+                    player.country(),
+                    player.level(),
+                    player.contribution(),
+                    player.server_region_id()?,
+                    player.shape().get_tile_x().ok()?,
+                    player.shape().get_tile_y().ok()?,
+                ))
+            })
+        else {
+            return Vec::new();
+        };
+        if no_contribute || region_country == 0 || victim_country == region_country {
+            return Vec::new();
+        }
+        if u32::from(victim_level) <= self.globe_setup.new_soldier_level() {
+            let text = self.get_string_by_id(b"GS0135").to_vec();
+            return vec![self.send_player_other_info(victim_id, &text)];
+        }
+        let base = self.contribution_base(victim_level);
+        self.spawn_contribution_item_monsters(region_id, tile_x, tile_y, base, runtime);
+        let (loss_modifier, _, _) = self.contribute_setup.country_city_modifiers();
+        let loss = if victim_country == region_country {
+            base
+        } else {
+            contribution_percent(base, loss_modifier)
+        };
+        if loss == 0 {
+            return Vec::new();
+        }
+        let Some(victim) = self.find_player_mut(victim_id) else {
+            return Vec::new();
+        };
+        victim.set_contribution(current.wrapping_sub(loss));
+        let mut deliveries = self
+            .send_player_contribution_update(victim_id)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let text = format_legacy_mixed(
+            self.get_string_by_id(b"GS0134"),
+            &[LegacyFormatArgument::Signed(loss)],
+            255,
+        );
+        deliveries.push(self.send_player_other_info(victim_id, &text));
+        deliveries
+    }
+
+    fn player_on_been_murdered<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        blow: PlayerKillingBlow,
+        runtime: &mut Runtime,
+    ) -> Option<GamePlayerMurderReport> {
+        let (region_id, victim_country, victim_level, victim_badman, victim_faction) =
+            self.find_player(blow.victim_id).and_then(|victim| {
+                Some((
+                    victim.server_region_id()?,
+                    victim.country(),
+                    victim.level(),
+                    victim.is_badman(self.globe_setup.pk_count_per_kill()),
+                    victim.faction_id(),
+                ))
+            })?;
+        let (region_country, no_contribute, security, gods_battle_region) = {
+            let owner = self.find_region(region_id)?;
+            let victim = self.find_player(blow.victim_id)?;
+            let x = victim.shape().get_tile_x().ok()?;
+            let y = victim.shape().get_tile_y().ok()?;
+            (
+                owner.base().country,
+                owner.base().no_contribute,
+                owner.get_security(x, y).ok()?,
+                matches!(owner, ServerRegionOwner::GodsBattle(_)),
+            )
+        };
+        let murderer_id =
+            self.resolve_death_murderer(region_id, blow.attacker_type, blow.attacker_id);
+        let mut report = GamePlayerMurderReport {
+            victim_id: blow.victim_id,
+            murderer_id,
+            kill_count: None,
+            pk_disposition: None,
+            pk_count: None,
+            contribution_updates: Vec::new(),
+            client_deliveries: Vec::new(),
+            world_deliveries: Vec::new(),
+            jjc: None,
+        };
+
+        if blow.attacker_type == MONSTER_TYPE && murderer_id.is_none() {
+            let non_tamed_monster = self
+                .find_region(region_id)
+                .and_then(|owner| owner.base().find_monster_by_id(blow.attacker_id))
+                .is_some_and(|monster| !monster.is_tamed());
+            if !non_tamed_monster {
+                return Some(report);
+            }
+            report
+                .client_deliveries
+                .extend(self.apply_victim_region_contribution_loss(
+                    blow.victim_id,
+                    region_country,
+                    no_contribute,
+                    runtime,
+                ));
+            return Some(report);
+        }
+        let Some(murderer_id) = murderer_id else {
+            return Some(report);
+        };
+        let (murderer_country, murderer_level, murderer_faction, murderer_team, same_gods_faction) =
+            self.find_player(murderer_id).map(|murderer| {
+                (
+                    murderer.country(),
+                    murderer.level(),
+                    murderer.faction_id(),
+                    murderer.team_id(),
+                    murderer.gods_battle_faction()
+                        == self
+                            .find_player(blow.victim_id)
+                            .map_or(0, CPlayer::gods_battle_faction),
+                )
+            })?;
+        let increment = if murderer_country == victim_country {
+            1
+        } else {
+            2
+        };
+        report.kill_count = self
+            .find_player_mut(murderer_id)
+            .map(|murderer| murderer.add_murder_kill_count(increment));
+
+        if self.log_system.player_killed_enabled() {
+            let victim = self.find_player(blow.victim_id)?;
+            let mut log = CMessage::new(0x0006_020a);
+            log.add_byte(1);
+            log.add_long(blow.victim_id);
+            log.add_long(murderer_id);
+            log.add_long(region_id);
+            log.add_long(victim.shape().get_tile_x().unwrap_or_default());
+            log.add_long(victim.shape().get_tile_y().unwrap_or_default());
+            report.world_deliveries.push(log.send(self, false));
+        }
+        if self.globe_setup.use_appellation_function()
+            && murderer_country != victim_country
+            && (i32::from(murderer_level) - i32::from(victim_level)).abs()
+                <= self.honor_eliminate_config.level_difference
+            && security != RegionSecurity::FIGHT
+            && self.find_player(murderer_id).is_some_and(|murderer| {
+                murderer.union_id() == 0
+                    || self.find_player(blow.victim_id).map(CPlayer::union_id)
+                        != Some(murderer.union_id())
+            })
+        {
+            let mut honor = CMessage::new(0x0005_fd0d);
+            honor.add_long(murderer_id);
+            honor.add_long(blow.victim_id);
+            report.world_deliveries.push(honor.send(self, false));
+        }
+
+        if murderer_country == victim_country {
+            report
+                .client_deliveries
+                .extend(self.apply_victim_region_contribution_loss(
+                    blow.victim_id,
+                    region_country,
+                    no_contribute,
+                    runtime,
+                ));
+        } else if !no_contribute {
+            let (combat_a, combat_b) = self.contribute_setup.combat_levels();
+            let lower = combat_a.min(combat_b);
+            let upper = combat_a.max(combat_b);
+            let delta = i32::from(murderer_level).wrapping_sub(i32::from(victim_level));
+            if delta > lower {
+                let (penalty_a, penalty_b) = self.contribute_setup.over_level_penalties();
+                let (limit, penalty, protected_string, penalty_string) = if delta > upper {
+                    (upper, penalty_a, b"GS0165".as_slice(), b"GS0166".as_slice())
+                } else {
+                    (lower, penalty_b, b"GS0168".as_slice(), b"GS0169".as_slice())
+                };
+                if u32::from(victim_level) <= self.globe_setup.new_soldier_level() {
+                    let protected = self.get_string_by_id(protected_string).to_vec();
+                    let murderer_notice = self.get_string_by_id(b"GS0164").to_vec();
+                    report
+                        .client_deliveries
+                        .push(self.send_player_other_info(blow.victim_id, &protected));
+                    report
+                        .client_deliveries
+                        .push(self.send_player_other_info(murderer_id, &murderer_notice));
+                } else if region_country == murderer_country {
+                    report
+                        .client_deliveries
+                        .extend(self.apply_victim_region_contribution_loss(
+                            blow.victim_id,
+                            region_country,
+                            no_contribute,
+                            runtime,
+                        ));
+                    let notice = self.get_string_by_id(b"GS0164").to_vec();
+                    report
+                        .client_deliveries
+                        .push(self.send_player_other_info(murderer_id, &notice));
+                }
+                if region_country != murderer_country {
+                    if let Some(murderer) = self.find_player_mut(murderer_id) {
+                        let current = murderer.contribution();
+                        murderer.set_contribution(current.wrapping_sub(penalty));
+                        report.contribution_updates.push((murderer_id, -penalty));
+                        if let Some(delivery) = self.send_player_contribution_update(murderer_id) {
+                            report.client_deliveries.push(delivery);
+                        }
+                    }
+                    let murderer_text = format_legacy_mixed(
+                        self.get_string_by_id(penalty_string),
+                        &[
+                            LegacyFormatArgument::Signed(limit),
+                            LegacyFormatArgument::Signed(penalty),
+                        ],
+                        255,
+                    );
+                    let victim_text = format_legacy_mixed(
+                        self.get_string_by_id(b"GS0167"),
+                        &[LegacyFormatArgument::Signed(limit)],
+                        255,
+                    );
+                    report
+                        .client_deliveries
+                        .push(self.send_player_other_info(murderer_id, &murderer_text));
+                    report
+                        .client_deliveries
+                        .push(self.send_player_other_info(blow.victim_id, &victim_text));
+                }
+            } else if u32::from(victim_level) <= self.globe_setup.new_soldier_level() {
+                let text = self.get_string_by_id(b"GS0135").to_vec();
+                report
+                    .client_deliveries
+                    .push(self.send_player_other_info(blow.victim_id, &text));
+            } else {
+                let base = self.contribution_base(victim_level);
+                let foreign_city = region_country != 0 && victim_country != region_country;
+                if foreign_city {
+                    self.spawn_contribution_item_monsters(
+                        region_id,
+                        self.find_player(blow.victim_id)
+                            .and_then(|player| player.shape().get_tile_x().ok())
+                            .unwrap_or_default(),
+                        self.find_player(blow.victim_id)
+                            .and_then(|player| player.shape().get_tile_y().ok())
+                            .unwrap_or_default(),
+                        base,
+                        runtime,
+                    );
+                }
+                let (loss_modifier, gain_modifier, _) =
+                    self.contribute_setup.country_city_modifiers();
+                let victim_loss = if foreign_city {
+                    contribution_percent(base, loss_modifier)
+                } else {
+                    base
+                };
+                let mut gain = if foreign_city {
+                    contribution_percent(base, gain_modifier)
+                } else {
+                    base
+                };
+                let victim_contribution = self
+                    .find_player(blow.victim_id)
+                    .map_or(0, CPlayer::contribution);
+                gain = if victim_contribution < 0 {
+                    0
+                } else {
+                    gain.min(victim_contribution)
+                };
+                let recipients = if murderer_team == 0 {
+                    vec![murderer_id]
+                } else {
+                    let session_id = self.get_team_session_id(murderer_team as u32);
+                    self.session_factory
+                        .team_player_ids(session_id)
+                        .unwrap_or_else(|| vec![murderer_id])
+                };
+                let victim_shape = self
+                    .find_player(blow.victim_id)
+                    .and_then(CPlayer::shape_view);
+                let distance_limit = self.globe_setup.contribution_distance_limit();
+                let eligible: Vec<(i32, u8)> = if gain == 0 {
+                    Vec::new()
+                } else {
+                    recipients
+                        .into_iter()
+                        .filter_map(|id| {
+                            let player = self.find_player(id)?;
+                            let in_range = murderer_team == 0
+                                || player.shape_view().zip(victim_shape).is_some_and(
+                                    |(shape, victim)| victim.distance(shape) <= distance_limit,
+                                );
+                            (player.server_region_id() == Some(region_id)
+                                && !player.is_dead()
+                                && player.country() == murderer_country
+                                && in_range)
+                                .then_some((id, player.level()))
+                        })
+                        .collect()
+                };
+                let level_sum: i32 = eligible.iter().map(|(_, level)| i32::from(*level)).sum();
+                let maximum_fetch_gain = self.globe_setup.maximum_fetch_power_gain();
+                let maximum_fetch = self.globe_setup.maximum_fetch_power();
+                for (id, level) in eligible {
+                    let share = if murderer_team == 0 || level_sum == 0 {
+                        gain
+                    } else {
+                        (f64::from(level) / f64::from(level_sum) * f64::from(gain)).round() as i32
+                    };
+                    if let Some(player) = self.find_player_mut(id) {
+                        let current = player.contribution();
+                        player.set_contribution(current.wrapping_add(share));
+                        let fetch_gain = (player.war_soul_state() == 1)
+                            .then_some(gain / 100)
+                            .unwrap_or_default()
+                            .max(0) as u32;
+                        let applied_fetch_gain =
+                            if fetch_gain > 0 && (fetch_gain as f32) < maximum_fetch_gain {
+                                fetch_gain
+                            } else if maximum_fetch_gain < fetch_gain as f32 {
+                                maximum_fetch_gain.round().max(0.0) as u32
+                            } else {
+                                0
+                            };
+                        if applied_fetch_gain != 0 {
+                            player.set_fetch_power(
+                                player.fetch_power().wrapping_add(applied_fetch_gain),
+                                maximum_fetch,
+                            );
+                        }
+                        report.contribution_updates.push((id, share));
+                    }
+                    if let Some(delivery) = self.send_player_contribution_update(id) {
+                        report.client_deliveries.push(delivery);
+                    }
+                    let text = format_legacy_mixed(
+                        self.get_string_by_id(if murderer_team == 0 {
+                            b"GS0171"
+                        } else {
+                            b"GS0170"
+                        }),
+                        &[LegacyFormatArgument::Signed(share)],
+                        255,
+                    );
+                    report
+                        .client_deliveries
+                        .push(self.send_player_other_info(id, &text));
+                }
+                if murderer_team == 0 && gain == 0 {
+                    let text = self.get_string_by_id(b"GS0172").to_vec();
+                    report
+                        .client_deliveries
+                        .push(self.send_player_other_info(murderer_id, &text));
+                }
+                if base != 0 {
+                    if let Some(victim) = self.find_player_mut(blow.victim_id) {
+                        victim.set_contribution(victim_contribution.wrapping_sub(victim_loss));
+                        report
+                            .contribution_updates
+                            .push((blow.victim_id, -victim_loss));
+                    }
+                    if let Some(delivery) = self.send_player_contribution_update(blow.victim_id) {
+                        report.client_deliveries.push(delivery);
+                    }
+                    let text = format_legacy_mixed(
+                        self.get_string_by_id(b"GS0173"),
+                        &[LegacyFormatArgument::Signed(victim_loss)],
+                        255,
+                    );
+                    report
+                        .client_deliveries
+                        .push(self.send_player_other_info(blow.victim_id, &text));
+                }
+            }
+        }
+
+        if region_id
+            == self
+                .country_war_sys
+                .get_war_region_for_country(i32::from(victim_country))
+            && murderer_country != victim_country
+            && i32::from(murderer_level) <= i32::from(victim_level).wrapping_add(10)
+        {
+            let increment = self.country_param.exploit_increment().unwrap_or_default();
+            let maximum = self.country_param.max_exploit().unwrap_or_default();
+            if let Some(murderer) = self.find_player_mut(murderer_id) {
+                let requested = murderer.exploit().wrapping_add(increment as u32);
+                let applied = murderer.set_exploit(requested, maximum).applied;
+                let mut update = CMessage::new(0x000b_f72e);
+                update.add_ulong(applied);
+                report
+                    .client_deliveries
+                    .push(update.send_to_player(self.net_server(), murderer_id));
+                let text = format_legacy_mixed(
+                    self.get_string_by_id(b"GS0174"),
+                    &[LegacyFormatArgument::Signed(increment)],
+                    255,
+                );
+                report
+                    .client_deliveries
+                    .push(self.send_player_other_info(murderer_id, &text));
+            }
+        }
+
+        let city_war_enemies = self.find_player(blow.victim_id).is_some_and(|victim| {
+            victim.is_city_war_enemy_faction_member(murderer_faction)
+                || self.find_player(murderer_id).is_some_and(|murderer| {
+                    murderer.is_city_war_enemy_faction_member(victim.faction_id())
+                })
+        });
+        let faction_war_enemies = victim_faction > 0
+            && self.find_player(blow.victim_id).is_some_and(|victim| {
+                victim.is_enemy_faction_member(murderer_faction)
+                    || self.find_player(murderer_id).is_some_and(|murderer| {
+                        murderer.is_enemy_faction_member(victim.faction_id())
+                    })
+            });
+        let country_identity = self.player_country_identity(murderer_id);
+        let attacker_kill_count = report.kill_count.unwrap_or_default();
+        let disposition = CPKSys::on_kill(KillPkFacts {
+            victim_is_badman: victim_badman,
+            security,
+            city_war_enemies,
+            faction_war_enemies,
+            gods_battle_region,
+            same_gods_battle_faction: same_gods_faction,
+            same_country: murderer_country == victim_country,
+            attacker_country_identity: country_identity,
+            attacker_kill_count,
+        });
+        report.pk_disposition = Some(disposition);
+        if disposition == KillPkDisposition::ReportMurderer {
+            let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
+            let confirmed = self
+                .find_player_mut(murderer_id)?
+                .report_murderer(pk_count_per_kill, || runtime.now_milliseconds());
+            report.pk_count = Some(confirmed.pk_count);
+        }
+        if self
+            .find_player(murderer_id)
+            .is_some_and(|player| player.server_region_id() == Some(region_id))
+        {
+            let (minimum, maximum, _, _) = self.globe_setup.jjc_game_config();
+            if minimum <= region_id && region_id <= maximum {
+                report.jjc = Some(self.quit_player_jjc(blow.victim_id));
+            }
+        }
+        Some(report)
+    }
+
+    fn player_on_death<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        blow: PlayerKillingBlow,
+        runtime: &mut Runtime,
+    ) -> Option<GamePlayerDeathReport> {
+        let murder = self.player_on_been_murdered(blow, runtime)?;
+        let (region_id, tile_x, tile_y, level, pk_count, criminal, victim_faction) =
+            self.find_player(blow.victim_id).and_then(|player| {
+                Some((
+                    player.server_region_id()?,
+                    player.shape().get_tile_x().ok()?,
+                    player.shape().get_tile_y().ok()?,
+                    player.level(),
+                    player.pk_count(),
+                    player.criminal_state_timestamp_ms(),
+                    player.faction_id(),
+                ))
+            })?;
+        let security = self
+            .find_region(region_id)?
+            .get_security(tile_x, tile_y)
+            .ok()?;
+
+        self.change_body_after_player_death(blow.victim_id, runtime);
+        let nation = self.player_died_in_nation_region(blow.victim_id, runtime);
+        let mut owner = self.take_region_owner(region_id)?;
+        if owner
+            .base_mut()
+            .region
+            .set_block(tile_x, tile_y, 0)
+            .is_err()
+        {
+            self.restore_region_owner(owner);
+            return None;
+        }
+        self.restore_region_owner(owner);
+
+        let mut world_deliveries = Vec::new();
+        if blow.attacker_type == PLAYER_TYPE
+            && blow.attacker_id > 0
+            && blow.attacker_faction_id > 0
+            && victim_faction > 0
+            && self
+                .find_player(blow.victim_id)
+                .is_some_and(|victim| victim.is_enemy_faction_member(blow.attacker_faction_id))
+        {
+            let mut message = CMessage::new(0x0006_0101);
+            message.add_long(blow.victim_id);
+            message.add_long(blow.attacker_id);
+            world_deliveries.push(message.send(self, false));
+        }
+        let gods_battle = (blow.attacker_type == PLAYER_TYPE)
+            .then(|| self.apply_gods_battle_death_szl(blow.attacker_id, blow.victim_id, runtime))
+            .flatten();
+
+        let loss_allowed = self.globe_setup.newbie_level_limit() < u32::from(level)
+            || self.globe_setup.pk_count_per_kill() < u32::from(pk_count)
+            || criminal != 0;
+        let mut lost_experience = 0;
+        let mut exp_delivery = None;
+        let mut drops = Vec::new();
+        let mut drop_disposition = None;
+        if loss_allowed {
+            let requested = CPKSys::died_lost_experience(&self.globe_setup, security).max(0) as u32;
+            if requested != 0 {
+                let (experience, vigour) = self
+                    .find_player(blow.victim_id)
+                    .map(|player| (player.experience(), player.vigour()))?;
+                lost_experience = requested.min(experience);
+                self.find_player_mut(blow.victim_id)?
+                    .set_experience(experience - lost_experience);
+                let mut update = CMessage::new(0x000b_f704);
+                update.add_ulong(experience - lost_experience);
+                update.add_ulong(vigour);
+                update.add_long(-(lost_experience as i32));
+                exp_delivery = Some(update.send_to_player(self.net_server(), blow.victim_id));
+                if self.log_system.experience_decrease_enabled() {
+                    let mut log = CMessage::new(0x0006_0207);
+                    log.add_byte(1);
+                    log.add_long(blow.victim_id);
+                    log.add_ulong(lost_experience);
+                    log.add_long(region_id);
+                    log.add_ulong(tile_x as u32);
+                    log.add_ulong(tile_y as u32);
+                    world_deliveries.push(log.send(self, false));
+                }
+            }
+
+            let candidates = self
+                .find_player(blow.victim_id)?
+                .death_goods_candidates(&self.goods_factory);
+            for candidate in candidates
+                .iter()
+                .filter(|candidate| candidate.particular_on_death)
+            {
+                let result = self.drop_player_goods_to_region(
+                    blow.victim_id,
+                    region_id,
+                    candidate.location.extend_id,
+                    candidate.location.position,
+                    candidate.goods_id,
+                    candidate.amount,
+                    runtime,
+                );
+                if result.is_ok()
+                    && candidate.location.extend_id == 3
+                    && self.log_system.goods_lost_by_dead_enabled()
+                {
+                    world_deliveries.push(self.send_goods_lost_by_death_log(
+                        blow.victim_id,
+                        region_id,
+                        tile_x,
+                        tile_y,
+                        candidate,
+                    ));
+                }
+                drops.push(result);
+            }
+
+            let lost_class = if criminal != 0 {
+                3
+            } else if self.globe_setup.pk_count_per_kill() < u32::from(pk_count) {
+                2
+            } else if pk_count != 0 {
+                1
+            } else {
+                0
+            };
+            let player_attacker_found =
+                blow.attacker_type != PLAYER_TYPE || self.find_player(blow.attacker_id).is_some();
+            let faction_war_enemies = blow.attacker_faction_id > 0
+                && self
+                    .find_player(blow.victim_id)
+                    .is_some_and(|victim| victim.is_enemy_faction_member(blow.attacker_faction_id));
+            match CPKSys::died_lost_goods(
+                &self.globe_setup,
+                security,
+                lost_class,
+                player_attacker_found,
+                faction_war_enemies,
+            ) {
+                Ok(lost) => {
+                    drop_disposition = Some(DiedLostGoodsDisposition::Enabled {
+                        table: usize::from(security == RegionSecurity::CITY_WAR),
+                        lost_class,
+                    });
+                    if self.globe_setup.new_soldier_level() < u32::from(level)
+                        || self.find_player(blow.victim_id).is_some_and(|player| {
+                            player.is_badman(self.globe_setup.pk_count_per_kill())
+                        })
+                    {
+                        for candidate in candidates
+                            .iter()
+                            .filter(|candidate| !candidate.particular_on_death)
+                        {
+                            let probability = match candidate.location.extend_id {
+                                1 => lost.packet,
+                                2 => lost
+                                    .equipment
+                                    .get(candidate.location.position as usize)
+                                    .copied()
+                                    .unwrap_or_default(),
+                                3 if candidate.location.position == 0 => lost.hand,
+                                _ => 0.0,
+                            };
+                            if !candidate.table_drop_allowed
+                                || game_legacy_random(&mut self.random_state, 10_000) as f32
+                                    >= probability * 10_000.0
+                            {
+                                continue;
+                            }
+                            let result = self.drop_player_goods_to_region(
+                                blow.victim_id,
+                                region_id,
+                                candidate.location.extend_id,
+                                candidate.location.position,
+                                candidate.goods_id,
+                                candidate.amount,
+                                runtime,
+                            );
+                            if result.is_ok() && self.log_system.goods_lost_by_dead_enabled() {
+                                world_deliveries.push(self.send_goods_lost_by_death_log(
+                                    blow.victim_id,
+                                    region_id,
+                                    tile_x,
+                                    tile_y,
+                                    candidate,
+                                ));
+                            }
+                            drops.push(result);
+                        }
+                        let money = self.find_player(blow.victim_id).map_or(0, CPlayer::money);
+                        if money != 0
+                            && (game_legacy_random(&mut self.random_state, 10_000) as f32)
+                                < lost.money * 10_000.0
+                        {
+                            let amount =
+                                (f64::from(money) * f64::from(lost.money_percent)).round() as u32;
+                            if amount != 0 {
+                                if let Some(goods) = self
+                                    .find_player(blow.victim_id)
+                                    .and_then(|player| player.ground_currency_goods(4))
+                                    .cloned()
+                                {
+                                    let money_id = goods.identity().ex_id;
+                                    let money_name = goods.name().to_vec();
+                                    let result = self.drop_player_goods_to_region(
+                                        blow.victim_id,
+                                        region_id,
+                                        4,
+                                        0,
+                                        goods.identity().ex_id,
+                                        amount.min(money),
+                                        runtime,
+                                    );
+                                    if result.is_ok()
+                                        && self.log_system.goods_lost_by_dead_enabled()
+                                    {
+                                        let money_candidate = PlayerDeathGoodsCandidate {
+                                            location: crate::gameserver::appserver::player::PlayerGoodsAiLocation {
+                                                extend_id: 4,
+                                                position: 0,
+                                            },
+                                            goods_id: money_id,
+                                            amount: amount.min(money),
+                                            price: amount.min(money),
+                                            name: money_name,
+                                            particular_on_death: false,
+                                            table_drop_allowed: true,
+                                        };
+                                        world_deliveries.push(self.send_goods_lost_by_death_log(
+                                            blow.victim_id,
+                                            region_id,
+                                            tile_x,
+                                            tile_y,
+                                            &money_candidate,
+                                        ));
+                                    }
+                                    drops.push(result);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(disposition) => drop_disposition = Some(disposition),
+            }
+        } else {
+            let text = self.get_string_by_id(b"GS0137").to_vec();
+            let _ = self.send_nation_player_notice(blow.victim_id, &text);
+        }
+
+        let peace = self.enter_player_peace_state(blow.victim_id);
+        let quest_path = self.quest_system.player_died_script.clone();
+        let quest_script_id = self.queue_script_file(
+            &quest_path,
+            ScriptExecutionContext {
+                player_id: Some(blow.victim_id),
+                region_id: Some(region_id),
+                ..ScriptExecutionContext::default()
+            },
+        );
+        let pets = self
+            .find_player(blow.victim_id)
+            .map(|player| player.active_pets().to_vec())
+            .unwrap_or_default();
+        let mut pet_deliveries = Vec::new();
+        for pet in pets {
+            let text = self.get_string_by_id(b"GS0138").to_vec();
+            pet_deliveries.push(self.send_nation_player_notice(blow.victim_id, &text));
+            if let Some(delivery) = self.dismiss_player_pet(blow.victim_id, pet.object_type, pet.id)
+            {
+                pet_deliveries.push(delivery);
+            }
+        }
+        let attacker_notice_delivery = if blow.attacker_type == PLAYER_TYPE {
+            let attacker_name = self
+                .find_player(blow.attacker_id)
+                .map(CPlayer::player_name)
+                .unwrap_or_default();
+            let text = format_legacy_mixed(
+                self.get_string_by_id(b"GS0139"),
+                &[LegacyFormatArgument::Bytes(attacker_name)],
+                1023,
+            );
+            Some(self.send_nation_player_notice(blow.victim_id, &text))
+        } else if blow.attacker_type == MONSTER_TYPE
+            && self
+                .find_region(region_id)
+                .is_some_and(|owner| owner.base().find_monster_by_id(blow.attacker_id).is_some())
+        {
+            let text = self.get_string_by_id(b"GS0143").to_vec();
+            Some(self.send_nation_player_notice(blow.victim_id, &text))
+        } else {
+            None
+        };
+        if blow.attacker_type == PLAYER_TYPE {
+            let notify_facts = self.find_player(blow.attacker_id).and_then(|attacker| {
+                let victim = self.find_player(blow.victim_id)?;
+                Some((
+                    attacker.country(),
+                    attacker.player_name().to_vec(),
+                    attacker.faction_id(),
+                    attacker.faction_name().to_vec(),
+                    victim.country(),
+                ))
+            });
+            if let Some((
+                attacker_country,
+                attacker_name,
+                attacker_faction,
+                faction_name,
+                victim_country,
+            )) = notify_facts
+            {
+                let now = runtime.now_milliseconds();
+                let notify = self.find_region(region_id).and_then(|owner| {
+                    let interval = owner.base().region.notify_interval_ms()?;
+                    let last = owner.base().region.last_notify_kill_time_ms();
+                    (interval != 0
+                        && attacker_country != victim_country
+                        && security != RegionSecurity::FIGHT
+                        && now.wrapping_sub(last) >= interval as u32)
+                        .then_some(interval)
+                });
+                if notify.is_some() {
+                    if let Some(owner) = self.find_region_mut(region_id) {
+                        owner.base_mut().region.set_last_notify_kill_time_ms(now);
+                    }
+                    let region_name = self
+                        .find_region(region_id)
+                        .map(ServerRegionOwner::name)
+                        .unwrap_or_default()
+                        .to_vec();
+                    let victim_text = format_legacy_mixed(
+                        self.get_string_by_id(b"GS0140"),
+                        &[
+                            LegacyFormatArgument::Bytes(&region_name),
+                            LegacyFormatArgument::Signed(tile_x),
+                            LegacyFormatArgument::Signed(tile_y),
+                        ],
+                        1023,
+                    );
+                    let mut victim_world = CMessage::new(0x0005_fd09);
+                    victim_world.add_byte(1);
+                    victim_world.add_byte(victim_country);
+                    add_legacy_c_string(victim_world.base_mut(), &victim_text);
+                    world_deliveries.push(victim_world.send(self, false));
+
+                    let (template, arguments) = if attacker_faction != 0 {
+                        (
+                            self.get_string_by_id(b"GS0141"),
+                            vec![
+                                LegacyFormatArgument::Bytes(&attacker_name),
+                                LegacyFormatArgument::Bytes(&faction_name),
+                                LegacyFormatArgument::Bytes(&region_name),
+                            ],
+                        )
+                    } else {
+                        (
+                            self.get_string_by_id(b"GS0142"),
+                            vec![
+                                LegacyFormatArgument::Bytes(&attacker_name),
+                                LegacyFormatArgument::Bytes(&region_name),
+                            ],
+                        )
+                    };
+                    let attacker_text = format_legacy_mixed(template, &arguments, 1023);
+                    let mut attacker_world = CMessage::new(0x0005_fd09);
+                    attacker_world.add_byte(2);
+                    attacker_world.add_byte(attacker_country);
+                    add_legacy_c_string(attacker_world.base_mut(), &attacker_text);
+                    world_deliveries.push(attacker_world.send(self, false));
+                }
+            }
+        }
+        if self.log_system.player_died_enabled() {
+            let mut log = CMessage::new(0x0006_0208);
+            log.add_long(blow.victim_id);
+            log.add_long(region_id);
+            log.add_ulong(tile_x as u32);
+            log.add_ulong(tile_y as u32);
+            world_deliveries.push(log.send(self, false));
+        }
+        self.find_player_mut(blow.victim_id)?
+            .reset_war_soul_after_player_death();
+        let property_delivery = self
+            .find_player(blow.victim_id)
+            .map(|player| self.send_player_properties_changed(player));
+        let mut changed = CMessage::new(0x000b_f930);
+        changed.add_long(PLAYER_TYPE);
+        changed.add_long(blow.victim_id);
+        let around_delivery = self.send_player_shape_around(blow.victim_id, None, &changed);
+        Some(GamePlayerDeathReport {
+            victim_id: blow.victim_id,
+            region_id,
+            murder,
+            nation,
+            gods_battle,
+            security,
+            lost_experience,
+            exp_delivery,
+            drops,
+            drop_disposition,
+            peace,
+            quest_script_id,
+            pet_deliveries,
+            attacker_notice_delivery,
+            world_deliveries,
+            property_delivery,
+            around_delivery,
+        })
+    }
+
+    fn send_goods_lost_by_death_log(
+        &self,
+        player_id: i32,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        goods: &PlayerDeathGoodsCandidate,
+    ) -> Result<i32, SendMessageError> {
+        let player = self
+            .find_player(player_id)
+            .expect("death-loss log вызывается для live victim");
+        let mut log = CMessage::new(0x0006_0202);
+        log.add_byte(6);
+        log.add_long(player_id);
+        log.base_mut().add_short(player.pk_count() as i16);
+        log.add_ulong(player.money());
+        log.add_ulong(player.depot_money());
+        log.base_mut().add_guid(goods.goods_id);
+        log.add_ulong(goods.price);
+        add_legacy_c_string(log.base_mut(), &goods.name);
+        log.add_long(1);
+        log.add_long(region_id);
+        log.add_ulong(tile_x as u32);
+        log.add_ulong(tile_y as u32);
+        log.add_ulong(player.client_ip());
+        log.send(self, false)
     }
 
     fn send_player_around_excluding_self(
@@ -34099,6 +35155,10 @@ fn gods_battle_team_szl_share(total: u32, teammate_amount: u32) -> u32 {
     debug_assert_ne!(teammate_amount, 0);
     let multiplier = f64::from(teammate_amount - 1) * 0.05 + 1.0;
     (f64::from(total) * multiplier / f64::from(teammate_amount)) as u32
+}
+
+fn contribution_percent(base: i32, modifier: i32) -> i32 {
+    (f64::from(base) * f64::from(modifier) * 0.01).round() as i32
 }
 
 fn legacy_atoi_i32(value: &[u8]) -> i32 {

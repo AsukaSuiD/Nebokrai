@@ -33,6 +33,33 @@ pub(crate) struct CContributeSetup {
 }
 
 impl CContributeSetup {
+    pub(crate) const fn combat_levels(&self) -> (i32, i32) {
+        (self.parameters[0], self.parameters[1])
+    }
+
+    pub(crate) const fn over_level_penalties(&self) -> (i32, i32) {
+        (self.parameters[2], self.parameters[3])
+    }
+
+    pub(crate) const fn contribution_base_parameters(&self) -> (i32, i32, i32, i32) {
+        (
+            self.parameters[4],
+            self.parameters[5],
+            self.parameters[6],
+            self.parameters[7],
+        )
+    }
+
+    pub(crate) const fn country_city_modifiers(&self) -> (i32, i32, i32) {
+        (self.parameters[8], self.parameters[9], self.parameters[10])
+    }
+
+    pub(crate) fn item_for_value(&self, value: u32) -> Option<&ContributeItem> {
+        self.items
+            .iter()
+            .find(|item| item.low_value < value && value < item.high_value)
+    }
+
     pub(crate) fn clear_items(&mut self) {
         self.items.clear();
     }

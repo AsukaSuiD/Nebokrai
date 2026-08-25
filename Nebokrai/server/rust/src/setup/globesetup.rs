@@ -92,6 +92,7 @@ const AREA_HEIGHT_OFFSET: usize = 0x518;
 const CONTEND_DAMAGE_TIME_FACTOR_OFFSET: usize = 0x568;
 const DIED_STATE_TIME_OFFSET: usize = 0x56C;
 const MAX_FETCH_POWER_OFFSET: usize = 0x900;
+const MAX_FETCH_POWER_GAIN_OFFSET: usize = 0x8FC;
 const BATTLE_FAIRY_ENABLED_OFFSET: usize = 0x904;
 const CI_QING_ENABLED_OFFSET: usize = 0xD00;
 const FAIRY_EGG_MAX_LEVEL_OFFSET: usize = 0x85C;
@@ -108,6 +109,7 @@ const FAIRY_SYNCRETIC_NEEDED_EXP_OFFSET: usize = 0x8A4;
 const FAIRY_SYNCRETIC_NEEDED_MONEY_OFFSET: usize = 0x8A8;
 const PK_COUNT_PER_KILL_OFFSET: usize = 0x4F4;
 const FIGHT_STATE_TIMER_OFFSET: usize = 0x364;
+const CONTRIBUTION_DISTANCE_LIMIT_OFFSET: usize = 0x3E0;
 const TALK_WORLD_GOODS_NAME_OFFSET: usize = 0x768;
 const TALK_WORLD_GOODS_AMOUNT_OFFSET: usize = 0x7A8;
 const TALK_WORLD_MONEY_OFFSET: usize = 0x7AC;
@@ -140,6 +142,13 @@ const EXP_TO_VIGOUR_Y_OFFSET: usize = 0x760;
 const MAXIMUM_VIGOUR_ONCE_OFFSET: usize = 0x764;
 const NEWBIE_LEVEL_LIMIT_OFFSET: usize = 0x734;
 const NEW_SOLDIER_LEVEL_OFFSET: usize = 0x738;
+const LOSS_EXP_NORMAL_OFFSET: usize = 0x0A0;
+const LOSS_EXP_GAME_OFFSET: usize = 0x0A4;
+const LOSS_EXP_WAR_OFFSET: usize = 0x0A8;
+const DIED_DROP_TABLE_OFFSET: usize = 0x0AC;
+const DIED_DROP_TABLE_ROWS: usize = 2;
+const DIED_DROP_TABLE_COLUMNS: usize = 4;
+const DIED_DROP_TABLE_FIELDS: usize = 18;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -217,6 +226,41 @@ impl Default for GlobeSetupSnapshot {
 }
 
 impl GlobeSetupSnapshot {
+    /// Exact `fLossExp_Normal/Game/War +0xA0..+0xA8`. Несмотря на имя,
+    /// `CPKSys::GetDiedLostExp` округляет эти значения как абсолютное число
+    /// опыта, а не как коэффициент.
+    pub(crate) fn died_lost_experience(&self, security: u8) -> i32 {
+        let offset = match security {
+            0 => LOSS_EXP_NORMAL_OFFSET,
+            1 => LOSS_EXP_GAME_OFFSET,
+            3 => LOSS_EXP_WAR_OFFSET,
+            _ => return 0,
+        };
+        self.read_f32(offset).round_ties_even() as i32
+    }
+
+    /// Один элемент массива death-drop из 18 последовательных таблиц
+    /// `[security table][lost class]`. `field` сохраняет ABI-порядок
+    /// `weapon, head, body, glove, shoes, back, decorate, hand, bag, money,
+    /// money percent, headgear, talisman, frock, medal, wing, manteau, fairy`.
+    pub(crate) fn died_drop_probability(
+        &self,
+        field: usize,
+        table: usize,
+        lost_class: usize,
+    ) -> Option<f32> {
+        if field >= DIED_DROP_TABLE_FIELDS
+            || table >= DIED_DROP_TABLE_ROWS
+            || lost_class >= DIED_DROP_TABLE_COLUMNS
+        {
+            return None;
+        }
+        let index = field * DIED_DROP_TABLE_ROWS * DIED_DROP_TABLE_COLUMNS
+            + table * DIED_DROP_TABLE_COLUMNS
+            + lost_class;
+        Some(self.read_f32(DIED_DROP_TABLE_OFFSET + index * 4))
+    }
+
     pub(crate) fn pet_factors(&self, level: u32) -> Option<[f32; 10]> {
         let level = usize::try_from(level).ok().filter(|level| *level < 10)?;
         Some(std::array::from_fn(|index| {
@@ -484,6 +528,14 @@ impl GlobeSetupSnapshot {
     /// после unsigned cast, поэтому отрицательное значение не нормализуется.
     pub(crate) fn maximum_fetch_power(&self) -> i32 {
         self.read_i32(MAX_FETCH_POWER_OFFSET)
+    }
+
+    pub(crate) fn maximum_fetch_power_gain(&self) -> f32 {
+        self.read_f32(MAX_FETCH_POWER_GAIN_OFFSET)
+    }
+
+    pub(crate) fn contribution_distance_limit(&self) -> i32 {
+        self.read_i32(CONTRIBUTION_DISTANCE_LIMIT_OFFSET)
     }
 
     /// `bBattleFairy +0x904` — общий gate для combine и связанных skill

@@ -1453,6 +1453,17 @@ pub(crate) struct PlayerConfirmedKillReport {
     pub(crate) murderer_timestamp_started: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerDeathGoodsCandidate {
+    pub(crate) location: PlayerGoodsAiLocation,
+    pub(crate) goods_id: CGuid,
+    pub(crate) amount: u32,
+    pub(crate) price: u32,
+    pub(crate) name: Vec<u8>,
+    pub(crate) particular_on_death: bool,
+    pub(crate) table_drop_allowed: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerCriminalStateEndReason {
     Timeout,
@@ -7138,6 +7149,38 @@ impl CPlayer {
         self.base_properties.kill_count
     }
 
+    pub(crate) const fn criminal_state_timestamp_ms(&self) -> u32 {
+        self.criminal_state_timestamp_ms
+    }
+
+    pub(crate) const fn add_murder_kill_count(&mut self, amount: u32) -> u32 {
+        self.base_properties.kill_count = self.base_properties.kill_count.wrapping_add(amount);
+        self.base_properties.kill_count
+    }
+
+    /// `CPKSys::ReportMurderer` добавляет только PK count; kill count уже
+    /// увеличен `OnBeenMurdered` перед вызовом policy.
+    pub(crate) fn report_murderer(
+        &mut self,
+        pk_count_per_kill: u32,
+        now_ms: impl FnOnce() -> u32,
+    ) -> PlayerConfirmedKillReport {
+        self.base_properties.pk_count = u32::from(self.base_properties.pk_count)
+            .saturating_add(pk_count_per_kill)
+            .min(u32::from(u16::MAX)) as u16;
+        let murderer_timestamp_started =
+            self.base_properties.pk_count != 0 && self.murderer_time_stamp_ms == 0;
+        if murderer_timestamp_started {
+            self.murderer_time_stamp_ms = now_ms();
+        }
+        PlayerConfirmedKillReport {
+            player_id: self.player_id(),
+            pk_count: self.base_properties.pk_count,
+            kill_count: self.base_properties.kill_count,
+            murderer_timestamp_started,
+        }
+    }
+
     pub(crate) fn is_badman(&self, pk_count_per_kill: u32) -> bool {
         u32::from(self.base_properties.pk_count) > pk_count_per_kill
             || self.criminal_state_timestamp_ms != 0
@@ -8792,6 +8835,47 @@ impl CPlayer {
             }
         }
         drops
+    }
+
+    /// Stable snapshot контейнеров для `CPlayer::OnDied`: caller может
+    /// удалять предметы, не инвалидируя исходный обход. Бит `0x08` задаёт
+    /// unconditional death drop, бит `0x02` запрещает table-driven drop.
+    pub(crate) fn death_goods_candidates(
+        &self,
+        factory: &CGoodsFactory,
+    ) -> Vec<PlayerDeathGoodsCandidate> {
+        let mut candidates = Vec::new();
+        let mut push = |extend_id: i32, position: u32, goods: &CGoods| {
+            let particular = goods.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1);
+            candidates.push(PlayerDeathGoodsCandidate {
+                location: PlayerGoodsAiLocation {
+                    extend_id,
+                    position,
+                },
+                goods_id: goods.identity().ex_id,
+                amount: goods.amount(),
+                price: goods.price(),
+                name: goods.name().to_vec(),
+                particular_on_death: particular & 0x08 != 0,
+                table_drop_allowed: particular & 0x02 == 0,
+            });
+        };
+        for position in 0..self.packet.size() {
+            if let Some(goods) = self.packet.get_goods(position) {
+                push(1, position, goods);
+            }
+        }
+        for position in 0..17 {
+            if let Some(goods) = self.equipment.get_goods(position) {
+                push(2, position, goods);
+            }
+        }
+        for goods in self.hand.traversing_goods() {
+            if let Some(position) = self.hand.query_goods_position(goods.identity().ex_id) {
+                push(3, position, goods);
+            }
+        }
+        candidates
     }
 
     pub(crate) fn owned_goods_location(
@@ -10897,6 +10981,16 @@ impl CPlayer {
 
     pub(crate) const fn set_battle_fairy_died(&mut self, value: bool) {
         self.base_properties.battle_fairy_died = value;
+    }
+
+    /// Scalar tail `ApplyDeathFinalWarSoulReset`. В отличие от гибели самой
+    /// боевой феи смерть хозяина снимает summon/state, разрешает recall и
+    /// очищает `bBFDied`.
+    pub(crate) const fn reset_war_soul_after_player_death(&mut self) {
+        self.battle_fairy_summoned = false;
+        self.war_soul_state = 0;
+        self.base_properties.battle_fairy_recall = true;
+        self.base_properties.battle_fairy_died = false;
     }
 
     /// Exact `SetSilence`: начало хранится в минутах `timeGetTime`, а

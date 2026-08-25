@@ -5,8 +5,9 @@
 //! вызывается реальным `skillmessage 0x90001` перед постановкой object-target
 //! skill в `CPlayerAI`: сохраняет exact victim/security/faction-war gates,
 //! GodsBattle faction либо country rule, criminal transition и World audit
-//! `0x6020A`. Остальные функции ниже пока остаются RAW и не объявляются
-//! исполненными.
+//! `0x6020A`. Death-проход также использует перенесённые `GetDiedLostExp`,
+//! `GetDiedLostGoods` и `OnKill`: все три читают один live Globe/player/region
+//! snapshot, а caller сохраняет container и network side effects.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -54,6 +55,46 @@ pub(crate) struct FirstSkillPkReport {
 /// Stateless singleton semantics исходного `CPKSys::OnFirstSkill`.
 pub(crate) struct CPKSys;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct DiedLostGoods {
+    pub(crate) equipment: [f32; 17],
+    pub(crate) hand: f32,
+    pub(crate) packet: f32,
+    pub(crate) money: f32,
+    pub(crate) money_percent: f32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DiedLostGoodsDisposition {
+    UnsupportedSecurity,
+    MissingPlayerAttacker,
+    FactionWarProtected,
+    Enabled { table: usize, lost_class: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum KillPkDisposition {
+    VictimBadman,
+    ProtectedSecurity,
+    CityWarEnemies,
+    FactionWarEnemies,
+    AllowedCombat,
+    ReportMurderer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct KillPkFacts {
+    pub(crate) victim_is_badman: bool,
+    pub(crate) security: RegionSecurity,
+    pub(crate) city_war_enemies: bool,
+    pub(crate) faction_war_enemies: bool,
+    pub(crate) gods_battle_region: bool,
+    pub(crate) same_gods_battle_faction: bool,
+    pub(crate) same_country: bool,
+    pub(crate) attacker_country_identity: u8,
+    pub(crate) attacker_kill_count: u32,
+}
+
 impl CPKSys {
     pub(crate) fn on_first_skill(facts: FirstSkillPkFacts) -> FirstSkillPkDisposition {
         if facts.victim_is_badman {
@@ -70,6 +111,90 @@ impl CPKSys {
             FirstSkillPkDisposition::EnterCriminalState
         } else {
             FirstSkillPkDisposition::AllowedCombat
+        }
+    }
+
+    pub(crate) fn died_lost_experience(
+        setup: &crate::setup::globesetup::GlobeSetupSnapshot,
+        security: RegionSecurity,
+    ) -> i32 {
+        setup.died_lost_experience(security.value())
+    }
+
+    pub(crate) fn died_lost_goods(
+        setup: &crate::setup::globesetup::GlobeSetupSnapshot,
+        security: RegionSecurity,
+        lost_class: usize,
+        player_attacker_found: bool,
+        faction_war_enemies: bool,
+    ) -> Result<DiedLostGoods, DiedLostGoodsDisposition> {
+        let table = if security == RegionSecurity::FREE {
+            if !player_attacker_found {
+                return Err(DiedLostGoodsDisposition::MissingPlayerAttacker);
+            }
+            if faction_war_enemies && lost_class < 2 {
+                return Err(DiedLostGoodsDisposition::FactionWarProtected);
+            }
+            0
+        } else if security == RegionSecurity::CITY_WAR {
+            1
+        } else {
+            return Err(DiedLostGoodsDisposition::UnsupportedSecurity);
+        };
+        if lost_class >= 4 {
+            return Err(DiedLostGoodsDisposition::UnsupportedSecurity);
+        }
+        let probability = |field| {
+            setup
+                .died_drop_probability(field, table, lost_class)
+                .unwrap_or_default()
+        };
+        // Equipment enum order differs from tagDiedLost ABI order.
+        let equipment = [
+            probability(1),
+            probability(2),
+            probability(0),
+            probability(3),
+            probability(4),
+            probability(6),
+            probability(6),
+            probability(6),
+            probability(14),
+            probability(5),
+            probability(11),
+            probability(12),
+            probability(13),
+            probability(15),
+            probability(16),
+            probability(17),
+            0.0,
+        ];
+        Ok(DiedLostGoods {
+            equipment,
+            hand: probability(7),
+            packet: probability(8),
+            money: probability(9),
+            money_percent: probability(10),
+        })
+    }
+
+    pub(crate) fn on_kill(facts: KillPkFacts) -> KillPkDisposition {
+        if facts.victim_is_badman {
+            KillPkDisposition::VictimBadman
+        } else if facts.security != RegionSecurity::FREE {
+            KillPkDisposition::ProtectedSecurity
+        } else if facts.city_war_enemies {
+            KillPkDisposition::CityWarEnemies
+        } else if facts.faction_war_enemies {
+            KillPkDisposition::FactionWarEnemies
+        } else if (facts.gods_battle_region && facts.same_gods_battle_faction)
+            || (!facts.gods_battle_region
+                && facts.same_country
+                && (facts.attacker_country_identity != 7 || facts.attacker_kill_count > 10))
+        {
+            KillPkDisposition::ReportMurderer
+        } else {
+            KillPkDisposition::AllowedCombat
         }
     }
 }
