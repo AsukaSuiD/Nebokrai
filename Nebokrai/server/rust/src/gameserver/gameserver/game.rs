@@ -2883,12 +2883,14 @@ pub(crate) struct CiQingComposeStorageRemoval {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CiQingComposeTransferRemoval {
     Player(EnhancementTransferRemoval),
+    Hand(GroundHandRemoval),
     Compose(CiQingComposeStorageRemoval),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CiQingComposeTransferAddition {
     Player(DepotStorageTransferAddition),
+    Hand(GroundHandAddition),
     Compose(CiQingContainerAddition),
 }
 
@@ -2920,6 +2922,7 @@ pub(crate) enum CiQingComposeTransferBlock {
         rollback: CiQingComposeTransferAddition,
     },
     PacketRemovalFailed,
+    HandRemovalFailed,
     EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
     ComposeRemovalFailed,
     RolledBack {
@@ -8545,8 +8548,8 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<CiQingComposeTransferReport, CiQingComposeTransferBlock> {
-        let supported = matches!(source_extend_id, 1 | 2) && destination_extend_id == 17
-            || source_extend_id == 17 && matches!(destination_extend_id, 1 | 2);
+        let supported = matches!(source_extend_id, 1 | 2 | 3) && destination_extend_id == 17
+            || source_extend_id == 17 && matches!(destination_extend_id, 1 | 2 | 3);
         if !supported {
             return Err(CiQingComposeTransferBlock::UnsupportedRoute);
         }
@@ -8556,6 +8559,7 @@ impl CGame {
         let source = match source_extend_id {
             1 => player.packet().get_goods(source_position),
             2 => player.equipment().get_goods(source_position),
+            3 => player.hand().get_goods(source_position),
             17 => player.ci_qing_compose_goods(source_position),
             _ => None,
         }
@@ -8582,6 +8586,7 @@ impl CGame {
         let mut burden_goods = source.clone();
         burden_goods.set_amount(amount);
         let burden_exceeded = source_extend_id == 17
+            && matches!(destination_extend_id, 1 | 2 | 3)
             && player
                 .current_burden(&self.goods_factory)
                 .wrapping_add(burden_goods.weight(&self.goods_factory))
@@ -8649,6 +8654,45 @@ impl CGame {
                 }),
                 Some(removed.goods),
             )
+        } else if source_extend_id == 3 {
+            let removed =
+                player
+                    .hand_mut()
+                    .take_goods(source_position, amount, &self.goods_factory, |_| {
+                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                            .then(|| split_template.clone())
+                    });
+            let Some(taken) = removed else {
+                self.players.insert(player_id, player);
+                return Err(CiQingComposeTransferBlock::HandRemovalFailed);
+            };
+            let (goods, removal) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    GroundHandRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                        kind: GroundHandRemovalKind::Removed,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    GroundHandRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                        kind: GroundHandRemovalKind::Split {
+                            source: split.source,
+                        },
+                    },
+                ),
+            };
+            (CiQingComposeTransferRemoval::Hand(removal), Some(goods))
         } else {
             let removed = player.take_ci_qing_compose_transfer_goods(
                 source_position,
@@ -8813,6 +8857,11 @@ impl CGame {
                 player.add_ci_qing_compose_transfer_goods(incoming, position, &self.goods_factory),
             );
         }
+        if extend_id == 3 {
+            return CiQingComposeTransferAddition::Hand(
+                self.add_ground_hand_goods(player, position, incoming),
+            );
+        }
         CiQingComposeTransferAddition::Player(
             self.add_depot_transfer_goods(player, extend_id, position, incoming, context),
         )
@@ -8826,6 +8875,13 @@ impl CGame {
         match addition {
             CiQingComposeTransferAddition::Player(addition) => {
                 Self::depot_transfer_destination(player, requested_position, addition)
+            }
+            CiQingComposeTransferAddition::Hand(_) => {
+                let goods = player
+                    .hand()
+                    .get_goods(0)
+                    .expect("CiQing compose→hand add сохранён");
+                (0, goods.identity(), goods.amount())
             }
             CiQingComposeTransferAddition::Compose(addition) => {
                 let goods = player
