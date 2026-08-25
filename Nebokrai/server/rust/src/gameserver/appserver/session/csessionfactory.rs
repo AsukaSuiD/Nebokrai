@@ -164,6 +164,25 @@ pub(crate) struct TeamMemberInserted {
     pub(crate) teammate_count: usize,
 }
 
+#[must_use = "team removal сохраняет removed owner и remaining members"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TeamMemberRemoved {
+    pub(crate) session_id: i32,
+    pub(crate) team_id: u32,
+    pub(crate) player_id: i32,
+    pub(crate) leader_id: i32,
+    pub(crate) remaining_player_ids: Vec<i32>,
+}
+
+#[must_use = "team disband сохраняет ordered owners до registry GC"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TeamSessionDisbanded {
+    pub(crate) session_id: i32,
+    pub(crate) team_id: u32,
+    pub(crate) leader_id: i32,
+    pub(crate) player_ids: Vec<i32>,
+}
+
 #[derive(Debug)]
 pub(crate) struct CSessionFactory {
     sessions: BTreeMap<i32, CSession>,
@@ -312,6 +331,66 @@ impl CSessionFactory {
             .then(|| self.sessions.get(&session_id))
             .flatten()
             .map(|session| session.plug_ids_storage().len())
+    }
+
+    pub(crate) fn set_team_leader(&mut self, session_id: i32, player_id: i32) -> Option<i32> {
+        self.query_session_plug_by_owner(session_id, 400, player_id)?;
+        let team = self.teams.get_mut(&session_id)?;
+        let previous = team.leader_id();
+        team.set_leader(player_id);
+        Some(previous)
+    }
+
+    pub(crate) fn remove_team_member(
+        &mut self,
+        session_id: i32,
+        player_id: i32,
+    ) -> Option<TeamMemberRemoved> {
+        let plug_id = self
+            .query_session_plug_by_owner(session_id, 400, player_id)?
+            .id();
+        let team = self.teams.get(&session_id)?;
+        let team_id = team.team_id();
+        let leader_id = team.leader_id();
+        if !self.sessions.get_mut(&session_id)?.remove_plug(plug_id) {
+            return None;
+        }
+        self.plugs.remove(&plug_id);
+        self.teammates.remove(&plug_id);
+        let remaining_player_ids = self
+            .sessions
+            .get(&session_id)?
+            .plug_ids_storage()
+            .iter()
+            .filter_map(|id| self.teammates.get(id).map(CTeamate::owner_id))
+            .collect();
+        Some(TeamMemberRemoved {
+            session_id,
+            team_id,
+            player_id,
+            leader_id,
+            remaining_player_ids,
+        })
+    }
+
+    pub(crate) fn disband_team(&mut self, session_id: i32) -> Option<TeamSessionDisbanded> {
+        let team = self.teams.get(&session_id)?;
+        let team_id = team.team_id();
+        let leader_id = team.leader_id();
+        let player_ids = self
+            .sessions
+            .get(&session_id)?
+            .plug_ids_storage()
+            .iter()
+            .filter_map(|id| self.teammates.get(id).map(CTeamate::owner_id))
+            .collect();
+        let _removed = self.garbage_collect_session(session_id);
+        Some(TeamSessionDisbanded {
+            session_id,
+            team_id,
+            leader_id,
+            player_ids,
+        })
     }
     /// Exact normal `(2, 2, 0)` player trade: первый plug принадлежит
     /// пригласившему, второй — отвечающему, как два последовательных

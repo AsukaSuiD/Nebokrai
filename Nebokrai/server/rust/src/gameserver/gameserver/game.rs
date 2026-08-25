@@ -712,7 +712,8 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
 };
 use crate::gameserver::appserver::session::csessionfactory::{
     CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved, SessionEndReport,
-    TeamMemberInserted, TeamSessionCreated, TerminalEquipmentSessionCollected,
+    TeamMemberInserted, TeamMemberRemoved, TeamSessionCreated, TeamSessionDisbanded,
+    TerminalEquipmentSessionCollected,
 };
 use crate::gameserver::appserver::session::ctrader::{
     TraderContainerKind, TraderOfferAdded, TraderOfferBlock, TraderOfferRemoved,
@@ -5083,6 +5084,26 @@ pub(crate) struct GameTeamJoinMutation {
     pub(crate) session_id: i32,
     pub(crate) team_id: u32,
     pub(crate) teammate_count: usize,
+    pub(crate) client_deliveries: Vec<i32>,
+    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameTeamLifecycleAction {
+    Left,
+    LeaderChanged,
+    Kicked,
+    Disbanded,
+}
+
+#[must_use = "team lifecycle report сохраняет player state и ordered effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameTeamLifecycleMutation {
+    pub(crate) action: GameTeamLifecycleAction,
+    pub(crate) session_id: i32,
+    pub(crate) team_id: u32,
+    pub(crate) affected_player_ids: Vec<i32>,
     pub(crate) client_deliveries: Vec<i32>,
     pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
     pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
@@ -26121,6 +26142,182 @@ impl CGame {
             session_id,
             team_id,
             teammate_count,
+            client_deliveries,
+            around_delivery,
+            world_deliveries,
+        })
+    }
+
+    fn publish_team_member_left(
+        &self,
+        team_id: u32,
+        player_id: i32,
+        recipients: impl IntoIterator<Item = i32>,
+    ) -> Vec<i32> {
+        let mut left = CMessage::new(0x000b_fd05);
+        left.add_ulong(team_id);
+        left.add_long(400);
+        left.add_long(player_id);
+        recipients
+            .into_iter()
+            .map(|recipient| left.send_to_player(self.net_server(), recipient))
+            .collect()
+    }
+
+    fn remove_local_team_member(
+        &mut self,
+        session_id: i32,
+        player_id: i32,
+        action: GameTeamLifecycleAction,
+    ) -> Option<GameTeamLifecycleMutation> {
+        let removed: TeamMemberRemoved = self
+            .session_factory
+            .remove_team_member(session_id, player_id)?;
+        self.players
+            .get_mut(&player_id)?
+            .set_team_membership(0);
+        let recipients = std::iter::once(player_id)
+            .chain(removed.remaining_player_ids.iter().copied())
+            .collect::<Vec<_>>();
+        let client_deliveries =
+            self.publish_team_member_left(removed.team_id, player_id, recipients);
+        let mut changed = CMessage::new(0x0006_0004);
+        changed.add_ulong(removed.team_id);
+        changed.add_long(400);
+        changed.add_long(player_id);
+        let world_deliveries = vec![changed.send(self, false)];
+        let around_delivery = self.publish_team_recruitment_count(
+            removed.leader_id,
+            removed.remaining_player_ids.len(),
+        );
+        Some(GameTeamLifecycleMutation {
+            action,
+            session_id: removed.session_id,
+            team_id: removed.team_id,
+            affected_player_ids: vec![player_id],
+            client_deliveries,
+            around_delivery,
+            world_deliveries,
+        })
+    }
+
+    pub(crate) fn leave_team(&mut self, player_id: i32) -> Option<GameTeamLifecycleMutation> {
+        let team_id = self.players.get(&player_id)?.team_id();
+        if team_id == 0 {
+            return None;
+        }
+        let session_id = self.get_team_session_id(team_id as u32);
+        self.remove_local_team_member(session_id, player_id, GameTeamLifecycleAction::Left)
+    }
+
+    pub(crate) fn change_team_leader(
+        &mut self,
+        actor_id: i32,
+        new_leader_id: i32,
+    ) -> Option<GameTeamLifecycleMutation> {
+        let team_id = self.players.get(&actor_id)?.team_id();
+        let session_id = self.get_team_session_id(team_id as u32);
+        if self.session_factory.query_team(session_id)?.leader_id() != actor_id {
+            return None;
+        }
+        let previous = self
+            .session_factory
+            .set_team_leader(session_id, new_leader_id)?;
+        if let Some(player) = self.players.get_mut(&previous) {
+            player.set_team_captain(false);
+        }
+        if let Some(player) = self.players.get_mut(&new_leader_id) {
+            player.set_team_captain(true);
+        }
+        let recipients: Vec<i32> = self
+            .session_factory
+            .query_session(session_id)?
+            .plug_ids_storage()
+            .iter()
+            .filter_map(|id| self.session_factory.query_plug(*id).map(|plug| plug.owner_id()))
+            .collect();
+        let mut client = CMessage::new(0x000b_fd07);
+        client.add_ulong(team_id as u32);
+        client.add_long(new_leader_id);
+        let client_deliveries = recipients
+            .iter()
+            .map(|id| client.send_to_player(self.net_server(), *id))
+            .collect();
+        let mut world = CMessage::new(0x0006_0006);
+        world.add_ulong(team_id as u32);
+        world.add_long(new_leader_id);
+        Some(GameTeamLifecycleMutation {
+            action: GameTeamLifecycleAction::LeaderChanged,
+            session_id,
+            team_id: team_id as u32,
+            affected_player_ids: vec![previous, new_leader_id],
+            client_deliveries,
+            around_delivery: None,
+            world_deliveries: vec![world.send(self, false)],
+        })
+    }
+
+    pub(crate) fn kick_team_member(
+        &mut self,
+        actor_id: i32,
+        kicked_id: i32,
+    ) -> Option<GameTeamLifecycleMutation> {
+        let team_id = self.players.get(&actor_id)?.team_id();
+        let session_id = self.get_team_session_id(team_id as u32);
+        if self.session_factory.query_team(session_id)?.leader_id() != actor_id {
+            return None;
+        }
+        if self.players.contains_key(&kicked_id) {
+            return self.remove_local_team_member(
+                session_id,
+                kicked_id,
+                GameTeamLifecycleAction::Kicked,
+            );
+        }
+        self.session_factory
+            .query_session_plug_by_owner(session_id, 400, kicked_id)?;
+        let mut world = CMessage::new(0x0006_0007);
+        world.add_ulong(team_id as u32);
+        world.add_long(kicked_id);
+        Some(GameTeamLifecycleMutation {
+            action: GameTeamLifecycleAction::Kicked,
+            session_id,
+            team_id: team_id as u32,
+            affected_player_ids: vec![kicked_id],
+            client_deliveries: Vec::new(),
+            around_delivery: None,
+            world_deliveries: vec![world.send(self, false)],
+        })
+    }
+
+    pub(crate) fn disband_team(&mut self, actor_id: i32) -> Option<GameTeamLifecycleMutation> {
+        let team_id = self.players.get(&actor_id)?.team_id();
+        let session_id = self.get_team_session_id(team_id as u32);
+        if self.session_factory.query_team(session_id)?.leader_id() != actor_id {
+            return None;
+        }
+        let disbanded: TeamSessionDisbanded = self.session_factory.disband_team(session_id)?;
+        let mut ended = CMessage::new(0x0006_0002);
+        ended.add_ulong(disbanded.team_id);
+        let world_deliveries = vec![ended.send(self, false)];
+        let mut client_deliveries = Vec::new();
+        for player_id in &disbanded.player_ids {
+            if let Some(player) = self.players.get_mut(player_id) {
+                player.set_team_membership(0);
+                client_deliveries.extend(self.publish_team_member_left(
+                    disbanded.team_id,
+                    *player_id,
+                    [*player_id],
+                ));
+            }
+        }
+        self.team_session_ids.remove(&disbanded.team_id);
+        let around_delivery = self.publish_team_recruitment_count(disbanded.leader_id, 1);
+        Some(GameTeamLifecycleMutation {
+            action: GameTeamLifecycleAction::Disbanded,
+            session_id: disbanded.session_id,
+            team_id: disbanded.team_id,
+            affected_player_ids: disbanded.player_ids,
             client_deliveries,
             around_delivery,
             world_deliveries,

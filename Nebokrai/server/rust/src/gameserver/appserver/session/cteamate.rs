@@ -3,8 +3,9 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/session/cteamate.cpp`. Материализован достигнутый invite/join
 //! prefix: plug identity, player owner, region/name snapshot и wire Serialize,
-//! который `OnPlugInserted` вкладывает в клиентский `0xBFD03`. Lose/restore,
-//! AI и остальные change-state ветви сохранены ниже как RAW.
+//! который `OnPlugInserted` вкладывает в клиентский `0xBFD03`, а local exit
+//! доводит до player membership и `0xBFD05`. Lose/restore, AI и остальные
+//! change-state ветви сохранены ниже как RAW.
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CTeamate {

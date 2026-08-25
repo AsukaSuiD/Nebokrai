@@ -3,8 +3,9 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/session/cteam.cpp`. Материализован reached local creation/join
 //! prefix: team/leader identity, default shared allocation и exact session +
-//! teammate serialization для World `0x60001` и client `0xBFD03`. Leave,
-//! remote reconstruction, AI/quest и остальные state transitions остаются RAW.
+//! teammate serialization, local leave/leader/kick/disband lifecycle и их
+//! World/client publications. Remote reconstruction, AI/quest и остальные
+//! state transitions остаются RAW.
 
 use crate::gameserver::appserver::session::csession::CSession;
 use crate::gameserver::appserver::session::cteamate::CTeamate;
