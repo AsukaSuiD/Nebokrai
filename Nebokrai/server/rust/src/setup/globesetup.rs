@@ -21,6 +21,8 @@
 //! raw snapshot остаётся единым wire owner-ом без дублирующей config-модели.
 //! `CArea::AI` читает goods disappear/protection DWORD из `+0x34C/+0x350`;
 //! абсолютные VA `0xEF410C/0xEF4110` подтверждены целевым GameServer EXE.
+//! `bAllowClientChangePos +0x50D` загружается Game-side positional
+//! projection и напрямую gate-ит runtime `shapemessage 0x8F902`.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
 //! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Nation contender damage
 //! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
@@ -50,6 +52,7 @@ const BASE_MAX_RP_LEVEL_1_OFFSET: usize = 0x3F4;
 const BASE_MAX_RP_LEVEL_2_OFFSET: usize = 0x3F6;
 const PLAYER_SPEED_OFFSET: usize = 0x7F8;
 const MONSTER_NUMBER_SCALE_OFFSET: usize = 0x508;
+const ALLOW_CLIENT_CHANGE_POSITION_OFFSET: usize = 0x50D;
 const SAVE_POINT_TIME_OFFSET: usize = 0x510;
 const AUCTION_ENABLED_OFFSET: usize = 0xC87;
 const AUCTION_PLAYER_MAXIMUM_OFFSET: usize = 0xC88;
@@ -559,6 +562,12 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn monster_number_scale(&self) -> f32 {
         self.read_f32(MONSTER_NUMBER_SCALE_OFFSET)
+    }
+
+    /// `tagSetup::bAllowClientChangePos +0x50D`; Game positional loader
+    /// накладывает его из второй boolean-записи `gamesetup.ini`.
+    pub(crate) const fn allow_client_change_position(&self) -> bool {
+        self.bytes[ALLOW_CLIENT_CHANGE_POSITION_OFFSET] != 0
     }
 
     /// Возвращает точное поле `dwSavePointTime` по PDB-смещению `+0x510`.

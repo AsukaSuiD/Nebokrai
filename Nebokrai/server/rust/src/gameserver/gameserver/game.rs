@@ -19977,6 +19977,10 @@ impl CGame {
         self.globe_setup.battle_fairy_enabled()
     }
 
+    pub(crate) const fn allow_client_change_position(&self) -> bool {
+        self.globe_setup.allow_client_change_position()
+    }
+
     /// Полный `CPlayer::MakeCiQingNode` и его `goodsmessage 0x8FC31` tail.
     /// Resource logs предшествуют каждому DeleteGoods-effect; финальный
     /// positive log сохраняет странный native count оставшихся в vector-е

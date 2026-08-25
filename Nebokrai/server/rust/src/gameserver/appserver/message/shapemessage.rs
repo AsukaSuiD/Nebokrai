@@ -8,7 +8,9 @@
 //! canonical region owner-ом. Player `SetTileXY` проходит concrete region/area/
 //! block mutation и post-move `GS0163`. Quest movement замыкает attack guard,
 //! rotation correction, addressed `OnCannotMove`, emotion reset и canonical
-//! player-owned `CPlayerAI` destination FIFO. Non-player polymorphic `SetTileXY` и полные
+//! player-owned `CPlayerAI` destination FIFO. Client position gate читается
+//! из live `CGlobeSetup::bAllowClientChangePos`; native gate/lookup/payload
+//! ordering сохранён. Non-player polymorphic `SetTileXY` и полные
 //! player/goods/shape serializers остаются runtime-границами.
 
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeView};
@@ -44,7 +46,6 @@ pub(crate) struct ShapeSnapshot {
 }
 
 pub(crate) trait GameShapeMessageRuntime {
-    fn allow_client_change_position(&mut self, game: &CGame) -> bool;
     fn resolve_external_shape_view(
         &mut self,
         game: &CGame,
@@ -242,24 +243,22 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             report.outcome = GameShapeMessageOutcome::DirectionChanged;
         }
         CHANGE_POSITION => {
-            let fields = match (|| {
+            if !game.allow_client_change_position() {
+                report.outcome = GameShapeMessageOutcome::PositionFeatureDisabled;
+                return Some(Ok(report));
+            }
+            let target_fields = match (|| {
                 Ok((
                     read_long(message, "target type")?,
                     read_long(message, "target id")?,
-                    read_long(message, "tile x")?,
-                    read_long(message, "tile y")?,
                 ))
             })() {
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
-            if !runtime.allow_client_change_position(game) {
-                report.outcome = GameShapeMessageOutcome::PositionFeatureDisabled;
-                return Some(Ok(report));
-            }
             let identity = ShapeIdentity {
-                object_type: fields.0,
-                id: fields.1,
+                object_type: target_fields.0,
+                id: target_fields.1,
                 ex_id: CGuid::GUID_INVALID,
             };
             report.target = Some(identity);
@@ -270,11 +269,16 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 report.outcome = GameShapeMessageOutcome::PositionTargetMissing;
                 return Some(Ok(report));
             };
+            let position_fields =
+                match (|| Ok((read_long(message, "tile x")?, read_long(message, "tile y")?)))() {
+                    Ok(value) => value,
+                    Err(error) => return Some(Err(error)),
+                };
             let mut relocation = CMessage::new(0x000b_f603);
-            relocation.add_long(fields.0);
-            relocation.add_long(fields.1);
-            relocation.add_long(fields.2);
-            relocation.add_long(fields.3);
+            relocation.add_long(target_fields.0);
+            relocation.add_long(target_fields.1);
+            relocation.add_long(position_fields.0);
+            relocation.add_long(position_fields.1);
             report
                 .deliveries
                 .push(GameShapeMessageDelivery::AroundPosition(
@@ -286,7 +290,12 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                     ),
                 ));
             if identity.object_type == PLAYER_TYPE && game.find_player(identity.id).is_some() {
-                match game.relocate_player_shape(identity.id, region_id, fields.2, fields.3) {
+                match game.relocate_player_shape(
+                    identity.id,
+                    region_id,
+                    position_fields.0,
+                    position_fields.1,
+                ) {
                     Some(Ok(())) => {}
                     Some(Err(_)) => {
                         report.outcome = GameShapeMessageOutcome::PositionMutationBlocked;
@@ -312,7 +321,13 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                         .push(GameShapeMessageDelivery::Player(delivery));
                 }
             } else {
-                runtime.relocate_external_shape(game, region_id, identity, fields.2, fields.3);
+                runtime.relocate_external_shape(
+                    game,
+                    region_id,
+                    identity,
+                    position_fields.0,
+                    position_fields.1,
+                );
             }
             report.outcome = GameShapeMessageOutcome::PositionChanged;
         }
