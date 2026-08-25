@@ -87,6 +87,8 @@
 //! Hand↔auction listing (`3↔13`) проходит отдельным direct owner-путём:
 //! partial one-slot removal, slot-0 `AuctionLimit`, burden обратного переноса,
 //! positional stack, rollback и `0xC0101` больше не выпадают в RAW handler.
+//! Ordinary-fairy↔auction listing (`11↔13`) добавляет к тому же AuctionLimit
+//! hatch/lock remove/add, listing rollback и фактическую destination position.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -95,6 +97,7 @@ use crate::gameserver::appserver::container::ccontainer::ContainerListenerHandle
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cdepot::{DepotGoodsAddBlock, DepotGoodsAddOutcome};
 use crate::gameserver::appserver::container::cequipmentcontainer::EquipmentRemovedEvent;
+use crate::gameserver::appserver::container::cfairycontainer::FairyContainerRemoveOutcome;
 use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
     ShadowPresenceReport, ShadowRemovedReport,
 };
@@ -121,10 +124,10 @@ use crate::gameserver::gameserver::game::{
     BattleFairyTransferBlock, BattleFairyTransferReport, CGame, CiQingComposeTransferAddition,
     CiQingComposeTransferBlock, CiQingComposeTransferReport, DepotStorageRemoval,
     DepotStorageTransferAddition, DepotStorageTransferBlock, DepotStorageTransferReport,
-    FairyStorageTransferAddition, FairyStorageTransferBlock, FairyStorageTransferReport,
-    GameContainerMessageRuntime, GroundGoodsMoveBlock, GroundGoodsMoveReport,
-    HandAuctionListingBlock, HandAuctionListingReport, HandContainerMoveBlock,
-    HandContainerMoveReport, PlayerHandMoveBlock, PlayerHandMoveReport,
+    FairyStorageRemoval, FairyStorageTransferAddition, FairyStorageTransferBlock,
+    FairyStorageTransferReport, GameContainerMessageRuntime, GroundGoodsMoveBlock,
+    GroundGoodsMoveReport, HandAuctionListingBlock, HandAuctionListingReport,
+    HandContainerMoveBlock, HandContainerMoveReport, PlayerHandMoveBlock, PlayerHandMoveReport,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -399,6 +402,7 @@ pub(crate) enum AuctionListingTransferRemoval {
         listeners: Vec<ContainerListenerHandle>,
     },
     Depot(DepotStorageRemoval),
+    Fairy(FairyStorageRemoval),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -422,6 +426,7 @@ pub(crate) enum AuctionListingTransferBlock {
     PacketRemovalFailed,
     AuctionGoodsRemovalFailed,
     DepotRemovalFailed,
+    FairyRemovalFailed(FairyContainerRemoveOutcome),
     EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
 }
 
@@ -437,17 +442,17 @@ pub(crate) struct AuctionListingWithdrawalRemoval {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AuctionListingWithdrawalOutcome {
     Moved {
-        addition: DepotStorageTransferAddition,
+        addition: FairyStorageTransferAddition,
         destination_position: u32,
         destination_goods: ShapeIdentity,
         amount: u32,
     },
     RolledBack {
-        rejected: DepotStorageTransferAddition,
+        rejected: FairyStorageTransferAddition,
         restored: VolumeGoodsAddOutcome,
     },
     GoodsCollected {
-        rejected: DepotStorageTransferAddition,
+        rejected: FairyStorageTransferAddition,
         rollback: VolumeGoodsAddOutcome,
         goods: ShapeIdentity,
         notification_delivery: i32,
@@ -780,13 +785,13 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_extend_id == 13
-                && matches!(request.source_container_extend_id, 1 | 2 | 9 | 14)
+                && matches!(request.source_container_extend_id, 1 | 2 | 9 | 11 | 14)
             {
                 EnhancementMessageRoute::AuctionListingMove
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.source_container_extend_id == 13
-                && matches!(request.destination_container_extend_id, 1 | 2 | 9)
+                && matches!(request.destination_container_extend_id, 1 | 2 | 9 | 11)
             {
                 EnhancementMessageRoute::AuctionListingWithdrawal
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
@@ -1706,7 +1711,13 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         let notification_delivery = match &withdrawal.outcome {
             AuctionListingWithdrawalOutcome::RolledBack { rejected, .. }
             | AuctionListingWithdrawalOutcome::GoodsCollected { rejected, .. } => {
-                depot_add_rejection_notice(rejected).map(|notice_id| {
+                let notice_id = match rejected {
+                    FairyStorageTransferAddition::Player(addition) => {
+                        depot_add_rejection_notice(addition)
+                    }
+                    _ => None,
+                };
+                notice_id.map(|notice_id| {
                     send_notify(
                         game,
                         player_id,

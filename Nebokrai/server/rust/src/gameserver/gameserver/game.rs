@@ -6594,7 +6594,7 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<AuctionListingTransferReport, AuctionListingTransferBlock> {
-        if !matches!(source_extend_id, 1 | 2 | 9 | 14) {
+        if !matches!(source_extend_id, 1 | 2 | 9 | 11 | 14) {
             return Err(AuctionListingTransferBlock::UnsupportedSourceContainer {
                 extend_id: source_extend_id,
             });
@@ -6653,6 +6653,7 @@ impl CGame {
             1 => player.packet().get_goods(source_position),
             2 => player.equipment().get_goods(source_position),
             9 => player.depot().get_goods(source_position),
+            11 => player.fairy_container().base().get_goods(source_position),
             14 => player.auction_goods().get_goods(source_position),
             _ => unreachable!("source extend проверен выше"),
         }
@@ -6769,6 +6770,50 @@ impl CGame {
                     Some(removed.goods),
                 )
             }
+            11 => {
+                let mut split_template = goods.clone();
+                split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+                let outcome = player.fairy_container_mut().take(
+                    source_position,
+                    amount,
+                    &self.goods_factory,
+                    |_| {
+                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                            .then(|| split_template.clone())
+                    },
+                );
+                let taken = match outcome {
+                    FairyContainerRemoveOutcome::Removed(VolumeGoodsRemoveOutcome::Removed(
+                        taken,
+                    )) => taken,
+                    failed => {
+                        return Err(AuctionListingTransferBlock::FairyRemovalFailed(failed));
+                    }
+                };
+                let (goods, removal) = match taken {
+                    AmountLimitGoodsTaken::Removed(removed) => (
+                        removed.goods,
+                        FairyStorageRemoval {
+                            owner_type: removed.owner_type,
+                            owner_id: removed.owner_id,
+                            position: removed.position.unwrap_or(source_position),
+                            amount: removed.amount,
+                            listeners: removed.listeners,
+                        },
+                    ),
+                    AmountLimitGoodsTaken::Split(split) => (
+                        split.goods,
+                        FairyStorageRemoval {
+                            owner_type: split.owner_type,
+                            owner_id: split.owner_id,
+                            position: split.position.unwrap_or(source_position),
+                            amount: split.amount,
+                            listeners: split.listeners,
+                        },
+                    ),
+                };
+                (AuctionListingTransferRemoval::Fairy(removal), Some(goods))
+            }
             2 => {
                 let remove_facts =
                     context.enhancement_equipment_remove_facts(player, goods, pack_add_enabled);
@@ -6845,7 +6890,7 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<AuctionListingWithdrawalReport, AuctionListingWithdrawalBlock> {
-        if !matches!(destination_extend_id, 1 | 2 | 9) {
+        if !matches!(destination_extend_id, 1 | 2 | 9 | 11) {
             return Err(
                 AuctionListingWithdrawalBlock::UnsupportedDestinationContainer {
                     extend_id: destination_extend_id,
@@ -6904,7 +6949,7 @@ impl CGame {
             .filter(|goods| goods.identity().ex_id == goods_id && goods.amount() == amount)
             .ok_or(AuctionListingWithdrawalBlock::MissingSourceGoods)?;
         let goods_identity = goods.identity();
-        if destination_extend_id != 9
+        if matches!(destination_extend_id, 1 | 2)
             && player
                 .current_burden(&self.goods_factory)
                 .wrapping_add(goods.weight(&self.goods_factory))
@@ -6932,7 +6977,7 @@ impl CGame {
             listeners: removed.listeners,
         };
         let mut incoming = Some(removed.goods);
-        let addition = self.add_depot_transfer_goods(
+        let addition = self.add_fairy_transfer_goods(
             player,
             destination_extend_id,
             destination_position,
@@ -6941,7 +6986,7 @@ impl CGame {
         );
         let outcome = if incoming.is_none() {
             let (destination_position, destination_goods, amount) =
-                Self::depot_transfer_destination(player, destination_position, &addition);
+                Self::fairy_transfer_destination(player, destination_position, &addition);
             AuctionListingWithdrawalOutcome::Moved {
                 addition,
                 destination_position,
