@@ -7662,15 +7662,16 @@ impl CPlayer {
         self.enhancement.base().goods_id_at(0)
     }
 
-    /// Enhancement container хранит только shadow metadata; script 9409/9411
-    /// каждый раз разрешает выбранный товар обратно в его live owner.
+    /// Контейнер улучшения хранит только теневые метаданные; сценарии
+    /// `9409/9411` каждый раз разрешают выбранный товар обратно в его живого
+    /// владельца.
     pub(crate) fn enhancement_selected_goods_mut(&mut self) -> Option<&mut CGoods> {
         let goods_id = self.enhancement_selected_goods_id()?;
         self.get_goods_by_id_mut(goods_id)
     }
 
-    /// Script-function owner пишет server-trusted path; client `0x8FC11/12`
-    /// никогда не передаёт имя исполняемого файла.
+    /// Владелец сценарной функции записывает доверенный серверный путь; клиент
+    /// `0x8FC11/12` никогда не передаёт имя исполняемого файла.
     pub(crate) fn set_last_container_script(&mut self, script: impl AsRef<[u8]>) {
         self.last_container_script.clear();
         self.last_container_script

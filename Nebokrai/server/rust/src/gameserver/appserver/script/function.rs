@@ -99,43 +99,51 @@
 //! изменяемый `CI`, отправляют назначение `0x60304` без преждевременного
 //! локального изменения и читают отдельное краткоживущее состояние ответа с
 //! идентификатором короля.
-//! Country scalar query family `9000/9002/9008/9010/9012` одним контрактом
-//! сужает explicit country до byte либо использует страну script-player и
-//! возвращает `-1` при недоступном owner-е.
-//! Aliases `2633/9020` разрешают local target и проходят canonical
-//! `CGame::player_country_identity`, который mutating-читает ordered CI `1..8`.
-//! Country-war declaration `9100` сохраняет NPC distance gate, фазу объявления,
-//! king-CI, обе duplicate-проверки, idle-region gate, `GS0213..GS0218` и
-//! terminal World request `0x60317 [player, target country]`.
-//! Соседняя read-only family `9101..9104/9106..9109/9111` одним dispatcher-ом
-//! читает phase flags, declaration membership, country-region win symbols,
-//! ordered war region/camp/opponent и сохранённый country result.
-//! Action family `9105/9110` сохраняет war/distance/argument ordering, вызывает
-//! concrete `ServerCountryRegion::OnEnterContend` с миллисекундным duration,
-//! публикует player state `0xBFF28`, timer `0xBFF29`, localized result и
-//! отправляет byte-narrowed победу World сообщением `0x60318`.
-//! Nation-war family `9304..9313/9315/9316` связывает current Nation region,
-//! timing/carriage/contender player-effects, FourNation seconds/time/morale,
-//! weak-state и World signup `0x6031B`; debug `GS1053..GS1056` остаётся в
-//! точном порядке вокруг соответствующих concrete вызовов.
-//! Battle-fairy family `9400..9411` сохраняет mixed string/integer parameter
-//! routing, name/current-player lookup, skill/equipment mutation, reset RNG,
-//! revive, experience/recreate RNG, old-client `0xBF918`, properties wire и
-//! локальные журналы `BattleFairy`.
-//! `2249 / FairyExpUp` разрешает enhancement-shadow обратно в live packet или
-//! equipment goods, сохраняет grow-log, replacement ownership и concrete
-//! delete/new-object wire, включая необратимый late packet-add failure.
-//! Предметная family `2231..2236/2243..2246` получает GUID запускающего goods
-//! из того же CScript instance, ограничивает used-item lookup настоящей
-//! сумкой, изменяет addon/durability storage и публикует delete/amount/update
-//! wire; selected durability разрешается через live enhancement-shadow.
-//! Login-script family `2650/2651` разрешает persisted LeiTing `tagThing` из
-//! того же player owner-а. Setter сохраняет только положительное увеличение,
-//! energy/daily-stamp mutation и общий `0xBF73E + 0x5FD10` snapshot; getter
-//! возвращает count либо `-1`, а исходный setter result остаётся `-1`.
-//! Достигнутая там же notice-family `3316/5201/5202` единообразно вычисляет
-//! text/color/background: личный круг использует `0xBF811` и opaque-black
-//! default, региональный — `0xBF806`, мировой сохраняет World `0x5FF0E` relay.
+//! Семейство скалярных запросов страны `9000/9002/9008/9010/9012` по единому
+//! контракту сужает явно заданную страну до байта либо использует страну игрока
+//! сценария и возвращает `-1` при недоступном владельце.
+//! Псевдонимы `2633/9020` разрешают локальную цель и проходят канонический
+//! `CGame::player_country_identity`, который при чтении изменяет упорядоченные
+//! значения `CI 1..8`.
+//! Объявление войны `9100` сохраняет проверку расстояния до NPC, фазу
+//! объявления, `CI` короля, обе проверки дубликата, проверку свободного региона,
+//! `GS0213..GS0218` и итоговый запрос World
+//! `0x60317 [player, target country]`.
+//! Соседнее семейство чтения `9101..9104/9106..9109/9111` одним диспетчером
+//! читает флаги фаз, наличие объявления, символы победы региона страны,
+//! упорядоченные регион, лагерь и противника войны, а также сохранённый итог.
+//! Семейство действий `9105/9110` сохраняет порядок проверок войны, расстояния
+//! и аргументов, вызывает `ServerCountryRegion::OnEnterContend` с длительностью
+//! в миллисекундах, публикует состояние игрока `0xBFF28`, таймер `0xBFF29`,
+//! локализованный результат и отправляет суженную до байта победу сообщением
+//! World `0x60318`.
+//! Семейство войны государств `9304..9313/9315/9316` связывает текущий регион
+//! государства, отсчёт, повозку и боевые эффекты игрока, время и боевой дух
+//! FourNation, состояние слабости и заявку World `0x6031B`; диагностика
+//! `GS1053..GS1056` остаётся в точном порядке вокруг соответствующих вызовов.
+//! Семейство боевой феи `9400..9411` сохраняет маршрутизацию строковых и
+//! целочисленных параметров, поиск по имени либо текущему игроку, мутации
+//! навыка и экипировки, RNG сброса, воскрешение, опыт и пересоздание через RNG,
+//! старый клиентский формат `0xBF918`, свойства и локальные журналы
+//! `BattleFairy`.
+//! `2249 / FairyExpUp` разрешает теневой выбор контейнера улучшения обратно в
+//! живой пакет либо экипировку, сохраняет журнал роста, владение заменой и
+//! конкретные сообщения удаления и нового объекта, включая необратимый поздний
+//! отказ добавления в пакет.
+//! Предметное семейство `2231..2236/2243..2246` получает GUID запускающего
+//! предмета из того же экземпляра `CScript`, ограничивает поиск использованного
+//! предмета настоящей сумкой, изменяет хранилища дополнений и долговечности и
+//! публикует сообщения удаления, количества и обновления; выбранная
+//! долговечность разрешается через живой теневой выбор контейнера улучшения.
+//! Семейство сценария входа `2650/2651` разрешает сохранённый LeiTing
+//! `tagThing` из того же владельца игрока. Запись принимает только положительное
+//! увеличение, изменяет энергию и дневную отметку и публикует общий снимок
+//! `0xBF73E + 0x5FD10`; чтение возвращает количество либо `-1`, а исходный
+//! результат записи остаётся `-1`.
+//! Достигнутое там же семейство уведомлений `3316/5201/5202` единообразно
+//! вычисляет текст и два цвета: личный круг использует `0xBF811` и непрозрачный
+//! чёрный цвет по умолчанию, региональный — `0xBF806`, а мировой сохраняет
+//! пересылку World `0x5FF0E`.
 //! Семейство заданий `6200/6201/6202/6203/6207` сохраняет сужение до `ushort`,
 //! вычисленный выбор целевого игрока, постоянные завершение и удаление,
 //! временное сообщение позиции и межсерверный путь добавления или удаления для
@@ -796,6 +804,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_FETCH_POWER: i32 = 9401;
 pub(crate) const SCRIPT_FUNCTION_SET_BATTLE_FAIRY_ATTRIBUTE: i32 = 9402;
 pub(crate) const SCRIPT_FUNCTION_ALLOCATE_BATTLE_FAIRY_SKILL: i32 = 9403;
 pub(crate) const SCRIPT_FUNCTION_ALLOCATE_BATTLE_FAIRY_SPECIAL_SKILL: i32 = 9404;
+pub(crate) const SCRIPT_FUNCTION_DELETE_BATTLE_FAIRY_SKILL: i32 = 9405;
 pub(crate) const SCRIPT_FUNCTION_REVIVE_BATTLE_FAIRY: i32 = 9406;
 pub(crate) const SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_ID: i32 = 9407;
 pub(crate) const SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_LEVEL: i32 = 9408;
@@ -4327,6 +4336,7 @@ pub(crate) fn script_function_parameter_kind(
             _ => Unused,
         },
         SCRIPT_FUNCTION_ALLOCATE_BATTLE_FAIRY_SKILL
+        | SCRIPT_FUNCTION_DELETE_BATTLE_FAIRY_SKILL
         | SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_ID
         | SCRIPT_FUNCTION_GET_BATTLE_FAIRY_SKILL_LEVEL
         | SCRIPT_FUNCTION_ADD_BATTLE_FAIRY_EXPERIENCE
@@ -4407,6 +4417,19 @@ fn run_battle_fairy_script_function<Runtime: ScriptFunctionRuntime>(
             BattleFairyScriptAction::ResetSkill {
                 player_name,
                 position: 6,
+            }
+        }
+        SCRIPT_FUNCTION_DELETE_BATTLE_FAIRY_SKILL => {
+            let Some(player_name) = string(0) else {
+                return Some(0);
+            };
+            let position = integer(1);
+            if !(0..=6).contains(&position) || position == SCRIPT_INT_PARAMETER_ERROR {
+                return Some(0);
+            }
+            BattleFairyScriptAction::DeleteSkillSlot {
+                player_name,
+                position,
             }
         }
         SCRIPT_FUNCTION_REVIVE_BATTLE_FAIRY => {

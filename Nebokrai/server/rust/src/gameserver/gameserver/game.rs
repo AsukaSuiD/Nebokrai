@@ -2476,6 +2476,10 @@ pub(crate) enum BattleFairyScriptAction {
         player_name: Vec<u8>,
         position: i32,
     },
+    DeleteSkillSlot {
+        player_name: Vec<u8>,
+        position: i32,
+    },
     Revive {
         player_name: Vec<u8>,
     },
@@ -33159,9 +33163,10 @@ impl CGame {
         true
     }
 
-    /// Gameplay owner script-family `9400..9411`. Selector и вычисление
-    /// аргументов остаются в `CScript::RunFunction`; здесь замкнуты canonical
-    /// player/equipment mutation, RNG, client wire и локальный audit.
+    /// Игровой владелец сценарного семейства `9400..9411`. Селектор и
+    /// вычисление аргументов остаются в `CScript::RunFunction`; здесь замкнуты
+    /// канонические мутации игрока и экипировки, RNG, клиентские сообщения и
+    /// локальный журнал.
     pub(crate) fn run_battle_fairy_script_action<Context>(
         &mut self,
         script_player_id: Option<i32>,
@@ -33399,6 +33404,35 @@ impl CGame {
                     return 0;
                 }
                 let _ = self.reset_battle_fairy_skill(player_id, position, false, context);
+                0
+            }
+            BattleFairyScriptAction::DeleteSkillSlot {
+                player_name,
+                position,
+            } => {
+                let Some(player_id) = target_id(self, &player_name) else {
+                    return 0;
+                };
+                let update = {
+                    let Some(player) = self.find_player_mut(player_id) else {
+                        return 0;
+                    };
+                    let Some(goods) = player.equipment_mut().get_goods_mut(10) else {
+                        return 0;
+                    };
+                    let property = GAP_BF_SKY + position;
+                    if position >= 3 {
+                        let _ = goods.set_addon_property_value_core(property, 2, 0);
+                    }
+                    let _ = goods.set_addon_property_value_core(property, 1, 0);
+                    crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
+                        message_type: 0x0b_f918,
+                        player_id,
+                        goods: goods.identity(),
+                        old_client_payload: context.encode_goods_for_old_client(goods),
+                    }
+                };
+                let _ = self.send_battle_fairy_goods_update(&update);
                 0
             }
             BattleFairyScriptAction::Revive { player_name } => {
