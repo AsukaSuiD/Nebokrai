@@ -616,11 +616,12 @@ use crate::gameserver::appserver::player::{
     PlayerBankCurrencyAddOutcome, PlayerCombatProperties, PlayerEquipmentAddEffect,
     PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery,
     PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
-    PlayerGameSaveCodecError, PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion,
-    PlayerHonorResetReport, PlayerLoginGoodsLocation, PlayerMurdererSignDecrease, PlayerProgress,
-    PlayerReliveMutation, PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery,
-    PlayerSkillRequestEffect, PlayerSkillRequestFacts, PlayerSkillRequestReport,
-    PlayerUncreatedCarriage, PlayerUncreatedPet, PlayerYuanBaoChange,
+    PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
+    PlayerGoodsAiDeletion, PlayerHonorResetReport, PlayerLoginGoodsLocation,
+    PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation, PlayerSkillDispatch,
+    PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
+    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet,
+    PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -3266,7 +3267,6 @@ pub(crate) trait PlayerReliveContext:
     fn set_player_moveable(&mut self, player: &mut CPlayer, moveable: bool);
     fn change_player_states_after_relive(&mut self, player: &mut CPlayer);
     fn enter_player_resident_state(&mut self, player: &mut CPlayer);
-    fn enter_player_peace_state(&mut self, player: &mut CPlayer);
     fn send_player_relive_around(
         &mut self,
         region: &CServerRegion,
@@ -3843,6 +3843,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
     pub(crate) player_lost_timeouts: Vec<GamePlayerLostTimeoutReport>,
+    pub(crate) player_fight_states: Vec<GamePlayerFightStateReport>,
     pub(crate) base_region: Option<BaseRegionAiReport>,
     pub(crate) nation_contend: Option<Result<NationContendAiReport, NationRegionAiError>>,
     pub(crate) city_contend: Option<CityRegionAiReport>,
@@ -3862,6 +3863,12 @@ pub(crate) struct GamePlayerLostTimeoutReport {
     pub(crate) sampled_at_ms: u32,
     pub(crate) business: Option<GamePlayerBusinessEndReport>,
     pub(crate) staged_for_delete: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerFightStateReport {
+    pub(crate) transition: PlayerFightStateTransition,
+    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4957,10 +4964,16 @@ pub(crate) trait GameMainLoopRuntime:
     /// Исполняет ещё внешний virtual base-slot `PeriodicalUpdate`
     /// непосредственно перед owned murderer/ping/countdown/hatcher tail.
     fn player_periodical_update_virtual(&mut self, game: &mut CGame, player_id: i32);
-    /// Исполняет `CMoveShape::AI` после полного `PeriodicalUpdate` и возвращает
-    /// post-AI restored-state current war-soul skill; `None` точно означает
-    /// отсутствие skill-а.
-    fn player_move_shape_ai(&mut self, game: &mut CGame, player_id: i32) -> Option<bool>;
+    /// Исполняет `UpdateAbnormality` prefix `CMoveShape::AI` непосредственно
+    /// перед owned virtual `CPlayer::UpdateCurrentState`.
+    fn player_move_shape_update_abnormality(&mut self, game: &mut CGame, player_id: i32);
+    /// Исполняет current-state `AI` tail после owned `UpdateCurrentState` и
+    /// возвращает post-AI restored-state current war-soul skill.
+    fn player_move_shape_active_state_ai(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+    ) -> Option<bool>;
     /// Возвращает actual derived AI/tamed/carriage facts одного monster-а.
     fn area_monster_ai_facts(
         &mut self,
@@ -20992,10 +21005,13 @@ impl CGame {
                     .find_player_mut(player_id)
                     .expect("relive player сохранён до in-place states");
                 context.enter_player_resident_state(player);
-                context.enter_player_peace_state(player);
             }
+            let peace = self.enter_player_peace_state(player_id);
             let answer_delivery = self.send_player_relive_answer(player_id);
-            let mut state_deliveries = Vec::new();
+            let mut state_deliveries: Vec<_> = peace
+                .and_then(|report| report.around_delivery)
+                .into_iter()
+                .collect();
             let region_id = self
                 .find_player(player_id)
                 .and_then(CPlayer::server_region_id);
@@ -21126,8 +21142,8 @@ impl CGame {
                 .find_player_mut(player_id)
                 .expect("relive player сохранён до destination states");
             context.enter_player_resident_state(player);
-            context.enter_player_peace_state(player);
         }
+        let peace = self.enter_player_peace_state(player_id);
         let changed_region = context.change_relived_player_region(
             player_id,
             return_point.point.region_id,
@@ -21137,7 +21153,10 @@ impl CGame {
             0,
         );
         let answer_delivery = changed_region.then(|| self.send_player_relive_answer(player_id));
-        let mut state_deliveries = Vec::new();
+        let mut state_deliveries: Vec<_> = peace
+            .and_then(|report| report.around_delivery)
+            .into_iter()
+            .collect();
         if self
             .find_player(player_id)
             .is_some_and(|player| player.city_war_died_state_time_ms() > 0)
@@ -21177,6 +21196,40 @@ impl CGame {
             .add_short(player.shape().get_action() as i16);
         message.add_ulong(player.health());
         message.send_to_player(self.net_server(), player_id)
+    }
+
+    fn publish_player_fight_state(
+        &mut self,
+        transition: PlayerFightStateTransition,
+    ) -> GamePlayerFightStateReport {
+        let around_delivery = transition
+            .entered_peace
+            .then(|| {
+                let mut message = CMessage::new(0x000b_f607);
+                message.add_long(transition.player_id);
+                message.add_long(0);
+                self.send_player_shape_around(transition.player_id, None, &message)
+            })
+            .flatten();
+        GamePlayerFightStateReport {
+            transition,
+            around_delivery,
+        }
+    }
+
+    /// Exact reached `EnterPeaceState`, shared by relive and the
+    /// `UpdateCurrentState` countdown transition.
+    fn enter_player_peace_state(&mut self, player_id: i32) -> Option<GamePlayerFightStateReport> {
+        let transition = self.find_player_mut(player_id)?.enter_peace_state();
+        Some(self.publish_player_fight_state(transition))
+    }
+
+    fn update_player_current_state(
+        &mut self,
+        player_id: i32,
+    ) -> Option<GamePlayerFightStateReport> {
+        let transition = self.find_player_mut(player_id)?.update_fight_state()?;
+        Some(self.publish_player_fight_state(transition))
     }
 
     fn publish_relive_died_state<Context: PlayerReliveContext>(
@@ -29148,6 +29201,7 @@ impl CGame {
             let mut battle_fairy_follows = Vec::with_capacity(player_ids.len());
             let mut player_ai_tails = Vec::with_capacity(player_ids.len());
             let mut player_lost_timeouts = Vec::new();
+            let mut player_fight_states = Vec::new();
             for player_id in player_ids {
                 if let Some(death) = self.refresh_battle_fairy_death(player_id) {
                     battle_fairy_deaths.push(death);
@@ -29175,8 +29229,14 @@ impl CGame {
                             nation_died_state,
                             fairy_hatcher,
                         });
-                        restored = runtime.player_move_shape_ai(self, player_id);
-                        ran_player_body = true;
+                        runtime.player_move_shape_update_abnormality(self, player_id);
+                        if self.find_player(player_id).is_some() {
+                            if let Some(fight_state) = self.update_player_current_state(player_id) {
+                                player_fight_states.push(fight_state);
+                            }
+                            restored = runtime.player_move_shape_active_state_ai(self, player_id);
+                            ran_player_body = true;
+                        }
                     }
                 }
                 if ran_player_body {
@@ -29512,6 +29572,7 @@ impl CGame {
                             battle_fairy_follows,
                             player_ai_tails,
                             player_lost_timeouts,
+                            player_fight_states,
                             base_region,
                             nation_contend,
                             city_contend,
@@ -29541,6 +29602,7 @@ impl CGame {
                 battle_fairy_follows,
                 player_ai_tails,
                 player_lost_timeouts,
+                player_fight_states,
                 base_region,
                 nation_contend,
                 city_contend,

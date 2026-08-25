@@ -1445,6 +1445,14 @@ pub(crate) struct PlayerLostDelayStarted {
     pub(crate) timestamp_ms: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerFightStateTransition {
+    pub(crate) player_id: i32,
+    pub(crate) previous_count: i32,
+    pub(crate) current_count: i32,
+    pub(crate) entered_peace: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerRemoteSkillMutation {
     pub(crate) skill_id: u32,
@@ -3978,6 +3986,46 @@ impl CPlayer {
 
     pub(crate) const fn fight_state_count(&self) -> i32 {
         self.fight_state_count
+    }
+
+    /// Exact `EnterPeaceState` state half: virtual `CShape::SetState(0)` and
+    /// fight countdown reset precede the caller-owned around publication.
+    pub(crate) fn enter_peace_state(&mut self) -> PlayerFightStateTransition {
+        let previous_count = self.fight_state_count;
+        self.movement_shape_mut().set_state(0);
+        self.fight_state_count = 0;
+        PlayerFightStateTransition {
+            player_id: self.player_id(),
+            previous_count,
+            current_count: 0,
+            entered_peace: true,
+        }
+    }
+
+    /// Reached `UpdateCurrentState` combat half. Только положительный counter
+    /// декрементируется; переход через zero исполняет exact peace mutation.
+    pub(crate) fn update_fight_state(&mut self) -> Option<PlayerFightStateTransition> {
+        if self.fight_state_count <= 0 {
+            return None;
+        }
+        let previous_count = self.fight_state_count;
+        self.fight_state_count = self.fight_state_count.wrapping_sub(1);
+        if self.fight_state_count < 1 {
+            self.movement_shape_mut().set_state(0);
+            self.fight_state_count = 0;
+            return Some(PlayerFightStateTransition {
+                player_id: self.player_id(),
+                previous_count,
+                current_count: 0,
+                entered_peace: true,
+            });
+        }
+        Some(PlayerFightStateTransition {
+            player_id: self.player_id(),
+            previous_count,
+            current_count: self.fight_state_count,
+            entered_peace: false,
+        })
     }
 
     /// Exact delayed `OnLost` timestamp. Native formula deliberately keeps
@@ -11467,7 +11515,7 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // `0x7FC0B/0x7FC0E`; покрытый raw удалён.
 // ============================================================================
 // FUNCTION: CPlayer::UpdateCurrentState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_MATERIALIZED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9313
@@ -11502,20 +11550,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x0002CA40
 // ADDRESS: 0042ca40
 // PROTOTYPE: void __thiscall EnterResidentState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::EnterPeaceState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9361
-// RVA: 0x0002CAC0
-// ADDRESS: 0042cac0
-// PROTOTYPE: void __thiscall EnterPeaceState(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
