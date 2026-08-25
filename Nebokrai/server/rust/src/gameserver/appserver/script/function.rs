@@ -243,11 +243,13 @@
 //! GameServer. Недостижимое обычным сценарием разыменование пустого игрока
 //! безопасно заменено отсутствием действия без сетевой публикации.
 //! Часовая ветвь `game_enter.script` добавляет `20/21`, `8003` и `3302` одним
-//! проходом того же CScript. Packed local time декодируется через CRT `mktime`;
-//! random position пишет player-owned `$m_Temp[0..1]`; все 12 вычисленных
-//! аргументов `CreateNpc` доходят до concrete `CServerRegion::AddNpc`, включая
-//! spatial/AI publication, show-list, script и lifetime. Для чужого региона
-//! тот же owner сохраняет исходный маршрут World `0x5FA0B -> 0x7F80A`.
+//! проходом того же `CScript`. Упакованное местное время декодируется через
+//! функцию CRT `mktime`; случайная позиция записывается в принадлежащий игроку
+//! массив `$m_Temp[0..1]`. Все 12 вычисленных аргументов `CreateNpc` доходят до
+//! конкретного `CServerRegion::AddNpc`, включая пространственную публикацию и
+//! публикацию для ИИ, список видимости, сценарий и время жизни. Для чужого
+//! региона тот же владелец сохраняет исходный маршрут World
+//! `0x5FA0B -> 0x7F80A`.
 //! Восстановительная ветвь `nodupe.script` достигает строкового `2998 /
 //! GetName`, `3002 / SetPlayerLevel` и skill pair `3102/3103`. String result
 //! возвращается непосредственно expression evaluator-у; level/experience и
@@ -297,11 +299,15 @@
 //! named kick завершает `CGame::KickPlayer` и `GS0025`, ban публикует
 //! `0x5FF12`, а silence либо меняет exact player timestamp, либо проходит
 //! `0x5FF0C -> 0x7FC0B/0x5FF0D -> 0x7FC0C` через общий GM dispatcher.
-//! `3309 / GetMapInfo` читает concrete cell текущего script-region и сохраняет
-//! приоритет war-marker над safe/fight security с legacy кодами `2/3/1/0`.
-//! Region collision selector `8000 / RefeashBlock` вычисляет только первый
-//! аргумент, находит canonical region owner и тем же runtime-вызовом очищает
-//! старые BLOCK_SHAPE и восстанавливает живые player/monster и все NPC tiles.
+//! `3309 / GetMapInfo` читает конкретную клетку текущего региона сценария и
+//! сохраняет приоритет отметки войны над безопасностью мирной и боевой зон с
+//! исходными кодами `2/3/1/0`.
+//! Группа блокировки региона `8000..8004` достигается из того же
+//! `CScript::RunFunction`: обновляет один либо все регионы, меняет три младших
+//! бита указанной клетки, выбирает случайную свободную позицию с записью в
+//! `$m_Temp[0..1]` и пересчитывает пространственное окно одной клетки. Полное
+//! обновление очищает прежние `BLOCK_SHAPE`, затем восстанавливает клетки живых
+//! игроков и монстров, а также всех NPC.
 //! `3305 / CreateMonster` проводит local spawn через canonical property,
 //! random-position, AI/spatial и around owners; чужой region сохраняет
 //! существующий `0x5FA0B -> 0x7F80A` межсерверный маршрут.
@@ -691,7 +697,10 @@ pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER_RECT: i32 = 3313;
 pub(crate) const SCRIPT_FUNCTION_MOVE_PLAYER: i32 = 3314;
 pub(crate) const SCRIPT_FUNCTION_DELETE_NPC_BY_NAME: i32 = 3315;
 pub(crate) const SCRIPT_FUNCTION_REFRESH_BLOCK: i32 = 8000;
+pub(crate) const SCRIPT_FUNCTION_REFRESH_ALL_BLOCKS: i32 = 8001;
+pub(crate) const SCRIPT_FUNCTION_SET_BLOCK: i32 = 8002;
 pub(crate) const SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION: i32 = 8003;
+pub(crate) const SCRIPT_FUNCTION_REFRESH_BLOCK_AT: i32 = 8004;
 pub(crate) const SCRIPT_FUNCTION_OPEN_CHANGE_PLAYER_NAME: i32 = 8100;
 pub(crate) const SCRIPT_FUNCTION_GET_MONSTER_REFRESH_TIME: i32 = 8101;
 pub(crate) const SCRIPT_FUNCTION_IS_QUEST_ENABLED: i32 = 3500;
@@ -3833,8 +3842,16 @@ pub(crate) fn script_function_parameter_kind(
             0 | 1 => Integer,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION => match index {
+        SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION | SCRIPT_FUNCTION_REFRESH_BLOCK => match index {
             0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_SET_BLOCK => match index {
+            0..=3 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_REFRESH_BLOCK_AT => match index {
+            0..=2 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_SET_CHARGED => match index {
@@ -3948,10 +3965,6 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_GET_MONSTER_REFRESH_TIME => match index {
             0..=1 => Integer,
-            _ => Unused,
-        },
-        SCRIPT_FUNCTION_REFRESH_BLOCK => match index {
-            0 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_GET_COPY_NUMBER => match index {
@@ -5265,9 +5278,6 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             )
         }
         SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION => {
-            if argument_count > 1 {
-                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
-            }
             let Some(player_id) =
                 script_player_id.filter(|player_id| game.find_player(*player_id).is_some())
             else {
@@ -5278,10 +5288,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 .and_then(|player| player.server_region_id())
                 .unwrap_or_default();
             let region_id = match integer_arguments[0] {
-                Some(SCRIPT_INT_PARAMETER_ERROR) => {
-                    return Some(ScriptFunctionDispatchOutcome::Invalid);
-                }
-                Some(0) | None => player_region_id,
+                Some(SCRIPT_INT_PARAMETER_ERROR) | Some(0) | None => player_region_id,
                 Some(region_id) => region_id,
             };
             let Some(position) = game
@@ -5292,7 +5299,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             let player = game
                 .find_player_mut(player_id)
-                .expect("script-player сохранён между random position и $m_Temp mutation");
+                .expect("игрок сценария сохранён между выбором позиции и записью $m_Temp");
             let _ = player.set_integer_variable(b"$m_Temp", 0, position.x);
             let _ = player.set_integer_variable(b"$m_Temp", 1, position.y);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
@@ -8446,6 +8453,31 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
         {
             let _ = game.refresh_script_region_blocks(region_id);
+        }
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+    }
+    if function_id == SCRIPT_FUNCTION_REFRESH_ALL_BLOCKS {
+        game.refresh_all_script_region_blocks();
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+    }
+    if function_id == SCRIPT_FUNCTION_SET_BLOCK {
+        if let (Some(region_id), Some(tile_x), Some(tile_y), Some(block)) = (
+            integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            integer_arguments[1],
+            integer_arguments[2],
+            integer_arguments[3].filter(|value| (0..=3).contains(value)),
+        ) {
+            let _ = game.set_script_region_block(region_id, tile_x, tile_y, block as u8);
+        }
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+    }
+    if function_id == SCRIPT_FUNCTION_REFRESH_BLOCK_AT {
+        if let (Some(region_id), Some(tile_x), Some(tile_y)) = (
+            integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+        ) {
+            let _ = game.refresh_script_region_block(region_id, tile_x, tile_y);
         }
         return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
     }

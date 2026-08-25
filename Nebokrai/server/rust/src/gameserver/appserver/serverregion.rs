@@ -46,17 +46,19 @@
 //! уникальные keys. `CArea::PlayerEnter`, move-shape callback и GodsBattle
 //! message остаются у внешних owners через `ServerRegionMembershipContext` и
 //! вызываются в исходном порядке.
-//! `SetPosXY` только пишет `CS_CHANGEAREA`; region AI уникализирует pointer,
-//! сбрасывает state лишь после первого insert и применяет очередь после
-//! delete/remove queues. `OnShapeChangeArea` строит old/new девяти-area
-//! neighborhoods, шлёт create/snapshot только в new-exclusive areas, затем
-//! делает old `RemoveObject -> new AddObject -> m_pArea` и player-enter wake.
-//! Реальный `CGame::AI` теперь забирает эту ordered очередь после virtual AI,
-//! временно проецируя canonical player/monster/NPC storage и очищая её только
-//! после попытки каждого `OnShapeChangeArea`.
-//! Message serialization/send остаются явным context-owner-ом; area storage и
-//! deferred queue принадлежат `CServerRegion`. `RefeashBlock` сначала снимает
-//! все block `3`, затем возвращает single-cell block живым `CMoveShape` и NPC.
+//! `SetPosXY` только пишет `CS_CHANGEAREA`; ИИ региона не допускает повторных
+//! указателей, сбрасывает состояние лишь после первого добавления и применяет
+//! очередь после очередей удаления и отсоединения. `OnShapeChangeArea` строит
+//! прежнее и новое окружение из девяти областей, отправляет создание и снимок
+//! только в области нового окружения, затем выполняет
+//! `RemoveObject -> AddObject -> m_pArea` и пробуждает вошедшего игрока.
+//! Реальный `CGame::AI` забирает эту упорядоченную очередь после виртуального
+//! вызова ИИ, временно проецирует основные хранилища игроков, монстров и NPC и
+//! удаляет запись лишь после попытки каждого `OnShapeChangeArea`.
+//! Сериализация и отправка сообщений остаются у явного владельца среды;
+//! области и отложенная очередь принадлежат `CServerRegion`. `RefeashBlock`
+//! сначала снимает все блоки `3`, затем возвращает одиночный блок живым
+//! `CMoveShape` и NPC.
 //! `m_listDeleteShape/m_listRemoveShape` теперь имеют typed ordered identity
 //! storage:
 //! Nation clear напрямую ставит туда sleeping monsters, которых active AI

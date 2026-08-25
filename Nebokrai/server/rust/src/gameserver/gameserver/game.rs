@@ -37778,14 +37778,10 @@ impl CGame {
         Some(result)
     }
 
-    /// Точная сценарная функция `8000 / RefeashBlock`: снимок заменяет только
-    /// временные указатели C++, пока основной регион изменяемо пересобирает
-    /// `BLOCK_SHAPE`. Координаты и `!IsDied` берутся у достигнутых владельцев
-    /// игрока, монстра и NPC.
-    pub(crate) fn refresh_script_region_blocks(
-        &mut self,
-        region_id: i32,
-    ) -> Option<Result<(), RegionMembershipBlock>> {
+    /// Собирает снимок фигур для сценарных функций блокировки региона.
+    /// Координаты и `!IsDied` берутся у достигнутых владельцев игрока,
+    /// монстра и NPC, а не из временных указателей старого C++.
+    fn script_region_block_resolver(&self, region_id: i32) -> Option<RegionBlockRefreshResolver> {
         let region = self.find_region(region_id)?.base();
         let identities = region.registered_shape_identities();
         let mut resolver = RegionBlockRefreshResolver::default();
@@ -37808,11 +37804,72 @@ impl CGame {
             };
             resolver.facts.insert(identity, (shape, is_alive));
         }
+        Some(resolver)
+    }
+
+    /// Точная сценарная функция `8000 / RefeashBlock`: основной регион
+    /// очищает старые `BLOCK_SHAPE` и заново отмечает клетки живых фигур.
+    pub(crate) fn refresh_script_region_blocks(
+        &mut self,
+        region_id: i32,
+    ) -> Option<Result<(), RegionMembershipBlock>> {
+        let resolver = self.script_region_block_resolver(region_id)?;
 
         let mut owner = self
             .take_region_owner(region_id)
-            .expect("script refresh сохраняет найденный region owner");
+            .expect("обновление блокировки сохраняет найденного владельца региона");
         let result = owner.base_mut().refresh_blocks(&resolver);
+        self.restore_region_owner(owner);
+        Some(result)
+    }
+
+    /// Точная сценарная функция `8001 / RefeashAllBlock` обходит снимок
+    /// идентификаторов, чтобы каждое обновление временно владело одним
+    /// конкретным регионом и не нарушало порядок хранилища `CGame`.
+    pub(crate) fn refresh_all_script_region_blocks(&mut self) {
+        let region_ids = self.regions.keys().copied().collect::<Vec<_>>();
+        for region_id in region_ids {
+            let _ = self.refresh_script_region_blocks(region_id);
+        }
+    }
+
+    /// Точная сценарная функция `8002 / SetBlock` меняет только три младших
+    /// бита клетки и сохраняет исходное молчаливое завершение при чужом
+    /// идентификаторе региона либо координате вне карты.
+    pub(crate) fn set_script_region_block(
+        &mut self,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        block: u8,
+    ) -> Option<Result<(), RegionCellAccessBlock>> {
+        Some(
+            self.find_region_mut(region_id)?
+                .base_mut()
+                .region
+                .set_block(tile_x, tile_y, block),
+        )
+    }
+
+    /// Точная сценарная функция `8004 / RefeashBlockXY` пересчитывает одну
+    /// клетку и фигуры её пространственного окна через того же владельца
+    /// `CServerRegion`, что и полное обновление.
+    pub(crate) fn refresh_script_region_block(
+        &mut self,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+    ) -> Option<Result<(), RegionMembershipBlock>> {
+        let resolver = self.script_region_block_resolver(region_id)?;
+        let area_width = self.globe_setup.area_width();
+        let area_height = self.globe_setup.area_height();
+        let mut owner = self
+            .take_region_owner(region_id)
+            .expect("обновление клетки сохраняет найденного владельца региона");
+        let result =
+            owner
+                .base_mut()
+                .refresh_block(tile_x, tile_y, area_width, area_height, &resolver);
         self.restore_region_owner(owner);
         Some(result)
     }
