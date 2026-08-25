@@ -172,6 +172,9 @@
 //! Соседний `3010 / ForceMove` ограничивает имя exact 23 байтами и проводит
 //! вычисленные X/Y/time через local player lookup, region spatial membership,
 //! around `0xBF708` и AI stand-event достигнутого `CMoveShape` owner-а.
+//! Diagnostic `3017 / GetPlayerAllVariables` требует live script-player,
+//! снимает insertion-order snapshot локального target `CVariableList` и
+//! публикует scalar/string/array строки точным зелёным `BF806` caller-у.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -210,6 +213,7 @@ use crate::gameserver::appserver::script::buffskillfunc::{
     BuffSkillScriptFunctionOutcome, SCRIPT_FUNCTION_ADD_JING_JIE_BUFF,
     run_buff_skill_script_function,
 };
+use crate::gameserver::appserver::script::variablelist::GameVariableValue;
 use crate::gameserver::appserver::servercityregion::CityGateRuntimeContext;
 use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
@@ -307,6 +311,7 @@ pub(crate) const SCRIPT_FUNCTION_SET_MONEY_BY_NAME: i32 = 3013;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_MONEY_BY_ID: i32 = 3014;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_ID: i32 = 3015;
 pub(crate) const SCRIPT_FUNCTION_SET_MONEY_BY_ID: i32 = 3016;
+pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_ALL_VARIABLES: i32 = 3017;
 pub(crate) const SCRIPT_FUNCTION_DELETE_SKILL: i32 = 3102;
 pub(crate) const SCRIPT_FUNCTION_SET_SKILL_LEVEL: i32 = 3103;
 pub(crate) const SCRIPT_FUNCTION_ADD_SKILL: i32 = 3101;
@@ -3267,6 +3272,10 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_PLAYER_ALL_VARIABLES => match index {
+            0 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_CREATE_FACTION => match index {
             0 | 2 | 3 => Integer,
             1 => String,
@@ -4408,6 +4417,20 @@ fn publish_script_lei_ting_update(game: &CGame, player_id: i32) {
     let _ = world.send(game, false);
 }
 
+fn format_script_variable_line(name: &[u8], index: Option<usize>, value: i32) -> Vec<u8> {
+    let mut line = name.to_vec();
+    if let Some(index) = index {
+        line.push(b'[');
+        line.extend_from_slice(index.to_string().as_bytes());
+        line.push(b']');
+    }
+    line.extend_from_slice(b" = ");
+    line.extend_from_slice(value.to_string().as_bytes());
+    // EXE uses a 0x19000-byte stack buffer and reserves the final NUL.
+    line.truncate(0x18fff);
+    line
+}
+
 fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -5410,6 +5433,49 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: target.map_or(0, |player| player.money() as i32),
             })
+        }
+        SCRIPT_FUNCTION_GET_PLAYER_ALL_VARIABLES => {
+            if let (Some(requester_id), Some(target_name)) = (script_player_id, string_arguments[0])
+            {
+                let lines = game
+                    .find_player_by_name(target_name)
+                    .map(|target| {
+                        let mut lines = Vec::new();
+                        for variable in target.variable_list().variables() {
+                            match &variable.value {
+                                GameVariableValue::Integer(value) => lines.push(
+                                    format_script_variable_line(&variable.name, None, *value),
+                                ),
+                                GameVariableValue::String(value) => {
+                                    let mut line = variable.name.clone();
+                                    line.extend_from_slice(b" = \"");
+                                    line.extend_from_slice(value);
+                                    line.push(b'"');
+                                    line.truncate(0x18fff);
+                                    lines.push(line);
+                                }
+                                GameVariableValue::IntegerArray(values) => {
+                                    lines.extend(values.iter().enumerate().map(
+                                        |(index, value)| {
+                                            format_script_variable_line(
+                                                &variable.name,
+                                                Some(index),
+                                                *value,
+                                            )
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                        lines
+                    })
+                    .unwrap_or_default();
+                for line in lines {
+                    let _ = colored_player_notice_message(0xff00_ff00, 0, &line)
+                        .send_to_player(game.net_server(), requester_id);
+                }
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_DELETE_SKILL => {
             let (Some(target_name), Some(skill_name)) = (string_arguments[0], string_arguments[1])
