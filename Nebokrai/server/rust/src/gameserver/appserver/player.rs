@@ -2069,6 +2069,15 @@ pub(crate) struct PlayerReliveMutation {
     pub(crate) mana: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerReliveOwnedPrelude {
+    pub(crate) cleared_uncreated_pets: usize,
+    pub(crate) cleared_uncreated_carriage: bool,
+    pub(crate) previous_moveable_count: i32,
+    pub(crate) resulting_moveable_count: i32,
+    pub(crate) moveable: bool,
+}
+
 fn apply_ride_goods_properties(
     properties: &mut PlayerCombatProperties,
     goods: &CGoods,
@@ -10450,6 +10459,43 @@ impl CPlayer {
             health: self.health(),
             mana: self.mana(),
         })
+    }
+
+    /// Owned non-polymorphic mutations из reached `OnRelive`: transient
+    /// companion snapshots очищаются до `EnterRegion/UpdateProperty`, а один
+    /// nesting movement lock снимается после них.
+    pub(crate) fn clear_relive_uncreated_companions(&mut self) -> (usize, bool) {
+        let cleared_uncreated_pets = self.uncreated_pets.len();
+        self.uncreated_pets.clear();
+        let cleared_uncreated_carriage = !self.uncreated_carriage.original_name.is_empty()
+            || self.uncreated_carriage.health != 0;
+        self.uncreated_carriage.original_name.clear();
+        self.uncreated_carriage.health = 0;
+        (cleared_uncreated_pets, cleared_uncreated_carriage)
+    }
+
+    pub(crate) fn unlock_movement_after_relive(
+        &mut self,
+        cleared_uncreated_pets: usize,
+        cleared_uncreated_carriage: bool,
+    ) -> PlayerReliveOwnedPrelude {
+        let previous_moveable_count = self.move_shape.moveable_count();
+        self.move_shape.set_moveable(true);
+        PlayerReliveOwnedPrelude {
+            cleared_uncreated_pets,
+            cleared_uncreated_carriage,
+            previous_moveable_count,
+            resulting_moveable_count: self.move_shape.moveable_count(),
+            moveable: self.move_shape.is_moveable(),
+        }
+    }
+
+    /// Scalar mutation exact `EnterResidentState`; around wire принадлежит
+    /// `CGame`, где доступен живой region/session owner.
+    pub(crate) fn enter_resident_state(&mut self) -> u32 {
+        let previous = self.murderer_time_stamp_ms;
+        self.murderer_time_stamp_ms = 0;
+        previous
     }
 
     pub(crate) const fn mana(&self) -> u32 {

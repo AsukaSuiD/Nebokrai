@@ -626,9 +626,10 @@ use crate::gameserver::appserver::player::{
     PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerExitSilenceUpdate,
     PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
     PlayerGoodsAiDeletion, PlayerHonorResetReport, PlayerLoginGoodsLocation,
-    PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation, PlayerSkillRequest,
-    PlayerSkillRequestDelivery, PlayerSkillRequestEffect, PlayerSkillRequestFacts,
-    PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet, PlayerYuanBaoChange,
+    PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation, PlayerReliveOwnedPrelude,
+    PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
+    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet,
+    PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -3287,31 +3288,11 @@ pub(crate) trait GodsBattleReturnPointContext {
 }
 
 pub(crate) trait PlayerReliveContext:
-    GodsBattleReturnPointContext + RegionRandomContext
+    GodsBattleReturnPointContext + RegionRandomContext + ScriptFunctionRuntime
 {
     fn auto_start_player_passive_skills(&mut self, player: &mut CPlayer);
-    fn clear_player_uncreated_summons(&mut self, player: &mut CPlayer);
     fn player_enter_region_after_relive(&mut self, player: &mut CPlayer);
-    fn update_player_property_after_relive(&mut self, player: &mut CPlayer);
-    fn set_player_moveable(&mut self, player: &mut CPlayer, moveable: bool);
     fn change_player_states_after_relive(&mut self, player: &mut CPlayer);
-    fn enter_player_resident_state(&mut self, player: &mut CPlayer);
-    fn send_player_relive_around(
-        &mut self,
-        region: &CServerRegion,
-        origin: &CShape,
-        message: &CMessage,
-    ) -> Result<i32, ShapeCoordinateBlock>;
-    fn change_relived_player_region(
-        &mut self,
-        player_id: i32,
-        region_id: i32,
-        x: i32,
-        y: i32,
-        direction: i32,
-        reason: i32,
-    ) -> bool;
-    fn restore_relive_origin_block(&mut self, player_id: i32, x: i32, y: i32);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3399,6 +3380,8 @@ pub(crate) enum PlayerReliveOutcome {
         answer_delivery: i32,
         shape_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
         state_deliveries: Vec<Result<i32, ShapeCoordinateBlock>>,
+        region_change: PlayerRegionChangeReport,
+        cannot_move_delivery: Option<i32>,
     },
     ReturnPointBlocked(ServerReturnSetupBlock),
     RandomPositionBlocked(RegionCellAccessBlock),
@@ -3410,13 +3393,22 @@ pub(crate) enum PlayerReliveOutcome {
         changed_region: bool,
         answer_delivery: Option<i32>,
         state_deliveries: Vec<Result<i32, ShapeCoordinateBlock>>,
+        region_change: PlayerRegionChangeReport,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerRelivePreludeReport {
+    pub(crate) owned: PlayerReliveOwnedPrelude,
+    pub(crate) combat_property_delivery: i32,
+    pub(crate) tao_zhuang_ran: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerReliveReport {
     pub(crate) player_id: i32,
     pub(crate) relive_type: i32,
+    pub(crate) prelude: Option<PlayerRelivePreludeReport>,
     pub(crate) outcome: PlayerReliveOutcome,
 }
 
@@ -3846,6 +3838,7 @@ pub(crate) struct GameReturnedRegionPlayer {
     pub(crate) destination: Option<(i32, i32)>,
     pub(crate) random_block: Option<RegionCellAccessBlock>,
     pub(crate) changed_region: Option<bool>,
+    pub(crate) region_change: Option<PlayerRegionChangeReport>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21173,9 +21166,11 @@ impl CGame {
         })
     }
 
-    /// Full reached `CPlayer::OnRelive` path. Universal skill/state/spatial
-    /// owners остаются explicit runtime callbacks; player scalars, GodsBattle
-    /// virtual return, random target position и client wires исполняются здесь.
+    /// Full reached `CPlayer::OnRelive` path. Только ещё не материализованные
+    /// passive-skill, EnterRegion и OnChangeStates virtual owners остаются
+    /// explicit callbacks; companion cleanup, property recompute, movement,
+    /// resident/peace state, GodsBattle return, region change и client wires
+    /// исполняются concrete `CPlayer/CGame` owners.
     pub(crate) fn relive_gods_battle_player<Context: PlayerReliveContext>(
         &mut self,
         player_id: i32,
@@ -21186,6 +21181,7 @@ impl CGame {
             return PlayerReliveReport {
                 player_id,
                 relive_type,
+                prelude: None,
                 outcome: PlayerReliveOutcome::PlayerMissing,
             };
         };
@@ -21194,21 +21190,36 @@ impl CGame {
             return PlayerReliveReport {
                 player_id,
                 relive_type,
+                prelude: None,
                 outcome: PlayerReliveOutcome::AlreadyAlive { answer_delivery },
             };
         }
-        let mutation = {
+        let (cleared_uncreated_pets, cleared_uncreated_carriage) = {
             let player = self
                 .find_player_mut(player_id)
                 .expect("relive player сохранён после synchronous dead-check");
             context.auto_start_player_passive_skills(player);
-            context.clear_player_uncreated_summons(player);
+            let cleared = player.clear_relive_uncreated_companions();
             context.player_enter_region_after_relive(player);
-            context.update_player_property_after_relive(player);
-            context.set_player_moveable(player, true);
+            cleared
+        };
+        let (combat_property_delivery, tao_zhuang_ran) = self
+            .update_player_properties(player_id, context)
+            .expect("relive player сохранён после EnterRegion");
+        let (owned, mutation) = {
+            let player = self
+                .find_player_mut(player_id)
+                .expect("relive player сохранён после property update");
+            let owned = player
+                .unlock_movement_after_relive(cleared_uncreated_pets, cleared_uncreated_carriage);
             let mutation = player.apply_relive_scalars();
             context.change_player_states_after_relive(player);
-            mutation
+            (owned, mutation)
+        };
+        let prelude = PlayerRelivePreludeReport {
+            owned,
+            combat_property_delivery,
+            tao_zhuang_ran,
         };
         let mutation = match mutation {
             Ok(mutation) => mutation,
@@ -21216,23 +21227,19 @@ impl CGame {
                 return PlayerReliveReport {
                     player_id,
                     relive_type,
+                    prelude: Some(prelude),
                     outcome: PlayerReliveOutcome::PositionBlocked(block),
                 };
             }
         };
 
         if relive_type == 1 {
-            {
-                let player = self
-                    .find_player_mut(player_id)
-                    .expect("relive player сохранён до in-place states");
-                context.enter_player_resident_state(player);
-            }
+            let resident_delivery = self.enter_player_resident_state(player_id);
             let peace = self.enter_player_peace_state(player_id);
             let answer_delivery = self.send_player_relive_answer(player_id);
-            let mut state_deliveries: Vec<_> = peace
-                .and_then(|report| report.around_delivery)
+            let mut state_deliveries: Vec<_> = resident_delivery
                 .into_iter()
+                .chain(peace.and_then(|report| report.around_delivery).into_iter())
                 .collect();
             let region_id = self
                 .find_player(player_id)
@@ -21241,8 +21248,7 @@ impl CGame {
                 .find_player(player_id)
                 .is_some_and(|player| player.city_war_died_state_time_ms() > 0)
             {
-                state_deliveries
-                    .extend(self.publish_relive_died_state(region_id, player_id, context));
+                state_deliveries.extend(self.publish_relive_died_state(region_id, player_id));
             }
             let shape_delivery = region_id
                 .and_then(|region_id| self.take_region_owner(region_id))
@@ -21253,34 +21259,58 @@ impl CGame {
                     let player = self
                         .find_player(player_id)
                         .expect("relive player сохранён до shape publication");
-                    let delivery =
-                        context.send_player_relive_around(owner.base(), player.shape(), &message);
+                    let delivery = self.send_shape_around_in_region(
+                        owner.base(),
+                        player.shape(),
+                        Some(player_id),
+                        &message,
+                    );
                     self.restore_region_owner(owner);
                     delivery
                 });
-            if let Some(region_id) = region_id {
-                let _ = context.change_relived_player_region(
+            let region_change = region_id.map(|region_id| {
+                self.change_player_region(
                     player_id,
                     region_id,
                     mutation.previous_x,
                     mutation.previous_y,
                     mutation.direction,
+                    0,
                     3,
-                );
-                context.restore_relive_origin_block(
+                    0,
+                    context,
+                )
+            });
+            let cannot_move_delivery = region_change.as_ref().and_then(|_| {
+                self.restore_relive_origin_after_change(
                     player_id,
                     mutation.previous_x,
                     mutation.previous_y,
-                );
-            }
+                )
+            });
+            let region_change = region_change.unwrap_or_else(|| {
+                self.missing_player_region_change_report(
+                    player_id,
+                    0,
+                    mutation.previous_x,
+                    mutation.previous_y,
+                    mutation.direction,
+                    0,
+                    3,
+                    0,
+                )
+            });
             return PlayerReliveReport {
                 player_id,
                 relive_type,
+                prelude: Some(prelude),
                 outcome: PlayerReliveOutcome::InPlace {
                     mutation,
                     answer_delivery,
                     shape_delivery,
                     state_deliveries,
+                    region_change,
+                    cannot_move_delivery,
                 },
             };
         }
@@ -21295,6 +21325,7 @@ impl CGame {
                     return PlayerReliveReport {
                         player_id,
                         relive_type,
+                        prelude: Some(prelude),
                         outcome: PlayerReliveOutcome::CurrentRegionMissing { mutation },
                     };
                 }
@@ -21302,6 +21333,7 @@ impl CGame {
                     return PlayerReliveReport {
                         player_id,
                         relive_type,
+                        prelude: Some(prelude),
                         outcome: PlayerReliveOutcome::ReturnPointBlocked(block),
                     };
                 }
@@ -21310,6 +21342,7 @@ impl CGame {
                 return PlayerReliveReport {
                     player_id,
                     relive_type,
+                    prelude: Some(prelude),
                     outcome: PlayerReliveOutcome::CurrentRegionMissing { mutation },
                 };
             }
@@ -21353,31 +21386,31 @@ impl CGame {
                         return PlayerReliveReport {
                             player_id,
                             relive_type,
+                            prelude: Some(prelude),
                             outcome: PlayerReliveOutcome::RandomPositionBlocked(block),
                         };
                     }
                 }
             }
         }
-        {
-            let player = self
-                .find_player_mut(player_id)
-                .expect("relive player сохранён до destination states");
-            context.enter_player_resident_state(player);
-        }
+        let resident_delivery = self.enter_player_resident_state(player_id);
         let peace = self.enter_player_peace_state(player_id);
-        let changed_region = context.change_relived_player_region(
+        let region_change = self.change_player_region(
             player_id,
             return_point.point.region_id,
             x,
             y,
             return_point.point.direction,
             0,
+            0,
+            0,
+            context,
         );
+        let changed_region = Self::player_region_change_succeeded(&region_change);
         let answer_delivery = changed_region.then(|| self.send_player_relive_answer(player_id));
-        let mut state_deliveries: Vec<_> = peace
-            .and_then(|report| report.around_delivery)
+        let mut state_deliveries: Vec<_> = resident_delivery
             .into_iter()
+            .chain(peace.and_then(|report| report.around_delivery).into_iter())
             .collect();
         if self
             .find_player(player_id)
@@ -21387,15 +21420,13 @@ impl CGame {
                 .find_player(player_id)
                 .and_then(CPlayer::server_region_id)
                 .or(Some(return_point.point.region_id));
-            state_deliveries.extend(self.publish_relive_died_state(
-                destination_region_id,
-                player_id,
-                context,
-            ));
+            state_deliveries
+                .extend(self.publish_relive_died_state(destination_region_id, player_id));
         }
         PlayerReliveReport {
             player_id,
             relive_type,
+            prelude: Some(prelude),
             outcome: PlayerReliveOutcome::ReturnPoint {
                 mutation,
                 return_point,
@@ -21404,6 +21435,7 @@ impl CGame {
                 changed_region,
                 answer_delivery,
                 state_deliveries,
+                region_change,
             },
         }
     }
@@ -21418,6 +21450,116 @@ impl CGame {
             .add_short(player.shape().get_action() as i16);
         message.add_ulong(player.health());
         message.send_to_player(self.net_server(), player_id)
+    }
+
+    /// Exact scalar/wire `EnterResidentState`: murderer timer сбрасывается до
+    /// `0xBF60E(player, 0)`, опубликованного всем around-получателям.
+    fn enter_player_resident_state(
+        &mut self,
+        player_id: i32,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        self.find_player_mut(player_id)?.enter_resident_state();
+        let mut message = CMessage::new(0x000b_f60e);
+        message.add_long(player_id);
+        message.add_byte(0);
+        self.send_player_shape_around(player_id, None, &message)
+    }
+
+    fn player_region_change_succeeded(report: &PlayerRegionChangeReport) -> bool {
+        match report.kind {
+            PlayerRegionChangeKind::SameRegion | PlayerRegionChangeKind::LocalRegion => true,
+            PlayerRegionChangeKind::RemoteServer => {
+                matches!(report.world_delivery, Some(Ok(delivery)) if delivery != 0)
+            }
+            PlayerRegionChangeKind::MissingPlayer | PlayerRegionChangeKind::MissingSourceRegion => {
+                false
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn missing_player_region_change_report(
+        &self,
+        player_id: i32,
+        target_region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+        use_goods: i32,
+        range: i32,
+        carriage_distance: i32,
+    ) -> PlayerRegionChangeReport {
+        PlayerRegionChangeReport {
+            player_id,
+            source_region_id: None,
+            target_region_id,
+            tile_x,
+            tile_y,
+            direction,
+            use_goods,
+            range,
+            carriage_distance,
+            kind: PlayerRegionChangeKind::MissingPlayer,
+            business: None,
+            position_delivery: None,
+            direction_delivery: None,
+            region_delivery: None,
+            faction_delivery: None,
+            team_delivery: None,
+            world_delivery: None,
+            change_log_delivery: None,
+            player_snapshot_size: None,
+        }
+    }
+
+    /// Native in-place relive вызывает `OnCannotMove(old_x, old_y)`, если
+    /// смена позиции сохранила старую клетку либо её уже занял живой
+    /// `CMoveShape` (goods type 700 намеренно исключён).
+    fn restore_relive_origin_after_change(
+        &self,
+        player_id: i32,
+        origin_x: i32,
+        origin_y: i32,
+    ) -> Option<i32> {
+        let player = self.find_player(player_id)?;
+        let current = (
+            player.shape().get_tile_x().ok()?,
+            player.shape().get_tile_y().ok()?,
+        );
+        let occupied = if current == (origin_x, origin_y) {
+            true
+        } else {
+            let region = self.find_region(player.server_region_id()?)?.base();
+            let shape = region
+                .get_shape(
+                    origin_x,
+                    origin_y,
+                    self.globe_setup.area_width(),
+                    self.globe_setup.area_height(),
+                    self,
+                )
+                .ok()
+                .flatten();
+            shape.is_some_and(|shape| match shape.identity.object_type {
+                PLAYER_TYPE => self
+                    .find_player(shape.identity.id)
+                    .is_some_and(|player| !player.is_dead()),
+                MONSTER_TYPE => region
+                    .find_monster_by_id(shape.identity.id)
+                    .is_some_and(|monster| !CMoveShape::is_died(monster.hit_points())),
+                NPC_TYPE => true,
+                GOODS_TYPE => false,
+                _ => false,
+            })
+        };
+        occupied.then(|| {
+            let mut response = CMessage::new(0x000b_f605);
+            response.add_long(0);
+            response.add_long(0);
+            response.add_long(current.0);
+            response.add_long(current.1);
+            response.send_to_player(self.net_server(), player_id)
+        })
     }
 
     fn publish_player_fight_state(
@@ -21457,11 +21599,10 @@ impl CGame {
         Some(self.publish_player_fight_state(phase, transition))
     }
 
-    fn publish_relive_died_state<Context: PlayerReliveContext>(
+    fn publish_relive_died_state(
         &mut self,
         region_id: Option<i32>,
         player_id: i32,
-        context: &mut Context,
     ) -> Vec<Result<i32, ShapeCoordinateBlock>> {
         let Some(player) = self.find_player_mut(player_id) else {
             return Vec::new();
@@ -21473,9 +21614,10 @@ impl CGame {
         let mut deliveries = vec![Ok(message.send_to_player(self.net_server(), player_id))];
         if let Some(owner) = region_id.and_then(|region_id| self.take_region_owner(region_id)) {
             if let Some(player) = self.find_player(player_id) {
-                deliveries.push(context.send_player_relive_around(
+                deliveries.push(self.send_shape_around_in_region(
                     owner.base(),
                     player.shape(),
+                    None,
                     &message,
                 ));
             }
@@ -30307,6 +30449,7 @@ impl CGame {
                 destination: None,
                 random_block: None,
                 changed_region: None,
+                region_change: None,
             };
         };
         let facts = ServerReturnPlayer {
@@ -30339,6 +30482,7 @@ impl CGame {
                     destination: None,
                     random_block: None,
                     changed_region: None,
+                    region_change: None,
                 };
             };
             let mut city_facts = city_facts;
@@ -30374,6 +30518,7 @@ impl CGame {
                 destination: None,
                 random_block: None,
                 changed_region: None,
+                region_change: None,
             };
         };
         let width = point_value.right.wrapping_sub(point_value.left);
@@ -30398,20 +30543,25 @@ impl CGame {
                 }
             }
         }
-        let changed_region = runtime.change_relived_player_region(
+        let region_change = self.change_player_region(
             player_id,
             point_value.region_id,
             x,
             y,
             direction,
             0,
+            0,
+            0,
+            runtime,
         );
+        let changed_region = Self::player_region_change_succeeded(&region_change);
         GameReturnedRegionPlayer {
             player_id,
             point: Ok(point_value),
             destination: Some((x, y)),
             random_block,
             changed_region: Some(changed_region),
+            region_change: Some(region_change),
         }
     }
 
