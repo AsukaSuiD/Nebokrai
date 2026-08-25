@@ -18,8 +18,11 @@
 //! VERIFIED_DISASSEMBLY`. Она хранит только исходные ID/GUID/hash и получает
 //! живой shape-view через resolver исторического
 //! `CServerRegion::FindChildObject`; pointer ownership в `CArea` не вводится.
-//! `PlayerEnter` RVA `0x00075580` сохраняет точный девяти-area traversal, а
-//! сам `WakeUpMonsters` остаётся явным AI callback.
+//! `PlayerEnter` RVA `0x00075580` сохраняет точный девяти-area traversal.
+//! `WakeUpMonsters` RVA `0x00073A70` атомарно забирает sleeping storage;
+//! owning region передаёт actual monster в AI Reset/classification callback и
+//! возвращает его в active/pet/carriage vector либо оставляет вне area при
+//! stale owner/отсутствующем AI.
 //! Nation `OnClearWar` достигает ordered type `600` и sleeping-only views;
 //! они возвращают owned ID в исходном active/sleep/pet/carriage порядке без
 //! введения второго pointer owner-а.
@@ -109,6 +112,13 @@ pub(crate) struct AreaMonsterAiFacts {
     pub(crate) hibernated: bool,
     pub(crate) tamed: bool,
     pub(crate) carriage: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AreaWokenMonsterClass {
+    Active,
+    Pet,
+    Carriage,
 }
 
 pub(crate) trait AreaAiContext {
@@ -219,6 +229,20 @@ impl CArea {
     pub(crate) fn append_sleeping_monster_ids(&self, destination: &mut Vec<i32>) {
         let _guard = self.critical_section.lock();
         destination.extend_from_slice(&self.sleeping_monsters);
+    }
+
+    pub(crate) fn take_sleeping_monster_ids(&mut self) -> Vec<i32> {
+        let _guard = self.critical_section.lock();
+        std::mem::take(&mut self.sleeping_monsters)
+    }
+
+    pub(crate) fn push_woken_monster(&mut self, id: i32, class: AreaWokenMonsterClass) {
+        let _guard = self.critical_section.lock();
+        match class {
+            AreaWokenMonsterClass::Active => self.active_monsters.push(id),
+            AreaWokenMonsterClass::Pet => self.pets.push(id),
+            AreaWokenMonsterClass::Carriage => self.carriages.push(id),
+        }
     }
 
     /// Возвращает identity-кандидаты exact `GetActivedShapes` в исходном
@@ -746,7 +770,9 @@ impl CSession {
 
 // ============================================================================
 // FUNCTION: CArea::WakeUpMonsters
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// IMPLEMENTED: storage transition в `take_sleeping_monster_ids`/
+// `push_woken_monster`, actual owner caller — `CServerRegion`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\area.cpp:100

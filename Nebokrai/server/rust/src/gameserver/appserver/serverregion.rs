@@ -120,7 +120,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use encoding_rs::WINDOWS_1251;
 
-use super::area::{AreaAiContext, AreaAiReport, CArea, WarSoulPoint};
+use super::area::{AreaAiContext, AreaAiReport, AreaWokenMonsterClass, CArea, WarSoulPoint};
 use super::baseobject::CBaseObject;
 use super::country::countryparam::CCountryParam;
 use super::monster::CMonster;
@@ -407,15 +407,14 @@ pub(crate) trait ServerRegionAreaTransitionContext {
     /// Шлёт player-у `0xBF502` одного уже присутствующего shape новой area.
     fn send_area_shape_to_player(&mut self, player_id: i32, shape: ShapeView, payload: &[u8]);
 
-    /// Материализует `CArea::PlayerEnter -> WakeUpMonsters` у AI owner-а.
-    fn wake_up_area_monsters(&mut self, area_x: i32, area_y: i32);
+    /// Выполняет `GetAI/Reset` и derived pet/carriage classification.
+    fn wake_up_monster(&mut self, monster: &mut CMonster) -> Option<AreaWokenMonsterClass>;
 }
 
 pub(crate) trait ServerRegionMembershipContext:
     RegionRandomContext + ShapePositionDispatch<Error = RegionMembershipBlock>
 {
-    /// Материализует `CArea::WakeUpMonsters` у AI owner-а.
-    fn wake_up_area_monsters(&mut self, area_x: i32, area_y: i32);
+    fn wake_up_monster(&mut self, monster: &mut CMonster) -> Option<AreaWokenMonsterClass>;
 
     /// Материализует достигнутый virtual `CMoveShape` area-enter callback.
     fn move_shape_entered_area(&mut self, identity: ShapeIdentity);
@@ -1056,6 +1055,27 @@ impl CServerRegion {
             goods_protected_timer_ms,
             context,
         ))
+    }
+
+    fn wake_up_area_monsters(
+        &mut self,
+        area_x: i32,
+        area_y: i32,
+        mut wake: impl FnMut(&mut CMonster) -> Option<AreaWokenMonsterClass>,
+    ) {
+        let Some(area_index) = self.area_index_by_coordinates(ShapeAreaCoordinates {
+            x: area_x,
+            y: area_y,
+        }) else {
+            return;
+        };
+        let sleeping = self.areas[area_index].take_sleeping_monster_ids();
+        for monster_id in sleeping {
+            let class = self.owned_monsters.get_mut(&monster_id).and_then(&mut wake);
+            if let Some(class) = class {
+                self.areas[area_index].push_woken_monster(monster_id, class);
+            }
+        }
     }
 
     pub(crate) fn active_shape_candidates(&self, area_index: usize) -> Vec<ShapeIdentity> {
@@ -1963,7 +1983,9 @@ impl CServerRegion {
                 let neighbors = self.areas[area_index].player_enter_neighbors();
                 for (area_x, area_y) in neighbors {
                     if self.get_area(area_x, area_y).is_some() {
-                        context.wake_up_area_monsters(area_x, area_y);
+                        self.wake_up_area_monsters(area_x, area_y, |monster| {
+                            context.wake_up_monster(monster)
+                        });
                     }
                 }
             }
@@ -2169,7 +2191,9 @@ impl CServerRegion {
         if moving.object_type == PLAYER_TYPE {
             for (area_x, area_y) in self.areas[target_index].player_enter_neighbors() {
                 if self.get_area(area_x, area_y).is_some() {
-                    context.wake_up_area_monsters(area_x, area_y);
+                    self.wake_up_area_monsters(area_x, area_y, |monster| {
+                        context.wake_up_monster(monster)
+                    });
                 }
             }
         }
