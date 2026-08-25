@@ -35,14 +35,16 @@
 //! `0xBF807` и переносит registered players в virtual return points.
 //! Public talk `0x8FB07/08` сохраняет silence/cooldown, exact setup-cost,
 //! ordered item/money mutations, World `0x5FD07/08` и chat-log `0x6020B`.
-//! Failed GameServer change `0x8FB04` условно пишет player error-log через
-//! общий concrete GameServer sink и всегда ставит concrete `QuitBySocketId`.
-//! Script-dialog answer `0x8FB02` сохраняет player/region no-read guard,
-//! exact mode `1/-1/0`, bounded string + CRT-like `atoi` и continue/delete
-//! прямо в owned script-instance `CGame`; ответ снимает TalkBox wait по
-//! исходному script ID, а cancel удаляет тот же instance. World continuation
-//! `0x7FA15` читает player/script/value и делает тот же lookup даже после null
-//! player lookup, сохраняя исходный безусловный вызов `ScriptContinue`.
+//! Сбой смены GameServer `0x8FB04` при найденном игроке пишет запись в журнал
+//! ошибок через общий приёмник GameServer и всегда вызывает `QuitBySocketId`.
+//! Ответ сценарного окна `0x8FB02` сохраняет защиту от чтения без найденных
+//! игрока и региона, режимы `1/-1/0`, ограниченную строку с поведением `atoi`
+//! и продолжение либо удаление прямо во владельце сценария `CGame`. Ответ
+//! снимает ожидание `GameMessage` или `TalkBox` по исходному ID сценария, а
+//! отмена удаляет тот же экземпляр. Продолжение от WorldServer `0x7FA15`
+//! читает идентификаторы игрока и сценария вместе со значением и выполняет тот
+//! же поиск даже при отсутствии игрока, сохраняя исходный безусловный вызов
+//! `ScriptContinue`.
 //! Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::{

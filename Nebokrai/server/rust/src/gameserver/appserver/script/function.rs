@@ -126,6 +126,9 @@
 //! экипировке с полным завершением игрока и обычные клиентские сообщения
 //! добавления, удаления и изменения количества; достигнутый вызов находится
 //! в первом блоке очистки реально запускаемого `scripts/quest/nodupe.script`.
+//! `2306 / GameMessage` публикует `0xBF808` с текстом, видом окна и
+//! идентификатором сценария, после чего тот же экземпляр ожидает клиентский
+//! ответ `0x8FB02` и получает `$m_TalkRet`.
 //! Соседняя группа `2204/2205/2212/2217/2218/2220` связывает подсчёты рюкзака
 //! и депо, выбранный предмет контейнера улучшения, локальное либо удалённое
 //! удаление и доверенный путь сценария окна `0xBF919` с подтверждением
@@ -515,6 +518,7 @@ pub(crate) const SCRIPT_FUNCTION_OPEN_DEPOT: i32 = 2301;
 pub(crate) const SCRIPT_FUNCTION_GET_TEAM_NUM: i32 = 2302;
 pub(crate) const SCRIPT_FUNCTION_GET_TEAMER_NAME: i32 = 2303;
 pub(crate) const SCRIPT_FUNCTION_ADD_INFO: i32 = 2305;
+pub(crate) const SCRIPT_FUNCTION_GAME_MESSAGE: i32 = 2306;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX: i32 = 2307;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX_SMALL: i32 = 2324;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS_LOG: i32 = 2313;
@@ -3839,6 +3843,11 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_ADD_GOODS_LOG => match index {
             0 => String,
             1..=3 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GAME_MESSAGE => match index {
+            0 => String,
+            1 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_RANDOM => match index {
@@ -7383,6 +7392,19 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     .send_to_player(game.net_server(), player_id);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GAME_MESSAGE => {
+            if let Some(text) = string_arguments[0]
+                && game.find_player(player_id).is_some()
+            {
+                let mut message = CMessage::new(0x000b_f808);
+                message.base_mut().add(text);
+                message.add_byte(0);
+                message.add_long(integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR));
+                message.add_long(script_id);
+                let _ = message.send_to_player(game.net_server(), player_id);
+            }
+            Some(ScriptFunctionDispatchOutcome::Yielded { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_POST_COUNTRY_INFO => {
             let (Some(text), Some(country_id)) = (
