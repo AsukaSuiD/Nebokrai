@@ -55,7 +55,10 @@
 //! пока остаётся typed runtime-границей.
 //! `ProcessMessage` RVA `0x00005830` атомарно забирает FIFO строго в порядке
 //! World, Billing, accepted clients и для каждого элемента вызывает
-//! `CMessage::Run`; это имеет статус `IMPLEMENTED`. `InitNetServer` RVA
+//! `CMessage::Run`; это имеет статус `IMPLEMENTED`. Уже восстановленные family
+//! dispatcher-ы исполняются на месте, а оставшийся exact numeric route теперь
+//! возвращается явным unresolved report-ом вместо несуществующего handler-а.
+//! `InitNetServer` RVA
 //! `0x000020D0`, `InitNetClientOfWS/BS` RVA `0x00002C60/0x00002DE0`,
 //! `ReConnectWorldServer/BillingServer` RVA `0x0000B7B0/0x0000B8D0`, retry
 //! entries RVA `0x0000BAD0/0x0000BB80` и task owners RVA
@@ -724,7 +727,7 @@ use crate::gameserver::gameserver::playerranks::{
 use crate::nets::clients::ClientConnectError;
 use crate::nets::mysocket::legacy_ipv4_word;
 use crate::nets::netserver::message::{
-    CMessage, GameMessageHandlers, GameServerAroundRuntime, SendMessageError,
+    CMessage, GameMessageRoute, GameServerAroundRuntime, SendMessageError,
 };
 use crate::nets::netserver::mynetclient::{
     CMyNetClient, GameClientIoError, GameClientIoStep, ServerType,
@@ -5052,6 +5055,13 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
     pub(crate) server_messages:
         Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
     pub(crate) world_reconnections: Vec<GameWorldReconnectReport>,
+    pub(crate) unresolved_routes: Vec<GameUnresolvedMessageRoute>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameUnresolvedMessageRoute {
+    pub(crate) message_type: i32,
+    pub(crate) route: Option<GameMessageRoute>,
 }
 
 #[must_use = "reconnect report сохраняет replacement, player snapshot и World delivery"]
@@ -5109,8 +5119,7 @@ struct GameMainLoopState {
 /// материализации; message routing уже исполняется самим `CGame`, а region
 /// decoder получает тот же live factory-контекст без отдельного shadow state.
 pub(crate) trait GameMainLoopRuntime:
-    GameMessageHandlers
-    + InitialRegionStartupContext
+    InitialRegionStartupContext
     + GameRegionEnterContext
     + GamePlayerLoginContext
     + GameOrganizingWarRuntime
@@ -31072,6 +31081,7 @@ impl CGame {
         let mut log_messages = Vec::new();
         let mut server_messages = Vec::new();
         let mut world_reconnections = Vec::new();
+        let mut unresolved_routes = Vec::new();
         let world_messages = self
             .world_client
             .as_ref()
@@ -31100,6 +31110,7 @@ impl CGame {
                 &mut player_messages,
                 &mut log_messages,
                 &mut server_messages,
+                &mut unresolved_routes,
             );
         }
         let billing_messages = self
@@ -31130,6 +31141,7 @@ impl CGame {
                 &mut player_messages,
                 &mut log_messages,
                 &mut server_messages,
+                &mut unresolved_routes,
             );
         }
         let server_events = self
@@ -31162,6 +31174,7 @@ impl CGame {
                         &mut player_messages,
                         &mut log_messages,
                         &mut server_messages,
+                        &mut unresolved_routes,
                     );
                 }
                 GameServerEvent::WorldClientReconnected(client) => {
@@ -31194,6 +31207,7 @@ impl CGame {
             log_messages,
             server_messages,
             world_reconnections,
+            unresolved_routes,
         }
     }
 
@@ -31233,6 +31247,7 @@ impl CGame {
         server_messages: &mut Vec<
             Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
         >,
+        unresolved_routes: &mut Vec<GameUnresolvedMessageRoute>,
     ) {
         if let Some(report) =
             dispatch_server_message(message, self, runtime, |runtime| runtime.now_milliseconds())
@@ -31286,7 +31301,10 @@ impl CGame {
         } else if let Some(report) = dispatch_game_log_message(message, self, runtime) {
             log_messages.push(report);
         } else {
-            message.run(self, runtime);
+            unresolved_routes.push(GameUnresolvedMessageRoute {
+                message_type: message.message_type(),
+                route: message.select_game_route(self),
+            });
         }
     }
 }

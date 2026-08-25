@@ -160,11 +160,6 @@ pub(crate) enum GameMessageRoute {
     UniBill,
 }
 
-/// Синхронная граница доменного owner-а после numeric route selection.
-pub(crate) trait GameMessageHandlers {
-    fn handle(&mut self, route: GameMessageRoute, message: &mut CMessage);
-}
-
 pub(crate) struct GameServerAroundRuntime<'a> {
     game: &'a CGame,
     sessions: &'a CSessionFactory,
@@ -326,8 +321,10 @@ impl CMessage {
         }
     }
 
-    /// Выполняет exact selector, не материализуя тела выбранных handlers.
-    pub(crate) fn run(&mut self, game: &CGame, handlers: &mut dyn GameMessageHandlers) -> i32 {
+    /// Выполняет exact selector и возвращает ещё не материализованный route.
+    /// Уже восстановленные family-dispatcher-ы вызываются `CGame` раньше этой
+    /// точки, поэтому результат честно обозначает оставшийся gameplay owner.
+    pub(crate) fn select_game_route(&mut self, game: &CGame) -> Option<GameMessageRoute> {
         self.resolve_player_context(game);
 
         let family = self.message_type() as u32 & 0xFFFF_FF00;
@@ -379,10 +376,7 @@ impl CMessage {
             0x000F_F000 => Some(GameMessageRoute::UniBill),
             _ => None,
         };
-        if let Some(route) = route {
-            handlers.handle(route, self);
-        }
-        1
+        route
     }
 
     pub(crate) fn message_type(&self) -> i32 {
