@@ -446,6 +446,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rustix::system::uname;
 
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::area::{AreaAiContext, AreaAiReport, AreaMonsterAiFacts};
 use crate::gameserver::appserver::chbystate::ChangeBodyState;
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::{
@@ -605,25 +606,24 @@ use crate::gameserver::appserver::player::{
     BattleFairyFollowReport, BattleFairyObjectMove, BattleFairyObjectMoveOperation,
     BattleFairyPotentialAllocationDelivery, BattleFairyPotentialAllocationEffect,
     BattleFairyPotentialResetDelivery, BattleFairyPotentialResetEffect, BattleFairySkillAdded,
-    BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestDelivery,
-    BattleFairySkillRequestEffect, BattleFairySkillRequestFacts, BattleFairySkillRequestReport,
-    BattleFairySkillResetDelivery, BattleFairySkillResetEffect, BattleFairySkillResetReport,
-    BattleFairySummonDelivery, BattleFairySummonEffect, BattleFairySummonReport,
-    BattleFairyUpgradeDelivery, BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer,
-    CiQingContainerAddition, CiQingContainerConsumption, CiQingHandConsumption,
-    CiQingPacketAddition, CiQingPacketConsumption, EnhancementDeselectionBlock,
-    EnhancementDeselectionReport, EnhancementSelectionBlock, EnhancementSelectionReport,
-    GoodsDestroyHandConsumption, GoodsSessionPlayerRelease, HotkeyHandTransferOutcome,
-    HotkeyHandTransferReport, PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange,
-    PlayerBankCurrencyAddOutcome, PlayerCombatProperties, PlayerEquipmentAddEffect,
-    PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery,
-    PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
-    PlayerExitSilenceUpdate, PlayerFightStateTransition, PlayerGameSaveCodecError,
-    PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion, PlayerHonorResetReport,
-    PlayerLoginGoodsLocation, PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation,
-    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
-    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet,
-    PlayerYuanBaoChange,
+    BattleFairySkillRequest, BattleFairySkillRequestDelivery, BattleFairySkillRequestEffect,
+    BattleFairySkillRequestFacts, BattleFairySkillRequestReport, BattleFairySkillResetDelivery,
+    BattleFairySkillResetEffect, BattleFairySkillResetReport, BattleFairySummonDelivery,
+    BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeDelivery,
+    BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, CiQingContainerAddition,
+    CiQingContainerConsumption, CiQingHandConsumption, CiQingPacketAddition,
+    CiQingPacketConsumption, EnhancementDeselectionBlock, EnhancementDeselectionReport,
+    EnhancementSelectionBlock, EnhancementSelectionReport, GoodsDestroyHandConsumption,
+    GoodsSessionPlayerRelease, HotkeyHandTransferOutcome, HotkeyHandTransferReport,
+    PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange, PlayerBankCurrencyAddOutcome,
+    PlayerCombatProperties, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
+    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
+    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerExitSilenceUpdate,
+    PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
+    PlayerGoodsAiDeletion, PlayerHonorResetReport, PlayerLoginGoodsLocation,
+    PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation, PlayerSkillRequest,
+    PlayerSkillRequestDelivery, PlayerSkillRequestEffect, PlayerSkillRequestFacts,
+    PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -2221,14 +2221,6 @@ pub(crate) enum BattleFairyScriptAction {
         minimum: i32,
         maximum: i32,
     },
-}
-
-pub(crate) trait BattleFairySkillRequestContext {
-    fn queue_battle_fairy_skill(&mut self, player_id: i32, dispatch: BattleFairySkillDispatch);
-}
-
-pub(crate) trait PlayerSkillRequestContext {
-    fn queue_player_skill(&mut self, player_id: i32, dispatch: PlayerSkillDispatch);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5000,12 +4992,14 @@ pub(crate) trait GameMainLoopRuntime:
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
     fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
-    /// Исполняет current-state `AI` tail после owned `UpdateCurrentState` и
-    /// возвращает post-AI restored-state current war-soul skill.
+    /// Исполняет current-state `AI` tail после owned `UpdateCurrentState` с
+    /// canonical player-owned `CPlayerAI` FIFO и возвращает post-AI
+    /// restored-state current war-soul skill.
     fn player_move_shape_active_state_ai(
         &mut self,
         game: &mut CGame,
         player_id: i32,
+        player_ai: &mut CPlayerAI,
     ) -> Option<bool>;
     /// Возвращает actual derived AI/tamed/carriage facts одного monster-а.
     fn area_monster_ai_facts(
@@ -25457,6 +25451,20 @@ impl CGame {
         self.players.get_mut(&player_id)
     }
 
+    pub(crate) fn queue_player_ai_destination(
+        &mut self,
+        player_id: i32,
+        direction: i32,
+        is_run: bool,
+    ) -> bool {
+        self.find_player_mut(player_id).is_some_and(|player| {
+            player
+                .player_ai_mut()
+                .queue_client_destination(direction, is_run);
+            true
+        })
+    }
+
     pub(crate) fn player_registered_in_region(&self, player_id: i32) -> bool {
         self.regions
             .values()
@@ -27863,42 +27871,39 @@ impl CGame {
     /// Player mutation и effects сохраняют native order: optional contend
     /// notice, безусловный `ClearEmotion 0xBF611`, authorization, socket
     /// reject либо очередь concrete `CPlayerAI`.
-    pub(crate) fn request_player_skill<Context: PlayerSkillRequestContext>(
+    pub(crate) fn request_player_skill(
         &mut self,
         player_id: i32,
         socket_id: i32,
         request: PlayerSkillRequest,
         facts: PlayerSkillRequestFacts,
-        context: &mut Context,
     ) -> Option<PlayerSkillRequestReport> {
         let report = self
             .players
             .get_mut(&player_id)
             .map(|player| player.request_player_skill(request, facts, &self.skill_factory))?;
-        Some(self.deliver_player_skill_report(player_id, socket_id, report, context))
+        Some(self.deliver_player_skill_report(player_id, socket_id, report))
     }
 
-    pub(crate) fn request_item_skill<Context: PlayerSkillRequestContext>(
+    pub(crate) fn request_item_skill(
         &mut self,
         player_id: i32,
         socket_id: i32,
         request: PlayerSkillRequest,
         skill_level: i32,
         facts: PlayerSkillRequestFacts,
-        context: &mut Context,
     ) -> Option<PlayerSkillRequestReport> {
         let report = self.players.get_mut(&player_id).map(|player| {
             player.request_item_skill(request, skill_level, facts, &self.skill_factory)
         })?;
-        Some(self.deliver_player_skill_report(player_id, socket_id, report, context))
+        Some(self.deliver_player_skill_report(player_id, socket_id, report))
     }
 
-    fn deliver_player_skill_report<Context: PlayerSkillRequestContext>(
+    fn deliver_player_skill_report(
         &mut self,
         player_id: i32,
         socket_id: i32,
         mut report: PlayerSkillRequestReport,
-        context: &mut Context,
     ) -> PlayerSkillRequestReport {
         for effect in report.effects.clone() {
             match effect {
@@ -27957,7 +27962,11 @@ impl CGame {
                         ));
                 }
                 PlayerSkillRequestEffect::AiDispatch(dispatch) => {
-                    context.queue_player_skill(player_id, dispatch);
+                    self.players
+                        .get_mut(&player_id)
+                        .expect("skill dispatch сохраняет canonical player")
+                        .player_ai_mut()
+                        .queue_player_skill(dispatch);
                     report.deliveries.push(PlayerSkillRequestDelivery::AiQueued);
                 }
             }
@@ -28166,13 +28175,12 @@ impl CGame {
     /// Facts оставляют explicit boundaries для ещё сырого `CPlayerAI`,
     /// `SymbolIsAttackAble` и monster registry, не выдавая player-only resolver
     /// текущего `CGame` за полный region lookup.
-    pub(crate) fn request_battle_fairy_skill<Context: BattleFairySkillRequestContext>(
-        &self,
+    pub(crate) fn request_battle_fairy_skill(
+        &mut self,
         player_id: i32,
         socket_id: i32,
         request: BattleFairySkillRequest,
         facts: BattleFairySkillRequestFacts,
-        context: &mut Context,
     ) -> Option<BattleFairySkillRequestReport> {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let mut report = self.players.get(&player_id).map(|player| {
@@ -28217,7 +28225,11 @@ impl CGame {
                         ));
                 }
                 BattleFairySkillRequestEffect::AiDispatch(dispatch) => {
-                    context.queue_battle_fairy_skill(player_id, dispatch);
+                    self.players
+                        .get_mut(&player_id)
+                        .expect("battle-fairy dispatch сохраняет canonical player")
+                        .player_ai_mut()
+                        .queue_battle_fairy_skill(dispatch);
                     report
                         .deliveries
                         .push(BattleFairySkillRequestDelivery::AiQueued);
@@ -29400,8 +29412,19 @@ impl CGame {
                                 player_fight_states.push(fight_state);
                             }
                             runtime.player_update_criminal_state_tail(self, player_id);
-                            restored = runtime.player_move_shape_active_state_ai(self, player_id);
-                            ran_player_body = true;
+                            let mut player_ai = self
+                                .find_player_mut(player_id)
+                                .expect("active-state caller проверил canonical player")
+                                .take_player_ai();
+                            restored = runtime.player_move_shape_active_state_ai(
+                                self,
+                                player_id,
+                                &mut player_ai,
+                            );
+                            if let Some(player) = self.find_player_mut(player_id) {
+                                player.restore_player_ai(player_ai);
+                                ran_player_body = true;
+                            }
                         }
                     }
                 }

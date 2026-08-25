@@ -12,8 +12,9 @@
 //!
 //! Безопасный decoder отклоняет оборванный payload вместо исходного чтения за
 //! границей буфера. Skill-script path входит в reached `CGame::run_script_file`
-//! с player/region context. Concrete `CSkill::IsEnd/End(true)` и `CPlayerAI`
-//! остаются явно названными runtime-границами.
+//! с player/region context. Оба AI-dispatch теперь попадают в canonical
+//! player-owned `CPlayerAI`; concrete `CSkill::IsEnd/End(true)` и исполнение
+//! target/skill очередей остаются явно названными runtime-границами.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -27,9 +28,7 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
-use crate::gameserver::gameserver::game::{
-    BattleFairySkillRequestContext, CGame, PlayerSkillRequestContext, colored_player_notice_message,
-};
+use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
 
 const USE_PLAYER_SKILL: u32 = 0x0009_0001;
@@ -79,9 +78,7 @@ pub(crate) struct PlayerSkillScriptReport {
     pub(crate) outcome: PlayerSkillScriptOutcome,
 }
 
-pub(crate) trait GameSkillMessageRuntime:
-    BattleFairySkillRequestContext + PlayerSkillRequestContext + ScriptFunctionRuntime
-{
+pub(crate) trait GameSkillMessageRuntime: ScriptFunctionRuntime {
     fn end_current_player_skill(
         &mut self,
         game: &mut CGame,
@@ -183,7 +180,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
             };
             let facts = runtime.player_skill_request_facts(game, player_id, region_id, request);
             let report = game
-                .request_player_skill(player_id, socket_id, request, facts, runtime)
+                .request_player_skill(player_id, socket_id, request, facts)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
             GameSkillMessageOutcome::PlayerSkill(report)
         }
@@ -320,7 +317,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
             };
             let facts = runtime.player_skill_request_facts(game, player_id, region_id, request);
             let report = game
-                .request_item_skill(player_id, socket_id, request, skill_level, facts, runtime)
+                .request_item_skill(player_id, socket_id, request, skill_level, facts)
                 .expect("resolved message player остаётся в CGame во время item-skill dispatch");
             GameSkillMessageOutcome::ItemSkill(report)
         }
@@ -350,7 +347,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
             let facts =
                 runtime.battle_fairy_skill_request_facts(game, player_id, region_id, request);
             let report = game
-                .request_battle_fairy_skill(player_id, socket_id, request, facts, runtime)
+                .request_battle_fairy_skill(player_id, socket_id, request, facts)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
             GameSkillMessageOutcome::BattleFairy(report)
         }

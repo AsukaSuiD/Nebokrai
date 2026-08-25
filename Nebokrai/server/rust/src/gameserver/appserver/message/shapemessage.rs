@@ -6,11 +6,10 @@
 //! state, region lookup, around/addressed wire и ordering внешних AI/spatial/
 //! serialization owners. Player `SetTileXY` проходит concrete region/area/
 //! block mutation и post-move `GS0163`. Quest movement замыкает attack guard,
-//! rotation correction, addressed `OnCannotMove`, emotion reset и concrete
-//! `CPlayerAI` destination FIFO. Non-player polymorphic `SetTileXY` и полные
+//! rotation correction, addressed `OnCannotMove`, emotion reset и canonical
+//! player-owned `CPlayerAI` destination FIFO. Non-player polymorphic `SetTileXY` и полные
 //! player/goods/shape serializers остаются runtime-границами.
 
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeView};
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
@@ -66,7 +65,6 @@ pub(crate) trait GameShapeMessageRuntime {
         player_id: i32,
         region_id: i32,
     ) -> ShapeQuestMoveFacts;
-    fn shape_player_ai_mut(&mut self, game: &CGame, player_id: i32) -> Option<&mut CPlayerAI>;
     fn serialize_shape_snapshot(
         &mut self,
         game: &CGame,
@@ -363,7 +361,10 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 report.outcome = GameShapeMessageOutcome::QuestMoveIgnoredDead;
                 return Some(Ok(report));
             }
-            let Some(player_ai) = runtime.shape_player_ai_mut(game, player_id) else {
+            game.find_player_mut(player_id)
+                .expect("quest-move player сохранён после dead guard")
+                .clear_emotion_state();
+            if !game.queue_player_ai_destination(player_id, i32::from(direction), move_mode != 2) {
                 let delivery = match send_player_cannot_move(game, player_id) {
                     Ok(delivery) => delivery,
                     Err(error) => return Some(Err(error)),
@@ -373,11 +374,7 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                     .push(GameShapeMessageDelivery::Player(delivery));
                 report.outcome = GameShapeMessageOutcome::QuestMoveBlocked;
                 return Some(Ok(report));
-            };
-            game.find_player_mut(player_id)
-                .expect("quest-move player сохранён после dead guard")
-                .clear_emotion_state();
-            player_ai.queue_client_destination(i32::from(direction), move_mode != 2);
+            }
             report.outcome = GameShapeMessageOutcome::QuestMoveQueued;
         }
         QUERY_SHAPE_SNAPSHOT => {

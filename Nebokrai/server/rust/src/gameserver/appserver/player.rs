@@ -233,6 +233,7 @@
 //! commit добавляет девять war-soul skills, пересчитывает свойства, публикует
 //! `0xBF720` с исключением owner-а и отражает даже zero-delta `PackExpand` log.
 
+use super::ai::playerai::CPlayerAI;
 use super::area::WarSoulPoint;
 use super::container::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsCodecError, AmountLimitGoodsRemoved,
@@ -1901,6 +1902,7 @@ pub(crate) enum PlayerTalkChannel {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
+    player_ai: CPlayerAI,
     figure: ShapeFigure,
     faction_id: i32,
     faction_master_id: i32,
@@ -2223,6 +2225,7 @@ impl CPlayer {
         let _empty_release = auction_listing.set_container_volume(2);
         let mut player = Self {
             move_shape,
+            player_ai: CPlayerAI::default(),
             figure,
             faction_id: 0,
             faction_master_id: 0,
@@ -3181,6 +3184,22 @@ impl CPlayer {
 
     pub(crate) const fn shape(&self) -> &CShape {
         self.move_shape.shape()
+    }
+
+    pub(crate) const fn player_ai(&self) -> &CPlayerAI {
+        &self.player_ai
+    }
+
+    pub(crate) const fn player_ai_mut(&mut self) -> &mut CPlayerAI {
+        &mut self.player_ai
+    }
+
+    pub(crate) fn take_player_ai(&mut self) -> CPlayerAI {
+        std::mem::take(&mut self.player_ai)
+    }
+
+    pub(crate) fn restore_player_ai(&mut self, player_ai: CPlayerAI) {
+        self.player_ai = player_ai;
     }
 
     pub(crate) const fn restore_login_team(&mut self, captain: bool, team_id: i32) {

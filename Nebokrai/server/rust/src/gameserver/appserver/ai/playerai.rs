@@ -6,10 +6,15 @@
 //! destination до длины не более трёх и затем добавляет `(direction, is_run)`;
 //! так очередь после вызова содержит не более четырёх элементов. Owner/health
 //! и ClearEmotion остаются у caller-а, чтобы не хранить raw pointers внутри AI.
-//! Четырёхаргументный pathfinding `MoveTo`, AI tick, target/skill execution и
-//! остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Owner теперь принадлежит canonical `CPlayer`: quest movement и оба skill
+//! message family кладут typed dispatch в его FIFO, а reached active-state AI
+//! получает именно этот owner и может потребить очереди без shadow map.
+//! Четырёхаргументный pathfinding `MoveTo`, target/skill execution и остальные
+//! методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::VecDeque;
+
+use crate::gameserver::appserver::player::{BattleFairySkillDispatch, PlayerSkillDispatch};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAiDestination {
@@ -20,6 +25,8 @@ pub(crate) struct PlayerAiDestination {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CPlayerAI {
     destinations: VecDeque<PlayerAiDestination>,
+    player_skills: VecDeque<PlayerSkillDispatch>,
+    battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
 }
 
 impl CPlayerAI {
@@ -33,6 +40,22 @@ impl CPlayerAI {
         }
         self.destinations
             .push_back(PlayerAiDestination { direction, is_run });
+    }
+
+    pub(crate) fn queue_player_skill(&mut self, dispatch: PlayerSkillDispatch) {
+        self.player_skills.push_back(dispatch);
+    }
+
+    pub(crate) fn queue_battle_fairy_skill(&mut self, dispatch: BattleFairySkillDispatch) {
+        self.battle_fairy_skills.push_back(dispatch);
+    }
+
+    pub(crate) fn player_skills(&self) -> &VecDeque<PlayerSkillDispatch> {
+        &self.player_skills
+    }
+
+    pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {
+        &self.battle_fairy_skills
     }
 }
 
