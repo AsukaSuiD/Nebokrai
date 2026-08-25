@@ -16415,6 +16415,9 @@ impl CGame {
                 ScriptStepDisposition::WaitingFunction { .. } => {
                     self.active_scripts.insert(script_id, script);
                 }
+                ScriptStepDisposition::WaitingFunctionTimedOut { .. } => {
+                    self.active_scripts.insert(script_id, script);
+                }
                 ScriptStepDisposition::WaitingRuntime {
                     countdown_seconds,
                     expired_path,
@@ -26858,8 +26861,9 @@ impl CGame {
         Some(audit.send(self, false))
     }
 
-    /// Script `3504 / AddCarriage`: computed names reach canonical property,
-    /// spatial spawn, player binding, `C0205` publication and World audit.
+    /// Сценарная функция `3504 / AddCarriage`: вычисленные имена доходят до
+    /// канонических свойств, размещения в регионе, привязки к игроку,
+    /// публикации `C0205` и журналирования в World.
     pub(crate) fn add_script_player_carriage<Context: ServerRegionMonsterContext>(
         &mut self,
         player_id: i32,
@@ -26880,8 +26884,8 @@ impl CGame {
             return 0;
         };
         let Some(region_id) = region_id else {
-            // Native `AddCarriage` reports success when the shape has no
-            // `CServerRegion` father and performs no mutation.
+            // Исходный `AddCarriage` сообщает об успехе, когда у формы нет
+            // родителя `CServerRegion`, и не изменяет состояние.
             return 1;
         };
         let (Ok(player_x), Ok(player_y)) = (player_x, player_y) else {

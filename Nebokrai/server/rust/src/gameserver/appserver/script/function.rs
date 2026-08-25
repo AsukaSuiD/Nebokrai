@@ -99,9 +99,15 @@
 //! Соседний `3500..3503/3507` owner меняет persisted quest-enabled/countdown
 //! поля, публикует `0xBF728..2A` и возвращает тот же signed-wrap remainder,
 //! который client может отдельно запросить через уже достигнутый `0xBF72B`.
-//! Carriage family `3504..3506/3508` тем же reached dispatcher-ом проводит
-//! вычисленные имена в canonical spawn/player binding, `C0205/BF504`, World
-//! audit, live distance/index queries и уже materialized AI/save lifecycle.
+//! Семейство повозки `3504..3506/3508` через тот же достигнутый диспетчер
+//! передаёт вычисленные имена каноническим владельцам создания и привязки к
+//! игроку, публикации `C0205/BF504`, журналирования в World, живых запросов
+//! расстояния и индекса, а также уже восстановленного жизненного цикла AI и
+//! сохранения.
+//! `GetCopyNumForShengSiShiSu 9314` передаёт вычисленный признак резервирования,
+//! игрока и ID сценария в World-запрос `0x5FD0B`; ответ `0x7FA15` возвращается
+//! через общего владельца продолжения, а десятисекундный тайм-аут записывает ноль
+//! в `$m_TalkRet` и освобождает сохранённую позицию сценария.
 //! PreciousBox `2221/2222/2237` сохраняет trusted action-script у player,
 //! client open/result/close wire, общий Game RNG, configuration roll,
 //! goods factory/upgrade/packet ownership и optional World announcement;
@@ -421,6 +427,7 @@ pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY: i32 = 2500;
 pub(crate) const SCRIPT_FUNCTION_ADD_INCREMENT_LOG: i32 = 2570;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
+pub(crate) const SCRIPT_FUNCTION_GET_COPY_NUMBER: i32 = 9314;
 pub(crate) const SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE: i32 = 5411;
 pub(crate) const SCRIPT_FUNCTION_GET_MAXIMUM_LEVEL: i32 = 5412;
 pub(crate) const SCRIPT_FUNCTION_GET_AREA_ID: i32 = 5413;
@@ -3511,6 +3518,10 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_COPY_NUMBER => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE => match index {
             0 => Integer,
             _ => Unused,
@@ -6196,6 +6207,23 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Yielded {
                 legacy_return: local_count,
             })
+        }
+        SCRIPT_FUNCTION_GET_COPY_NUMBER => {
+            let Some(increment_flag) = integer_arguments[0].filter(|value| matches!(value, 0 | 1))
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if argument_count < 1 || game.find_player(player_id).is_none() || script_id <= 0 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let mut request = CMessage::new(0x0005_fd0b);
+            request.add_long(player_id);
+            request.add_long(script_id);
+            request.add_long(increment_flag);
+            match request.send(game, false) {
+                Ok(1) => Some(ScriptFunctionDispatchOutcome::Yielded { legacy_return: 0 }),
+                _ => Some(ScriptFunctionDispatchOutcome::Invalid),
+            }
         }
         SCRIPT_FUNCTION_POST_PLAYER_INFO
         | SCRIPT_FUNCTION_POST_REGION_INFO

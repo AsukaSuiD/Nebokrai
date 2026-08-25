@@ -22,11 +22,11 @@
 //! Metadata/progression group `5411/5412/5414/5420` читает единый загруженный
 //! `CPlayerList`, current player EXP и startup IDs; аргументы, которых exact
 //! selector не касается, VM не вычисляет.
-//! `wait 6` и `RunTime 22` хранят deadline в том же `ActiveScript`: первый
-//! продолжает cursor после истечения, второй раз в секунду отправляет
-//! `0xBF80E`, а после нуля запускает дочерний instance с исходным
-//! player/NPC/region context. Остальные неподтверждённые pause families
-//! остаются в RAW ниже.
+//! `wait 6` и `RunTime 22` хранят срок ожидания в том же `ActiveScript`:
+//! первый продолжает выполнение с сохранённой позиции, второй раз в секунду
+//! отправляет `0xBF80E`, а после нуля запускает дочерний сценарий с исходным
+//! контекстом игрока, NPC и региона. Остальные неподтверждённые семейства
+//! приостановки остаются в RAW ниже.
 //! Поздний `RegisterBuffSkillFunctions` программно дополняет загруженный RU
 //! FunctionList потерянным `AddJingJieBuff = 11131`; тот же registry lookup
 //! затем ведёт в общий `CScript::RunFunction`, а не в обходной parser path.
@@ -43,17 +43,17 @@ use super::function::{
     SCRIPT_FUNCTION_ADD_APPELLATION_STATE, SCRIPT_FUNCTION_ADD_INCREMENT_LOG,
     SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR, SCRIPT_FUNCTION_ARGUMENT_CAPACITY,
     SCRIPT_FUNCTION_CITY_WAR_DECLARE, SCRIPT_FUNCTION_DEL_APPELLATION_STATE,
-    SCRIPT_FUNCTION_GET_APPELLATION_STATE, SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE,
-    SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID, SCRIPT_FUNCTION_GET_STRING_BY_ID,
-    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME,
-    SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME,
-    SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAY_SOUND,
-    SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
-    SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
-    ScriptFunctionParameterKind, ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome,
-    dispatch_script_function, dispatch_script_string_function, owned_region_script_caller_is_live,
-    script_function_parameter_kind, script_player_npc_caller_exists,
-    village_war_script_caller_is_live,
+    SCRIPT_FUNCTION_GET_APPELLATION_STATE, SCRIPT_FUNCTION_GET_COPY_NUMBER,
+    SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE, SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID,
+    SCRIPT_FUNCTION_GET_STRING_BY_ID, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME,
+    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME,
+    SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME, SCRIPT_FUNCTION_MONSTER_TALK,
+    SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAY_SOUND, SCRIPT_FUNCTION_PLAYER_MESSAGE,
+    SCRIPT_FUNCTION_PLAYER_TALK, SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS,
+    ScriptFunctionDispatchOutcome, ScriptFunctionParameterKind, ScriptFunctionRuntime,
+    ScriptStringFunctionDispatchOutcome, dispatch_script_function, dispatch_script_string_function,
+    owned_region_script_caller_is_live, script_function_parameter_kind,
+    script_player_npc_caller_exists, village_war_script_caller_is_live,
 };
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
@@ -189,6 +189,10 @@ pub(crate) enum ScriptStepDisposition {
         function_id: i32,
         replay_command: bool,
     },
+    WaitingFunctionTimedOut {
+        function_id: i32,
+        legacy_return: i32,
+    },
     WaitingRuntime {
         countdown_seconds: Option<i32>,
         expired_path: Option<Vec<u8>>,
@@ -221,6 +225,7 @@ pub(crate) struct ActiveScript {
     waiting_replay: bool,
     resumed_function: Option<(i32, i32)>,
     runtime_wait: Option<ScriptRuntimeWait>,
+    waiting_started_ms: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -255,6 +260,7 @@ impl ActiveScript {
             waiting_replay: false,
             resumed_function: None,
             runtime_wait: None,
+            waiting_started_ms: None,
         }
     }
 
@@ -284,6 +290,7 @@ impl ActiveScript {
         let Some(function_id) = self.waiting_function.take() else {
             return false;
         };
+        self.waiting_started_ms = None;
         self.integer_variables
             .insert(normalize_name(b"$m_TalkRet"), value);
         if self.waiting_replay {
@@ -343,6 +350,24 @@ impl ActiveScript {
             };
         }
         if let Some(function_id) = self.waiting_function {
+            if function_id == SCRIPT_FUNCTION_GET_COPY_NUMBER
+                && self.waiting_started_ms.is_some_and(|started| {
+                    runtime.now_milliseconds().wrapping_sub(started) >= 10_000
+                })
+            {
+                self.waiting_function = None;
+                self.waiting_replay = false;
+                self.waiting_started_ms = None;
+                self.integer_variables
+                    .insert(normalize_name(b"$m_TalkRet"), 0);
+                return ScriptStepReport {
+                    execution: ScriptExecutionReport::default(),
+                    disposition: ScriptStepDisposition::WaitingFunctionTimedOut {
+                        function_id,
+                        legacy_return: 0,
+                    },
+                };
+            }
             return ScriptStepReport {
                 execution: ScriptExecutionReport::default(),
                 disposition: ScriptStepDisposition::WaitingFunction {
@@ -375,6 +400,7 @@ impl ActiveScript {
         {
             self.waiting_function = Some(*function_id);
             self.waiting_replay = *replay_command;
+            self.waiting_started_ms = Some(runtime.now_milliseconds());
         }
         report
     }
@@ -1711,8 +1737,8 @@ fn is_command_start(value: u8) -> bool {
 // IMPLEMENTED: player/path lookup и безопасное удаление текущего/чужих instances
 // принадлежат `CGame::player_script_is_running` / `remove_player_scripts`;
 // ID-based delete/continue замкнуты `delete_player_script` / `continue_player_script`.
-// Function `0x16` materialized выше: её waiting state принадлежит
-// `ActiveScript`, а countdown, дочерний запуск и delete-close — `CGame`.
+// Состояние ожидания функции `0x16` принадлежит `ActiveScript`, а обратный
+// отсчёт, дочерний запуск и закрытие при удалении — `CGame`.
 
 // ============================================================================
 // FUNCTION: CScript::~CScript
