@@ -209,8 +209,9 @@
 //! блокируется typed outcome до старого x87 integer conversion.
 //! Periodic HP-death prefix `CPlayer::AI` повторно нормализует summon/state и
 //! recall/died флаги нулевой по HP equipped fairy, затем вызывает
-//! `PropertiesChanged`; `CGame` собирает exact `0xBF721`, а ещё не owned
-//! RP/vigour/mode/exalt scalar-ы получает обязательными runtime facts.
+//! `PropertiesChanged`; `CGame` собирает exact `0xBF721` из owned combat/base
+//! полей, оставляя runtime facts только для ещё не сведённых add-element-
+//! attack, RP/max-vigour и exalt scalar-ов.
 //! Оригинал в этой ветви не чистит stale area-map entry и не посылает status
 //! broadcast; оба отсутствующих side effect сохранены.
 //! `CEquipmentContainer::OnObjectRemoved` player-tail связывает снятие

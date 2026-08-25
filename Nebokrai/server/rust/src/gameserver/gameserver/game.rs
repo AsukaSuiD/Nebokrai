@@ -175,7 +175,9 @@
 //! `0xBF720`; полный virtual property owner остаётся caller adapter-ом.
 //! Periodic battle-fairy death prefix теперь также доведён через equipment
 //! addon lookup и четыре player state mutation до адресного `0xBF721` в
-//! точном field order; ещё не owned RP/vigour/mode/exalt приходят typed facts.
+//! точном field order. Attack speed/CCH и base vigour/credit/mode читаются из
+//! canonical player state; только add-element-attack, RP/max-vigour и exalt
+//! остаются typed facts ещё не сведённого полного property owner-а.
 //! Summon/recall тем же property adapter-ом исполняет ordered notifications,
 //! around `0xBF605/0xBF930/0xBF92E` и terminal `0xBF721`; координаты move wire
 //! кодируются IEEE-754 float bits, как в `TellClientMove`, а не signed DWORD.
@@ -1368,14 +1370,9 @@ pub(crate) trait GodsBattlePlayerContext {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerPropertiesExternalFacts {
     pub(crate) add_element_attack: u32,
-    pub(crate) attack_speed: i16,
-    pub(crate) cch: i16,
     pub(crate) maximum_rp: u32,
     pub(crate) rp: u32,
     pub(crate) maximum_vigour: u32,
-    pub(crate) vigour: u32,
-    pub(crate) credit: u32,
-    pub(crate) mode: u32,
     pub(crate) exalt: u32,
 }
 
@@ -9186,12 +9183,11 @@ impl CGame {
             .expect("script-player сохранён между write и UpdateProperty")
             .apply_recomputed_combat_properties(recomputed);
 
-        let mut external = context.player_properties_external_facts(player_id);
+        let external = context.player_properties_external_facts(player_id);
         let player = self
             .players
             .get(&player_id)
             .expect("script-player сохранён до OnChangeProperties");
-        external.vigour = player.vigour();
         let _ = self.send_player_properties_changed(player, external);
         if property.eq_ignore_ascii_case(b"dwExp") {
             let mut result = CMessage::new(0x000b_f704);
@@ -9230,12 +9226,11 @@ impl CGame {
             .get_mut(&player_id)
             .expect("named script-player сохранён до ChangePlayer UpdateProperty")
             .apply_recomputed_combat_properties(recomputed);
-        let mut external = context.player_properties_external_facts(player_id);
+        let external = context.player_properties_external_facts(player_id);
         let player = self
             .players
             .get(&player_id)
             .expect("named script-player сохранён до ChangePlayer OnChangeProperties");
-        external.vigour = player.vigour();
         let _ = self.send_player_properties_changed(player, external);
         Some(applied)
     }
@@ -9268,12 +9263,11 @@ impl CGame {
             .get_mut(&player_id)
             .expect("named script-player сохранён до UpdateProperty")
             .apply_recomputed_combat_properties(recomputed);
-        let mut external = context.player_properties_external_facts(player_id);
+        let external = context.player_properties_external_facts(player_id);
         let player = self
             .players
             .get(&player_id)
             .expect("named script-player сохранён до OnChangeProperties");
-        external.vigour = player.vigour();
         let _ = self.send_player_properties_changed(player, external);
         let mut changed = CMessage::new(0x000b_f80c);
         changed.add_long(400);
@@ -15805,11 +15799,7 @@ impl CGame {
                 .expect("implantation player остаётся зарегистрирован");
             player.set_vigour(player.vigour().wrapping_sub(consumed_vigour));
         }
-        let mut external = context.player_properties_external_facts(player_id);
-        external.vigour = self
-            .find_player(player_id)
-            .expect("implantation player остаётся зарегистрирован")
-            .vigour();
+        let external = context.player_properties_external_facts(player_id);
         report.property_delivery = self
             .find_player(player_id)
             .map(|player| self.send_player_properties_changed(player, external));
@@ -20945,8 +20935,8 @@ impl CGame {
         message.add_ulong(combat.maximum_attack);
         message.add_ulong(external.add_element_attack);
         message.add_ulong(combat.element_modify as u32);
-        message.base_mut().add_short(external.attack_speed);
-        message.base_mut().add_short(external.cch);
+        message.base_mut().add_short(combat.attack_speed as i16);
+        message.base_mut().add_short(combat.cch as i16);
         message.add_ulong(combat.defense);
         message.add_ulong(combat.element_resistance);
         message.add_ulong(u32::from(combat.burden));
@@ -20958,9 +20948,9 @@ impl CGame {
         message.add_ulong(external.rp);
         message.base_mut().add_short(combat.reank as i16);
         message.add_ulong(external.maximum_vigour);
-        message.add_ulong(external.vigour);
-        message.add_ulong(external.credit);
-        message.add_ulong(external.mode);
+        message.add_ulong(base.vigour);
+        message.add_ulong(base.credit);
+        message.add_ulong(base.mode);
         message.add_ulong(u32::from(player.war_soul_state() == 1));
         message.add_ulong(u32::from(base.battle_fairy_recall));
         message.add_ulong(u32::from(base.battle_fairy_died));
