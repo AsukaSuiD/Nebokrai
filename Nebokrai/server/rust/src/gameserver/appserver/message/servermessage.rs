@@ -72,6 +72,11 @@
 //! Runtime general-variable echo `0x7F805` читает tag/name/value в исходном
 //! порядке и меняет первый ASCII-case-insensitive owner в принадлежащем `CGame`
 //! списке; неизвестный tag после имени остаётся no-op без чтения value.
+//! World reconnect request `0x7F808` публикует begin/player/finish кадры
+//! `0x5FA09` в signed порядке `s_mapPlayer`: каждый player-кадр содержит полный
+//! GameSave с живым pet/carriage context, затем отдельный `m_dwClientIP` и
+//! обновлённую длину. Ошибка codec сохраняет уже записанный partial snapshot,
+//! как игнорируемый virtual result оригинала, и не прерывает оставшиеся send-ы.
 //! Player notice response `0x7F804` сохраняет World offline/online wire,
 //! локализует exact `"GS0332 "` либо формирует `source:text`, bounded заменяет
 //! небезопасный `sprintf` и адресно шлёт client `0xBF806` с исходными colors.
@@ -182,8 +187,8 @@ use crate::gameserver::appserver::skills::skillfactory::{
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameNetworkInitializationError, GameSingleFilePublication, GodsBattleXydApplyReport,
-    MonsterBasePropertyRefreshReport, RealmAppellationScriptContext, ServerRegionOwner,
-    colored_player_notice_message, format_legacy_text_fields,
+    MonsterBasePropertyRefreshReport, RealmAppellationScriptContext, ScriptRegionChangeContext,
+    ServerRegionOwner, colored_player_notice_message, format_legacy_text_fields,
 };
 use crate::gameserver::gameserver::honorranks::{HonorRanksDecodeError, HonorRanksDecodeReport};
 use crate::gameserver::gameserver::playerranks::PlayerRanksDecodeError;
@@ -228,11 +233,13 @@ const WORLD_REGION_CHANGE_RESPONSE: i32 = 0x0007_F802;
 const WORLD_PLAYER_NOTICE_RESPONSE: i32 = 0x0007_F804;
 const GENERAL_VARIABLE_UPDATE_RESPONSE: i32 = 0x0007_F805;
 const MURDERER_UPDATE_RESPONSE: i32 = 0x0007_F806;
+const WORLD_PLAYER_DATA_REQUEST: i32 = 0x0007_F808;
 const RUNTIME_SPAWN_RESPONSE: i32 = 0x0007_F80A;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_MESSAGE: i32 = 0x0007_F809;
 const PLAYER_COUNT_MESSAGE: i32 = 0x0007_F80B;
 const PLAYER_COUNT_IF_WORLD_CONNECTED_RESPONSE: i32 = 0x0005_FA0A;
 const PLAYER_COUNT_RESPONSE: i32 = 0x0005_FA0C;
+const WORLD_PLAYER_DATA_RESPONSE: i32 = 0x0005_FA09;
 const GODS_BATTLE_TOP_TEN_RESPONSE: i32 = 0x0007_F80F;
 const GODS_BATTLE_XYD_RESPONSE: i32 = 0x0007_F80E;
 const GODS_BATTLE_TOP_TEN_CLIENT: i32 = 0x000B_F740;
@@ -360,6 +367,24 @@ pub(crate) struct GamePlayerCountResponseReport {
     pub(crate) kind: GamePlayerCountResponseKind,
     pub(crate) player_count: Option<u32>,
     pub(crate) outcome: GamePlayerCountResponseOutcome,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerDataSnapshotFrame {
+    pub(crate) player_id: i32,
+    pub(crate) encoded: bool,
+    pub(crate) snapshot_bytes: usize,
+    pub(crate) client_ip: u32,
+    pub(crate) delivery: Result<i32, SendMessageError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerDataSnapshotReport {
+    pub(crate) declared_players: u32,
+    pub(crate) begin_delivery: Result<i32, SendMessageError>,
+    pub(crate) frames: Vec<GamePlayerDataSnapshotFrame>,
+    pub(crate) sent_players: u32,
+    pub(crate) finish_delivery: Result<i32, SendMessageError>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1041,6 +1066,7 @@ pub(crate) enum GameServerMessageReport {
     RegionChange(GameRegionChangeResponseReport),
     StringTable(GameStringTableMessageReport),
     PlayerCount(GamePlayerCountResponseReport),
+    PlayerDataSnapshot(GamePlayerDataSnapshotReport),
     GodsBattleTopTen(GameGodsBattleTopTenReport),
     GodsBattleXyd(GameGodsBattleXydReport),
     GeneralVariableUpdate(GameGeneralVariableUpdateReport),
@@ -1251,7 +1277,8 @@ pub(crate) fn dispatch_server_message<Context>(
 where
     Context: InitialRegionStartupContext
         + GameRegionChangeResponseContext
-        + RealmAppellationScriptContext,
+        + RealmAppellationScriptContext
+        + ScriptRegionChangeContext,
 {
     if message.message_type() == WORLD_REGION_CHANGE_RESPONSE {
         let Some(accepted) = message.base_mut().get_char() else {
@@ -1740,6 +1767,55 @@ where
             game,
             GameStringTableSource::RuntimeRefresh,
         ));
+    }
+    if message.message_type() == WORLD_PLAYER_DATA_REQUEST {
+        let declared_players = game.player_count();
+        let mut begin = CMessage::new(WORLD_PLAYER_DATA_RESPONSE);
+        begin.add_byte(0);
+        begin.add_long(declared_players as i32);
+        let begin_delivery = begin.send(game, false);
+
+        let mut frames = Vec::with_capacity(declared_players as usize);
+        for player_id in game.reconnect_player_ids() {
+            let Some(player) = game.find_player(player_id) else {
+                continue;
+            };
+            let mut snapshot = Vec::new();
+            let encoded = game.encode_player_game_save(player, &mut snapshot, script_context);
+            let client_ip = player.client_ip();
+            let snapshot_bytes = snapshot.len();
+
+            let mut frame = CMessage::new(WORLD_PLAYER_DATA_RESPONSE);
+            frame.add_byte(1);
+            frame.add_long(player_id);
+            frame.base_mut().add(&snapshot);
+            frame.add_ulong(client_ip);
+            frame.base_mut().update();
+            let delivery = frame.send(game, false);
+            frames.push(GamePlayerDataSnapshotFrame {
+                player_id,
+                encoded,
+                snapshot_bytes,
+                client_ip,
+                delivery,
+            });
+        }
+
+        let sent_players = u32::try_from(frames.len())
+            .expect("x86 player snapshot count не может превысить DWORD");
+        let mut finish = CMessage::new(WORLD_PLAYER_DATA_RESPONSE);
+        finish.add_byte(2);
+        finish.add_long(sent_players as i32);
+        let finish_delivery = finish.send(game, false);
+        return Some(Ok(GameServerMessageReport::PlayerDataSnapshot(
+            GamePlayerDataSnapshotReport {
+                declared_players,
+                begin_delivery,
+                frames,
+                sent_players,
+                finish_delivery,
+            },
+        )));
     }
     if let Some(report) = dispatch_player_count_message(message.message_type(), game) {
         return Some(Ok(GameServerMessageReport::PlayerCount(report)));
