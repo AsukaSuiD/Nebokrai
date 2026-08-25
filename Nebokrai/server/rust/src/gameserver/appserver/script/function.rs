@@ -263,6 +263,7 @@ pub(crate) const SCRIPT_FUNCTION_ADD_UNDEAD_STATE: i32 = 2556;
 pub(crate) const SCRIPT_FUNCTION_DELETE_UNDEAD_STATE: i32 = 2557;
 pub(crate) const SCRIPT_FUNCTION_GET_UNDEAD_STATE: i32 = 2558;
 pub(crate) const SCRIPT_FUNCTION_SET_HOTKEY: i32 = 2560;
+pub(crate) const SCRIPT_FUNCTION_ADD_LOG: i32 = 2571;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
@@ -3338,6 +3339,11 @@ pub(crate) fn script_function_parameter_kind(
             1 | 2 | 4 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_ADD_LOG => match index {
+            0 => Integer,
+            1 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_ADD_GOODS
         | SCRIPT_FUNCTION_DELETE_GOODS
         | SCRIPT_FUNCTION_CHECK_GOODS
@@ -5597,6 +5603,22 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 message.add_long(item_amount);
             }
             message.add_ulong(client_ip);
+            let _ = message.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_ADD_LOG => {
+            let Some(player) = game.find_player(player_id) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let log_type = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            let Some(content) = string_arguments[1] else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let mut message = CMessage::new(0x0006_020f);
+            message.add_long(player.player_id());
+            message.add_long(log_type);
+            message.base_mut().add(content);
+            message.add_byte(0);
             let _ = message.send(game, false);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
