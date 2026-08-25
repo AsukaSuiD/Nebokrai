@@ -3014,6 +3014,9 @@ pub(crate) enum AuctionGoodsInventoryRollback {
 pub(crate) enum AuctionGoodsInventoryBlock {
     MissingPlayer,
     UnsupportedDestination,
+    InvalidBattleFairyCell {
+        position: u32,
+    },
     MissingGoods,
     AmountMismatch,
     PartialMoveBusy(PlayerProgress),
@@ -3025,11 +3028,16 @@ pub(crate) enum AuctionGoodsInventoryBlock {
         removal: AuctionGoodsInventoryRemoval,
         rollback: AuctionGoodsInventoryRollback,
     },
+    DestinationRejectsSourceSlot {
+        source_position: u32,
+        removal: AuctionGoodsInventoryRemoval,
+        rollback: AuctionGoodsInventoryRollback,
+    },
     RemovalFailed,
     RolledBack {
         removal: AuctionGoodsInventoryRemoval,
         bind_cleared: bool,
-        rejected: DepotStorageTransferAddition,
+        rejected: CiQingComposeTransferAddition,
         rollback: AuctionGoodsInventoryRollback,
     },
 }
@@ -3044,7 +3052,7 @@ pub(crate) struct AuctionGoodsInventoryReport {
     pub(crate) destination_position: u32,
     pub(crate) removal: AuctionGoodsInventoryRemoval,
     pub(crate) bind_cleared: bool,
-    pub(crate) addition: DepotStorageTransferAddition,
+    pub(crate) addition: CiQingComposeTransferAddition,
     pub(crate) previous_last_operated: (u32, u32),
     pub(crate) audit_deliveries: Vec<i32>,
     pub(crate) delivery: i32,
@@ -9627,8 +9635,16 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<AuctionGoodsInventoryReport, AuctionGoodsInventoryBlock> {
-        if !matches!(destination_extend_id, 1 | 2 | 9) {
+        if !matches!(destination_extend_id, 1 | 2 | 9 | 11 | 12 | 17) {
             return Err(AuctionGoodsInventoryBlock::UnsupportedDestination);
+        }
+        if destination_extend_id == 12
+            && destination_position != u32::MAX
+            && BattleFairyCell::from_position(destination_position).is_none()
+        {
+            return Err(AuctionGoodsInventoryBlock::InvalidBattleFairyCell {
+                position: destination_position,
+            });
         }
         let player = self
             .find_player(player_id)
@@ -9656,7 +9672,7 @@ impl CGame {
         let audit_price = source.price();
         let mut burden_goods = source.clone();
         burden_goods.set_amount(amount);
-        let burden_exceeded = destination_extend_id != 9
+        let burden_exceeded = matches!(destination_extend_id, 1 | 2)
             && player
                 .current_burden(&self.goods_factory)
                 .wrapping_add(burden_goods.weight(&self.goods_factory))
@@ -9711,6 +9727,17 @@ impl CGame {
             return Err(AuctionGoodsInventoryBlock::BurdenExceeded { removal, rollback });
         }
 
+        if destination_extend_id == 17 && source_position == 2 {
+            let rollback =
+                self.rollback_auction_goods_transfer(&mut player, source_position, &mut incoming);
+            self.players.insert(player_id, player);
+            return Err(AuctionGoodsInventoryBlock::DestinationRejectsSourceSlot {
+                source_position,
+                removal,
+                rollback,
+            });
+        }
+
         // Exact PutGoods игнорирует присланную packet position для source 14:
         // FindPositionForGoods выбирает compatible stack либо первый empty
         // slot до bind mutation и до positional Add.
@@ -9739,7 +9766,7 @@ impl CGame {
             && incoming
                 .as_mut()
                 .is_some_and(|goods| goods.set_addon_property_value_core(GAP_GOODS_BIND, 2, 0));
-        let addition = self.add_depot_transfer_goods(
+        let addition = self.add_ci_qing_compose_transfer_goods(
             &mut player,
             destination_extend_id,
             actual_destination_position,
@@ -9760,7 +9787,11 @@ impl CGame {
         }
 
         let (actual_destination_position, destination_goods, destination_amount) =
-            Self::depot_transfer_destination(&player, actual_destination_position, &addition);
+            Self::ci_qing_compose_transfer_destination(
+                &player,
+                actual_destination_position,
+                &addition,
+            );
         let previous_last_operated = player.record_last_operated_goods(14, source_position);
         self.players.insert(player_id, player);
         let audit_deliveries =

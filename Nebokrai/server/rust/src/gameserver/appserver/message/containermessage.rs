@@ -77,9 +77,10 @@
 //! validation, BF property/equipment effects и deliveries на remove/add/rollback.
 //! Auction-return storage (`14`) имеет только исходящий generic route:
 //! packet destination заново выбирает `FindPositionForGoods`, очищает bind
-//! value-id `2`, equipment сохраняет positional add, depot — lock/anchor/audit;
-//! burden, partial guards, equipment callbacks, rollback и self wire доходят
-//! до live owner-ов.
+//! value-id `2`, equipment сохраняет positional add, depot — lock/anchor/audit,
+//! а fairy/battle-fairy/CiQing — hatch/property/compose effects. Для compose
+//! сохранён source-slot-2 remove→rollback quirk; burden, partial guards,
+//! callbacks, rollback и self wire доходят до live owner-ов.
 //! Auction wallet (`15`) аналогично имеет только исходящий путь в wallet `4`:
 //! exact capacity gate выполняется и в Receive по полному auction balance, и
 //! повторно после source removal; partial currency ownership, rollback,
@@ -779,7 +780,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
                 && request.source_container_extend_id == 14
-                && matches!(request.destination_container_extend_id, 1 | 2 | 9)
+                && matches!(
+                    request.destination_container_extend_id,
+                    1 | 2 | 9 | 11 | 12 | 17
+                )
             {
                 EnhancementMessageRoute::AuctionGoodsInventoryReturn
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
@@ -1450,6 +1454,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     ));
                 }
                 if let AuctionGoodsInventoryBlock::RolledBack { rejected, .. } = &reason
+                    && let CiQingComposeTransferAddition::Player(rejected) = rejected
                     && let Some(notice_id) = depot_add_rejection_notice(rejected)
                 {
                     notification_deliveries.push(send_notify(
@@ -1463,6 +1468,9 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 let rollback = match &reason {
                     AuctionGoodsInventoryBlock::BurdenExceeded { rollback, .. }
                     | AuctionGoodsInventoryBlock::PacketPositionUnavailable { rollback, .. }
+                    | AuctionGoodsInventoryBlock::DestinationRejectsSourceSlot {
+                        rollback, ..
+                    }
                     | AuctionGoodsInventoryBlock::RolledBack { rollback, .. } => Some(rollback),
                     _ => None,
                 };
