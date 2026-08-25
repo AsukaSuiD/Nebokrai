@@ -25713,6 +25713,47 @@ impl CGame {
         Ok(())
     }
 
+    /// Synchronous message-loop entry эквивалента `CreateConnectWorldThread`.
+    /// Если прежний worker ещё жив, новый task сначала выставляет ему exit и
+    /// await-ит handle, затем начинает исходный трёхсекундный retry loop.
+    pub(crate) fn schedule_world_reconnect_task(
+        &mut self,
+    ) -> Result<(), GameReconnectTaskStartError> {
+        let setup = self
+            .network_setup
+            .as_ref()
+            .cloned()
+            .ok_or(GameReconnectTaskStartError::MissingNetworkSetup)?;
+        let publisher = self
+            .net_server
+            .as_ref()
+            .map(CMyNetServer::event_publisher)
+            .ok_or(GameReconnectTaskStartError::MissingNetworkServerOwner)?;
+        if let Some(client) = self.world_client.as_mut() {
+            client.disable_control_send();
+            let _legacy_result = client.close();
+        }
+
+        let previous = self.world_reconnect_task.take();
+        let exit_requested = Arc::new(AtomicBool::new(false));
+        let worker_exit = Arc::clone(&exit_requested);
+        let handle = tokio::spawn(async move {
+            if let Some(previous) = previous {
+                previous.exit_requested.store(true, Ordering::Release);
+                let _legacy_ignored = previous.handle.await;
+            }
+            if worker_exit.load(Ordering::Acquire) {
+                return GameReconnectWorkerEnd::ExitRequested;
+            }
+            run_world_reconnect_task(setup, publisher, worker_exit).await
+        });
+        self.world_reconnect_task = Some(GameReconnectTask {
+            exit_requested,
+            handle,
+        });
+        Ok(())
+    }
+
     /// Останавливает прежний Billing worker, закрывает текущий канал и запускает retry entry.
     pub(crate) async fn create_connect_billing_task(
         &mut self,
@@ -32877,12 +32918,6 @@ impl CGame {
         >,
         unresolved_routes: &mut Vec<GameUnresolvedMessageRoute>,
     ) {
-        // `OnServerMessage(0x6F901)` очищает JJC match maps немедленно при
-        // потере World. Остальной reconnect lifecycle этого server-message
-        // owner-а пока сохраняется как unresolved route ниже.
-        if message.message_type() == 0x0006_f901 {
-            self.jjc_on_world_closed();
-        }
         if let Some(report) =
             dispatch_server_message(message, self, runtime, |runtime| runtime.now_milliseconds())
         {
