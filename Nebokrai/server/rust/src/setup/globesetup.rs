@@ -22,6 +22,8 @@
 //! `CArea::AI` читает goods disappear/protection DWORD из `+0x34C/+0x350`;
 //! monster death/EXP читает protection, quota/corrective, continuous-kill и
 //! pet progression массивы непосредственно из подтверждённых ABI offsets;
+//! ordinary monster base defense читает raw minimum/maximum monster hit из
+//! `+0x07C/+0x080`, не создавая отдельную config-модель;
 //! абсолютные VA `0xEF410C/0xEF4110` подтверждены целевым GameServer EXE.
 //! `bAllowClientChangePos +0x50D` загружается Game-side positional
 //! projection и напрямую gate-ит runtime `shapemessage 0x8F902`.
@@ -162,6 +164,8 @@ const LOSS_EXP_GAME_OFFSET: usize = 0x0A4;
 const LOSS_EXP_WAR_OFFSET: usize = 0x0A8;
 const MINIMUM_PLAYER_HIT_OFFSET: usize = 0x084;
 const MAXIMUM_PLAYER_HIT_OFFSET: usize = 0x090;
+const MINIMUM_MONSTER_HIT_OFFSET: usize = 0x07C;
+const MAXIMUM_MONSTER_HIT_OFFSET: usize = 0x080;
 const CRITICAL_RATE_OFFSET: usize = 0x09C;
 const PVP_DAMAGE_FACTOR_OFFSET: usize = 0x730;
 const BLAST_ATTACK_SCALE_OFFSET: usize = 0x748;
@@ -263,6 +267,13 @@ impl GlobeSetupSnapshot {
         (
             self.read_i32(MINIMUM_PLAYER_HIT_OFFSET + index * 4),
             self.read_i32(MAXIMUM_PLAYER_HIT_OFFSET + index * 4),
+        )
+    }
+
+    pub(crate) fn monster_hit_limits(&self) -> (i32, i32) {
+        (
+            self.read_i32(MINIMUM_MONSTER_HIT_OFFSET),
+            self.read_i32(MAXIMUM_MONSTER_HIT_OFFSET),
         )
     }
 

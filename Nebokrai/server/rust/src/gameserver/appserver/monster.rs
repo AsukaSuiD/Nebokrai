@@ -15,9 +15,11 @@
 //! ниже. Достигнутая player base-attack цепочка теперь хранит canonical HP,
 //! first-attacker protection, killed attack snapshot и combat AI target/event;
 //! `CGame` исполняет hurt/death, Nation/GodsBattle, reward/drop/script и
-//! region-delete tails. Очередь `CBaseAI` заменена typed single-event handoff
-//! только для этого синхронного combat caller-а; pathfinding/attack AI этим не
-//! подменяются.
+//! region-delete tails. Для ordinary monster с единственным skill `1` тот же
+//! owner хранит target, cast/reuse и передаёт monster-to-player удар в живой
+//! region/player/network/death проход. Очередь `CBaseAI` заменена typed
+//! single-event handoff только для этих синхронных combat caller-ов;
+//! search/tracing, pet AI и multi-skill decision tree этим не подменяются.
 //! Login pet restoration и client control используют owned `tagMasterInfo`,
 //! taming sign, progress, раздельные Globe experience/property factors и
 //! reached follower-EXP level-up с `0xC0203`, а также узкое pet-control state;
@@ -58,6 +60,9 @@ pub(crate) struct CMonster {
     killed_by: Option<MonsterKillingAttack>,
     ai_target: Option<ShapeIdentity>,
     last_combat_ai_event: Option<MonsterCombatAiEvent>,
+    base_attack_cast: Option<MonsterBaseAttackCast>,
+    last_base_attack_ms: u32,
+    base_attack_owned_tick: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -94,6 +99,13 @@ pub(crate) struct PetExperienceUpdate {
     pub(crate) hit_points: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MonsterBaseAttackCast {
+    pub(crate) target: ShapeIdentity,
+    pub(crate) skill_level: u16,
+    pub(crate) started_at_ms: u32,
+}
+
 impl CMonster {
     pub(crate) fn with_constructor_defaults() -> Self {
         let mut move_shape = CMoveShape::default();
@@ -128,6 +140,9 @@ impl CMonster {
             killed_by: None,
             ai_target: None,
             last_combat_ai_event: None,
+            base_attack_cast: None,
+            last_base_attack_ms: 0,
+            base_attack_owned_tick: false,
         }
     }
 
@@ -217,6 +232,14 @@ impl CMonster {
     pub(crate) const fn set_pet_target(&mut self, target: ShapeIdentity) {
         self.pet_action = 0;
         self.pet_target = Some(target);
+    }
+
+    pub(crate) fn retarget_passive_pet(&mut self, target: ShapeIdentity) -> bool {
+        if !self.tamed || self.pet_mode != 1 || self.ai_target.is_some() {
+            return false;
+        }
+        self.ai_target = Some(target);
+        true
     }
 
     pub(crate) fn evanish_pet(&mut self) {
@@ -346,6 +369,49 @@ impl CMonster {
         self.last_combat_ai_event
             .take()
             .map(|event| (event, self.ai_target))
+    }
+
+    pub(crate) const fn ai_target(&self) -> Option<ShapeIdentity> {
+        self.ai_target
+    }
+
+    pub(crate) const fn base_attack_cast(&self) -> Option<MonsterBaseAttackCast> {
+        self.base_attack_cast
+    }
+
+    pub(crate) fn begin_base_attack_cast(
+        &mut self,
+        target: ShapeIdentity,
+        skill_level: u16,
+        now_ms: u32,
+    ) {
+        self.base_attack_cast = Some(MonsterBaseAttackCast {
+            target,
+            skill_level,
+            started_at_ms: now_ms,
+        });
+        self.last_base_attack_ms = now_ms;
+    }
+
+    pub(crate) fn finish_base_attack_cast(&mut self) -> Option<MonsterBaseAttackCast> {
+        self.base_attack_cast.take()
+    }
+
+    pub(crate) fn clear_ai_target(&mut self) {
+        self.ai_target = None;
+        self.base_attack_cast = None;
+    }
+
+    pub(crate) const fn last_base_attack_ms(&self) -> u32 {
+        self.last_base_attack_ms
+    }
+
+    pub(crate) const fn set_base_attack_owned_tick(&mut self, owned: bool) {
+        self.base_attack_owned_tick = owned;
+    }
+
+    pub(crate) fn take_base_attack_owned_tick(&mut self) -> bool {
+        std::mem::take(&mut self.base_attack_owned_tick)
     }
 
     /// Guards reached from `CMonster::OnBeenHurted` before Nation first-hit
