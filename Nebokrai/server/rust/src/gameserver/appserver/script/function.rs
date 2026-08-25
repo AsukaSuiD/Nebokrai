@@ -250,6 +250,8 @@ pub(crate) const SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE: i32 = 2518;
 pub(crate) const SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE: i32 = 2519;
 pub(crate) const SCRIPT_FUNCTION_GET_CHANGE_BODY_STATE: i32 = 2520;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_BODY_CHECK: i32 = 2521;
+pub(crate) const SCRIPT_FUNCTION_CHECK_MODE: i32 = 2522;
+pub(crate) const SCRIPT_FUNCTION_GET_PROGRESS: i32 = 2576;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
@@ -3237,7 +3239,10 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_IS_CHARGED | SCRIPT_FUNCTION_CHANGE_BODY_CHECK => Unused,
+        SCRIPT_FUNCTION_IS_CHARGED
+        | SCRIPT_FUNCTION_CHANGE_BODY_CHECK
+        | SCRIPT_FUNCTION_CHECK_MODE
+        | SCRIPT_FUNCTION_GET_PROGRESS => Unused,
         SCRIPT_FUNCTION_CREATE_NPC => match index {
             0 | 8 => String,
             1..=7 | 9..=11 => Integer,
@@ -4379,6 +4384,21 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 legacy_return: game.script_change_body_check(player_id, true),
             })
         }
+        SCRIPT_FUNCTION_CHECK_MODE => Some(ScriptFunctionDispatchOutcome::Handled {
+            // Exact selector читает `m_eProgress` напрямую. Native без player
+            // разыменовывал null; safe runtime не воспроизводит UB и оставляет
+            // начальный `PROGRESS_NONE`.
+            legacy_return: game
+                .find_player(player_id)
+                .map_or(0, |player| player.current_progress() as i32),
+        }),
+        SCRIPT_FUNCTION_GET_PROGRESS => Some(ScriptFunctionDispatchOutcome::Handled {
+            // Поздний alias идёт через `GetCurrentProgress` и в отличие от
+            // CheckMode явно возвращает -1 при отсутствии script-player.
+            legacy_return: script_player_id
+                .and_then(|player_id| game.find_player(player_id))
+                .map_or(-1, |player| player.current_progress() as i32),
+        }),
         SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE
         | SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE
         | SCRIPT_FUNCTION_GET_CHANGE_BODY_STATE => {
