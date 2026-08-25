@@ -175,9 +175,10 @@
 //! `0xBF720`; полный virtual property owner остаётся caller adapter-ом.
 //! Periodic battle-fairy death prefix теперь также доведён через equipment
 //! addon lookup и четыре player state mutation до адресного `0xBF721` в
-//! точном field order. Attack speed/CCH и base vigour/credit/mode читаются из
-//! canonical player state; только add-element-attack, RP/max-vigour и exalt
-//! остаются typed facts ещё не сведённого полного property owner-а.
+//! точном field order. Combat attack-speed/CCH/add-element-attack и base
+//! RP/max-RP/vigour/max-vigour/credit/mode/exalt читаются из единого canonical
+//! player state без отдельного property snapshot; caller встроен в signed
+//! region/player traversal реального `CGame::AI` до оставшегося virtual tail.
 //! Summon/recall тем же property adapter-ом исполняет ordered notifications,
 //! around `0xBF605/0xBF930/0xBF92E` и terminal `0xBF721`; координаты move wire
 //! кодируются IEEE-754 float bits, как в `TellClientMove`, а не signed DWORD.
@@ -1367,15 +1368,6 @@ pub(crate) trait GodsBattlePlayerContext {
     ) -> Result<i32, ShapeCoordinateBlock>;
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerPropertiesExternalFacts {
-    pub(crate) add_element_attack: u32,
-    pub(crate) maximum_rp: u32,
-    pub(crate) rp: u32,
-    pub(crate) maximum_vigour: u32,
-    pub(crate) exalt: u32,
-}
-
 pub(crate) trait OldClientGoodsCodec {
     fn encode_goods_for_old_client(&mut self, goods: &CGoods) -> Vec<u8>;
 }
@@ -1880,10 +1872,10 @@ pub(crate) struct GoodsDestroyConfirmReport {
     pub(crate) result_delivery: Option<i32>,
 }
 
-pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {
-    fn player_properties_external_facts(&mut self, player_id: i32)
-    -> PlayerPropertiesExternalFacts;
-}
+/// Battle-fairy death/equipment transitions используют runtime только для
+/// точного old-client goods codec; player property state и `0xBF721` принадлежат
+/// `CGame/CPlayer` и не передаются через этот context.
+pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {}
 
 /// Exact virtual `CPlayer::UpdateProperty` после realm hidden-skill mutation.
 /// Runtime владеет ещё не сведёнными equipment/state/GlobeSetup источниками;
@@ -2921,6 +2913,7 @@ pub(crate) enum GameRegionClearPlayerOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GameRegionAiReport {
     pub(crate) region_id: i32,
+    pub(crate) battle_fairy_deaths: Vec<BattleFairyDeathReport>,
     pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
@@ -9183,12 +9176,11 @@ impl CGame {
             .expect("script-player сохранён между write и UpdateProperty")
             .apply_recomputed_combat_properties(recomputed);
 
-        let external = context.player_properties_external_facts(player_id);
         let player = self
             .players
             .get(&player_id)
             .expect("script-player сохранён до OnChangeProperties");
-        let _ = self.send_player_properties_changed(player, external);
+        let _ = self.send_player_properties_changed(player);
         if property.eq_ignore_ascii_case(b"dwExp") {
             let mut result = CMessage::new(0x000b_f704);
             result.add_ulong(player.experience());
@@ -9226,12 +9218,11 @@ impl CGame {
             .get_mut(&player_id)
             .expect("named script-player сохранён до ChangePlayer UpdateProperty")
             .apply_recomputed_combat_properties(recomputed);
-        let external = context.player_properties_external_facts(player_id);
         let player = self
             .players
             .get(&player_id)
             .expect("named script-player сохранён до ChangePlayer OnChangeProperties");
-        let _ = self.send_player_properties_changed(player, external);
+        let _ = self.send_player_properties_changed(player);
         Some(applied)
     }
 
@@ -9263,12 +9254,11 @@ impl CGame {
             .get_mut(&player_id)
             .expect("named script-player сохранён до UpdateProperty")
             .apply_recomputed_combat_properties(recomputed);
-        let external = context.player_properties_external_facts(player_id);
         let player = self
             .players
             .get(&player_id)
             .expect("named script-player сохранён до OnChangeProperties");
-        let _ = self.send_player_properties_changed(player, external);
+        let _ = self.send_player_properties_changed(player);
         let mut changed = CMessage::new(0x000b_f80c);
         changed.add_long(400);
         changed.add_long(player_id);
@@ -9460,9 +9450,8 @@ impl CGame {
                 .expect("realm skill recompute сохраняет canonical player")
                 .apply_recomputed_combat_properties(current_properties);
             if previous_properties != current_properties {
-                let external = context.player_properties_external_facts(target_id);
                 if let Some(player) = self.find_player(target_id) {
-                    let _ = self.send_player_properties_changed(player, external);
+                    let _ = self.send_player_properties_changed(player);
                 }
             }
         } else if let Some(response) = player_skill_learned_message(
@@ -15799,10 +15788,9 @@ impl CGame {
                 .expect("implantation player остаётся зарегистрирован");
             player.set_vigour(player.vigour().wrapping_sub(consumed_vigour));
         }
-        let external = context.player_properties_external_facts(player_id);
         report.property_delivery = self
             .find_player(player_id)
-            .map(|player| self.send_player_properties_changed(player, external));
+            .map(|player| self.send_player_properties_changed(player));
         let consumptions = self
             .find_player_mut(player_id)
             .expect("implantation player остаётся зарегистрирован")
@@ -16848,11 +16836,10 @@ impl CGame {
         true
     }
 
-    pub(crate) fn apply_player_state_properties<Context: BattleFairyDeathContext>(
+    pub(crate) fn apply_player_state_properties(
         &mut self,
         player_id: i32,
         properties: PlayerCombatProperties,
-        context: &mut Context,
     ) {
         let coefficients = self.globe_setup.player_property_coefficients();
         let goods_factory = self.goods_factory.clone();
@@ -16860,9 +16847,8 @@ impl CGame {
             return;
         };
         player.apply_change_body_properties(properties, coefficients, &goods_factory);
-        let external = context.player_properties_external_facts(player_id);
         if let Some(player) = self.find_player(player_id) {
-            let _ = self.send_player_properties_changed(player, external);
+            let _ = self.send_player_properties_changed(player);
         }
     }
 
@@ -16877,7 +16863,7 @@ impl CGame {
         else {
             return;
         };
-        self.apply_player_state_properties(player_id, properties, context);
+        self.apply_player_state_properties(player_id, properties);
     }
 
     fn update_ride_states<Context: RealmAppellationScriptContext>(
@@ -17061,9 +17047,8 @@ impl CGame {
         self.find_player_mut(player_id)
             .expect("ChangeBody recompute сохраняет player")
             .apply_change_body_properties(properties, coefficients, &goods_factory);
-        let external = context.player_properties_external_facts(player_id);
         if let Some(player) = self.find_player(player_id) {
-            let _ = self.send_player_properties_changed(player, external);
+            let _ = self.send_player_properties_changed(player);
         }
     }
 
@@ -17169,9 +17154,8 @@ impl CGame {
             .expect("realm recompute сохраняет canonical player")
             .apply_recomputed_combat_properties(current_properties);
         if mutation.previous_properties != current_properties {
-            let external = context.player_properties_external_facts(player_id);
             if let Some(player) = self.find_player(player_id) {
-                let _ = self.send_player_properties_changed(player, external);
+                let _ = self.send_player_properties_changed(player);
             }
         }
         Some(i32::from(mutation.succeeded))
@@ -18912,11 +18896,10 @@ impl CGame {
     /// Player сохраняет порядок guards и broadcast effects, а region map
     /// меняется здесь, потому что `CGame` — первый живой owner обоих runtime
     /// объектов. Around transport использует те же owned session и area maps.
-    pub(crate) fn summon_battle_fairy<Context: BattleFairyDeathContext>(
+    pub(crate) fn summon_battle_fairy(
         &mut self,
         player_id: i32,
         mode: i32,
-        context: &mut Context,
     ) -> Option<BattleFairySummonReport> {
         let battle_fairy_enabled = self.globe_setup.battle_fairy_enabled();
         let mut report = {
@@ -18942,15 +18925,11 @@ impl CGame {
                 player.apply_war_soul_action(action, spatial_applied);
             }
         }
-        self.deliver_battle_fairy_summon_effects(&mut report, context);
+        self.deliver_battle_fairy_summon_effects(&mut report);
         Some(report)
     }
 
-    fn deliver_battle_fairy_summon_effects<Context: BattleFairyDeathContext>(
-        &mut self,
-        report: &mut BattleFairySummonReport,
-        context: &mut Context,
-    ) {
+    fn deliver_battle_fairy_summon_effects(&mut self, report: &mut BattleFairySummonReport) {
         for effect in report.effects.clone() {
             match effect {
                 BattleFairySummonEffect::Notification {
@@ -19002,9 +18981,8 @@ impl CGame {
                         .push(BattleFairySummonDelivery::Around(delivery));
                 }
                 BattleFairySummonEffect::PropertiesChanged { player_id } => {
-                    let external = context.player_properties_external_facts(player_id);
                     if let Some(player) = self.find_player(player_id) {
-                        let delivery = self.send_player_properties_changed(player, external);
+                        let delivery = self.send_player_properties_changed(player);
                         report
                             .deliveries
                             .push(BattleFairySummonDelivery::Properties(delivery));
@@ -19017,14 +18995,13 @@ impl CGame {
     /// Замыкает positional add battle-fairy container-а с player property и
     /// загруженными GlobeSetup coefficients. Old-client codec остаётся
     /// transport boundary и вызывается только на подтверждённом update path.
-    pub(crate) fn add_battle_fairy_goods<Context: BattleFairyDeathContext>(
+    pub(crate) fn add_battle_fairy_goods(
         &mut self,
         player_id: i32,
         cell: BattleFairyCell,
         incoming: &mut Option<CGoods>,
         owner_progress_allows: bool,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-        context: &mut Context,
     ) -> Option<BattleFairyEquipmentMutationReport> {
         let coefficients = self.globe_setup.player_property_coefficients();
         let mut report = self.players.get_mut(&player_id).map(|player| {
@@ -19037,7 +19014,7 @@ impl CGame {
                 encode_old_client,
             )
         })?;
-        self.deliver_battle_fairy_equipment_effects(&mut report, context);
+        self.deliver_battle_fairy_equipment_effects(&mut report);
         Some(report)
     }
 
@@ -19163,12 +19140,11 @@ impl CGame {
 
     /// Замыкает remove по GUID с тем же player/equipment state и сохраняет
     /// подтверждённую двойную публикацию `0xBF918` после property removal.
-    pub(crate) fn remove_battle_fairy_goods<Context: BattleFairyDeathContext>(
+    pub(crate) fn remove_battle_fairy_goods(
         &mut self,
         player_id: i32,
         ex_id: CGuid,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-        context: &mut Context,
     ) -> Option<BattleFairyEquipmentMutationReport> {
         let coefficients = self.globe_setup.player_property_coefficients();
         let mut report = self.players.get_mut(&player_id).map(|player| {
@@ -19179,24 +19155,22 @@ impl CGame {
                 encode_old_client,
             )
         })?;
-        self.deliver_battle_fairy_equipment_effects(&mut report, context);
+        self.deliver_battle_fairy_equipment_effects(&mut report);
         Some(report)
     }
 
-    fn deliver_battle_fairy_equipment_effects<Context: BattleFairyDeathContext>(
+    fn deliver_battle_fairy_equipment_effects(
         &self,
         report: &mut BattleFairyEquipmentMutationReport,
-        context: &mut Context,
     ) {
         for effect in report.effects.clone() {
             match effect {
                 BattleFairyEquipmentMutationEffect::PropertiesChanged { player_id } => {
-                    let external = context.player_properties_external_facts(player_id);
                     if let Some(player) = self.find_player(player_id) {
                         report
                             .deliveries
                             .push(BattleFairyEquipmentMutationDelivery::Properties(
-                                self.send_player_properties_changed(player, external),
+                                self.send_player_properties_changed(player),
                             ));
                     }
                 }
@@ -19261,12 +19235,11 @@ impl CGame {
                         .push(BattleFairyPotentialAllocationDelivery::Player(delivery));
                 }
                 BattleFairyPotentialAllocationEffect::PropertiesChanged { player_id } => {
-                    let external = context.player_properties_external_facts(player_id);
                     if let Some(player) = self.find_player(player_id) {
                         report
                             .deliveries
                             .push(BattleFairyPotentialAllocationDelivery::Properties(
-                                self.send_player_properties_changed(player, external),
+                                self.send_player_properties_changed(player),
                             ));
                     }
                 }
@@ -19653,12 +19626,11 @@ impl CGame {
                         ));
                 }
                 BattleFairyPotentialResetEffect::PropertiesChanged { player_id } => {
-                    let external = context.player_properties_external_facts(player_id);
                     if let Some(player) = self.find_player(player_id) {
                         report
                             .deliveries
                             .push(BattleFairyPotentialResetDelivery::Properties(
-                                self.send_player_properties_changed(player, external),
+                                self.send_player_properties_changed(player),
                             ));
                     }
                 }
@@ -20317,9 +20289,8 @@ impl CGame {
                 if let Some(update) = update {
                     let _ = self.send_battle_fairy_goods_update(&update);
                 }
-                let external = context.player_properties_external_facts(player_id);
                 if let Some(player) = self.find_player(player_id) {
-                    let _ = self.send_player_properties_changed(player, external);
+                    let _ = self.send_player_properties_changed(player);
                 }
                 1
             }
@@ -20432,9 +20403,8 @@ impl CGame {
                         old_client_payload: context.encode_goods_for_old_client(goods),
                     }
                 };
-                let external = context.player_properties_external_facts(target_player_id);
                 if let Some(player) = self.find_player(target_player_id) {
-                    let _ = self.send_player_properties_changed(player, external);
+                    let _ = self.send_player_properties_changed(player);
                 }
                 let _ = self.send_battle_fairy_goods_update(&update);
                 0
@@ -20898,10 +20868,9 @@ impl CGame {
 
     /// Выполняет periodic HP-death prefix `CPlayer::AI` и немедленно замыкает
     /// reached virtual `OnChangeProperties` точным адресным `0xBF721`.
-    pub(crate) fn refresh_battle_fairy_death<Context: BattleFairyDeathContext>(
+    pub(crate) fn refresh_battle_fairy_death(
         &mut self,
         player_id: i32,
-        context: &mut Context,
     ) -> Option<BattleFairyDeathReport> {
         let factory = &self.goods_factory;
         let mut report = self
@@ -20909,19 +20878,14 @@ impl CGame {
             .get_mut(&player_id)
             .map(|player| player.refresh_battle_fairy_death(factory))?;
         if report.outcome == crate::gameserver::appserver::player::BattleFairyDeathOutcome::Died {
-            let external = context.player_properties_external_facts(player_id);
             report.property_delivery = self
                 .find_player(player_id)
-                .map(|player| self.send_player_properties_changed(player, external));
+                .map(|player| self.send_player_properties_changed(player));
         }
         Some(report)
     }
 
-    fn send_player_properties_changed(
-        &self,
-        player: &CPlayer,
-        external: PlayerPropertiesExternalFacts,
-    ) -> i32 {
+    fn send_player_properties_changed(&self, player: &CPlayer) -> i32 {
         let combat = player.combat_properties();
         let base = player.base_properties();
         let mut message = CMessage::new(0xbf721);
@@ -20933,7 +20897,7 @@ impl CGame {
         message.add_ulong(combat.intelligence);
         message.add_ulong(combat.minimum_attack);
         message.add_ulong(combat.maximum_attack);
-        message.add_ulong(external.add_element_attack);
+        message.add_ulong(combat.add_element_attack);
         message.add_ulong(combat.element_modify as u32);
         message.base_mut().add_short(combat.attack_speed as i16);
         message.base_mut().add_short(combat.cch as i16);
@@ -20944,17 +20908,17 @@ impl CGame {
         message.add_ulong(base.health);
         message.add_ulong(combat.maximum_mp);
         message.add_ulong(base.mana);
-        message.add_ulong(external.maximum_rp);
-        message.add_ulong(external.rp);
+        message.add_ulong(u32::from(base.maximum_rp));
+        message.add_ulong(u32::from(base.rp));
         message.base_mut().add_short(combat.reank as i16);
-        message.add_ulong(external.maximum_vigour);
+        message.add_ulong(base.maximum_vigour);
         message.add_ulong(base.vigour);
         message.add_ulong(base.credit);
         message.add_ulong(base.mode);
         message.add_ulong(u32::from(player.war_soul_state() == 1));
         message.add_ulong(u32::from(base.battle_fairy_recall));
         message.add_ulong(u32::from(base.battle_fairy_died));
-        message.add_ulong(external.exalt);
+        message.add_ulong(base.exalt);
         message.send_to_player(self.net_server(), player.player_id())
     }
 
@@ -21064,8 +21028,9 @@ impl CGame {
         Some(report)
     }
 
-    /// Exact `CGame::AI`: signed region-map order и virtual region AI,
-    /// после которого выполняется base-tail `ClearPlayerAI` того же owner-а.
+    /// Exact `CGame::AI`: signed region-map order, reached player AI prefix и
+    /// virtual region AI, после которого выполняется base-tail `ClearPlayerAI`
+    /// того же owner-а.
     pub(crate) fn ai<Runtime: GameMainLoopRuntime>(
         &mut self,
         runtime: &mut Runtime,
@@ -21079,6 +21044,17 @@ impl CGame {
         let region_ids: Vec<_> = self.regions.keys().copied().collect();
         let mut regions = Vec::with_capacity(region_ids.len());
         for region_id in region_ids {
+            // `CPlayer::AI` начинает каждый reached player pass с проверки HP
+            // экипированной боевой феи; остальная virtual region AI пока
+            // остаётся runtime owner-ом и исполняется сразу после prefix-а.
+            let player_ids = self
+                .find_region(region_id)
+                .map(|region| region.base().registered_player_ids())
+                .unwrap_or_default();
+            let battle_fairy_deaths = player_ids
+                .into_iter()
+                .filter_map(|player_id| self.refresh_battle_fairy_death(player_id))
+                .collect();
             let gods_battle = if self
                 .find_region(region_id)
                 .is_some_and(ServerRegionOwner::is_gods_battle)
@@ -21161,6 +21137,7 @@ impl CGame {
                             .collect();
                         regions.push(GameRegionAiReport {
                             region_id,
+                            battle_fairy_deaths,
                             gods_battle,
                             region_changes,
                             clear_player: Some(GameRegionClearPlayerOutcome::Expired { players }),
@@ -21177,6 +21154,7 @@ impl CGame {
             }
             regions.push(GameRegionAiReport {
                 region_id,
+                battle_fairy_deaths,
                 gods_battle,
                 region_changes,
                 clear_player,

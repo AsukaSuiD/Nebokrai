@@ -904,7 +904,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 -1
             };
             GameGoodsMessageOutcome::BattleFairySummon(
-                game.summon_battle_fairy(player_id, mode, runtime).expect(
+                game.summon_battle_fairy(player_id, mode).expect(
                     "resolved message player остаётся в CGame во время synchronous dispatch",
                 ),
             )

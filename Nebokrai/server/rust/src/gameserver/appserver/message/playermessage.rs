@@ -822,7 +822,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     let properties = runtime.recompute_enhancement_player_properties(
                         game.find_player(player_id).expect("mount player сохранён"),
                     );
-                    game.apply_player_state_properties(player_id, properties, runtime);
+                    game.apply_player_state_properties(player_id, properties);
                 } else if game.find_player(player_id).is_some_and(|player| {
                     player.current_progress() != PlayerProgress::OpenStall
                         && facts.fight_state_count == 0
@@ -844,7 +844,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                             game.find_player(player_id)
                                 .expect("mounted player сохранён"),
                         );
-                        game.apply_player_state_properties(player_id, properties, runtime);
+                        game.apply_player_state_properties(player_id, properties);
                         consume = goods.addon_property_value(
                             game.goods_factory(),
                             GAP_UNLIMITED_ACCESS,

@@ -209,9 +209,8 @@
 //! блокируется typed outcome до старого x87 integer conversion.
 //! Periodic HP-death prefix `CPlayer::AI` повторно нормализует summon/state и
 //! recall/died флаги нулевой по HP equipped fairy, затем вызывает
-//! `PropertiesChanged`; `CGame` собирает exact `0xBF721` из owned combat/base
-//! полей, оставляя runtime facts только для ещё не сведённых add-element-
-//! attack, RP/max-vigour и exalt scalar-ов.
+//! `PropertiesChanged`; `CGame` собирает exact `0xBF721` целиком из owned
+//! combat/base wire, включая add-element-attack, RP/max-RP, max-vigour и exalt.
 //! Оригинал в этой ветви не чистит stale area-map entry и не посылает status
 //! broadcast; оба отсутствующих side effect сохранены.
 //! `CEquipmentContainer::OnObjectRemoved` player-tail связывает снятие
@@ -327,14 +326,18 @@ const BASE_PK_BADMAN_OFFSET: usize = 0x9f;
 const BASE_PK_COUNTRY_OFFSET: usize = 0xa0;
 const BASE_HEALTH_OFFSET: usize = 0xa4;
 const BASE_MANA_OFFSET: usize = 0xa8;
+const BASE_RP_OFFSET: usize = 0xac;
 const BASE_MAXIMUM_HP_OFFSET: usize = 0xb0;
 const BASE_MAXIMUM_MP_OFFSET: usize = 0xb4;
+const BASE_MAXIMUM_RP_OFFSET: usize = 0xba;
 const BASE_STRENGTH_OFFSET: usize = 0xbc;
 const BASE_DEXTERITY_OFFSET: usize = 0xc0;
 const BASE_CONSTITUTION_OFFSET: usize = 0xc4;
 const BASE_INTELLIGENCE_OFFSET: usize = 0xc8;
 const BASE_VIGOUR_OFFSET: usize = 0xec;
+const BASE_MAXIMUM_VIGOUR_OFFSET: usize = 0xf0;
 const BASE_CREDIT_OFFSET: usize = 0xfc;
+const BASE_EXALT_OFFSET: usize = 0x100;
 const BASE_DISPLAY_HEAD_PIECE_OFFSET: usize = 0x104;
 const BASE_QUEST_TIME_BEGIN_OFFSET: usize = 0x108;
 const BASE_QUEST_TIME_LIMIT_OFFSET: usize = 0x10c;
@@ -1225,6 +1228,10 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) face_picture: i32,
     pub(crate) health: u32,
     pub(crate) mana: u32,
+    pub(crate) rp: u16,
+    pub(crate) maximum_rp: u16,
+    pub(crate) maximum_vigour: u32,
+    pub(crate) exalt: u32,
     pub(crate) fetch_power: u32,
     pub(crate) battle_fairy_recall: bool,
     pub(crate) battle_fairy_died: bool,
@@ -1517,6 +1524,7 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) cch: u16,
     pub(crate) defense: u32,
     pub(crate) element_resistance: u32,
+    pub(crate) add_element_attack: u32,
     pub(crate) hp_recovery: u16,
     pub(crate) mp_recovery: u16,
     pub(crate) burden: u16,
@@ -2812,7 +2820,12 @@ impl CPlayer {
                 self.base_properties.base_intelligence,
             ),
             (BASE_VIGOUR_OFFSET, self.base_properties.vigour),
+            (
+                BASE_MAXIMUM_VIGOUR_OFFSET,
+                self.base_properties.maximum_vigour,
+            ),
             (BASE_CREDIT_OFFSET, self.base_properties.credit),
+            (BASE_EXALT_OFFSET, self.base_properties.exalt),
             (
                 BASE_QUEST_TIME_BEGIN_OFFSET,
                 self.base_properties.quest_time_begin as u32,
@@ -2863,6 +2876,12 @@ impl CPlayer {
             &mut wire,
             BASE_LT_UP_60_COUNT_OFFSET,
             self.base_properties.lt_up_60_count,
+        );
+        write_player_wire_u16(&mut wire, BASE_RP_OFFSET, self.base_properties.rp);
+        write_player_wire_u16(
+            &mut wire,
+            BASE_MAXIMUM_RP_OFFSET,
+            self.base_properties.maximum_rp,
         );
         write_player_wire_u16(
             &mut wire,
@@ -2915,6 +2934,8 @@ impl CPlayer {
         self.base_properties.pk_country = wire[BASE_PK_COUNTRY_OFFSET] != 0;
         self.base_properties.health = read_player_wire_u32(wire, BASE_HEALTH_OFFSET);
         self.base_properties.mana = read_player_wire_u32(wire, BASE_MANA_OFFSET);
+        self.base_properties.rp = read_player_wire_u16(wire, BASE_RP_OFFSET);
+        self.base_properties.maximum_rp = read_player_wire_u16(wire, BASE_MAXIMUM_RP_OFFSET);
         self.base_properties.base_maximum_hp = read_player_wire_u32(wire, BASE_MAXIMUM_HP_OFFSET);
         self.base_properties.base_maximum_mp = read_player_wire_u32(wire, BASE_MAXIMUM_MP_OFFSET);
         self.base_properties.base_strength = read_player_wire_u32(wire, BASE_STRENGTH_OFFSET);
@@ -2924,7 +2945,10 @@ impl CPlayer {
         self.base_properties.base_intelligence =
             read_player_wire_u32(wire, BASE_INTELLIGENCE_OFFSET);
         self.base_properties.vigour = read_player_wire_u32(wire, BASE_VIGOUR_OFFSET);
+        self.base_properties.maximum_vigour =
+            read_player_wire_u32(wire, BASE_MAXIMUM_VIGOUR_OFFSET);
         self.base_properties.credit = read_player_wire_u32(wire, BASE_CREDIT_OFFSET);
+        self.base_properties.exalt = read_player_wire_u32(wire, BASE_EXALT_OFFSET);
         self.base_properties.display_head_piece = wire[BASE_DISPLAY_HEAD_PIECE_OFFSET] != 0;
         self.base_properties.quest_time_begin =
             read_player_wire_u32(wire, BASE_QUEST_TIME_BEGIN_OFFSET) as i32;
@@ -2982,6 +3006,7 @@ impl CPlayer {
             burden: read_player_wire_u16(wire, 0x26),
             defense: read_player_wire_u32(wire, 0x2c),
             element_resistance: read_player_wire_u32(wire, 0x34),
+            add_element_attack: read_player_wire_u32(wire, 0x40),
             hp_recovery: read_player_wire_u16(wire, 0x38),
             mp_recovery: read_player_wire_u16(wire, 0x3a),
             element_modify: read_player_wire_u32(wire, 0x48) as i32,
@@ -4894,6 +4919,11 @@ impl CPlayer {
             &mut self.combat_property_wire,
             0x34,
             properties.element_resistance,
+        );
+        write_u32(
+            &mut self.combat_property_wire,
+            0x40,
+            properties.add_element_attack,
         );
         write_u16(&mut self.combat_property_wire, 0x38, properties.hp_recovery);
         write_u16(&mut self.combat_property_wire, 0x3a, properties.mp_recovery);
