@@ -4,8 +4,8 @@
 //! сообщения `0x7F801` для достигнутых typed startup snapshots, runtime
 //! general-variable echo `0x7F805`,
 //! AttackCity/Village и terminal selector `0x3B`, а также полных typed World
-//! disconnect/reconnect `0x6F901/902`, Billing reconnect `0x6F904` и ответа
-//! перехода `0x7F802`; они имеют статус
+//! disconnect/reconnect `0x6F901/902`, Billing disconnect/reconnect
+//! `0x6F903/904` и ответа перехода `0x7F802`; они имеют статус
 //! `IMPLEMENTED`. Точная пара
 //! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
 //! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\servermessage.cpp`.
@@ -25,6 +25,8 @@
 //! decode выполняет парный World owner. `0x6F901` пишет исходный log, очищает
 //! JJC match state и запускает owned retry worker; success-event `0x6F902`
 //! заменяет transport и публикует полный `0x5FA01` player snapshot.
+//! `0x6F903` тем же lifecycle запускает primary→backup Billing retry; typed
+//! `0x6F904` replacement затем регистрирует новый transport до control-send.
 //! HonorEliminate `0x26` отдельно сохраняет оба подтверждённых sink-а:
 //! `AddLogText` и `PutStringToFile("HonorCompositior", ...)`; payload проверен
 //! по exact EXE и runtime-логам.
@@ -238,6 +240,7 @@ use crate::setup::tradelist::TradeListDecodeError;
 
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
 const WORLD_SERVER_CLOSED: i32 = 0x0006_F901;
+const BILLING_SERVER_CLOSED: i32 = 0x0006_F903;
 const SERVER_STARTUP_MESSAGE: i32 = 0x0007_F801;
 const WORLD_REGION_CHANGE_RESPONSE: i32 = 0x0007_F802;
 const WORLD_PLAYER_SAVE_REQUEST: i32 = 0x0007_F803;
@@ -1091,6 +1094,7 @@ fn player_ranks_decode_errors_equal(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageReport {
     WorldDisconnected(GameWorldDisconnectReport),
+    BillingDisconnected(GameBillingDisconnectReport),
     ClientServerStart(GameClientServerStartReport),
     RegionChange(GameRegionChangeResponseReport),
     StringTable(GameStringTableMessageReport),
@@ -1125,6 +1129,12 @@ pub(crate) enum GameServerMessageReport {
 #[must_use = "World disconnect report сохраняет JJC cleanup и reconnect start"]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GameWorldDisconnectReport {
+    pub(crate) reconnect: Result<(), GameReconnectTaskStartError>,
+}
+
+#[must_use = "Billing disconnect report сохраняет reconnect start"]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameBillingDisconnectReport {
     pub(crate) reconnect: Result<(), GameReconnectTaskStartError>,
 }
 
@@ -1311,6 +1321,15 @@ where
         game.jjc_on_world_closed();
         return Some(Ok(GameServerMessageReport::WorldDisconnected(
             GameWorldDisconnectReport { reconnect },
+        )));
+    }
+    if message.message_type() == BILLING_SERVER_CLOSED {
+        add_game_log_text(
+            b"[WARNNING] BillingServer closed : Billing Function CANNOT Start NOW!!!!",
+        );
+        let reconnect = game.schedule_billing_reconnect_task();
+        return Some(Ok(GameServerMessageReport::BillingDisconnected(
+            GameBillingDisconnectReport { reconnect },
         )));
     }
     if message.message_type() == WORLD_PLAYER_SAVE_REQUEST {
@@ -4643,6 +4662,7 @@ pub(crate) fn on_billing_client_reconnected(
     game.current_billing_client_mut()
         .expect("reconnect Billing client только что опубликован")
         .enable_control_send();
+    add_game_log_text(b"Reconnect to BillingServer Success!");
     GameBillingClientReplacement {
         previous_client_closed,
         registration,

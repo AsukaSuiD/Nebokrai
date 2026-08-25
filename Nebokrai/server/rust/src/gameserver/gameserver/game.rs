@@ -25788,6 +25788,46 @@ impl CGame {
         Ok(())
     }
 
+    /// Message-loop entry `CreateConnectBillingThread`; сохраняет stop-before-
+    /// retry и primary→backup connect policy без блокировки Game main loop.
+    pub(crate) fn schedule_billing_reconnect_task(
+        &mut self,
+    ) -> Result<(), GameReconnectTaskStartError> {
+        let setup = self
+            .network_setup
+            .as_ref()
+            .cloned()
+            .ok_or(GameReconnectTaskStartError::MissingNetworkSetup)?;
+        let publisher = self
+            .net_server
+            .as_ref()
+            .map(CMyNetServer::event_publisher)
+            .ok_or(GameReconnectTaskStartError::MissingNetworkServerOwner)?;
+        if let Some(client) = self.billing_client.as_mut() {
+            client.disable_control_send();
+            let _legacy_result = client.close();
+        }
+
+        let previous = self.billing_reconnect_task.take();
+        let exit_requested = Arc::new(AtomicBool::new(false));
+        let worker_exit = Arc::clone(&exit_requested);
+        let handle = tokio::spawn(async move {
+            if let Some(previous) = previous {
+                previous.exit_requested.store(true, Ordering::Release);
+                let _legacy_ignored = previous.handle.await;
+            }
+            if worker_exit.load(Ordering::Acquire) {
+                return GameReconnectWorkerEnd::ExitRequested;
+            }
+            run_billing_reconnect_task(setup, publisher, worker_exit).await
+        });
+        self.billing_reconnect_task = Some(GameReconnectTask {
+            exit_requested,
+            handle,
+        });
+        Ok(())
+    }
+
     /// Материализует начальный порядок остановки reconnect workers из `Release`.
     pub(crate) async fn stop_reconnect_tasks(&mut self) {
         stop_reconnect_task(&mut self.world_reconnect_task).await;
