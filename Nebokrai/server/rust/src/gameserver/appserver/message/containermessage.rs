@@ -44,8 +44,9 @@
 //! Packet/equipment↔depot direct move и compatible stack проходят через тот
 //! же dispatcher после password unlock: burden rollback, extension-anchor
 //! guards, equipment effects, GoodsAI, audit `7/8` и self wire достигают live
-//! owners. Hand↔packet/equipment обычный Put сохраняет positional split,
-//! equipment callbacks, one-slot stack и двусторонний rollback. Для
+//! owners. Hand↔packet/equipment и depot→hand обычный Put сохраняют positional
+//! split, equipment callbacks, one-slot stack, depot lock/anchor/audit и
+//! двусторонний rollback. Для
 //! source-hand→packet/equipment/depot `OT_SWITCH_OBJECT` выполняется после
 //! отказа Put: occupied destination меняется с предметом руки, displaced
 //! возвращается в hand (либо exact garbage collection), а switch wire доходит
@@ -625,7 +626,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             });
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && matches!(request.source_container_extend_id, 1 | 2)
+                && matches!(request.source_container_extend_id, 1 | 2 | 9)
                 && request.destination_container_extend_id == 3
             {
                 EnhancementMessageRoute::PlayerHandMove

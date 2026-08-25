@@ -113,7 +113,7 @@
 // ============================================================================
 // FUNCTION: CC2SContainerObjectMove::Move
 // STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: полные packet/equipment ↔ enhancement/equipment-session, двусторонние auction-listing, ground, wallet↔bank gold, direct move/stack packet/equipment↔depot, packet/equipment→hand Put и hand→packet/equipment/depot Put/Swap, включая burden/rollback/equipment/lock/audit/last-operated effects и OT_SWITCH_OBJECT wire; остальные container routes RAW ниже
+// MATERIALIZED: полные packet/equipment ↔ enhancement/equipment-session, двусторонние auction-listing, ground, wallet↔bank gold, direct move/stack packet/equipment↔depot, packet/equipment/depot→hand Put и hand→packet/equipment/depot Put/Swap, включая burden/rollback/equipment/lock/audit/last-operated effects и OT_SWITCH_OBJECT wire; остальные container routes RAW ниже
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message packaging\cc2scontainerobjectmove.cpp:1225

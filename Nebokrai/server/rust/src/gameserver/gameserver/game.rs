@@ -2658,6 +2658,12 @@ pub(crate) struct HandContainerMoveReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerHandMoveRemoval {
+    Player(EnhancementTransferRemoval),
+    Depot(DepotStorageRemoval),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerHandMoveBlock {
     MissingPlayer,
     UnsupportedSource,
@@ -2665,15 +2671,16 @@ pub(crate) enum PlayerHandMoveBlock {
     AmountMismatch,
     PartialMoveBusy(PlayerProgress),
     PacketRemovalFailed,
+    DepotRemovalFailed,
     EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
     RolledBack {
-        removal: EnhancementTransferRemoval,
+        removal: PlayerHandMoveRemoval,
         rejected: GroundHandAddition,
         restored: DepotStorageTransferAddition,
     },
     RollbackFailed {
         goods: CGoods,
-        removal: EnhancementTransferRemoval,
+        removal: PlayerHandMoveRemoval,
         rejected: GroundHandAddition,
         rollback: DepotStorageTransferAddition,
     },
@@ -2686,9 +2693,10 @@ pub(crate) struct PlayerHandMoveReport {
     pub(crate) amount: u32,
     pub(crate) source_extend_id: i32,
     pub(crate) source_position: u32,
-    pub(crate) removal: EnhancementTransferRemoval,
+    pub(crate) removal: PlayerHandMoveRemoval,
     pub(crate) addition: GroundHandAddition,
     pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) audit_deliveries: Vec<i32>,
     pub(crate) delivery: i32,
 }
 
@@ -7056,7 +7064,7 @@ impl CGame {
         amount: u32,
         context: &mut Context,
     ) -> Result<PlayerHandMoveReport, PlayerHandMoveBlock> {
-        if !matches!(source_extend_id, 1 | 2) {
+        if !matches!(source_extend_id, 1 | 2 | 9) {
             return Err(PlayerHandMoveBlock::UnsupportedSource);
         }
         let player = self
@@ -7065,6 +7073,7 @@ impl CGame {
         let source = match source_extend_id {
             1 => player.packet().get_goods(source_position),
             2 => player.equipment().get_goods(source_position),
+            9 => player.depot().get_goods(source_position),
             _ => None,
         }
         .filter(|goods| goods.identity().ex_id == goods_id)
@@ -7086,6 +7095,8 @@ impl CGame {
             ));
         }
         let source_identity = source.identity();
+        let audit_name = source.name().to_vec();
+        let audit_price = source.price();
         let mut split_template = source.clone();
         split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
         let mut player = self
@@ -7128,8 +7139,8 @@ impl CGame {
                     },
                 ),
             };
-            (removal, Some(goods))
-        } else {
+            (PlayerHandMoveRemoval::Player(removal), Some(goods))
+        } else if source_extend_id == 2 {
             let goods = player
                 .equipment()
                 .get_goods(source_position)
@@ -7162,13 +7173,52 @@ impl CGame {
                 return Err(PlayerHandMoveBlock::EquipmentRemovalFailed(report));
             };
             (
-                EnhancementTransferRemoval::Equipment {
+                PlayerHandMoveRemoval::Player(EnhancementTransferRemoval::Equipment {
                     event: removed.event,
                     effects: report.effects,
                     deliveries: report.deliveries,
-                },
+                }),
                 Some(removed.goods),
             )
+        } else {
+            let removed =
+                player
+                    .depot_mut()
+                    .take_goods(source_position, amount, &self.goods_factory, |_| {
+                        (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                            .then(|| split_template.clone())
+                    });
+            let Some(VolumeGoodsRemoveOutcome::Removed(taken)) = removed else {
+                self.players.insert(player_id, player);
+                return Err(PlayerHandMoveBlock::DepotRemovalFailed);
+            };
+            let (goods, removal) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    DepotStorageRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                        kind: DepotStorageRemovalKind::Removed,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    DepotStorageRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                        kind: DepotStorageRemovalKind::Split {
+                            source: split.source,
+                        },
+                    },
+                ),
+            };
+            (PlayerHandMoveRemoval::Depot(removal), Some(goods))
         };
 
         let addition = self.add_ground_hand_goods(&mut player, 0, &mut incoming);
@@ -7203,6 +7253,19 @@ impl CGame {
         let previous_last_operated =
             player.record_last_operated_goods(source_extend_id, source_position);
         self.players.insert(player_id, player);
+        let audit_deliveries =
+            if source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled() {
+                self.send_ground_goods_move_log(
+                    player_id,
+                    8,
+                    source_identity,
+                    audit_price,
+                    &audit_name,
+                    amount,
+                )
+            } else {
+                Vec::new()
+            };
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -7221,6 +7284,7 @@ impl CGame {
             removal,
             addition,
             previous_last_operated,
+            audit_deliveries,
             delivery,
         })
     }
