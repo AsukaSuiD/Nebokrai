@@ -16,6 +16,9 @@
 //! name` и намеренно не вычисляет хвост команды.
 //! `PlayerMessage 3308` вычисляет message type только после успешно
 //! вычисленного explicit color, сохраняя short-circuit исходного owner-а.
+//! `GetMonsterRefeashTime 8101` вычисляет только region/refresh pair, берёт
+//! clock после успешного region lookup и читает live refresh setup того же
+//! `CServerRegion`, который обновляет periodic monster AI.
 //! Неподтверждённые wait/pause families и остальной не достигнутый синтаксис
 //! остаются в RAW ниже.
 //! Поздний `RegisterBuffSkillFunctions` программно дополняет загруженный RU

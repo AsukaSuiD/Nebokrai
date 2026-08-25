@@ -1371,6 +1371,27 @@ impl CServerRegion {
         &self.monster_setups
     }
 
+    /// Exact `GetMonsterRefeashTime`: lookup идёт по setup index, нулевой
+    /// reset interval означает отсутствие таймера. `timeGetTime` и оба
+    /// timestamp-а остаются в 32-bit кольце; только итоговый битовый остаток
+    /// трактуется как signed перед clamp и переводом в секунды.
+    pub(crate) fn monster_refresh_remaining_seconds(&self, index: i32, now_ms: u32) -> i32 {
+        let Some(refresh) = self
+            .monster_setups
+            .iter()
+            .find(|refresh| refresh.index == index)
+            .filter(|refresh| refresh.reset_time != 0)
+        else {
+            return -1;
+        };
+        let remaining = refresh
+            .reset_time
+            .cast_unsigned()
+            .wrapping_sub(now_ms)
+            .wrapping_add(refresh.last_reset_time_ms) as i32;
+        remaining.max(0) / 1_000
+    }
+
     pub(crate) fn weather_setup(&self) -> &[ServerRegionWeatherTime] {
         &self.weather_setup
     }

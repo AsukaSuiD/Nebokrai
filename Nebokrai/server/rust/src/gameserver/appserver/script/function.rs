@@ -419,6 +419,7 @@ pub(crate) const SCRIPT_FUNCTION_PLAYER_MESSAGE: i32 = 3308;
 pub(crate) const SCRIPT_FUNCTION_GET_MAP_INFO: i32 = 3309;
 pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER_RECT: i32 = 3313;
 pub(crate) const SCRIPT_FUNCTION_DELETE_NPC_BY_NAME: i32 = 3315;
+pub(crate) const SCRIPT_FUNCTION_GET_MONSTER_REFRESH_TIME: i32 = 8101;
 pub(crate) const SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION: i32 = 8003;
 pub(crate) const SCRIPT_FUNCTION_IS_QUEST_ENABLED: i32 = 3500;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_ENABLED: i32 = 3501;
@@ -3476,6 +3477,10 @@ pub(crate) fn script_function_parameter_kind(
             _ => Unused,
         },
         SCRIPT_FUNCTION_GET_MAP_INFO => match index {
+            0..=1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_MONSTER_REFRESH_TIME => match index {
             0..=1 => Integer,
             _ => Unused,
         },
@@ -6743,6 +6748,21 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     integer_arguments: [Option<i32>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
     string_arguments: [Option<&[u8]>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
 ) -> ScriptFunctionDispatchOutcome {
+    if function_id == SCRIPT_FUNCTION_GET_MONSTER_REFRESH_TIME {
+        let Some(region_id) = integer_arguments[0]
+            .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            .filter(|_| integer_arguments[1] != Some(0))
+        else {
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 };
+        };
+        let legacy_return = game.find_region(region_id).map_or(-1, |region| {
+            region.base().monster_refresh_remaining_seconds(
+                integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+                runtime.country_contend_now_milliseconds(),
+            )
+        });
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+    }
     match run_buff_skill_script_function(
         game,
         runtime,
