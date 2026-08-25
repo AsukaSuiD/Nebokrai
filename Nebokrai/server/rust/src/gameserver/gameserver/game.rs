@@ -25124,6 +25124,25 @@ impl CGame {
         })
     }
 
+    /// Сценарный `OpenSynthesis` открывает только клиентскую страницу.
+    /// Проверки безопасной клетки и перевод в `PlayerProgress::Synthesis`
+    /// остаются за последующим клиентским запросом `0x8FC17`.
+    pub(crate) fn open_script_synthesis_page(&self, player_id: i32) -> Option<(bool, i32)> {
+        self.find_player(player_id)?;
+        let enabled = self.globe_setup.synthesis_enabled();
+        let delivery = if enabled {
+            CMessage::new(0x000b_f921).send_to_player(self.net_server(), player_id)
+        } else {
+            colored_player_notice_message(
+                0xffff_0000,
+                0xffff_ffff,
+                self.get_string_by_id(b"GS1052"),
+            )
+            .send_to_player(self.net_server(), player_id)
+        };
+        Some((enabled, delivery))
+    }
+
     pub(crate) fn close_synthesis(
         &mut self,
         player_id: i32,

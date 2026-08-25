@@ -93,6 +93,7 @@ const PACK_ADD_OFFSET: usize = 0xC4E;
 const TAO_ZHUANG_MODIFY_OFFSET: usize = 0x1108;
 const TAO_ZHUANG_OFFSET: usize = 0x1109;
 const DA_KONG_KEY_OFFSET: usize = 0xC85;
+const SYNTHESIS_KEY_OFFSET: usize = 0xC84;
 const AREA_WIDTH_OFFSET: usize = 0x514;
 const AREA_HEIGHT_OFFSET: usize = 0x518;
 const CONTEND_DAMAGE_TIME_FACTOR_OFFSET: usize = 0x568;
@@ -220,6 +221,7 @@ pub(crate) struct GlobeSetupDecodeReport {
     pub(crate) area_width: i32,
     pub(crate) area_height: i32,
     pub(crate) da_kong_key: bool,
+    pub(crate) synthesis_enabled: bool,
     pub(crate) goods_ai_enabled: bool,
     pub(crate) auction_enabled: bool,
 }
@@ -439,6 +441,7 @@ impl GlobeSetupSnapshot {
             area_width: self.area_width(),
             area_height: self.area_height(),
             da_kong_key: self.da_kong_key(),
+            synthesis_enabled: self.synthesis_enabled(),
             goods_ai_enabled: self.goods_ai_enabled(),
             auction_enabled: self.auction_enabled(),
         })
@@ -718,6 +721,10 @@ impl GlobeSetupSnapshot {
 
     pub(crate) const fn da_kong_key(&self) -> bool {
         self.bytes[DA_KONG_KEY_OFFSET] != 0
+    }
+
+    pub(crate) const fn synthesis_enabled(&self) -> bool {
+        self.bytes[SYNTHESIS_KEY_OFFSET] != 0
     }
 
     pub(crate) const fn goods_ai_enabled(&self) -> bool {

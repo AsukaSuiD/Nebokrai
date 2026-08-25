@@ -548,6 +548,7 @@ pub(crate) const SCRIPT_FUNCTION_DELETE_CARRIAGE: i32 = 3505;
 pub(crate) const SCRIPT_FUNCTION_GET_CARRIAGE_DISTANCE: i32 = 3506;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_TIME: i32 = 3507;
 pub(crate) const SCRIPT_FUNCTION_GET_CARRIAGE_INDEX: i32 = 3508;
+pub(crate) const SCRIPT_FUNCTION_OPEN_SYNTHESIS: i32 = 3510;
 pub(crate) const SCRIPT_FUNCTION_ACTIVITY_LOG: i32 = 9510;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
@@ -3840,7 +3841,8 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_GET_QUEST_TIME
         | SCRIPT_FUNCTION_DELETE_CARRIAGE
         | SCRIPT_FUNCTION_GET_CARRIAGE_DISTANCE
-        | SCRIPT_FUNCTION_GET_CARRIAGE_INDEX => Unused,
+        | SCRIPT_FUNCTION_GET_CARRIAGE_INDEX
+        | SCRIPT_FUNCTION_OPEN_SYNTHESIS => Unused,
         SCRIPT_FUNCTION_SET_QUEST_ENABLED | SCRIPT_FUNCTION_QUEST_TIME_BEGIN => match index {
             0 => Integer,
             _ => Unused,
@@ -6910,6 +6912,12 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
         SCRIPT_FUNCTION_GET_CARRIAGE_INDEX => {
             let legacy_return = game.script_player_carriage_index(player_id);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_OPEN_SYNTHESIS => {
+            if let Some(player_id) = script_player_id {
+                let _ = game.open_script_synthesis_page(player_id);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_CHECK_GOODS => {
             let Some(name) = string_arguments[0].filter(|name| !name.is_empty()) else {
