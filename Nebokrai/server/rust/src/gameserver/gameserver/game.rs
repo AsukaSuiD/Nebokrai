@@ -3042,9 +3042,17 @@ pub(crate) struct GameServerRegionBaseAiReport {
 pub(crate) struct GameRegionShapeScanReport {
     pub(crate) areas: usize,
     pub(crate) area_ai: Vec<AreaAiReport>,
+    pub(crate) npc_expirations: Vec<GameNpcLifetimeExpiration>,
     pub(crate) resolved_shapes: usize,
     pub(crate) shape_ai_calls: usize,
     pub(crate) stale_memberships: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameNpcLifetimeExpiration {
+    pub(crate) npc_id: i32,
+    pub(crate) delivery: Option<i32>,
+    pub(crate) removal: Result<bool, RegionMembershipBlock>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -19499,7 +19507,7 @@ impl CGame {
         Some(self.kick_player(player_id))
     }
 
-    fn send_script_shape_exit_around(&self, region: &CServerRegion, shape: &CShape) -> Option<i32> {
+    fn send_shape_exit_around(&self, region: &CServerRegion, shape: &CShape) -> Option<i32> {
         let runtime = GameServerAroundRuntime::new(
             self,
             &self.session_factory,
@@ -19523,8 +19531,7 @@ impl CGame {
         let mut owner = self.take_region_owner(region_id)?;
         let result = (|| {
             let npc = owner.base().find_npc_by_id(npc_id)?;
-            let delivery =
-                self.send_script_shape_exit_around(owner.base(), npc.move_shape().shape())?;
+            let delivery = self.send_shape_exit_around(owner.base(), npc.move_shape().shape())?;
             owner
                 .base_mut()
                 .remove_owned_npc_by_id(npc_id)
@@ -19543,7 +19550,7 @@ impl CGame {
         let result = (|| {
             let monster = owner.base().find_monster_by_id(monster_id)?;
             let delivery =
-                self.send_script_shape_exit_around(owner.base(), monster.move_shape().shape())?;
+                self.send_shape_exit_around(owner.base(), monster.move_shape().shape())?;
             owner
                 .base_mut()
                 .find_monster_by_id_mut(monster_id)
@@ -19562,8 +19569,7 @@ impl CGame {
         let result = (|| {
             let npc = owner.base().find_npc_by_name(name).ok()??;
             let npc_id = npc.move_shape().shape().identity().id;
-            let delivery =
-                self.send_script_shape_exit_around(owner.base(), npc.move_shape().shape())?;
+            let delivery = self.send_shape_exit_around(owner.base(), npc.move_shape().shape())?;
             owner
                 .base_mut()
                 .remove_owned_npc_by_id(npc_id)
@@ -19598,7 +19604,7 @@ impl CGame {
                 .base()
                 .find_monster_by_id(monster_id)
                 .and_then(|monster| {
-                    self.send_script_shape_exit_around(owner.base(), monster.move_shape().shape())
+                    self.send_shape_exit_around(owner.base(), monster.move_shape().shape())
                 });
             let Some(delivery) = delivery else {
                 continue;
@@ -22270,6 +22276,26 @@ impl CGame {
         }
     }
 
+    fn run_region_npc_ai(
+        &mut self,
+        region: &mut CServerRegion,
+        npc_id: i32,
+        now_ms: u32,
+    ) -> Option<GameNpcLifetimeExpiration> {
+        let npc = region.find_npc_by_id(npc_id)?;
+        if !npc.lifetime_expired(now_ms) || !npc.move_shape().shape().is_assigned_to_server_region()
+        {
+            return None;
+        }
+        let delivery = self.send_shape_exit_around(region, npc.move_shape().shape());
+        let removal = region.remove_owned_npc_by_id(npc_id);
+        Some(GameNpcLifetimeExpiration {
+            npc_id,
+            delivery,
+            removal,
+        })
+    }
+
     fn run_region_shape_scan<Runtime: GameMainLoopRuntime>(
         &mut self,
         region: &mut CServerRegion,
@@ -22328,7 +22354,16 @@ impl CGame {
                     SHAPE_CHANGE_AREA => region.stage_area_transition(identity),
                     SHAPE_CHANGE_REGION => region.stage_region_transition(identity),
                     _ => {
-                        runtime.run_region_active_shape_ai(self, region, identity);
+                        if identity.object_type == NPC_TYPE {
+                            let now_ms = runtime.get_tick_ms();
+                            if let Some(expiration) =
+                                self.run_region_npc_ai(region, identity.id, now_ms)
+                            {
+                                report.npc_expirations.push(expiration);
+                            }
+                        } else {
+                            runtime.run_region_active_shape_ai(self, region, identity);
+                        }
                         report.shape_ai_calls += 1;
                         false
                     }

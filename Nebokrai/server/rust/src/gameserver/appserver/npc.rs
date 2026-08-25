@@ -12,8 +12,10 @@
 //! owner-а в `baseobject.rs`. `Vec<u8>` сохраняет legacy script без UTF-8.
 //! Player interaction использует owned script path и immutable shape-view;
 //! NPC virtual figure для distance остаётся нулевой, как достигнутый base shape.
-//! Полная shape serialization, around-message, deferred delete и Talk остаются
-//! RAW ниже до подключения соответствующих owner-цепочек.
+//! `AI` lifetime predicate вызывается из row-major active-shape scan; `CGame`
+//! публикует `0xBF504(type,id,0)` и сразу удаляет NPC из region owner-а, как
+//! virtual `DeleteChildObject` исходника. Полная shape serialization и Talk
+//! остаются RAW ниже до подключения соответствующих owner-цепочек.
 
 use super::moveshape::CMoveShape;
 use super::shape::{ShapeFigure, ShapeView};
@@ -153,7 +155,9 @@ impl CNpc {
 
 // ============================================================================
 // FUNCTION: CNpc::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// IMPLEMENTED: scalar predicate — `lifetime_expired`, wire/removal caller —
+// `CGame::run_region_npc_ai`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp:62
