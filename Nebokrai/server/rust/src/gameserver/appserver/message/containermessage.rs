@@ -54,10 +54,10 @@
 //! отказа Put: occupied destination меняется с предметом руки, displaced
 //! возвращается в hand (либо exact garbage collection), а switch wire доходит
 //! до runtime.
-//! Packet/equipment↔ordinary-fairy (`11`) использует тот же ownership owner:
+//! Packet/equipment/hand↔ordinary-fairy (`11`) использует тот же ownership owner:
 //! fairy positional filters и hatch-lock, packet split, equipment callbacks,
 //! burden после fairy remove, rollback и self `0xC0101` наблюдаемы целиком.
-//! Packet/equipment↔battle-fairy (`12`) дополнительно сохраняет ранние
+//! Packet/equipment/hand↔battle-fairy (`12`) дополнительно сохраняет ранние
 //! `BFPropertyAdd`, partial material/gem remove, property/goods-update
 //! deliveries и их повторный rollback add до итогового move/rollback wire.
 //! Packet/equipment↔CiQing compose (`17`) достигает persisted трёхслотового
@@ -672,18 +672,18 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 EnhancementMessageRoute::CiQingComposeTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && (matches!(request.source_container_extend_id, 1 | 2)
+                && (matches!(request.source_container_extend_id, 1 | 2 | 3)
                     && request.destination_container_extend_id == 12
                     || request.source_container_extend_id == 12
-                        && matches!(request.destination_container_extend_id, 1 | 2))
+                        && matches!(request.destination_container_extend_id, 1 | 2 | 3))
             {
                 EnhancementMessageRoute::BattleFairyTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && (matches!(request.source_container_extend_id, 1 | 2)
+                && (matches!(request.source_container_extend_id, 1 | 2 | 3)
                     && request.destination_container_extend_id == 11
                     || request.source_container_extend_id == 11
-                        && matches!(request.destination_container_extend_id, 1 | 2))
+                        && matches!(request.destination_container_extend_id, 1 | 2 | 3))
             {
                 EnhancementMessageRoute::FairyStorageTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
