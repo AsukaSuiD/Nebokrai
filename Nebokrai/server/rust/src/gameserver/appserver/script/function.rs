@@ -59,7 +59,8 @@
 //! в общий OrganSys dispatcher и меняет canonical player wallet/client wire.
 //! Городская заявка в той же цепочке добавляет master/country/owner/state
 //! gates, `GS0209..GS0211`, wire `0x60137` и симметричный ответ `0x7FE37`.
-//! Также материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
+//! Также материализованы ID `9351 / ReflushExternProperty`,
+//! `9352 / DaKongModify`, `9353 / DaKongDeluxModify`, `9350 / OpenRolePage`,
 //! `9354 / OpenEquipmentCompose`, `2216 / OpenGoodsUpgrade` и
 //! `8100 / OpenChangePlayerNameUI`. Вход смены имени без аргументов публикует
 //! `0xBF810` из основного игрока и `GlobeSetup`, тем самым открывая уже живой
@@ -428,7 +429,10 @@ use crate::gameserver::appserver::serverregion::{
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, WarContendEntryContext, WarRegionContext,
 };
-use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongExternalRefreshReport;
+use crate::gameserver::appserver::session::cequipmentdakong::{
+    EquipmentDaKongExternalRefreshReport, EquipmentDaKongScriptModifyKind,
+    EquipmentDaKongScriptModifyReport,
+};
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
@@ -449,6 +453,8 @@ use crate::setup::leitingsetup::{CThingSetup, LeiTingLocalTime};
 
 pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
 pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
+pub(crate) const SCRIPT_FUNCTION_DA_KONG_MODIFY: i32 = 9352;
+pub(crate) const SCRIPT_FUNCTION_DA_KONG_DELUX_MODIFY: i32 = 9353;
 pub(crate) const SCRIPT_FUNCTION_OPEN_CI_QING_PAGE: i32 = 9628;
 pub(crate) const SCRIPT_FUNCTION_PUSH_ITEM_TO_CI_QING: i32 = 9629;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
@@ -3522,6 +3528,7 @@ pub(crate) enum EquipmentDaKongScriptFunctionOutcome {
     DifferentFunction,
     HandledWithoutCall,
     Refreshed(EquipmentDaKongExternalRefreshReport),
+    Modified(EquipmentDaKongScriptModifyReport),
 }
 
 pub(crate) fn run_equipment_da_kong_script_function<Context: EquipmentDaKongContext>(
@@ -3531,6 +3538,18 @@ pub(crate) fn run_equipment_da_kong_script_function<Context: EquipmentDaKongCont
     evaluated_first_string: Option<&[u8]>,
     context: &mut Context,
 ) -> EquipmentDaKongScriptFunctionOutcome {
+    if function_id == SCRIPT_FUNCTION_DA_KONG_MODIFY
+        || function_id == SCRIPT_FUNCTION_DA_KONG_DELUX_MODIFY
+    {
+        let kind = if function_id == SCRIPT_FUNCTION_DA_KONG_MODIFY {
+            EquipmentDaKongScriptModifyKind::ReapplyGemProperties
+        } else {
+            EquipmentDaKongScriptModifyKind::ClampDeluxProperties
+        };
+        return EquipmentDaKongScriptFunctionOutcome::Modified(
+            game.modify_script_equipment_da_kong(player_id, kind, context),
+        );
+    }
     if function_id != SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY {
         return EquipmentDaKongScriptFunctionOutcome::DifferentFunction;
     }
@@ -9014,7 +9033,8 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             ScriptFunctionDispatchOutcome::DifferentFunction
         }
         EquipmentDaKongScriptFunctionOutcome::HandledWithoutCall
-        | EquipmentDaKongScriptFunctionOutcome::Refreshed(_) => {
+        | EquipmentDaKongScriptFunctionOutcome::Refreshed(_)
+        | EquipmentDaKongScriptFunctionOutcome::Modified(_) => {
             ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
         }
     }

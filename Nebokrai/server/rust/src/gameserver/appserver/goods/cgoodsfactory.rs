@@ -36,9 +36,9 @@ use super::cgoodsbaseproperties::{
     GAP_BF_SPRITE_BASE, GAP_BF_SPRITE_GROW, GAP_BF_SPRITUALISE_ADDON, GAP_BF_SPRITUALISE_GROW,
     GAP_BF_SPRITUALISM_BASE, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_BASE, GAP_BF_STRENGH_GROW,
     GAP_BF_WEAPON_LEVEL, GAP_BURDEN_UPPER_LIMIT_CORRECTION,
-    GAP_BURDEN_UPPER_LIMIT_CORRECTION_UPGRADE, GAP_DAKONG_1, GAP_DAKONG_EXTERN_3,
-    GAP_DODGE_CORRECTION, GAP_DODGE_UPGRADE, GAP_ELEMENT_ATTACK_CORRECTION,
-    GAP_ELEMENT_ATTACK_UPGRADE, GAP_ELEMENT_RESISTANCE_CORRECTION,
+    GAP_BURDEN_UPPER_LIMIT_CORRECTION_UPGRADE, GAP_DAKONG_1, GAP_DAKONG_EXTERN_1,
+    GAP_DAKONG_EXTERN_2, GAP_DAKONG_EXTERN_3, GAP_DODGE_CORRECTION, GAP_DODGE_UPGRADE,
+    GAP_ELEMENT_ATTACK_CORRECTION, GAP_ELEMENT_ATTACK_UPGRADE, GAP_ELEMENT_RESISTANCE_CORRECTION,
     GAP_ELEMENT_RESISTANCE_CORRECTION_UPGRADE, GAP_FATAL_BLOW_RATE_CORRECTION,
     GAP_FATAL_BLOW_RATE_UPGRADE, GAP_GOODS_MAXIMUM_DURABILITY,
     GAP_GOODS_MAXIMUM_DURABILITY_UPGRADE, GAP_GOODS_STACKING_LIMIT, GAP_HIT_RATE_CORRECTION,
@@ -56,7 +56,11 @@ use super::cgoodsbaseproperties::{
     GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
     GoodsBasePropertiesDecodeError, ICON_TYPE_GROUND,
 };
-use crate::gameserver::appserver::session::cequipmentdakong::apply_embedded_gem_properties;
+use crate::gameserver::appserver::session::cequipmentdakong::{
+    EquipmentDaKongGemSnapshot, apply_embedded_gem_properties, deal_enchase_gems,
+    equipment_da_kong_condition,
+};
+use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::guid::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -409,6 +413,129 @@ impl CGoodsFactory {
         {
             apply_embedded_gem_properties(goods, self, |maximum| random(maximum));
         }
+    }
+
+    /// Точная мутация `CGoodsFactory::DaKongModify`: снимает рассчитанные по
+    /// вставленным камням свойства и сразу накладывает их заново по текущему
+    /// реестру, не меняя сами семь слотов.
+    pub(crate) fn da_kong_modify(&self, goods: &mut CGoods) {
+        if !goods.query_attribute(GAP_DAKONG_1) {
+            return;
+        }
+        let gems = std::array::from_fn(|index| {
+            let gem_index = goods.addon_property_value(self, GAP_DAKONG_1 + index as i32, 2) as u32;
+            EquipmentDaKongGemSnapshot::from_catalog(gem_index, self)
+        });
+        let _ = deal_enchase_gems(goods, &gems, self, false);
+    }
+
+    /// Ограничивает особые свойства пределом из базы предмета, вкладом
+    /// вставленных камней и зависящей от уровня прибавкой, как
+    /// `CGoodsFactory::DaKongDeluxModify`.
+    pub(crate) fn da_kong_delux_modify(&self, goods: &mut CGoods, setup: &CDaKongXiangQian) {
+        let Some(base) = self
+            .query_goods_base_properties(goods.base_properties_index())
+            .cloned()
+        else {
+            return;
+        };
+        let property_types = goods
+            .addon_properties()
+            .iter()
+            .map(|property| property.property_type)
+            .collect::<Vec<_>>();
+        for property_type in property_types {
+            for modifier in setup
+                .delux_modify()
+                .iter()
+                .filter(|modifier| modifier.property_type == property_type)
+            {
+                let current = goods.addon_property_value(self, property_type, 1);
+                let stone_value = self.da_kong_property_value(goods, property_type);
+                let level_value =
+                    if modifier.add_type != -1 && base.has_addon_property(modifier.add_type) {
+                        goods
+                            .addon_property_value(self, modifier.add_type, 1)
+                            .wrapping_mul(goods.addon_property_value(self, GAP_WEAPON_LEVEL, 1))
+                    } else {
+                        0
+                    };
+                let maximum = base
+                    .query_addon_max_property_value(property_type, 1)
+                    .wrapping_add(stone_value)
+                    .wrapping_add(level_value);
+                if maximum < current {
+                    let _ = goods.set_addon_property_value_first_core(property_type, 1, maximum);
+                }
+            }
+        }
+    }
+
+    fn da_kong_property_value(&self, goods: &CGoods, property_type: i32) -> i32 {
+        let mut value = 0i32;
+        let count = goods.da_kong_count(self) as usize;
+        for index in 0..count {
+            let socket = index + 1;
+            let gem_index = goods.addon_property_value(self, GAP_DAKONG_1 + index as i32, 2) as u32;
+            let Some(gem) = EquipmentDaKongGemSnapshot::from_catalog(gem_index, self) else {
+                continue;
+            };
+            let Some(base) = self.query_goods_base_properties(gem_index) else {
+                continue;
+            };
+            for addon in base
+                .addon_properties()
+                .iter()
+                .filter(|addon| addon.property_type == property_type)
+            {
+                let mut addition = addon.values.first().map_or(0, |entry| entry.base_value);
+                if socket < 7 && gem.color == 8 {
+                    addition = 0;
+                } else if socket == 7 && gem.color != 8 {
+                    addition /= 2;
+                } else if socket == 7
+                    && gem.color == 8
+                    && !equipment_da_kong_condition(gem, goods, self)
+                {
+                    addition = 0;
+                }
+                value = value.wrapping_add(addition);
+            }
+        }
+
+        for (target, begin, end, minimum) in [
+            (GAP_DAKONG_EXTERN_1, 1, 3, 3),
+            (GAP_DAKONG_EXTERN_2, 4, 6, 6),
+        ] {
+            if count >= minimum
+                && (begin..=end).all(|socket| {
+                    let property = GAP_DAKONG_1 + socket as i32 - 1;
+                    let socket_color = goods.addon_property_value(self, property, 1);
+                    let gem_index = goods.addon_property_value(self, property, 2) as u32;
+                    self.query_goods_base_properties(gem_index)
+                        .and_then(|base| {
+                            base.get_addon_property_values(
+                                super::cgoodsbaseproperties::GAP_BAOSHI_COLOR,
+                            )
+                            .first()
+                        })
+                        .is_some_and(|gem_color| gem_color.base_value == socket_color)
+                })
+                && goods.addon_property_value(self, target, 1) == property_type
+            {
+                value = value.wrapping_add(goods.addon_property_value(self, target, 2));
+            }
+        }
+        if count == 7 && goods.addon_property_value(self, GAP_DAKONG_EXTERN_3, 1) == property_type {
+            let gem_index = goods.addon_property_value(self, GAP_DAKONG_1 + 6, 2) as u32;
+            if EquipmentDaKongGemSnapshot::from_catalog(gem_index, self)
+                .is_some_and(|gem| equipment_da_kong_condition(gem, goods, self))
+            {
+                value =
+                    value.wrapping_add(goods.addon_property_value(self, GAP_DAKONG_EXTERN_3, 2));
+            }
+        }
+        value
     }
 
     /// Переходит к целевому уровню по одному шагу. На каждом шаге зависящие от

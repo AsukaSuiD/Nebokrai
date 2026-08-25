@@ -3,17 +3,18 @@
 //! `gameserver.exe + GameServer.pdb`; исходный owner
 //! `public/dakongxiangqian.h/.cpp`.
 //!
-//! `GetAddType` не зависит от загруженного
-//! `delux_modify`: EXE вставляет фиксированный набор addon property types в
-//! переданный set и всегда возвращает `true`.
-//! Owner читает marker-oriented `data/dakongxiangqian.ini`: main vector и
-//! три ordered attribute map очищаются до открытия, а `DaKongDeluxModify`
-//! сохраняется и дополняется отдельным optional resource. `BTreeMap` заменяет
-//! только MSVC map plumbing, сохраняя order wire `0x2B`; parser намеренно
-//! принимает частичный текст как исходный formatted-stream owner.
-//! Game decoder также очищает primary state, но дописывает deluxe vector.
-//! Gameplay query/RNG family принимает общий GameServer MSVCRT random через
-//! тонкий closure, сохраняя inclusive probability и weighted-choice quirks.
+//! `GetAddType` не зависит от загруженного `delux_modify`: EXE вставляет
+//! фиксированный набор типов дополнительных свойств в переданное множество и
+//! всегда возвращает `true`.
+//! Владелец читает размеченный `data/dakongxiangqian.ini`: основной вектор и
+//! три упорядоченные карты атрибутов очищаются до открытия, а
+//! `DaKongDeluxModify` сохраняется и дополняется отдельным необязательным
+//! ресурсом. `BTreeMap` заменяет только устройство карты MSVC, сохраняя порядок
+//! в формате `0x2B`; разбор намеренно принимает частичный текст, как исходный
+//! владелец форматированного потока. Декодер GameServer также очищает основное
+//! состояние, но дописывает вектор особых модификаторов. Игровые запросы и RNG
+//! используют общий генератор MSVCRT GameServer через тонкий адаптер, сохраняя
+//! включённую верхнюю границу вероятности и особенности взвешенного выбора.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -97,7 +98,7 @@ impl CDaKongXiangQian {
         true
     }
 
-    /// Оригинал pre-open transition: deluxe modifiers deliberately persist.
+    /// Исходный переход перед открытием сохраняет особые модификаторы.
     pub(crate) fn clear_primary_state(&mut self) {
         self.info.clear();
         for attributes in &mut self.external_attributes {
@@ -105,7 +106,7 @@ impl CDaKongXiangQian {
         }
     }
 
-    /// Replaces the owner-internal `rfOpen` calls with supplied resources.
+    /// Заменяет внутренние вызовы `rfOpen` владельца переданными ресурсами.
     pub(crate) fn load_from_resources(
         &mut self,
         main: Option<&[u8]>,
@@ -259,6 +260,10 @@ impl CDaKongXiangQian {
 
     pub(crate) const fn log_key(&self) -> bool {
         self.log_key
+    }
+
+    pub(crate) fn delux_modify(&self) -> &[DaKongDeluxModify] {
+        &self.delux_modify
     }
 
     /// Exact `GetSuccessProbability`: roll `0..9999` сравнивается через

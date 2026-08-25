@@ -751,8 +751,10 @@ use crate::gameserver::appserver::session::cequipmentdakong::{
     EquipmentDaKongAuditLog, EquipmentDaKongClientUpdate, EquipmentDaKongCloseOutcome,
     EquipmentDaKongCloseReport, EquipmentDaKongEnchaseEvent, EquipmentDaKongExternalRefreshOutcome,
     EquipmentDaKongExternalRefreshReport, EquipmentDaKongGemSnapshot, EquipmentDaKongGoodsSnapshot,
-    EquipmentDaKongOperation, EquipmentDaKongOutcome, EquipmentDaKongReport, deal_enchase_gems,
-    deal_with_da_kong_external_attributes, deal_with_da_kong_seven, equipment_da_kong_condition,
+    EquipmentDaKongOperation, EquipmentDaKongOutcome, EquipmentDaKongReport,
+    EquipmentDaKongScriptModifyKind, EquipmentDaKongScriptModifyOutcome,
+    EquipmentDaKongScriptModifyReport, deal_enchase_gems, deal_with_da_kong_external_attributes,
+    deal_with_da_kong_seven, equipment_da_kong_condition,
 };
 use crate::gameserver::appserver::session::cequipmentupgrade::{
     CEquipmentUpgrade, EQUIPMENT_UPGRADE_FAILURE_LOG_REASON, EQUIPMENT_UPGRADE_LOST_LOG_REASON,
@@ -13145,9 +13147,10 @@ impl CGame {
         );
     }
 
-    /// Script function `9304 / kScriptFunctionNationWarSendPlayerId`:
-    /// father-region берётся у current script player, а timing запускается
-    /// для переданного player ID только в concrete local Nation owner.
+    /// Сценарная функция `9304 / kScriptFunctionNationWarSendPlayerId`:
+    /// родительский регион берётся у текущего игрока сценария, а отсчёт
+    /// запускается для переданного ID игрока только в локальном владельце
+    /// `ServerNationRegion`.
     pub(crate) fn script_nation_war_send_player_id(
         &mut self,
         script_player_id: i32,
@@ -13163,8 +13166,8 @@ impl CGame {
         self.start_nation_war_player_timing(region_id, player_id, now_ms)
     }
 
-    /// Exact `ServerNationRegion::OnPlayerTimgingStart`, включая
-    /// morale snapshot `0xBF818` до мутации timing record.
+    /// Точный `ServerNationRegion::OnPlayerTimgingStart`, включая снимок
+    /// боевого духа `0xBF818` до мутации записи отсчёта.
     pub(crate) fn start_nation_war_player_timing(
         &mut self,
         region_id: i32,
@@ -13218,8 +13221,8 @@ impl CGame {
         true
     }
 
-    /// Caller-side `CPlayer::OnLost`: changing-server ветвь не закрывает
-    /// nation clock; ordinary loss передаёт `died=false`.
+    /// Вызов из `CPlayer::OnLost`: ветвь смены сервера не закрывает отсчёт
+    /// войны государств, а обычная потеря передаёт `died=false`.
     pub(crate) fn finish_nation_war_timing_on_player_lost(
         &mut self,
         player_id: i32,
@@ -13252,9 +13255,10 @@ impl CGame {
             .is_some()
     }
 
-    /// Script primitive `NationWar_CarriageBackTown` reaches the same typed
-    /// Nation owner that combat callbacks use; non-Nation region keeps the
-    /// original dynamic-cast no-op as `None`.
+    /// Сценарный примитив `NationWar_CarriageBackTown` достигает того же
+    /// типизированного владельца государства, что и боевые обратные вызовы;
+    /// иной тип региона сохраняет исходный пустой результат приведения как
+    /// `None`.
     pub(crate) fn script_nation_carriage_back_town(
         &mut self,
         region_id: i32,
@@ -20239,6 +20243,107 @@ impl CGame {
             report,
             context,
         );
+        self.players.insert(player_id, player);
+        report
+    }
+
+    /// Сценарии `9352/9353` используют выбранный предмет контейнера улучшения и
+    /// общий пакет игрока, затем публикуют тот же `0xBF918`, что остальные
+    /// операции DaKong.
+    pub(crate) fn modify_script_equipment_da_kong<Context: EquipmentDaKongContext>(
+        &mut self,
+        player_id: i32,
+        kind: EquipmentDaKongScriptModifyKind,
+        context: &mut Context,
+    ) -> EquipmentDaKongScriptModifyReport {
+        const COST_ORIGINAL_NAME: &[u8] = b"GMXF18";
+        let mut report = EquipmentDaKongScriptModifyReport {
+            player_id,
+            kind,
+            outcome: EquipmentDaKongScriptModifyOutcome::FeatureDisabled,
+            equipment_id: None,
+            consumption: None,
+            consumption_deliveries: Vec::new(),
+            client_update: None,
+            client_update_delivery: None,
+            notification_delivery: None,
+        };
+        if !self.da_kong_xiang_qian.key() {
+            return report;
+        }
+        let cost_base_index = self
+            .goods_factory
+            .query_goods_id_by_original_name(Some(COST_ORIGINAL_NAME));
+        if self
+            .goods_factory
+            .query_goods_base_properties(cost_base_index)
+            .is_none()
+        {
+            report.outcome = EquipmentDaKongScriptModifyOutcome::MissingCostDefinition;
+            return report;
+        }
+        let Some(mut player) = self.players.remove(&player_id) else {
+            report.outcome = EquipmentDaKongScriptModifyOutcome::MissingPlayer;
+            return report;
+        };
+        let Some(equipment_id) = player.enhancement_selected_goods_id() else {
+            report.outcome = EquipmentDaKongScriptModifyOutcome::MissingSelection;
+            self.players.insert(player_id, player);
+            return report;
+        };
+        report.equipment_id = Some(equipment_id);
+        if player.get_goods_by_id(equipment_id).is_none() {
+            report.outcome = EquipmentDaKongScriptModifyOutcome::MissingEquipment;
+            self.players.insert(player_id, player);
+            return report;
+        }
+        if player.check_item_in_packet(cost_base_index) == 0 {
+            report.outcome = EquipmentDaKongScriptModifyOutcome::MissingCost;
+            let text = self.get_string_by_id(b"GS1060");
+            report.notification_delivery = Some(
+                colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                    .send_to_player(self.net_server(), player_id),
+            );
+            self.players.insert(player_id, player);
+            return report;
+        }
+
+        let equipment = player
+            .get_goods_by_id_mut(equipment_id)
+            .expect("выбранный предмет DaKong проверен до мутации");
+        match kind {
+            EquipmentDaKongScriptModifyKind::ReapplyGemProperties => {
+                self.goods_factory.da_kong_modify(equipment);
+            }
+            EquipmentDaKongScriptModifyKind::ClampDeluxProperties => {
+                self.goods_factory
+                    .da_kong_delux_modify(equipment, &self.da_kong_xiang_qian);
+            }
+        }
+        if let Some(consumption) = player
+            .remove_item_in_packet(cost_base_index, 1)
+            .into_iter()
+            .next()
+        {
+            report.consumption_deliveries = self.send_player_packet_consumption(&consumption);
+            report.consumption = Some(consumption);
+        }
+        let equipment = player
+            .get_goods_by_id(equipment_id)
+            .expect("выбранный предмет DaKong сохраняется до обновления клиента");
+        let update = EquipmentDaKongClientUpdate {
+            player_id,
+            goods: equipment.identity(),
+            old_client_payload: context.encode_goods_for_old_client(equipment),
+        };
+        report.client_update_delivery = Some(self.send_equipment_da_kong_update(&update));
+        report.client_update = Some(update);
+        let text = self.get_string_by_id(b"GS1059");
+        report.notification_delivery = Some(
+            colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                .send_to_player(self.net_server(), player_id),
+        );
+        report.outcome = EquipmentDaKongScriptModifyOutcome::Completed;
         self.players.insert(player_id, player);
         report
     }

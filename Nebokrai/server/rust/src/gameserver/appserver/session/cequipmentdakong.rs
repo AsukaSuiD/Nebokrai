@@ -154,6 +154,39 @@ pub(crate) struct EquipmentDaKongExternalRefreshReport {
     pub(crate) client_update_deliveries: Vec<i32>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentDaKongScriptModifyKind {
+    ReapplyGemProperties,
+    ClampDeluxProperties,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EquipmentDaKongScriptModifyOutcome {
+    FeatureDisabled,
+    MissingPlayer,
+    MissingCostDefinition,
+    MissingSelection,
+    MissingEquipment,
+    MissingCost,
+    Completed,
+}
+
+/// Итог сценариев `9352/9353`, сохраняющий мутацию выбранного предмета,
+/// расход `GMXF18`, обновление `0xBF918` и уведомление игрока.
+#[must_use = "отчёт сохраняет расход материала и весь клиентский результат"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EquipmentDaKongScriptModifyReport {
+    pub(crate) player_id: i32,
+    pub(crate) kind: EquipmentDaKongScriptModifyKind,
+    pub(crate) outcome: EquipmentDaKongScriptModifyOutcome,
+    pub(crate) equipment_id: Option<crate::public::guid::CGuid>,
+    pub(crate) consumption: Option<CiQingPacketConsumption>,
+    pub(crate) consumption_deliveries: Vec<i32>,
+    pub(crate) client_update: Option<EquipmentDaKongClientUpdate>,
+    pub(crate) client_update_delivery: Option<i32>,
+    pub(crate) notification_delivery: Option<i32>,
+}
+
 #[must_use = "DaKong report хранит validation, addon mutations, расход и terminal wire"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct EquipmentDaKongReport {
