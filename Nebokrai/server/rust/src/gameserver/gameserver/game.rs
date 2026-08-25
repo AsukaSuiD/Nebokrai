@@ -4955,7 +4955,6 @@ pub(crate) trait GameMainLoopRuntime:
     /// Точная соседняя пара `DoneGoodsAiTree -> DoneDelList`; вызывается только
     /// при live `bGoodsAi` до ticket increment.
     fn player_done_goods_ai_and_delete_list(&mut self, game: &mut CGame, player_id: i32);
-    fn player_done_tao_zhuang(&mut self, game: &mut CGame, player_id: i32);
     /// Concrete ground-goods owner шлёт around delete и ставит `CS_DELETE`.
     fn expire_area_ground_goods(
         &mut self,
@@ -15735,6 +15734,10 @@ impl CGame {
         context: ScriptExecutionContext,
         _runtime: &mut Runtime,
     ) -> Option<i32> {
+        self.queue_script_file(path, context)
+    }
+
+    fn queue_script_file(&mut self, path: &[u8], context: ScriptExecutionContext) -> Option<i32> {
         let player_id = context.player_id?;
         let path = legacy_c_string_prefix(path).to_vec();
         if self
@@ -25900,6 +25903,9 @@ impl CGame {
             )
         })?;
         self.publish_player_equipment_remove_report(&mut report, context);
+        if self.globe_setup.tao_zhuang_modify_enabled() {
+            let _ = self.done_player_tao_zhuang(player_id);
+        }
         Some(report)
     }
 
@@ -25960,6 +25966,9 @@ impl CGame {
             )
         })?;
         self.publish_player_equipment_add_report(&mut report, context);
+        if self.globe_setup.tao_zhuang_modify_enabled() {
+            let _ = self.done_player_tao_zhuang(player_id);
+        }
         Some(report)
     }
 
@@ -27764,10 +27773,7 @@ impl CGame {
             .find_player_mut(player_id)?
             .advance_ai_ticket_and_packet(pack_add_enabled);
         let flash_update = self.done_player_flash(player_id);
-        let tao_zhuang_ran = !self.globe_setup.tao_zhuang_modify_enabled();
-        if tao_zhuang_ran {
-            runtime.player_done_tao_zhuang(self, player_id);
-        }
+        let tao_zhuang_ran = self.done_player_tao_zhuang(player_id);
         Some(PlayerAiTailReport {
             player_id,
             goods_ai_ran,
@@ -27776,6 +27782,173 @@ impl CGame {
             flash_update,
             tao_zhuang_ran,
         })
+    }
+
+    /// Полный `CPlayer::DoneTaoZhuang`: live equipment/CiQing state идёт через
+    /// setup thresholds к combat/skill state, completion scripts и точным
+    /// адресным `BF81A/C0110/BF71D/BF71E/BF721` результатам.
+    fn done_player_tao_zhuang(&mut self, player_id: i32) -> bool {
+        if !self.globe_setup.tao_zhuang_enabled()
+            || !self
+                .find_player(player_id)
+                .is_some_and(CPlayer::tao_zhuang_is_pending)
+        {
+            return false;
+        }
+
+        let setup_payload = self
+            .find_player(player_id)
+            .filter(|player| player.tao_zhuang_setup_is_pending())
+            .and_then(|_| {
+                let mut payload = Vec::new();
+                self.tao_zhuang_setup
+                    .add_byte_to_array(&mut payload)
+                    .ok()
+                    .map(|_| payload)
+            });
+        if let Some(payload) = setup_payload {
+            let mut setup = CMessage::new(0x000b_f81a);
+            setup.base_mut().add(&payload);
+            let _ = setup.send_to_player(self.net_server(), player_id);
+            self.players
+                .get_mut(&player_id)
+                .expect("TaoZhuang setup send сохраняет canonical player")
+                .mark_tao_zhuang_setup_sent();
+        }
+
+        {
+            let (players, setup, goods_factory) = (
+                &mut self.players,
+                &self.tao_zhuang_setup,
+                &self.goods_factory,
+            );
+            players
+                .get_mut(&player_id)
+                .expect("TaoZhuang gate проверил canonical player")
+                .rebuild_tao_zhuang_items(setup, goods_factory);
+        }
+
+        let removed_skills = self
+            .find_player(player_id)
+            .expect("TaoZhuang rebuild сохраняет canonical player")
+            .tao_zhuang_skills_for_removal(&self.tao_zhuang_setup);
+        for removed in removed_skills {
+            let mut message = CMessage::new(removed.message_type as i32);
+            add_legacy_c_string(message.base_mut(), &removed.skill_name);
+            let _ = message.send_to_player(self.net_server(), player_id);
+            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+            let _ = players
+                .get_mut(&player_id)
+                .expect("TaoZhuang skill send сохраняет canonical player")
+                .delete_tao_zhuang_skill(removed.skill_id, skill_factory);
+        }
+
+        let mut clear = CMessage::new(0x000c_0110);
+        clear.add_ulong(0);
+        let _ = clear.send_to_player(self.net_server(), player_id);
+        self.players
+            .get_mut(&player_id)
+            .expect("TaoZhuang clear сохраняет canonical player")
+            .set_tao_zhuang_id(0);
+        let evaluations = {
+            let (players, setup) = (&mut self.players, &self.tao_zhuang_setup);
+            players
+                .get_mut(&player_id)
+                .expect("TaoZhuang compute сохраняет canonical player")
+                .compute_tao_zhuang_bonuses(setup)
+        };
+        let region_id = self
+            .find_player(player_id)
+            .and_then(CPlayer::server_region_id);
+        for evaluation in evaluations {
+            let result = if evaluation.collected_all {
+                evaluation.set_id
+            } else {
+                0
+            };
+            let mut message = CMessage::new(0x000c_0110);
+            message.add_ulong(result);
+            let _ = message.send_to_player(self.net_server(), player_id);
+            if evaluation.collected_all {
+                self.players
+                    .get_mut(&player_id)
+                    .expect("TaoZhuang completion сохраняет canonical player")
+                    .set_tao_zhuang_id(evaluation.set_id);
+                let _ = self.queue_script_file(
+                    &evaluation.completion_script,
+                    ScriptExecutionContext {
+                        player_id: Some(player_id),
+                        region_id,
+                        ..ScriptExecutionContext::default()
+                    },
+                );
+            }
+        }
+
+        let coefficients = self.globe_setup.player_property_coefficients();
+        let (previous, current) = {
+            let player = self
+                .players
+                .get_mut(&player_id)
+                .expect("TaoZhuang property pass сохраняет canonical player");
+            player.apply_tao_zhuang_properties(false, coefficients);
+            let previous = player.combat_type_values();
+            player.apply_tao_zhuang_properties(true, coefficients);
+            let current = player.combat_type_values();
+            (previous, current)
+        };
+        let difference = CPlayer::update_ci_qing_property_difference(&previous, &current)
+            .unwrap_or_else(|| {
+                self.find_player(player_id)
+                    .expect("TaoZhuang difference сохраняет canonical player")
+                    .ci_qing_property_snapshot()
+                    .1
+                    .clone()
+            });
+        let result_values = {
+            let player = self
+                .players
+                .get_mut(&player_id)
+                .expect("TaoZhuang result сохраняет canonical player");
+            player.replace_ci_qing_tao_zhuang_add_values(difference);
+            player.ci_qing_property_result()
+        };
+        let mut result = CMessage::new(0x000c_0110);
+        result.add_long(player_id);
+        result.add_long(player_id);
+        for value in result_values.values() {
+            result.add_ulong(*value);
+        }
+        let _ = result.send_to_player(self.net_server(), player_id);
+
+        let added = {
+            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+            players
+                .get_mut(&player_id)
+                .expect("TaoZhuang skill add сохраняет canonical player")
+                .add_tao_zhuang_skills(skill_factory)
+        };
+        for skill in added {
+            if let Some(message) = player_skill_learned_message(
+                skill.message_type,
+                skill.skill_id,
+                skill.skill_level,
+                skill.skill_level,
+                &skill.skill_name,
+                &self.skill_factory,
+                true,
+            ) {
+                let _ = message.send_to_player(self.net_server(), player_id);
+            }
+        }
+        if let Some(player) = self.find_player(player_id) {
+            let _ = self.send_player_properties_changed(player);
+        }
+        self.players
+            .get_mut(&player_id)
+            .expect("TaoZhuang finish сохраняет canonical player")
+            .finish_tao_zhuang_update();
+        true
     }
 
     /// `DoneFlash`: pending property snapshot становится exact `0xBF73B` и

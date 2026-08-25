@@ -4,8 +4,9 @@
 //! `WorldServer/Nworldserver.exe + WorldServer/WorldServer.pdb`, Game
 //! `DeCodeFromByte` — парой `GameServer/gameserver.exe + GameServer/GameServer.pdb`.
 //! Исходный owner PDB:
-//! `e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp/.h`. Gameplay queries
-//! и применение результатов к player остаются отдельной реконструкцией.
+//! `e:\svn\fengyun_russia_dev\public\taozhuangsetup.cpp/.h`. Gameplay-query
+//! сохраняет first matching set в unsigned ID-order, exact-count completion и
+//! ordered threshold-prefix; применение результата остаётся у `CPlayer`.
 //!
 //! Wire сначала содержит ordered skill set, затем ordered item map. Item:
 //! четыре `u32`, три C-string, фактический equipment-name count и ordered
@@ -77,18 +78,24 @@ pub(crate) struct CTaoZhuangSetup {
 }
 
 impl CTaoZhuangSetup {
- /// Читает точный World text-format из уже выбранного resource backend-а.
+    /// Читает точный World text-format из уже выбранного resource backend-а.
     pub(crate) fn read_file(
         &mut self,
         source: Option<&[u8]>,
         mut add_log_text: impl FnMut(&[u8]),
     ) -> bool {
-        const MISSING_FILE: &[u8] = b"\xCC\xD7\xD7\xB0\xCE\xC4\xBC\xFE\xC5\xE4\xD6\xC3\xB2\xBB\xB4\xE6\xD4\xDA";
-        const DUPLICATE_SKILL: &[u8] = b"\xCC\xD7\xD7\xB0\xBC\xBC\xC4\xDC\x49\x64\xD3\xD0\xD6\xD8\xB8\xB4";
-        const DUPLICATE_EQUIPMENT: &[u8] = b"\xCC\xD7\xD7\xB0\xD7\xB0\xB1\xB8\xD4\xAD\xCA\xBC\xC3\xFB\xD3\xD0\xD6\xD8\xB8\xB4";
-        const DUPLICATE_PROPERTY: &[u8] = b"\xCC\xD7\xD7\xB0\xCC\xED\xBC\xD3\xCA\xF4\xD0\xD4\xD3\xD0\xD6\xD8\xB8\xB4";
-        const DUPLICATE_ADDED_SKILL: &[u8] = b"\xCC\xD7\xD7\xB0\xCC\xED\xBC\xD3\xBC\xBC\xC4\xDC\xD3\xD0\xD6\xD8\xB8\xB4";
-        const DUPLICATE_ADDITION: &[u8] = b"\xCC\xD7\xD7\xB0\xBC\xFE\xCA\xFD\xB7\xD6\xC5\xE4\xD3\xD0\xD6\xD8\xB8\xB4";
+        const MISSING_FILE: &[u8] =
+            b"\xCC\xD7\xD7\xB0\xCE\xC4\xBC\xFE\xC5\xE4\xD6\xC3\xB2\xBB\xB4\xE6\xD4\xDA";
+        const DUPLICATE_SKILL: &[u8] =
+            b"\xCC\xD7\xD7\xB0\xBC\xBC\xC4\xDC\x49\x64\xD3\xD0\xD6\xD8\xB8\xB4";
+        const DUPLICATE_EQUIPMENT: &[u8] =
+            b"\xCC\xD7\xD7\xB0\xD7\xB0\xB1\xB8\xD4\xAD\xCA\xBC\xC3\xFB\xD3\xD0\xD6\xD8\xB8\xB4";
+        const DUPLICATE_PROPERTY: &[u8] =
+            b"\xCC\xD7\xD7\xB0\xCC\xED\xBC\xD3\xCA\xF4\xD0\xD4\xD3\xD0\xD6\xD8\xB8\xB4";
+        const DUPLICATE_ADDED_SKILL: &[u8] =
+            b"\xCC\xD7\xD7\xB0\xCC\xED\xBC\xD3\xBC\xBC\xC4\xDC\xD3\xD0\xD6\xD8\xB8\xB4";
+        const DUPLICATE_ADDITION: &[u8] =
+            b"\xCC\xD7\xD7\xB0\xBC\xFE\xCA\xFD\xB7\xD6\xC5\xE4\xD3\xD0\xD6\xD8\xB8\xB4";
 
         let Some(source) = source else {
             add_log_text(MISSING_FILE);
@@ -222,6 +229,17 @@ impl CTaoZhuangSetup {
         &self.items
     }
 
+    pub(crate) fn query_id_by_equipment_name(&self, name: &[u8]) -> Option<u32> {
+        self.items
+            .values()
+            .find(|item| item.equipment_names.contains(name))
+            .map(|item| item.id)
+    }
+
+    pub(crate) fn item(&self, id: u32) -> Option<&TaoZhuangItem> {
+        self.items.get(&id)
+    }
+
     pub(crate) fn add_byte_to_array(
         &self,
         destination: &mut Vec<u8>,
@@ -236,11 +254,7 @@ impl CTaoZhuangSetup {
             payload.extend_from_slice(&skill_id.to_le_bytes());
         }
 
-        write_tao_zhuang_count(
-            &mut payload,
-            TaoZhuangCountSection::Items,
-            self.items.len(),
-        )?;
+        write_tao_zhuang_count(&mut payload, TaoZhuangCountSection::Items, self.items.len())?;
         for item in self.items.values() {
             for value in [
                 item.id,
@@ -328,8 +342,7 @@ impl CTaoZhuangSetup {
         for _ in 0..item_count.max(0) {
             let id = read_wire_u32(source, cursor, "item ID")?;
             let color = read_wire_u32(source, cursor, "item color")?;
-            let declared_item_count =
-                read_wire_u32(source, cursor, "declared addition count")?;
+            let declared_item_count = read_wire_u32(source, cursor, "declared addition count")?;
             let declared_equipment_count =
                 read_wire_u32(source, cursor, "declared equipment count")?;
             let name = read_wire_c_string(source, cursor, "item name")?;
@@ -339,11 +352,7 @@ impl CTaoZhuangSetup {
             let equipment_count = read_wire_i32(source, cursor, "equipment name count")?;
             let mut equipment_names = BTreeSet::new();
             for _ in 0..equipment_count.max(0) {
-                equipment_names.insert(read_wire_c_string(
-                    source,
-                    cursor,
-                    "equipment name",
-                )?);
+                equipment_names.insert(read_wire_c_string(source, cursor, "equipment name")?);
             }
 
             let addition_count = read_wire_i32(source, cursor, "addition count")?;
@@ -359,8 +368,7 @@ impl CTaoZhuangSetup {
                     properties.entry(property_id).or_insert(value);
                 }
 
-                let declared_skill_count =
-                    read_wire_u32(source, cursor, "addition skill count")?;
+                let declared_skill_count = read_wire_u32(source, cursor, "addition skill count")?;
                 let mut skills = BTreeMap::new();
                 for _ in 0..declared_skill_count {
                     let skill_id = read_wire_u32(source, cursor, "added skill ID")?;
@@ -478,9 +486,7 @@ fn read_wire_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, TaoZhuangDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(
-        source, cursor, field,
-    )?))
+    Ok(i32::from_le_bytes(read_wire_array(source, cursor, field)?))
 }
 
 fn read_wire_u32(
@@ -488,9 +494,7 @@ fn read_wire_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, TaoZhuangDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(
-        source, cursor, field,
-    )?))
+    Ok(u32::from_le_bytes(read_wire_array(source, cursor, field)?))
 }
 
 fn read_wire_array<const N: usize>(
@@ -651,7 +655,9 @@ fn parse_legacy_u32(token: &[u8]) -> Option<u32> {
         if !digit.is_ascii_digit() {
             return None;
         }
-        value = value.checked_mul(10)?.checked_add(u64::from(digit - b'0'))?;
+        value = value
+            .checked_mul(10)?
+            .checked_add(u64::from(digit - b'0'))?;
     }
     if negative {
         (value <= u64::from(u32::MAX) + 1).then(|| (value as u32).wrapping_neg())

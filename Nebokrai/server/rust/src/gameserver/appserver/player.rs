@@ -165,6 +165,10 @@
 //! wrapping addition. Other-person snapshot читает это состояние и те же
 //! восемь owned CiQing slots без копий. Универсальные equipment/addon формулы
 //! остаются обязательной runtime-границей до materialization всех combat scalar-ов.
+//! TaoZhuang теперь сохраняет constructor flags, unique original-name set,
+//! ordered set counts/threshold-prefix, max-level skills и раздельные обычные/
+//! CiQing property maps. `CGame` исполняет полный `DoneTaoZhuang`, поэтому эти
+//! player-методы не являются отдельным недостижимым adapter-слоем.
 //! `skillmessage 0x90001` сохраняет learned-skill authorization, contend
 //! notice, безусловное обнуление emotion state, self/point/object target и
 //! socket reject; `0x90005` добавляет feature/HP guards и странный fallback
@@ -306,6 +310,7 @@ use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
 use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::auctionnode::CGoodsNode;
 use crate::public::guid::CGuid;
+use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -1544,6 +1549,13 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) critical_rate_bits: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TaoZhuangSetEvaluation {
+    pub(crate) set_id: u32,
+    pub(crate) collected_all: bool,
+    pub(crate) completion_script: Vec<u8>,
+}
+
 /// Exact `GetPlayerAllProperties` diagnostic projection. Числа хранят raw
 /// DWORD vararg bits: конкретный `%d`/`%u` шаблона определяет их signed view.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1910,6 +1922,13 @@ pub(crate) struct CPlayer {
     ci_qing_add_values: BTreeMap<u32, u32>,
     ci_qing_tao_zhuang_add_values: BTreeMap<u32, u32>,
     tao_zhuang_id: u32,
+    equipment_changed: bool,
+    tao_zhuang_setup_pending: bool,
+    tao_zhuang_items: BTreeMap<u32, u32>,
+    tao_zhuang_original_names: BTreeSet<Vec<u8>>,
+    tao_zhuang_properties: BTreeMap<u32, u32>,
+    ci_qing_tao_zhuang_properties: BTreeMap<u32, u32>,
+    tao_zhuang_skills: BTreeMap<u32, u32>,
     contend_state: bool,
     emotion_index: i32,
     emotion_timestamp_ms: u32,
@@ -2200,6 +2219,13 @@ impl CPlayer {
             ci_qing_add_values: BTreeMap::new(),
             ci_qing_tao_zhuang_add_values: BTreeMap::new(),
             tao_zhuang_id: 0,
+            equipment_changed: false,
+            tao_zhuang_setup_pending: true,
+            tao_zhuang_items: BTreeMap::new(),
+            tao_zhuang_original_names: BTreeSet::new(),
+            tao_zhuang_properties: BTreeMap::new(),
+            ci_qing_tao_zhuang_properties: BTreeMap::new(),
+            tao_zhuang_skills: BTreeMap::new(),
             contend_state: false,
             emotion_index: 0,
             emotion_timestamp_ms: 0,
@@ -4908,6 +4934,12 @@ impl CPlayer {
         goods_factory: &CGoodsFactory,
     ) {
         self.combat_properties = properties;
+        self.sync_combat_property_wire();
+        self.refresh_equipment_flash(goods_factory);
+    }
+
+    fn sync_combat_property_wire(&mut self) {
+        let properties = self.combat_properties;
         let write_u16 = |wire: &mut [u8], offset: usize, value: u16| {
             wire[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
         };
@@ -5002,7 +5034,6 @@ impl CPlayer {
             0x6c,
             properties.critical_rate_bits,
         );
-        self.refresh_equipment_flash(goods_factory);
     }
 
     /// `MountAllEquip -> SetCurFlash`: пересобирает 17 flash-ячеек после
@@ -5272,6 +5303,376 @@ impl CPlayer {
             destination.insert(property, current.saturating_sub(previous));
         }
         Some(destination)
+    }
+
+    pub(crate) const fn tao_zhuang_is_pending(&self) -> bool {
+        self.equipment_changed
+    }
+
+    pub(crate) const fn tao_zhuang_setup_is_pending(&self) -> bool {
+        self.tao_zhuang_setup_pending
+    }
+
+    pub(crate) const fn mark_tao_zhuang_setup_sent(&mut self) {
+        self.tao_zhuang_setup_pending = false;
+    }
+
+    /// `MountAllEquip` собирает только уникальные original-name активных
+    /// equipment/CiQing goods; одинаковое имя в двух слотах считается один раз.
+    pub(crate) fn rebuild_tao_zhuang_items(
+        &mut self,
+        setup: &CTaoZhuangSetup,
+        factory: &CGoodsFactory,
+    ) {
+        self.tao_zhuang_items.clear();
+        self.tao_zhuang_original_names.clear();
+        let mut names = Vec::new();
+        for (_, goods) in self.equipment.traversing_goods() {
+            if goods.query_attribute(GAP_GOODS_MAXIMUM_DURABILITY)
+                && goods.addon_property_value(factory, GAP_GOODS_MAXIMUM_DURABILITY, 2) < 1
+            {
+                continue;
+            }
+            if let Some(name) = factory.query_goods_original_name(goods.base_properties_index()) {
+                names.push(name.to_vec());
+            }
+        }
+        for position in 0..self.ci_qing.size() {
+            let Some(goods) = self.ci_qing.get_goods(position) else {
+                continue;
+            };
+            if goods.query_attribute(GAP_GOODS_MAXIMUM_DURABILITY)
+                && goods.addon_property_value(factory, GAP_GOODS_MAXIMUM_DURABILITY, 2) < 1
+            {
+                continue;
+            }
+            if let Some(name) = factory.query_goods_original_name(goods.base_properties_index()) {
+                names.push(name.to_vec());
+            }
+        }
+        for name in names {
+            if self.tao_zhuang_original_names.insert(name.clone())
+                && let Some(set_id) = setup.query_id_by_equipment_name(&name)
+            {
+                let count = self.tao_zhuang_items.entry(set_id).or_default();
+                *count = count.wrapping_add(1);
+            }
+        }
+    }
+
+    pub(crate) fn tao_zhuang_skills_for_removal(
+        &self,
+        setup: &CTaoZhuangSetup,
+    ) -> Vec<BattleFairySkillRemoved> {
+        setup
+            .skill_ids()
+            .iter()
+            .filter_map(|&skill_id| {
+                self.move_shape
+                    .skill(skill_id)
+                    .map(|skill| BattleFairySkillRemoved {
+                        message_type: BATTLE_FAIRY_SKILL_REMOVED_MESSAGE_TYPE,
+                        player_id: self.player_id(),
+                        skill_id,
+                        skill_name: skill.name().to_vec(),
+                    })
+            })
+            .collect()
+    }
+
+    pub(crate) fn delete_tao_zhuang_skill(
+        &mut self,
+        skill_id: u32,
+        factory: &CSkillFactory,
+    ) -> bool {
+        self.move_shape.delete_skill(skill_id, factory)
+    }
+
+    /// `ComputerAddValue`: каждый достигнутый threshold применяется, а первый
+    /// threshold выше collected count немедленно завершает set-prefix.
+    pub(crate) fn compute_tao_zhuang_bonuses(
+        &mut self,
+        setup: &CTaoZhuangSetup,
+    ) -> Vec<TaoZhuangSetEvaluation> {
+        self.tao_zhuang_properties.clear();
+        self.ci_qing_tao_zhuang_properties.clear();
+        self.tao_zhuang_skills.clear();
+        let mut evaluations = Vec::new();
+        for (&set_id, &item_count) in &self.tao_zhuang_items {
+            let Some(item) = setup.item(set_id) else {
+                continue;
+            };
+            for addition in item.additions().values() {
+                if item_count < addition.number {
+                    break;
+                }
+                for (&skill_id, &level) in &addition.skills {
+                    self.tao_zhuang_skills
+                        .entry(skill_id)
+                        .and_modify(|current| *current = (*current).max(level))
+                        .or_insert(level);
+                }
+                let destination = if set_id < 100 {
+                    &mut self.tao_zhuang_properties
+                } else {
+                    &mut self.ci_qing_tao_zhuang_properties
+                };
+                for (&property, &value) in &addition.properties {
+                    let current = destination.entry(property).or_default();
+                    *current = current.wrapping_add(value);
+                }
+            }
+            let collected_all = item.declared_equipment_count == item_count;
+            evaluations.push(TaoZhuangSetEvaluation {
+                set_id,
+                collected_all,
+                completion_script: if collected_all {
+                    item.script.clone()
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+        evaluations
+    }
+
+    pub(crate) const fn set_tao_zhuang_id(&mut self, set_id: u32) {
+        self.tao_zhuang_id = set_id;
+    }
+
+    pub(crate) fn replace_ci_qing_tao_zhuang_add_values(&mut self, values: BTreeMap<u32, u32>) {
+        self.ci_qing_tao_zhuang_add_values = values;
+    }
+
+    pub(crate) fn combat_type_values(&self) -> BTreeMap<u32, u32> {
+        BTreeMap::from([
+            (0x0e, self.combat_properties.minimum_attack),
+            (0x0f, self.combat_properties.maximum_attack),
+            (0x10, self.combat_properties.element_modify as u32),
+            (0x11, self.combat_properties.defense),
+            (0x12, u32::from(self.combat_properties.attack_speed)),
+            (0x13, u32::from(self.combat_properties.hit)),
+            (0x14, u32::from(self.combat_properties.cch)),
+            (0x15, u32::from(self.combat_properties.dodge)),
+            (0x17, self.combat_properties.element_resistance),
+            (0x19, u32::from(self.combat_properties.hp_recovery)),
+            (0x1a, u32::from(self.combat_properties.mp_recovery)),
+            (0x1b, self.combat_properties.strength),
+            (0x1c, self.combat_properties.dexterity),
+            (0x1d, self.combat_properties.constitution),
+            (0x1e, self.combat_properties.intelligence),
+            (0x1f, self.combat_properties.maximum_hp),
+            (0x20, self.combat_properties.maximum_mp),
+            (0x33, u32::from(self.combat_properties.reank)),
+            (0x34, u32::from(self.combat_properties.burden)),
+            (0x5b, u32::from(self.combat_properties.attack_avoid)),
+            (0x5c, u32::from(self.combat_properties.element_avoid)),
+            (0x5d, u32::from(self.combat_properties.full_miss)),
+            (0x5f, u32::from(self.combat_properties.blast_attack)),
+            (0x60, u32::from(self.combat_properties.blast_element_attack)),
+        ])
+    }
+
+    pub(crate) fn apply_tao_zhuang_properties(
+        &mut self,
+        ci_qing: bool,
+        coefficients: GlobePlayerPropertyCoefficients,
+    ) {
+        let properties = if ci_qing {
+            self.ci_qing_tao_zhuang_properties.clone()
+        } else {
+            self.tao_zhuang_properties.clone()
+        };
+        let occupation = usize::from(self.base_properties.occupation).min(2);
+        let derived = |value: u32, coefficient: f32| {
+            ((value as i32 as f32) * coefficient).round() as i32 as u32
+        };
+        for (property, value) in properties {
+            match property {
+                0x0e => {
+                    self.combat_properties.minimum_attack =
+                        self.combat_properties.minimum_attack.wrapping_add(value)
+                }
+                0x0f => {
+                    self.combat_properties.maximum_attack =
+                        self.combat_properties.maximum_attack.wrapping_add(value)
+                }
+                0x10 => {
+                    self.combat_properties.element_modify = self
+                        .combat_properties
+                        .element_modify
+                        .wrapping_add(value as i32)
+                }
+                0x11 => {
+                    self.combat_properties.defense =
+                        self.combat_properties.defense.wrapping_add(value)
+                }
+                0x12 => {
+                    self.combat_properties.attack_speed = self
+                        .combat_properties
+                        .attack_speed
+                        .wrapping_add(value as u16)
+                }
+                0x13 => {
+                    self.combat_properties.hit =
+                        self.combat_properties.hit.wrapping_add(value as u16)
+                }
+                0x14 => {
+                    self.combat_properties.cch =
+                        self.combat_properties.cch.wrapping_add(value as u16)
+                }
+                0x15 => {
+                    self.combat_properties.dodge =
+                        self.combat_properties.dodge.wrapping_add(value as u16)
+                }
+                0x17 => {
+                    self.combat_properties.element_resistance = self
+                        .combat_properties
+                        .element_resistance
+                        .wrapping_add(value)
+                }
+                0x19 => {
+                    self.combat_properties.hp_recovery = self
+                        .combat_properties
+                        .hp_recovery
+                        .wrapping_add(value as u16)
+                }
+                0x1a => {
+                    self.combat_properties.mp_recovery = self
+                        .combat_properties
+                        .mp_recovery
+                        .wrapping_add(value as u16)
+                }
+                0x1b => {
+                    self.combat_properties.strength =
+                        self.combat_properties.strength.wrapping_add(value);
+                    self.combat_properties.maximum_attack = self
+                        .combat_properties
+                        .maximum_attack
+                        .wrapping_add(derived(value, coefficients.str_to_max_attack[occupation]));
+                    self.combat_properties.burden =
+                        self.combat_properties.burden.wrapping_add(derived(
+                            value,
+                            coefficients.str_to_burden[occupation],
+                        )
+                            as u16);
+                }
+                0x1c => {
+                    self.combat_properties.dexterity =
+                        self.combat_properties.dexterity.wrapping_add(value);
+                    self.combat_properties.minimum_attack = self
+                        .combat_properties
+                        .minimum_attack
+                        .wrapping_add(derived(value, coefficients.dex_to_min_attack[occupation]));
+                    self.combat_properties.reank = self
+                        .combat_properties
+                        .reank
+                        .wrapping_add(derived(value, coefficients.dex_to_stiff[occupation]) as u16);
+                }
+                0x1d => {
+                    self.combat_properties.constitution =
+                        self.combat_properties.constitution.wrapping_add(value);
+                    self.combat_properties.maximum_hp = self
+                        .combat_properties
+                        .maximum_hp
+                        .wrapping_add(derived(value, coefficients.con_to_max_hp[occupation]));
+                    self.combat_properties.defense = self
+                        .combat_properties
+                        .defense
+                        .wrapping_add(derived(value, coefficients.con_to_defense[occupation]));
+                }
+                0x1e => {
+                    self.combat_properties.intelligence =
+                        self.combat_properties.intelligence.wrapping_add(value);
+                    self.combat_properties.element_modify = self
+                        .combat_properties
+                        .element_modify
+                        .wrapping_add(
+                            derived(value, coefficients.int_to_element[occupation]) as i32
+                        );
+                    self.combat_properties.maximum_mp = self
+                        .combat_properties
+                        .maximum_mp
+                        .wrapping_add(derived(value, coefficients.int_to_max_mp[occupation]));
+                    self.combat_properties.element_resistance = self
+                        .combat_properties
+                        .element_resistance
+                        .wrapping_add(derived(value, coefficients.int_to_resistant[occupation]));
+                }
+                0x1f => {
+                    self.combat_properties.maximum_hp =
+                        self.combat_properties.maximum_hp.wrapping_add(value)
+                }
+                0x20 => {
+                    self.combat_properties.maximum_mp =
+                        self.combat_properties.maximum_mp.wrapping_add(value)
+                }
+                0x33 => {
+                    self.combat_properties.reank =
+                        self.combat_properties.reank.wrapping_add(value as u16)
+                }
+                0x34 => {
+                    self.combat_properties.burden =
+                        self.combat_properties.burden.wrapping_add(value as u16)
+                }
+                0x5b => {
+                    self.combat_properties.attack_avoid = self
+                        .combat_properties
+                        .attack_avoid
+                        .wrapping_add(value as u16)
+                }
+                0x5c => {
+                    self.combat_properties.element_avoid = self
+                        .combat_properties
+                        .element_avoid
+                        .wrapping_add(value as u16)
+                }
+                0x5d => {
+                    self.combat_properties.full_miss =
+                        self.combat_properties.full_miss.wrapping_add(value as u16)
+                }
+                0x5f => {
+                    self.combat_properties.blast_attack = self
+                        .combat_properties
+                        .blast_attack
+                        .wrapping_add(value as u16)
+                }
+                0x60 => {
+                    self.combat_properties.blast_element_attack = self
+                        .combat_properties
+                        .blast_element_attack
+                        .wrapping_add(value as u16)
+                }
+                _ => {}
+            }
+        }
+        self.sync_combat_property_wire();
+    }
+
+    pub(crate) fn add_tao_zhuang_skills(
+        &mut self,
+        factory: &CSkillFactory,
+    ) -> Vec<BattleFairySkillAdded> {
+        let player_id = self.player_id();
+        let skills = self.tao_zhuang_skills.clone();
+        let mut added = Vec::new();
+        for (skill_id, level) in skills {
+            if self.move_shape.add_skill(skill_id, level as i32, factory)
+                && let Some(skill) = self.move_shape.skill(skill_id)
+            {
+                added.push(battle_fairy_skill_snapshot(player_id, skill));
+            }
+        }
+        added
+    }
+
+    pub(crate) fn finish_tao_zhuang_update(&mut self) {
+        self.equipment_changed = false;
+        self.tao_zhuang_items.clear();
+        self.tao_zhuang_original_names.clear();
+        self.tao_zhuang_properties.clear();
+        self.ci_qing_tao_zhuang_properties.clear();
+        self.tao_zhuang_skills.clear();
     }
 
     pub(crate) fn check_item_in_packet(&self, base_index: u32) -> u32 {
@@ -7274,6 +7675,9 @@ impl CPlayer {
             },
         );
         let mut effects = Vec::new();
+        if matches!(&outcome, EquipmentRemoveOutcome::Removed(_)) {
+            self.equipment_changed = true;
+        }
         if let EquipmentRemoveOutcome::Removed(removed) = &outcome
             && let Some(player_effects) = removed.event.player_effects
         {
@@ -7374,6 +7778,9 @@ impl CPlayer {
             )
         };
         let mut effects = Vec::new();
+        if matches!(&outcome, EquipmentAddOutcome::Added(_)) {
+            self.equipment_changed = true;
+        }
         if let EquipmentAddOutcome::Added(added) = &outcome
             && let Some(player_effects) = added.player_effects
         {
