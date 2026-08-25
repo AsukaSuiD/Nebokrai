@@ -2172,7 +2172,7 @@ pub(crate) struct GameRegionEnterReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ScriptRegionChangeKind {
+pub(crate) enum PlayerRegionChangeKind {
     MissingPlayer,
     MissingSourceRegion,
     SameRegion,
@@ -2180,9 +2180,9 @@ pub(crate) enum ScriptRegionChangeKind {
     RemoteServer,
 }
 
-#[must_use = "report сохраняет script destination, lifecycle и network result"]
+#[must_use = "report сохраняет destination, lifecycle и network result"]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ScriptRegionChangeReport {
+pub(crate) struct PlayerRegionChangeReport {
     pub(crate) player_id: i32,
     pub(crate) source_region_id: Option<i32>,
     pub(crate) target_region_id: i32,
@@ -2192,7 +2192,7 @@ pub(crate) struct ScriptRegionChangeReport {
     pub(crate) use_goods: i32,
     pub(crate) range: i32,
     pub(crate) carriage_distance: i32,
-    pub(crate) kind: ScriptRegionChangeKind,
+    pub(crate) kind: PlayerRegionChangeKind,
     pub(crate) business: Option<GamePlayerBusinessEndReport>,
     pub(crate) position_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
     pub(crate) direction_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
@@ -16476,12 +16476,12 @@ impl CGame {
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
-    /// Reached `ChangeRegion` gameplay path used by `nodupe.script`. The
-    /// selector/default parsing remains in `CScript::RunFunction`; this owner
+    /// Reached common `CPlayer::ChangeRegion` gameplay owner used by client,
+    /// GM and script callers. Callers own their argument decoding; this owner
     /// performs session/player state, spatial randomization and exact client /
     /// World wire in the original order.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn change_script_player_region<
+    pub(crate) fn change_player_region<
         Context: ScriptRegionChangeContext + RealmAppellationScriptContext,
     >(
         &mut self,
@@ -16494,8 +16494,8 @@ impl CGame {
         range: i32,
         carriage_distance: i32,
         context: &mut Context,
-    ) -> ScriptRegionChangeReport {
-        let mut report = ScriptRegionChangeReport {
+    ) -> PlayerRegionChangeReport {
+        let mut report = PlayerRegionChangeReport {
             player_id,
             source_region_id: None,
             target_region_id,
@@ -16505,7 +16505,7 @@ impl CGame {
             use_goods,
             range,
             carriage_distance,
-            kind: ScriptRegionChangeKind::MissingPlayer,
+            kind: PlayerRegionChangeKind::MissingPlayer,
             business: None,
             position_delivery: None,
             direction_delivery: None,
@@ -16530,7 +16530,7 @@ impl CGame {
         };
         report.source_region_id = Some(source_region_id);
         let Some(mut source_owner) = self.take_region_owner(source_region_id) else {
-            report.kind = ScriptRegionChangeKind::MissingSourceRegion;
+            report.kind = PlayerRegionChangeKind::MissingSourceRegion;
             return report;
         };
         report.business = self.finish_player_business(player_id);
@@ -16544,7 +16544,7 @@ impl CGame {
         }
         report.direction = direction;
         if target_region_id == source_region_id {
-            report.kind = ScriptRegionChangeKind::SameRegion;
+            report.kind = PlayerRegionChangeKind::SameRegion;
             context.prepare_script_region_companions(
                 &mut player,
                 source_region_id,
@@ -16622,7 +16622,7 @@ impl CGame {
         }
 
         if let Some(target_owner) = self.take_region_owner(target_region_id) {
-            report.kind = ScriptRegionChangeKind::LocalRegion;
+            report.kind = PlayerRegionChangeKind::LocalRegion;
             context.prepare_script_region_companions(
                 &mut player,
                 source_region_id,
@@ -16698,7 +16698,7 @@ impl CGame {
             return report;
         }
 
-        report.kind = ScriptRegionChangeKind::RemoteServer;
+        report.kind = PlayerRegionChangeKind::RemoteServer;
         context.prepare_script_region_companions(
             &mut player,
             source_region_id,

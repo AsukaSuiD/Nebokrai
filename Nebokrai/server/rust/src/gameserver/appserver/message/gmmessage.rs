@@ -161,7 +161,7 @@ pub(crate) enum GmMessageReport {
         region_id: i32,
         tile_x: i32,
         tile_y: i32,
-        report: crate::gameserver::gameserver::game::ScriptRegionChangeReport,
+        report: crate::gameserver::gameserver::game::PlayerRegionChangeReport,
     },
     ScriptContinued {
         requester_id: i32,
@@ -384,7 +384,7 @@ pub(crate) fn dispatch_gm_message<
             .expect("GM move target проверен до ChangeRegion")
             .shape()
             .get_direction();
-        let report = game.change_script_player_region(
+        let report = game.change_player_region(
             target_player_id,
             region_id,
             tile_x,

@@ -158,10 +158,9 @@ impl PartialEq for RegionRouterLoadError {
             (Self::Io(left), Self::Io(right)) => {
                 left.kind() == right.kind() && left.to_string() == right.to_string()
             }
-            (
-                Self::MissingToken { field: left },
-                Self::MissingToken { field: right },
-            ) => left == right,
+            (Self::MissingToken { field: left }, Self::MissingToken { field: right }) => {
+                left == right
+            }
             (
                 Self::InvalidInteger {
                     field: left_field,
@@ -401,8 +400,31 @@ impl RegionRouter {
         Ok(report)
     }
 
- /// Восстанавливает оригинал World `ChageRegionRouter` с детерминированным
- /// signed-key tie-break исходного `std::map`.
+    /// Exact GameServer `IsConectRegion`: разрешается только direct edge,
+    /// текущая точка должна попадать в квадрат `lOutRange` вокруг transition,
+    /// а success возвращает `pOut` destination node. Сравнение через `f64`
+    /// точно для разности двух `i32` и сохраняет исходный floating `ABS`, не
+    /// допуская signed overflow.
+    pub(crate) fn connected_region_destination(
+        &self,
+        from_region: i32,
+        to_region: i32,
+        current: RegionRoutePoint,
+    ) -> Option<RegionRoutePoint> {
+        if from_region == to_region {
+            return None;
+        }
+        let source = self.nodes.get(&from_region)?;
+        let destination = self.nodes.get(&to_region)?;
+        let transition = source.next.get(&to_region)?;
+        let range = f64::from(source.exit_range);
+        let x_distance = (f64::from(transition.x) - f64::from(current.x)).abs();
+        let y_distance = (f64::from(transition.y) - f64::from(current.y)).abs();
+        (x_distance <= range && y_distance <= range).then_some(destination.exit)
+    }
+
+    /// Восстанавливает оригинал World `ChageRegionRouter` с детерминированным
+    /// signed-key tie-break исходного `std::map`.
     pub(crate) fn change_region_router(
         &self,
         from_region: i32,
@@ -450,8 +472,8 @@ impl RegionRouter {
                 .nodes
                 .get(&current_region)
                 .expect("pending содержит только ключи RegionRouter");
- // Машина сравнивает destination с `stRouterNode::lRegionId`, хотя
- // путь и lookup-и строит по map key. Несовпадение полей сохраняем.
+            // Машина сравнивает destination с `stRouterNode::lRegionId`, хотя
+            // путь и lookup-и строит по map key. Несовпадение полей сохраняем.
             if current_node.region_id == to_region {
                 break;
             }
@@ -660,8 +682,8 @@ fn write_count(
     count: usize,
     region_id: Option<i32>,
 ) -> Result<(), RegionRouterSerializeError> {
-    let count_i32 = i32::try_from(count)
-        .map_err(|_| RegionRouterSerializeError { region_id, count })?;
+    let count_i32 =
+        i32::try_from(count).map_err(|_| RegionRouterSerializeError { region_id, count })?;
     destination.extend_from_slice(&count_i32.to_le_bytes());
     Ok(())
 }

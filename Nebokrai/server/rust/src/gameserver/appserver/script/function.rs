@@ -5543,7 +5543,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 .find_player_by_name(&target_name)
                 .map(CPlayer::player_id)
             {
-                let _ = game.change_script_player_region(
+                let _ = game.change_player_region(
                     target_id,
                     target_region_id,
                     tile_x,
@@ -5582,7 +5582,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let direction = game
                     .find_player(target_id)
                     .map_or(0, |player| player.shape().get_direction());
-                let _ = game.change_script_player_region(
+                let _ = game.change_player_region(
                     target_id,
                     target_region_id,
                     tile_x,
@@ -6170,7 +6170,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let use_goods = integer(4).unwrap_or_default();
             let range = integer(5).unwrap_or(2);
             let carriage_distance = integer(6).unwrap_or_default();
-            let _ = game.change_script_player_region(
+            let _ = game.change_player_region(
                 player_id,
                 target_region_id,
                 tile_x,
