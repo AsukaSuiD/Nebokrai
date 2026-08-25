@@ -1482,9 +1482,11 @@ pub(crate) struct FairyImplantationLog {
     pub(crate) crystal_amount: u32,
 }
 
-pub(crate) trait FairyContext: BattleFairyDeathContext {
-    fn current_fairy_tick(&mut self) -> u32;
+pub(crate) trait GameClockContext {
+    fn now_milliseconds(&mut self) -> u32;
 }
+
+pub(crate) trait FairyContext: BattleFairyDeathContext + GameClockContext {}
 
 pub(crate) trait PlayerEquipmentInspectionContext: OldClientGoodsCodec {}
 
@@ -2467,10 +2469,12 @@ pub(crate) trait PlayerEquipmentContext {
 /// runtime fact. RideState overlay и
 /// personal-shop mount gate также принадлежат canonical player owner-у.
 pub(crate) trait GameContainerMessageRuntime:
-    OldClientGoodsCodec + PlayerEquipmentContext + PlayerPropertyContext + ServerRegionMembershipContext
+    OldClientGoodsCodec
+    + GameClockContext
+    + PlayerEquipmentContext
+    + PlayerPropertyContext
+    + ServerRegionMembershipContext
 {
-    fn container_tick_ms(&mut self) -> u32;
-
     fn enhancement_equipment_remove_facts(
         &mut self,
         player: &CPlayer,
@@ -3268,9 +3272,8 @@ pub(crate) trait GodsBattleDeathContext {
 }
 
 pub(crate) trait GodsBattleNpcContendContext:
-    ServerRegionMonsterContext + GodsBattlePlayerContext + ScriptFunctionRuntime
+    ServerRegionMonsterContext + GodsBattlePlayerContext + ScriptFunctionRuntime + GameClockContext
 {
-    fn gods_battle_now_milliseconds(&mut self) -> u32;
     fn record_gods_battle_log(&mut self, event: GodsBattleNpcLog);
 }
 
@@ -3530,8 +3533,7 @@ pub(crate) struct GodsBattleDeathSzlReport {
     pub(crate) region_notice_delivery: Option<i32>,
 }
 
-pub(crate) trait NationCombatContext: ServerRegionNpcContext {
-    fn now_milliseconds(&mut self) -> u32;
+pub(crate) trait NationCombatContext: ServerRegionNpcContext + GameClockContext {
     fn add_log_text(&mut self, text: &[u8]);
     fn put_debug_string(&mut self, text: &[u8]);
 
@@ -4044,7 +4046,7 @@ impl<Runtime: GameMainLoopRuntime> CountryContendEntryContext
     for GameCountryRegionAiContext<'_, Runtime>
 {
     fn now_millis(&mut self) -> u32 {
-        self.runtime.country_contend_now_milliseconds()
+        self.runtime.now_milliseconds()
     }
 
     fn send_contend_time(&mut self, player_id: i32, time: i32) {
@@ -4297,7 +4299,7 @@ impl<Runtime: GameMainLoopRuntime> WarRegionContext for GameCityRegionAiContext<
 
 impl<Runtime: GameMainLoopRuntime> WarContendEntryContext for GameCityRegionAiContext<'_, Runtime> {
     fn now_millis(&mut self) -> u32 {
-        self.runtime.country_contend_now_milliseconds()
+        self.runtime.now_milliseconds()
     }
 
     fn is_owner(&mut self, faction_id: i32) -> bool {
@@ -4603,7 +4605,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext
     for GameVillageRegionAiContext<'_, Runtime>
 {
     fn now_millis(&mut self) -> u32 {
-        self.runtime.country_contend_now_milliseconds()
+        self.runtime.now_milliseconds()
     }
 
     fn is_owner(&mut self, faction_id: i32) -> bool {
@@ -11195,7 +11197,7 @@ impl CGame {
         let particular_attribute =
             detached.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32;
         let old_client_payload = context.encode_goods_for_old_client(&detached);
-        let now_ms = context.container_tick_ms();
+        let now_ms = context.now_milliseconds();
         let (area_width, area_height) = self.area_dimensions();
         if let Err((error, detached)) = owner.base_mut().add_owned_ground_goods(
             detached,
@@ -11518,7 +11520,7 @@ impl CGame {
             }
         };
         if burden_exceeded {
-            let now_ms = context.container_tick_ms();
+            let now_ms = context.now_milliseconds();
             let (area_width, area_height) = self.area_dimensions();
             let rollback = owner.base_mut().add_owned_ground_goods(
                 detached,
@@ -11651,7 +11653,7 @@ impl CGame {
             let detached = incoming
                 .take()
                 .expect("rejected container add сохраняет ground goods owner");
-            let now_ms = context.container_tick_ms();
+            let now_ms = context.now_milliseconds();
             let (area_width, area_height) = self.area_dimensions();
             let rollback = owner.base_mut().add_owned_ground_goods(
                 detached,
@@ -21028,7 +21030,7 @@ impl CGame {
                 -1,
                 true,
                 false,
-                context.gods_battle_now_milliseconds(),
+                context.now_milliseconds(),
                 area_width,
                 area_height,
                 context,
@@ -21883,7 +21885,7 @@ impl CGame {
                         npc_id,
                         &npc_name,
                         max_time,
-                        context.gods_battle_now_milliseconds(),
+                        context.now_milliseconds(),
                     );
                     if let Some(delivery) = self.set_gods_battle_player_contend_state(
                         &region.war.base,
@@ -21955,7 +21957,7 @@ impl CGame {
                 return Some(Err(GodsBattleRegionAiError::Base(error)));
             }
         };
-        let advance = region.advance_contenders(runtime.gods_battle_now_milliseconds());
+        let advance = region.advance_contenders(runtime.now_milliseconds());
         let mut report = GodsBattleContendAiReport {
             region_id,
             base_ai,
@@ -23012,7 +23014,7 @@ impl CGame {
             report.outcome = FairyHatchOutcome::InvalidAction;
             return report;
         }
-        let now = (action == b'b' as i8).then(|| context.current_fairy_tick());
+        let now = (action == b'b' as i8).then(|| context.now_milliseconds());
         let egg_max_level = self.globe_setup.fairy_egg_max_level();
         let Some(goods) = self
             .find_player_mut(player_id)
@@ -23087,7 +23089,7 @@ impl CGame {
             };
             let mut threshold = |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level);
             let context_cell = std::cell::RefCell::new(&mut *context);
-            let mut current_tick = || context_cell.borrow_mut().current_fairy_tick();
+            let mut current_tick = || context_cell.borrow_mut().now_milliseconds();
             let mut encode =
                 |goods: &CGoods| context_cell.borrow_mut().encode_goods_for_old_client(goods);
             player.fairy_container_mut().check_hatcher(

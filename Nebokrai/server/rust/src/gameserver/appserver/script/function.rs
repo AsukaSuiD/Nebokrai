@@ -273,7 +273,7 @@ use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, S
 use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
     EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
-    GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
+    GameClockContext, GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
     GodsBattleSzlPlayerUpdate, NationCarriageReturnReport, NationCombatContext,
     NationContendEnterReport, RealmAppellationScriptContext, ScriptRegionChangeContext,
     ServerRegionOwner, colored_player_notice_message, colored_text_message,
@@ -521,11 +521,6 @@ const MAXIMUM_SCRIPT_SPAWN_COUNT: i32 = 4096;
 const SCRIPT_PLAYER_TYPE: i32 = 400;
 const SCRIPT_NPC_TYPE: i32 = 500;
 
-pub(crate) trait CountryWarActionScriptRuntime {
-    /// Exact lower DWORD process tick, sampled only when a contender is added.
-    fn country_contend_now_milliseconds(&mut self) -> u32;
-}
-
 pub(crate) trait ScriptAwardAuthenticationContext {
     /// Внешняя UniBill/Bsip граница exact `AwardAuthenByPatchID`: реализация
     /// создаёт order IDs, удерживает pending bill record до callback-а и
@@ -542,7 +537,7 @@ pub(crate) trait ScriptAwardAuthenticationContext {
 }
 
 pub(crate) trait ScriptFunctionRuntime:
-    CountryWarActionScriptRuntime
+    GameClockContext
     + CountryExileTimeScriptContext
     + NationCombatContext
     + EquipmentSessionOpenContext
@@ -561,7 +556,7 @@ pub(crate) trait ScriptFunctionRuntime:
 }
 
 impl<T> ScriptFunctionRuntime for T where
-    T: CountryWarActionScriptRuntime
+    T: GameClockContext
         + CountryExileTimeScriptContext
         + NationCombatContext
         + EquipmentSessionOpenContext
@@ -720,11 +715,9 @@ impl<Runtime> WarRegionContext for GameWarContendEntryContext<'_, Runtime> {
     }
 }
 
-impl<Runtime: CountryWarActionScriptRuntime> WarContendEntryContext
-    for GameWarContendEntryContext<'_, Runtime>
-{
+impl<Runtime: GameClockContext> WarContendEntryContext for GameWarContendEntryContext<'_, Runtime> {
     fn now_millis(&mut self) -> u32 {
-        self.runtime.country_contend_now_milliseconds()
+        self.runtime.now_milliseconds()
     }
 
     fn is_owner(&mut self, faction_id: i32) -> bool {
@@ -796,7 +789,7 @@ impl<Runtime: CountryWarActionScriptRuntime> WarContendEntryContext
     }
 }
 
-pub(crate) fn run_war_contend_script_function<Runtime: CountryWarActionScriptRuntime>(
+pub(crate) fn run_war_contend_script_function<Runtime: GameClockContext>(
     game: &mut CGame,
     runtime: &mut Runtime,
     script_player_id: Option<i32>,
@@ -1133,11 +1126,11 @@ struct GameCountryContendEntryContext<'a, Runtime> {
     effects: Vec<CountryWarContendEffect>,
 }
 
-impl<Runtime: CountryWarActionScriptRuntime> CountryContendEntryContext
+impl<Runtime: GameClockContext> CountryContendEntryContext
     for GameCountryContendEntryContext<'_, Runtime>
 {
     fn now_millis(&mut self) -> u32 {
-        self.runtime.country_contend_now_milliseconds()
+        self.runtime.now_milliseconds()
     }
 
     fn send_contend_time(&mut self, player_id: i32, time: i32) {
@@ -1173,7 +1166,7 @@ impl<Runtime: CountryWarActionScriptRuntime> CountryContendEntryContext
     }
 }
 
-pub(crate) fn run_country_war_action_script_function<Runtime: CountryWarActionScriptRuntime>(
+pub(crate) fn run_country_war_action_script_function<Runtime: GameClockContext>(
     game: &mut CGame,
     runtime: &mut Runtime,
     script_player_id: Option<i32>,
@@ -4841,7 +4834,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let Some(player_id) = script_player_id else {
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };
-            let now_ms = runtime.country_contend_now_milliseconds();
+            let now_ms = runtime.now_milliseconds();
             let legacy_return = match function_id {
                 SCRIPT_FUNCTION_ADD_UNDEAD_STATE => {
                     game.add_script_appellation_state(player_id, state_id, now_ms, runtime)
@@ -4896,11 +4889,11 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             let legacy_return = match function_id {
                 SCRIPT_FUNCTION_ADD_EX_STATE | SCRIPT_FUNCTION_ADD_EX_STATE_NEW => {
-                    let now_ms = runtime.country_contend_now_milliseconds();
+                    let now_ms = runtime.now_milliseconds();
                     game.add_script_extended_state(player_id, state_id, kind, now_ms, runtime)
                 }
                 SCRIPT_FUNCTION_DELETE_EX_STATE | SCRIPT_FUNCTION_DELETE_EX_STATE_NEW => {
-                    let now_ms = runtime.country_contend_now_milliseconds();
+                    let now_ms = runtime.now_milliseconds();
                     game.delete_script_extended_state(player_id, state_id, kind, now_ms, runtime)
                 }
                 SCRIPT_FUNCTION_GET_EX_STATE | SCRIPT_FUNCTION_GET_EX_STATE_NEW => game
@@ -4926,7 +4919,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             let legacy_return = match function_id {
                 SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE => {
-                    let now_ms = runtime.country_contend_now_milliseconds();
+                    let now_ms = runtime.now_milliseconds();
                     game.add_script_change_body_state(player_id, state_id, now_ms, runtime)
                 }
                 SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE => {
@@ -5657,7 +5650,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     required_goods,
                     required_money,
                     country as u8,
-                    runtime.country_contend_now_milliseconds(),
+                    runtime.now_milliseconds(),
                 );
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
@@ -5674,7 +5667,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 game.start_script_faction_application(
                     player_id,
                     required_level,
-                    runtime.country_contend_now_milliseconds(),
+                    runtime.now_milliseconds(),
                 );
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
@@ -5770,10 +5763,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     .find_player(player_id)
                     .is_some_and(|player| player.faction_id() > 0)
             {
-                game.start_script_faction_war_declaration(
-                    player_id,
-                    runtime.country_contend_now_milliseconds(),
-                );
+                game.start_script_faction_war_declaration(player_id, runtime.now_milliseconds());
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
@@ -6766,7 +6756,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
         }),
         SCRIPT_FUNCTION_DELETE_EX_STATE_BY_TYPE => {
             let state_type = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR) as u16;
-            let now_ms = runtime.country_contend_now_milliseconds();
+            let now_ms = runtime.now_milliseconds();
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: game
                     .delete_script_extended_state_by_type(player_id, state_type, now_ms, runtime)
@@ -6846,7 +6836,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         let legacy_return = game.find_region(region_id).map_or(-1, |region| {
             region.base().monster_refresh_remaining_seconds(
                 integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
-                runtime.country_contend_now_milliseconds(),
+                runtime.now_milliseconds(),
             )
         });
         return ScriptFunctionDispatchOutcome::Handled { legacy_return };
@@ -6920,7 +6910,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         ) else {
             return ScriptFunctionDispatchOutcome::Invalid;
         };
-        let now_ms = runtime.country_contend_now_milliseconds();
+        let now_ms = runtime.now_milliseconds();
         let legacy_return = match function_id {
             SCRIPT_FUNCTION_ADD_APPELLATION_STATE => {
                 game.add_script_appellation_state(player_id, state_id as u32, now_ms, runtime)
@@ -6948,7 +6938,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             let _ = game.request_script_player_ranks(
                 player_id,
                 maximum_rank_count,
-                runtime.country_contend_now_milliseconds(),
+                runtime.now_milliseconds(),
             );
         }
         return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
