@@ -28,6 +28,8 @@
 //! Nation slot вызывает отдельный `ServerNationRegion::AI`: base-region pass,
 //! magic-stone replacements и altar contender completion выполняются одним
 //! reached проходом с morale, player-state, network и NPC spawn effects.
+//! Для concrete Base owner-а секундный monster refresh уже выполняется самим
+//! `CGame`; runtime сохраняет только ещё не материализованный region-AI tail.
 //!
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
@@ -614,8 +616,9 @@ use crate::gameserver::appserver::servernationregion::{
 };
 use crate::gameserver::appserver::serverregion::{
     CServerRegion, RegionMembershipBlock, ServerRegionClearPlayerTick, ServerRegionMonsterContext,
-    ServerRegionNpcContext, ServerRegionNpcSetup, ServerRegionNpcSpawnBlock,
-    ServerRegionNpcSpawnReport, ServerReturnPlayer, ServerReturnSetupBlock,
+    ServerRegionMonsterRectBlock, ServerRegionMonsterRefreshReport, ServerRegionNpcContext,
+    ServerRegionNpcSetup, ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport,
+    ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
@@ -2968,6 +2971,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) periodical_updates: Vec<PlayerPeriodicalUpdateReport>,
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
+    pub(crate) base_region: Option<BaseRegionAiReport>,
     pub(crate) nation_contend: Option<Result<NationContendAiReport, NationContendArithmeticBlock>>,
     pub(crate) city_contend: Option<CityRegionAiReport>,
     pub(crate) village_contend: Option<VillageRegionAiReport>,
@@ -2975,6 +2979,15 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BaseRegionAiReport {
+    pub(crate) region_id: i32,
+    pub(crate) ai_tick: i32,
+    pub(crate) monster_refresh:
+        Result<Option<ServerRegionMonsterRefreshReport>, ServerRegionMonsterRectBlock>,
+    pub(crate) tail_called: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4033,8 +4046,8 @@ pub(crate) trait GameMainLoopRuntime:
         region_id: i32,
         capture: &VillageSymbolCaptureLog,
     );
-    /// Выполняет оставшийся monster/NPC/region virtual AI после достигнутых
-    /// player passes и до точного base-tail `ClearPlayerAI`.
+    /// Выполняет оставшийся weather/shape/delete region-AI tail после уже
+    /// достигнутого Base monster refresh и до точного `ClearPlayerAI`.
     fn region_ai_before_clear_player(&mut self, game: &mut CGame, region_id: i32);
     fn wait(&mut self, duration_ms: u32);
     fn output_debug(&mut self, message: &'static str);
@@ -22004,6 +22017,48 @@ impl CGame {
         Some(report)
     }
 
+    /// Достигнутый prefix `CServerRegion::AI` для concrete Base owner-а:
+    /// one-second monster refresh исполняется над canonical storage, а внешний
+    /// runtime получает только оставшийся weather/shape/delete tail.
+    pub(crate) fn run_base_server_region_ai<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        ai_tick: i32,
+        runtime: &mut Runtime,
+    ) -> Option<BaseRegionAiReport> {
+        let owner = self.take_region_owner(region_id)?;
+        let ServerRegionOwner::Base(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let tick_interval_ms = runtime.tick_interval_ms() as i32;
+        let period = (1_000i32 / tick_interval_ms) as u32;
+        let monster_refresh = if (ai_tick as u32) % period == 0 {
+            let now_ms = runtime.get_tick_ms();
+            region
+                .refresh_monster_groups(
+                    now_ms,
+                    self.globe_setup.area_width(),
+                    self.globe_setup.area_height(),
+                    runtime,
+                )
+                .map(Some)
+        } else {
+            Ok(None)
+        };
+        let tail_called = monster_refresh.is_ok();
+        self.restore_region_owner(ServerRegionOwner::Base(region));
+        if tail_called {
+            runtime.region_ai_before_clear_player(self, region_id);
+        }
+        Some(BaseRegionAiReport {
+            region_id,
+            ai_tick,
+            monster_refresh,
+            tail_called,
+        })
+    }
+
     /// Подключает уже materialized `CServerCountryRegion::AI` к virtual region
     /// slot `CGame::AI`. Region временно вынимается только для безопасного
     /// одновременного доступа adapter-а к canonical player/network owners.
@@ -22129,6 +22184,9 @@ impl CGame {
                 regions: Vec::new(),
             };
         }
+        // MainLoop увеличивает legacy global tick непосредственно перед AI,
+        // а owned state публикует после возврата из всего прохода.
+        let ai_tick = self.main_loop_state.ai_tick.wrapping_add(1);
         let region_ids: Vec<_> = self.regions.keys().copied().collect();
         let mut regions = Vec::with_capacity(region_ids.len());
         for region_id in region_ids {
@@ -22188,6 +22246,10 @@ impl CGame {
             let is_gods_battle = self
                 .find_region(region_id)
                 .is_some_and(ServerRegionOwner::is_gods_battle);
+            let is_base = matches!(
+                self.find_region(region_id),
+                Some(ServerRegionOwner::Base(_))
+            );
             let is_country = matches!(
                 self.find_region(region_id),
                 Some(ServerRegionOwner::Country(_))
@@ -22204,51 +22266,71 @@ impl CGame {
                 self.find_region(region_id),
                 Some(ServerRegionOwner::Village(_))
             );
-            let (nation_contend, city_contend, village_contend, country_contend, gods_battle) =
-                if is_gods_battle {
-                    (
-                        None,
-                        None,
-                        None,
-                        None,
-                        self.gods_battle_contend_ai(region_id, runtime),
-                    )
-                } else if is_nation {
-                    (
-                        self.nation_contend_ai(region_id, runtime),
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
-                } else if is_country {
-                    (
-                        None,
-                        None,
-                        None,
-                        self.run_country_region_ai(region_id, runtime),
-                        None,
-                    )
-                } else if is_city {
-                    (
-                        None,
-                        self.run_city_region_ai(region_id, runtime),
-                        None,
-                        None,
-                        None,
-                    )
-                } else if is_village {
-                    (
-                        None,
-                        None,
-                        self.run_village_region_ai(region_id, runtime),
-                        None,
-                        None,
-                    )
-                } else {
-                    runtime.region_ai_before_clear_player(self, region_id);
-                    (None, None, None, None, None)
-                };
+            let (
+                base_region,
+                nation_contend,
+                city_contend,
+                village_contend,
+                country_contend,
+                gods_battle,
+            ) = if is_gods_battle {
+                (
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    self.gods_battle_contend_ai(region_id, runtime),
+                )
+            } else if is_base {
+                (
+                    self.run_base_server_region_ai(region_id, ai_tick, runtime),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            } else if is_nation {
+                (
+                    None,
+                    self.nation_contend_ai(region_id, runtime),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            } else if is_country {
+                (
+                    None,
+                    None,
+                    None,
+                    None,
+                    self.run_country_region_ai(region_id, runtime),
+                    None,
+                )
+            } else if is_city {
+                (
+                    None,
+                    None,
+                    self.run_city_region_ai(region_id, runtime),
+                    None,
+                    None,
+                    None,
+                )
+            } else if is_village {
+                (
+                    None,
+                    None,
+                    None,
+                    self.run_village_region_ai(region_id, runtime),
+                    None,
+                    None,
+                )
+            } else {
+                runtime.region_ai_before_clear_player(self, region_id);
+                (None, None, None, None, None, None)
+            };
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 continue;
             };
@@ -22326,6 +22408,7 @@ impl CGame {
                             periodical_updates,
                             battle_fairy_follows,
                             player_ai_tails,
+                            base_region,
                             nation_contend,
                             city_contend,
                             village_contend,
@@ -22350,6 +22433,7 @@ impl CGame {
                 periodical_updates,
                 battle_fairy_follows,
                 player_ai_tails,
+                base_region,
                 nation_contend,
                 city_contend,
                 village_contend,

@@ -83,6 +83,9 @@
 //! он одновременно питает born-time и concrete spatial membership owner.
 //! One-second AI fragment сохраняет wrapping respawn deadline, сначала пишет
 //! last-reset и затем восполняет только deficit `count-living_count`.
+//! Для concrete Base owner-а этот fragment вызывается реальным `CGame::AI`;
+//! typed spawn/spatial block прекращает дальнейший region tail после уже
+//! выполненной partial mutation.
 //! `BTreeMap` используется только для identity lookup: observable обход
 //! старого MSVC `stdext::hash_map` для startup name-cache пока остаётся у
 //! `ServerRegionDecodeContext`, а не подменяется сортировкой Rust-map.
@@ -3189,9 +3192,10 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // IMPLEMENTED_SUBCHAIN: сбор, unique insert, state reset и отложенное
 // применение `CS_CHANGEAREA`, а также monster refresh due/deficit/spawn
-// материализованы выше; delete-list storage/unique sleeping append также
-// достигнуты, но weather/delete application/remove/change-region/ClearPlayerAI и
-// точный move-existing-monsters area callback остаются RAW в этом блоке.
+// материализованы выше; Base monster refresh подключён к `CGame::AI`, а
+// delete-list storage/unique sleeping append также достигнуты. Weather/delete
+// application/remove и точный move-existing-monsters area callback остаются
+// RAW в этом блоке; change-region/ClearPlayerAI исполняет CGame tail.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:87
