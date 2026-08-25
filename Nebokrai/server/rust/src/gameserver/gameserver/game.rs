@@ -84,6 +84,9 @@
 //! `0xEF201`, обходит все подтверждённые goods containers и выполняет
 //! equipment-state `2→3` с `0xBF928`. Save/faction/region/release callers
 //! используют один обратный codec с live companion snapshot.
+//! Pending login теперь начинается реальным client `0x8F702` caller-ом и
+//! хранит validate/sequence owners в `CGame`: exact `0xBF402/0xBF403` идут до
+//! decode, reject/OnLost/Kick очищают state, а Release закрывает остатки.
 //! Reached faction `Create/ApplyJoin` sessions хранят exact correlation,
 //! `1000/2000` ms timeout, client prompts и World requests; успешный create
 //! callback списывает обещанные packet goods и деньги через canonical player/
@@ -553,7 +556,7 @@ use crate::gameserver::appserver::message::playershopmessage::{
 };
 use crate::gameserver::appserver::message::regionmessage::dispatch_game_region_message;
 use crate::gameserver::appserver::message::sequencestring::{
-    CSequenceRegistry, SequenceRegistryInitializationError,
+    CSequenceRegistry, CSequenceString, SequenceRegistryInitializationError, SequenceSerializeError,
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::message::servermessage::{
@@ -2068,6 +2071,30 @@ pub(crate) struct GamePlayerLoginReport {
     pub(crate) honor_script_id: Option<i32>,
     pub(crate) goods_ai_registrations: usize,
     pub(crate) equipment_state_updates: Vec<PlayerLoginEquipmentStateUpdate>,
+    pub(crate) team_session_found: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerLoginValidateTime {
+    pub(crate) issued_tick_ms: u32,
+    pub(crate) issued_wall_seconds: u32,
+    pub(crate) timeout_ms: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerLoginPreludeReport {
+    pub(crate) player_id: i32,
+    pub(crate) validate_time: Option<PlayerLoginValidateTime>,
+    pub(crate) validate_delivery: Option<i32>,
+    pub(crate) sequence_position: Option<i32>,
+    pub(crate) sequence_elements: usize,
+    pub(crate) sequence_delivery: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerLoginPreludeError {
+    DuplicateSequenceOwner { player_id: i32 },
+    Sequence(SequenceSerializeError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5086,6 +5113,10 @@ pub(crate) enum GameReleaseEvent {
     SequenceRegistryCleared {
         count: usize,
     },
+    LoginValidationCleared {
+        sequences: usize,
+        validate_times: usize,
+    },
     PlayerRanksReleased {
         present: bool,
     },
@@ -5320,6 +5351,8 @@ pub(crate) struct CGame {
     setup_ex: GameSetupEx,
     random_state: u32,
     sequence_registry: CSequenceRegistry,
+    login_sequences: BTreeMap<i32, CSequenceString>,
+    login_validate_times: BTreeMap<i32, bool>,
     player_list: CPlayerList,
     trade_list: CTradeList,
     goods_factory: CGoodsFactory,
@@ -5909,6 +5942,8 @@ impl CGame {
             setup_ex: GameSetupEx::default(),
             random_state: 1,
             sequence_registry: CSequenceRegistry::default(),
+            login_sequences: BTreeMap::new(),
+            login_validate_times: BTreeMap::new(),
             player_list: CPlayerList::default(),
             trade_list: CTradeList::default(),
             goods_factory: CGoodsFactory::default(),
@@ -24367,6 +24402,14 @@ impl CGame {
             GameReleaseExternalOwner::BaseMessageRuntime,
         ));
 
+        let login_sequences = self.login_sequences.len();
+        let login_validate_times = self.login_validate_times.len();
+        self.login_sequences.clear();
+        self.login_validate_times.clear();
+        events.push(GameReleaseEvent::LoginValidationCleared {
+            sequences: login_sequences,
+            validate_times: login_validate_times,
+        });
         let sequence_count = self.sequence_registry.len();
         self.sequence_registry.clear();
         events.push(GameReleaseEvent::SequenceRegistryCleared {
@@ -24454,8 +24497,71 @@ impl CGame {
 
     pub(crate) fn discard_player_login(&mut self, player_id: i32) -> bool {
         let removed = self.players.remove(&player_id).is_some();
+        self.login_sequences.remove(&player_id);
+        self.login_validate_times.remove(&player_id);
         let _ = self.net_server().clear_player_map_id(player_id);
         removed
+    }
+
+    /// Exact login prefix после успешного World status: optional validation
+    /// clock и sequence выдаются клиенту до decode player snapshot. Оба owner-а
+    /// остаются привязаны к player ID до OnLost/reject, как native maps.
+    pub(crate) fn begin_player_login_validation(
+        &mut self,
+        player_id: i32,
+        issued_tick_ms: u32,
+        issued_wall_seconds: u32,
+    ) -> Result<GamePlayerLoginPreludeReport, GamePlayerLoginPreludeError> {
+        let validate_time =
+            (self.setup.message_validate_time_ms != 0).then(|| PlayerLoginValidateTime {
+                issued_tick_ms,
+                issued_wall_seconds,
+                timeout_ms: self.setup.message_validate_time_ms,
+            });
+        let validate_delivery = validate_time.map(|validation| {
+            self.login_validate_times.insert(player_id, true);
+            let mut message = CMessage::new(0x000b_f402);
+            message.add_long(player_id);
+            message.add_ulong(validation.issued_tick_ms);
+            message.add_ulong(validation.issued_wall_seconds);
+            message.send_to_player(self.net_server(), player_id)
+        });
+
+        let mut sequence_position = None;
+        let mut sequence_elements = 0usize;
+        let mut sequence_delivery = None;
+        if !self.sequence_registry.is_empty() {
+            if self.login_sequences.remove(&player_id).is_some() {
+                return Err(GamePlayerLoginPreludeError::DuplicateSequenceOwner { player_id });
+            }
+            let (registry, random_state) = (&self.sequence_registry, &mut self.random_state);
+            let mut sequence = CSequenceString::new();
+            let payload = sequence
+                .serialize(registry, || next_msvc_rand(random_state))
+                .map_err(GamePlayerLoginPreludeError::Sequence)?;
+            sequence_position = Some(sequence.position());
+            sequence_elements = registry.len();
+            self.login_sequences.insert(player_id, sequence);
+
+            let mut message = CMessage::new(0x000b_f403);
+            message.add_long(player_id);
+            message.base_mut().add(&payload);
+            sequence_delivery = Some(message.send_to_player(self.net_server(), player_id));
+        }
+
+        Ok(GamePlayerLoginPreludeReport {
+            player_id,
+            validate_time,
+            validate_delivery,
+            sequence_position,
+            sequence_elements,
+            sequence_delivery,
+        })
+    }
+
+    pub(crate) fn clear_player_login_validation(&mut self, player_id: i32) {
+        self.login_sequences.remove(&player_id);
+        self.login_validate_times.remove(&player_id);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -24482,6 +24588,14 @@ impl CGame {
             });
         }
         player.restore_login_team(captain, team_id);
+        let team_session_id = (team_id != 0)
+            .then(|| self.get_team_session_id(team_id as u32))
+            .unwrap_or_default();
+        let team_session_found = team_session_id != 0
+            && self
+                .session_factory
+                .query_session(team_session_id)
+                .is_some();
         let region_id = player.server_region_id().unwrap_or_default();
         self.players.insert(expected_player_id, player);
 
@@ -24706,6 +24820,7 @@ impl CGame {
             honor_script_id,
             goods_ai_registrations,
             equipment_state_updates,
+            team_session_found,
         })
     }
 
