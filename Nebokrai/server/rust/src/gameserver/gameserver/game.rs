@@ -1725,37 +1725,15 @@ pub(crate) struct FairySetupQueryReport {
     pub(crate) delivery: Option<i32>,
 }
 
-pub(crate) trait EquipmentComposeContext:
-    OldClientGoodsCodec + PlayerEquipmentContext
-{
-    fn equipment_compose_remove_facts(
-        &mut self,
-        player: &CPlayer,
-        goods: &CGoods,
-        pack_add_enabled: bool,
-    ) -> PlayerEquipmentRemoveRuntimeFacts;
-    fn recompute_equipment_compose_player_properties(
-        &mut self,
-        player: &CPlayer,
-    ) -> PlayerCombatProperties;
-}
+pub(crate) trait EquipmentComposeContext: GameContainerMessageRuntime {}
+
+impl<T: GameContainerMessageRuntime> EquipmentComposeContext for T {}
 
 pub(crate) trait EquipmentDaKongContext: OldClientGoodsCodec {}
 
-pub(crate) trait EquipmentUpgradeContext:
-    OldClientGoodsCodec + PlayerEquipmentContext
-{
-    fn equipment_upgrade_remove_facts(
-        &mut self,
-        player: &CPlayer,
-        goods: &CGoods,
-        pack_add_enabled: bool,
-    ) -> PlayerEquipmentRemoveRuntimeFacts;
-    fn recompute_equipment_upgrade_player_properties(
-        &mut self,
-        player: &CPlayer,
-    ) -> PlayerCombatProperties;
-}
+pub(crate) trait EquipmentUpgradeContext: GameContainerMessageRuntime {}
+
+impl<T: GameContainerMessageRuntime> EquipmentUpgradeContext for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EquipmentSessionOpenOutcome {
@@ -18008,13 +17986,13 @@ impl CGame {
                 None => EquipmentUpgradeConsumptionRemoval::Missing,
             }
         } else if let Some(goods) = player.equipment().find(goods_id) {
-            let facts = context.equipment_upgrade_remove_facts(
+            let facts = context.enhancement_equipment_remove_facts(
                 player,
                 goods,
                 self.globe_setup.pack_add_enabled(),
             );
             let mut recompute =
-                |player: &CPlayer| context.recompute_equipment_upgrade_player_properties(player);
+                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
             let mut removal = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -18526,13 +18504,13 @@ impl CGame {
                 None => EquipmentComposeSourceRemoval::Missing,
             }
         } else if let Some(goods) = player.equipment().find(goods_id) {
-            let facts = context.equipment_compose_remove_facts(
+            let facts = context.enhancement_equipment_remove_facts(
                 &player,
                 goods,
                 self.globe_setup.pack_add_enabled(),
             );
             let mut recompute =
-                |player: &CPlayer| context.recompute_equipment_compose_player_properties(player);
+                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
             let mut equipment = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
