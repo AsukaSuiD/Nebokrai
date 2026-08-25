@@ -99,6 +99,9 @@
 //! Соседний `3500..3503/3507` owner меняет persisted quest-enabled/countdown
 //! поля, публикует `0xBF728..2A` и возвращает тот же signed-wrap remainder,
 //! который client может отдельно запросить через уже достигнутый `0xBF72B`.
+//! Carriage family `3504..3506/3508` тем же reached dispatcher-ом проводит
+//! вычисленные имена в canonical spawn/player binding, `C0205/BF504`, World
+//! audit, live distance/index queries и уже materialized AI/save lifecycle.
 //! PreciousBox `2221/2222/2237` сохраняет trusted action-script у player,
 //! client open/result/close wire, общий Game RNG, configuration roll,
 //! goods factory/upgrade/packet ownership и optional World announcement;
@@ -458,7 +461,11 @@ pub(crate) const SCRIPT_FUNCTION_IS_QUEST_ENABLED: i32 = 3500;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_ENABLED: i32 = 3501;
 pub(crate) const SCRIPT_FUNCTION_QUEST_TIME_BEGIN: i32 = 3502;
 pub(crate) const SCRIPT_FUNCTION_QUEST_TIME_CLEAR: i32 = 3503;
+pub(crate) const SCRIPT_FUNCTION_ADD_CARRIAGE: i32 = 3504;
+pub(crate) const SCRIPT_FUNCTION_DELETE_CARRIAGE: i32 = 3505;
+pub(crate) const SCRIPT_FUNCTION_GET_CARRIAGE_DISTANCE: i32 = 3506;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_TIME: i32 = 3507;
+pub(crate) const SCRIPT_FUNCTION_GET_CARRIAGE_INDEX: i32 = 3508;
 pub(crate) const SCRIPT_FUNCTION_ACTIVITY_LOG: i32 = 9510;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
@@ -3631,9 +3638,16 @@ pub(crate) fn script_function_parameter_kind(
         },
         SCRIPT_FUNCTION_IS_QUEST_ENABLED
         | SCRIPT_FUNCTION_QUEST_TIME_CLEAR
-        | SCRIPT_FUNCTION_GET_QUEST_TIME => Unused,
+        | SCRIPT_FUNCTION_GET_QUEST_TIME
+        | SCRIPT_FUNCTION_DELETE_CARRIAGE
+        | SCRIPT_FUNCTION_GET_CARRIAGE_DISTANCE
+        | SCRIPT_FUNCTION_GET_CARRIAGE_INDEX => Unused,
         SCRIPT_FUNCTION_SET_QUEST_ENABLED | SCRIPT_FUNCTION_QUEST_TIME_BEGIN => match index {
             0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_ADD_CARRIAGE => match index {
+            0 | 1 => String,
             _ => Unused,
         },
         SCRIPT_FUNCTION_ACTIVITY_LOG => Unused,
@@ -6430,6 +6444,30 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 .find_player(player_id)
                 .map(|player| player.quest_time_remaining(now_seconds))
                 .unwrap_or(0);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_ADD_CARRIAGE => {
+            let Some(original_name) = string_arguments[0] else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let legacy_return = game.add_script_player_carriage(
+                player_id,
+                original_name,
+                string_arguments[1],
+                runtime,
+            );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_DELETE_CARRIAGE => {
+            let legacy_return = game.delete_script_player_carriage(player_id);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_GET_CARRIAGE_DISTANCE => {
+            let legacy_return = game.script_player_carriage_distance(player_id);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
+        }
+        SCRIPT_FUNCTION_GET_CARRIAGE_INDEX => {
+            let legacy_return = game.script_player_carriage_index(player_id);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }
         SCRIPT_FUNCTION_CHECK_GOODS => {

@@ -11,8 +11,8 @@
 //! NPC buy/sell используют подтверждённые первые два bytes. Region pickup и
 //! drop используют bytes `2/5`, причём pickup сохраняет точный item-set filter.
 //! Depot deposit/withdrawal используют bytes `9/10`, bank — `11/12`.
-//! Goods destruction и equipment compose используют подтверждённые bytes
-//! `55/57`; Fairy
+//! Goods destruction, equipment compose и carriage lifecycle используют
+//! подтверждённые bytes `55/57/58`; Fairy
 //! grow/incubate/implantation/syncretize — tail `60..63` того же snapshot-а.
 //! Player level-up audit использует positional `bLevelLog` byte `24`.
 //! `CPlayer::ChangeRegion` читает adjacent `bChMap0/1/2` bytes
@@ -153,6 +153,10 @@ impl CLogSystem {
 
     pub(crate) fn equipment_compose_enabled(&self) -> bool {
         self.setting(57)
+    }
+
+    pub(crate) fn carriage_enabled(&self) -> bool {
+        self.setting(58)
     }
 
     pub(crate) fn goods_destroy_enabled(&self) -> bool {

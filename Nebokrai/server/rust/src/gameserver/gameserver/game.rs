@@ -26654,6 +26654,7 @@ impl CGame {
                             monster.hit_points(),
                             property.maximum_hp,
                             monster.original_name().to_vec(),
+                            property.index,
                         ))
                 })
         } else {
@@ -26739,12 +26740,14 @@ impl CGame {
                 monster.hit_points(),
                 property.maximum_hp,
                 monster.original_name().to_vec(),
+                property.index,
             ))
         } else {
             None
         };
 
-        let Some((monster_id, shape, health, maximum_hp, original_name)) = carriage else {
+        let Some((monster_id, shape, health, maximum_hp, original_name, carriage_index)) = carriage
+        else {
             self.restore_region_owner(owner);
             return None;
         };
@@ -26766,12 +26769,266 @@ impl CGame {
         let around_delivery = self
             .send_game_shape_around(owner.base(), &shape, None, &entered)
             .ok();
+        if recreate {
+            let _ = self.send_carriage_log_snapshot(
+                player_id,
+                carriage_index,
+                region_id,
+                shape.get_tile_x().unwrap_or_default(),
+                shape.get_tile_y().unwrap_or_default(),
+                7,
+            );
+        }
         self.restore_region_owner(owner);
         Some(GamePlayerCarriageRestoration {
             original_name,
             monster_id: Some(monster_id),
             around_delivery,
         })
+    }
+
+    fn send_carriage_log_snapshot(
+        &self,
+        player_id: i32,
+        carriage_index: u32,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        reason: i32,
+    ) -> Option<Result<i32, SendMessageError>> {
+        if !self.log_system.carriage_enabled() {
+            return None;
+        }
+        let mut audit = CMessage::new(0x0006_020e);
+        audit.add_long(player_id);
+        audit.add_long(carriage_index as i32);
+        audit.add_long(region_id);
+        audit.base_mut().add_short(tile_x as i16);
+        audit.base_mut().add_short(tile_y as i16);
+        audit.add_long(reason);
+        Some(audit.send(self, false))
+    }
+
+    /// Script `3504 / AddCarriage`: computed names reach canonical property,
+    /// spatial spawn, player binding, `C0205` publication and World audit.
+    pub(crate) fn add_script_player_carriage<Context: ServerRegionMonsterContext>(
+        &mut self,
+        player_id: i32,
+        original_name: &[u8],
+        script_file: Option<&[u8]>,
+        context: &mut Context,
+    ) -> i32 {
+        let Some((region_id, player_name, player_x, player_y)) =
+            self.find_player(player_id).map(|player| {
+                (
+                    player.server_region_id(),
+                    player.player_name().to_vec(),
+                    player.shape().get_tile_x(),
+                    player.shape().get_tile_y(),
+                )
+            })
+        else {
+            return 0;
+        };
+        let Some(region_id) = region_id else {
+            // Native `AddCarriage` reports success when the shape has no
+            // `CServerRegion` father and performs no mutation.
+            return 1;
+        };
+        let (Ok(player_x), Ok(player_y)) = (player_x, player_y) else {
+            return 0;
+        };
+        let Some(property) = self
+            .find_monster_property_by_origin_name(original_name)
+            .filter(|property| property.tamable == 1 && property.maximum_tame_attempt_count == 0)
+            .cloned()
+        else {
+            return 0;
+        };
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return 0;
+        };
+        let position = owner
+            .base()
+            .region
+            .get_random_pos_in_range(
+                player_x.wrapping_sub(3),
+                player_y.wrapping_sub(3),
+                7,
+                7,
+                context,
+            )
+            .ok();
+        let Some(position) = position else {
+            self.restore_region_owner(owner);
+            return 0;
+        };
+        let monster_id = owner
+            .base_mut()
+            .add_monster(
+                &property,
+                position.x,
+                position.y,
+                -1,
+                true,
+                false,
+                context.now_milliseconds(),
+                self.area_width,
+                self.area_height,
+                context,
+            )
+            .ok();
+        let Some(monster_id) = monster_id else {
+            self.restore_region_owner(owner);
+            return 0;
+        };
+        let (shape, health) = {
+            let carriage = owner
+                .base_mut()
+                .find_monster_by_id_mut(monster_id)
+                .expect("script AddCarriage сохраняет spawned owner");
+            carriage.set_master_info(crate::gameserver::appserver::masterinfo::MasterInfo {
+                master_type: PLAYER_TYPE,
+                master_id: player_id,
+                ..crate::gameserver::appserver::masterinfo::MasterInfo::default()
+            });
+            carriage.set_carriage_action(0);
+            if let Some(script_file) = script_file.filter(|script| *script != b"0") {
+                carriage.set_script_file(script_file);
+            }
+            (carriage.move_shape().shape().clone(), carriage.hit_points())
+        };
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.bind_active_carriage(monster_id);
+        }
+        let mut entered = CMessage::new(0x000c_0205);
+        entered.add_long(MONSTER_TYPE);
+        entered.add_long(monster_id);
+        entered.add_long(PLAYER_TYPE);
+        entered.add_long(player_id);
+        add_legacy_c_string(entered.base_mut(), &player_name);
+        entered.add_ulong(health);
+        entered.add_ulong(property.maximum_hp);
+        let _ = self.send_game_shape_around(owner.base(), &shape, None, &entered);
+        let _ = self.send_carriage_log_snapshot(
+            player_id,
+            property.index,
+            region_id,
+            shape.get_tile_x().unwrap_or_default(),
+            shape.get_tile_y().unwrap_or_default(),
+            1,
+        );
+        self.restore_region_owner(owner);
+        1
+    }
+
+    pub(crate) fn delete_script_player_carriage(&mut self, player_id: i32) -> i32 {
+        let Some((region_id, carriage_id)) = self
+            .find_player(player_id)
+            .map(|player| (player.server_region_id(), player.active_carriage_id()))
+        else {
+            return 0;
+        };
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.bind_active_carriage(0);
+        }
+        let Some(region_id) = region_id else {
+            return 0;
+        };
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return 0;
+        };
+        let snapshot = owner
+            .base()
+            .find_monster_by_id(carriage_id)
+            .and_then(|carriage| {
+                let property =
+                    self.find_monster_property_by_origin_name(carriage.base_property_key()?)?;
+                let master = carriage.master_info();
+                (carriage.is_carriage(property)
+                    && master.master_type == PLAYER_TYPE
+                    && master.master_id == player_id)
+                    .then(|| (property.index, carriage.move_shape().shape().clone()))
+            });
+        if let Some((index, shape)) = snapshot {
+            let _ = self.send_carriage_log_snapshot(
+                player_id,
+                index,
+                region_id,
+                shape.get_tile_x().unwrap_or_default(),
+                shape.get_tile_y().unwrap_or_default(),
+                2,
+            );
+            let mut vanished = CMessage::new(0x000b_f504);
+            vanished.add_long(MONSTER_TYPE);
+            vanished.add_long(carriage_id);
+            vanished.add_long(0);
+            let _ = self.send_game_shape_around(owner.base(), &shape, None, &vanished);
+            if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(carriage_id) {
+                carriage.stage_for_delete();
+            }
+        }
+        self.restore_region_owner(owner);
+        0
+    }
+
+    pub(crate) fn script_player_carriage_distance(&self, player_id: i32) -> i32 {
+        let Some(player) = self.find_player(player_id) else {
+            return 0;
+        };
+        let Some(region_id) = player.server_region_id() else {
+            return 0;
+        };
+        let Some(carriage) = self
+            .find_region(region_id)
+            .and_then(|owner| owner.base().find_monster_by_id(player.active_carriage_id()))
+        else {
+            return 0;
+        };
+        let Some(property) = carriage
+            .base_property_key()
+            .and_then(|key| self.find_monster_property_by_origin_name(key))
+        else {
+            return 0;
+        };
+        let master = carriage.master_info();
+        if !carriage.is_carriage(property)
+            || master.master_type != PLAYER_TYPE
+            || master.master_id != player_id
+        {
+            return 0;
+        }
+        let Some((px, py, cx, cy)) = player
+            .shape()
+            .get_tile_x()
+            .ok()
+            .zip(player.shape().get_tile_y().ok())
+            .zip(
+                carriage
+                    .move_shape()
+                    .shape()
+                    .get_tile_x()
+                    .ok()
+                    .zip(carriage.move_shape().shape().get_tile_y().ok()),
+            )
+            .map(|((px, py), (cx, cy))| (px, py, cx, cy))
+        else {
+            return 0;
+        };
+        real_distance(px, py, cx, cy)
+    }
+
+    pub(crate) fn script_player_carriage_index(&self, player_id: i32) -> i32 {
+        let Some(player) = self.find_player(player_id) else {
+            return 0;
+        };
+        player
+            .server_region_id()
+            .and_then(|region_id| self.find_region(region_id))
+            .and_then(|owner| owner.base().find_monster_by_id(player.active_carriage_id()))
+            .and_then(CMonster::base_property_key)
+            .and_then(|key| self.find_monster_property_by_origin_name(key))
+            .map_or(0, |property| property.index as i32)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -32223,7 +32480,8 @@ impl CGame {
             .as_ref()
             .is_some_and(|(_, carriage_id)| *carriage_id != 0 && *carriage_id != monster_id);
 
-        let mut vanish = CMoveShape::is_died(health);
+        let mut vanish_reason = CMoveShape::is_died(health).then_some(3);
+        let mut vanish = vanish_reason.is_some();
         if !vanish && moveable {
             if action == FOLLOWING
                 && let Some((master_shape, _)) = &master_snapshot
@@ -32323,6 +32581,7 @@ impl CGame {
             } else {
                 if !carriage.carriage_master_logout() && master_owns_other {
                     vanish = true;
+                    vanish_reason = Some(5);
                 } else if carriage.carriage_master_logout() {
                     carriage.set_carriage_action(FOLLOWING);
                     carriage.set_carriage_master_logout(false);
@@ -32358,10 +32617,21 @@ impl CGame {
                     >= self.globe_setup.carriage_disappear_time_ms()
             {
                 vanish = true;
+                vanish_reason.get_or_insert(4);
             }
         }
 
         if vanish {
+            if let Some(reason) = vanish_reason {
+                let _ = self.send_carriage_log_snapshot(
+                    master.master_id,
+                    property.index,
+                    region_id,
+                    carriage_shape.get_tile_x().unwrap_or_default(),
+                    carriage_shape.get_tile_y().unwrap_or_default(),
+                    reason,
+                );
+            }
             if master_owns {
                 if !CMoveShape::is_died(health) {
                     let _ = colored_player_notice_message(
@@ -33822,6 +34092,14 @@ impl CGame {
                         self.gods_battle_monster_died(region_id, target_id, PLAYER_TYPE, player_id);
                     let _ = self.monster_on_died(region_id, target_id, player_id, runtime);
                     if monster_carriage {
+                        let _ = self.send_carriage_log_snapshot(
+                            monster_master.master_id,
+                            monster_property.index,
+                            region_id,
+                            target_x,
+                            target_y,
+                            3,
+                        );
                         if monster_master.master_type == PLAYER_TYPE
                             && let Some(master) = self.find_player_mut(monster_master.master_id)
                         {

@@ -1014,7 +1014,13 @@ impl CServerRegion {
             .set_direction(direction);
 
         let facts = ShapeRuntimeFacts {
-            monster: Some(super::shape::MonsterAreaClass::Active),
+            monster: Some(
+                if property.tamable == 1 && property.maximum_tame_attempt_count == 0 {
+                    super::shape::MonsterAreaClass::Carriage
+                } else {
+                    super::shape::MonsterAreaClass::Active
+                },
+            ),
             is_move_shape: true,
             figure: CMonster::figure(property),
             ..ShapeRuntimeFacts::default()
