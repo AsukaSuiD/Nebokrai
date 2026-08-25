@@ -136,6 +136,9 @@
 //! `2319 / OpenNewHelpWindow` открывает клиентское окно пакетом `0xBF812` без
 //! аргументов и ответного состояния. Соседний ID `2318` в целевом EXE не
 //! поддерживается и намеренно не получает выдуманного обработчика.
+//! `2321 / GetGoodsProperty` разрешает исходное имя через `CGoodsFactory`,
+//! создаёт временный предмет тем же игровым генератором и читает указанную
+//! пару дополнения без изменения контейнеров игрока.
 //! Соседняя группа `2204/2205/2212/2217/2218/2220` связывает подсчёты рюкзака
 //! и депо, выбранный предмет контейнера улучшения, локальное либо удалённое
 //! удаление и доверенный путь сценария окна `0xBF919` с подтверждением
@@ -533,6 +536,7 @@ pub(crate) const SCRIPT_FUNCTION_ADD_GOODS_LOG: i32 = 2313;
 pub(crate) const SCRIPT_FUNCTION_ADD_GEM_EXCHANGE_LOG: i32 = 2314;
 pub(crate) const SCRIPT_FUNCTION_ADD_JEWELRY_MADE_LOG: i32 = 2315;
 pub(crate) const SCRIPT_FUNCTION_OPEN_NEW_HELP_WINDOW: i32 = 2319;
+pub(crate) const SCRIPT_FUNCTION_GET_GOODS_PROPERTY: i32 = 2321;
 pub(crate) const SCRIPT_FUNCTION_SET_REGION_FOR_TEAM: i32 = 2310;
 pub(crate) const SCRIPT_FUNCTION_SET_TEAM_REGION: i32 = 2311;
 pub(crate) const SCRIPT_FUNCTION_IS_TEAMMATES_AROUND_ME: i32 = 2312;
@@ -3870,6 +3874,11 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_ADD_JEWELRY_MADE_LOG => match index {
             0..=2 => String,
             3 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_GOODS_PROPERTY => match index {
+            0 => String,
+            1..=2 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_RANDOM => match index {
@@ -7434,6 +7443,31 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let _ = CMessage::new(0x000b_f812).send_to_player(game.net_server(), player_id);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GET_GOODS_PROPERTY => {
+            let (Some(name), Some(property), Some(value_id)) = (
+                string_arguments[0],
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let goods_index = game
+                .goods_factory()
+                .query_goods_id_by_original_name(Some(name));
+            let Some(goods) = game.create_goods_core(goods_index) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: goods.addon_property_value(
+                    game.goods_factory(),
+                    property,
+                    value_id as u32,
+                ),
+            })
         }
         SCRIPT_FUNCTION_POST_COUNTRY_INFO => {
             let (Some(text), Some(country_id)) = (
