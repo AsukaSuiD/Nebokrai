@@ -37,7 +37,9 @@
 //! wallet/YuanBao extend `4/5`, а source currency containers сохраняют
 //! свой balance/object ownership и partial split. JiFen extend `6`
 //! отсутствует в точном `GetGoods` switch этого `0x90301` owner-а и остаётся
-//! вне данного runtime-маршрута.
+//! вне данного runtime-маршрута. Wallet↔bank gold transfer достигает тех же
+//! positional split/stack owner-ов только после реального password unlock;
+//! locked destination выполняет полный rollback в source balance.
 //!
 //! Остальные container paths owner-а остаются RAW ниже и после восстановления
 //! cursor продолжают проходить через прежнюю общую handler-границу.
@@ -66,7 +68,8 @@ use crate::gameserver::appserver::session::csessionfactory::{
 use crate::gameserver::appserver::session::ctrader::{TraderOfferAdded, TraderOfferRemoved};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
-    CGame, GameContainerMessageRuntime, GroundGoodsMoveBlock, GroundGoodsMoveReport,
+    BankCurrencyTransferBlock, BankCurrencyTransferReport, CGame, GameContainerMessageRuntime,
+    GroundGoodsMoveBlock, GroundGoodsMoveReport,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -229,10 +232,16 @@ pub(crate) enum GameContainerMessageOutcome {
         delivery: i32,
         notification_delivery: Option<i32>,
     },
+    BankCurrencyMoved(BankCurrencyTransferReport),
+    BankCurrencyRolledBack {
+        reason: BankCurrencyTransferBlock,
+        delivery: i32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EnhancementMessageRoute {
+    BankCurrencyTransfer,
     GroundDrop,
     GroundPickup,
     EnhancementSelect,
@@ -549,6 +558,16 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 || (ground_is_currency
                     && !matches!(request.destination_container_extend_id, 1 | 2));
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && matches!(
+                    (
+                        request.source_container_extend_id,
+                        request.destination_container_extend_id
+                    ),
+                    (4, 8) | (8, 4)
+                ) {
+                EnhancementMessageRoute::BankCurrencyTransfer
+            } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == 200
                 && (matches!(request.source_container_extend_id, 1 | 2) || source_is_reached)
             {
@@ -773,6 +792,25 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
             EnhancementMoveReceiveBlock::ForbiddenRoute,
         ))));
+    }
+
+    if route == EnhancementMessageRoute::BankCurrencyTransfer {
+        let transfer = game.transfer_player_bank_currency(
+            player_id,
+            request.source_container_extend_id,
+            request.source_position,
+            request.object_id,
+            request.amount,
+            request.destination_container_extend_id,
+            request.destination_position,
+        );
+        return Some(Ok(report(match transfer {
+            Ok(transfer) => GameContainerMessageOutcome::BankCurrencyMoved(transfer),
+            Err(reason) => GameContainerMessageOutcome::BankCurrencyRolledBack {
+                reason,
+                delivery: send_rollback(game, player_id),
+            },
+        })));
     }
 
     if matches!(

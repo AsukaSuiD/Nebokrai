@@ -2,15 +2,18 @@
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/container/cbank.cpp`. Constructor, clear и
-//! release оставляют bank locked; locked gate скрывает `Find`, `Remove` и обе
-//! `Add` перегрузки. Сам password lookup принадлежит player/game owner-у и
-//! передаётся сюда уже как результат аутентификации: container сохраняет только
-//! подтверждённый state transition. Codec restore ниже остаётся RAW.
+//! release оставляют bank locked; locked gate скрывает `Find`, positional
+//! full/partial `Remove` и обе `Add` перегрузки. Сам password lookup принадлежит
+//! player/game owner-у и передаётся сюда уже как результат аутентификации:
+//! container сохраняет только подтверждённый state transition. Достигнутый
+//! `0x90301` caller переносит
+//! owned gold между wallet и bank с rollback и клиентским move. Codec restore
+//! ниже остаётся RAW.
 
 use super::cgoodscontainer::CGoodsContainer;
 use super::cwallet::{
     CWallet, CurrencyCodecError, CurrencyGoodsAddOutcome, CurrencyGoodsCollected,
-    CurrencyGoodsRemoved,
+    CurrencyGoodsRemoved, CurrencyGoodsTaken,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
@@ -67,6 +70,13 @@ impl CBank {
         self.wallet.find(ex_id)
     }
 
+    pub(crate) fn get_goods(&self, position: u32) -> Option<&CGoods> {
+        if self.locked {
+            return None;
+        }
+        self.wallet.get_goods(position)
+    }
+
     pub(crate) fn add_goods(
         &mut self,
         position: u32,
@@ -90,6 +100,23 @@ impl CBank {
             return None;
         }
         self.wallet.remove_goods(ex_id)
+    }
+
+    pub(crate) fn take_goods<Create>(
+        &mut self,
+        position: u32,
+        requested: u32,
+        factory: &CGoodsFactory,
+        create_goods: Create,
+    ) -> Option<CurrencyGoodsTaken>
+    where
+        Create: FnMut(u32) -> Option<CGoods>,
+    {
+        if self.locked {
+            return None;
+        }
+        self.wallet
+            .take_goods(position, requested, factory, create_goods)
     }
 
     pub(crate) fn lock(&mut self) -> bool {

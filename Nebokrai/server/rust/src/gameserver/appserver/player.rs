@@ -87,7 +87,8 @@
 //! Remote equipment inspection использует owned persisted head/face/mode и
 //! тот же live equipment container, не отдельный display snapshot.
 //! Depot-password vertical дополнительно материализует `m_eProgress`, оба
-//! changing-guard-а, password byte-string и owned `CBank/CDepot`; numeric
+//! changing-guard-а, password byte-string и owned `CBank/CDepot`; открытый
+//! bank участвует в реальном wallet↔bank `0x90301` ownership pass. Numeric
 //! значения внутреннего `eProgress` не выходят в wire и потому заменены typed
 //! enum без выдуманного `repr`.
 //! Exact `GetWarSoulGoods` читает headgear cell 10 и признаёт её боевой феей
@@ -234,7 +235,7 @@ use super::container::camountlimitgoodscontainer::{
 use super::container::camountlimitgoodsshadowcontainer::{
     AmountShadowAdded, CAmountLimitGoodsShadowContainer,
 };
-use super::container::cbank::CBank;
+use super::container::cbank::{BankGoodsAddOutcome, CBank};
 use super::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck, BattleFairyCombineRemovedInput,
     BattleFairyContainerAddOutcome, BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill,
@@ -1690,6 +1691,13 @@ pub(crate) struct PlayerMoneyDecrease {
     pub(crate) previous: u32,
     pub(crate) current: u32,
     pub(crate) outcome: CurrencyDecreaseOutcome,
+}
+
+#[must_use = "результат bank transfer определяет ownership и lock/add side effects"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerBankCurrencyAddOutcome {
+    Wallet(CurrencyGoodsAddOutcome),
+    Bank(BankGoodsAddOutcome),
 }
 
 #[must_use = "изменение аукционных денег содержит wallet outcome для client effect"]
@@ -5955,6 +5963,70 @@ impl CPlayer {
 
     pub(crate) const fn money(&self) -> u32 {
         self.money
+    }
+
+    pub(crate) fn bank_transfer_currency_goods(&self, extend_id: i32) -> Option<&CGoods> {
+        match extend_id {
+            4 => self.wallet.get_goods(0),
+            8 => self.bank.get_goods(0),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn take_bank_transfer_currency_goods<Create>(
+        &mut self,
+        extend_id: i32,
+        requested: u32,
+        factory: &CGoodsFactory,
+        mut create_goods: Create,
+    ) -> Option<CurrencyGoodsTaken>
+    where
+        Create: FnMut(u32) -> Option<CGoods>,
+    {
+        let taken = match extend_id {
+            4 => self
+                .wallet
+                .take_goods(0, requested, factory, &mut create_goods),
+            8 => self
+                .bank
+                .take_goods(0, requested, factory, &mut create_goods),
+            _ => None,
+        };
+        if extend_id == 4 {
+            self.money = self.wallet.currency_amount();
+        }
+        taken
+    }
+
+    pub(crate) fn add_bank_transfer_currency_goods(
+        &mut self,
+        extend_id: i32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+    ) -> Option<PlayerBankCurrencyAddOutcome> {
+        let owner_progress_allows = !matches!(
+            self.current_progress,
+            PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+        );
+        let outcome = match extend_id {
+            4 => PlayerBankCurrencyAddOutcome::Wallet(self.wallet.add_goods(
+                0,
+                incoming,
+                factory,
+                owner_progress_allows,
+            )),
+            8 => PlayerBankCurrencyAddOutcome::Bank(self.bank.add_goods(
+                0,
+                incoming,
+                factory,
+                owner_progress_allows,
+            )),
+            _ => return None,
+        };
+        if extend_id == 4 {
+            self.money = self.wallet.currency_amount();
+        }
+        Some(outcome)
     }
 
     pub(crate) fn ground_currency_goods(&self, extend_id: i32) -> Option<&CGoods> {

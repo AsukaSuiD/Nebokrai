@@ -442,6 +442,7 @@ use crate::gameserver::appserver::chbystate::ChangeBodyState;
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsTaken,
 };
+use crate::gameserver::appserver::container::cbank::BankGoodsAddOutcome;
 use crate::gameserver::appserver::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck,
 };
@@ -598,12 +599,12 @@ use crate::gameserver::appserver::player::{
     CiQingPacketConsumption, EnhancementDeselectionBlock, EnhancementDeselectionReport,
     EnhancementSelectionBlock, EnhancementSelectionReport, GoodsDestroyHandConsumption,
     HotkeyHandTransferOutcome, HotkeyHandTransferReport, PlayerAuctionGoodsReturn,
-    PlayerAuctionMoneyChange, PlayerCombatProperties, PlayerEquipmentAddEffect,
-    PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery,
-    PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
-    PlayerGameSaveCodecError, PlayerGameSaveDecodeReport, PlayerHonorResetReport,
-    PlayerLoginGoodsLocation, PlayerProgress, PlayerReliveMutation, PlayerSkillDispatch,
-    PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
+    PlayerAuctionMoneyChange, PlayerBankCurrencyAddOutcome, PlayerCombatProperties,
+    PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
+    PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport,
+    PlayerEquipmentRemoveRuntimeFacts, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
+    PlayerHonorResetReport, PlayerLoginGoodsLocation, PlayerProgress, PlayerReliveMutation,
+    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
     PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet,
     PlayerYuanBaoChange,
 };
@@ -2451,6 +2452,51 @@ pub(crate) enum GroundGoodsMoveBlock {
         currency_addition: Option<CurrencyGoodsAddOutcome>,
     },
     Region(RegionMembershipBlock),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BankCurrencyTransferBlock {
+    MissingPlayer,
+    UnsupportedRoute,
+    InvalidPosition,
+    MissingGoods,
+    AmountMismatch,
+    RemovalFailed,
+    RollbackCompleted {
+        removal: BankCurrencyRemoval,
+        rejected: PlayerBankCurrencyAddOutcome,
+        rollback: PlayerBankCurrencyAddOutcome,
+    },
+    RollbackFailed {
+        goods: CGoods,
+        removal: BankCurrencyRemoval,
+        rejected: PlayerBankCurrencyAddOutcome,
+        rollback: Option<PlayerBankCurrencyAddOutcome>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BankCurrencyRemoval {
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) position: u32,
+    pub(crate) source: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
+    pub(crate) split: bool,
+}
+
+#[must_use = "bank transfer report сохраняет ownership, balance и client move"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BankCurrencyTransferReport {
+    pub(crate) goods: ShapeIdentity,
+    pub(crate) amount: u32,
+    pub(crate) source_extend_id: i32,
+    pub(crate) destination_extend_id: i32,
+    pub(crate) removal: BankCurrencyRemoval,
+    pub(crate) addition: PlayerBankCurrencyAddOutcome,
+    pub(crate) previous_last_operated: (u32, u32),
+    pub(crate) delivery: i32,
 }
 
 #[must_use = "ground-goods report сохраняет ownership и обе client/around публикации"]
@@ -6306,6 +6352,159 @@ impl CGame {
         audit.add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
         audit.add_ulong(player.client_ip());
         audit.send(self, false).into_iter().collect()
+    }
+
+    pub(crate) fn transfer_player_bank_currency(
+        &mut self,
+        player_id: i32,
+        source_extend_id: i32,
+        source_position: u32,
+        goods_id: CGuid,
+        amount: u32,
+        destination_extend_id: i32,
+        destination_position: u32,
+    ) -> Result<BankCurrencyTransferReport, BankCurrencyTransferBlock> {
+        if !matches!((source_extend_id, destination_extend_id), (4, 8) | (8, 4)) {
+            return Err(BankCurrencyTransferBlock::UnsupportedRoute);
+        }
+        if source_position != 0 || destination_position != 0 {
+            return Err(BankCurrencyTransferBlock::InvalidPosition);
+        }
+        let source = self
+            .find_player(player_id)
+            .ok_or(BankCurrencyTransferBlock::MissingPlayer)?
+            .bank_transfer_currency_goods(source_extend_id)
+            .ok_or(BankCurrencyTransferBlock::MissingGoods)?;
+        if source.identity().ex_id != goods_id {
+            return Err(BankCurrencyTransferBlock::MissingGoods);
+        }
+        if amount == 0 || source.amount() < amount {
+            return Err(BankCurrencyTransferBlock::AmountMismatch);
+        }
+        let mut split_template = source.clone();
+        split_template.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+
+        let mut player = self
+            .players
+            .remove(&player_id)
+            .expect("player проверен непосредственно перед bank currency removal");
+        let removal = match player.take_bank_transfer_currency_goods(
+            source_extend_id,
+            amount,
+            &self.goods_factory,
+            |_| {
+                (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                    .then(|| split_template.clone())
+            },
+        ) {
+            Some(removal) => removal,
+            None => {
+                self.players.insert(player_id, player);
+                return Err(BankCurrencyTransferBlock::RemovalFailed);
+            }
+        };
+        let (detached, removal) = match removal {
+            CurrencyGoodsTaken::Removed(removed) => {
+                let source = removed.goods.identity();
+                (
+                    removed.goods,
+                    BankCurrencyRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position,
+                        source,
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                        split: false,
+                    },
+                )
+            }
+            CurrencyGoodsTaken::Split(split) => (
+                split.goods,
+                BankCurrencyRemoval {
+                    owner_type: split.owner_type,
+                    owner_id: split.owner_id,
+                    position: split.position,
+                    source: split.source,
+                    amount: split.amount,
+                    listeners: split.listeners,
+                    split: true,
+                },
+            ),
+        };
+        let mut incoming = Some(detached);
+        let addition = player
+            .add_bank_transfer_currency_goods(
+                destination_extend_id,
+                &mut incoming,
+                &self.goods_factory,
+            )
+            .expect("bank transfer destination extend проверен");
+        if let Some(detached) = incoming {
+            let rejected = addition;
+            let mut rollback_incoming = Some(detached);
+            let rollback = player.add_bank_transfer_currency_goods(
+                source_extend_id,
+                &mut rollback_incoming,
+                &self.goods_factory,
+            );
+            self.players.insert(player_id, player);
+            if let Some(goods) = rollback_incoming {
+                return Err(BankCurrencyTransferBlock::RollbackFailed {
+                    goods,
+                    removal,
+                    rejected,
+                    rollback,
+                });
+            }
+            return Err(BankCurrencyTransferBlock::RollbackCompleted {
+                removal,
+                rejected,
+                rollback: rollback.expect("bank rollback extend проверен"),
+            });
+        }
+
+        debug_assert!(matches!(
+            &addition,
+            PlayerBankCurrencyAddOutcome::Wallet(CurrencyGoodsAddOutcome::Added(_))
+                | PlayerBankCurrencyAddOutcome::Wallet(CurrencyGoodsAddOutcome::Stack(
+                    GoodsStackMergeOutcome::Merged { .. }
+                ))
+                | PlayerBankCurrencyAddOutcome::Bank(BankGoodsAddOutcome::Wallet(
+                    CurrencyGoodsAddOutcome::Added(_)
+                ))
+                | PlayerBankCurrencyAddOutcome::Bank(BankGoodsAddOutcome::Wallet(
+                    CurrencyGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { .. })
+                ))
+        ));
+        let (destination_identity, destination_amount) = player
+            .bank_transfer_currency_goods(destination_extend_id)
+            .map(|destination| (destination.identity(), destination.amount()))
+            .expect("успешный bank currency add сохраняет destination goods");
+        let previous_last_operated =
+            player.record_last_operated_goods(source_extend_id, source_position);
+        self.players.insert(player_id, player);
+
+        let mut moved = CS2CContainerObjectMove::default();
+        moved.set_operation(ContainerObjectMoveOperation::MoveObject);
+        moved.set_source_container(PLAYER_TYPE, player_id, source_position);
+        moved.set_source_container_extend_id(source_extend_id);
+        moved.set_destination_container(PLAYER_TYPE, player_id, destination_position);
+        moved.set_destination_container_extend_id(destination_extend_id);
+        moved.set_source_object(GOODS_TYPE, goods_id, amount);
+        moved.set_destination_object(GOODS_TYPE, destination_identity.ex_id);
+        moved.set_destination_object_amount(destination_amount);
+        let delivery = moved.send_to_player(self, player_id);
+        Ok(BankCurrencyTransferReport {
+            goods: destination_identity,
+            amount,
+            source_extend_id,
+            destination_extend_id,
+            removal,
+            addition,
+            previous_last_operated,
+            delivery,
+        })
     }
 
     fn add_ground_hand_goods(
