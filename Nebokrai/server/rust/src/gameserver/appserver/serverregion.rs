@@ -54,11 +54,13 @@
 //! Message serialization/send остаются явным context-owner-ом; area storage и
 //! deferred queue принадлежат `CServerRegion`. `RefeashBlock` сначала снимает
 //! все block `3`, затем возвращает single-cell block живым `CMoveShape` и NPC.
-//! `m_listDeleteShape` теперь также имеет typed ordered identity storage:
+//! `m_listDeleteShape/m_listRemoveShape` теперь имеют typed ordered identity
+//! storage:
 //! Nation clear напрямую ставит туда sleeping monsters, которых active AI
 //! scan не видит, сохраняя pointer-unique append исходника. CGame после scan
-//! выполняет `RemoveObject` и освобождает player/monster/NPC owners; player
-//! ветвь является post-OnLost tail и не повторяет session callbacks.
+//! выполняет delete с освобождением owner-а либо remove-only detach, а затем
+//! area/region transitions. Player delete-ветвь является post-OnLost tail и
+//! не повторяет session callbacks.
 //! GM `0x7FC07` использует identity snapshot registry для проверки, что каждый
 //! потенциально более ранний `GetShape` candidate разрешим runtime owner-ом;
 //! неразрешённый goods/other shape блокирует сценарий до ложного player match.
@@ -131,9 +133,8 @@ use super::region::{
     RegionReturnPoint, RegionStorageBlock,
 };
 use super::shape::{
-    CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, SHAPE_CHANGE_REGION, ShapeAreaCoordinates,
-    ShapeBlockError, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch,
-    ShapeResolver, ShapeRuntimeFacts, ShapeView,
+    CShape, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError, ShapeCoordinateBlock,
+    ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
 use crate::public::guid::CGuid;
 use crate::setup::monsterlist::MonsterProperties;
@@ -636,6 +637,7 @@ pub(crate) struct CServerRegion {
     owned_npcs: BTreeMap<i32, CNpc>,
     next_npc_id: NextNpcId,
     delete_shapes: Vec<ShapeIdentity>,
+    remove_shapes: Vec<ShapeIdentity>,
     change_area_shapes: Vec<ShapeIdentity>,
     change_region_shapes: Vec<ShapeIdentity>,
     pub(crate) param: RegionParamState,
@@ -1038,6 +1040,59 @@ impl CServerRegion {
         ids
     }
 
+    pub(crate) const fn area_count(&self) -> usize {
+        self.areas.len()
+    }
+
+    pub(crate) fn active_shape_candidates(&self, area_index: usize) -> Vec<ShapeIdentity> {
+        self.areas
+            .get(area_index)
+            .map_or_else(Vec::new, CArea::active_shape_candidates)
+    }
+
+    pub(crate) fn forget_unresolved_active_shape(
+        &mut self,
+        area_index: usize,
+        identity: ShapeIdentity,
+    ) {
+        if let Some(area) = self.areas.get_mut(area_index) {
+            area.forget_unresolved_active_shape(identity);
+        }
+    }
+
+    pub(crate) fn owned_shape_change_state(&self, identity: ShapeIdentity) -> Option<i32> {
+        match identity.object_type {
+            MONSTER_TYPE => self
+                .owned_monsters
+                .get(&identity.id)
+                .map(|monster| monster.move_shape().shape().change_state()),
+            NPC_TYPE => self
+                .owned_npcs
+                .get(&identity.id)
+                .map(|npc| npc.move_shape().shape().change_state()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn reset_owned_shape_change_state(&mut self, identity: ShapeIdentity) -> bool {
+        let shape = match identity.object_type {
+            MONSTER_TYPE => self
+                .owned_monsters
+                .get_mut(&identity.id)
+                .map(|monster| monster.move_shape_mut().shape_mut()),
+            NPC_TYPE => self
+                .owned_npcs
+                .get_mut(&identity.id)
+                .map(|npc| npc.move_shape_mut().shape_mut()),
+            _ => None,
+        };
+        let Some(shape) = shape else {
+            return false;
+        };
+        shape.set_change_state(SHAPE_CHANGE_NONE);
+        true
+    }
+
     /// Второй `OnClearWar` pass читает только sleeping storage каждой area.
     pub(crate) fn sleeping_monster_ids(&self) -> Vec<i32> {
         let mut ids = Vec::new();
@@ -1055,6 +1110,18 @@ impl CServerRegion {
         }
         self.delete_shapes.push(identity);
         true
+    }
+
+    pub(crate) fn stage_remove_shape(&mut self, identity: ShapeIdentity) -> bool {
+        if self.remove_shapes.contains(&identity) {
+            return false;
+        }
+        self.remove_shapes.push(identity);
+        true
+    }
+
+    pub(crate) fn take_staged_remove_shapes(&mut self) -> Vec<ShapeIdentity> {
+        std::mem::take(&mut self.remove_shapes)
     }
 
     pub(crate) fn staged_delete_shapes(&self) -> &[ShapeIdentity] {
@@ -1087,6 +1154,29 @@ impl CServerRegion {
             return Err(error);
         }
         Ok(true)
+    }
+
+    /// `CS_REMOVE` выполняет тот же spatial/registry detach, но сохраняет
+    /// concrete owner: в исходнике после virtual `RemoveObject` delete не было.
+    pub(crate) fn detach_owned_monster_by_id(
+        &mut self,
+        id: i32,
+        figure: ShapeFigure,
+    ) -> Result<bool, RegionMembershipBlock> {
+        let Some(mut monster) = self.owned_monsters.remove(&id) else {
+            return Ok(false);
+        };
+        let facts = ShapeRuntimeFacts {
+            monster: Some(super::shape::MonsterAreaClass::Active),
+            is_move_shape: true,
+            figure,
+            ..ShapeRuntimeFacts::default()
+        };
+        let result = self
+            .remove_object(monster.move_shape_mut().shape_mut(), facts)
+            .map(|()| true);
+        self.owned_monsters.insert(id, monster);
+        result
     }
 
     pub(crate) fn monster_base_property_keys(&self) -> impl Iterator<Item = &[u8]> {
@@ -1247,6 +1337,25 @@ impl CServerRegion {
             return Err(error);
         }
         Ok(true)
+    }
+
+    pub(crate) fn detach_owned_npc_by_id(
+        &mut self,
+        id: i32,
+    ) -> Result<bool, RegionMembershipBlock> {
+        let Some(mut npc) = self.owned_npcs.remove(&id) else {
+            return Ok(false);
+        };
+        let facts = ShapeRuntimeFacts {
+            is_npc: true,
+            is_move_shape: true,
+            ..ShapeRuntimeFacts::default()
+        };
+        let result = self
+            .remove_object(npc.move_shape_mut().shape_mut(), facts)
+            .map(|()| true);
+        self.owned_npcs.insert(id, npc);
+        result
     }
 
     /// Декодирует полный World -> Game region snapshot в исходном порядке:
@@ -1944,19 +2053,13 @@ impl CServerRegion {
         Ok(facts)
     }
 
-    /// Собирает только достигнутую `CS_CHANGEAREA` ветвь area AI scan.
-    /// Первый insert сбрасывает state; уже присутствующий pointer оригинал
-    /// пропускал без сброса.
-    pub(crate) fn stage_area_transition(&mut self, shape: &mut CShape) -> bool {
-        if shape.change_state() != SHAPE_CHANGE_AREA {
-            return false;
-        }
-        let identity = shape.identity();
+    /// Pointer-unique append area AI scan; marker сбрасывает caller только
+    /// после `true`, потому что duplicate исходник оставлял неизменным.
+    pub(crate) fn stage_area_transition(&mut self, identity: ShapeIdentity) -> bool {
         if self.change_area_shapes.contains(&identity) {
             return false;
         }
         self.change_area_shapes.push(identity);
-        shape.set_change_state(SHAPE_CHANGE_NONE);
         true
     }
 
@@ -1970,13 +2073,7 @@ impl CServerRegion {
         self.change_area_shapes.clear();
     }
 
-    /// Сохраняет pointer-unique insert в `m_listChangeRegionShape`. В отличие
-    /// от area-перехода исходник не сбрасывает marker до deferred AI tail.
-    pub(crate) fn stage_region_transition(&mut self, shape: &CShape) -> bool {
-        if shape.change_state() != SHAPE_CHANGE_REGION {
-            return false;
-        }
-        let identity = shape.identity();
+    pub(crate) fn stage_region_transition(&mut self, identity: ShapeIdentity) -> bool {
         if self.change_region_shapes.contains(&identity) {
             return false;
         }
@@ -3350,8 +3447,9 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // применение `CS_CHANGEAREA`, а также monster refresh due/deficit/spawn
 // материализованы выше; общий monster/weather prefix подключён к `CGame::AI`,
 // delete-list application и change-area/change-region/ClearPlayerAI также
-// достигнуты. Shape scan/remove queue и точный move-existing-monsters area
-// callback остаются внешней границей этого блока.
+// достигнуты. Row-major active-shape scan, state classification/reset и
+// remove queue теперь принадлежат `CGame::AI`; concrete `CArea::AI` и virtual
+// shape `AI` остаются узкими runtime owner-границами.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:87

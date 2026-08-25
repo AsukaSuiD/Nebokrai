@@ -206,6 +206,7 @@ const MOVE_CHECK_CELLS: &[(usize, usize, MoveCheckCell)] = &[
 
 pub(crate) const SHAPE_CHANGE_NONE: i32 = 0;
 pub(crate) const SHAPE_CHANGE_DELETE: i32 = 1;
+pub(crate) const SHAPE_CHANGE_REMOVE: i32 = 2;
 pub(crate) const SHAPE_CHANGE_AREA: i32 = 3;
 pub(crate) const SHAPE_CHANGE_REGION: i32 = 4;
 
@@ -644,10 +645,7 @@ impl CShape {
             self.next_direction,
         );
         self.region_id = self.next_region_id;
-        self.set_pos_xy_base(
-            self.next_tile_x as f32 + 0.5,
-            self.next_tile_y as f32 + 0.5,
-        );
+        self.set_pos_xy_base(self.next_tile_x as f32 + 0.5, self.next_tile_y as f32 + 0.5);
         self.set_direction(self.next_direction);
         self.action = 0;
         self.change_state = SHAPE_CHANGE_NONE;

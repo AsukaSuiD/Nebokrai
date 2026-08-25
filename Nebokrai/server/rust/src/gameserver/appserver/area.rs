@@ -23,6 +23,10 @@
 //! Nation `OnClearWar` достигает ordered type `600` и sleeping-only views;
 //! они возвращают owned ID в исходном active/sleep/pet/carriage порядке без
 //! введения второго pointer owner-а.
+//! `GetActivedShapes` также выражен ordered identity snapshot-ом
+//! players/active monsters/pets/carriages/goods/NPC/other. Owning region
+//! выполняет старый `FindChildObject`, stale-storage cleanup и особый goods
+//! filter `m_lChangeState == CS_DELETE` перед virtual shape AI.
 //! `OnRefreshMonster` RVA `0x00101A70`, вызываемый region AI только для area
 //! без plug-ов, в точном EXE является намеренным no-op (`ret 4`). Метод
 //! оставлен явным, чтобы не потерять подтверждённую границу owner-а и аргумент
@@ -188,6 +192,70 @@ impl CArea {
     pub(crate) fn append_sleeping_monster_ids(&self, destination: &mut Vec<i32>) {
         let _guard = self.critical_section.lock();
         destination.extend_from_slice(&self.sleeping_monsters);
+    }
+
+    /// Возвращает identity-кандидаты exact `GetActivedShapes` в исходном
+    /// storage order. Живость проверяет owning region/runtime: только он
+    /// соответствует старому `FindChildObject` и может удалить stale ID.
+    pub(crate) fn active_shape_candidates(&self) -> Vec<ShapeIdentity> {
+        let _guard = self.critical_section.lock();
+        let mut identities = Vec::with_capacity(
+            self.players.len()
+                + self.active_monsters.len()
+                + self.pets.len()
+                + self.carriages.len()
+                + self.goods.len()
+                + self.npcs.len()
+                + self.other_shapes.len(),
+        );
+        identities.extend(self.players.iter().map(|id| ShapeIdentity {
+            object_type: PLAYER_TYPE,
+            id: *id,
+            ex_id: CGuid::GUID_INVALID,
+        }));
+        for ids in [&self.active_monsters, &self.pets, &self.carriages] {
+            identities.extend(ids.iter().map(|id| ShapeIdentity {
+                object_type: MONSTER_TYPE,
+                id: *id,
+                ex_id: CGuid::GUID_INVALID,
+            }));
+        }
+        identities.extend(self.goods.iter().map(|ex_id| ShapeIdentity {
+            object_type: GOODS_TYPE,
+            id: 0,
+            ex_id: *ex_id,
+        }));
+        identities.extend(self.npcs.iter().map(|id| ShapeIdentity {
+            object_type: NPC_TYPE,
+            id: *id,
+            ex_id: CGuid::GUID_INVALID,
+        }));
+        identities.extend(self.other_shapes.iter().map(|hash| ShapeIdentity {
+            object_type: CBaseObject::calculate_type(*hash),
+            id: CBaseObject::calculate_id(*hash),
+            ex_id: CGuid::GUID_INVALID,
+        }));
+        identities
+    }
+
+    /// Exact stale-pointer cleanup внутри `GetActivedShapes`, в том числе для
+    /// `m_vOtherShapes`, который обычный `RemoveObject` намеренно не чистит.
+    pub(crate) fn forget_unresolved_active_shape(&mut self, identity: ShapeIdentity) {
+        let _guard = self.critical_section.lock();
+        match identity.object_type {
+            PLAYER_TYPE => remove_first(&mut self.players, &identity.id),
+            MONSTER_TYPE => {
+                remove_first(&mut self.active_monsters, &identity.id);
+                remove_first(&mut self.pets, &identity.id);
+                remove_first(&mut self.carriages, &identity.id);
+            }
+            GOODS_TYPE => remove_first(&mut self.goods, &identity.ex_id),
+            NPC_TYPE => remove_first(&mut self.npcs, &identity.id),
+            _ => remove_first(
+                &mut self.other_shapes,
+                &CBaseObject::get_hash_value(identity.object_type, identity.id),
+            ),
+        }
     }
 
     /// Сохраняет пустой контракт `CArea::OnRefreshMonster(long)` exact EXE.

@@ -29,11 +29,13 @@
 //! magic-stone replacements и altar contender completion выполняются одним
 //! reached проходом с morale, player-state, network и NPC spawn effects.
 //! Для всех concrete region owner-ов секундный monster refresh и следующий
-//! weather transition выполняются самим `CGame`; runtime сохраняет только ещё
-//! не материализованный shape scan/remove region-AI tail.
-//! После virtual region AI тот же caller применяет ordered `CS_CHANGEAREA` для
-//! canonical players и owned monsters/NPC до change-region/ClearPlayer tail.
-//! Перед area queue он завершает staged player/monster/NPC deletion. Для
+//! weather transition выполняются самим `CGame`. Затем row-major area scan
+//! вызывает concrete `CArea::AI`, разрешает active identities, классифицирует
+//! `CS_DELETE/REMOVE/CHANGEAREA/CHANGEREGION` и вызывает virtual shape AI
+//! только для default state; сами derived area/shape owners остаются узкими
+//! runtime callbacks с actual game/region/identity context.
+//! После scan тот же caller применяет ordered delete/remove/change-area/
+//! change-region очереди перед `ClearPlayerAI`. Для
 //! player-а это exact post-OnLost tail: region removal, map erase и Rust drop
 //! без повторного session/logout callback-а.
 //!
@@ -661,8 +663,9 @@ use crate::gameserver::appserver::session::ctrader::{
     TraderContainerKind, TraderOfferAdded, TraderOfferBlock, TraderOfferRemoved,
 };
 use crate::gameserver::appserver::shape::{
-    CShape, MoveCheckCellRegistry, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
-    ShapeRuntimeFacts, ShapeView,
+    CShape, MoveCheckCellRegistry, SHAPE_CHANGE_AREA, SHAPE_CHANGE_DELETE, SHAPE_CHANGE_NONE,
+    SHAPE_CHANGE_REGION, SHAPE_CHANGE_REMOVE, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity,
+    ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::gameserver::honorranks::CHonorRanks;
@@ -732,6 +735,7 @@ const PLAYER_TYPE: i32 = 400;
 const SCRIPT_SCALAR_ERROR: i32 = 0x09ff_fff9;
 const NPC_TYPE: i32 = 500;
 const MONSTER_TYPE: i32 = 600;
+const GOODS_TYPE: i32 = 700;
 const DEFAULT_SOCKET_TYPE: i32 = 1;
 const WORLD_REGISTRATION: i32 = 0x0005_FA01;
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
@@ -2995,6 +2999,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) country_contend: Option<CountryRegionAiReport>,
     pub(crate) gods_battle: Option<Result<GodsBattleContendAiReport, GodsBattleRegionAiError>>,
     pub(crate) deletions: Vec<GameRegionDeletionReport>,
+    pub(crate) removals: Vec<GameRegionRemovalReport>,
     pub(crate) area_transitions: Vec<GameAreaTransitionReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
@@ -3004,6 +3009,12 @@ pub(crate) struct GameRegionAiReport {
 pub(crate) struct GameRegionDeletionReport {
     pub(crate) identity: ShapeIdentity,
     pub(crate) result: Result<bool, RegionMembershipBlock>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameRegionRemovalReport {
+    pub(crate) identity: ShapeIdentity,
+    pub(crate) result: Option<Result<bool, RegionMembershipBlock>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3023,6 +3034,15 @@ pub(crate) struct BaseRegionAiReport {
 pub(crate) struct GameServerRegionBaseAiReport {
     pub(crate) monster_refresh: Option<ServerRegionMonsterRefreshReport>,
     pub(crate) weather: Option<GameRegionWeatherReport>,
+    pub(crate) shape_scan: GameRegionShapeScanReport,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GameRegionShapeScanReport {
+    pub(crate) areas: usize,
+    pub(crate) resolved_shapes: usize,
+    pub(crate) shape_ai_calls: usize,
+    pub(crate) stale_memberships: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4096,9 +4116,41 @@ pub(crate) trait GameMainLoopRuntime:
     fn player_done_goods_ai_and_delete_list(&mut self, game: &mut CGame, player_id: i32);
     fn player_done_flash(&mut self, game: &mut CGame, player_id: i32);
     fn player_done_tao_zhuang(&mut self, game: &mut CGame, player_id: i32);
-    /// Выполняет оставшийся shape scan/remove-queue tail после owned periodic
-    /// monster refresh и weather transition над actual region storage.
-    fn run_region_ai_after_weather(&mut self, game: &mut CGame, region: &mut CServerRegion);
+    /// Concrete virtual `CArea::AI` перед сбором active shapes этой area.
+    fn run_region_area_ai(
+        &mut self,
+        game: &mut CGame,
+        region: &mut CServerRegion,
+        area_index: usize,
+    );
+    /// Разрешает state ground goods и прочих external shape owners, которых
+    /// нет в player/monster/NPC Rust storage.
+    fn external_region_shape_change_state(
+        &mut self,
+        game: &mut CGame,
+        region: &mut CServerRegion,
+        identity: ShapeIdentity,
+    ) -> Option<i32>;
+    fn reset_external_region_shape_change_state(
+        &mut self,
+        game: &mut CGame,
+        region: &mut CServerRegion,
+        identity: ShapeIdentity,
+    );
+    /// Virtual shape `AI` вызывается только для state `CS_NONE`; новое state
+    /// исходник увидит на следующем region tick.
+    fn run_region_active_shape_ai(
+        &mut self,
+        game: &mut CGame,
+        region: &mut CServerRegion,
+        identity: ShapeIdentity,
+    );
+    fn remove_external_region_shape(
+        &mut self,
+        game: &mut CGame,
+        region: &mut CServerRegion,
+        identity: ShapeIdentity,
+    ) -> Option<Result<bool, RegionMembershipBlock>>;
     /// Concrete virtual slot country-region-а после записи symbol owner-а.
     fn on_country_win_one_symbol(
         &mut self,
@@ -10850,9 +10902,6 @@ impl CGame {
             ));
 
             player.stage_local_region_change(target_region_id, tile_x, tile_y, direction);
-            let _ = source_owner
-                .base_mut()
-                .stage_region_transition(player.shape());
             if player.faction_id() > 0 {
                 let mut faction = CMessage::new(0x0006_012a);
                 faction.add_long(player.faction_id());
@@ -22151,6 +22200,86 @@ impl CGame {
         GameRegionWeatherReport { tick, delivery }
     }
 
+    fn region_shape_change_state<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region: &mut CServerRegion,
+        identity: ShapeIdentity,
+        runtime: &mut Runtime,
+    ) -> Option<i32> {
+        match identity.object_type {
+            PLAYER_TYPE => self
+                .find_player(identity.id)
+                .map(|player| player.shape().change_state()),
+            MONSTER_TYPE | NPC_TYPE => region.owned_shape_change_state(identity),
+            _ => runtime.external_region_shape_change_state(self, region, identity),
+        }
+    }
+
+    fn reset_region_shape_change_state<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region: &mut CServerRegion,
+        identity: ShapeIdentity,
+        runtime: &mut Runtime,
+    ) {
+        let reset = match identity.object_type {
+            PLAYER_TYPE => self.find_player_mut(identity.id).is_some_and(|player| {
+                player
+                    .movement_shape_mut()
+                    .set_change_state(SHAPE_CHANGE_NONE);
+                true
+            }),
+            MONSTER_TYPE | NPC_TYPE => region.reset_owned_shape_change_state(identity),
+            _ => false,
+        };
+        if !reset {
+            runtime.reset_external_region_shape_change_state(self, region, identity);
+        }
+    }
+
+    fn run_region_shape_scan<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region: &mut CServerRegion,
+        runtime: &mut Runtime,
+    ) -> GameRegionShapeScanReport {
+        let mut report = GameRegionShapeScanReport::default();
+        for area_index in 0..region.area_count() {
+            report.areas += 1;
+            runtime.run_region_area_ai(self, region, area_index);
+            for identity in region.active_shape_candidates(area_index) {
+                let Some(change_state) = self.region_shape_change_state(region, identity, runtime)
+                else {
+                    region.forget_unresolved_active_shape(area_index, identity);
+                    report.stale_memberships += 1;
+                    continue;
+                };
+                // `GetActivedShapes` разрешает ground goods, но публикует их
+                // в active vector только с `m_lChangeState == CS_DELETE`.
+                if identity.object_type == GOODS_TYPE && change_state != SHAPE_CHANGE_DELETE {
+                    continue;
+                }
+                report.resolved_shapes += 1;
+                let reset = match change_state {
+                    SHAPE_CHANGE_DELETE => {
+                        region.stage_delete_shape(identity);
+                        false
+                    }
+                    SHAPE_CHANGE_REMOVE => region.stage_remove_shape(identity),
+                    SHAPE_CHANGE_AREA => region.stage_area_transition(identity),
+                    SHAPE_CHANGE_REGION => region.stage_region_transition(identity),
+                    _ => {
+                        runtime.run_region_active_shape_ai(self, region, identity);
+                        report.shape_ai_calls += 1;
+                        false
+                    }
+                };
+                if reset {
+                    self.reset_region_shape_change_state(region, identity, runtime);
+                }
+            }
+        }
+        report
+    }
+
     fn run_server_region_base_ai<Runtime: GameMainLoopRuntime>(
         &mut self,
         region: &mut CServerRegion,
@@ -22172,10 +22301,11 @@ impl CGame {
             None
         };
         let weather = periodic_due.then(|| self.run_region_weather_tick(region, runtime));
-        runtime.run_region_ai_after_weather(self, region);
+        let shape_scan = self.run_region_shape_scan(region, runtime);
         Ok(GameServerRegionBaseAiReport {
             monster_refresh,
             weather,
+            shape_scan,
         })
     }
 
@@ -22547,6 +22677,41 @@ impl CGame {
             owner
                 .base_mut()
                 .retain_staged_delete_shapes(|identity| !completed_deletions.contains(&identity));
+            let mut removals = Vec::new();
+            for identity in owner.base_mut().take_staged_remove_shapes() {
+                let result = match identity.object_type {
+                    PLAYER_TYPE => self.players.remove(&identity.id).map(|mut player| {
+                        let facts = ShapeRuntimeFacts {
+                            is_player: true,
+                            is_move_shape: true,
+                            figure: player.figure(),
+                            ..ShapeRuntimeFacts::default()
+                        };
+                        let result = owner
+                            .base_mut()
+                            .remove_object(player.movement_shape_mut(), facts)
+                            .map(|()| true);
+                        if result.is_err() {
+                            self.players.insert(identity.id, player);
+                        }
+                        result
+                    }),
+                    MONSTER_TYPE => {
+                        let figure = area_resolver
+                            .resolve_shape(identity)
+                            .map(|shape| shape.figure)
+                            .unwrap_or_default();
+                        Some(
+                            owner
+                                .base_mut()
+                                .detach_owned_monster_by_id(identity.id, figure),
+                        )
+                    }
+                    NPC_TYPE => Some(owner.base_mut().detach_owned_npc_by_id(identity.id)),
+                    _ => runtime.remove_external_region_shape(self, owner.base_mut(), identity),
+                };
+                removals.push(GameRegionRemovalReport { identity, result });
+            }
             let staged_area_transitions = owner.base().staged_area_transitions();
             let mut area_transitions = Vec::with_capacity(staged_area_transitions.len());
             for identity in staged_area_transitions {
@@ -22674,6 +22839,7 @@ impl CGame {
                             country_contend,
                             gods_battle,
                             deletions,
+                            removals,
                             area_transitions,
                             region_changes,
                             clear_player: Some(GameRegionClearPlayerOutcome::Expired { players }),
@@ -22701,6 +22867,7 @@ impl CGame {
                 country_contend,
                 gods_battle,
                 deletions,
+                removals,
                 area_transitions,
                 region_changes,
                 clear_player,
