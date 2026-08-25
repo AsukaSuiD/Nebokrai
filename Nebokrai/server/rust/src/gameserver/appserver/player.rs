@@ -1886,6 +1886,8 @@ pub(crate) struct CPlayer {
     war_soul_visual_x_bits: u32,
     war_soul_visual_y_bits: u32,
     current_ticket: u32,
+    goods_ai_tree: BTreeMap<u32, BTreeSet<CGuid>>,
+    goods_ai_delete_queue: VecDeque<BTreeSet<CGuid>>,
     flash_previous: [u32; 17],
     flash_current: [u32; 17],
     flash_changed: bool,
@@ -1984,6 +1986,21 @@ pub(crate) struct CPlayer {
     ci_qing_compose: CVolumeLimitGoodsContainer,
     fairy_container: CFairyContainer,
     battle_fairy_container: CBattleFairyContainer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerGoodsAiLocation {
+    pub(crate) extend_id: i32,
+    pub(crate) position: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerGoodsAiDeletion {
+    pub(crate) location: PlayerGoodsAiLocation,
+    pub(crate) goods: CGoods,
+    pub(crate) previous_amount: u32,
+    pub(crate) remaining_amount: u32,
+    pub(crate) listeners: Vec<ContainerListenerHandle>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2182,6 +2199,8 @@ impl CPlayer {
             war_soul_visual_x_bits: 0.0f32.to_bits(),
             war_soul_visual_y_bits: 0.0f32.to_bits(),
             current_ticket: 0,
+            goods_ai_tree: BTreeMap::new(),
+            goods_ai_delete_queue: VecDeque::new(),
             flash_previous: [0; 17],
             flash_current: [0; 17],
             flash_changed: false,
@@ -7664,7 +7683,7 @@ impl CPlayer {
         recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
     ) -> PlayerEquipmentRemoveReport {
         let player_id = self.player_id();
-        let outcome = self.equipment.remove(
+        let mut outcome = self.equipment.remove(
             ex_id,
             factory,
             EquipmentRemoveRuntimeFacts {
@@ -7675,8 +7694,13 @@ impl CPlayer {
             },
         );
         let mut effects = Vec::new();
-        if matches!(&outcome, EquipmentRemoveOutcome::Removed(_)) {
+        if let EquipmentRemoveOutcome::Removed(removed) = &mut outcome {
             self.equipment_changed = true;
+            let now_seconds = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            self.unregister_goods_ai(&mut removed.goods, factory, now_seconds);
         }
         if let EquipmentRemoveOutcome::Removed(removed) = &outcome
             && let Some(player_effects) = removed.event.player_effects
@@ -7986,9 +8010,9 @@ impl CPlayer {
     }
 
     /// Владеющая state/container середина оставшегося `CPlayer::AI` tail.
-    /// GoodsAI и TaoZhuang остаются у runtime owner-ов; ticket и packet
-    /// expansion принадлежат самому player-у и меняются между ними. Flash
-    /// завершается соседним concrete `CGame::DoneFlash` caller-ом.
+    /// GoodsAI/delete выполняется соседним CGame caller-ом до ticket mutation;
+    /// packet expansion принадлежит самому player-у. Flash и TaoZhuang затем
+    /// завершаются concrete CGame owner-ом.
     pub(crate) fn advance_ai_ticket_and_packet(
         &mut self,
         pack_add_enabled: bool,
@@ -8005,6 +8029,331 @@ impl CPlayer {
 
     pub(crate) const fn current_ticket(&self) -> u32 {
         self.current_ticket
+    }
+
+    /// Exact `CheckAddGoods -> ComputeTicket`: remaining lifetime переводится
+    /// в AI tickets множителем 12.5. Пара возвращается наружу, чтобы container
+    /// borrow завершился до mutation player map-а.
+    pub(crate) fn prepare_goods_ai_registration(
+        current_ticket: u32,
+        goods: &mut CGoods,
+        factory: &CGoodsFactory,
+        now_seconds: u64,
+    ) -> Option<(u32, CGuid)> {
+        if !goods.query_attribute(GAP_GOODS_LIFE_TYPE) || goods.add_ticket() != 0 {
+            return None;
+        }
+        let time_type = goods.goods_time_type(factory);
+        let mut start = goods.start_point(factory);
+        if !matches!(time_type, 1 | 3) && (!matches!(time_type, 2 | 4) || start == 0) {
+            return None;
+        }
+        if start == 0 {
+            goods.set_start_point(now_seconds);
+            start = now_seconds;
+        }
+        let elapsed = if start < now_seconds {
+            (now_seconds as u32).wrapping_sub(start as u32)
+        } else {
+            0
+        };
+        let lifetime = goods.goods_lifetime(factory);
+        if elapsed.wrapping_add(5) >= lifetime {
+            return Some((current_ticket, goods.identity().ex_id));
+        }
+        let delta = ((u64::from(lifetime.wrapping_sub(elapsed)) * 25) / 2) as u32;
+        if delta == 0 {
+            return None;
+        }
+        let ticket = current_ticket.wrapping_add(delta);
+        goods.set_add_ticket(ticket);
+        (goods.add_ticket() != 0).then_some((ticket, goods.identity().ex_id))
+    }
+
+    pub(crate) fn record_goods_ai_registration(&mut self, ticket: u32, goods_id: CGuid) {
+        if ticket <= self.current_ticket {
+            self.goods_ai_delete_queue
+                .push_back(BTreeSet::from([goods_id]));
+        } else {
+            self.goods_ai_tree
+                .entry(ticket)
+                .or_default()
+                .insert(goods_id);
+        }
+    }
+
+    fn unregister_goods_ai(
+        &mut self,
+        goods: &mut CGoods,
+        factory: &CGoodsFactory,
+        now_seconds: u64,
+    ) {
+        let ticket = goods.add_ticket();
+        if ticket == 0 {
+            return;
+        }
+        let goods_id = goods.identity().ex_id;
+        let mut registered = false;
+        if let Some(bucket) = self.goods_ai_tree.get_mut(&ticket) {
+            registered = bucket.remove(&goods_id);
+            if bucket.is_empty() {
+                self.goods_ai_tree.remove(&ticket);
+            }
+        }
+        if !registered {
+            return;
+        }
+        let start = goods.start_point(factory);
+        let elapsed = if start < now_seconds {
+            (now_seconds as u32).wrapping_sub(start as u32)
+        } else {
+            0
+        };
+        let lifetime = goods.goods_lifetime(factory);
+        if elapsed.wrapping_add(5) >= lifetime {
+            let _ = goods.set_addon_property_value_core(GAP_GOODS_LIFE_TYPE, 1, 0);
+            self.goods_ai_delete_queue
+                .push_back(BTreeSet::from([goods_id]));
+            return;
+        }
+        let _ = goods.set_addon_property_value_core(
+            GAP_GOODS_LIFE_TYPE,
+            1,
+            lifetime.wrapping_sub(elapsed) as i32,
+        );
+        goods.set_start_point(0);
+        goods.set_add_ticket(0);
+    }
+
+    pub(crate) fn register_goods_ai_by_id(
+        &mut self,
+        goods_id: CGuid,
+        factory: &CGoodsFactory,
+        now_seconds: u64,
+    ) -> bool {
+        let current_ticket = self.current_ticket;
+        let registration = self.get_goods_ai_by_id_mut(goods_id).and_then(|goods| {
+            Self::prepare_goods_ai_registration(current_ticket, goods, factory, now_seconds)
+        });
+        let Some((ticket, goods_id)) = registration else {
+            return false;
+        };
+        self.record_goods_ai_registration(ticket, goods_id);
+        true
+    }
+
+    fn get_goods_ai_by_id_mut(&mut self, goods_id: CGuid) -> Option<&mut CGoods> {
+        if self.hand.find(goods_id).is_some() {
+            return self.hand.find_mut(goods_id);
+        }
+        if self.packet.base().find(goods_id).is_some() {
+            return self.packet.base_mut().find_mut(goods_id);
+        }
+        if self.equipment.find(goods_id).is_some() {
+            return self.equipment.find_mut(goods_id);
+        }
+        if self.depot.base().base().find(goods_id).is_some() {
+            return self.depot.base_mut().base_mut().find_mut(goods_id);
+        }
+        if self.fairy_container.base().base().find(goods_id).is_some() {
+            return self
+                .fairy_container
+                .base_mut()
+                .base_mut()
+                .find_mut(goods_id);
+        }
+        if self
+            .battle_fairy_container
+            .base()
+            .base()
+            .find(goods_id)
+            .is_some()
+        {
+            return self
+                .battle_fairy_container
+                .base_mut()
+                .base_mut()
+                .find_mut(goods_id);
+        }
+        if self.auction_listing.base().find(goods_id).is_some() {
+            return self.auction_listing.base_mut().find_mut(goods_id);
+        }
+        if self.auction_goods.base().find(goods_id).is_some() {
+            return self.auction_goods.base_mut().find_mut(goods_id);
+        }
+        if self.ci_qing.base().find(goods_id).is_some() {
+            return self.ci_qing.base_mut().find_mut(goods_id);
+        }
+        self.ci_qing_compose.base_mut().find_mut(goods_id)
+    }
+
+    pub(crate) fn done_goods_ai_tree(&mut self) -> usize {
+        let due_tickets: Vec<_> = self
+            .goods_ai_tree
+            .range(..=self.current_ticket)
+            .map(|(&ticket, _)| ticket)
+            .collect();
+        let mut moved = 0;
+        for ticket in due_tickets {
+            if let Some(due) = self.goods_ai_tree.remove(&ticket)
+                && !due.is_empty()
+            {
+                moved += due.len();
+                self.goods_ai_delete_queue.push_back(due);
+            }
+        }
+        moved
+    }
+
+    /// Exact `DoneDelList`: только front bucket и максимум четыре GUID за AI.
+    pub(crate) fn take_goods_ai_deletions(&mut self) -> Vec<CGuid> {
+        while self
+            .goods_ai_delete_queue
+            .front()
+            .is_some_and(BTreeSet::is_empty)
+        {
+            self.goods_ai_delete_queue.pop_front();
+        }
+        let Some(front) = self.goods_ai_delete_queue.front_mut() else {
+            return Vec::new();
+        };
+        let result: Vec<_> = front.iter().copied().take(4).collect();
+        for goods_id in &result {
+            front.remove(goods_id);
+        }
+        if front.is_empty() {
+            self.goods_ai_delete_queue.pop_front();
+        }
+        result
+    }
+
+    pub(crate) fn goods_ai_location(&self, goods_id: CGuid) -> Option<PlayerGoodsAiLocation> {
+        let located = |extend_id, position| PlayerGoodsAiLocation {
+            extend_id,
+            position,
+        };
+        self.packet
+            .query_goods_position(goods_id)
+            .map(|position| located(1, position))
+            .or_else(|| {
+                self.equipment
+                    .query_goods_position_by_id(goods_id)
+                    .map(|column| located(2, column.position()))
+            })
+            .or_else(|| {
+                self.hand
+                    .query_goods_position(goods_id)
+                    .map(|p| located(3, p))
+            })
+            .or_else(|| {
+                self.depot
+                    .base()
+                    .query_goods_position(goods_id)
+                    .map(|p| located(9, p))
+            })
+            .or_else(|| {
+                self.fairy_container
+                    .base()
+                    .query_goods_position(goods_id)
+                    .map(|p| located(11, p))
+            })
+            .or_else(|| {
+                self.battle_fairy_container
+                    .base()
+                    .query_goods_position(goods_id)
+                    .map(|p| located(12, p))
+            })
+            .or_else(|| {
+                self.auction_listing
+                    .query_goods_position(goods_id)
+                    .map(|p| located(13, p))
+            })
+            .or_else(|| {
+                self.auction_goods
+                    .query_goods_position(goods_id)
+                    .map(|p| located(14, p))
+            })
+            .or_else(|| {
+                self.ci_qing
+                    .query_goods_position(goods_id)
+                    .map(|p| located(16, p))
+            })
+            .or_else(|| {
+                self.ci_qing_compose
+                    .query_goods_position(goods_id)
+                    .map(|p| located(17, p))
+            })
+    }
+
+    /// Полный non-equipment `DeleteGoods(..., 1, true)` storage core. Client
+    /// wire и World audit формирует CGame после сохранения удалённого snapshot.
+    pub(crate) fn delete_non_equipment_goods_ai(
+        &mut self,
+        location: PlayerGoodsAiLocation,
+        goods_id: CGuid,
+    ) -> Option<PlayerGoodsAiDeletion> {
+        macro_rules! delete_volume {
+            ($container:expr) => {{
+                let container = $container;
+                let goods = container.get_goods(location.position)?.clone();
+                (goods.identity().ex_id == goods_id).then_some(())?;
+                let previous_amount = goods.amount();
+                let listeners = if previous_amount > 1 {
+                    container
+                        .get_goods_mut(location.position)?
+                        .set_amount(previous_amount - 1);
+                    Vec::new()
+                } else {
+                    let removed = container.remove_goods(goods_id)?;
+                    let taken = match removed {
+                        VolumeGoodsRemoveOutcome::Removed(taken)
+                        | VolumeGoodsRemoveOutcome::RemovedButCellMissing(taken) => taken,
+                    };
+                    match taken {
+                        AmountLimitGoodsTaken::Removed(removed) => removed.listeners,
+                        AmountLimitGoodsTaken::Split(_) => unreachable!("full GoodsAI delete"),
+                    }
+                };
+                Some(PlayerGoodsAiDeletion {
+                    location,
+                    goods,
+                    previous_amount,
+                    remaining_amount: previous_amount.saturating_sub(1),
+                    listeners,
+                })
+            }};
+        }
+        match location.extend_id {
+            1 => delete_volume!(&mut self.packet),
+            3 => {
+                let goods = self.hand.get_goods(location.position)?.clone();
+                (goods.identity().ex_id == goods_id).then_some(())?;
+                let previous_amount = goods.amount();
+                let listeners = if previous_amount > 1 {
+                    self.hand
+                        .find_mut(goods_id)?
+                        .set_amount(previous_amount - 1);
+                    Vec::new()
+                } else {
+                    self.hand.remove_goods(goods_id)?.listeners
+                };
+                Some(PlayerGoodsAiDeletion {
+                    location,
+                    goods,
+                    previous_amount,
+                    remaining_amount: previous_amount.saturating_sub(1),
+                    listeners,
+                })
+            }
+            9 => delete_volume!(self.depot.base_mut()),
+            11 => delete_volume!(self.fairy_container.base_mut()),
+            12 => delete_volume!(self.battle_fairy_container.base_mut()),
+            13 => delete_volume!(&mut self.auction_listing),
+            14 => delete_volume!(&mut self.auction_goods),
+            16 => delete_volume!(&mut self.ci_qing),
+            17 => delete_volume!(&mut self.ci_qing_compose),
+            _ => None,
+        }
     }
 
     /// Periodic prefix `CPlayer::AI`: нулевой HP equipped battle fairy каждый

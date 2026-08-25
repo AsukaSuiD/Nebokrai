@@ -82,7 +82,7 @@
 //! World login `0x7F901` проходит из общего message FIFO через полный player
 //! GameSave decoder, transport-route validation, canonical player map и
 //! spatial region membership. Затем тот же main-loop runtime выполняет login
-//! property recompute и ещё не материализованные client/GoodsAI virtual owners;
+//! property recompute и ещё не материализованный полный client snapshot;
 //! сам `CGame` ставит login/honor scripts в живой scheduler, публикует Billing
 //! `0xEF201`, обходит все подтверждённые goods containers и выполняет
 //! equipment-state `2→3` с `0xBF928`. Save/faction/region/release callers
@@ -439,7 +439,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rustix::system::uname;
 
@@ -613,10 +613,11 @@ use crate::gameserver::appserver::player::{
     PlayerCombatProperties, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
     PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
     PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerGameSaveCodecError,
-    PlayerGameSaveDecodeReport, PlayerHonorResetReport, PlayerLoginGoodsLocation, PlayerProgress,
-    PlayerReliveMutation, PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery,
-    PlayerSkillRequestEffect, PlayerSkillRequestFacts, PlayerSkillRequestReport,
-    PlayerUncreatedCarriage, PlayerUncreatedPet, PlayerYuanBaoChange,
+    PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion, PlayerHonorResetReport,
+    PlayerLoginGoodsLocation, PlayerProgress, PlayerReliveMutation, PlayerSkillDispatch,
+    PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
+    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet,
+    PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -1598,10 +1599,21 @@ pub(crate) struct PlayerPeriodicalUpdateReport {
 pub(crate) struct PlayerAiTailReport {
     pub(crate) player_id: i32,
     pub(crate) goods_ai_ran: bool,
+    pub(crate) goods_ai: Option<PlayerGoodsAiReport>,
     pub(crate) current_ticket: u32,
     pub(crate) packet_expansion_applied: Option<u32>,
     pub(crate) flash_update: Option<PlayerFlashUpdateReport>,
     pub(crate) tao_zhuang_ran: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerGoodsAiReport {
+    pub(crate) player_id: i32,
+    pub(crate) moved_to_delete_queue: usize,
+    pub(crate) attempted_goods: Vec<CGuid>,
+    pub(crate) deletions: Vec<PlayerGoodsAiDeletion>,
+    pub(crate) client_deliveries: Vec<i32>,
+    pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
 }
 
 #[must_use = "DoneFlash report сохраняет 17 пар и around delivery"]
@@ -2043,8 +2055,9 @@ pub(crate) trait GameRegionEnterContext: NationCombatContext {
 
 /// Внешняя половина initial-login owner-а: player codec, map, spatial
 /// membership, login/honor scripts и Billing account entry исполняет `CGame`.
-/// Ещё не материализованные полный client snapshot, virtual property recompute
-/// и GoodsAI tree получают тот же live runtime в исходном порядке.
+/// Ещё не материализованные полный client snapshot и virtual property
+/// recompute получают тот же live runtime в исходном порядке. GoodsAI tree
+/// принадлежит canonical player и заполняется после успешной регистрации.
 pub(crate) trait GamePlayerLoginContext: NationCombatContext + OldClientGoodsCodec {
     fn recompute_login_player_properties(&mut self, player: &CPlayer) -> PlayerCombatProperties;
     fn publish_initial_player_client_snapshot(
@@ -2057,7 +2070,6 @@ pub(crate) trait GamePlayerLoginContext: NationCombatContext + OldClientGoodsCod
     /// `difftime(now, expiry) / 60 > 10079`. Time-zone/CRT conversion остаётся
     /// системной runtime-границей; gameplay mutation и wire принадлежат CGame.
     fn login_equipment_state_expired(&mut self, packed_local_time: i32) -> bool;
-    fn register_login_goods_ai(&mut self, player_id: i32, goods: &CGoods);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2416,8 +2428,8 @@ pub(crate) trait PlayerEquipmentContext {
 
 /// Container transfer использует уже материализованные player/equipment
 /// owners. Exact `CanMountEquip` теперь читает persisted player flags и goods
-/// прямо у canonical owner-а; базовый property recompute, clock и GoodsAI
-/// registration остаются обязательными runtime facts. RideState overlay и
+/// прямо у canonical owner-а; базовый property recompute остаётся обязательным
+/// runtime fact. RideState overlay и
 /// personal-shop mount gate также принадлежат canonical player owner-у.
 pub(crate) trait GameContainerMessageRuntime:
     OldClientGoodsCodec + PlayerEquipmentContext + ServerRegionMembershipContext
@@ -2442,8 +2454,6 @@ pub(crate) trait GameContainerMessageRuntime:
         &mut self,
         player: &CPlayer,
     ) -> PlayerCombatProperties;
-
-    fn register_enhancement_goods_ai(&mut self, goods: &CGoods);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4927,9 +4937,6 @@ pub(crate) trait GameMainLoopRuntime:
     /// post-AI restored-state current war-soul skill; `None` точно означает
     /// отсутствие skill-а.
     fn player_move_shape_ai(&mut self, game: &mut CGame, player_id: i32) -> Option<bool>;
-    /// Точная соседняя пара `DoneGoodsAiTree -> DoneDelList`; вызывается только
-    /// при live `bGoodsAi` до ticket increment.
-    fn player_done_goods_ai_and_delete_list(&mut self, game: &mut CGame, player_id: i32);
     /// Concrete ground-goods owner шлёт around delete и ставит `CS_DELETE`.
     fn expire_area_ground_goods(
         &mut self,
@@ -5395,6 +5402,18 @@ pub(crate) struct CGame {
 }
 
 impl CGame {
+    fn register_player_goods_ai(
+        player: &mut CPlayer,
+        factory: &CGoodsFactory,
+        goods_id: CGuid,
+    ) -> bool {
+        let now_seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        player.register_goods_ai_by_id(goods_id, factory, now_seconds)
+    }
+
     pub(crate) fn personal_shop_session_available<Context: GameContainerMessageRuntime>(
         &self,
         session_id: i32,
@@ -10358,8 +10377,12 @@ impl CGame {
                     removed,
                     added,
                 }) => {
-                    if let Some(goods) = player.depot().get_goods(destination_position) {
-                        context.register_enhancement_goods_ai(goods);
+                    if let Some(goods_id) = player
+                        .depot()
+                        .get_goods(destination_position)
+                        .map(|goods| goods.identity().ex_id)
+                    {
+                        Self::register_player_goods_ai(&mut player, &self.goods_factory, goods_id);
                     }
                     Some((
                         outgoing,
@@ -10656,9 +10679,12 @@ impl CGame {
                 )
             };
             if let DepotGoodsAddOutcome::Volume(VolumeGoodsAddOutcome::Added(added)) = &outcome
-                && let Some(goods) = player.depot().get_goods(added.position.unwrap_or(position))
+                && let Some(goods_id) = player
+                    .depot()
+                    .get_goods(added.position.unwrap_or(position))
+                    .map(|goods| goods.identity().ex_id)
             {
-                context.register_enhancement_goods_ai(goods);
+                Self::register_player_goods_ai(player, &self.goods_factory, goods_id);
             }
             return DepotStorageTransferAddition::Depot(outcome);
         }
@@ -12090,12 +12116,11 @@ impl CGame {
                 .expect("destination/rollback add получает detached goods"),
             pack_add_enabled,
         );
+        let mut goods_ai_ids = Vec::new();
         let mut report = {
             let context_cell = std::cell::RefCell::new(&mut *context);
             let mut register = |goods: &CGoods| {
-                context_cell
-                    .borrow_mut()
-                    .register_enhancement_goods_ai(goods);
+                goods_ai_ids.push(goods.identity().ex_id);
             };
             let mut recompute = |player: &CPlayer| {
                 context_cell
@@ -12112,6 +12137,9 @@ impl CGame {
                 &mut recompute,
             )
         };
+        for goods_id in goods_ai_ids {
+            Self::register_player_goods_ai(player, &self.goods_factory, goods_id);
+        }
         self.publish_player_equipment_add_report(&mut report, context);
         EnhancementTransferAddition::Equipment(report)
     }
@@ -24758,14 +24786,27 @@ impl CGame {
             .flatten();
 
         let mut goods_ai_registrations = 0usize;
+        let mut goods_ai_entries = Vec::new();
         let mut pending_equipment_state_updates = Vec::new();
         {
             let (players, goods_factory) = (&mut self.players, &self.goods_factory);
             let player = players
                 .get_mut(&expected_player_id)
                 .expect("honor script scheduling сохраняет player owner");
+            let current_ticket = player.current_ticket();
             player.visit_login_goods_mut(|location, goods| {
-                context.register_login_goods_ai(expected_player_id, goods);
+                let now_seconds = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if let Some(entry) = CPlayer::prepare_goods_ai_registration(
+                    current_ticket,
+                    goods,
+                    goods_factory,
+                    now_seconds,
+                ) {
+                    goods_ai_entries.push(entry);
+                }
                 goods_ai_registrations += 1;
                 if !matches!(
                     location,
@@ -24791,6 +24832,9 @@ impl CGame {
                 }
                 true
             });
+            for (ticket, goods_id) in goods_ai_entries.drain(..) {
+                player.record_goods_ai_registration(ticket, goods_id);
+            }
         }
         let mut equipment_state_updates = Vec::new();
         for (location, goods, payload) in pending_equipment_state_updates {
@@ -26848,13 +26892,17 @@ impl CGame {
             &self.goods_factory,
             &mut |goods| context.encode_goods_for_old_client(goods),
         );
+        let mut goods_ai_ids = Vec::new();
         for addition in &additions {
             if let Some(position) = addition.position
                 && matches!(addition.outcome, VolumeGoodsAddOutcome::Added(_))
                 && let Some(goods) = player.packet().get_goods(position)
             {
-                context.register_enhancement_goods_ai(goods);
+                goods_ai_ids.push(goods.identity().ex_id);
             }
+        }
+        for goods_id in goods_ai_ids {
+            Self::register_player_goods_ai(&mut player, &self.goods_factory, goods_id);
         }
         self.players.insert(player_id, player);
         for addition in &additions {
@@ -27730,10 +27778,142 @@ impl CGame {
         Some(report)
     }
 
+    fn publish_goods_ai_deletion(
+        &self,
+        player: &CPlayer,
+        deletion: &PlayerGoodsAiDeletion,
+    ) -> (i32, Result<i32, SendMessageError>) {
+        let client_delivery = if deletion.remaining_amount == 0 {
+            let mut message = CS2CContainerObjectMove::default();
+            message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+            message.set_source_container(
+                PLAYER_TYPE,
+                player.player_id(),
+                deletion.location.position,
+            );
+            message.set_source_container_extend_id(deletion.location.extend_id);
+            message.set_source_object(
+                deletion.goods.identity().object_type,
+                deletion.goods.identity().ex_id,
+                deletion.previous_amount,
+            );
+            message.send_to_player(self, player.player_id())
+        } else {
+            let mut message = CS2CContainerObjectAmountChange::default();
+            message.set_source_container(
+                PLAYER_TYPE,
+                player.player_id(),
+                deletion.location.position,
+            );
+            message.set_source_container_extend_id(deletion.location.extend_id);
+            message.set_object(
+                deletion.goods.identity().object_type,
+                deletion.goods.identity().ex_id,
+            );
+            message.set_object_amount(deletion.remaining_amount);
+            message.send_to_player(self, player.player_id())
+        };
+        let mut audit = CMessage::new(0x0006_0213);
+        let base_index = deletion.goods.base_properties_index();
+        audit.add_ulong(deletion.goods.goods_lifetime(&self.goods_factory));
+        add_legacy_c_string(audit.base_mut(), player.account());
+        add_legacy_c_string(audit.base_mut(), player.player_name());
+        audit.add_long(player.player_id());
+        audit.add_ulong(base_index);
+        add_legacy_c_string(
+            audit.base_mut(),
+            self.goods_factory
+                .query_goods_original_name(base_index)
+                .unwrap_or_default(),
+        );
+        audit.add_ulong(u32::from(player.level()));
+        audit.add_long(player.shape().get_tile_x().unwrap_or_default());
+        audit.add_long(player.shape().get_tile_y().unwrap_or_default());
+        audit.add_ulong(base_index);
+        (client_delivery, audit.send(self, false))
+    }
+
+    fn run_player_goods_ai<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<PlayerGoodsAiReport> {
+        let player = self.players.get_mut(&player_id)?;
+        let moved_to_delete_queue = player.done_goods_ai_tree();
+        let attempted_goods = player.take_goods_ai_deletions();
+        let mut deletions = Vec::new();
+        let mut client_deliveries = Vec::new();
+        let mut world_deliveries = Vec::new();
+        for goods_id in &attempted_goods {
+            let Some(location) = self
+                .players
+                .get(&player_id)
+                .and_then(|player| player.goods_ai_location(*goods_id))
+            else {
+                continue;
+            };
+            let deletion = if location.extend_id == 2 {
+                let mut player = self.players.remove(&player_id)?;
+                let goods = player.equipment().find(*goods_id)?.clone();
+                let facts = runtime.enhancement_equipment_remove_facts(
+                    &player,
+                    &goods,
+                    self.globe_setup.pack_add_enabled(),
+                );
+                let mut recompute =
+                    |player: &CPlayer| runtime.recompute_enhancement_player_properties(player);
+                let mut report = player.remove_equipment_goods(
+                    *goods_id,
+                    &self.goods_factory,
+                    &self.skill_factory,
+                    facts,
+                    &mut recompute,
+                );
+                drop(recompute);
+                self.publish_player_equipment_remove_report(&mut report, runtime);
+                let removed = match &report.outcome {
+                    EquipmentRemoveOutcome::Removed(removed) => Some(PlayerGoodsAiDeletion {
+                        location,
+                        goods: removed.goods.clone(),
+                        previous_amount: removed.goods.amount(),
+                        remaining_amount: 0,
+                        listeners: removed.event.listeners.clone(),
+                    }),
+                    _ => None,
+                };
+                self.players.insert(player_id, player);
+                if self.globe_setup.tao_zhuang_modify_enabled() {
+                    let _ = self.done_player_tao_zhuang(player_id);
+                }
+                removed
+            } else {
+                self.players
+                    .get_mut(&player_id)?
+                    .delete_non_equipment_goods_ai(location, *goods_id)
+            };
+            let Some(deletion) = deletion else {
+                continue;
+            };
+            let player = self.players.get(&player_id)?;
+            let (client, world) = self.publish_goods_ai_deletion(player, &deletion);
+            client_deliveries.push(client);
+            world_deliveries.push(world);
+            deletions.push(deletion);
+        }
+        Some(PlayerGoodsAiReport {
+            player_id,
+            moved_to_delete_queue,
+            attempted_goods,
+            deletions,
+            client_deliveries,
+            world_deliveries,
+        })
+    }
+
     /// Точный остаток `CPlayer::AI` после live/dead war-soul ветви.
     /// Feature gates принадлежат live GlobeSetup, ticket/packet/Flash —
-    /// CPlayer, а ещё не перенесённые GoodsAI/TaoZhuang owners вызываются в
-    /// подтверждённом порядке через тот же main-loop runtime.
+    /// CPlayer; owned GoodsAI/delete и TaoZhuang выполняются в подтверждённом
+    /// порядке, runtime нужен только reached equipment property callbacks.
     pub(crate) fn run_player_ai_tail<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -27741,9 +27921,9 @@ impl CGame {
     ) -> Option<PlayerAiTailReport> {
         self.find_player(player_id)?;
         let goods_ai_ran = self.globe_setup.goods_ai_enabled();
-        if goods_ai_ran {
-            runtime.player_done_goods_ai_and_delete_list(self, player_id);
-        }
+        let goods_ai = goods_ai_ran
+            .then(|| self.run_player_goods_ai(player_id, runtime))
+            .flatten();
         let pack_add_enabled = self.globe_setup.pack_add_enabled();
         let (current_ticket, packet_expansion_applied) = self
             .find_player_mut(player_id)?
@@ -27753,6 +27933,7 @@ impl CGame {
         Some(PlayerAiTailReport {
             player_id,
             goods_ai_ran,
+            goods_ai,
             current_ticket,
             packet_expansion_applied,
             flash_update,
