@@ -176,6 +176,10 @@
 //! списки GM и игроков, запрашивает межсерверные части списка GM и молчания,
 //! а также запускает `0x5FF13 → 0x7F803 → 0x5FA03`, поэтому сохранение всех
 //! игроков доходит до полного снимка GameSave и владельца сохранения World.
+//! Соседние `5301 / KickAll` и `5302 / KickMap` используют тот же живой
+//! диспетчер GM: первый рассылает отключение всем GameServer с исключением
+//! запросившего игрока, второй сначала обслуживает локальный регион, а при его
+//! отсутствии маршрутизирует запрос фактическому владельцу региона.
 //! Недельный сброс из того же достигнутого сценария читает локальные поля
 //! `SYSTEMTIME` через `TagTime`, меняет принадлежащие планировщику общие
 //! переменные и публикует `PostWorldInfo` по уже замкнутому контракту
@@ -577,6 +581,8 @@ pub(crate) const SCRIPT_FUNCTION_SAVE_ALL_PLAYERS: i32 = 5105;
 pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
 pub(crate) const SCRIPT_FUNCTION_LIST_ONLINE_PLAYER: i32 = 5109;
 pub(crate) const SCRIPT_FUNCTION_LIST_BANNED_PLAYER: i32 = 5106;
+pub(crate) const SCRIPT_FUNCTION_KICK_ALL: i32 = 5301;
+pub(crate) const SCRIPT_FUNCTION_KICK_MAP: i32 = 5302;
 pub(crate) const SCRIPT_FUNCTION_GET_COPY_NUMBER: i32 = 9314;
 pub(crate) const SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE: i32 = 5411;
 pub(crate) const SCRIPT_FUNCTION_GET_MAXIMUM_LEVEL: i32 = 5412;
@@ -3803,12 +3809,17 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_GET_ONLINE_PLAYERS
         | SCRIPT_FUNCTION_LIST_ONLINE_PLAYER
         | SCRIPT_FUNCTION_LIST_BANNED_PLAYER
+        | SCRIPT_FUNCTION_KICK_ALL
         | SCRIPT_FUNCTION_GET_MAXIMUM_LEVEL
         | SCRIPT_FUNCTION_GET_AREA_ID
         | SCRIPT_FUNCTION_GET_AREA_TYPE
         | SCRIPT_FUNCTION_GET_WORLD_SERVER_ID
         | SCRIPT_FUNCTION_GET_PLAYER_SZL
         | SCRIPT_FUNCTION_OPEN_CHANGE_PLAYER_NAME => Unused,
+        SCRIPT_FUNCTION_KICK_MAP => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_INVISIBLE
         | SCRIPT_FUNCTION_GOD_MODE
         | SCRIPT_FUNCTION_RESIDENT_MODE
@@ -6948,6 +6959,31 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 Ok(1) => ScriptFunctionDispatchOutcome::Yielded { legacy_return: -1 },
                 _ => ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 },
             })
+        }
+        SCRIPT_FUNCTION_KICK_ALL => {
+            if argument_count != 0 || game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let mut request = CMessage::new(0x0005_ff0a);
+            request.add_long(player_id);
+            let _ = request.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_KICK_MAP => {
+            let Some(region_id) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if game.find_region(region_id).is_some() {
+                let _ = game.kick_players_in_region_except(region_id, player_id);
+            } else if game.find_player(player_id).is_some() {
+                let mut request = CMessage::new(0x0005_ff0b);
+                request.add_long(player_id);
+                request.add_long(region_id);
+                let _ = request.send(game, false);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_OPEN_CI_QING_PAGE => {
             if argument_count != 0 {
