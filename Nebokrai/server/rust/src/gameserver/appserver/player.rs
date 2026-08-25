@@ -1429,6 +1429,15 @@ pub(crate) struct PlayerConfirmedKillReport {
     pub(crate) murderer_timestamp_started: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerMurdererSignDecrease {
+    pub(crate) player_id: i32,
+    pub(crate) pk_count: u16,
+    pub(crate) kill_count: u32,
+    pub(crate) checked_at_ms: u32,
+    pub(crate) next_timestamp_ms: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerRemoteSkillMutation {
     pub(crate) skill_id: u32,
@@ -6791,6 +6800,40 @@ impl CPlayer {
         }
     }
 
+    /// Exact `OnDecreaseMurdererSign`: timer идёт только у живого murderer-а,
+    /// сравнение сохраняет DWORD addition/order, а при оставшемся PK исходник
+    /// повторно читает `timeGetTime` для начала следующего интервала.
+    pub(crate) fn decrease_murderer_sign(
+        &mut self,
+        one_pk_count_time_ms: u32,
+        mut now_ms: impl FnMut() -> u32,
+    ) -> Option<PlayerMurdererSignDecrease> {
+        if self.is_dead() || self.base_properties.pk_count == 0 {
+            return None;
+        }
+        let checked_at_ms = now_ms();
+        if self
+            .murderer_time_stamp_ms
+            .wrapping_add(one_pk_count_time_ms)
+            > checked_at_ms
+        {
+            return None;
+        }
+        self.base_properties.pk_count -= 1;
+        self.murderer_time_stamp_ms = if self.base_properties.pk_count == 0 {
+            0
+        } else {
+            now_ms()
+        };
+        Some(PlayerMurdererSignDecrease {
+            player_id: self.player_id(),
+            pk_count: self.base_properties.pk_count,
+            kill_count: self.base_properties.kill_count,
+            checked_at_ms,
+            next_timestamp_ms: self.murderer_time_stamp_ms,
+        })
+    }
+
     pub(crate) const fn set_money_snapshot(&mut self, money: u32) {
         self.money = money;
     }
@@ -11214,19 +11257,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::OnDecreaseMurdererSign
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:2941
-// RVA: 0x0002B030
-// ADDRESS: 0042b030
-// PROTOTYPE: void __thiscall OnDecreaseMurdererSign(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CPlayer::OnDecreaseMurdererSign` входит в reached
+// `CGame::AI -> PeriodicalUpdate` pass через `decrease_murderer_sign`.
 
 // IMPLEMENTED: `CPlayer::OnUpdateMurdererSign` входит в `apply_confirmed_kill` выше.
 

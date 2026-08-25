@@ -615,8 +615,8 @@ use crate::gameserver::appserver::player::{
     PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
     PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerGameSaveCodecError,
     PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion, PlayerHonorResetReport,
-    PlayerLoginGoodsLocation, PlayerProgress, PlayerReliveMutation, PlayerSkillDispatch,
-    PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
+    PlayerLoginGoodsLocation, PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation,
+    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
     PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet,
     PlayerYuanBaoChange,
 };
@@ -1591,9 +1591,16 @@ pub(crate) enum PlayerPeriodicalPingTick {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerPeriodicalUpdateReport {
     pub(crate) player_id: i32,
+    pub(crate) murderer_sign: Option<PlayerMurdererSignDecreaseReport>,
     pub(crate) ping: PlayerPeriodicalPingTick,
     pub(crate) nation_died_state: Option<NationPlayerDiedStateTick>,
     pub(crate) fairy_hatcher: Option<FairyHatcherRunReport>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerMurdererSignDecreaseReport {
+    pub(crate) mutation: PlayerMurdererSignDecrease,
+    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4919,10 +4926,9 @@ pub(crate) trait GameMainLoopRuntime:
     /// `m_bInChangingRegion`; owner вправе удалить player-а или перевести его
     /// в terminal state, поэтому `CGame` после возврата повторяет lookup.
     fn player_ai_before_periodical_update(&mut self, game: &mut CGame, player_id: i32);
-    /// Исполняет ещё внешние virtual base `PeriodicalUpdate` и
-    /// `OnDecreaseMurdererSign` непосредственно перед owned ping/countdown/
-    /// hatcher tail того же player-а.
-    fn player_periodical_update_prefix(&mut self, game: &mut CGame, player_id: i32);
+    /// Исполняет ещё внешний virtual base-slot `PeriodicalUpdate`
+    /// непосредственно перед owned murderer/ping/countdown/hatcher tail.
+    fn player_periodical_update_virtual(&mut self, game: &mut CGame, player_id: i32);
     /// Исполняет `CMoveShape::AI` после полного `PeriodicalUpdate` и возвращает
     /// post-AI restored-state current war-soul skill; `None` точно означает
     /// отсутствие skill-а.
@@ -13236,6 +13242,30 @@ impl CGame {
         Some(PlayerPeriodicalPingTick::Sent {
             sampled_at_ms,
             delivery,
+        })
+    }
+
+    /// Exact `OnDecreaseMurdererSign` внутри `PeriodicalUpdate`: owned player
+    /// меняет persisted PK/timer, после чего тот же live shape публикует
+    /// `0xBF70E(player, pk, kills)` всем вокруг, включая самого player-а.
+    pub(crate) fn periodical_update_murderer_sign<Context: NationCombatContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<PlayerMurdererSignDecreaseReport> {
+        let one_pk_count_time_ms = self.globe_setup.one_pk_count_time_ms();
+        let mutation = self
+            .players
+            .get_mut(&player_id)?
+            .decrease_murderer_sign(one_pk_count_time_ms, || context.now_milliseconds())?;
+        let mut message = CMessage::new(0x000b_f70e);
+        message.add_long(player_id);
+        message.base_mut().add_word(mutation.pk_count);
+        message.add_ulong(mutation.kill_count);
+        let around_delivery = self.send_player_shape_around(player_id, None, &message);
+        Some(PlayerMurdererSignDecreaseReport {
+            mutation,
+            around_delivery,
         })
     }
 
@@ -28864,13 +28894,15 @@ impl CGame {
                     .find_player(player_id)
                     .is_some_and(|player| !player.in_changing_region())
                 {
-                    runtime.player_periodical_update_prefix(self, player_id);
+                    runtime.player_periodical_update_virtual(self, player_id);
+                    let murderer_sign = self.periodical_update_murderer_sign(player_id, runtime);
                     if let Some(ping) = self.periodical_update_player_ping(player_id, runtime) {
                         let nation_died_state =
                             self.periodical_update_nation_died_state(player_id, runtime);
                         let fairy_hatcher = self.run_fairy_hatcher(player_id, runtime);
                         periodical_updates.push(PlayerPeriodicalUpdateReport {
                             player_id,
+                            murderer_sign,
                             ping,
                             nation_died_state,
                             fairy_hatcher,
