@@ -149,6 +149,9 @@
 //! `3314 / MovePlayer` фиксирует игроков исходного прямоугольника в порядке
 //! областей региона, выбирает каждому случайную точку целевого прямоугольника
 //! и проводит через общий `CPlayer::ChangeRegion` со всеми его сообщениями.
+//! Селекторы `3310 / OpenPlayerUI` и `3311 / CallMonster` в целевом EXE не
+//! читают аргументы и не создают побочных эффектов, но различаются точными
+//! возвращаемыми значениями `0` и `1`.
 //! Соседняя группа `2204/2205/2212/2217/2218/2220` связывает подсчёты рюкзака
 //! и депо, выбранный предмет контейнера улучшения, локальное либо удалённое
 //! удаление и доверенный путь сценария окна `0xBF919` с подтверждением
@@ -596,6 +599,8 @@ pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER: i32 = 3306;
 pub(crate) const SCRIPT_FUNCTION_KILL_MONSTER: i32 = 3307;
 pub(crate) const SCRIPT_FUNCTION_PLAYER_MESSAGE: i32 = 3308;
 pub(crate) const SCRIPT_FUNCTION_GET_MAP_INFO: i32 = 3309;
+pub(crate) const SCRIPT_FUNCTION_OPEN_PLAYER_UI: i32 = 3310;
+pub(crate) const SCRIPT_FUNCTION_CALL_MONSTER: i32 = 3311;
 pub(crate) const SCRIPT_FUNCTION_ATTACK_PLAYER: i32 = 3312;
 pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER_RECT: i32 = 3313;
 pub(crate) const SCRIPT_FUNCTION_MOVE_PLAYER: i32 = 3314;
@@ -3704,6 +3709,7 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_GET_PROGRESS
         | SCRIPT_FUNCTION_IS_COMBAT_STATE
         | SCRIPT_FUNCTION_IS_RIDER => Unused,
+        SCRIPT_FUNCTION_OPEN_PLAYER_UI | SCRIPT_FUNCTION_CALL_MONSTER => Unused,
         SCRIPT_FUNCTION_CREATE_NPC => match index {
             0 | 8 => String,
             1..=7 | 9..=11 => Integer,
@@ -5432,6 +5438,12 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let _ = game.script_monsters_talk(player_id, name, text);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_OPEN_PLAYER_UI => {
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_CALL_MONSTER => {
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
         }
         SCRIPT_FUNCTION_ATTACK_PLAYER => {
             if let (Some(player_id), Some(target_name)) = (
