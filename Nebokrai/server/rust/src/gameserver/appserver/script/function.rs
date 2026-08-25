@@ -133,6 +133,12 @@
 //! reload owners и для IncrementShopList рассылает обновлённый GameServer
 //! snapshot. Недостижимый normal-script-ом null-player dereference исходника
 //! безопасно заменён no-op без сетевой публикации.
+//! Часовая ветвь `game_enter.script` добавляет `20/21`, `8003` и `3302` одним
+//! проходом того же CScript. Packed local time декодируется через CRT `mktime`;
+//! random position пишет player-owned `$m_Temp[0..1]`; все 12 вычисленных
+//! аргументов `CreateNpc` доходят до concrete `CServerRegion::AddNpc`, включая
+//! spatial/AI publication, show-list, script и lifetime. Для чужого региона
+//! тот же owner сохраняет исходный маршрут World `0x5FA0B -> 0x7F80A`.
 //! Восстановительная ветвь `nodupe.script` достигает строкового `2998 /
 //! GetName`, `3002 / SetPlayerLevel` и skill pair `3102/3103`. String result
 //! возвращается непосредственно expression evaluator-у; level/experience и
@@ -184,7 +190,7 @@ use crate::gameserver::appserver::servercityregion::CityGateRuntimeContext;
 use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
 };
-use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionNpcSetup};
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, WarContendEntryContext, WarRegionContext,
 };
@@ -231,6 +237,8 @@ pub(crate) const SCRIPT_FUNCTION_DAY: i32 = 16;
 pub(crate) const SCRIPT_FUNCTION_HOUR: i32 = 17;
 pub(crate) const SCRIPT_FUNCTION_MINUTE: i32 = 18;
 pub(crate) const SCRIPT_FUNCTION_DAY_OF_WEEK: i32 = 19;
+pub(crate) const SCRIPT_FUNCTION_HOUR_DIFF: i32 = 20;
+pub(crate) const SCRIPT_FUNCTION_MINUTE_DIFF: i32 = 21;
 pub(crate) const SCRIPT_FUNCTION_SECOND: i32 = 23;
 pub(crate) const SCRIPT_FUNCTION_GET_STRING_BY_ID: i32 = 2000;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
@@ -302,6 +310,8 @@ pub(crate) const SCRIPT_FUNCTION_COMPLETE_QUEST: i32 = 6201;
 pub(crate) const SCRIPT_FUNCTION_DISBAND_QUEST: i32 = 6202;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
 pub(crate) const SCRIPT_FUNCTION_UPDATE_QUEST_POSITION: i32 = 6207;
+pub(crate) const SCRIPT_FUNCTION_CREATE_NPC: i32 = 3302;
+pub(crate) const SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION: i32 = 8003;
 pub(crate) const SCRIPT_FUNCTION_IS_QUEST_ENABLED: i32 = 3500;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_ENABLED: i32 = 3501;
 pub(crate) const SCRIPT_FUNCTION_QUEST_TIME_BEGIN: i32 = 3502;
@@ -365,6 +375,8 @@ pub(crate) const SCRIPT_FUNCTION_ADD_BATTLE_FAIRY_EXPERIENCE: i32 = 9409;
 pub(crate) const SCRIPT_FUNCTION_GET_BATTLE_FAIRY_ATTRIBUTE: i32 = 9410;
 pub(crate) const SCRIPT_FUNCTION_RECREATE_BATTLE_FAIRY_ATTRIBUTES: i32 = 9411;
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
+pub(crate) const SCRIPT_FUNCTION_ARGUMENT_CAPACITY: usize = 12;
+const MAXIMUM_SCRIPT_SPAWN_COUNT: i32 = 4096;
 const SCRIPT_PLAYER_TYPE: i32 = 400;
 const SCRIPT_NPC_TYPE: i32 = 500;
 
@@ -3201,6 +3213,19 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_HOUR_DIFF | SCRIPT_FUNCTION_MINUTE_DIFF => match index {
+            0 | 1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_CREATE_NPC => match index {
+            0 | 8 => String,
+            1..=7 | 9..=11 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_TIME
         | SCRIPT_FUNCTION_SECOND
         | SCRIPT_FUNCTION_GET_COUNTRY
@@ -3743,6 +3768,43 @@ fn script_packed_time_component(function_id: i32, packed: i32) -> i32 {
     }
 }
 
+fn decode_script_packed_local_time(packed: i32) -> Option<libc::time_t> {
+    let mut local = libc::tm {
+        tm_sec: 0,
+        tm_min: (packed >> 3) & 0x3f,
+        tm_hour: (packed >> 9) & 0x1f,
+        tm_mday: (packed >> 14) & 0x1f,
+        tm_mon: (packed >> 19) & 0x0f,
+        tm_year: packed >> 23,
+        tm_wday: packed & 0x07,
+        tm_yday: 0,
+        tm_isdst: -1,
+        ..unsafe { std::mem::zeroed() }
+    };
+    let value = unsafe { libc::mktime(&raw mut local) };
+    (value != -1).then_some(value)
+}
+
+fn script_packed_time_difference(function_id: i32, first: i32, second: Option<i32>) -> Option<i32> {
+    let first = decode_script_packed_local_time(first)?;
+    let second = match second {
+        Some(second) => decode_script_packed_local_time(second)?,
+        None => {
+            let now = unsafe { libc::time(std::ptr::null_mut()) };
+            if now == -1 {
+                return None;
+            }
+            now
+        }
+    };
+    let divisor = if function_id == SCRIPT_FUNCTION_HOUR_DIFF {
+        3_600
+    } else {
+        60
+    };
+    i32::try_from(second.checked_sub(first)? / divisor).ok()
+}
+
 #[derive(Clone, Debug)]
 struct ScriptWarRegionSnapshot {
     name: Vec<u8>,
@@ -4137,8 +4199,8 @@ fn next_lei_ting_daily_stamp_if_same_local_day(current_stamp: u32) -> Option<u32
 
 fn script_notice_arguments<'a>(
     argument_count: usize,
-    integer_arguments: &[Option<i32>; 7],
-    string_arguments: &[Option<&'a [u8]>; 7],
+    integer_arguments: &[Option<i32>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
+    string_arguments: &[Option<&'a [u8]>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
     default_background: i32,
 ) -> Option<(&'a [u8], u32, u32)> {
     let text = string_arguments[0].filter(|text| text.len() <= 0xff && !text.contains(&0))?;
@@ -4178,12 +4240,13 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
     runtime: &mut Runtime,
     script_player_id: Option<i32>,
     script_npc_id: Option<i32>,
+    script_region_id: Option<i32>,
     script_id: i32,
     script_path: &[u8],
     function_id: i32,
     argument_count: usize,
-    integer_arguments: [Option<i32>; 7],
-    string_arguments: [Option<&[u8]>; 7],
+    integer_arguments: [Option<i32>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
+    string_arguments: [Option<&[u8]>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
 ) -> Option<ScriptFunctionDispatchOutcome> {
     let player_id = script_player_id.unwrap_or_default();
     match function_id {
@@ -4220,6 +4283,187 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
         SCRIPT_FUNCTION_SECOND => Some(ScriptFunctionDispatchOutcome::Handled {
             legacy_return: i32::from(TagTime::local_now().second),
         }),
+        SCRIPT_FUNCTION_HOUR_DIFF | SCRIPT_FUNCTION_MINUTE_DIFF => {
+            if !(1..=2).contains(&argument_count) {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(first) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let second = match integer_arguments[1] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) => {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                }
+                value => value,
+            };
+            Some(
+                script_packed_time_difference(function_id, first, second)
+                    .map_or(ScriptFunctionDispatchOutcome::Invalid, |legacy_return| {
+                        ScriptFunctionDispatchOutcome::Handled { legacy_return }
+                    }),
+            )
+        }
+        SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION => {
+            if argument_count > 1 {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let Some(player_id) =
+                script_player_id.filter(|player_id| game.find_player(*player_id).is_some())
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let player_region_id = game
+                .find_player(player_id)
+                .and_then(|player| player.server_region_id())
+                .unwrap_or_default();
+            let region_id = match integer_arguments[0] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) => {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                }
+                Some(0) | None => player_region_id,
+                Some(region_id) => region_id,
+            };
+            let Some(position) = game
+                .find_region(region_id)
+                .and_then(|owner| owner.base().region.get_random_pos(runtime).ok())
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let player = game
+                .find_player_mut(player_id)
+                .expect("script-player сохранён между random position и $m_Temp mutation");
+            let _ = player.set_integer_variable(b"$m_Temp", 0, position.x);
+            let _ = player.set_integer_variable(b"$m_Temp", 1, position.y);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
+        }
+        SCRIPT_FUNCTION_CREATE_NPC => {
+            if argument_count < 8 || argument_count > 12 || game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(mut name) = string_arguments[0]
+                .filter(|name| name.len() <= 0xff && !name.contains(&0))
+                .map(<[u8]>::to_vec)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let mut values = [0_i32; 7];
+            for (index, destination) in values.iter_mut().enumerate() {
+                let Some(value) = integer_arguments[index + 1]
+                    .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                else {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                };
+                *destination = value;
+            }
+            if !(0..=MAXIMUM_SCRIPT_SPAWN_COUNT).contains(&values[1])
+                || values[4] < values[2]
+                || values[5] < values[3]
+                || i32::try_from(i64::from(values[4]) - i64::from(values[2])).is_err()
+                || i32::try_from(i64::from(values[5]) - i64::from(values[3])).is_err()
+            {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            if name.is_empty() {
+                name.extend_from_slice(b"No Name");
+            }
+            let mut script = match (argument_count > 8, string_arguments[8]) {
+                (true, Some(script)) if script.len() <= 0xff && !script.contains(&0) => {
+                    script.to_vec()
+                }
+                (true, _) => return Some(ScriptFunctionDispatchOutcome::Invalid),
+                (false, _) => Vec::new(),
+            };
+            if script.is_empty() {
+                script.extend_from_slice(b"scripts/Npc/test.script");
+            }
+            let player_region_id = game
+                .find_player(player_id)
+                .and_then(|player| player.server_region_id())
+                .unwrap_or_default();
+            let mut region_id = script_region_id.unwrap_or(player_region_id);
+            if let Some(requested_region_id) = integer_arguments[9] {
+                if requested_region_id == SCRIPT_INT_PARAMETER_ERROR {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                }
+                region_id = if requested_region_id == 0 {
+                    script_region_id.unwrap_or_default()
+                } else {
+                    requested_region_id
+                };
+            }
+            if region_id <= 0 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let show_list = match integer_arguments[10] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) => {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                }
+                Some(show_list) => show_list != 0,
+                None => true,
+            };
+            let lifetime = match integer_arguments[11] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) => {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                }
+                Some(lifetime) => lifetime,
+                None => 0,
+            };
+            let setup = ServerRegionNpcSetup {
+                show_list,
+                picture_id: values[0],
+                count: values[1],
+                left: values[2],
+                top: values[3],
+                right: values[4],
+                bottom: values[5],
+                direction: values[6],
+                time: lifetime,
+                name,
+                script,
+            };
+            let Some(mut owner) = game.take_region_owner(region_id) else {
+                let mut request = CMessage::new(0x0005_fa0b);
+                request.add_byte(1);
+                request.add_long(region_id);
+                request.base_mut().add(&setup.name);
+                request.add_byte(0);
+                request.add_long(setup.picture_id);
+                request.add_long(setup.count);
+                request.add_long(setup.left);
+                request.add_long(setup.top);
+                request.add_long(setup.right);
+                request.add_long(setup.bottom);
+                request.add_long(setup.direction);
+                let has_script = setup.script.len() > 1 && setup.script != b"0";
+                request.add_byte(u8::from(has_script));
+                if has_script {
+                    request.base_mut().add(&setup.script);
+                    request.add_byte(0);
+                }
+                request.add_long(setup.time);
+                let _ = request.send(game, false);
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let (area_width, area_height) = game.area_dimensions();
+            let spawn = owner.base_mut().add_npc_with_clock(
+                &setup,
+                false,
+                true,
+                area_width,
+                area_height,
+                runtime,
+                |runtime| runtime.now_milliseconds(),
+            );
+            game.restore_region_owner(owner);
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: spawn
+                    .ok()
+                    .and_then(|spawn| spawn.created_ids.first().copied())
+                    .unwrap_or_default(),
+            })
+        }
         SCRIPT_FUNCTION_SET_THING_COUNT => {
             let (Some(player_id), Some(thing_id), Some(requested_count)) = (
                 script_player_id.filter(|player_id| game.find_player(*player_id).is_some()),
@@ -5175,8 +5419,8 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     script_path: &[u8],
     function_id: i32,
     argument_count: usize,
-    integer_arguments: [Option<i32>; 7],
-    string_arguments: [Option<&[u8]>; 7],
+    integer_arguments: [Option<i32>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
+    string_arguments: [Option<&[u8]>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
 ) -> ScriptFunctionDispatchOutcome {
     match run_buff_skill_script_function(
         game,
@@ -5309,6 +5553,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         runtime,
         script_player_id,
         script_npc_id,
+        script_region_id,
         script_id,
         script_path,
         function_id,

@@ -21,51 +21,49 @@
 //! Готовые setup/region/country/skill serializers вызываются как отдельные
 //! владельцы; `Option`, Rust-владение и системный IPv4 parser заменяют nullable
 //! указатели, ручное удаление и обычную сетевую инфраструктуру.
+//! Runtime spawn request `0x5FA0B` валидируется вместе с source/region route,
+//! меняет только тип на `0x7F80A` и передаёт неизменный payload целевому
+//! GameServer; там существующий concrete handler создаёт NPC/monster owner-а.
 
 use std::error::Error;
 use std::fmt;
 use std::net::Ipv4Addr;
 
-use crate::dbaccess::worlddb::rsplayer::HonorRanksType;
 use crate::dbaccess::worlddb::rsgodsbattle::{
-    GodsBattleNpcFactionSnapshot, RsGodsBattleNotice, RsGodsBattleOwner,
-    TiberiusRsGodsBattle,
+    GodsBattleNpcFactionSnapshot, RsGodsBattleNotice, RsGodsBattleOwner, TiberiusRsGodsBattle,
 };
+use crate::dbaccess::worlddb::rsplayer::HonorRanksType;
 use crate::dbaccess::worlddb::rssetup::WorldTdsClient;
 use crate::nets::basemessage::CBaseMessage;
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::nets::networld::mynetclient::CMyNetClient;
 use crate::nets::servers::ServerCommandHandle;
+use crate::public::ciqing::CiQingSerializationBlock;
 use crate::public::dupliregionsetup::DupliRegionSerializeError;
 use crate::public::equipmentcomposelist::EquipmentComposeSerializeError;
-use crate::public::ciqing::CiQingSerializationBlock;
 use crate::public::taozhuangsetup::TaoZhuangSerializationBlock;
 use crate::public::wordsfilter::WordsFilterSerializeError;
-use crate::setup::cbattlefairyexpconfig::{
-    BattleFairyExpSerializeError, CBattleFairyExpConfig,
-};
-use crate::setup::fairyexpconf::CFairyExpConf;
+use crate::setup::cbattlefairyexpconfig::{BattleFairyExpSerializeError, CBattleFairyExpConfig};
 use crate::setup::contributesetup::ContributeSetupSerializeError;
 use crate::setup::emotion::EmotionSerializeError;
-use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
-use crate::setup::gmlist::{CGMList, GmListSerializationBlock};
+use crate::setup::fairyexpconf::CFairyExpConf;
 use crate::setup::globesetup::GlobeSetupSnapshot;
+use crate::setup::gmlist::{CGMList, GmListSerializationBlock};
 use crate::setup::godsbattleconf::{
     CGodsBattleConf, GodsBattleFactionXydUpdate, GodsBattleNpcFactionUpdate,
     GodsBattleSerializeError,
 };
+use crate::setup::goodsdestructionconfig::{GoodsDestroySerializeError, GoodsDestroySetup};
 use crate::setup::hitlevelsetup::HitLevelSerializeError;
 use crate::setup::honorelimilateconfig::HonorElimilateConfig;
 use crate::setup::incrementshoplist::IncrementShopSerializeError;
-use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
 use crate::setup::leitingsetup::ThingSetupCodecError;
+use crate::setup::lingbao::{CLingBaoSetup, LingBaoSerializationBlock};
 use crate::setup::logsystem::{CLogSystem, LogSystemSerializeError};
 use crate::setup::monsterlist::{
     MonsterDropRegistry, MonsterListSerializeError, MonsterRegistry, serialize_monster_list,
 };
-use crate::setup::newskillmonsterlist::{
-    NewSkillMonsterConf, NewSkillMonsterSerializeError,
-};
+use crate::setup::newskillmonsterlist::{NewSkillMonsterConf, NewSkillMonsterSerializeError};
 use crate::setup::playerlist::{CPlayerList, PlayerListSerializeError};
 use std::sync::Arc;
 
@@ -74,23 +72,23 @@ use parking_lot::Mutex;
 use crate::setup::preciousboxconf::{PreciousBoxConf, PreciousBoxSerializeError};
 use crate::setup::prisonconf::PrisonConfSerializeError;
 use crate::setup::questsystem::QuestSystemSerializationBlock;
-use crate::setup::regionsetup::{CRegionSetup, RegionSetupSerializeError};
 use crate::setup::regionrouter::{RegionRouter, RegionRouterSerializeError};
+use crate::setup::regionsetup::{CRegionSetup, RegionSetupSerializeError};
 use crate::setup::synthesis::{CSynthesis, SynthesisSerializeError};
 use crate::setup::tradelist::TradeListSerializeError;
 use crate::worldserver::appworld::country::country::CountryKingSaveLimits;
-use crate::worldserver::appworld::country::countrywarsys::CountryWarSys;
-use crate::worldserver::appworld::country::countryparam::{
-    CCountryParam, CountryParamSerializationBlock,
-};
 use crate::worldserver::appworld::country::countryhandler::{
     CCountryHandler, CountryHandlerSerializeError,
 };
-use crate::worldserver::appworld::goods::cgoodsfactory::{
-    GoodsBasePropertiesRegistry, GoodsRegistrySerializeError, serialize_goods_registry,
+use crate::worldserver::appworld::country::countryparam::{
+    CCountryParam, CountryParamSerializationBlock,
 };
+use crate::worldserver::appworld::country::countrywarsys::CountryWarSys;
 use crate::worldserver::appworld::goods::cbattlefairyproperty::{
     BattleFairyComposeWireError, CBattleFairyProperty,
+};
+use crate::worldserver::appworld::goods::cgoodsfactory::{
+    GoodsBasePropertiesRegistry, GoodsRegistrySerializeError, serialize_goods_registry,
 };
 use crate::worldserver::appworld::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::worldserver::appworld::organizingsystem::factionwarsys::CFactionWarSys;
@@ -113,19 +111,16 @@ use crate::worldserver::worldserver::game::{
     CGame, WorldCdkeySnapshot, WorldCdkeySnapshotError, WorldGameServerLookupError,
     WorldGenerateDbDataBlock, WorldGenerateDbDataReport, WorldGlobeVariablesDelivery,
     WorldInitialRegionSnapshot, WorldInitialRegionSnapshotBlock, WorldInitialRegionSnapshotKind,
-    WorldLoginReconnectThreadRestart,
-    WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo, WorldReconnectedPlayerDecode,
+    WorldLoginReconnectThreadRestart, WorldOnlinePlayerAppendOutcome, WorldPingGameServerInfo,
     WorldPlayerSaveResponseProgress, WorldReceivedPlayerDataRead, WorldReceivedPlayerDataUpdate,
-    WorldRegionParamDecodeOutcome, WorldRegionChangePlayerTransition,
-    WorldRegionChangeTeamUpdate, WorldSaveRuntimeContext, WorldSaveThreadHandleState,
-    WorldSaveThreadLaunchRequest,
-    WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner, prepare_save_thread_launch,
+    WorldReconnectedPlayerDecode, WorldRegionChangePlayerTransition, WorldRegionChangeTeamUpdate,
+    WorldRegionParamDecodeOutcome, WorldSaveRuntimeContext, WorldSaveThreadHandleState,
+    WorldSaveThreadLaunchRequest, WorldServerSnapshotPlayerDecode, WorldServerSnapshotPlayerOwner,
+    prepare_save_thread_launch,
 };
 use crate::worldserver::worldserver::honorranks::{CHonorRanks, HonorRanksSerializationBlock};
+use crate::worldserver::worldserver::playerranks::{CPlayerRanks, PlayerRanksSerializationBlock};
 use crate::worldserver::worldserver::savedb::SaveDataLifecycleState;
-use crate::worldserver::worldserver::playerranks::{
-    CPlayerRanks, PlayerRanksSerializationBlock,
-};
 use crate::worldserver::worldserver::worldserver::AddLogTextDisposition;
 
 #[derive(Debug)]
@@ -152,9 +147,7 @@ pub(crate) struct WorldCompletedSaveResponseLaunchReport {
 
 #[derive(Debug)]
 pub(crate) enum WorldServerMessageOutcome {
-    NoOp {
-        request_type: i32,
-    },
+    NoOp { request_type: i32 },
     GameServerConnection(WorldGameServerConnectionReport),
     GameServerBroadcast(WorldGameServerBroadcast),
     GameServerPingResponseRecorded(WorldGameServerPingResponse),
@@ -173,6 +166,98 @@ pub(crate) enum WorldServerMessageOutcome {
     RegionParametersUpdated(WorldRegionParameterUpdate),
     RegionChanged(WorldRegionChangeMessage),
     RegionMessageRelayed(WorldRegionMessageRelay),
+    SpawnRouted(WorldSpawnRoutingOutcome),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WorldSpawnRoutingOutcome {
+    Rejected {
+        source_map_id: i32,
+        region_id: Option<i32>,
+        reason: &'static str,
+    },
+    Forwarded {
+        source_map_id: i32,
+        target_map_id: i32,
+        region_id: i32,
+        kind: u8,
+        delivery: Result<i32, SendMessageError>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorldSpawnRoutingCommand {
+    kind: u8,
+    region_id: i32,
+}
+
+fn decode_spawn_routing_i32(payload: &[u8], cursor: &mut usize) -> Option<i32> {
+    let bytes: [u8; 4] = payload
+        .get(*cursor..cursor.checked_add(4)?)?
+        .try_into()
+        .ok()?;
+    *cursor += 4;
+    Some(i32::from_le_bytes(bytes))
+}
+
+fn skip_spawn_routing_string(payload: &[u8], cursor: &mut usize) -> bool {
+    let Some(remaining) = payload.get(*cursor..) else {
+        return false;
+    };
+    let Some(length) = remaining.iter().take(256).position(|byte| *byte == 0) else {
+        return false;
+    };
+    *cursor += length + 1;
+    true
+}
+
+fn skip_spawn_routing_script(payload: &[u8], cursor: &mut usize) -> bool {
+    let Some(&marker) = payload.get(*cursor) else {
+        return false;
+    };
+    *cursor += 1;
+    marker == 0 || skip_spawn_routing_string(payload, cursor)
+}
+
+fn decode_world_spawn_routing(payload: &[u8]) -> Option<WorldSpawnRoutingCommand> {
+    let mut cursor = 0_usize;
+    let kind = *payload.get(cursor)?;
+    cursor += 1;
+    if kind > 1 {
+        return None;
+    }
+    let region_id = decode_spawn_routing_i32(payload, &mut cursor)?;
+    if region_id <= 0 || !skip_spawn_routing_string(payload, &mut cursor) {
+        return None;
+    }
+    if kind == 0 {
+        let count = decode_spawn_routing_i32(payload, &mut cursor)?;
+        let left = decode_spawn_routing_i32(payload, &mut cursor)?;
+        let top = decode_spawn_routing_i32(payload, &mut cursor)?;
+        let right = decode_spawn_routing_i32(payload, &mut cursor)?;
+        let bottom = decode_spawn_routing_i32(payload, &mut cursor)?;
+        if !(0..=4096).contains(&count)
+            || i32::try_from(i64::from(right) - i64::from(left)).is_err()
+            || i32::try_from(i64::from(bottom) - i64::from(top)).is_err()
+            || !skip_spawn_routing_script(payload, &mut cursor)
+        {
+            return None;
+        }
+    } else {
+        let _graphics_id = decode_spawn_routing_i32(payload, &mut cursor)?;
+        let count = decode_spawn_routing_i32(payload, &mut cursor)?;
+        if !(0..=4096).contains(&count) {
+            return None;
+        }
+        for _ in 0..5 {
+            let _ = decode_spawn_routing_i32(payload, &mut cursor)?;
+        }
+        if !skip_spawn_routing_script(payload, &mut cursor) {
+            return None;
+        }
+        let _lifetime = decode_spawn_routing_i32(payload, &mut cursor)?;
+    }
+    (cursor == payload.len()).then_some(WorldSpawnRoutingCommand { kind, region_id })
 }
 
 /// Наблюдаемые эффекты внутреннего `0x3FC01`, опубликованного
@@ -1313,7 +1398,7 @@ pub(crate) fn on_login_client_reconnected(
 ) -> Result<WorldLoginClientReplacement, WorldServerMessageError> {
     let previous_client_closed = game.replace_login_client(client);
 
- // Эта позиция является typed-эквивалентом операторского AddLogText.
+    // Эта позиция является typed-эквивалентом операторского AddLogText.
     let connected_notice = true;
     let cdkey_snapshot = game
         .send_cdkey_to_login_server()
@@ -1383,13 +1468,7 @@ pub(crate) fn materialize_completed_save_response_snapshot(
     game.clear_deletion_player();
     game.clear_offline_player();
     let launch = prepare_save_thread_launch(save_thread_handle);
-    let job = game.take_save_thread_job(
-        variables,
-        registry,
-        honor_ranks,
-        gods_battle,
-        lifecycle,
-    );
+    let job = game.take_save_thread_job(variables, registry, honor_ranks, gods_battle, lifecycle);
     let resulting_handle = save_runtime.launch(&launch, job);
     *save_thread_handle = resulting_handle;
     Ok(WorldCompletedSaveResponseLaunchReport {
@@ -1464,12 +1543,63 @@ pub(crate) async fn on_server_message(
                 }),
             )
         }
+        0x0005_FA0B => {
+            let source_map_id = message.map_id();
+            let command = decode_world_spawn_routing(message.base_mut().unread_bytes());
+            let source_is_current = source_map_id != 5
+                && u32::try_from(source_map_id)
+                    .ok()
+                    .and_then(|map_id| game.game_server(map_id))
+                    .is_some_and(|server| server.connected);
+            let Some(command) = command else {
+                return WorldServerMessageDispatch::Handled(
+                    WorldServerMessageOutcome::SpawnRouted(WorldSpawnRoutingOutcome::Rejected {
+                        source_map_id,
+                        region_id: None,
+                        reason: "некорректный spawn-routing payload",
+                    }),
+                );
+            };
+            if !source_is_current {
+                return WorldServerMessageDispatch::Handled(
+                    WorldServerMessageOutcome::SpawnRouted(WorldSpawnRoutingOutcome::Rejected {
+                        source_map_id,
+                        region_id: Some(command.region_id),
+                        reason: "источник не является подключённым GameServer",
+                    }),
+                );
+            }
+            let target_map_id = game.game_server_number_by_region_id(command.region_id);
+            let target_available = target_map_id > 0
+                && target_map_id != 5
+                && u32::try_from(target_map_id)
+                    .ok()
+                    .and_then(|map_id| game.game_server(map_id))
+                    .is_some_and(|server| server.connected);
+            if !game.has_materialized_region(command.region_id) || !target_available {
+                return WorldServerMessageDispatch::Handled(
+                    WorldServerMessageOutcome::SpawnRouted(WorldSpawnRoutingOutcome::Rejected {
+                        source_map_id,
+                        region_id: Some(command.region_id),
+                        reason: "владелец целевого региона недоступен",
+                    }),
+                );
+            }
+            message.set_message_type(0x0007_f80a);
+            let delivery = game.send_msg_to_game_server(target_map_id, &message);
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::SpawnRouted(
+                WorldSpawnRoutingOutcome::Forwarded {
+                    source_map_id,
+                    target_map_id,
+                    region_id: command.region_id,
+                    kind: command.kind,
+                    delivery,
+                },
+            ))
+        }
         0x0005_FA01 => {
-            let mut report = on_game_server_connected(
-                game,
-                &mut message,
-                Some(globe_setup.auction_enabled()),
-            );
+            let mut report =
+                on_game_server_connected(game, &mut message, Some(globe_setup.auction_enabled()));
             if let WorldGameServerConnectionContinuation::ReconnectPlayerDataPending {
                 socket_id,
                 game_server_index,
@@ -1557,9 +1687,7 @@ pub(crate) async fn on_server_message(
                         cursor_after_decode,
                         error,
                     },
-                    Ok(None) => {
-                        WorldRegionChangeDisposition::OnlinePlayerDisappeared { prefix }
-                    }
+                    Ok(None) => WorldRegionChangeDisposition::OnlinePlayerDisappeared { prefix },
                     Ok(Some(transition)) => {
                         let (target_game_server_index, target_ip, target_port) =
                             target_game_server.expect("target проверен до player mutation");
@@ -1578,8 +1706,7 @@ pub(crate) async fn on_server_message(
                                 add_legacy_c_string(response.base_mut(), &target_ip);
                                 response.base_mut().add_ulong(target_port);
                                 let sender = game.current_game_server_sender();
-                                let delivery =
-                                    response.send_to_socket(sender.as_ref(), socket_id);
+                                let delivery = response.send_to_socket(sender.as_ref(), socket_id);
                                 let team_session_id =
                                     game.get_team_session_id(transition.team_id as u32);
                                 let team_update = game.set_team_player_owner_region(
@@ -1646,9 +1773,8 @@ pub(crate) async fn on_server_message(
                                 packet_type_complete: decoded_packet_type.is_some(),
                             });
                             if decoded_packet_type.is_none() {
-                                exhausted_noop_entries = advertised_player_count
-                                    .wrapping_sub(index)
-                                    .wrapping_sub(1);
+                                exhausted_noop_entries =
+                                    advertised_player_count.wrapping_sub(index).wrapping_sub(1);
                                 break;
                             }
                             index = index.wrapping_add(1);
@@ -1808,12 +1934,7 @@ pub(crate) async fn on_server_message(
                     let (displayed_target, target_online) = game
                         .online_player_by_id(target_player_id as u32)
                         .map_or_else(
-                            || {
-                                (
-                                    format!("uid[{target_player_id}]").into_bytes(),
-                                    false,
-                                )
-                            },
+                            || (format!("uid[{target_player_id}]").into_bytes(), false),
                             |player| {
                                 let name = player.get_name();
                                 let end = name
@@ -1868,16 +1989,14 @@ pub(crate) async fn on_server_message(
             };
 
             WorldServerMessageDispatch::Handled(
-                WorldServerMessageOutcome::PlayerNameMessageRelayed(
-                    WorldPlayerNameMessageRelay {
-                        requested_name,
-                        text,
-                        values,
-                        values_complete,
-                        resolved_named_player_id,
-                        disposition,
-                    },
-                ),
+                WorldServerMessageOutcome::PlayerNameMessageRelayed(WorldPlayerNameMessageRelay {
+                    requested_name,
+                    text,
+                    values,
+                    values_complete,
+                    resolved_named_player_id,
+                    disposition,
+                }),
             )
         }
         0x0005_FA05 => {
@@ -1944,17 +2063,15 @@ pub(crate) async fn on_server_message(
                 }
             };
 
-            WorldServerMessageDispatch::Handled(
-                WorldServerMessageOutcome::GeneralVariableUpdated(
-                    WorldGeneralVariableUpdate {
-                        variable_type,
-                        type_complete: decoded_type.is_some(),
-                        name,
-                        value,
-                        disposition,
-                    },
-                ),
-            )
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::GeneralVariableUpdated(
+                WorldGeneralVariableUpdate {
+                    variable_type,
+                    type_complete: decoded_type.is_some(),
+                    name,
+                    value,
+                    disposition,
+                },
+            ))
         }
         0x0005_FA06 => {
             let decoded = [
@@ -1968,10 +2085,11 @@ pub(crate) async fn on_server_message(
             let player_id = fields[3];
             let game_server_number = game.game_server_number_by_player_id(player_id);
             let disposition = if game_server_number == 0 {
-                game.increment_online_player_murder_counters(player_id as u32).map_or(
-                    WorldMurderReportDisposition::MissingOnlinePlayer,
-                    WorldMurderReportDisposition::CountersIncremented,
-                )
+                game.increment_online_player_murder_counters(player_id as u32)
+                    .map_or(
+                        WorldMurderReportDisposition::MissingOnlinePlayer,
+                        WorldMurderReportDisposition::CountersIncremented,
+                    )
             } else {
                 message.set_message_type(0x0007_F806);
                 let delivery = game.send_msg_to_game_server(game_server_number, &message);
@@ -1998,15 +2116,15 @@ pub(crate) async fn on_server_message(
                 game.decode_region_param_from_game_server(region_id, source, cursor)
             };
             let cursor_after_decode = message.base_mut().cursor();
-            WorldServerMessageDispatch::Handled(
-                WorldServerMessageOutcome::RegionParametersUpdated(WorldRegionParameterUpdate {
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::RegionParametersUpdated(
+                WorldRegionParameterUpdate {
                     region_id,
                     region_complete: decoded_region.is_some(),
                     cursor_before_decode,
                     cursor_after_decode,
                     outcome,
-                }),
-            )
+                },
+            ))
         }
         0x0005_FA09 => {
             let decoded_subtype = message.base_mut().get_char();
@@ -2070,14 +2188,14 @@ pub(crate) async fn on_server_message(
                 }
                 _ => WorldPlayerDataSyncDisposition::Ignored,
             };
-            WorldServerMessageDispatch::Handled(
-                WorldServerMessageOutcome::PlayerDataSynchronized(WorldPlayerDataSync {
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::PlayerDataSynchronized(
+                WorldPlayerDataSync {
                     subtype,
                     subtype_complete: decoded_subtype.is_some(),
                     game_server_index,
                     disposition,
-                }),
-            )
+                },
+            ))
         }
         0x0005_FA0A => {
             let decoded = message.base_mut().get_long();
@@ -2100,25 +2218,6 @@ pub(crate) async fn on_server_message(
                 ),
             )
         }
-        0x0005_FA0B => {
-            let selector = message.base_mut().get_char();
-            let decoded_region = message.base_mut().get_long();
-            let region_id = decoded_region.unwrap_or(0);
-            let game_server_number = game.game_server_number_by_region_id(region_id);
-            message.set_message_type(0x0007_F80A);
-            let delivery = game.send_msg_to_game_server(game_server_number, &message);
-            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::RegionMessageRelayed(
-                WorldRegionMessageRelay {
-                    ignored_selector: selector.unwrap_or(0),
-                    selector_complete: selector.is_some(),
-                    region_id,
-                    region_complete: decoded_region.is_some(),
-                    game_server_number,
-                    message_type: 0x0007_F80A,
-                    delivery,
-                },
-            ))
-        }
         0x0005_FA0C => {
             let world_number = game.configured_world_number();
             let map_id = message.map_id();
@@ -2128,9 +2227,9 @@ pub(crate) async fn on_server_message(
 
             let relay = match world_number {
                 None => {
- // До успешного LoadSetup старый
- // dwNumber был неинициализирован. Реакция его чтения не
- // назначается; исходное GetLong уже выполнено выше.
+                    // До успешного LoadSetup старый
+                    // dwNumber был неинициализирован. Реакция его чтения не
+                    // назначается; исходное GetLong уже выполнено выше.
                     WorldLoginServerTupleRelay::WorldNumberUnavailable {
                         map_id,
                         value,
@@ -2250,9 +2349,8 @@ pub(crate) async fn on_server_message(
                         None => WorldGodsBattleNpcSave::DatabaseOwnerUnavailable,
                         Some(database_owner) => {
                             let notice_checkpoint = database_owner.notice_checkpoint();
-                            let save_returned = database_owner
-                                .save_npc_faction_autonomous(&snapshots)
-                                .await;
+                            let save_returned =
+                                database_owner.save_npc_faction_autonomous(&snapshots).await;
                             let notices = database_owner.drain_notices_after(notice_checkpoint);
                             WorldGodsBattleNpcSave::Completed {
                                 snapshot_records: snapshots.len(),
@@ -2318,8 +2416,7 @@ pub(crate) async fn on_server_message(
                             let mut response = CMessage::new(0x0007_F80F);
                             response.base_mut().add(&payload);
                             let sender = game.current_game_server_sender();
-                            let delivery =
-                                response.send_to_socket(sender.as_ref(), socket_id);
+                            let delivery = response.send_to_socket(sender.as_ref(), socket_id);
                             let notices = database_owner.drain_notices_after(notice_checkpoint);
                             WorldGodsBattleTopTenDisposition::Sent {
                                 faction_five_payload_bytes,
@@ -2334,18 +2431,16 @@ pub(crate) async fn on_server_message(
                     }
                 }
             };
-            WorldServerMessageDispatch::Handled(
-                WorldServerMessageOutcome::GodsBattleTopTen(
-                    WorldGodsBattleTopTenMessage {
-                        socket_id,
-                        disposition,
-                    },
-                ),
-            )
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::GodsBattleTopTen(
+                WorldGodsBattleTopTenMessage {
+                    socket_id,
+                    disposition,
+                },
+            ))
         }
-        request_type => WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::NoOp {
-            request_type,
-        }),
+        request_type => {
+            WorldServerMessageDispatch::Handled(WorldServerMessageOutcome::NoOp { request_type })
+        }
     }
 }
 
@@ -3100,9 +3195,7 @@ where
     );
 
     let completion = match traversal {
-        Ok(()) => WorldRegionConfigurationCompletion::RegionSetupConfigurationPending {
-            socket_id,
-        },
+        Ok(()) => WorldRegionConfigurationCompletion::RegionSetupConfigurationPending { socket_id },
         Err(error) => WorldRegionConfigurationCompletion::RegionSnapshot(error),
     };
     WorldRegionConfigurationReport {
@@ -3132,9 +3225,7 @@ pub(crate) fn continue_game_server_region_setup_configuration(
             0x11,
             &payload,
         )),
-        completion: WorldRegionSetupConfigurationCompletion::DupliRegionSetupPending {
-            socket_id,
-        },
+        completion: WorldRegionSetupConfigurationCompletion::DupliRegionSetupPending { socket_id },
     }
 }
 
@@ -3173,12 +3264,7 @@ pub(crate) fn continue_game_server_honor_eliminate_configuration(
     honor_eliminate.add_to_byte_array(&mut payload);
     let sender = game.current_game_server_sender();
     WorldHonorEliminateConfigurationReport {
-        delivery: send_initial_configuration_to_socket(
-            sender.as_ref(),
-            socket_id,
-            0x26,
-            &payload,
-        ),
+        delivery: send_initial_configuration_to_socket(sender.as_ref(), socket_id, 0x26, &payload),
         completion: WorldHonorEliminateConfigurationCompletion::HonorRanksPending { socket_id },
     }
 }
@@ -3199,9 +3285,7 @@ pub(crate) fn continue_game_server_honor_ranks_configuration(
     let mut deliveries = Vec::with_capacity(PASSES.len());
     for (rank_type, subtype, has_total_prefix) in PASSES {
         let mut payload = Vec::new();
-        if let Err(error) =
-            honor_ranks.add_history_to_byte_array(&mut payload, rank_type, None)
-        {
+        if let Err(error) = honor_ranks.add_history_to_byte_array(&mut payload, rank_type, None) {
             return WorldHonorRanksConfigurationReport {
                 deliveries,
                 completion: WorldHonorRanksConfigurationCompletion::HonorRanks(error),
@@ -3220,12 +3304,7 @@ pub(crate) fn continue_game_server_honor_ranks_configuration(
                 delivery: message.send_to_socket(sender.as_ref(), socket_id),
             }
         } else {
-            send_initial_configuration_to_socket(
-                sender.as_ref(),
-                socket_id,
-                subtype,
-                &payload,
-            )
+            send_initial_configuration_to_socket(sender.as_ref(), socket_id, subtype, &payload)
         };
         deliveries.push(WorldHonorRanksConfigurationDelivery {
             rank_type,
@@ -3462,9 +3541,7 @@ pub(crate) fn continue_game_server_index_configuration(
             0x12,
             &[game_server_index as u8],
         ),
-        completion: WorldGameServerIndexConfigurationCompletion::FourNationWarPending {
-            socket_id,
-        },
+        completion: WorldGameServerIndexConfigurationCompletion::FourNationWarPending { socket_id },
     }
 }
 
@@ -3488,10 +3565,9 @@ pub(crate) fn continue_game_server_four_nation_war_configuration(
             0x25,
             &payload,
         )),
-        completion:
-            WorldFourNationWarConfigurationCompletion::BattleFairyExpConfigurationPending {
-                socket_id,
-            },
+        completion: WorldFourNationWarConfigurationCompletion::BattleFairyExpConfigurationPending {
+            socket_id,
+        },
     }
 }
 
@@ -3530,8 +3606,7 @@ pub(crate) fn continue_game_server_battle_fairy_property_configuration(
     if let Err(error) = battle_fairy_property.serialize_combine(&mut payload) {
         return WorldBattleFairyPropertyConfigurationReport {
             delivery: None,
-            completion:
-                WorldBattleFairyPropertyConfigurationCompletion::BattleFairyProperty(error),
+            completion: WorldBattleFairyPropertyConfigurationCompletion::BattleFairyProperty(error),
         };
     }
     let sender = game.current_game_server_sender();
@@ -3615,12 +3690,7 @@ pub(crate) fn continue_game_server_attack_city_configuration(
     let _legacy_success = attack_city.add_to_byte_array(&mut payload);
     let sender = game.current_game_server_sender();
     WorldAttackCityConfigurationReport {
-        delivery: send_initial_configuration_to_socket(
-            sender.as_ref(),
-            socket_id,
-            0x1B,
-            &payload,
-        ),
+        delivery: send_initial_configuration_to_socket(sender.as_ref(), socket_id, 0x1B, &payload),
         completion: WorldAttackCityConfigurationCompletion::VillageWarConfigurationPending {
             socket_id,
         },
@@ -3636,12 +3706,7 @@ pub(crate) fn continue_game_server_village_war_configuration(
     let _legacy_success = village_war.add_to_byte_array(&mut payload);
     let sender = game.current_game_server_sender();
     WorldVillageWarConfigurationReport {
-        delivery: send_initial_configuration_to_socket(
-            sender.as_ref(),
-            socket_id,
-            0x1C,
-            &payload,
-        ),
+        delivery: send_initial_configuration_to_socket(sender.as_ref(), socket_id, 0x1C, &payload),
         completion: WorldVillageWarConfigurationCompletion::CountryWarConfigurationPending {
             socket_id,
         },
@@ -3657,15 +3722,8 @@ pub(crate) fn continue_game_server_country_war_configuration(
     let _legacy_success = country_war.add_to_byte_array(&mut payload);
     let sender = game.current_game_server_sender();
     WorldCountryWarConfigurationReport {
-        delivery: send_initial_configuration_to_socket(
-            sender.as_ref(),
-            socket_id,
-            0x1F,
-            &payload,
-        ),
-        completion: WorldCountryWarConfigurationCompletion::GameServerIdentityPending {
-            socket_id,
-        },
+        delivery: send_initial_configuration_to_socket(sender.as_ref(), socket_id, 0x1F, &payload),
+        completion: WorldCountryWarConfigurationCompletion::GameServerIdentityPending { socket_id },
     }
 }
 
@@ -3691,9 +3749,7 @@ pub(crate) fn finish_game_server_initial_configuration(
             0x3B,
             &payload,
         )),
-        completion: WorldGameServerIdentityCompletion::InitialConfigurationComplete {
-            socket_id,
-        },
+        completion: WorldGameServerIdentityCompletion::InitialConfigurationComplete { socket_id },
     }
 }
 
