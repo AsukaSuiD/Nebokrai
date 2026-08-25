@@ -281,6 +281,9 @@
 //! в исходном порядке. Вызванный ими `3401 / DropGoods` наследует точку смерти,
 //! создаёт товары, занимает ячейки региона и публикует `CS2CContainerObjectMove`
 //! игроку и окружающим через настоящую цепочку исполнения `CScript`.
+//! Соседний `3402 / AutoMove` вычисляет только две координаты и отправляет
+//! игроку точный `0xBF723`; позиция сервера не меняется, хвост аргументов и
+//! результат сетевой доставки не прерывают дальнейшее исполнение сценария.
 //! Числовой селектор получает вычисленные параметры из собственного
 //! `CScript`; результат или приостановка диалога возвращается в ту же цепочку
 //! исполнения. Остальные идентификаторы функций и неподтверждённые семейства
@@ -524,6 +527,7 @@ pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
 pub(crate) const SCRIPT_FUNCTION_POST_PLAYER_INFO: i32 = 3316;
 pub(crate) const SCRIPT_FUNCTION_IS_RIDER: i32 = 3317;
 pub(crate) const SCRIPT_FUNCTION_DROP_GOODS: i32 = 3401;
+pub(crate) const SCRIPT_FUNCTION_AUTO_MOVE: i32 = 3402;
 pub(crate) const SCRIPT_FUNCTION_POST_REGION_INFO: i32 = 5201;
 pub(crate) const SCRIPT_FUNCTION_POST_WORLD_INFO: i32 = 5202;
 pub(crate) const SCRIPT_FUNCTION_POST_COUNTRY_INFO: i32 = 5203;
@@ -3662,6 +3666,10 @@ pub(crate) fn script_function_parameter_kind(
             2 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_AUTO_MOVE => match index {
+            0 | 1 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_DELETE_NPC_BY_NAME => match index {
             0 => String,
             1 => Integer,
@@ -5481,6 +5489,20 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 tile_y,
                 runtime,
             );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_AUTO_MOVE => {
+            let (Some(player_id), Some(tile_x), Some(tile_y)) = (
+                script_player_id.filter(|player_id| game.find_player(*player_id).is_some()),
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+                integer_arguments[1].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let mut movement = CMessage::new(0x000b_f723);
+            movement.add_long(tile_x);
+            movement.add_long(tile_y);
+            let _ = movement.send_to_player(game.net_server(), player_id);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_DELETE_MONSTER_RECT => {
