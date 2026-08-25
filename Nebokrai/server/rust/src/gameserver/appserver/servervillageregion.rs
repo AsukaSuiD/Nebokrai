@@ -211,7 +211,8 @@ impl CServerVillageRegion {
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // RVA: 0x001D12C0
 //
-// IMPLEMENTED выше: state gate и victory callback; технические STL/SEH детали удалены.
+// IMPLEMENTED выше: state gate сохранён, достигнутый base virtual slot пуст;
+// технические STL/SEH детали удалены без внешнего runtime callback-а.
 
 // ============================================================================
 // FUNCTION: CServerVillageRegion::IsApplyWarFacsMem

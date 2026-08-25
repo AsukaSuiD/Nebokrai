@@ -4023,8 +4023,8 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
     }
 
     fn on_country_win_one_symbol(&mut self, country: i32, symbol_id: i32) {
-        self.runtime
-            .on_country_win_one_symbol(self.game, self.region.id, country, symbol_id);
+        // Country-region не переопределяет пустой base virtual slot; реальный
+        // owned result уже записан в `symbol_hold` перед этим уведомлением.
         self.effects
             .push(CountryRegionAiEffect::CountryWonSymbol { country, symbol_id });
     }
@@ -4659,14 +4659,8 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
         union_id: i32,
         current_owner: WarRegionOwnership,
     ) -> WarRegionOwnership {
-        if self.region.city_state != 0 {
-            self.runtime.on_village_faction_victory(
-                self.game,
-                self.region.id,
-                faction_id,
-                union_id,
-            );
-        }
+        // `CServerVillageRegion` делегирует сюда только при active city-state,
+        // но точный `CServerWarRegion::OnFactionVictory` slot пуст.
         let current = current_owner;
         self.effects.push(VillageRegionAiEffect::Victory {
             faction_id,
@@ -4999,28 +4993,11 @@ pub(crate) trait GameMainLoopRuntime:
         region: &mut CServerRegion,
         identity: ShapeIdentity,
     ) -> Option<Result<bool, RegionMembershipBlock>>;
-    /// Concrete virtual slot country-region-а после записи symbol owner-а.
-    fn on_country_win_one_symbol(
-        &mut self,
-        game: &mut CGame,
-        region_id: i32,
-        country: i32,
-        symbol_id: i32,
-    );
     fn write_city_symbol_capture_log(
         &mut self,
         game: &mut CGame,
         region_id: i32,
         capture: &CitySymbolCaptureLog,
-    );
-    /// Concrete `CServerVillageRegion::OnFactionVictory` external callback;
-    /// owner state сам village override синхронно не меняет.
-    fn on_village_faction_victory(
-        &mut self,
-        game: &mut CGame,
-        region_id: i32,
-        faction_id: i32,
-        union_id: i32,
     );
     fn write_village_symbol_capture_log(
         &mut self,
