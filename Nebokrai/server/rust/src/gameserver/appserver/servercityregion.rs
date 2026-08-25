@@ -21,6 +21,8 @@
 //! pointer-return factory. Gate map хранит logical/runtime IDs, имя и concrete
 //! `CCityGate`; factory child-registration и send-around остаются
 //! owner-context границами.
+//! Inherited `CServerWarRegion::AI` вызывается реальным `CGame::AI` через City
+//! adapter с weekly membership, defender/owner и network/log effects.
 //! Rust name/ID queries используют `Option` вместо pointer/sentinel формы и не
 //! декодируют исходные name bytes.
 //! Spatial override сохраняет два state-read, defender-only return setup,
@@ -823,7 +825,7 @@ fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
 
 // ============================================================================
 // FUNCTION: CServerCityRegion::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servercityregion.cpp:78
@@ -831,9 +833,8 @@ fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
 // ADDRESS: 005ced40
 // PROTOTYPE: void __thiscall AI(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Реальный CGame virtual caller вызывает inherited `CServerWarRegion::AI`
+// через typed City adapter; exact one-call override не дублируется wrapper-ом.
 
 // ============================================================================
 // FUNCTION: CServerRegion::OnSymbolDestroy
