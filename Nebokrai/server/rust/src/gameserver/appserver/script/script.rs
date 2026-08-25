@@ -14,6 +14,9 @@
 //! Поздний `RegisterBuffSkillFunctions` программно дополняет загруженный RU
 //! FunctionList потерянным `AddJingJieBuff = 11131`; тот же registry lookup
 //! затем ведёт в общий `CScript::RunFunction`, а не в обходной parser path.
+//! Строковый result `GetStringByID` проходит typed dispatcher, `TalkBoxSmall`
+//! сохраняет instance до client reply, а `random` расходует общий process
+//! MSVCRT stream; battle-fairy reset не получает отдельную shadow VM.
 
 use std::collections::BTreeMap;
 
@@ -24,14 +27,14 @@ use super::function::{
     SCRIPT_FUNCTION_ADD_APPELLATION_STATE, SCRIPT_FUNCTION_ADD_INCREMENT_LOG,
     SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR, SCRIPT_FUNCTION_CITY_WAR_DECLARE,
     SCRIPT_FUNCTION_DEL_APPELLATION_STATE, SCRIPT_FUNCTION_GET_APPELLATION_STATE,
-    SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME,
-    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME,
-    SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME, SCRIPT_FUNCTION_PLAY_EFFECT,
-    SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
-    ScriptFunctionParameterKind, ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome,
-    dispatch_script_function, dispatch_script_string_function, owned_region_script_caller_is_live,
-    script_function_parameter_kind, script_player_npc_caller_exists,
-    village_war_script_caller_is_live,
+    SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID, SCRIPT_FUNCTION_GET_STRING_BY_ID,
+    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME,
+    SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME,
+    SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS,
+    ScriptFunctionDispatchOutcome, ScriptFunctionParameterKind, ScriptFunctionRuntime,
+    ScriptStringFunctionDispatchOutcome, dispatch_script_function, dispatch_script_string_function,
+    owned_region_script_caller_is_live, script_function_parameter_kind,
+    script_player_npc_caller_exists, village_war_script_caller_is_live,
 };
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
@@ -822,24 +825,25 @@ impl<'a> CScript<'a> {
                 .string(expression)
                 .map(<[u8]>::to_vec);
         }
-        if let Some((name, parameters)) = split_function(expression)
-            && game.script_function_id(name) == Some(2000)
-        {
-            let key = parameters
-                .first()
-                .and_then(|parameter| self.evaluate_string(game, runtime, parameter))?;
-            return Some(game.get_string_by_id(&key).to_vec());
-        }
         if let Some((name, parameters)) = split_function(expression) {
             let function_id = game.script_function_id(name)?;
-            let evaluated_player_id = parameters
-                .first()
-                .map(|parameter| self.evaluate_integer(game, runtime, parameter));
+            let first = parameters.first().copied();
+            let evaluated_player_id = if function_id == SCRIPT_FUNCTION_GET_STRING_BY_ID {
+                None
+            } else {
+                first.map(|parameter| self.evaluate_integer(game, runtime, parameter))
+            };
+            let evaluated_string = if function_id == SCRIPT_FUNCTION_GET_STRING_BY_ID {
+                first.and_then(|parameter| self.evaluate_string(game, runtime, parameter))
+            } else {
+                None
+            };
             match dispatch_script_string_function(
                 game,
                 self.context.player_id,
                 function_id,
                 evaluated_player_id.flatten(),
+                evaluated_string.as_deref(),
             ) {
                 ScriptStringFunctionDispatchOutcome::Handled(value) => return Some(value),
                 ScriptStringFunctionDispatchOutcome::Invalid => return None,

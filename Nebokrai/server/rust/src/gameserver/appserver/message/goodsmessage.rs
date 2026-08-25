@@ -14,7 +14,9 @@
 //! region spatial map, around packets и пересчёт player properties. `0x8FC29`
 //! сохраняет два `long`, detach → live script → attach и World ack; сам script
 //! входит в concrete `CGame::run_script_file` с player/region context и
-//! возвращается к attach только после synchronous `CScript::RunFunction`.
+//! исполняется на следующей Script-stage, как исходный `RunScript` registry:
+//! attach и World ack завершают Message-stage до диалога, а client reply на
+//! `TalkBoxSmall` позднее ведёт к canonical `AddSkillBF` mutation.
 //! `0x8FC2E` читает два GUID, выполняет exact four-container lookup и только
 //! для найденного goods вызывает обязательный virtual property runtime.
 //! Парные `0x8FC2F/0x8FC30` публикуют ordered CiQing goods preview и global

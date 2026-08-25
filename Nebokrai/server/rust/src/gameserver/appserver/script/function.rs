@@ -208,6 +208,7 @@ pub(crate) const SCRIPT_FUNCTION_SET_CURRENT_DURABILITY: i32 = 2244;
 pub(crate) const SCRIPT_FUNCTION_GET_SELECTED_DURABILITY: i32 = 2245;
 pub(crate) const SCRIPT_FUNCTION_SET_SELECTED_DURABILITY: i32 = 2246;
 pub(crate) const SCRIPT_FUNCTION_FAIRY_EXP_UP: i32 = 2249;
+pub(crate) const SCRIPT_FUNCTION_RANDOM: i32 = 8;
 pub(crate) const SCRIPT_FUNCTION_RGB: i32 = 9;
 pub(crate) const SCRIPT_FUNCTION_TIME: i32 = 13;
 pub(crate) const SCRIPT_FUNCTION_YEAR: i32 = 14;
@@ -217,6 +218,7 @@ pub(crate) const SCRIPT_FUNCTION_HOUR: i32 = 17;
 pub(crate) const SCRIPT_FUNCTION_MINUTE: i32 = 18;
 pub(crate) const SCRIPT_FUNCTION_DAY_OF_WEEK: i32 = 19;
 pub(crate) const SCRIPT_FUNCTION_SECOND: i32 = 23;
+pub(crate) const SCRIPT_FUNCTION_GET_STRING_BY_ID: i32 = 2000;
 pub(crate) const SCRIPT_FUNCTION_GET_ME: i32 = 2002;
 pub(crate) const SCRIPT_FUNCTION_SET_ME: i32 = 2003;
 pub(crate) const SCRIPT_FUNCTION_GET_NAME: i32 = 2998;
@@ -265,6 +267,7 @@ pub(crate) const SCRIPT_FUNCTION_CHECK_GOODS: i32 = 2202;
 pub(crate) const SCRIPT_FUNCTION_CHECK_SPACE: i32 = 2203;
 pub(crate) const SCRIPT_FUNCTION_ADD_INFO: i32 = 2305;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX: i32 = 2307;
+pub(crate) const SCRIPT_FUNCTION_TALK_BOX_SMALL: i32 = 2324;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS_LOG: i32 = 2313;
 pub(crate) const SCRIPT_FUNCTION_SCRIPT_IS_RUNNING: i32 = 2316;
 pub(crate) const SCRIPT_FUNCTION_REMOVE_SCRIPT: i32 = 2317;
@@ -3018,33 +3021,41 @@ pub(crate) enum ScriptStringFunctionDispatchOutcome {
     Handled(Vec<u8>),
 }
 
-/// Строковая половина `CScript::RunFunction`. Исторический `GetName` возвращал
-/// borrowed `char *`; owned Rust runtime копирует те же байты до следующего
-/// шага script evaluator-а, не превращая адрес в числовой result.
+/// Строковая половина `CScript::RunFunction`. Исторические `GetName` и
+/// `GetStringByID` возвращали borrowed `char *`; owned Rust runtime копирует
+/// те же байты до следующего шага evaluator-а, не превращая адрес в число.
 pub(crate) fn dispatch_script_string_function(
     game: &CGame,
     script_player_id: Option<i32>,
     function_id: i32,
     evaluated_player_id: Option<i32>,
+    evaluated_string: Option<&[u8]>,
 ) -> ScriptStringFunctionDispatchOutcome {
-    if function_id != SCRIPT_FUNCTION_GET_NAME {
-        return ScriptStringFunctionDispatchOutcome::DifferentFunction;
+    if function_id == SCRIPT_FUNCTION_GET_STRING_BY_ID {
+        return evaluated_string.map_or(ScriptStringFunctionDispatchOutcome::Invalid, |id| {
+            ScriptStringFunctionDispatchOutcome::Handled(game.get_string_by_id(id).to_vec())
+        });
     }
-    let requested = evaluated_player_id.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
-    let player_id = if requested == SCRIPT_INT_PARAMETER_ERROR {
-        let Some(player_id) = script_player_id else {
-            return ScriptStringFunctionDispatchOutcome::Invalid;
+    if function_id == SCRIPT_FUNCTION_GET_NAME {
+        let requested = evaluated_player_id.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+        let player_id = if requested == SCRIPT_INT_PARAMETER_ERROR {
+            let Some(player_id) = script_player_id else {
+                return ScriptStringFunctionDispatchOutcome::Invalid;
+            };
+            player_id
+        } else {
+            requested
         };
-        player_id
-    } else {
-        requested
-    };
-    game.find_player(player_id)
-        .map_or(ScriptStringFunctionDispatchOutcome::Invalid, |player| {
-            ScriptStringFunctionDispatchOutcome::Handled(
-                player.shape().base_object().get_name().to_vec(),
-            )
-        })
+        return game.find_player(player_id).map_or(
+            ScriptStringFunctionDispatchOutcome::Invalid,
+            |player| {
+                ScriptStringFunctionDispatchOutcome::Handled(
+                    player.shape().base_object().get_name().to_vec(),
+                )
+            },
+        );
+    }
+    ScriptStringFunctionDispatchOutcome::DifferentFunction
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3063,7 +3074,7 @@ pub(crate) fn script_function_parameter_kind(
 ) -> ScriptFunctionParameterKind {
     use ScriptFunctionParameterKind::{Integer, String, Unused};
     match function_id {
-        SCRIPT_FUNCTION_GET_ME => match index {
+        SCRIPT_FUNCTION_GET_STRING_BY_ID | SCRIPT_FUNCTION_GET_ME => match index {
             0 => String,
             _ => Unused,
         },
@@ -3223,9 +3234,14 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_CHECK_GOODS
         | SCRIPT_FUNCTION_ADD_INFO
         | SCRIPT_FUNCTION_TALK_BOX
+        | SCRIPT_FUNCTION_TALK_BOX_SMALL
         | SCRIPT_FUNCTION_ADD_GOODS_LOG => match index {
             0 => String,
             1..=3 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_RANDOM => match index {
+            0 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_RGB | SCRIPT_FUNCTION_CHECK_SPACE => match index {
@@ -4034,6 +4050,19 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
 ) -> Option<ScriptFunctionDispatchOutcome> {
     let player_id = script_player_id.unwrap_or_default();
     match function_id {
+        SCRIPT_FUNCTION_RANDOM => {
+            if argument_count != 1 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(maximum) =
+                integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.script_random(maximum),
+            })
+        }
         SCRIPT_FUNCTION_TIME => {
             let legacy_return = pack_script_local_time(TagTime::local_now());
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
@@ -4693,18 +4722,27 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 _ => Some(ScriptFunctionDispatchOutcome::Invalid),
             }
         }
-        SCRIPT_FUNCTION_TALK_BOX => {
+        SCRIPT_FUNCTION_TALK_BOX | SCRIPT_FUNCTION_TALK_BOX_SMALL => {
+            if argument_count != 1 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
             let Some(text) = string_arguments[0].filter(|text| text.len() < 0x5000) else {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             };
             if game.find_player(player_id).is_none() {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             }
-            let mut message = CMessage::new(0x000b_f805);
+            let mut message = CMessage::new(if function_id == SCRIPT_FUNCTION_TALK_BOX {
+                0x000b_f805
+            } else {
+                0x000b_f71c
+            });
             message.add_long(script_id);
             message.base_mut().add(text);
             message.add_byte(0);
-            message.add_byte(1);
+            if function_id == SCRIPT_FUNCTION_TALK_BOX {
+                message.add_byte(1);
+            }
             if message.send_to_player(game.net_server(), player_id) == 0 {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             }

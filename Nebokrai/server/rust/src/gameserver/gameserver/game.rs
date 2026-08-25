@@ -8849,6 +8849,12 @@ impl CGame {
         operated
     }
 
+    /// Общий `public::random(max)` script-owner использует тот же process-wide
+    /// MSVCRT stream, что goods, equipment и battle-fairy gameplay.
+    pub(crate) fn script_random(&mut self, maximum: i32) -> i32 {
+        game_legacy_random(&mut self.random_state, maximum)
+    }
+
     /// Exact `RunScript` owner: загруженный instance получает wrapping ID и
     /// попадает в ordered `g_Scripts`; команды исполняет только Script-stage
     /// главного цикла. Повтор того же файла у того же player отклоняется как
