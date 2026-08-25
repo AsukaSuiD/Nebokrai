@@ -450,6 +450,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rustix::system::uname;
+use rustix::time::{ClockId, clock_gettime};
 
 use crate::gameserver::appserver::ai::playerai::{
     CPlayerAI, PlayerAutoProgress, PlayerEnergyRegeneration,
@@ -1484,7 +1485,20 @@ pub(crate) struct FairyImplantationLog {
 }
 
 pub(crate) trait GameClockContext {
-    fn now_milliseconds(&mut self) -> u32;
+    fn now_milliseconds(&mut self) -> u32 {
+        game_tick_milliseconds()
+    }
+}
+
+impl<T> GameClockContext for T {}
+
+/// Linux-аналог wrapping `timeGetTime`: `CLOCK_BOOTTIME` включает suspend
+/// и оборачивается в DWORD так же, как owners остальных серверов.
+pub(crate) fn game_tick_milliseconds() -> u32 {
+    let now = clock_gettime(ClockId::Boottime);
+    let seconds_ms = (now.tv_sec as u64).wrapping_mul(1_000);
+    let nanoseconds_ms = (now.tv_nsec as u64) / 1_000_000;
+    seconds_ms.wrapping_add(nanoseconds_ms) as u32
 }
 
 pub(crate) fn game_wall_time_seconds() -> u64 {
