@@ -1454,15 +1454,6 @@ pub(crate) struct GodsBattleTopTenRequestReport {
     pub(crate) delivery: Result<i32, SendMessageError>,
 }
 
-pub(crate) trait GodsBattlePlayerContext {
-    fn send_gods_battle_player_around(
-        &mut self,
-        region: &CServerRegion,
-        origin: &CShape,
-        message: &CMessage,
-    ) -> Result<i32, ShapeCoordinateBlock>;
-}
-
 pub(crate) trait OldClientGoodsCodec {
     fn encode_goods_for_old_client(&mut self, goods: &CGoods) -> Vec<u8>;
 }
@@ -3292,15 +3283,12 @@ pub(crate) trait GodsBattleDeathContext {
 }
 
 pub(crate) trait GodsBattleNpcContendContext:
-    ServerRegionMonsterContext + GodsBattlePlayerContext + ScriptFunctionRuntime + GameClockContext
+    ServerRegionMonsterContext + ScriptFunctionRuntime + GameClockContext
 {
 }
 
 impl<T> GodsBattleNpcContendContext for T where
-    T: ServerRegionMonsterContext
-        + GodsBattlePlayerContext
-        + ScriptFunctionRuntime
-        + GameClockContext
+    T: ServerRegionMonsterContext + ScriptFunctionRuntime + GameClockContext
 {
 }
 
@@ -20980,11 +20968,10 @@ impl CGame {
     }
 
     /// Точный player-tail после успешного base `CServerRegion::AddObject`.
-    pub(crate) fn enter_gods_battle_player<Context: GodsBattlePlayerContext>(
+    pub(crate) fn enter_gods_battle_player(
         &mut self,
         region_id: i32,
         player_id: i32,
-        context: &mut Context,
     ) -> Option<GodsBattlePlayerRegionReport> {
         let (country, previous_faction) = self
             .find_player(player_id)
@@ -21009,7 +20996,7 @@ impl CGame {
             let player = self
                 .find_player(player_id)
                 .expect("player сохранён после mutation");
-            Some(context.send_gods_battle_player_around(&region.war.base, player.shape(), &message))
+            Some(self.send_game_shape_around(&region.war.base, player.shape(), None, &message))
         } else {
             None
         };
@@ -21989,7 +21976,6 @@ impl CGame {
                             &region.war.base,
                             player_id,
                             false,
-                            context,
                         ) {
                             deliveries.push(delivery);
                         }
@@ -22004,12 +21990,9 @@ impl CGame {
                         max_time,
                         context.now_milliseconds(),
                     );
-                    if let Some(delivery) = self.set_gods_battle_player_contend_state(
-                        &region.war.base,
-                        player_id,
-                        true,
-                        context,
-                    ) {
+                    if let Some(delivery) =
+                        self.set_gods_battle_player_contend_state(&region.war.base, player_id, true)
+                    {
                         deliveries.push(delivery);
                     }
                     deliveries.push(self.send_gods_battle_contend_time(player_id, 0));
@@ -22114,8 +22097,7 @@ impl CGame {
         };
         let changed =
             self.change_gods_battle_npc_faction(region_id, contender.symbol_id, faction, context);
-        let mut deliveries =
-            self.cancel_gods_battle_contend_symbol(region_id, contender.symbol_id, context);
+        let mut deliveries = self.cancel_gods_battle_contend_symbol(region_id, contender.symbol_id);
         if changed.is_none() {
             return GodsBattleContendCompletionReport {
                 contender,
@@ -22195,12 +22177,7 @@ impl CGame {
         }
     }
 
-    fn cancel_gods_battle_contend_symbol<Context: GodsBattleNpcContendContext>(
-        &mut self,
-        region_id: i32,
-        symbol_id: i32,
-        context: &mut Context,
-    ) -> Vec<i32> {
+    fn cancel_gods_battle_contend_symbol(&mut self, region_id: i32, symbol_id: i32) -> Vec<i32> {
         let Some(owner) = self.take_region_owner(region_id) else {
             return Vec::new();
         };
@@ -22215,7 +22192,6 @@ impl CGame {
                 &region.war.base,
                 contender.player_id,
                 false,
-                context,
             ) {
                 deliveries.push(delivery);
             }
@@ -22224,12 +22200,11 @@ impl CGame {
         deliveries
     }
 
-    fn set_gods_battle_player_contend_state<Context: GodsBattleNpcContendContext>(
+    fn set_gods_battle_player_contend_state(
         &mut self,
         region: &CServerRegion,
         player_id: i32,
         state: bool,
-        context: &mut Context,
     ) -> Option<i32> {
         let player = self.find_player_mut(player_id)?;
         if !player.set_contend_state(state) {
@@ -22241,8 +22216,7 @@ impl CGame {
         let player = self
             .find_player(player_id)
             .expect("GodsBattle player сохранён до synchronous around-send");
-        context
-            .send_gods_battle_player_around(region, player.shape(), &message)
+        self.send_game_shape_around(region, player.shape(), None, &message)
             .ok()
     }
 
