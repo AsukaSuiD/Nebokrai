@@ -16,11 +16,12 @@
 //! Client entry `0x8F702` теперь сам создаёт этот pending route после World
 //! `0x5FB01`; duplicate live owner закрывает новый socket. До player decode
 //! успешный `0x7F901` выдаёт optional validate `0xBF402` и sequence `0xBF403`,
-//! а `0x6FA01` теперь проходит полный reached `OnLost` lifecycle: team/JJC,
+//! а `0x6FA01` теперь проходит полный reached `OnLost` lifecycle: JJC,
 //! scripts, nation timing, particular goods/states, immediate либо delayed
-//! fight-state departure и region/map cleanup. Reached `OnExit` корректирует
-//! silence, публикует позиционный `0xBF504`, исполняет узкий spatial/AI tail и
-//! при обычном logout отправляет полный GameSave в World `0x5FB02`.
+//! fight-state departure и region/map cleanup. Original сохраняет team при
+//! offline. Reached `OnExit` корректирует silence, публикует `0xBF504`,
+//! применяет virtual return point и при обычном logout отправляет полный
+//! GameSave в World `0x5FB02`.
 //! LoginServer kick
 //! `0x7F903` полностью различает live, pending, orphan-region и missing player:
 //! публикует `GS0041`, transport close либо World `0x5FB02` и очищает route.
@@ -59,16 +60,7 @@ pub(crate) enum GameLogMessageOutcome {
 }
 
 pub(crate) trait GamePlayerLostRuntime {
-    fn detach_player_from_team_on_lost(&mut self, game: &mut CGame, player_id: i32) -> bool;
     fn quit_player_jjc_on_lost(&mut self, game: &mut CGame, player_id: i32) -> bool;
-    /// Исполняет оставшийся polymorphic spatial/AI tail `OnExit` между
-    /// owned around-publication и World-save.
-    fn player_on_exit_spatial_tail(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        changing_server: bool,
-    );
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

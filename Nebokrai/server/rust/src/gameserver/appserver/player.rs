@@ -55,6 +55,9 @@
 //! GameSave. GM `0x7FC0B/0x7FC0E`
 //! замыкают name lookup, mutation, двухпроходный ordered query и World
 //! responses, поэтому отдельный scheduler не требуется.
+//! Тот же `OnExit` после around-публикации восстанавливает умершего и
+//! сохраняет выбранные `GetReturnPoint` region/tile/direction до GameSave;
+//! team membership при `OnLost` намеренно не очищается.
 //! Client allocation `0x8FA01` владеет sex/occupation, remaining point,
 //! четырьмя base stat и base HP/MP maxima. Сохранены общий STR gate для всех
 //! `Add*`, безусловный расход очка и отдельный 0x9c-byte `m_Property` wire:
@@ -10634,6 +10637,30 @@ impl CPlayer {
         } else {
             value
         };
+    }
+
+    /// Player-owned scalar части `OnExit` return-point tail. Восстановление
+    /// смерти выполняется до virtual `GetReturnPoint`, а destination location
+    /// записывается только после успешного выбора точки.
+    pub(crate) fn prepare_exit_return(&mut self, died: bool) {
+        if died {
+            self.set_health(self.maximum_health());
+            self.move_shape.shape_mut().set_action(0);
+            self.move_shape.shape_mut().set_position(0);
+        }
+    }
+
+    pub(crate) fn apply_exit_return_location(
+        &mut self,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+    ) {
+        let shape = self.move_shape.shape_mut();
+        shape.set_region_id(region_id);
+        shape.set_direction(direction);
+        shape.set_pos_xy_base(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
     }
 
     pub(crate) const fn set_strength(&mut self, value: u32) {

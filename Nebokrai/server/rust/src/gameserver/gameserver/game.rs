@@ -4003,8 +4003,23 @@ pub(crate) struct GamePlayerExitReport {
     pub(crate) business: Option<GamePlayerBusinessEndReport>,
     pub(crate) silence: PlayerExitSilenceUpdate,
     pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) return_point: GamePlayerExitReturnPoint,
     pub(crate) player_snapshot_size: Option<usize>,
     pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GamePlayerExitReturnPoint {
+    RegionMissing,
+    RecallCheckBlocked(ServerReturnSetupBlock),
+    NotRequired,
+    ReturnPointBlocked(GameReturnPointBlock),
+    Applied {
+        died: bool,
+        point: RegionReturnPoint,
+        destination: (i32, i32),
+        random_block: Option<RegionCellAccessBlock>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -17094,10 +17109,9 @@ impl CGame {
     }
 
     /// Exact live `0x6FA01 -> CPlayer::OnLost` lifecycle. Общий caller
-    /// владеет validation/script/map/spatial и delayed-fight timestamp;
-    /// JJC/team и оставшаяся polymorphic середина `OnExit` остаются узкими
-    /// virtual owner-ами с canonical `CGame + player_id`, а не generic
-    /// message fallback-ом.
+    /// владеет validation/script/map/spatial и delayed-fight timestamp; JJC
+    /// остаётся отдельным historical owner-ом. Вопреки прежнему adapter-у
+    /// original `OnLost` не исключает игрока из команды.
     pub(crate) fn on_player_lost<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -17134,20 +17148,17 @@ impl CGame {
             };
         }
 
-        let (changing_server, changing_region, team_id, fight_state_count) = {
+        let (changing_server, changing_region, fight_state_count) = {
             let player = self
                 .find_player(player_id)
                 .expect("OnLost live player проверен перед snapshot");
             (
                 player.in_changing_server(),
                 player.in_changing_region(),
-                player.team_id(),
                 player.fight_state_count(),
             )
         };
-        let team_detached = !changing_server
-            && team_id != 0
-            && runtime.detach_player_from_team_on_lost(self, player_id);
+        let team_detached = false;
         self.clear_player_login_validation(player_id);
         let scripts_before = self.active_scripts.len();
         self.active_scripts
@@ -17261,9 +17272,9 @@ impl CGame {
     }
 
     /// Достигнутый `CPlayer::OnExit`: business уже принадлежит canonical
-    /// session owner-у; затем legacy silence, `0xBF504`, оставшийся
-    /// polymorphic spatial tail и необязательный World `0x5FB02` исполняются
-    /// в исходном порядке. Changing-server ветвь намеренно не сохраняется.
+    /// session owner-у; затем legacy silence, `0xBF504`, virtual return point
+    /// и необязательный World `0x5FB02` исполняются в исходном порядке.
+    /// Changing-server ветвь намеренно не сохраняется.
     fn finish_player_exit<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -17292,7 +17303,7 @@ impl CGame {
         around.add_ulong(pos_y_bits);
         let around_delivery = self.send_player_shape_around(player_id, Some(player_id), &around);
 
-        runtime.player_on_exit_spatial_tail(self, player_id, changing_server);
+        let return_point = self.apply_player_exit_return_point(player_id, runtime);
 
         let mut player_snapshot_size = None;
         let mut world_delivery = None;
@@ -17316,9 +17327,136 @@ impl CGame {
             business,
             silence,
             around_delivery,
+            return_point,
             player_snapshot_size,
             world_delivery,
         }
+    }
+
+    fn apply_player_exit_return_point<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> GamePlayerExitReturnPoint {
+        let Some((source_region_id, died)) = self
+            .find_player(player_id)
+            .and_then(|player| Some((player.server_region_id()?, player.is_dead())))
+        else {
+            return GamePlayerExitReturnPoint::RegionMissing;
+        };
+        let Some(source) = self.find_region(source_region_id) else {
+            return GamePlayerExitReturnPoint::RegionMissing;
+        };
+        let source_is_gods_battle = source.is_gods_battle();
+        let recall_when_lost = (!died).then(|| source.base().does_recall_when_lost());
+        if !died {
+            match recall_when_lost.expect("alive exit всегда читает recall setup") {
+                Ok(0) => return GamePlayerExitReturnPoint::NotRequired,
+                Ok(_) => {}
+                Err(block) => return GamePlayerExitReturnPoint::RecallCheckBlocked(block),
+            }
+        }
+        self.find_player_mut(player_id)
+            .expect("exit player сохранён после region lookup")
+            .prepare_exit_return(died);
+
+        let point =
+            self.select_player_return_point(source_region_id, player_id, source_is_gods_battle);
+        let point = match point {
+            Ok(point) => point,
+            Err(block) => return GamePlayerExitReturnPoint::ReturnPointBlocked(block),
+        };
+        let width = point.right.wrapping_sub(point.left);
+        let height = point.bottom.wrapping_sub(point.top);
+        let mut x = point.left.wrapping_add(width / 2);
+        let mut y = point.top.wrapping_add(height / 2);
+        let mut random_block = None;
+        if width > 0
+            && height > 0
+            && let Some(destination) = self.find_region(point.region_id)
+        {
+            match destination
+                .base()
+                .region
+                .get_random_pos_in_range(point.left, point.top, width, height, runtime)
+            {
+                Ok(position) => {
+                    x = position.x;
+                    y = position.y;
+                }
+                Err(block) => random_block = Some(block),
+            }
+        }
+        self.find_player_mut(player_id)
+            .expect("exit player сохранён до location commit")
+            .apply_exit_return_location(point.region_id, x, y, point.direction);
+        GamePlayerExitReturnPoint::Applied {
+            died,
+            point,
+            destination: (x, y),
+            random_block,
+        }
+    }
+
+    fn select_player_return_point(
+        &mut self,
+        source_region_id: i32,
+        player_id: i32,
+        source_is_gods_battle: bool,
+    ) -> Result<RegionReturnPoint, GameReturnPointBlock> {
+        let player = self
+            .find_player(player_id)
+            .ok_or(GameReturnPointBlock::PlayerMissing)?;
+        let facts = ServerReturnPlayer {
+            id: player_id,
+            country: player.country(),
+            faction_id: player.faction_id(),
+        };
+        let mut city_facts = CityReturnPointFacts {
+            player_id,
+            tile_x: player.shape().get_tile_x().unwrap_or_default(),
+            tile_y: player.shape().get_tile_y().unwrap_or_default(),
+        };
+        if source_is_gods_battle {
+            return self
+                .gods_battle_return_point(source_region_id, player_id)
+                .map_err(GameReturnPointBlock::Base)?
+                .map(|point| point.point)
+                .ok_or(GameReturnPointBlock::GodsBattleMissing);
+        }
+        let Some(mut owner) = self.take_region_owner(source_region_id) else {
+            return Err(GameReturnPointBlock::GodsBattleMissing);
+        };
+        let point = match &mut owner {
+            ServerRegionOwner::Base(region) => region
+                .get_return_point(Some(facts), &mut self.country_param)
+                .map_err(GameReturnPointBlock::Base),
+            ServerRegionOwner::Village(region) => region
+                .war
+                .base
+                .get_return_point(Some(facts), &mut self.country_param)
+                .map_err(GameReturnPointBlock::Base),
+            ServerRegionOwner::City(region) => region
+                .get_return_point(Some(facts), &mut self.country_param, &mut city_facts)
+                .map_err(GameReturnPointBlock::City),
+            ServerRegionOwner::Country(region) => region
+                .get_return_point(
+                    Some(facts),
+                    &mut self.country_param,
+                    &mut CountryReturnPointRng {
+                        random_state: &mut self.random_state,
+                    },
+                )
+                .map_err(GameReturnPointBlock::Country),
+            ServerRegionOwner::Nation(region) => region
+                .war
+                .base
+                .get_return_point(Some(facts), &mut self.country_param)
+                .map_err(GameReturnPointBlock::Base),
+            ServerRegionOwner::GodsBattle(_) => unreachable!("GodsBattle обработан до take"),
+        };
+        self.restore_region_owner(owner);
+        point
     }
 
     /// Reached `CPlayer::end_business`: session lookup/end остаётся в factory,
@@ -32108,71 +32246,12 @@ impl CGame {
                 region_change: None,
             };
         };
-        let facts = ServerReturnPlayer {
-            id: player_id,
-            country: player.country(),
-            faction_id: player.faction_id(),
-        };
         let direction = player.shape().get_direction();
-        let city_facts = CityReturnPointFacts {
-            player_id,
-            tile_x: player.shape().get_tile_x().unwrap_or_default(),
-            tile_y: player.shape().get_tile_y().unwrap_or_default(),
-        };
-        let point = if self
+        let source_is_gods_battle = self
             .find_region(source_region_id)
-            .is_some_and(ServerRegionOwner::is_gods_battle)
-        {
-            self.gods_battle_return_point(source_region_id, player_id)
-                .map_err(GameReturnPointBlock::Base)
-                .and_then(|point| {
-                    point
-                        .map(|point| point.point)
-                        .ok_or(GameReturnPointBlock::GodsBattleMissing)
-                })
-        } else {
-            let Some(mut owner) = self.take_region_owner(source_region_id) else {
-                return GameReturnedRegionPlayer {
-                    player_id,
-                    point: Err(GameReturnPointBlock::GodsBattleMissing),
-                    destination: None,
-                    random_block: None,
-                    changed_region: None,
-                    region_change: None,
-                };
-            };
-            let mut city_facts = city_facts;
-            let point = match &mut owner {
-                ServerRegionOwner::Base(region) => region
-                    .get_return_point(Some(facts), &mut self.country_param)
-                    .map_err(GameReturnPointBlock::Base),
-                ServerRegionOwner::Village(region) => region
-                    .war
-                    .base
-                    .get_return_point(Some(facts), &mut self.country_param)
-                    .map_err(GameReturnPointBlock::Base),
-                ServerRegionOwner::City(region) => region
-                    .get_return_point(Some(facts), &mut self.country_param, &mut city_facts)
-                    .map_err(GameReturnPointBlock::City),
-                ServerRegionOwner::Country(region) => region
-                    .get_return_point(
-                        Some(facts),
-                        &mut self.country_param,
-                        &mut CountryReturnPointRng {
-                            random_state: &mut self.random_state,
-                        },
-                    )
-                    .map_err(GameReturnPointBlock::Country),
-                ServerRegionOwner::Nation(region) => region
-                    .war
-                    .base
-                    .get_return_point(Some(facts), &mut self.country_param)
-                    .map_err(GameReturnPointBlock::Base),
-                ServerRegionOwner::GodsBattle(_) => unreachable!("GodsBattle обработан до take"),
-            };
-            self.restore_region_owner(owner);
-            point
-        };
+            .is_some_and(ServerRegionOwner::is_gods_battle);
+        let point =
+            self.select_player_return_point(source_region_id, player_id, source_is_gods_battle);
         let Ok(point_value) = point else {
             return GameReturnedRegionPlayer {
                 player_id,
