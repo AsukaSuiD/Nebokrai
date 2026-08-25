@@ -2913,6 +2913,7 @@ pub(crate) enum CiQingComposeTransferRemoval {
     Hand(GroundHandRemoval),
     Depot(DepotStorageRemoval),
     Fairy(FairyStorageRemoval),
+    BattleFairy(BattleFairyStorageRemoval),
     Compose(CiQingComposeStorageRemoval),
 }
 
@@ -2921,6 +2922,7 @@ pub(crate) enum CiQingComposeTransferAddition {
     Player(DepotStorageTransferAddition),
     Hand(GroundHandAddition),
     Fairy(FairyContainerAddOutcome),
+    BattleFairy(BattleFairyEquipmentMutationReport),
     Compose(CiQingContainerAddition),
 }
 
@@ -2929,6 +2931,9 @@ pub(crate) enum CiQingComposeTransferBlock {
     MissingPlayer,
     UnsupportedRoute,
     MissingGoods,
+    InvalidBattleFairyCell {
+        position: u32,
+    },
     AmountMismatch,
     PartialMoveBusy(PlayerProgress),
     DestinationRejectsSourceSlot {
@@ -2955,6 +2960,7 @@ pub(crate) enum CiQingComposeTransferBlock {
     HandRemovalFailed,
     DepotRemovalFailed,
     FairyRemovalFailed(FairyContainerRemoveOutcome),
+    BattleFairyRemovalFailed(BattleFairyEquipmentMutationReport),
     EquipmentRemovalFailed(PlayerEquipmentRemoveReport),
     ComposeRemovalFailed,
     RolledBack {
@@ -8846,11 +8852,19 @@ impl CGame {
         destination_position: u32,
         context: &mut Context,
     ) -> Result<CiQingComposeTransferReport, CiQingComposeTransferBlock> {
-        let supported = matches!(source_extend_id, 1 | 2 | 3 | 9 | 11)
+        let supported = matches!(source_extend_id, 1 | 2 | 3 | 9 | 11 | 12)
             && destination_extend_id == 17
-            || source_extend_id == 17 && matches!(destination_extend_id, 1 | 2 | 3 | 9 | 11);
+            || source_extend_id == 17 && matches!(destination_extend_id, 1 | 2 | 3 | 9 | 11 | 12);
         if !supported {
             return Err(CiQingComposeTransferBlock::UnsupportedRoute);
+        }
+        if destination_extend_id == 12
+            && destination_position != u32::MAX
+            && BattleFairyCell::from_position(destination_position).is_none()
+        {
+            return Err(CiQingComposeTransferBlock::InvalidBattleFairyCell {
+                position: destination_position,
+            });
         }
         let player = self
             .find_player(player_id)
@@ -8861,6 +8875,10 @@ impl CGame {
             3 => player.hand().get_goods(source_position),
             9 => player.depot().get_goods(source_position),
             11 => player.fairy_container().base().get_goods(source_position),
+            12 => player
+                .battle_fairy_container()
+                .base()
+                .get_goods(source_position),
             17 => player.ci_qing_compose_goods(source_position),
             _ => None,
         }
@@ -9077,6 +9095,74 @@ impl CGame {
                 ),
             };
             (CiQingComposeTransferRemoval::Fairy(removal), Some(goods))
+        } else if source_extend_id == 12 {
+            let Some(cell) = BattleFairyCell::from_position(source_position) else {
+                self.players.insert(player_id, player);
+                return Err(CiQingComposeTransferBlock::InvalidBattleFairyCell {
+                    position: source_position,
+                });
+            };
+            let coefficients = self.globe_setup.player_property_coefficients();
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let mut report = player.take_battle_fairy_goods(
+                cell,
+                amount,
+                &self.goods_factory,
+                coefficients,
+                |_| {
+                    (split_template.identity().ex_id != CGuid::GUID_INVALID)
+                        .then(|| split_template.clone())
+                },
+                &mut encode,
+            );
+            drop(encode);
+            self.deliver_battle_fairy_equipment_effects_for_player(Some(&player), &mut report);
+            let outcome = std::mem::replace(
+                &mut report.outcome,
+                BattleFairyEquipmentMutationOutcome::MissingGoods,
+            );
+            let BattleFairyEquipmentMutationOutcome::Removed(VolumeGoodsRemoveOutcome::Removed(
+                taken,
+            )) = outcome
+            else {
+                report.outcome = outcome;
+                self.players.insert(player_id, player);
+                return Err(CiQingComposeTransferBlock::BattleFairyRemovalFailed(report));
+            };
+            let (goods, storage) = match taken {
+                AmountLimitGoodsTaken::Removed(removed) => (
+                    removed.goods,
+                    BattleFairyStorageRemoval {
+                        owner_type: removed.owner_type,
+                        owner_id: removed.owner_id,
+                        position: removed.position.unwrap_or(source_position),
+                        amount: removed.amount,
+                        listeners: removed.listeners,
+                        cell,
+                        property_applied: report.property_applied,
+                        effects: report.effects,
+                        deliveries: report.deliveries,
+                    },
+                ),
+                AmountLimitGoodsTaken::Split(split) => (
+                    split.goods,
+                    BattleFairyStorageRemoval {
+                        owner_type: split.owner_type,
+                        owner_id: split.owner_id,
+                        position: split.position.unwrap_or(source_position),
+                        amount: split.amount,
+                        listeners: split.listeners,
+                        cell,
+                        property_applied: report.property_applied,
+                        effects: report.effects,
+                        deliveries: report.deliveries,
+                    },
+                ),
+            };
+            (
+                CiQingComposeTransferRemoval::BattleFairy(storage),
+                Some(goods),
+            )
         } else {
             let removed = player.take_ci_qing_compose_transfer_goods(
                 source_position,
@@ -9257,6 +9343,37 @@ impl CGame {
                 player.add_ci_qing_compose_transfer_goods(incoming, position, &self.goods_factory),
             );
         }
+        if extend_id == 12 {
+            let coefficients = self.globe_setup.player_property_coefficients();
+            let owner_progress_allows = !matches!(
+                player.current_progress(),
+                PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
+            );
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let mut report = if position == u32::MAX {
+                player.add_battle_fairy_goods_auto(
+                    incoming,
+                    &self.goods_factory,
+                    coefficients,
+                    owner_progress_allows,
+                    &mut encode,
+                )
+            } else {
+                let cell = BattleFairyCell::from_position(position)
+                    .expect("battle-fairy position проверена до ownership pass");
+                player.add_battle_fairy_goods(
+                    cell,
+                    incoming,
+                    &self.goods_factory,
+                    coefficients,
+                    owner_progress_allows,
+                    &mut encode,
+                )
+            };
+            drop(encode);
+            self.deliver_battle_fairy_equipment_effects_for_player(Some(player), &mut report);
+            return CiQingComposeTransferAddition::BattleFairy(report);
+        }
         if extend_id == 11 {
             let owner_progress_allows = !matches!(
                 player.current_progress(),
@@ -9327,6 +9444,36 @@ impl CGame {
             }
             CiQingComposeTransferAddition::Fairy(FairyContainerAddOutcome::Rejected(_)) => {
                 unreachable!("успешный fairy transfer не содержит reject")
+            }
+            CiQingComposeTransferAddition::BattleFairy(report) => {
+                let BattleFairyEquipmentMutationOutcome::Added(
+                    crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyContainerAddOutcome::Stored {
+                        base,
+                        ..
+                    },
+                ) = &report.outcome
+                else {
+                    unreachable!("успешный battle-fairy add")
+                };
+                let position = match base {
+                    VolumeGoodsAddOutcome::Added(added) => {
+                        added.position.unwrap_or(requested_position)
+                    }
+                    VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
+                        target, ..
+                    }) => player
+                        .battle_fairy_container()
+                        .base()
+                        .query_goods_position(target.ex_id)
+                        .expect("battle-fairy stack position"),
+                    _ => unreachable!("успешный battle-fairy storage add"),
+                };
+                let goods = player
+                    .battle_fairy_container()
+                    .base()
+                    .get_goods(position)
+                    .expect("battle-fairy add сохранён");
+                (position, goods.identity(), goods.amount())
             }
             CiQingComposeTransferAddition::Compose(addition) => {
                 let goods = player

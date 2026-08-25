@@ -73,6 +73,8 @@
 //! source remove, поэтому наблюдаемы remove/add rollback effects.
 //! Ordinary-fairy↔CiQing compose (`11↔17`) связывает тот же quirk и compose
 //! stacking с fairy hatch/lock owner-ом без carried burden.
+//! Battle-fairy↔CiQing compose (`12↔17`) дополнительно сохраняет cell
+//! validation, BF property/equipment effects и deliveries на remove/add/rollback.
 //! Auction-return storage (`14`) имеет только исходящий generic route:
 //! packet destination заново выбирает `FindPositionForGoods`, очищает bind
 //! value-id `2`, equipment сохраняет positional add, depot — lock/anchor/audit;
@@ -682,11 +684,13 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     && !matches!(request.destination_container_extend_id, 1 | 2));
             let route = if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
-                && (matches!(request.source_container_extend_id, 1 | 2 | 3 | 9 | 11)
+                && (matches!(request.source_container_extend_id, 1 | 2 | 3 | 9 | 11 | 12)
                     && request.destination_container_extend_id == 17
                     || request.source_container_extend_id == 17
-                        && matches!(request.destination_container_extend_id, 1 | 2 | 3 | 9 | 11))
-            {
+                        && matches!(
+                            request.destination_container_extend_id,
+                            1 | 2 | 3 | 9 | 11 | 12
+                        )) {
                 EnhancementMessageRoute::CiQingComposeTransfer
             } else if request.source_container_type == PLAYER_CONTAINER_TYPE
                 && request.destination_container_type == PLAYER_CONTAINER_TYPE
