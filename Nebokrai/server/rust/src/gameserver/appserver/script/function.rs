@@ -61,23 +61,33 @@
 //! gates, `GS0209..GS0211`, wire `0x60137` и симметричный ответ `0x7FE37`.
 //! Также материализованы ID `9351 / ReflushExternProperty`, `9350 / OpenRolePage`,
 //! `9354 / OpenEquipmentCompose`, `2216 / OpenGoodsUpgrade` и
-//! `8100 / OpenChangePlayerNameUI`. Rename-вход без аргументов публикует
-//! `0xBF810` из canonical player/GlobeSetup и тем самым открывает уже живой
-//! `0x8FB05 → World/DB → 0x7FA0E → 0xBF80F` контур. Refresh вычисляет первую
-//! строка, DaKong gate предшествует lookup выбранного enhancement goods, а
-//! gameplay передаётся canonical `CGame`, который сам исполняет localized
-//! notices, session/plug lifecycle и client wire; runtime сообщает только
-//! ещё не owned team skill-state. Country scalar family `9001/9003/9009/9011/
-//! 9013` сохраняет byte country lookup, field-specific clamp, local mutation и
-//! World `0x60314`. Quest-switch `9018/9019` сохраняет read-only lookup и
-//! странность writer-а: второй аргумент влияет только на country fallback, а
-//! применяемое значение всегда `true`; `0x60315` уходит до local map write.
-//! Exile-time `9021` остаётся полностью локальным: страна script-player, один
-//! runtime clock sample и wrapping `CCountry` calculation. `9317 / AddKingPoint`
-//! складывает delta как DWORD, меняет local control point и публикует selector
-//! `5`, сохраняя нулевой script result. Government identity `9004/9005/9006`
-//! читает mutating CI, отправляет назначение `0x60304` без преждевременной
-//! local mutation и читает отдельный краткоживущий king-ID response state.
+//! `8100 / OpenChangePlayerNameUI`. Вход смены имени без аргументов публикует
+//! `0xBF810` из основного игрока и `GlobeSetup`, тем самым открывая уже живой
+//! контур `0x8FB05 → World/DB → 0x7FA0E → 0xBF80F`. Обновление вычисляет
+//! первую строку, проверка `DaKong` предшествует поиску выбранного улучшаемого
+//! предмета, а игровой проход передаётся основному `CGame`. Он сам выполняет
+//! локализованные уведомления, жизненный цикл сеансов и подключений и
+//! клиентский протокол; среда сообщает только ещё не принадлежащее серверу
+//! состояние командного умения. Семейство скалярных параметров страны
+//! `9001/9003/9009/9011/
+//! 9013` сохраняет байтовый поиск страны, отдельные ограничения каждого поля,
+//! локальное изменение и сообщение World `0x60314`. Переключатель заданий
+//! `9018/9019` сохраняет поиск без изменения состояния и странность записи:
+//! второй аргумент влияет только на подстановку страны, а применяемое значение
+//! всегда равно `true`; сообщение `0x60315` уходит до записи в локальную карту.
+//! Соседние региональные запросы `8101/8102` достигают того же диспетчера:
+//! первый сохраняет 32-битную арифметику таймера возрождения монстра, второй
+//! читает число зарегистрированных игроков конкретного `CServerRegion`.
+//! Только отсутствующий аргумент `8102` подставляет регион игрока; явный `0`
+//! остаётся обычным идентификатором, как в точной ветви EXE.
+//! Время изгнания `9021` остаётся полностью локальным: берётся страна игрока
+//! сценария, время читается один раз, а расчёт `CCountry` сохраняет арифметику
+//! с переполнением. `9317 / AddKingPoint` складывает приращение как `DWORD`,
+//! меняет локальные очки управления и публикует селектор `5`, сохраняя нулевой
+//! результат сценария. Идентификаторы правительства `9004/9005/9006` читают
+//! изменяемый `CI`, отправляют назначение `0x60304` без преждевременного
+//! локального изменения и читают отдельное краткоживущее состояние ответа с
+//! идентификатором короля.
 //! Country scalar query family `9000/9002/9008/9010/9012` одним контрактом
 //! сужает explicit country до byte либо использует страну script-player и
 //! возвращает `-1` при недоступном owner-е.
@@ -703,6 +713,7 @@ pub(crate) const SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION: i32 = 8003;
 pub(crate) const SCRIPT_FUNCTION_REFRESH_BLOCK_AT: i32 = 8004;
 pub(crate) const SCRIPT_FUNCTION_OPEN_CHANGE_PLAYER_NAME: i32 = 8100;
 pub(crate) const SCRIPT_FUNCTION_GET_MONSTER_REFRESH_TIME: i32 = 8101;
+pub(crate) const SCRIPT_FUNCTION_GET_REGION_PLAYER_COUNT: i32 = 8102;
 pub(crate) const SCRIPT_FUNCTION_IS_QUEST_ENABLED: i32 = 3500;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_ENABLED: i32 = 3501;
 pub(crate) const SCRIPT_FUNCTION_QUEST_TIME_BEGIN: i32 = 3502;
@@ -3842,7 +3853,9 @@ pub(crate) fn script_function_parameter_kind(
             0 | 1 => Integer,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION | SCRIPT_FUNCTION_REFRESH_BLOCK => match index {
+        SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION
+        | SCRIPT_FUNCTION_REFRESH_BLOCK
+        | SCRIPT_FUNCTION_GET_REGION_PLAYER_COUNT => match index {
             0 => Integer,
             _ => Unused,
         },
@@ -8430,6 +8443,18 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
             return ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: game.server_ids().1,
             };
+        }
+        SCRIPT_FUNCTION_GET_REGION_PLAYER_COUNT => {
+            let region_id = match integer_arguments[0] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) | None => script_player_id
+                    .and_then(|player_id| game.find_player(player_id))
+                    .and_then(CPlayer::server_region_id),
+                Some(region_id) => Some(region_id),
+            };
+            let legacy_return = region_id
+                .and_then(|region_id| game.find_region(region_id))
+                .map_or(0, |region| region.base().get_player_amount() as i32);
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return };
         }
         _ => {}
     }

@@ -21416,8 +21416,9 @@ impl CGame {
     }
 
     /// `8100 / OpenChangePlayerNameUI` не вычисляет аргументы. Разрешение
-    /// совпадает с native `strstr(playerName, strSpeStr)`; последующий запрос
-    /// клиента уже проходит concrete `0x8FB05 → World 0x5FD05 → 0x7FA0E`.
+    /// совпадает с `strstr(playerName, strSpeStr)` из исходного EXE;
+    /// последующий запрос клиента уже проходит конкретный контур
+    /// `0x8FB05 → World 0x5FD05 → 0x7FA0E`.
     pub(crate) fn open_script_player_rename(&self, player_id: i32) -> Option<i32> {
         let player = self.find_player(player_id)?;
         let name = player.player_name();

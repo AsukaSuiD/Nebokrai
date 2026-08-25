@@ -2162,10 +2162,11 @@ impl CServerRegion {
         &self.monster_setups
     }
 
-    /// Exact `GetMonsterRefeashTime`: lookup идёт по setup index, нулевой
-    /// reset interval означает отсутствие таймера. `timeGetTime` и оба
-    /// timestamp-а остаются в 32-bit кольце; только итоговый битовый остаток
-    /// трактуется как signed перед clamp и переводом в секунды.
+    /// Точный `GetMonsterRefeashTime`: поиск идёт по индексу настройки,
+    /// нулевой интервал сброса означает отсутствие таймера. `timeGetTime` и
+    /// обе временные отметки остаются в 32-битном кольце; только итоговый
+    /// битовый остаток трактуется как знаковый перед ограничением снизу и
+    /// переводом в секунды.
     pub(crate) fn monster_refresh_remaining_seconds(&self, index: i32, now_ms: u32) -> i32 {
         let Some(refresh) = self
             .monster_setups
