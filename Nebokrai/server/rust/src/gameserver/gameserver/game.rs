@@ -16,6 +16,8 @@
 //! Внутри player pass exact `PeriodicalUpdate` tail выполняет ping `0xBF809`,
 //! Nation died countdown и fairy hatcher до `CMoveShape::AI`; внешний runtime
 //! остаётся только у ещё не материализованных virtual/disconnect owners.
+//! После live/dead war-soul ветви тот же caller сохраняет GoodsAI/delete,
+//! wrapping ticket, packet expansion, Flash и инвертированный TaoZhuang gate.
 //!
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
@@ -1532,6 +1534,16 @@ pub(crate) struct PlayerPeriodicalUpdateReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerAiTailReport {
+    pub(crate) player_id: i32,
+    pub(crate) goods_ai_ran: bool,
+    pub(crate) current_ticket: u32,
+    pub(crate) packet_expansion_applied: Option<u32>,
+    pub(crate) flash_ran: bool,
+    pub(crate) tao_zhuang_ran: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FairyImplantOutcome {
     Disabled,
     MissingFairy,
@@ -2936,6 +2948,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) battle_fairy_deaths: Vec<BattleFairyDeathReport>,
     pub(crate) periodical_updates: Vec<PlayerPeriodicalUpdateReport>,
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
+    pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
     pub(crate) gods_battle: Option<GodsBattleContendAiReport>,
     pub(crate) region_changes: Vec<GameLocalRegionChange>,
     pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
@@ -3169,6 +3182,11 @@ pub(crate) trait GameMainLoopRuntime:
     /// post-AI restored-state current war-soul skill; `None` точно означает
     /// отсутствие skill-а.
     fn player_move_shape_ai(&mut self, game: &mut CGame, player_id: i32) -> Option<bool>;
+    /// Точная соседняя пара `DoneGoodsAiTree -> DoneDelList`; вызывается только
+    /// при live `bGoodsAi` до ticket increment.
+    fn player_done_goods_ai_and_delete_list(&mut self, game: &mut CGame, player_id: i32);
+    fn player_done_flash(&mut self, game: &mut CGame, player_id: i32);
+    fn player_done_tao_zhuang(&mut self, game: &mut CGame, player_id: i32);
     /// Выполняет оставшийся monster/NPC/region virtual AI после достигнутых
     /// player passes и до точного base-tail `ClearPlayerAI`.
     fn region_ai_before_clear_player(&mut self, game: &mut CGame, region_id: i32);
@@ -20900,6 +20918,67 @@ impl CGame {
         Some(report)
     }
 
+    /// Мёртвая половина той же ветви `CPlayer::AI`: в отличие от живого
+    /// follow она меняет только region spatial membership и visual-координаты.
+    pub(crate) fn clear_dead_war_soul_xy(
+        &mut self,
+        player_id: i32,
+    ) -> Option<BattleFairyFollowReport> {
+        let mut report = self.players.get_mut(&player_id)?.clear_dead_war_soul_xy();
+        let action = report
+            .spatial_action
+            .expect("очистка war-soul мёртвого игрока всегда имеет spatial action");
+        let spatial_applied = report.region_id.is_some_and(|region_id| {
+            let Some(region) = self.regions.get_mut(&region_id) else {
+                return false;
+            };
+            match action {
+                BattleFairyWarSoulAction::SetPosition { previous, target } => region
+                    .base_mut()
+                    .set_war_soul_position(player_id as u32, previous, target),
+                BattleFairyWarSoulAction::Delete { .. } => false,
+            }
+        });
+        report.spatial_applied = spatial_applied;
+        if let Some(player) = self.players.get_mut(&player_id) {
+            player.apply_war_soul_action(action, spatial_applied);
+        }
+        Some(report)
+    }
+
+    /// Точный остаток `CPlayer::AI` после live/dead war-soul ветви.
+    /// Feature gates принадлежат live GlobeSetup, ticket/packet — CPlayer, а
+    /// ещё не перенесённые GoodsAI/Flash/TaoZhuang owners вызываются в
+    /// подтверждённом порядке через тот же main-loop runtime.
+    pub(crate) fn run_player_ai_tail<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<PlayerAiTailReport> {
+        self.find_player(player_id)?;
+        let goods_ai_ran = self.globe_setup.goods_ai_enabled();
+        if goods_ai_ran {
+            runtime.player_done_goods_ai_and_delete_list(self, player_id);
+        }
+        let pack_add_enabled = self.globe_setup.pack_add_enabled();
+        let (current_ticket, packet_expansion_applied) = self
+            .find_player_mut(player_id)?
+            .advance_ai_ticket_and_packet(pack_add_enabled);
+        runtime.player_done_flash(self, player_id);
+        let tao_zhuang_ran = !self.globe_setup.tao_zhuang_modify_enabled();
+        if tao_zhuang_ran {
+            runtime.player_done_tao_zhuang(self, player_id);
+        }
+        Some(PlayerAiTailReport {
+            player_id,
+            goods_ai_ran,
+            current_ticket,
+            packet_expansion_applied,
+            flash_ran: true,
+            tao_zhuang_ran,
+        })
+    }
+
     fn send_battle_fairy_around(
         &self,
         region: &CServerRegion,
@@ -21107,12 +21186,14 @@ impl CGame {
             let mut battle_fairy_deaths = Vec::with_capacity(player_ids.len());
             let mut periodical_updates = Vec::with_capacity(player_ids.len());
             let mut battle_fairy_follows = Vec::with_capacity(player_ids.len());
+            let mut player_ai_tails = Vec::with_capacity(player_ids.len());
             for player_id in player_ids {
                 if let Some(death) = self.refresh_battle_fairy_death(player_id) {
                     battle_fairy_deaths.push(death);
                 }
                 runtime.player_ai_before_periodical_update(self, player_id);
                 let mut restored = None;
+                let mut ran_player_body = false;
                 if self
                     .find_player(player_id)
                     .is_some_and(|player| !player.in_changing_region())
@@ -21129,14 +21210,21 @@ impl CGame {
                             fairy_hatcher,
                         });
                         restored = runtime.player_move_shape_ai(self, player_id);
+                        ran_player_body = true;
                     }
                 }
-                if self
-                    .find_player(player_id)
-                    .is_some_and(|player| !player.in_changing_region() && !player.is_dead())
-                    && let Some(follow) = self.compute_war_soul_xy(player_id, restored)
-                {
-                    battle_fairy_follows.push(follow);
+                if ran_player_body {
+                    let war_soul = match self.find_player(player_id).map(CPlayer::is_dead) {
+                        Some(false) => self.compute_war_soul_xy(player_id, restored),
+                        Some(true) => self.clear_dead_war_soul_xy(player_id),
+                        None => None,
+                    };
+                    if let Some(war_soul) = war_soul {
+                        battle_fairy_follows.push(war_soul);
+                    }
+                    if let Some(tail) = self.run_player_ai_tail(player_id, runtime) {
+                        player_ai_tails.push(tail);
+                    }
                 }
             }
             let gods_battle = if self
@@ -21224,6 +21312,7 @@ impl CGame {
                             battle_fairy_deaths,
                             periodical_updates,
                             battle_fairy_follows,
+                            player_ai_tails,
                             gods_battle,
                             region_changes,
                             clear_player: Some(GameRegionClearPlayerOutcome::Expired { players }),
@@ -21243,6 +21332,7 @@ impl CGame {
                 battle_fairy_deaths,
                 periodical_updates,
                 battle_fairy_follows,
+                player_ai_tails,
                 gods_battle,
                 region_changes,
                 clear_player,

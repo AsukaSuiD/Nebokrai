@@ -537,6 +537,7 @@ pub(crate) struct BattleFairySummonReport {
 pub(crate) enum BattleFairyFollowOutcome {
     ActiveSkill,
     NotSummoned,
+    Dead,
     CoordinateBlocked(ShapeCoordinateBlock),
     NonFiniteVisualState,
     InsideDeadZone,
@@ -1853,6 +1854,7 @@ pub(crate) struct CPlayer {
     war_soul_point: WarSoulPoint,
     war_soul_visual_x_bits: u32,
     war_soul_visual_y_bits: u32,
+    current_ticket: u32,
     battle_fairy_summoned: bool,
     recreate_carriage: bool,
     create_faction_operator: bool,
@@ -2138,6 +2140,7 @@ impl CPlayer {
             war_soul_point: WarSoulPoint::default(),
             war_soul_visual_x_bits: 0.0f32.to_bits(),
             war_soul_visual_y_bits: 0.0f32.to_bits(),
+            current_ticket: 0,
             battle_fairy_summoned: false,
             recreate_carriage: false,
             create_faction_operator: false,
@@ -7212,6 +7215,50 @@ impl CPlayer {
             y: visual_y.to_bits(),
         });
         report
+    }
+
+    /// Мёртвая ветвь сразу после `CMoveShape::AI`: spatial position получает
+    /// exact `(-1,-1)`, обе visual float координаты становятся `-1.0`, но
+    /// around move packet исходник не публикует.
+    pub(crate) fn clear_dead_war_soul_xy(&mut self) -> BattleFairyFollowReport {
+        let target = WarSoulPoint { x: -1, y: -1 };
+        self.war_soul_visual_x_bits = (-1.0f32).to_bits();
+        self.war_soul_visual_y_bits = (-1.0f32).to_bits();
+        BattleFairyFollowReport {
+            player_id: self.player_id(),
+            outcome: BattleFairyFollowOutcome::Dead,
+            region_id: self.server_region_id,
+            visual_x_bits: self.war_soul_visual_x_bits,
+            visual_y_bits: self.war_soul_visual_y_bits,
+            spatial_action: Some(BattleFairyWarSoulAction::SetPosition {
+                previous: self.war_soul_point,
+                target,
+            }),
+            spatial_applied: false,
+            effects: Vec::new(),
+            deliveries: Vec::new(),
+        }
+    }
+
+    /// Владеющая state/container середина оставшегося `CPlayer::AI` tail. GoodsAI,
+    /// Flash и TaoZhuang остаются у своих runtime owner-ов; ticket и packet
+    /// expansion принадлежат самому player-у и меняются между ними.
+    pub(crate) fn advance_ai_ticket_and_packet(
+        &mut self,
+        pack_add_enabled: bool,
+    ) -> (u32, Option<u32>) {
+        self.current_ticket = self.current_ticket.wrapping_add(1);
+        let expanded_package_num = pack_add_enabled.then(|| {
+            let expanded = self.equipment.expanded_package_num();
+            self.packet.set_all_inactive();
+            self.packet.apply_player_expansion_limit(expanded);
+            expanded
+        });
+        (self.current_ticket, expanded_package_num)
+    }
+
+    pub(crate) const fn current_ticket(&self) -> u32 {
+        self.current_ticket
     }
 
     /// Periodic prefix `CPlayer::AI`: нулевой HP equipped battle fairy каждый

@@ -74,6 +74,7 @@ const JJC_RANK_INTERVAL_OFFSET: usize = 0xCF0;
 const TRANSFER_MONEY_INTERVAL_OFFSET: usize = 0x110C;
 const GOODS_AI_OFFSET: usize = 0xC4C;
 const PACK_ADD_OFFSET: usize = 0xC4E;
+const TAO_ZHUANG_MODIFY_OFFSET: usize = 0x1108;
 const DA_KONG_KEY_OFFSET: usize = 0xC85;
 const AREA_WIDTH_OFFSET: usize = 0x514;
 const AREA_HEIGHT_OFFSET: usize = 0x518;
@@ -477,6 +478,12 @@ impl GlobeSetupSnapshot {
     /// container/equipment paths читают его до capacity и package effects.
     pub(crate) const fn pack_add_enabled(&self) -> bool {
         self.bytes[PACK_ADD_OFFSET] != 0
+    }
+
+    /// PDB-layout `tagSetup::bTaoZhuangModify +0x1108`. В `CPlayer::AI`
+    /// исторический tail вызывает `DoneTaoZhuang` только при false.
+    pub(crate) const fn tao_zhuang_modify_enabled(&self) -> bool {
+        self.bytes[TAO_ZHUANG_MODIFY_OFFSET] != 0
     }
 
     pub(crate) fn monster_number_scale(&self) -> f32 {
