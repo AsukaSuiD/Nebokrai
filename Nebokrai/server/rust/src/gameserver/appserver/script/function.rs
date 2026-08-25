@@ -148,9 +148,12 @@
 //! сохраняет pre-mutation `BF80C`, `UpdateProperty`, `BF721` и reached
 //! `CheckLevel` terminal result.
 //! Достигнутый `xinlian/hy_pg.script` расширяет этот owner до `GetMe(lID/
-//! btCountry/lPos)`, локального `3000 / SetPlayer(btCountry)` и `5203 /
-//! PostCountryInfo`. Named write сохраняет byte narrowing, `UpdateProperty`,
-//! адресные `BF80C/BF721`; notice проходит существующий строгий маршрут
+//! btCountry/lPos)`, named family `2999..3001` и `5203 / PostCountryInfo`.
+//! `ChangePlayer` замыкает shipped `Experience` alias без отдельного client
+//! packet; `SetPlayer` сохраняет narrowing и порядок write → UpdateProperty →
+//! `BF80C`, а удалённый `GetPlayer` проходит
+//! `5FF02 → 7FC03 → 5FF03 → 7FC02` до continuation исходного CScript. Notice
+//! проходит существующий строгий маршрут
 //! `0x5FF16 → 0x7FC13 → 0xBF806` только игрокам выбранной страны.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
@@ -268,6 +271,7 @@ pub(crate) const SCRIPT_FUNCTION_SET_HOTKEY: i32 = 2560;
 pub(crate) const SCRIPT_FUNCTION_ADD_LOG: i32 = 2571;
 pub(crate) const SCRIPT_FUNCTION_IS_COMBAT_STATE: i32 = 2574;
 pub(crate) const SCRIPT_FUNCTION_DRAW_AWARDS: i32 = 2575;
+pub(crate) const SCRIPT_FUNCTION_CHANGE_PLAYER: i32 = 2999;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
 pub(crate) const SCRIPT_FUNCTION_GET_PLAYER: i32 = 3001;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
@@ -3175,7 +3179,7 @@ pub(crate) fn script_function_parameter_kind(
             1 => Integer,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_SET_PLAYER => match index {
+        SCRIPT_FUNCTION_CHANGE_PLAYER | SCRIPT_FUNCTION_SET_PLAYER => match index {
             0 | 1 => String,
             2 => Integer,
             _ => Unused,
@@ -4854,6 +4858,20 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: game.set_script_player_level(player_id, target_name, level as u8),
+            })
+        }
+        SCRIPT_FUNCTION_CHANGE_PLAYER => {
+            let (Some(target_name), Some(property), Some(delta)) = (
+                string_arguments[0],
+                string_arguments[1],
+                integer_arguments[2],
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game
+                    .change_named_script_player_property(target_name, property, delta, runtime)
+                    .unwrap_or(-1),
             })
         }
         SCRIPT_FUNCTION_SET_PLAYER => {

@@ -9179,10 +9179,46 @@ impl CGame {
         Some(value)
     }
 
-    /// Reached `SetPlayer(name, "btCountry", value)` сохраняет byte-narrowed
-    /// player field, обязательный `UpdateProperty`, адресный legacy `0xBF80C`
-    /// и общий `0xBF721` property tail. World country mutation этим локальным
-    /// script owner-ом исторически не публикуется.
+    /// `ChangePlayer` меняет локальное named property, затем исполняет
+    /// обязательный virtual `UpdateProperty`. В отличие от `SetPlayer`, этот
+    /// selector не публикует отдельный `0xBF80C`.
+    pub(crate) fn change_named_script_player_property<Context>(
+        &mut self,
+        player_name: &[u8],
+        property: &[u8],
+        delta: i32,
+        context: &mut Context,
+    ) -> Option<i32>
+    where
+        Context: GameContainerMessageRuntime + BattleFairyDeathContext + NationCombatContext,
+    {
+        let player_id = self.find_player_by_name(player_name)?.player_id();
+        let applied = self
+            .players
+            .get_mut(&player_id)?
+            .change_script_value(property, delta)
+            .unwrap_or(0);
+        let recomputed = {
+            let player = self.players.get(&player_id)?;
+            context.recompute_enhancement_player_properties(player)
+        };
+        self.players
+            .get_mut(&player_id)
+            .expect("named script-player сохранён до ChangePlayer UpdateProperty")
+            .apply_recomputed_combat_properties(recomputed);
+        let mut external = context.player_properties_external_facts(player_id);
+        let player = self
+            .players
+            .get(&player_id)
+            .expect("named script-player сохранён до ChangePlayer OnChangeProperties");
+        external.vigour = player.vigour();
+        let _ = self.send_player_properties_changed(player, external);
+        Some(applied)
+    }
+
+    /// `SetPlayer` записывает локальное named property, исполняет обязательный
+    /// `UpdateProperty`, затем отправляет адресный legacy `0xBF80C` и общий
+    /// `0xBF721` property tail. World mutation этим owner-ом не публикуется.
     pub(crate) fn set_named_script_player_property<Context>(
         &mut self,
         player_name: &[u8],
@@ -9194,20 +9230,11 @@ impl CGame {
         Context: GameContainerMessageRuntime + BattleFairyDeathContext + NationCombatContext,
     {
         let player_id = self.find_player_by_name(player_name)?.player_id();
-        let applied = {
-            let player = self.players.get_mut(&player_id)?;
-            if property.eq_ignore_ascii_case(b"btCountry") {
-                player.set_script_country(value)
-            } else {
-                0
-            }
-        };
-        let mut changed = CMessage::new(0x000b_f80c);
-        changed.add_long(400);
-        changed.add_long(player_id);
-        add_legacy_c_string(changed.base_mut(), property);
-        changed.add_long(value);
-        let _ = changed.send_to_player(self.net_server(), player_id);
+        let applied = self
+            .players
+            .get_mut(&player_id)?
+            .set_script_value(property, value)
+            .unwrap_or(0);
 
         let recomputed = {
             let player = self.players.get(&player_id)?;
@@ -9224,6 +9251,12 @@ impl CGame {
             .expect("named script-player сохранён до OnChangeProperties");
         external.vigour = player.vigour();
         let _ = self.send_player_properties_changed(player, external);
+        let mut changed = CMessage::new(0x000b_f80c);
+        changed.add_long(400);
+        changed.add_long(player_id);
+        add_legacy_c_string(changed.base_mut(), property);
+        changed.add_long(value);
+        let _ = changed.send_to_player(self.net_server(), player_id);
         Some(applied)
     }
 

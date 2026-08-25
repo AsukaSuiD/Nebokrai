@@ -39,8 +39,9 @@
 //! value сохраняет wrapping addition, `SetExploit` отдельно применяет exact
 //! unsigned CountryParam maximum, а virtual `UpdateProperty` остаётся
 //! обязательным caller-runtime effect после мутации.
-//! Reached script property `dwVigour` отделено от `SetVigour`:
-//! generic `SetValue` пишет биты DWORD без clamp, включая достигнутые honor
+//! Reached script property catalog отделён от gameplay setter-ов: generic
+//! `SetValue/ChangeValue` сохраняет narrowing/wrapping storage, включая
+//! shipped `Experience` alias и достигнутые honor
 //! `dwAppellationID/dwRankOfNobilityID`; `GetValue` читает также credit, SZL и
 //! contribution из canonical storage. Пересчёт и
 //! `0xBF721` остаются у вызывающего `CGame`.
@@ -3948,21 +3949,55 @@ impl CPlayer {
         }
     }
 
-    /// Direct `SetScriptValue` storage для достигнутых SetMe DWORD fields.
+    /// Достигнутая writable-часть того же `m_mapNameValue/SetValue` catalog.
+    /// Узкие поля сохраняют исходное integer narrowing, DWORD — все биты.
     pub(crate) fn set_script_value(&mut self, property: &[u8], value: i32) -> Option<i32> {
-        if property.eq_ignore_ascii_case(b"dwVigour") {
+        if property.eq_ignore_ascii_case(b"btCountry") {
+            Some(self.set_script_country(value))
+        } else if property.eq_ignore_ascii_case(b"dwVigour") {
             Some(self.set_script_vigour(value))
+        } else if property.eq_ignore_ascii_case(b"lLevel") {
+            self.base_properties.level = value as u8;
+            Some(i32::from(self.base_properties.level))
+        } else if property.eq_ignore_ascii_case(b"lSex") {
+            self.base_properties.sex = value as u8;
+            Some(i32::from(self.base_properties.sex))
         } else if property.eq_ignore_ascii_case(b"dwExp") {
             Some(self.set_script_experience(value))
+        } else if property.eq_ignore_ascii_case(b"lOccupation") {
+            self.base_properties.occupation = value as u8;
+            Some(i32::from(self.base_properties.occupation))
         } else if property.eq_ignore_ascii_case(b"dwAppellationID") {
             self.base_properties.appellation_id = value as u32;
             Some(value)
         } else if property.eq_ignore_ascii_case(b"dwRankOfNobilityID") {
             self.base_properties.rank_of_nobility_id = value as u32;
             Some(value)
+        } else if property.eq_ignore_ascii_case(b"dwCredit") {
+            self.base_properties.credit = value as u32;
+            Some(value)
+        } else if property.eq_ignore_ascii_case(b"dwSZL") {
+            self.base_properties.szl = value as u32;
+            Some(value)
+        } else if property.eq_ignore_ascii_case(b"lContribute") {
+            self.contribution = value;
+            Some(value)
         } else {
             None
         }
+    }
+
+    /// `ChangeValue` применяет wrapping arithmetic ширины фактического поля.
+    /// Shipped GM-script использует исторический алиас `Experience` для
+    /// canonical `dwExp`.
+    pub(crate) fn change_script_value(&mut self, property: &[u8], delta: i32) -> Option<i32> {
+        let canonical = if property.eq_ignore_ascii_case(b"Experience") {
+            b"dwExp".as_slice()
+        } else {
+            property
+        };
+        let current = self.script_value(canonical)?;
+        self.set_script_value(canonical, current.wrapping_add(delta))
     }
 
     pub(crate) fn delete_realm_appellation_skill(
