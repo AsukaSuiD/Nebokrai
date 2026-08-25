@@ -3909,6 +3909,16 @@ impl CPlayer {
             Some(self.server_region_id().unwrap_or_default())
         } else if property.eq_ignore_ascii_case(b"lID") {
             Some(self.player_id())
+        } else if property.eq_ignore_ascii_case(b"lTileX") {
+            Some(self.shape().get_tile_x().unwrap_or_default())
+        } else if property.eq_ignore_ascii_case(b"lTileY") {
+            Some(self.shape().get_tile_y().unwrap_or_default())
+        } else if property.eq_ignore_ascii_case(b"lDir") {
+            Some(self.shape().get_direction())
+        } else if property.eq_ignore_ascii_case(b"wState") {
+            Some(i32::from(self.shape().get_state()))
+        } else if property.eq_ignore_ascii_case(b"wAction") {
+            Some(i32::from(self.shape().get_action()))
         } else if property.eq_ignore_ascii_case(b"btCountry") {
             Some(i32::from(self.country()))
         } else if property.eq_ignore_ascii_case(b"lPos") {
@@ -3917,6 +3927,8 @@ impl CPlayer {
             Some(self.vigour() as i32)
         } else if property.eq_ignore_ascii_case(b"lLevel") {
             Some(i32::from(self.level()))
+        } else if property.eq_ignore_ascii_case(b"lSex") {
+            Some(i32::from(self.base_properties.sex))
         } else if property.eq_ignore_ascii_case(b"dwExp") {
             Some(self.experience() as i32)
         } else if property.eq_ignore_ascii_case(b"lOccupation") {

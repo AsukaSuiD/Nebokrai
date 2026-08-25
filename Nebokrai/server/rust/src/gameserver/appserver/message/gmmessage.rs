@@ -2,7 +2,7 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x5FF15`, `0x7FC01/02/04/05`, `0x7FC06`, `0x7FC08..0x7FC0F`,
+//! ветви `0x5FF15`, `0x7FC01..0x7FC06`, `0x7FC08..0x7FC0F`,
 //! `0x7FC11` и `0x7FC13`: requester ID читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
@@ -39,6 +39,10 @@
 //! Script-continuation family читает `(value, script ID)` после requester-а,
 //! продолжает owned `CScript`; только `0x7FC01` подавляет вызов
 //! при отсутствующем player, остальные три передают исходный null-owner факт.
+//! Межсерверная ветвь `0x7FC03` читает target player ID, property с точной
+//! границей `0x20`, source map и script ID, вычисляет значение через того же
+//! `CPlayer` owner-а и возвращает WorldServer пакет `0x5FF03`; WorldServer
+//! маршрутизирует результат как `0x7FC02` исходному script continuation.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
@@ -54,6 +58,7 @@ use crate::nets::netserver::message::{CMessage, SendMessageError};
 const GM_LIST_RESPONSE_MESSAGE: i32 = 0x0005_FF15;
 const GM_SCRIPT_CONTINUE_IF_PRESENT_MESSAGE: i32 = 0x0007_FC01;
 const GM_SCRIPT_CONTINUE_MESSAGE_1: i32 = 0x0007_FC02;
+const GM_GET_PLAYER_PROPERTY_REQUEST: i32 = 0x0007_FC03;
 const GM_SCRIPT_CONTINUE_MESSAGE_2: i32 = 0x0007_FC04;
 const GM_SCRIPT_CONTINUE_MESSAGE_3: i32 = 0x0007_FC05;
 const GM_KICK_BY_NAME_MESSAGE: i32 = 0x0007_FC06;
@@ -86,6 +91,9 @@ const GM_PRIVATE_NOTICE_SUFFIX: &[u8] = b" By Game Server ";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GmMessageError {
     MissingRequesterId,
+    MissingTargetPlayerId,
+    MissingPlayerProperty,
+    MissingOriginMapId,
     MissingScriptContinuationValue,
     MissingScriptContinuationId,
     MissingListTargetPlayerId,
@@ -121,6 +129,19 @@ pub(crate) enum GmMessageError {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GmMessageReport {
+    PlayerPropertyTargetMissing {
+        requester_id: i32,
+        target_player_id: i32,
+    },
+    PlayerPropertyReturned {
+        requester_id: i32,
+        target_player_id: i32,
+        property: Vec<u8>,
+        value: i32,
+        origin_map_id: i32,
+        script_id: i32,
+        delivery: Result<i32, SendMessageError>,
+    },
     ScriptContinued {
         requester_id: i32,
         script_id: i32,
@@ -253,6 +274,7 @@ pub(crate) fn dispatch_gm_message<Runtime: GameOtherMessageRuntime>(
         GM_LIST_RESPONSE_MESSAGE
             | GM_SCRIPT_CONTINUE_IF_PRESENT_MESSAGE
             | GM_SCRIPT_CONTINUE_MESSAGE_1
+            | GM_GET_PLAYER_PROPERTY_REQUEST
             | GM_SCRIPT_CONTINUE_MESSAGE_2
             | GM_SCRIPT_CONTINUE_MESSAGE_3
             | GM_KICK_BY_NAME_MESSAGE
@@ -273,6 +295,43 @@ pub(crate) fn dispatch_gm_message<Runtime: GameOtherMessageRuntime>(
     let Some(requester_id) = message.base_mut().get_long() else {
         return Some(Err(GmMessageError::MissingRequesterId));
     };
+
+    if message_type == GM_GET_PLAYER_PROPERTY_REQUEST {
+        let Some(target_player_id) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingTargetPlayerId));
+        };
+        let Some(property) = message.base_mut().get_str_bytes(0x20) else {
+            return Some(Err(GmMessageError::MissingPlayerProperty));
+        };
+        let Some(origin_map_id) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingOriginMapId));
+        };
+        let Some(script_id) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingScriptContinuationId));
+        };
+        let Some(target) = game.find_player(target_player_id) else {
+            return Some(Ok(GmMessageReport::PlayerPropertyTargetMissing {
+                requester_id,
+                target_player_id,
+            }));
+        };
+        let value = target.script_value(&property).unwrap_or(0);
+        let mut response = CMessage::new(0x0005_ff03);
+        response.add_long(requester_id);
+        response.add_long(value);
+        response.add_long(origin_map_id);
+        response.add_long(script_id);
+        let delivery = response.send(game, false);
+        return Some(Ok(GmMessageReport::PlayerPropertyReturned {
+            requester_id,
+            target_player_id,
+            property,
+            value,
+            origin_map_id,
+            script_id,
+            delivery,
+        }));
+    }
 
     if matches!(
         message_type,

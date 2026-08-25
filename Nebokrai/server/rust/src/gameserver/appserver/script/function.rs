@@ -269,6 +269,7 @@ pub(crate) const SCRIPT_FUNCTION_ADD_LOG: i32 = 2571;
 pub(crate) const SCRIPT_FUNCTION_IS_COMBAT_STATE: i32 = 2574;
 pub(crate) const SCRIPT_FUNCTION_DRAW_AWARDS: i32 = 2575;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER: i32 = 3000;
+pub(crate) const SCRIPT_FUNCTION_GET_PLAYER: i32 = 3001;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
 pub(crate) const SCRIPT_FUNCTION_DELETE_SKILL: i32 = 3102;
@@ -3179,6 +3180,10 @@ pub(crate) fn script_function_parameter_kind(
             2 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_PLAYER => match index {
+            0 | 1 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_GET_MONEY_BY_NAME
         | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME
         | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => match index {
@@ -4862,6 +4867,26 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     .set_named_script_player_property(target_name, property, requested, runtime)
                     .unwrap_or(-1),
             })
+        }
+        SCRIPT_FUNCTION_GET_PLAYER => {
+            let (Some(target_name), Some(property)) = (string_arguments[0], string_arguments[1])
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if let Some(target) = game.find_player_by_name(target_name) {
+                return Some(ScriptFunctionDispatchOutcome::Handled {
+                    legacy_return: target.script_value(property).unwrap_or(0),
+                });
+            }
+            let mut request = CMessage::new(0x0005_ff02);
+            request.add_long(player_id);
+            request.base_mut().add(target_name);
+            request.add_byte(0);
+            request.base_mut().add(property);
+            request.add_byte(0);
+            request.add_long(script_id);
+            let _ = request.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Yielded { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_CREATE_FACTION => {
             let (Some(required_level), Some(required_goods), Some(required_money), Some(country)) = (
