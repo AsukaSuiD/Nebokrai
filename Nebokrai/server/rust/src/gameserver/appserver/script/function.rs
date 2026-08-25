@@ -87,6 +87,9 @@
 //! того же player owner-а. Setter сохраняет только положительное увеличение,
 //! energy/daily-stamp mutation и общий `0xBF73E + 0x5FD10` snapshot; getter
 //! возвращает count либо `-1`, а исходный setter result остаётся `-1`.
+//! Достигнутая там же notice-family `3316/5201/5202` единообразно вычисляет
+//! text/color/background: личный круг использует `0xBF811` и opaque-black
+//! default, региональный — `0xBF806`, мировой сохраняет World `0x5FF0E` relay.
 //! PreciousBox `2221/2222/2237` сохраняет trusted action-script у player,
 //! client open/result/close wire, общий Game RNG, configuration roll,
 //! goods factory/upgrade/packet ownership и optional World announcement;
@@ -188,7 +191,7 @@ use crate::gameserver::gameserver::game::{
     GameContainerMessageRuntime, GodsBattleDeathContext, GodsBattleSzlPlayerUpdate,
     NationCarriageReturnReport, NationCombatContext, NationContendEnterReport,
     RealmAppellationScriptContext, ScriptRegionChangeContext, ServerRegionOwner,
-    colored_player_notice_message, format_legacy_text_fields,
+    colored_player_notice_message, colored_text_message, format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
@@ -284,6 +287,8 @@ pub(crate) const SCRIPT_FUNCTION_GET_ONLINE_PLAYERS: i32 = 5108;
 pub(crate) const SCRIPT_FUNCTION_GET_AREA_ID: i32 = 5413;
 pub(crate) const SCRIPT_FUNCTION_PLAY_EFFECT: i32 = 5404;
 pub(crate) const SCRIPT_FUNCTION_RELOAD: i32 = 5001;
+pub(crate) const SCRIPT_FUNCTION_POST_PLAYER_INFO: i32 = 3316;
+pub(crate) const SCRIPT_FUNCTION_POST_REGION_INFO: i32 = 5201;
 pub(crate) const SCRIPT_FUNCTION_POST_WORLD_INFO: i32 = 5202;
 pub(crate) const SCRIPT_FUNCTION_POST_COUNTRY_INFO: i32 = 5203;
 pub(crate) const SCRIPT_FUNCTION_ADD_QUEST: i32 = 6200;
@@ -3229,7 +3234,9 @@ pub(crate) fn script_function_parameter_kind(
             0 => String,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_POST_WORLD_INFO => match index {
+        SCRIPT_FUNCTION_POST_PLAYER_INFO
+        | SCRIPT_FUNCTION_POST_REGION_INFO
+        | SCRIPT_FUNCTION_POST_WORLD_INFO => match index {
             0 => String,
             1 | 2 => Integer,
             _ => Unused,
@@ -4103,6 +4110,29 @@ fn next_lei_ting_daily_stamp_if_same_local_day(current_stamp: u32) -> Option<u32
     Some(unsafe { libc::mktime(&mut native) } as i32 as u32)
 }
 
+fn script_notice_arguments<'a>(
+    argument_count: usize,
+    integer_arguments: &[Option<i32>; 7],
+    string_arguments: &[Option<&'a [u8]>; 7],
+    default_background: i32,
+) -> Option<(&'a [u8], u32, u32)> {
+    let text = string_arguments[0].filter(|text| text.len() <= 0xff && !text.contains(&0))?;
+    if argument_count > 3 {
+        return None;
+    }
+    let color = match integer_arguments[1] {
+        Some(SCRIPT_INT_PARAMETER_ERROR) => return None,
+        Some(color) => color,
+        None => -1,
+    };
+    let background = match integer_arguments[2] {
+        Some(SCRIPT_INT_PARAMETER_ERROR) => return None,
+        Some(background) => background,
+        None => default_background,
+    };
+    Some((text, color as u32, background as u32))
+}
+
 fn publish_script_lei_ting_update(game: &CGame, player_id: i32) {
     let payload = game
         .find_player(player_id)
@@ -4570,31 +4600,69 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 legacy_return: local_count,
             })
         }
-        SCRIPT_FUNCTION_POST_WORLD_INFO => {
-            let Some(text) =
-                string_arguments[0].filter(|text| text.len() <= 0xff && !text.contains(&0))
-            else {
+        SCRIPT_FUNCTION_POST_PLAYER_INFO
+        | SCRIPT_FUNCTION_POST_REGION_INFO
+        | SCRIPT_FUNCTION_POST_WORLD_INFO => {
+            let default_background = if function_id == SCRIPT_FUNCTION_POST_PLAYER_INFO {
+                -16_777_216
+            } else {
+                0
+            };
+            let Some((text, color, background)) = script_notice_arguments(
+                argument_count,
+                &integer_arguments,
+                &string_arguments,
+                default_background,
+            ) else {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             };
-            if argument_count > 3 {
-                return Some(ScriptFunctionDispatchOutcome::Invalid);
-            }
-            if game
-                .find_player(player_id)
-                .and_then(|player| player.server_region_id())
-                .is_none()
-            {
+            if player_id <= 0 || game.find_player(player_id).is_none() {
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             }
-            let color = integer_arguments[1].unwrap_or(-1);
-            let background = integer_arguments[2].unwrap_or_default();
+
+            if function_id == SCRIPT_FUNCTION_POST_PLAYER_INFO {
+                return Some(
+                    if colored_text_message(0x000b_f811, color, background, text)
+                        .send_to_player(game.net_server(), player_id)
+                        != 0
+                    {
+                        ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
+                    } else {
+                        ScriptFunctionDispatchOutcome::Invalid
+                    },
+                );
+            }
+            let Some(region_id) = game
+                .find_player(player_id)
+                .and_then(|player| player.server_region_id())
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            if function_id == SCRIPT_FUNCTION_POST_REGION_INFO {
+                let Some(region) = game.find_region(region_id) else {
+                    return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+                };
+                return Some(
+                    if colored_player_notice_message(color, background, text).send_to_region(
+                        Some(region.base()),
+                        None,
+                        game,
+                    ) != 0
+                    {
+                        ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
+                    } else {
+                        ScriptFunctionDispatchOutcome::Invalid
+                    },
+                );
+            }
+
             let mut request = CMessage::new(0x0005_ff0e);
             request.add_long(player_id);
             request.base_mut().add(text);
             request.add_byte(0);
-            request.add_long(color);
-            request.add_long(background);
-            request.add_long(i32::from(color == -2));
+            request.add_long(color as i32);
+            request.add_long(background as i32);
+            request.add_long(i32::from(color as i32 == -2));
             request.add_long(0);
             match request.send(game, false) {
                 Ok(delivery) if delivery != 0 => {

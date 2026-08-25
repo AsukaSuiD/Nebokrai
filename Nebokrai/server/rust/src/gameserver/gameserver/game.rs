@@ -20817,6 +20817,15 @@ pub(crate) fn colored_player_notice_message(
     nation_colored_text_message(0xbf806, first_color, second_color, text)
 }
 
+pub(crate) fn colored_text_message(
+    message_type: i32,
+    first_color: u32,
+    second_color: u32,
+    text: &[u8],
+) -> CMessage {
+    nation_colored_text_message(message_type, first_color, second_color, text)
+}
+
 fn round_fairy_value(value: f32) -> u32 {
     value.round() as u32
 }
