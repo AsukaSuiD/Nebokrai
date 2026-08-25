@@ -16,8 +16,9 @@
 //! Внутри player pass exact `PeriodicalUpdate` tail выполняет ping `0xBF809`,
 //! Nation died countdown и fairy hatcher до `CMoveShape::AI`; внешний runtime
 //! остаётся только у ещё не материализованных virtual owners. Достигнутый
-//! `CPlayerAI::Run` tail восстанавливает persisted energy по live faction
-//! level/setup clock и публикует изменившийся DWORD адресным `0xBF72C`. Legacy
+//! `CPlayerAI::Run` tail начисляет faction auto-exp/vigour через полный
+//! multi-level `CheckLevel` (scripts, properties, `6012A/BF704/BF705/60206`),
+//! затем восстанавливает persisted energy и публикует `0xBF72C`. Legacy
 //! disconnect timer доказательно process-dead: EXE содержит только constructor
 //! zeroing и AI read/clear, но ни одного runtime writer-а обоих полей.
 //! После live/dead war-soul ветви тот же caller сохраняет GoodsAI/delete,
@@ -448,7 +449,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rustix::system::uname;
 
-use crate::gameserver::appserver::ai::playerai::{CPlayerAI, PlayerEnergyRegeneration};
+use crate::gameserver::appserver::ai::playerai::{
+    CPlayerAI, PlayerAutoProgress, PlayerEnergyRegeneration,
+};
 use crate::gameserver::appserver::area::{AreaAiContext, AreaAiReport, AreaMonsterAiFacts};
 use crate::gameserver::appserver::chbystate::ChangeBodyState;
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::{
@@ -1625,6 +1628,29 @@ pub(crate) struct PlayerAiTailReport {
 pub(crate) struct PlayerEnergyRegenerationReport {
     pub(crate) mutation: PlayerEnergyRegeneration,
     pub(crate) delivery: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerLevelStepReport {
+    pub(crate) level: u8,
+    pub(crate) faction_delivery: Option<Result<i32, SendMessageError>>,
+    pub(crate) level_script_id: Option<i32>,
+    pub(crate) protection_notice_delivery: Option<i32>,
+    pub(crate) upgrade_applied: bool,
+    pub(crate) upgrade_notice_delivery: Option<i32>,
+    pub(crate) property_applied: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerAutoProgressReport {
+    pub(crate) mutation: PlayerAutoProgress,
+    pub(crate) original_level: u8,
+    pub(crate) current_level: u8,
+    pub(crate) steps: Vec<PlayerLevelStepReport>,
+    pub(crate) final_property_applied: bool,
+    pub(crate) player_delivery: Option<i32>,
+    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+    pub(crate) level_log_delivery: Option<Result<i32, SendMessageError>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3846,6 +3872,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
     pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
     pub(crate) player_energy_regenerations: Vec<PlayerEnergyRegenerationReport>,
+    pub(crate) player_auto_progress: Vec<PlayerAutoProgressReport>,
     pub(crate) player_lost_timeouts: Vec<GamePlayerLostTimeoutReport>,
     pub(crate) player_fight_states: Vec<GamePlayerFightStateReport>,
     pub(crate) base_region: Option<BaseRegionAiReport>,
@@ -5001,10 +5028,10 @@ pub(crate) trait GameMainLoopRuntime:
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
     fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
-    /// Исполняет ещё не материализованные `CBaseAI::Run` и auto-exp prefix
-    /// virtual `CPlayerAI::Run` после owned `UpdateCurrentState`, используя
-    /// canonical player-owned FIFO. Возвращает post-AI restored-state current
-    /// war-soul skill; owned energy tail исполняется caller-ом сразу после.
+    /// Исполняет ещё не материализованный `CBaseAI::Run` prefix virtual
+    /// `CPlayerAI::Run` после owned `UpdateCurrentState`, используя canonical
+    /// player-owned FIFO. Возвращает post-AI restored-state current war-soul
+    /// skill; owned auto-exp/CheckLevel/energy tails идут сразу после.
     fn player_move_shape_active_state_ai(
         &mut self,
         game: &mut CGame,
@@ -28532,6 +28559,207 @@ impl CGame {
         })
     }
 
+    fn recompute_player_level_properties<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        refill_mana: bool,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let Some(properties) = self
+            .find_player(player_id)
+            .map(|player| runtime.recompute_enhancement_player_properties(player))
+        else {
+            return false;
+        };
+        if !self.apply_recomputed_player_properties(player_id, properties) {
+            return false;
+        }
+        if refill_mana {
+            let player = self
+                .find_player_mut(player_id)
+                .expect("level property recompute сохраняет canonical player");
+            player.set_mana(player.maximum_mana());
+        }
+        true
+    }
+
+    /// Exact `CPlayer::CheckLevel` из reached auto-exp caller-а. Разность EXP
+    /// намеренно остаётся wrapping DWORD с signed-проверкой; Linux-донор менял
+    /// её на `i64`, но целевой EXE этого исправления не содержит.
+    fn finish_player_auto_progress<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        mutation: PlayerAutoProgress,
+        runtime: &mut Runtime,
+    ) -> Option<PlayerAutoProgressReport> {
+        let player_id = mutation.player_id;
+        let original_level = self.find_player(player_id)?.level();
+        let mut steps = Vec::new();
+        let mut experience_beyond_level =
+            self.find_player(player_id)?
+                .experience()
+                .wrapping_sub(self.player_list.level_experience(original_level)) as i32;
+
+        while experience_beyond_level >= 0 {
+            let level = self.find_player(player_id)?.level();
+            if self.player_list.level_count() <= usize::from(level) {
+                let threshold = self.player_list.level_experience(level);
+                self.find_player_mut(player_id)?.set_experience(threshold);
+                break;
+            }
+
+            let level = level.wrapping_add(1);
+            self.find_player_mut(player_id)?.set_level(level);
+            let faction_id = self.find_player(player_id)?.faction_id();
+            let faction_delivery = (faction_id > 0).then(|| {
+                let mut message = CMessage::new(0x0006_012a);
+                message.add_long(faction_id);
+                message.add_long(player_id);
+                message.add_long(1);
+                message.add_ulong(u32::from(level));
+                message.send(self, false)
+            });
+            self.find_player_mut(player_id)?
+                .set_experience(experience_beyond_level as u32);
+            let region_id = self
+                .find_player(player_id)
+                .and_then(CPlayer::server_region_id);
+            let level_script = self.quest_system.player_level_up_script.clone();
+            let level_script_id = self.queue_script_file(
+                &level_script,
+                ScriptExecutionContext {
+                    player_id: Some(player_id),
+                    region_id,
+                    ..ScriptExecutionContext::default()
+                },
+            );
+
+            let protection_notice_delivery = if u32::from(level)
+                == self.globe_setup.newbie_level_limit().wrapping_add(1)
+            {
+                Some(
+                    colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0144"))
+                        .send_to_player(self.net_server(), player_id),
+                )
+            } else if u32::from(level) == self.globe_setup.new_soldier_level().wrapping_add(1) {
+                Some(
+                    colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0145"))
+                        .send_to_player(self.net_server(), player_id),
+                )
+            } else {
+                None
+            };
+
+            let occupation = self.find_player(player_id)?.occupation();
+            let upgrade = self
+                .player_list
+                .properties_upgrade(occupation, level)
+                .cloned();
+            let upgrade_notice_delivery = upgrade.as_ref().map(|upgrade| {
+                self.find_player_mut(player_id)
+                    .expect("level upgrade сохраняет canonical player")
+                    .apply_level_property_upgrade(upgrade);
+                colored_player_notice_message(0xff42_80fd, 0x55ff_0000, &upgrade.notification)
+                    .send_to_player(self.net_server(), player_id)
+            });
+            let base_maximum_rp = self.globe_setup.base_max_rp(occupation, level);
+            self.find_player_mut(player_id)?
+                .set_base_maximum_rp(base_maximum_rp);
+            let property_applied = self.recompute_player_level_properties(player_id, true, runtime);
+            steps.push(PlayerLevelStepReport {
+                level,
+                faction_delivery,
+                level_script_id,
+                protection_notice_delivery,
+                upgrade_applied: upgrade.is_some(),
+                upgrade_notice_delivery,
+                property_applied,
+            });
+
+            let player = self.find_player(player_id)?;
+            experience_beyond_level = player
+                .experience()
+                .wrapping_sub(self.player_list.level_experience(player.level()))
+                as i32;
+        }
+
+        let final_property_applied =
+            self.recompute_player_level_properties(player_id, false, runtime);
+        let player = self.find_player(player_id)?;
+        let current_level = player.level();
+        let level_delta = current_level.wrapping_sub(original_level);
+        let (player_delivery, around_delivery) = if level_delta == 0 {
+            let mut message = CMessage::new(0x000b_f704);
+            message.add_ulong(player.experience());
+            message.add_ulong(player.vigour());
+            message.add_ulong(player.fetch_power());
+            (
+                Some(message.send_to_player(self.net_server(), player_id)),
+                None,
+            )
+        } else {
+            let threshold = self.player_list.level_experience(current_level);
+            let (base_maximum_hp, base_maximum_mp, base_burden, base_maximum_rp) =
+                player.level_wire_properties();
+            let current_experience = player.experience();
+            let mut message = CMessage::new(0x000b_f705);
+            message.add_long(player_id);
+            message.add_byte(level_delta);
+            message.add_ulong(mutation.experience_gain);
+            message.add_ulong(current_experience);
+            message.add_ulong(threshold);
+            message.add_ulong(base_maximum_hp);
+            message.add_ulong(base_maximum_mp);
+            message.base_mut().add_word(base_burden);
+            message.base_mut().add_word(base_maximum_rp);
+            message.add_ulong(mutation.vigour_gain);
+            (
+                None,
+                self.send_player_shape_around(player_id, None, &message),
+            )
+        };
+
+        let level_log_delivery = if level_delta != 0 && self.log_system.player_level_log_enabled() {
+            let player = self.find_player(player_id)?;
+            let (tile_x, tile_y) = match (player.shape().get_tile_x(), player.shape().get_tile_y())
+            {
+                (Ok(tile_x), Ok(tile_y)) => (tile_x, tile_y),
+                _ => {
+                    return Some(PlayerAutoProgressReport {
+                        mutation,
+                        original_level,
+                        current_level,
+                        steps,
+                        final_property_applied,
+                        player_delivery,
+                        around_delivery,
+                        level_log_delivery: None,
+                    });
+                }
+            };
+            let mut message = CMessage::new(0x0006_0206);
+            message.add_long(player_id);
+            message.add_ulong(player.experience());
+            message.add_byte(original_level);
+            message.add_byte(current_level);
+            message.add_ulong(player.shape().get_region_id() as u32);
+            message.add_ulong(tile_x as u32);
+            message.add_ulong(tile_y as u32);
+            Some(message.send(self, false))
+        } else {
+            None
+        };
+        Some(PlayerAutoProgressReport {
+            mutation,
+            original_level,
+            current_level,
+            steps,
+            final_property_applied,
+            player_delivery,
+            around_delivery,
+            level_log_delivery,
+        })
+    }
+
     /// Полный `CPlayer::DoneTaoZhuang`: live equipment/CiQing state идёт через
     /// setup thresholds к combat/skill state, completion scripts и точным
     /// адресным `BF81A/C0110/BF71D/BF71E/BF721` результатам.
@@ -29375,6 +29603,7 @@ impl CGame {
             let mut battle_fairy_follows = Vec::with_capacity(player_ids.len());
             let mut player_ai_tails = Vec::with_capacity(player_ids.len());
             let mut player_energy_regenerations = Vec::with_capacity(player_ids.len());
+            let mut player_auto_progress = Vec::with_capacity(player_ids.len());
             let mut player_lost_timeouts = Vec::new();
             let mut player_fight_states = Vec::new();
             for player_id in player_ids {
@@ -29432,6 +29661,31 @@ impl CGame {
                                 player_id,
                                 &mut player_ai,
                             );
+                            let progress_setup = (
+                                self.globe_setup.auto_inc_time_ms(),
+                                self.globe_setup.auto_inc_exp_1(),
+                                self.globe_setup.auto_inc_exp_2(),
+                                self.globe_setup.exp_to_vigour_x(),
+                                self.globe_setup.exp_to_vigour_y(),
+                                self.globe_setup.maximum_vigour_once(),
+                            );
+                            let progress = self.find_player_mut(player_id).and_then(|player| {
+                                player_ai.increment_player_progress(
+                                    player,
+                                    progress_setup.0,
+                                    progress_setup.1,
+                                    progress_setup.2,
+                                    progress_setup.3,
+                                    progress_setup.4,
+                                    progress_setup.5,
+                                    &mut || runtime.get_tick_ms(),
+                                )
+                            });
+                            if let Some(report) = progress.and_then(|mutation| {
+                                self.finish_player_auto_progress(mutation, runtime)
+                            }) {
+                                player_auto_progress.push(report);
+                            }
                             let interval_ms = self.globe_setup.auto_inc_energy_time_ms();
                             let energy = self.find_player_mut(player_id).and_then(|player| {
                                 player_ai.regenerate_player_energy(player, interval_ms, &mut || {
@@ -29787,6 +30041,7 @@ impl CGame {
                             battle_fairy_follows,
                             player_ai_tails,
                             player_energy_regenerations,
+                            player_auto_progress,
                             player_lost_timeouts,
                             player_fight_states,
                             base_region,
@@ -29819,6 +30074,7 @@ impl CGame {
                 battle_fairy_follows,
                 player_ai_tails,
                 player_energy_regenerations,
+                player_auto_progress,
                 player_lost_timeouts,
                 player_fight_states,
                 base_region,

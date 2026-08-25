@@ -14,6 +14,7 @@
 //! Goods destruction и equipment compose используют подтверждённые bytes
 //! `55/57`; Fairy
 //! grow/incubate/implantation/syncretize — tail `60..63` того же snapshot-а.
+//! Player level-up audit использует positional `bLevelLog` byte `24`.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -103,6 +104,10 @@ impl CLogSystem {
 
     pub(crate) fn increment_log_enabled(&self) -> bool {
         self.setting(54)
+    }
+
+    pub(crate) fn player_level_log_enabled(&self) -> bool {
+        self.setting(24)
     }
 
     pub(crate) fn goods_lost_by_upgrade_enabled(&self) -> bool {

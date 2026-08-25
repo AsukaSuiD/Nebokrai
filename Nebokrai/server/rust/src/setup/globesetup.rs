@@ -16,7 +16,8 @@
 //! reads `0xEF4528/68/6C/70/B0/B4` и `0xEF4604/08` в `OnOtherMessage`
 //! подтверждают общий base `0xEF3DC0` и эти offsets по точному EXE.
 //! `dwPkCountPerKill +0x4F4` обслуживает GameServer kill-confirmation path;
-//! `auto_inc_energy_time +0x828` обслуживает reached `CPlayerAI::Run` tail;
+//! auto-inc progression `+0x734/+0x75C/+0x81C..+0x828` обслуживает reached
+//! `CPlayerAI::Run` и полный `CheckLevel` tail;
 //! raw snapshot остаётся единым wire owner-ом без дублирующей config-модели.
 //! `CArea::AI` читает goods disappear/protection DWORD из `+0x34C/+0x350`;
 //! абсолютные VA `0xEF410C/0xEF4110` подтверждены целевым GameServer EXE.
@@ -124,6 +125,14 @@ const GOODS_PROTECTED_TIMER_OFFSET: usize = 0x350;
 // `CPlayerAI::Run` читает DWORD по VA `0xEF45E8` при том же base
 // `0xEF3DC0`; это exact interval между попытками восстановления energy.
 const AUTO_INC_ENERGY_TIME_OFFSET: usize = 0x828;
+const AUTO_INC_TIME_OFFSET: usize = 0x81C;
+const AUTO_INC_EXP_1_OFFSET: usize = 0x820;
+const AUTO_INC_EXP_2_OFFSET: usize = 0x824;
+const EXP_TO_VIGOUR_X_OFFSET: usize = 0x75C;
+const EXP_TO_VIGOUR_Y_OFFSET: usize = 0x760;
+const MAXIMUM_VIGOUR_ONCE_OFFSET: usize = 0x764;
+const NEWBIE_LEVEL_LIMIT_OFFSET: usize = 0x734;
+const NEW_SOLDIER_LEVEL_OFFSET: usize = 0x738;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -415,6 +424,38 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn auto_inc_energy_time_ms(&self) -> u32 {
         self.read_u32(AUTO_INC_ENERGY_TIME_OFFSET)
+    }
+
+    pub(crate) fn auto_inc_time_ms(&self) -> u32 {
+        self.read_u32(AUTO_INC_TIME_OFFSET)
+    }
+
+    pub(crate) fn auto_inc_exp_1(&self) -> f32 {
+        self.read_f32(AUTO_INC_EXP_1_OFFSET)
+    }
+
+    pub(crate) fn auto_inc_exp_2(&self) -> f32 {
+        self.read_f32(AUTO_INC_EXP_2_OFFSET)
+    }
+
+    pub(crate) fn exp_to_vigour_x(&self) -> u32 {
+        self.read_u32(EXP_TO_VIGOUR_X_OFFSET)
+    }
+
+    pub(crate) fn exp_to_vigour_y(&self) -> u32 {
+        self.read_u32(EXP_TO_VIGOUR_Y_OFFSET)
+    }
+
+    pub(crate) fn maximum_vigour_once(&self) -> u32 {
+        self.read_u32(MAXIMUM_VIGOUR_ONCE_OFFSET)
+    }
+
+    pub(crate) fn newbie_level_limit(&self) -> u32 {
+        self.read_u32(NEWBIE_LEVEL_LIMIT_OFFSET)
+    }
+
+    pub(crate) fn new_soldier_level(&self) -> u32 {
+        self.read_u32(NEW_SOLDIER_LEVEL_OFFSET)
     }
 
     pub(crate) fn contend_damage_time_factor(&self) -> f32 {

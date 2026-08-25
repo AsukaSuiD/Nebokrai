@@ -9,9 +9,10 @@
 //! Owner теперь принадлежит canonical `CPlayer`: quest movement и оба skill
 //! message family кладут typed dispatch в его FIFO, а reached `CMoveShape::AI`
 //! получает именно этот owner и может потребить очереди без shadow map.
-//! Хвост `CPlayerAI::Run` после ещё внешних `CBaseAI::Run` и auto-exp теперь
-//! хранит собственный energy clock, использует persisted player/faction facts,
-//! exact unsigned due-check и возвращает изменение для адресного `0xBF72C`.
+//! Хвост `CPlayerAI::Run` после ещё внешнего `CBaseAI::Run` теперь хранит оба
+//! auto-inc clock, использует persisted player/faction facts и exact unsigned
+//! due-check. Auto-exp возвращает mutation в полный `CGame::CheckLevel` caller,
+//! energy — в адресный `0xBF72C` tail.
 //! Четырёхаргументный pathfinding `MoveTo`, target/skill execution и остальные
 //! методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
@@ -32,7 +33,20 @@ pub(crate) struct CPlayerAI {
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
+    auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerAutoProgress {
+    pub(crate) player_id: i32,
+    pub(crate) sampled_at_ms: u32,
+    pub(crate) experience_gain: u32,
+    pub(crate) vigour_gain: u32,
+    pub(crate) previous_experience: u32,
+    pub(crate) current_experience: u32,
+    pub(crate) previous_vigour: u32,
+    pub(crate) current_vigour: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +85,57 @@ impl CPlayerAI {
 
     pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {
         &self.battle_fairy_skills
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn increment_player_progress(
+        &mut self,
+        player: &mut CPlayer,
+        interval_ms: u32,
+        auto_exp_1: f32,
+        auto_exp_2: f32,
+        exp_to_vigour_x: u32,
+        exp_to_vigour_y: u32,
+        maximum_vigour_once: u32,
+        get_tick_ms: &mut dyn FnMut() -> u32,
+    ) -> Option<PlayerAutoProgress> {
+        if player.is_dead() || player.faction_id() == 0 {
+            return None;
+        }
+        let sampled_at_ms = get_tick_ms();
+        if self.auto_inc_last_time_ms >= sampled_at_ms.wrapping_sub(interval_ms) {
+            return None;
+        }
+        self.auto_inc_last_time_ms = get_tick_ms();
+
+        let level = f64::from(player.level());
+        let experience_gain = (((f64::from(player.faction_level()) * 0.05 + 1.0)
+            * level.powi(3)
+            * f64::from(auto_exp_2)
+            + f64::from(auto_exp_1))
+            * f64::from(0.000_115_740_74_f32))
+        .trunc() as u32;
+        if experience_gain == 0 {
+            return None;
+        }
+        let vigour_raw = f64::from(exp_to_vigour_x)
+            * f64::from(experience_gain.wrapping_add(600)).log10()
+            - f64::from(exp_to_vigour_y);
+        let vigour_gain = (vigour_raw.trunc() as i32 as u32).min(maximum_vigour_once);
+        let previous_experience = player.experience();
+        let previous_vigour = player.vigour();
+        player.set_experience(previous_experience.wrapping_add(experience_gain));
+        player.set_vigour_clamped(previous_vigour.wrapping_add(vigour_gain));
+        Some(PlayerAutoProgress {
+            player_id: player.player_id(),
+            sampled_at_ms,
+            experience_gain,
+            vigour_gain,
+            previous_experience,
+            current_experience: player.experience(),
+            previous_vigour,
+            current_vigour: player.vigour(),
+        })
     }
 
     /// Exact energy tail `CPlayerAI::Run`: первый живой tick только заводит

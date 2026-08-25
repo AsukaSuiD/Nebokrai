@@ -65,6 +65,9 @@
 //! Cross-Game progression `0x7FA08..0B` использует owned skill map и level/exp:
 //! name-overload-ы делегируют factory ID lookup, а `SetLevel` возвращает
 //! faction side effect caller-у до exact client progression packet.
+//! Тот же persisted level/exp/vigour/base-stat owner теперь обслуживает reached
+//! auto-inc `CheckLevel`; multi-level scripts, property recompute и network
+//! результаты остаются у `CGame`, чтобы helper-ы не образовывали shadow path.
 //! World/country public talk timestamps принадлежат тому же player state:
 //! wrapping cooldown обновляется до проверки и списания channel-cost.
 //! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
@@ -340,6 +343,7 @@ const BASE_MANA_OFFSET: usize = 0xa8;
 const BASE_RP_OFFSET: usize = 0xac;
 const BASE_MAXIMUM_HP_OFFSET: usize = 0xb0;
 const BASE_MAXIMUM_MP_OFFSET: usize = 0xb4;
+const BASE_BURDEN_OFFSET: usize = 0xb8;
 const BASE_MAXIMUM_RP_OFFSET: usize = 0xba;
 const BASE_STRENGTH_OFFSET: usize = 0xbc;
 const BASE_DEXTERITY_OFFSET: usize = 0xc0;
@@ -1209,6 +1213,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) remain_point: u16,
     pub(crate) base_maximum_hp: u32,
     pub(crate) base_maximum_mp: u32,
+    pub(crate) base_burden: u16,
     pub(crate) base_strength: u32,
     pub(crate) base_dexterity: u32,
     pub(crate) base_constitution: u32,
@@ -3016,6 +3021,11 @@ impl CPlayer {
         write_player_wire_u16(&mut wire, BASE_RP_OFFSET, self.base_properties.rp);
         write_player_wire_u16(
             &mut wire,
+            BASE_BURDEN_OFFSET,
+            self.base_properties.base_burden,
+        );
+        write_player_wire_u16(
+            &mut wire,
             BASE_MAXIMUM_RP_OFFSET,
             self.base_properties.maximum_rp,
         );
@@ -3074,6 +3084,7 @@ impl CPlayer {
         self.base_properties.maximum_rp = read_player_wire_u16(wire, BASE_MAXIMUM_RP_OFFSET);
         self.base_properties.base_maximum_hp = read_player_wire_u32(wire, BASE_MAXIMUM_HP_OFFSET);
         self.base_properties.base_maximum_mp = read_player_wire_u32(wire, BASE_MAXIMUM_MP_OFFSET);
+        self.base_properties.base_burden = read_player_wire_u16(wire, BASE_BURDEN_OFFSET);
         self.base_properties.base_strength = read_player_wire_u32(wire, BASE_STRENGTH_OFFSET);
         self.base_properties.base_dexterity = read_player_wire_u32(wire, BASE_DEXTERITY_OFFSET);
         self.base_properties.base_constitution =
@@ -4595,6 +4606,36 @@ impl CPlayer {
 
     pub(crate) const fn level(&self) -> u8 {
         self.base_properties.level
+    }
+
+    pub(crate) const fn set_level(&mut self, level: u8) {
+        self.base_properties.level = level;
+    }
+
+    pub(crate) fn apply_level_property_upgrade(
+        &mut self,
+        upgrade: &crate::setup::playerlist::PlayerPropertiesUpgrade,
+    ) {
+        self.base_properties.base_maximum_hp = upgrade.base_maximum_hp;
+        self.base_properties.base_dexterity = upgrade.base_dexterity;
+        self.base_properties.base_maximum_mp = upgrade.base_maximum_mp;
+        self.base_properties.base_strength = upgrade.base_strength;
+        self.base_properties.base_burden = upgrade.base_burden;
+        self.base_properties.base_constitution = upgrade.base_constitution;
+        self.base_properties.base_intelligence = upgrade.base_intelligence;
+    }
+
+    pub(crate) const fn set_base_maximum_rp(&mut self, value: u16) {
+        self.base_properties.maximum_rp = value;
+    }
+
+    pub(crate) const fn level_wire_properties(&self) -> (u32, u32, u16, u16) {
+        (
+            self.base_properties.base_maximum_hp,
+            self.base_properties.base_maximum_mp,
+            self.base_properties.base_burden,
+            self.base_properties.maximum_rp,
+        )
     }
 
     pub(crate) const fn energy(&self) -> u32 {
@@ -10329,6 +10370,14 @@ impl CPlayer {
 
     pub(crate) const fn set_vigour(&mut self, value: u32) {
         self.base_properties.vigour = value;
+    }
+
+    pub(crate) const fn set_vigour_clamped(&mut self, value: u32) {
+        self.base_properties.vigour = if self.base_properties.maximum_vigour < value {
+            self.base_properties.maximum_vigour
+        } else {
+            value
+        };
     }
 
     pub(crate) const fn set_script_vigour(&mut self, value: i32) -> i32 {
