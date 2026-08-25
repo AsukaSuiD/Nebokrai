@@ -363,10 +363,11 @@
 //! concrete owner-ы подключаются через обязательный runtime trait; message
 //! dispatch уже исполняется живым `CGame`.
 //! AI pass также исполняет ordinary monster с единственным `CBaseAttack(1)`:
+//! retaliation и aggressive melee `0/3` player-search, chase/slip movement,
 //! canonical target/cast/reuse, player defense/HP/action, passive-pet retarget,
-//! armor waste, `BFE01/BF60A/BF60B/BF612` и общий player-death tail проходят
-//! до живых owners. Search/tracing, multi-skill и tamed decision tree остаются
-//! на derived shape-AI границе и не объявлены reconstructed.
+//! armor waste, `BF506/BFE01/BF60A/BF60B/BF612` и общий player-death tail
+//! проходят до живых owners. Pet-target, idle/multi-skill и tamed decision tree
+//! остаются на derived shape-AI границе и не объявлены reconstructed.
 //! `Release` сохраняет player-save/catch, city-save, registry/script/factory,
 //! network и singleton teardown order; Rust `clear/take/Drop` заменяет manual
 //! delete, а ещё внешние process-global owners вызываются typed runtime-ом.
@@ -748,8 +749,8 @@ use crate::gameserver::appserver::session::ctrader::{
 };
 use crate::gameserver::appserver::shape::{
     CShape, MoveCheckCellRegistry, SHAPE_CHANGE_AREA, SHAPE_CHANGE_DELETE, SHAPE_CHANGE_NONE,
-    SHAPE_CHANGE_REGION, SHAPE_CHANGE_REMOVE, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity,
-    ShapeResolver, ShapeRuntimeFacts, ShapeView,
+    SHAPE_CHANGE_REGION, SHAPE_CHANGE_REMOVE, ShapeAreaCoordinates, ShapeCoordinateBlock,
+    ShapeFigure, ShapeIdentity, ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
 use crate::gameserver::appserver::skills::baseattack::{
     BASE_ATTACK_SKILL_ID, BaseAttackExecutionState, SKILL_USAGE_DELAY_TIME,
@@ -31563,9 +31564,9 @@ impl CGame {
         }
     }
 
-    /// Reached `CMonsterAI::OnSchedule -> CBaseAttack(1)` retaliation path.
-    /// Возвращает `true`, когда canonical target/cast принадлежит этому
-    /// owner-у; `false` оставляет search/tracing/прочие skill ID derived AI.
+    /// Reached `CMonsterAI::OnSchedule -> CBaseAttack(1)` path: retaliation,
+    /// а для aggressive melee `dwAI 0/3` также player search и tracing.
+    /// `false` оставляет pet-target, idle/multi-skill и прочие derived AI.
     fn run_owned_monster_base_attack_in_region<Runtime: GameMainLoopRuntime>(
         &mut self,
         region: &mut CServerRegion,
@@ -31573,31 +31574,43 @@ impl CGame {
         runtime: &mut Runtime,
         killing_blow: &mut Option<PlayerKillingBlow>,
     ) -> bool {
-        let Some((property, monster_shape, monster_health, target, cast, last_attack_ms, tamed)) =
-            region.find_monster_by_id(monster_id).and_then(|monster| {
-                let property = self
-                    .find_monster_property_by_origin_name(monster.base_property_key()?)?
-                    .clone();
-                Some((
-                    property,
-                    monster.move_shape().shape().clone(),
-                    monster.hit_points(),
-                    monster.ai_target(),
-                    monster.base_attack_cast(),
-                    monster.last_base_attack_ms(),
-                    monster.is_tamed(),
-                ))
-            })
+        let Some((
+            property,
+            monster_shape,
+            monster_view,
+            monster_health,
+            mut target,
+            cast,
+            last_attack_ms,
+            tamed,
+            moveable,
+            trace_move_delay,
+            area_index,
+        )) = region.find_monster_by_id(monster_id).and_then(|monster| {
+            let property = self
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                .clone();
+            let monster_view = monster.shape_view(&property)?;
+            Some((
+                property,
+                monster.move_shape().shape().clone(),
+                monster_view,
+                monster.hit_points(),
+                monster.ai_target(),
+                monster.base_attack_cast(),
+                monster.last_base_attack_ms(),
+                monster.is_tamed(),
+                monster.move_shape().is_moveable(),
+                monster.trace_move_delay(),
+                monster.move_shape().shape().area_index(),
+            ))
+        })
         else {
             return false;
         };
         if tamed || CMoveShape::is_died(monster_health) {
             return false;
         }
-        let target = cast.map(|cast| cast.target).or(target);
-        let Some(target) = target.filter(|target| target.object_type == PLAYER_TYPE) else {
-            return false;
-        };
         let [skill] = property.skills.as_slice() else {
             return false;
         };
@@ -31605,6 +31618,45 @@ impl CGame {
             return false;
         }
         let skill = *skill;
+        if target.is_none()
+            && cast.is_none()
+            && matches!(property.ai, 0 | 3)
+            && let Some(area_index) = area_index
+        {
+            let mut selected = None;
+            let mut selected_distance = i32::MAX;
+            for player_id in region.player_ids_around_area(area_index) {
+                let Some(player) = self.find_player(player_id) else {
+                    continue;
+                };
+                if player.server_region_id() != Some(region.id) || player.is_dead() {
+                    continue;
+                }
+                let Some(candidate) = player.shape_view() else {
+                    continue;
+                };
+                let distance = real_distance(
+                    monster_view.tile_x,
+                    monster_view.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                );
+                if distance <= 10 && distance <= selected_distance {
+                    selected = Some(candidate.identity);
+                    selected_distance = distance;
+                }
+            }
+            if let Some(selected) = selected {
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.set_ai_target(selected);
+                }
+                target = Some(selected);
+            }
+        }
+        let target = cast.map(|cast| cast.target).or(target);
+        let Some(target) = target.filter(|target| target.object_type == PLAYER_TYPE) else {
+            return false;
+        };
         let Some(skill_properties) = self
             .skill_factory
             .query_skill_base_properties(BASE_ATTACK_SKILL_ID, i32::from(skill.level))
@@ -31802,7 +31854,98 @@ impl CGame {
 
         let distance = real_distance(monster_x, monster_y, target_x, target_y);
         if maximum_distance != 0 && distance > maximum_distance as i32 {
-            return false;
+            if distance > property.chase_range as i32 {
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.clear_ai_target();
+                }
+                return true;
+            }
+            if !moveable {
+                return true;
+            }
+            if trace_move_delay
+                .is_some_and(|delay| !time_reached(now_ms, delay.started_at_ms, delay.delay_ms))
+            {
+                return true;
+            }
+
+            const SLIP_ORDER: [[usize; 8]; 8] = [
+                [0, 7, 1, 6, 2, 5, 3, 4],
+                [1, 0, 2, 7, 3, 6, 4, 5],
+                [2, 1, 3, 0, 4, 7, 5, 6],
+                [3, 2, 4, 1, 5, 0, 6, 7],
+                [4, 3, 5, 2, 6, 1, 7, 0],
+                [5, 4, 6, 3, 7, 2, 0, 1],
+                [6, 5, 7, 4, 0, 3, 1, 2],
+                [7, 6, 0, 5, 1, 4, 2, 3],
+            ];
+            let desired_direction = get_line_direction(monster_x, monster_y, target_x, target_y);
+            let origin = ShapeAreaCoordinates {
+                x: monster_x,
+                y: monster_y,
+            };
+            let figure = CMonster::figure(&property);
+            let figure_index = usize::from(figure.get(0).min(2));
+            let destination =
+                SLIP_ORDER[desired_direction as usize]
+                    .into_iter()
+                    .find_map(|direction| {
+                        let destination =
+                            CShape::get_direction_position(direction as i32, origin).ok()?;
+                        let cells = self.move_check_cells.get(figure_index, direction)?;
+                        let clear = cells.iter().all(|cell| {
+                            region
+                                .region
+                                .get_block(
+                                    origin.x.wrapping_add(cell.x),
+                                    origin.y.wrapping_add(cell.y),
+                                )
+                                .is_ok_and(|block| block == 0)
+                        });
+                        clear.then_some((direction, destination))
+                    });
+            let Some((direction, destination)) = destination else {
+                return true;
+            };
+            let area_width = self.globe_setup.area_width();
+            let area_height = self.globe_setup.area_height();
+            let Some(around) =
+                GameServerAroundRuntime::new(self, &self.session_factory, area_width, area_height)
+            else {
+                return true;
+            };
+            let moved = region.move_owned_monster(
+                monster_id,
+                destination.x,
+                destination.y,
+                0,
+                figure,
+                area_width,
+                area_height,
+                &around,
+            );
+            if moved.is_some_and(|result| result.is_ok()) {
+                let distance_units = if direction % 2 == 0 {
+                    1_000_000.0
+                } else {
+                    1_414_000.0
+                };
+                let speed = monster_shape.get_speed();
+                let delay_ms = if speed > 0.0 {
+                    (distance_units * 0.68 / speed + property.stop_frame as f32)
+                        .round()
+                        .max(0.0) as u32
+                } else {
+                    0
+                };
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.begin_trace_move_delay(now_ms, delay_ms);
+                }
+            }
+            return true;
+        }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.clear_trace_move_delay();
         }
         let attack_interval = property.attack_speed;
         if last_attack_ms != 0

@@ -67,6 +67,9 @@
 //! Достигнутые movement commands вызывают здесь именно owner
 //! `CShape::SetTileXY`: region дополняет runtime area facts и передаёт virtual
 //! dispatch, не дублируя tile-center либо `CMoveShape::SetPosXY`.
+//! Aggressive monster tracing использует тот же owner: девяти-area player
+//! snapshot сохраняет storage order, а concrete `OnMove` временно вынимает
+//! monster из map, публикует `0xBF506` и меняет block/area membership.
 //! Полный startup decoder сохраняет base/area/NPC/cache/monster/weather/
 //! setup/param wire-order. NPC и monster создаются собственными factory/spawn
 //! methods региона; decode context предоставляет только реальные RNG/AI/
@@ -133,7 +136,8 @@ use super::country::countryparam::CCountryParam;
 use super::goods::cgoods::CGoods;
 use super::monster::CMonster;
 use super::moveshape::{
-    MoveShapePositionBlock, MoveShapePositionDispatch, MoveShapePositionFacts, MoveShapeResolver,
+    MoveShapeCommandBlock, MoveShapePositionBlock, MoveShapePositionDispatch,
+    MoveShapePositionFacts, MoveShapeResolver,
 };
 use super::npc::CNpc;
 use super::region::{
@@ -144,6 +148,7 @@ use super::shape::{
     CShape, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError, ShapeCoordinateBlock,
     ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
+use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::guid::CGuid;
 use crate::setup::monsterlist::MonsterProperties;
 
@@ -1149,6 +1154,23 @@ impl CServerRegion {
         }
         monster_ids.retain(|monster_id| self.owned_monsters.contains_key(monster_id));
         monster_ids
+    }
+
+    /// `FindAroundObject(owner, 400)` использует тот же девяти-area порядок:
+    /// area идут по `_area`, player ID — в порядке внутреннего vector-а.
+    pub(crate) fn player_ids_around_area(&self, area_index: usize) -> Vec<i32> {
+        let Some(center) = self.areas.get(area_index) else {
+            return Vec::new();
+        };
+        let center = ShapeAreaCoordinates {
+            x: center.x(),
+            y: center.y(),
+        };
+        let mut player_ids = Vec::new();
+        for index in self.neighbor_area_indices(center) {
+            self.append_registered_player_ids(&self.areas[index], &mut player_ids);
+        }
+        player_ids
     }
 
     /// Exact area-array traversal `FindShapes(600)` без смены pointer owner-а.
@@ -2376,6 +2398,33 @@ impl CServerRegion {
         shape
             .set_tile_xy(&mut self.region, tile_x, tile_y, &mut dispatch)
             .map_err(RegionMembershipBlock::MoveShape)
+    }
+
+    /// Временно вынимает concrete monster owner из map, чтобы его virtual
+    /// `OnMove` мог одновременно изменить region membership и отправить wire.
+    pub(crate) fn move_owned_monster(
+        &mut self,
+        monster_id: i32,
+        destination_x: i32,
+        destination_y: i32,
+        run: i32,
+        figure: ShapeFigure,
+        area_width: i32,
+        area_height: i32,
+        around: &GameServerAroundRuntime<'_>,
+    ) -> Option<Result<(), MoveShapeCommandBlock>> {
+        let mut monster = self.owned_monsters.remove(&monster_id)?;
+        let facts = monster.movement_position_facts(figure, area_width, area_height);
+        let result = monster.move_shape_mut().on_move(
+            Some(self),
+            destination_x,
+            destination_y,
+            run,
+            facts,
+            around,
+        );
+        self.owned_monsters.insert(monster_id, monster);
+        Some(result)
     }
 
     fn complete_move_shape_position_facts(

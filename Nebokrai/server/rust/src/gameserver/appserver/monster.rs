@@ -18,15 +18,17 @@
 //! region-delete tails. Для ordinary monster с единственным skill `1` тот же
 //! owner хранит target, cast/reuse и передаёт monster-to-player удар в живой
 //! region/player/network/death проход. Очередь `CBaseAI` заменена typed
-//! single-event handoff только для этих синхронных combat caller-ов;
-//! search/tracing, pet AI и multi-skill decision tree этим не подменяются.
+//! single-event handoff только для этих синхронных combat caller-ов. Для
+//! aggressive melee AI `0/3` player-search и blocked-step tracing хранят здесь
+//! target/move delay; pet-target, idle wandering и multi-skill decision tree
+//! этим не подменяются.
 //! Login pet restoration и client control используют owned `tagMasterInfo`,
 //! taming sign, progress, раздельные Globe experience/property factors и
 //! reached follower-EXP level-up с `0xC0203`, а также узкое pet-control state;
 //! async CPet decision tree этим не подменяется.
 
 use super::masterinfo::MasterInfo;
-use super::moveshape::CMoveShape;
+use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
 use crate::setup::monsterlist::MonsterProperties;
 
@@ -63,6 +65,7 @@ pub(crate) struct CMonster {
     base_attack_cast: Option<MonsterBaseAttackCast>,
     last_base_attack_ms: u32,
     base_attack_owned_tick: bool,
+    trace_move_delay: Option<MonsterTraceMoveDelay>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -106,6 +109,12 @@ pub(crate) struct MonsterBaseAttackCast {
     pub(crate) started_at_ms: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MonsterTraceMoveDelay {
+    pub(crate) started_at_ms: u32,
+    pub(crate) delay_ms: u32,
+}
+
 impl CMonster {
     pub(crate) fn with_constructor_defaults() -> Self {
         let mut move_shape = CMoveShape::default();
@@ -143,6 +152,7 @@ impl CMonster {
             base_attack_cast: None,
             last_base_attack_ms: 0,
             base_attack_owned_tick: false,
+            trace_move_delay: None,
         }
     }
 
@@ -375,6 +385,10 @@ impl CMonster {
         self.ai_target
     }
 
+    pub(crate) fn set_ai_target(&mut self, target: ShapeIdentity) {
+        self.ai_target = Some(target);
+    }
+
     pub(crate) const fn base_attack_cast(&self) -> Option<MonsterBaseAttackCast> {
         self.base_attack_cast
     }
@@ -400,6 +414,7 @@ impl CMonster {
     pub(crate) fn clear_ai_target(&mut self) {
         self.ai_target = None;
         self.base_attack_cast = None;
+        self.trace_move_delay = None;
     }
 
     pub(crate) const fn last_base_attack_ms(&self) -> u32 {
@@ -412,6 +427,36 @@ impl CMonster {
 
     pub(crate) fn take_base_attack_owned_tick(&mut self) -> bool {
         std::mem::take(&mut self.base_attack_owned_tick)
+    }
+
+    pub(crate) const fn trace_move_delay(&self) -> Option<MonsterTraceMoveDelay> {
+        self.trace_move_delay
+    }
+
+    pub(crate) const fn begin_trace_move_delay(&mut self, started_at_ms: u32, delay_ms: u32) {
+        self.trace_move_delay = Some(MonsterTraceMoveDelay {
+            started_at_ms,
+            delay_ms,
+        });
+    }
+
+    pub(crate) const fn clear_trace_move_delay(&mut self) {
+        self.trace_move_delay = None;
+    }
+
+    pub(crate) const fn movement_position_facts(
+        &self,
+        figure: ShapeFigure,
+        area_width: i32,
+        area_height: i32,
+    ) -> MoveShapePositionFacts {
+        MoveShapePositionFacts {
+            current_hit_points: self.hit_points,
+            figure,
+            current_area: None,
+            area_width,
+            area_height,
+        }
     }
 
     /// Guards reached from `CMonster::OnBeenHurted` before Nation first-hit
