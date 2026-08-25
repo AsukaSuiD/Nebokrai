@@ -474,7 +474,8 @@ use crate::gameserver::appserver::container::cdepot::{
 };
 use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::ComposeEquipmentCell;
 use crate::gameserver::appserver::container::cequipmentcontainer::{
-    EQUIPMENT_COLUMN_LIMIT, EquipmentAddOutcome, EquipmentColumn, EquipmentRemoveOutcome,
+    EQUIPMENT_AROUND_UPDATE_MESSAGE_TYPE, EQUIPMENT_COLUMN_LIMIT, EquipmentAddOutcome,
+    EquipmentAroundUpdate, EquipmentColumn, EquipmentRemoveOutcome,
 };
 use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::UpgradeEquipmentCell;
 use crate::gameserver::appserver::container::cfairycontainer::{
@@ -2463,28 +2464,13 @@ pub(crate) struct CiQingOtherPersonReport {
     pub(crate) delivery: Option<i32>,
 }
 
-pub(crate) trait PlayerEquipmentContext {
-    fn publish_player_equipment_add_effect(
-        &mut self,
-        effect: &PlayerEquipmentAddEffect,
-    ) -> Vec<i32>;
-    fn publish_player_equipment_remove_effect(
-        &mut self,
-        effect: &PlayerEquipmentRemoveEffect,
-    ) -> Vec<i32>;
-}
-
 /// Container transfer использует уже материализованные player/equipment
 /// owners. Exact `CanMountEquip` теперь читает persisted player flags и goods
 /// прямо у canonical owner-а; базовый property recompute остаётся обязательным
 /// runtime fact. RideState overlay и
 /// personal-shop mount gate также принадлежат canonical player owner-у.
 pub(crate) trait GameContainerMessageRuntime:
-    OldClientGoodsCodec
-    + GameClockContext
-    + PlayerEquipmentContext
-    + PlayerPropertyContext
-    + ServerRegionMembershipContext
+    OldClientGoodsCodec + GameClockContext + PlayerPropertyContext + ServerRegionMembershipContext
 {
     fn enhancement_equipment_remove_facts(
         &mut self,
@@ -5961,7 +5947,7 @@ impl CGame {
                 &mut recompute,
             );
             drop(recompute);
-            self.publish_player_equipment_remove_report(&mut removal, context);
+            self.publish_player_equipment_remove_report(&mut removal);
             match removal.outcome {
                 EquipmentRemoveOutcome::Removed(removed) => Some(removed.goods),
                 _ => None,
@@ -7195,7 +7181,7 @@ impl CGame {
                     &mut recompute,
                 );
                 drop(recompute);
-                self.publish_player_equipment_remove_report(&mut report, context);
+                self.publish_player_equipment_remove_report(&mut report);
                 let outcome = std::mem::replace(
                     &mut report.outcome,
                     EquipmentRemoveOutcome::Missing {
@@ -7786,7 +7772,7 @@ impl CGame {
                 &mut recompute,
             );
             drop(recompute);
-            self.publish_player_equipment_remove_report(&mut report, context);
+            self.publish_player_equipment_remove_report(&mut report);
             let outcome = std::mem::replace(
                 &mut report.outcome,
                 EquipmentRemoveOutcome::Missing {
@@ -8111,7 +8097,7 @@ impl CGame {
                 &mut recompute,
             );
             drop(recompute);
-            self.publish_player_equipment_remove_report(&mut report, context);
+            self.publish_player_equipment_remove_report(&mut report);
             let outcome = std::mem::replace(
                 &mut report.outcome,
                 EquipmentRemoveOutcome::Missing {
@@ -8340,7 +8326,7 @@ impl CGame {
                 &mut recompute,
             );
             drop(recompute);
-            self.publish_player_equipment_remove_report(&mut report, context);
+            self.publish_player_equipment_remove_report(&mut report);
             let outcome = std::mem::replace(
                 &mut report.outcome,
                 EquipmentRemoveOutcome::Missing {
@@ -8809,7 +8795,7 @@ impl CGame {
                 &mut recompute,
             );
             drop(recompute);
-            self.publish_player_equipment_remove_report(&mut report, context);
+            self.publish_player_equipment_remove_report(&mut report);
             let outcome = std::mem::replace(
                 &mut report.outcome,
                 EquipmentRemoveOutcome::Missing {
@@ -9376,7 +9362,7 @@ impl CGame {
                 &mut recompute,
             );
             drop(recompute);
-            self.publish_player_equipment_remove_report(&mut report, context);
+            self.publish_player_equipment_remove_report(&mut report);
             let outcome = std::mem::replace(
                 &mut report.outcome,
                 EquipmentRemoveOutcome::Missing {
@@ -10844,7 +10830,7 @@ impl CGame {
             &mut recompute,
         );
         drop(recompute);
-        self.publish_player_equipment_remove_report(&mut removed_report, context);
+        self.publish_player_equipment_remove_report(&mut removed_report);
         let outcome = std::mem::replace(
             &mut removed_report.outcome,
             EquipmentRemoveOutcome::Missing {
@@ -11146,7 +11132,7 @@ impl CGame {
                 &mut recompute,
             );
             drop(recompute);
-            self.publish_player_equipment_remove_report(&mut report, context);
+            self.publish_player_equipment_remove_report(&mut report);
             let outcome = std::mem::replace(
                 &mut report.outcome,
                 EquipmentRemoveOutcome::Missing {
@@ -12092,7 +12078,7 @@ impl CGame {
                 &mut recompute,
             );
             drop(recompute);
-            self.publish_player_equipment_remove_report(&mut report, context);
+            self.publish_player_equipment_remove_report(&mut report);
             let outcome = std::mem::replace(
                 &mut report.outcome,
                 EquipmentRemoveOutcome::Missing {
@@ -12263,7 +12249,7 @@ impl CGame {
                     &mut recompute,
                 );
                 drop(recompute);
-                self.publish_player_equipment_remove_report(&mut report, context);
+                self.publish_player_equipment_remove_report(&mut report);
                 let outcome = std::mem::replace(
                     &mut report.outcome,
                     EquipmentRemoveOutcome::Missing {
@@ -12399,7 +12385,7 @@ impl CGame {
         for goods_id in goods_ai_ids {
             Self::register_player_goods_ai(player, &self.goods_factory, goods_id);
         }
-        self.publish_player_equipment_add_report(&mut report, context);
+        self.publish_player_equipment_add_report(&mut report);
         EnhancementTransferAddition::Equipment(report)
     }
 
@@ -14862,7 +14848,7 @@ impl CGame {
                         &mut recompute,
                     );
                     drop(recompute);
-                    self.publish_player_equipment_remove_report(&mut removal, context);
+                    self.publish_player_equipment_remove_report(&mut removal);
                     report.equipment_removals.push(removal.clone());
                     let outcome = std::mem::replace(
                         &mut removal.outcome,
@@ -18114,7 +18100,7 @@ impl CGame {
                 &mut recompute,
             );
             drop(recompute);
-            self.publish_player_equipment_remove_report(&mut removal, context);
+            self.publish_player_equipment_remove_report(&mut removal);
             if matches!(removal.outcome, EquipmentRemoveOutcome::Removed(_)) {
                 deliveries.push(self.send_container_object_delete(
                     player.player_id(),
@@ -18632,7 +18618,7 @@ impl CGame {
                 &mut recompute,
             );
             drop(recompute);
-            self.publish_player_equipment_remove_report(&mut equipment, context);
+            self.publish_player_equipment_remove_report(&mut equipment);
             if matches!(equipment.outcome, EquipmentRemoveOutcome::Removed(_)) {
                 deliveries.push(self.send_container_object_delete(
                     player_id,
@@ -19271,7 +19257,7 @@ impl CGame {
                     &mut recompute,
                 );
                 drop(recompute);
-                self.publish_player_equipment_remove_report(&mut report, runtime);
+                self.publish_player_equipment_remove_report(&mut report);
                 if let EquipmentRemoveOutcome::Removed(result) = &report.outcome {
                     removed = removed.wrapping_add(amount);
                     let previous = PreviousContainer {
@@ -23846,7 +23832,7 @@ impl CGame {
                     &mut recompute,
                 );
                 drop(recompute);
-                self.publish_player_equipment_remove_report(&mut report, context);
+                self.publish_player_equipment_remove_report(&mut report);
                 let deletion = match &report.outcome {
                     EquipmentRemoveOutcome::Removed(removed) => Some(PlayerGoodsAiDeletion {
                         location,
@@ -26916,13 +26902,12 @@ impl CGame {
     /// Полный player-owned tail `CEquipmentContainer::Remove`: callback
     /// materializes reached результат ещё отдельного virtual
     /// `PropertiesChanged`, наблюдая player уже без removed slot-а.
-    pub(crate) fn remove_player_equipment<Context: PlayerEquipmentContext>(
+    pub(crate) fn remove_player_equipment(
         &mut self,
         player_id: i32,
         ex_id: CGuid,
         runtime: PlayerEquipmentRemoveRuntimeFacts,
         recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
-        context: &mut Context,
     ) -> Option<PlayerEquipmentRemoveReport> {
         let (players, goods_factory, skill_factory) =
             (&mut self.players, &self.goods_factory, &self.skill_factory);
@@ -26935,18 +26920,14 @@ impl CGame {
                 recompute_properties,
             )
         })?;
-        self.publish_player_equipment_remove_report(&mut report, context);
+        self.publish_player_equipment_remove_report(&mut report);
         if self.globe_setup.tao_zhuang_modify_enabled() {
             let _ = self.done_player_tao_zhuang(player_id);
         }
         Some(report)
     }
 
-    fn publish_player_equipment_remove_report<Context: PlayerEquipmentContext>(
-        &self,
-        report: &mut PlayerEquipmentRemoveReport,
-        context: &mut Context,
-    ) {
+    fn publish_player_equipment_remove_report(&self, report: &mut PlayerEquipmentRemoveReport) {
         for effect in report.effects.clone() {
             match effect {
                 PlayerEquipmentRemoveEffect::WarSoulSkillDetached { .. } => {}
@@ -26959,14 +26940,31 @@ impl CGame {
                             message.send_to_player(self.net_server(), skill.player_id),
                         ));
                 }
-                effect @ (PlayerEquipmentRemoveEffect::WarSoulStatusAround { .. }
-                | PlayerEquipmentRemoveEffect::PropertiesChangedWithoutRemovedSlot {
-                    ..
-                }
-                | PlayerEquipmentRemoveEffect::VitalsClamped { .. }
-                | PlayerEquipmentRemoveEffect::AroundUpdate(_)) => {
+                PlayerEquipmentRemoveEffect::WarSoulStatusAround {
+                    message_type,
+                    player_id,
+                    values,
+                } => {
+                    let mut message = CMessage::new(message_type as i32);
+                    message.add_long(values[0]);
+                    message.add_long(values[1]);
                     report.deliveries.push(PlayerEquipmentDelivery::Runtime(
-                        context.publish_player_equipment_remove_effect(&effect),
+                        self.send_player_equipment_around(player_id, None, &message),
+                    ));
+                }
+                PlayerEquipmentRemoveEffect::PropertiesChangedWithoutRemovedSlot { .. } => {
+                    let deliveries = self
+                        .find_player(report.player_id)
+                        .map(|player| vec![self.send_player_properties_changed(player)])
+                        .unwrap_or_default();
+                    report
+                        .deliveries
+                        .push(PlayerEquipmentDelivery::Runtime(deliveries));
+                }
+                PlayerEquipmentRemoveEffect::VitalsClamped { .. } => {}
+                PlayerEquipmentRemoveEffect::AroundUpdate(update) => {
+                    report.deliveries.push(PlayerEquipmentDelivery::Runtime(
+                        self.send_player_equipment_update(update),
                     ));
                 }
             }
@@ -26975,7 +26973,7 @@ impl CGame {
 
     /// Полный player-owned tail positional `CEquipmentContainer::Add`; оба
     /// callback-а вызываются в native порядке относительно container commit.
-    pub(crate) fn add_player_equipment<Context: PlayerEquipmentContext>(
+    pub(crate) fn add_player_equipment(
         &mut self,
         player_id: i32,
         position: u32,
@@ -26983,7 +26981,6 @@ impl CGame {
         runtime: PlayerEquipmentAddRuntimeFacts,
         register_with_goods_ai: &mut dyn FnMut(&CGoods),
         recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
-        context: &mut Context,
     ) -> Option<PlayerEquipmentAddReport> {
         let (players, goods_factory, skill_factory) =
             (&mut self.players, &self.goods_factory, &self.skill_factory);
@@ -26998,18 +26995,14 @@ impl CGame {
                 recompute_properties,
             )
         })?;
-        self.publish_player_equipment_add_report(&mut report, context);
+        self.publish_player_equipment_add_report(&mut report);
         if self.globe_setup.tao_zhuang_modify_enabled() {
             let _ = self.done_player_tao_zhuang(player_id);
         }
         Some(report)
     }
 
-    fn publish_player_equipment_add_report<Context: PlayerEquipmentContext>(
-        &self,
-        report: &mut PlayerEquipmentAddReport,
-        context: &mut Context,
-    ) {
+    fn publish_player_equipment_add_report(&self, report: &mut PlayerEquipmentAddReport) {
         for effect in report.effects.clone() {
             match effect {
                 PlayerEquipmentAddEffect::WarSoulSkillAttached { .. } => {}
@@ -27028,15 +27021,73 @@ impl CGame {
                         ));
                     }
                 }
-                effect @ (PlayerEquipmentAddEffect::PropertiesChanged { .. }
-                | PlayerEquipmentAddEffect::AroundUpdate(_)
-                | PlayerEquipmentAddEffect::PackageExtensionLogged { .. }) => {
+                PlayerEquipmentAddEffect::PropertiesChanged { .. } => {
+                    let deliveries = self
+                        .find_player(report.player_id)
+                        .map(|player| vec![self.send_player_properties_changed(player)])
+                        .unwrap_or_default();
+                    report
+                        .deliveries
+                        .push(PlayerEquipmentDelivery::Runtime(deliveries));
+                }
+                PlayerEquipmentAddEffect::AroundUpdate(update) => {
                     report.deliveries.push(PlayerEquipmentDelivery::Runtime(
-                        context.publish_player_equipment_add_effect(&effect),
+                        self.send_player_equipment_update(update),
                     ));
+                }
+                PlayerEquipmentAddEffect::PackageExtensionLogged {
+                    category,
+                    string_id,
+                    expanded_package_num,
+                } => {
+                    if let Some(player) = self.find_player(report.player_id) {
+                        let text = format_legacy_mixed(
+                            self.get_string_by_id(string_id.as_bytes()),
+                            &[
+                                LegacyFormatArgument::Bytes(player.player_name()),
+                                LegacyFormatArgument::Signed(expanded_package_num as i32),
+                            ],
+                            265,
+                        );
+                        put_string_to_file(category, &text);
+                    }
                 }
             }
         }
+    }
+
+    fn send_player_equipment_update(&self, update: EquipmentAroundUpdate) -> Vec<i32> {
+        let mut message = CMessage::new(EQUIPMENT_AROUND_UPDATE_MESSAGE_TYPE as i32);
+        message.add_long(update.owner_id);
+        message.add_ulong(update.column.position());
+        message.add_byte(u8::from(update.added));
+        message.add_ulong(update.base_properties_index);
+        message.add_ulong(update.weapon_level);
+        self.send_player_equipment_around(
+            update.owner_id,
+            update.exclude_owner.then_some(update.owner_id),
+            &message,
+        )
+    }
+
+    fn send_player_equipment_around(
+        &self,
+        player_id: i32,
+        excluded_player_id: Option<i32>,
+        message: &CMessage,
+    ) -> Vec<i32> {
+        let Some(player) = self.find_player(player_id) else {
+            return Vec::new();
+        };
+        let Some(region) = player
+            .server_region_id()
+            .and_then(|region_id| self.find_region(region_id))
+        else {
+            return Vec::new();
+        };
+        self.send_game_shape_around(region.base(), player.shape(), excluded_player_id, message)
+            .into_iter()
+            .collect()
     }
 
     /// Замыкает remove по GUID с тем же player/equipment state и сохраняет
@@ -27877,7 +27928,7 @@ impl CGame {
                 &mut recompute,
             );
             drop(recompute);
-            self.publish_player_equipment_remove_report(&mut report, context);
+            self.publish_player_equipment_remove_report(&mut report);
             matches!(report.outcome, EquipmentRemoveOutcome::Removed(_))
         } else {
             false
@@ -28983,7 +29034,7 @@ impl CGame {
                     &mut recompute,
                 );
                 drop(recompute);
-                self.publish_player_equipment_remove_report(&mut report, runtime);
+                self.publish_player_equipment_remove_report(&mut report);
                 let removed = match &report.outcome {
                     EquipmentRemoveOutcome::Removed(removed) => Some(PlayerGoodsAiDeletion {
                         location,
