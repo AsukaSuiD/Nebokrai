@@ -2,8 +2,8 @@
 //!
 //! Точная пара GameServer EXE/PDB и owner
 //! `server/gameserver/appserver/message/gmmessage.cpp` подтверждают
-//! ветви `0x5FF15`, `0x7FC01..0x7FC06`, `0x7FC08..0x7FC0F`,
-//! `0x7FC11` и `0x7FC13`: requester ID читается до switch,
+//! ветви `0x5FF15`, `0x7FC01..0x7FC06`, `0x7FC08..0x7FC11`,
+//! и `0x7FC13`: requester ID читается до switch,
 //! silence duration нормализуется к минимуму `1`, player map
 //! обходится дважды в signed ID-order, а ответы `0x5FF0D/0x5FF10`
 //! уходят WorldServer. Адресный `0x7FC0F` сохраняет length guards,
@@ -43,6 +43,9 @@
 //! границей `0x20`, source map и script ID, вычисляет значение через того же
 //! `CPlayer` owner-а и возвращает WorldServer пакет `0x5FF03`; WorldServer
 //! маршрутизирует результат как `0x7FC02` исходному script continuation.
+//! Remote move `0x7FC10` сохраняет requester-before-switch, ищет target по
+//! имени и только для локального owner-а читает region/X/Y и вызывает полный
+//! `ChangeRegion` с текущим направлением и нулевыми use/range/carriage.
 //! Эти цепочки имеют статус `IMPLEMENTED`.
 //! `Vec` заменяет raw allocation; поле declared capacity сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
@@ -52,6 +55,7 @@
 use super::othermessage::GameOtherMessageRuntime;
 use crate::gameserver::gameserver::game::{
     CGame, GameKickAroundOutcome, GameKickAroundReport, GameKickPlayerReport,
+    RealmAppellationScriptContext, ScriptRegionChangeContext,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
@@ -71,6 +75,7 @@ const GM_REQUESTER_FEEDBACK_MESSAGE: i32 = 0x0007_FC0C;
 const GM_BROADCAST_MESSAGE: i32 = 0x0007_FC0D;
 const GM_QUERY_SILENCE_MESSAGE: i32 = 0x0007_FC0E;
 const GM_PRIVATE_NOTICE_MESSAGE: i32 = 0x0007_FC0F;
+const GM_MOVE_PLAYER_MESSAGE: i32 = 0x0007_FC10;
 const GM_LIST_REQUEST_MESSAGE: i32 = 0x0007_FC11;
 const GM_COUNTRY_BROADCAST_MESSAGE: i32 = 0x0007_FC13;
 const GM_SET_SILENCE_RESPONSE: i32 = 0x0005_FF0D;
@@ -94,6 +99,9 @@ pub(crate) enum GmMessageError {
     MissingTargetPlayerId,
     MissingPlayerProperty,
     MissingOriginMapId,
+    MissingMoveRegionId,
+    MissingMoveTileX,
+    MissingMoveTileY,
     MissingScriptContinuationValue,
     MissingScriptContinuationId,
     MissingListTargetPlayerId,
@@ -141,6 +149,19 @@ pub(crate) enum GmMessageReport {
         origin_map_id: i32,
         script_id: i32,
         delivery: Result<i32, SendMessageError>,
+    },
+    MovePlayerTargetMissing {
+        requester_id: i32,
+        player_name: Vec<u8>,
+    },
+    MovePlayer {
+        requester_id: i32,
+        player_name: Vec<u8>,
+        target_player_id: i32,
+        region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        report: crate::gameserver::gameserver::game::ScriptRegionChangeReport,
     },
     ScriptContinued {
         requester_id: i32,
@@ -263,7 +284,9 @@ pub(crate) struct GmListPublishedEntry {
 
 /// Материализует связанные silence, broadcast и direct-notice ветви `OnGMMessage`.
 /// `None` оставляет прочие selectors их ещё RAW owner-у.
-pub(crate) fn dispatch_gm_message<Runtime: GameOtherMessageRuntime>(
+pub(crate) fn dispatch_gm_message<
+    Runtime: GameOtherMessageRuntime + ScriptRegionChangeContext + RealmAppellationScriptContext,
+>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -287,6 +310,7 @@ pub(crate) fn dispatch_gm_message<Runtime: GameOtherMessageRuntime>(
             | GM_BROADCAST_MESSAGE
             | GM_QUERY_SILENCE_MESSAGE
             | GM_PRIVATE_NOTICE_MESSAGE
+            | GM_MOVE_PLAYER_MESSAGE
             | GM_LIST_REQUEST_MESSAGE
             | GM_COUNTRY_BROADCAST_MESSAGE
     ) {
@@ -330,6 +354,55 @@ pub(crate) fn dispatch_gm_message<Runtime: GameOtherMessageRuntime>(
             origin_map_id,
             script_id,
             delivery,
+        }));
+    }
+
+    if message_type == GM_MOVE_PLAYER_MESSAGE {
+        let Some(player_name) = message.base_mut().get_str_bytes(0x100) else {
+            unreachable!("literal 0x100 исключает zero-capacity GetStr");
+        };
+        let Some(target_player_id) = game
+            .find_player_by_name(&player_name)
+            .map(|player| player.player_id())
+        else {
+            return Some(Ok(GmMessageReport::MovePlayerTargetMissing {
+                requester_id,
+                player_name,
+            }));
+        };
+        let Some(region_id) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingMoveRegionId));
+        };
+        let Some(tile_x) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingMoveTileX));
+        };
+        let Some(tile_y) = message.base_mut().get_long() else {
+            return Some(Err(GmMessageError::MissingMoveTileY));
+        };
+        let direction = game
+            .find_player(target_player_id)
+            .expect("GM move target проверен до ChangeRegion")
+            .shape()
+            .get_direction();
+        let report = game.change_script_player_region(
+            target_player_id,
+            region_id,
+            tile_x,
+            tile_y,
+            direction,
+            0,
+            0,
+            0,
+            runtime,
+        );
+        return Some(Ok(GmMessageReport::MovePlayer {
+            requester_id,
+            player_name,
+            target_player_id,
+            region_id,
+            tile_x,
+            tile_y,
+            report,
         }));
     }
 

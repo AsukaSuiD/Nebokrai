@@ -159,6 +159,9 @@
 //! `IsPlayerOnline` при local miss и доступном World transport приостанавливает
 //! CScript по существующему `5FF05 → 7FC05` continuation contract; имя длиннее
 //! 255 байт и пустое имя возвращают zero без запроса.
+//! Region-routing family `3005..3007` связывает named lookup
+//! `5FF04 → 7FC04`, локальный полный `ChangeRegion`, remote broadcast
+//! `5FF11 → 7FC10` и X-major 7×7 массовый перенос через тот же spatial owner.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -281,6 +284,9 @@ pub(crate) const SCRIPT_FUNCTION_GET_PLAYER: i32 = 3001;
 pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_LEVEL: i32 = 3002;
 pub(crate) const SCRIPT_FUNCTION_IS_PLAYER_ONLINE: i32 = 3003;
 pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_ID: i32 = 3004;
+pub(crate) const SCRIPT_FUNCTION_GET_REGION_ID: i32 = 3005;
+pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_REGION: i32 = 3006;
+pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_REGION_EX: i32 = 3007;
 pub(crate) const SCRIPT_FUNCTION_GET_MONEY_BY_NAME: i32 = 3012;
 pub(crate) const SCRIPT_FUNCTION_DELETE_SKILL: i32 = 3102;
 pub(crate) const SCRIPT_FUNCTION_SET_SKILL_LEVEL: i32 = 3103;
@@ -3198,6 +3204,20 @@ pub(crate) fn script_function_parameter_kind(
             0 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_REGION_ID => match index {
+            0 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_SET_PLAYER_REGION => match index {
+            0 => String,
+            1..=5 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_SET_PLAYER_REGION_EX => match index {
+            0 => String,
+            1..=3 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_GET_MONEY_BY_NAME
         | SCRIPT_FUNCTION_GET_FACTION_ID_BY_PLAYER_NAME
         | SCRIPT_FUNCTION_IS_FACTION_MASTER_BY_PLAYER_NAME => match index {
@@ -4945,6 +4965,118 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 .and_then(|target_name| game.find_player_by_name(target_name))
                 .map_or(0, CPlayer::player_id),
         }),
+        SCRIPT_FUNCTION_GET_REGION_ID => {
+            let Some(region_name) = string_arguments[0]
+                .filter(|name| !name.is_empty() && name.len() <= u8::MAX as usize)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if let Some(region) = game.find_region_by_name(region_name) {
+                return Some(ScriptFunctionDispatchOutcome::Handled {
+                    legacy_return: region.region_id(),
+                });
+            }
+            if script_player_id.is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let mut request = CMessage::new(0x0005_ff04);
+            request.add_long(player_id);
+            request.base_mut().add(region_name);
+            request.add_byte(0);
+            request.add_long(script_id);
+            match request.send(game, false) {
+                Ok(1) => Some(ScriptFunctionDispatchOutcome::Yielded { legacy_return: 0 }),
+                _ => Some(ScriptFunctionDispatchOutcome::Invalid),
+            }
+        }
+        SCRIPT_FUNCTION_SET_PLAYER_REGION => {
+            let Some(caller) = game.find_player(player_id) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let target_name = string_arguments[0]
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| caller.player_name())
+                .to_vec();
+            let Some(target_region_id) = integer_arguments[1].filter(|value| *value > 0) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if target_name.is_empty() || target_name.len() > u8::MAX as usize {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let mut tile_x = integer_arguments[2].unwrap_or(-1);
+            let mut tile_y = integer_arguments[3].unwrap_or(-1);
+            if tile_x == 0 && tile_y == 0 {
+                tile_x = -1;
+                tile_y = -1;
+            }
+            if !((tile_x == -1 && tile_y == -1) || (tile_x >= 0 && tile_y >= 0)) {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let direction = integer_arguments[4].unwrap_or_else(|| {
+                game.find_player_by_name(&target_name)
+                    .map_or(-1, |target| target.shape().get_direction())
+            });
+            let range = integer_arguments[5].unwrap_or(2);
+            if !(0..=(i32::MAX - 1) / 2).contains(&range) {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            if let Some(target_id) = game
+                .find_player_by_name(&target_name)
+                .map(CPlayer::player_id)
+            {
+                let _ = game.change_script_player_region(
+                    target_id,
+                    target_region_id,
+                    tile_x,
+                    tile_y,
+                    direction,
+                    0,
+                    range,
+                    0,
+                    runtime,
+                );
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            let mut request = CMessage::new(0x0005_ff11);
+            request.add_long(player_id);
+            request.base_mut().add(&target_name);
+            request.add_byte(0);
+            request.add_long(target_region_id);
+            request.add_long(tile_x);
+            request.add_long(tile_y);
+            match request.send(game, false) {
+                Ok(1) => Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }),
+                _ => Some(ScriptFunctionDispatchOutcome::Invalid),
+            }
+        }
+        SCRIPT_FUNCTION_SET_PLAYER_REGION_EX => {
+            let (Some(target_name), Some(target_region_id), Some(tile_x), Some(tile_y)) = (
+                string_arguments[0].filter(|name| !name.is_empty()),
+                integer_arguments[1],
+                integer_arguments[2],
+                integer_arguments[3],
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let player_ids = game.script_players_around_name(target_name);
+            for target_id in player_ids {
+                let direction = game
+                    .find_player(target_id)
+                    .map_or(0, |player| player.shape().get_direction());
+                let _ = game.change_script_player_region(
+                    target_id,
+                    target_region_id,
+                    tile_x,
+                    tile_y,
+                    direction,
+                    0,
+                    0,
+                    0,
+                    runtime,
+                );
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
         SCRIPT_FUNCTION_CREATE_FACTION => {
             let (Some(required_level), Some(required_goods), Some(required_money), Some(country)) = (
                 integer_arguments[0].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),

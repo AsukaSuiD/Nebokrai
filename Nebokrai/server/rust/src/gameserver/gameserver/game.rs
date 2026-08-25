@@ -18125,6 +18125,47 @@ impl CGame {
         }
     }
 
+    /// Exact X-major 7×7 `SetPlayerRegionEx` target snapshot. Как исходный
+    /// `GetShape`, каждая клетка даёт не более одного player; consecutive
+    /// повторы снимаются до последующих `ChangeRegion` side effects.
+    pub(crate) fn script_players_around_name(&self, name: &[u8]) -> Vec<i32> {
+        let Some(player) = self.find_player_by_name(name) else {
+            return Vec::new();
+        };
+        let (Some(region_id), Ok(tile_x), Ok(tile_y)) = (
+            player.server_region_id(),
+            player.shape().get_tile_x(),
+            player.shape().get_tile_y(),
+        ) else {
+            return Vec::new();
+        };
+        let Some(region) = self.regions.get(&region_id).map(ServerRegionOwner::base) else {
+            return Vec::new();
+        };
+        let window_x = gm_kick_window_origin(tile_x, region.region.width);
+        let window_y = gm_kick_window_origin(tile_y, region.region.height);
+        let (area_width, area_height) = self.area_dimensions();
+        let mut player_ids = Vec::new();
+        let mut scan_x = window_x;
+        while scan_x < window_x.wrapping_add(7) {
+            let mut scan_y = window_y;
+            while scan_y < window_y.wrapping_add(7) {
+                let Ok(shape) = region.get_shape(scan_x, scan_y, area_width, area_height, self)
+                else {
+                    return Vec::new();
+                };
+                if let Some(shape) = shape.filter(|shape| shape.identity.object_type == PLAYER_TYPE)
+                {
+                    player_ids.push(shape.identity.id);
+                }
+                scan_y = scan_y.wrapping_add(1);
+            }
+            scan_x = scan_x.wrapping_add(1);
+        }
+        player_ids.dedup();
+        player_ids
+    }
+
     /// Exact name lookup + `KickPlayer` side effect для GM `0x7FC06`.
     pub(crate) fn kick_player_by_name(&self, name: &[u8]) -> Option<GameKickPlayerReport> {
         let player_id = self.find_player_by_name(name)?.player_id();
