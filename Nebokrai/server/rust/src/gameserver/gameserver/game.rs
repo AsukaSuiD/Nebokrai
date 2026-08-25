@@ -427,6 +427,7 @@ use std::time::Duration;
 
 use rustix::system::uname;
 
+use crate::gameserver::appserver::area::{AreaAiContext, AreaAiReport, AreaMonsterAiFacts};
 use crate::gameserver::appserver::chbystate::ChangeBodyState;
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::AmountLimitGoodsTaken;
 use crate::gameserver::appserver::container::cbattlefairycontainer::{
@@ -3037,9 +3038,10 @@ pub(crate) struct GameServerRegionBaseAiReport {
     pub(crate) shape_scan: GameRegionShapeScanReport,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GameRegionShapeScanReport {
     pub(crate) areas: usize,
+    pub(crate) area_ai: Vec<AreaAiReport>,
     pub(crate) resolved_shapes: usize,
     pub(crate) shape_ai_calls: usize,
     pub(crate) stale_memberships: usize,
@@ -4116,13 +4118,22 @@ pub(crate) trait GameMainLoopRuntime:
     fn player_done_goods_ai_and_delete_list(&mut self, game: &mut CGame, player_id: i32);
     fn player_done_flash(&mut self, game: &mut CGame, player_id: i32);
     fn player_done_tao_zhuang(&mut self, game: &mut CGame, player_id: i32);
-    /// Concrete virtual `CArea::AI` перед сбором active shapes этой area.
-    fn run_region_area_ai(
+    /// Concrete ground-goods owner шлёт around delete и ставит `CS_DELETE`.
+    fn expire_area_ground_goods(
         &mut self,
         game: &mut CGame,
-        region: &mut CServerRegion,
+        region_id: i32,
         area_index: usize,
-    );
+        ex_id: CGuid,
+    ) -> bool;
+    /// Возвращает actual derived AI/tamed/carriage facts одного monster-а.
+    fn area_monster_ai_facts(
+        &mut self,
+        game: &mut CGame,
+        region_id: i32,
+        area_index: usize,
+        monster: &CMonster,
+    ) -> Option<AreaMonsterAiFacts>;
     /// Разрешает state ground goods и прочих external shape owners, которых
     /// нет в player/monster/NPC Rust storage.
     fn external_region_shape_change_state(
@@ -4182,6 +4193,29 @@ pub(crate) trait GameMainLoopRuntime:
     );
     fn wait(&mut self, duration_ms: u32);
     fn output_debug(&mut self, message: &'static str);
+}
+
+struct GameAreaAiContext<'a, Runtime> {
+    game: &'a mut CGame,
+    runtime: &'a mut Runtime,
+    region_id: i32,
+    area_index: usize,
+    monster_facts: BTreeMap<i32, Option<AreaMonsterAiFacts>>,
+}
+
+impl<Runtime: GameMainLoopRuntime> AreaAiContext for GameAreaAiContext<'_, Runtime> {
+    fn tick_ms(&mut self) -> u32 {
+        self.runtime.get_tick_ms()
+    }
+
+    fn expire_ground_goods(&mut self, ex_id: CGuid) -> bool {
+        self.runtime
+            .expire_area_ground_goods(self.game, self.region_id, self.area_index, ex_id)
+    }
+
+    fn monster_ai_facts(&mut self, monster_id: i32) -> Option<AreaMonsterAiFacts> {
+        self.monster_facts.remove(&monster_id).flatten()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22242,9 +22276,36 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> GameRegionShapeScanReport {
         let mut report = GameRegionShapeScanReport::default();
+        let goods_disappear_timer_ms = self.globe_setup.goods_disappear_timer_ms();
+        let goods_protected_timer_ms = self.globe_setup.goods_protected_timer_ms();
         for area_index in 0..region.area_count() {
             report.areas += 1;
-            runtime.run_region_area_ai(self, region, area_index);
+            let mut monster_facts = BTreeMap::new();
+            for identity in region
+                .active_shape_candidates(area_index)
+                .into_iter()
+                .filter(|identity| identity.object_type == MONSTER_TYPE)
+            {
+                let facts = region.find_monster_by_id(identity.id).and_then(|monster| {
+                    runtime.area_monster_ai_facts(self, region.id, area_index, monster)
+                });
+                monster_facts.insert(identity.id, facts);
+            }
+            let mut context = GameAreaAiContext {
+                game: self,
+                runtime,
+                region_id: region.id,
+                area_index,
+                monster_facts,
+            };
+            if let Some(area_ai) = region.run_area_ai(
+                area_index,
+                goods_disappear_timer_ms,
+                goods_protected_timer_ms,
+                &mut context,
+            ) {
+                report.area_ai.push(area_ai);
+            }
             for identity in region.active_shape_candidates(area_index) {
                 let Some(change_state) = self.region_shape_change_state(region, identity, runtime)
                 else {

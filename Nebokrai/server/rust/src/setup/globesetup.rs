@@ -17,6 +17,8 @@
 //! подтверждают общий base `0xEF3DC0` и эти offsets по точному EXE.
 //! `dwPkCountPerKill +0x4F4` обслуживает GameServer kill-confirmation path;
 //! raw snapshot остаётся единым wire owner-ом без дублирующей config-модели.
+//! `CArea::AI` читает goods disappear/protection DWORD из `+0x34C/+0x350`;
+//! абсолютные VA `0xEF410C/0xEF4110` подтверждены целевым GameServer EXE.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
 //! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Nation contender damage
 //! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
@@ -112,6 +114,10 @@ const REGION_CHAT_LEVEL_LIMIT_OFFSET: usize = 0x560;
 const BASE_PRICE_RATE_OFFSET: usize = 0x2EC;
 const TRADE_IN_RATE_OFFSET: usize = 0x2F0;
 const REPAIR_FACTOR_OFFSET: usize = 0x2F4;
+// Exact GameServer `CArea::AI` читает VA `0xEF410C/0xEF4110` при base
+// `CGlobeSetup::m_stSetup = 0xEF3DC0`.
+const GOODS_DISAPPEAR_TIMER_OFFSET: usize = 0x34C;
+const GOODS_PROTECTED_TIMER_OFFSET: usize = 0x350;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobeSetupSnapshot {
@@ -391,6 +397,14 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn area_height(&self) -> i32 {
         self.read_i32(AREA_HEIGHT_OFFSET)
+    }
+
+    pub(crate) fn goods_disappear_timer_ms(&self) -> u32 {
+        self.read_u32(GOODS_DISAPPEAR_TIMER_OFFSET)
+    }
+
+    pub(crate) fn goods_protected_timer_ms(&self) -> u32 {
+        self.read_u32(GOODS_PROTECTED_TIMER_OFFSET)
     }
 
     pub(crate) fn contend_damage_time_factor(&self) -> f32 {

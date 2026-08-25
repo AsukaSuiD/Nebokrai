@@ -120,7 +120,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use encoding_rs::WINDOWS_1251;
 
-use super::area::{CArea, WarSoulPoint};
+use super::area::{AreaAiContext, AreaAiReport, CArea, WarSoulPoint};
 use super::baseobject::CBaseObject;
 use super::country::countryparam::CCountryParam;
 use super::monster::CMonster;
@@ -1042,6 +1042,20 @@ impl CServerRegion {
 
     pub(crate) const fn area_count(&self) -> usize {
         self.areas.len()
+    }
+
+    pub(crate) fn run_area_ai<Context: AreaAiContext>(
+        &mut self,
+        area_index: usize,
+        goods_disappear_timer_ms: u32,
+        goods_protected_timer_ms: u32,
+        context: &mut Context,
+    ) -> Option<AreaAiReport> {
+        Some(self.areas.get_mut(area_index)?.ai(
+            goods_disappear_timer_ms,
+            goods_protected_timer_ms,
+            context,
+        ))
     }
 
     pub(crate) fn active_shape_candidates(&self, area_index: usize) -> Vec<ShapeIdentity> {

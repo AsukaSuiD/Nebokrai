@@ -27,6 +27,10 @@
 //! players/active monsters/pets/carriages/goods/NPC/other. Owning region
 //! выполняет старый `FindChildObject`, stale-storage cleanup и особый goods
 //! filter `m_lChangeState == CS_DELETE` перед virtual shape AI.
+//! `AI` RVA `0x00074500` сохраняет отдельный `timeGetTime` для каждой ordered
+//! goods/protection записи, around-delete с `CS_DELETE` и active→sleep/pet/
+//! carriage переклассификацию только в area без игроков. Ground-goods wire и
+//! derived monster AI facts приходят узкими callbacks из actual Game runtime.
 //! `OnRefreshMonster` RVA `0x00101A70`, вызываемый region AI только для area
 //! без plug-ов, в точном EXE является намеренным no-op (`ret 4`). Метод
 //! оставлен явным, чтобы не потерять подтверждённую границу owner-а и аргумент
@@ -98,6 +102,29 @@ pub(crate) enum AreaParentLink {
 pub(crate) struct WarSoulPoint {
     pub(crate) x: i32,
     pub(crate) y: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AreaMonsterAiFacts {
+    pub(crate) hibernated: bool,
+    pub(crate) tamed: bool,
+    pub(crate) carriage: bool,
+}
+
+pub(crate) trait AreaAiContext {
+    fn tick_ms(&mut self) -> u32;
+    fn expire_ground_goods(&mut self, ex_id: CGuid) -> bool;
+    fn monster_ai_facts(&mut self, monster_id: i32) -> Option<AreaMonsterAiFacts>;
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AreaAiReport {
+    pub(crate) expired_goods: Vec<(CGuid, bool)>,
+    pub(crate) expired_protections: Vec<CGuid>,
+    pub(crate) stale_monsters: Vec<i32>,
+    pub(crate) hibernated_monsters: Vec<i32>,
+    pub(crate) tamed_monsters: Vec<i32>,
+    pub(crate) carriages: Vec<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -256,6 +283,88 @@ impl CArea {
                 &CBaseObject::get_hash_value(identity.object_type, identity.id),
             ),
         }
+    }
+
+    /// Exact `CArea::AI`: deadline использует обычный unsigned `<`, а monster
+    /// storage меняется только когда area не содержит players.
+    pub(crate) fn ai<Context: AreaAiContext>(
+        &mut self,
+        goods_disappear_timer_ms: u32,
+        goods_protected_timer_ms: u32,
+        context: &mut Context,
+    ) -> AreaAiReport {
+        let _guard = self.critical_section.lock();
+        let mut report = AreaAiReport::default();
+        let goods_ids: Vec<_> = self.dropped_goods_timestamps.keys().copied().collect();
+        for ex_id in goods_ids {
+            let timestamp_ms = self.dropped_goods_timestamps[&ex_id];
+            let now_ms = context.tick_ms();
+            if now_ms >= timestamp_ms.wrapping_add(goods_disappear_timer_ms) {
+                let resolved = context.expire_ground_goods(ex_id);
+                self.dropped_goods_timestamps.remove(&ex_id);
+                report.expired_goods.push((ex_id, resolved));
+            }
+        }
+
+        let protected_goods_ids: Vec<_> = self.goods_protection.keys().copied().collect();
+        for ex_id in protected_goods_ids {
+            let protection = self.goods_protection[&ex_id];
+            let now_ms = context.tick_ms();
+            if now_ms
+                >= protection
+                    .timestamp_ms
+                    .wrapping_add(goods_protected_timer_ms)
+            {
+                self.goods_protection.remove(&ex_id);
+                report.expired_protections.push(ex_id);
+            }
+        }
+
+        if !self.players.is_empty()
+            || (self.active_monsters.is_empty()
+                && self.pets.is_empty()
+                && self.carriages.is_empty())
+        {
+            return report;
+        }
+
+        let mut index = 0;
+        while index < self.active_monsters.len() {
+            let monster_id = self.active_monsters[index];
+            let Some(facts) = context.monster_ai_facts(monster_id) else {
+                self.active_monsters.remove(index);
+                report.stale_monsters.push(monster_id);
+                continue;
+            };
+            if facts.hibernated {
+                self.sleeping_monsters.push(monster_id);
+                self.active_monsters.remove(index);
+                report.hibernated_monsters.push(monster_id);
+            } else if facts.tamed {
+                self.pets.push(monster_id);
+                self.active_monsters.remove(index);
+                report.tamed_monsters.push(monster_id);
+            } else if facts.carriage {
+                self.carriages.push(monster_id);
+                self.active_monsters.remove(index);
+                report.carriages.push(monster_id);
+            } else {
+                index += 1;
+            }
+        }
+        move_hibernated_monsters(
+            &mut self.pets,
+            &mut self.sleeping_monsters,
+            context,
+            &mut report,
+        );
+        move_hibernated_monsters(
+            &mut self.carriages,
+            &mut self.sleeping_monsters,
+            context,
+            &mut report,
+        );
+        report
     }
 
     /// Сохраняет пустой контракт `CArea::OnRefreshMonster(long)` exact EXE.
@@ -493,6 +602,30 @@ fn remove_first<Value: PartialEq>(values: &mut Vec<Value>, needle: &Value) {
     }
 }
 
+fn move_hibernated_monsters<Context: AreaAiContext>(
+    source: &mut Vec<i32>,
+    sleeping: &mut Vec<i32>,
+    context: &mut Context,
+    report: &mut AreaAiReport,
+) {
+    let mut index = 0;
+    while index < source.len() {
+        let monster_id = source[index];
+        let Some(facts) = context.monster_ai_facts(monster_id) else {
+            source.remove(index);
+            report.stale_monsters.push(monster_id);
+            continue;
+        };
+        if facts.hibernated {
+            sleeping.push(monster_id);
+            source.remove(index);
+            report.hibernated_monsters.push(monster_id);
+        } else {
+            index += 1;
+        }
+    }
+}
+
 impl Clone for CArea {
     fn clone(&self) -> Self {
         Self {
@@ -647,7 +780,8 @@ impl CSession {
 
 // ============================================================================
 // FUNCTION: CArea::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// IMPLEMENTED: `CArea::ai` и реальный `CGame` row-major caller выше.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\area.cpp:734
