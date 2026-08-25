@@ -20273,6 +20273,99 @@ impl CGame {
         removed
     }
 
+    pub(crate) fn script_packet_goods_number(&self, player_id: i32) -> i32 {
+        self.find_player(player_id)
+            .map(|player| player.packet().goods_amount(&self.goods_factory) as i32)
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn script_container_free_space(&self, player_id: i32, depot: bool) -> i32 {
+        self.find_player(player_id)
+            .map(|player| {
+                (if depot {
+                    player.depot().base().space()
+                } else {
+                    player.packet().space()
+                }) as i32
+            })
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn script_depot_goods_amount(&self, player_id: i32, name: &[u8]) -> i32 {
+        let base_index = self
+            .goods_factory
+            .query_goods_id_by_original_name(Some(name));
+        if base_index == 0 {
+            return 0;
+        }
+        self.find_player(player_id)
+            .map(|player| {
+                player
+                    .depot()
+                    .base()
+                    .base()
+                    .traversing_goods()
+                    .filter(|goods| goods.base_properties_index() == base_index)
+                    .fold(0u64, |total, goods| total + u64::from(goods.amount()))
+                    .min(i32::MAX as u64) as i32
+            })
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn script_selected_container_item_type(&self, player_id: i32) -> i32 {
+        self.find_player(player_id)
+            .and_then(|player| {
+                let goods_id = player.enhancement_selected_goods_id()?;
+                let goods = player.get_goods_by_id(goods_id)?;
+                self.goods_factory
+                    .query_goods_base_properties(goods.base_properties_index())
+            })
+            .map(|properties| properties.goods_type() + properties.equip_place() - 1)
+            .unwrap_or(-1)
+    }
+
+    pub(crate) fn delete_named_player_script_goods<Runtime: GameContainerMessageRuntime>(
+        &mut self,
+        player_name: &[u8],
+        goods_name: &[u8],
+        requested: u32,
+        runtime: &mut Runtime,
+    ) -> i32 {
+        if let Some(player_id) = self
+            .find_player_by_name(player_name)
+            .map(CPlayer::player_id)
+        {
+            let base_index = self
+                .goods_factory
+                .query_goods_id_by_original_name(Some(goods_name));
+            return self.delete_script_goods(player_id, base_index, requested, runtime) as i32;
+        }
+        let mut relay = CMessage::new(0x0005_fc03);
+        add_legacy_c_string(relay.base_mut(), player_name);
+        add_legacy_c_string(relay.base_mut(), goods_name);
+        relay.add_ulong(requested);
+        let _ = relay.send(self, false);
+        0
+    }
+
+    pub(crate) fn open_script_goods_container(
+        &mut self,
+        player_id: i32,
+        description: &[u8],
+        execution_script: &[u8],
+    ) -> bool {
+        if self.find_player(player_id).is_none() {
+            return false;
+        }
+        let mut message = CMessage::new(0x000b_f919);
+        add_legacy_c_string(message.base_mut(), description);
+        let _ = message.send_to_player(self.net_server(), player_id);
+        self.find_player_mut(player_id)
+            .expect("игрок контейнерного сценария сохранён после отправки")
+            .set_last_container_script(execution_script);
+        true
+    }
+
     fn send_ci_qing_log(&self, log: &CiQingLog) -> Vec<i32> {
         let mut message = CMessage::new(0x0006_0218);
         message.add_long(log.player_id);

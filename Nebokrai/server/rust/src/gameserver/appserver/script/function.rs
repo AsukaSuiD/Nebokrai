@@ -120,10 +120,15 @@
 //! client open/result/close wire, общий Game RNG, configuration roll,
 //! goods factory/upgrade/packet ownership и optional World announcement;
 //! повторный запуск приходит из живого goods opcode `0x8FC12`.
-//! Item migration `2200..2203` теперь сохраняет optional upgrade/particular
-//! preparation, packet-first `DelGoods`, equipment fallback с полным player
-//! tail и обычные add/delete/amount client messages; reached caller — первый
-//! sanitation-блок реально запускаемого `scripts/quest/nodupe.script`.
+//! Перенос предметов `2200..2203` сохраняет необязательную подготовку
+//! улучшения и особого свойства, приоритет рюкзака в `DelGoods`, переход к
+//! экипировке с полным завершением игрока и обычные клиентские сообщения
+//! добавления, удаления и изменения количества; достигнутый вызов находится
+//! в первом блоке очистки реально запускаемого `scripts/quest/nodupe.script`.
+//! Соседняя группа `2204/2205/2212/2217/2218/2220` связывает подсчёты рюкзака
+//! и депо, выбранный предмет enhancement-контейнера, локальное либо удалённое
+//! удаление и доверенный путь сценария окна `0xBF919` с подтверждением
+//! `0x8FC11`.
 //! Следующий sanitation-блок `2002/2316/2317/2500` читает live player
 //! region/country и работает с тем же owned script registry; current-script
 //! removal завершается на command boundary без legacy use-after-free.
@@ -450,6 +455,12 @@ pub(crate) const SCRIPT_FUNCTION_ADD_GOODS: i32 = 2200;
 pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS: i32 = 2201;
 pub(crate) const SCRIPT_FUNCTION_CHECK_GOODS: i32 = 2202;
 pub(crate) const SCRIPT_FUNCTION_CHECK_SPACE: i32 = 2203;
+pub(crate) const SCRIPT_FUNCTION_GET_GOODS_NUMBER: i32 = 2204;
+pub(crate) const SCRIPT_FUNCTION_GET_FREE_SPACE: i32 = 2205;
+pub(crate) const SCRIPT_FUNCTION_CHECK_DEPOT_GOODS: i32 = 2212;
+pub(crate) const SCRIPT_FUNCTION_DELETE_PLAYER_GOODS: i32 = 2217;
+pub(crate) const SCRIPT_FUNCTION_GET_CONTAINER_ITEM_TYPE: i32 = 2218;
+pub(crate) const SCRIPT_FUNCTION_OPEN_GOODS_CONTAINER: i32 = 2220;
 pub(crate) const SCRIPT_FUNCTION_ADD_INFO: i32 = 2305;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX: i32 = 2307;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX_SMALL: i32 = 2324;
@@ -3697,6 +3708,24 @@ pub(crate) fn script_function_parameter_kind(
             0..=2 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_FREE_SPACE => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_CHECK_DEPOT_GOODS => match index {
+            0 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_DELETE_PLAYER_GOODS => match index {
+            0..=1 => String,
+            2 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_OPEN_GOODS_CONTAINER => match index {
+            0..=1 => String,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_GET_GOODS_NUMBER | SCRIPT_FUNCTION_GET_CONTAINER_ITEM_TYPE => Unused,
         SCRIPT_FUNCTION_ADD_QUEST
         | SCRIPT_FUNCTION_COMPLETE_QUEST
         | SCRIPT_FUNCTION_DISBAND_QUEST
@@ -6699,6 +6728,84 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: amount.min(i32::MAX as u32) as i32,
             })
+        }
+        SCRIPT_FUNCTION_GET_GOODS_NUMBER => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: game.script_packet_goods_number(player_id),
+        }),
+        SCRIPT_FUNCTION_GET_FREE_SPACE => {
+            let package = match integer_arguments[0] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) => {
+                    return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+                }
+                Some(package) => package,
+                None => 0,
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.script_container_free_space(player_id, package == 1),
+            })
+        }
+        SCRIPT_FUNCTION_CHECK_DEPOT_GOODS => {
+            let Some(name) = string_arguments[0].filter(|name| !name.is_empty()) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.script_depot_goods_amount(player_id, name),
+            })
+        }
+        SCRIPT_FUNCTION_DELETE_PLAYER_GOODS => {
+            let (Some(player_name), Some(goods_name), Some(requested)) = (
+                string_arguments[0].filter(|name| !name.is_empty() && name.len() <= 49),
+                string_arguments[1].filter(|name| !name.is_empty() && name.len() <= 255),
+                integer_arguments[2].filter(|value| *value > 0),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.delete_named_player_script_goods(
+                    player_name,
+                    goods_name,
+                    requested as u32,
+                    runtime,
+                ),
+            })
+        }
+        SCRIPT_FUNCTION_GET_CONTAINER_ITEM_TYPE => Some(ScriptFunctionDispatchOutcome::Handled {
+            legacy_return: game.script_selected_container_item_type(player_id),
+        }),
+        SCRIPT_FUNCTION_OPEN_GOODS_CONTAINER => {
+            if game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            if let Some(npc_id) = script_npc_id {
+                let player = game.resolve_shape(ShapeIdentity {
+                    object_type: SCRIPT_PLAYER_TYPE,
+                    id: player_id,
+                    ex_id: CGuid::GUID_INVALID,
+                });
+                let npc = game.resolve_shape(ShapeIdentity {
+                    object_type: SCRIPT_NPC_TYPE,
+                    id: npc_id,
+                    ex_id: CGuid::GUID_INVALID,
+                });
+                if player
+                    .zip(npc)
+                    .is_some_and(|(player, npc)| npc.distance(player) > 8)
+                {
+                    let _ = colored_player_notice_message(
+                        0xffff_ffff,
+                        0,
+                        game.get_string_by_id(b"GS0178"),
+                    )
+                    .send_to_player(game.net_server(), player_id);
+                    return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+                }
+            }
+            let _ = game.open_script_goods_container(
+                player_id,
+                string_arguments[0].unwrap_or_default(),
+                string_arguments[1].unwrap_or_default(),
+            );
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_CHECK_SPACE => {
             let requested = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);

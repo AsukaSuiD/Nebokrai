@@ -65,9 +65,11 @@
 //! PvP preferences `0x8FA05` хранят пять live permission flags, которые
 //! downstream player/skill AI читает при выборе обычных, team, union,
 //! criminal и country целей; unknown selector только потребляет вход.
-//! Cross-Game progression `0x7FA08..0B` использует owned skill map и level/exp:
-//! name-overload-ы делегируют factory ID lookup, а `SetLevel` возвращает
-//! faction side effect caller-у до exact client progression packet.
+//! Межсерверная прогрессия `0x7FA08/09/0B` использует собственную карту
+//! навыков и поля уровня с опытом: перегрузки по имени делегируют фабрике
+//! поиск ID, а `SetLevel` возвращает фракционное последствие вызывающему коду
+//! до точного клиентского сообщения прогрессии. `0x7FA0A` относится к
+//! контейнерному удалению предметов и не проходит через карту навыков.
 //! Тот же persisted level/exp/vigour/base-stat owner теперь обслуживает reached
 //! auto-inc `CheckLevel`; multi-level scripts, property recompute и network
 //! результаты остаются у `CGame`, чтобы helper-ы не образовывали shadow path.

@@ -1,4 +1,4 @@
-//! Other-message dispatcher GameServer.
+//! Диспетчер прочих сообщений GameServer.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/message/othermessage.cpp`. LeiTing `0x7FA17` замыкает ответ
@@ -23,8 +23,10 @@
 //! target map prefix отбрасывается, requester получает exact `0xBF806`.
 //! Increment Shop page `0x7FA12` замыкает `0x90605 -> 0x5FD0A` и сохраняет
 //! World-serialized page tail в exact client wire `0xC0405`.
-//! Cross-Game progression `0x7FA08..0B` применяет skill add/delete и level
-//! reset, публикует client/faction effects и возвращает requester feedback.
+//! Межсерверная прогрессия `0x7FA08/09/0B` изменяет навыки и уровень,
+//! публикует клиентские и фракционные последствия и возвращает ответ
+//! инициатору. `0x7FA0A` удаляет указанное количество предметов через тот же
+//! контейнерный владелец, что и локальный сценарий.
 //! Administrative World broadcast `0x7FA0C` обходит canonical player map и
 //! ставит exact `QuitClientByMapID` каждому текущему player owner-у.
 //! Honor acknowledgement `0x7FA16` после World rank update условно увеличивает
@@ -50,7 +52,7 @@ use crate::gameserver::appserver::player::{
 use crate::gameserver::appserver::script::script::legacy_atoi;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, GameClockContext, GameKickPlayerReport, GameRegionClearStarted,
+    CGame, GameContainerMessageRuntime, GameKickPlayerReport, GameRegionClearStarted,
     colored_player_notice_message, player_skill_learned_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
@@ -67,7 +69,7 @@ const WORLD_GM_FEEDBACK: u32 = 0x0007_fa05;
 const WORLD_INCREMENT_SHOP_PAGE: u32 = 0x0007_fa12;
 const WORLD_REMOTE_SKILL_ADD: u32 = 0x0007_fa08;
 const WORLD_REMOTE_SKILL_DELETE: u32 = 0x0007_fa09;
-const WORLD_REMOTE_SKILL_OBSERVE: u32 = 0x0007_fa0a;
+const WORLD_REMOTE_PLAYER_GOODS_DELETE: u32 = 0x0007_fa0a;
 const WORLD_REMOTE_LEVEL_SET: u32 = 0x0007_fa0b;
 const WORLD_KICK_ALL_PLAYERS: u32 = 0x0007_fa0c;
 const WORLD_START_REGION_CLEAR: u32 = 0x0007_fa13;
@@ -169,8 +171,10 @@ pub(crate) enum GameOtherMessageOutcome {
         legacy_result: bool,
         client_delivery: i32,
     },
-    RemoteSkillObserved {
-        skill_name: Vec<u8>,
+    RemotePlayerGoodsDeleted {
+        goods_name: Vec<u8>,
+        requested: u32,
+        removed: u32,
     },
     RemoteLevelSet {
         previous_level: u8,
@@ -961,7 +965,7 @@ fn dispatch_public_talk(
     })
 }
 
-pub(crate) fn dispatch_game_other_message<Runtime: GameClockContext>(
+pub(crate) fn dispatch_game_other_message<Runtime: GameContainerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -1175,7 +1179,7 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameClockContext>(
             | WORLD_INCREMENT_SHOP_PAGE
             | WORLD_REMOTE_SKILL_ADD
             | WORLD_REMOTE_SKILL_DELETE
-            | WORLD_REMOTE_SKILL_OBSERVE
+            | WORLD_REMOTE_PLAYER_GOODS_DELETE
             | WORLD_REMOTE_LEVEL_SET
             | WORLD_KICK_ALL_PLAYERS
             | WORLD_START_REGION_CLEAR
@@ -1321,7 +1325,7 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameClockContext>(
         })();
         return Some(result);
     }
-    if message_type == WORLD_REMOTE_SKILL_OBSERVE {
+    if message_type == WORLD_REMOTE_PLAYER_GOODS_DELETE {
         let player_name = read_string(message, 0x100);
         let Some(player_id) = game
             .find_player_by_name(&player_name)
@@ -1333,11 +1337,23 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameClockContext>(
                 outcome: GameOtherMessageOutcome::PlayerMissing,
             }));
         };
-        let skill_name = read_string(message, 0x100);
+        let goods_name = read_string(message, 0x100);
+        let requested = match read_long(message, "remote goods amount") {
+            Ok(requested) => requested as u32,
+            Err(error) => return Some(Err(error)),
+        };
+        let base_index = game
+            .goods_factory()
+            .query_goods_id_by_original_name(Some(&goods_name));
+        let removed = game.delete_script_goods(player_id, base_index, requested, runtime);
         return Some(Ok(GameOtherMessageReport {
             message_type,
             player_id,
-            outcome: GameOtherMessageOutcome::RemoteSkillObserved { skill_name },
+            outcome: GameOtherMessageOutcome::RemotePlayerGoodsDeleted {
+                goods_name,
+                requested,
+                removed,
+            },
         }));
     }
     if message_type == WORLD_REMOTE_LEVEL_SET {

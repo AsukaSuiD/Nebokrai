@@ -1,24 +1,25 @@
-//! Player-dispatcher `OnPlayerMessage` WorldServer.
+//! Диспетчер игроков `OnPlayerMessage` WorldServer.
 //!
 //! Источник контракта — `worldserver.exe` и
-//! `worldserver.pdb`. Owner содержит четыре in-place relay branch:
+//! `worldserver.pdb`. Владелец содержит четыре ветви перенаправления на месте:
 //! `0x5FC01 -> 0x7FA08`, `0x5FC02 -> 0x7FA09`, `0x5FC03 -> 0x7FA0A`,
-//! `0x5FC04 -> 0x7FA0B`. Только первая до broadcast дописывает signed
-//! `m_lMapID`; остальные сохраняют payload byte-for-byte. Все четыре вызывают
-//! общий `CMessage::SendAll`, не делают `Update`, не читают payload и не
-//! проверяют socket/map ownership или хвост. Неизвестный opcode завершает
-//! owner без mutation/send и
-//! без передачи следующему dispatcher-у; Rust представляет это `NoOp`.
+//! `0x5FC04 -> 0x7FA0B`. Только первая до общей рассылки дописывает знаковый
+//! `m_lMapID`; остальные побайтно сохраняют содержимое. Все четыре вызывают
+//! общий `CMessage::SendAll`, не выполняют `Update`, не читают содержимое и не
+//! проверяют принадлежность сокета или карты и хвост. Неизвестный код операции
+//! завершает владельца без изменения, отправки и передачи следующему
+//! диспетчеру; Rust представляет это вариантом `NoOp`.
 //!
-//! Compiler catch/unwind-записи не являются отдельными source-owner-ами.
+//! Записи компилятора для перехвата и раскрутки стека не являются отдельными
+//! владельцами исходного кода.
 
 use crate::nets::networld::message::{CMessage, SendMessageError};
 use crate::worldserver::worldserver::game::CGame;
 
 const SET_SKILL_LEVEL: i32 = 0x0005_FC01;
 const DELETE_SKILL: i32 = 0x0005_FC02;
-const ADD_SKILL: i32 = 0x0005_FC03;
-const USE_SKILL: i32 = 0x0005_FC04;
+const DELETE_PLAYER_GOODS: i32 = 0x0005_FC03;
+const SET_PLAYER_LEVEL: i32 = 0x0005_FC04;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum WorldPlayerMessageOutcome {
@@ -39,16 +40,13 @@ pub(crate) enum WorldPlayerMessageDispatch {
     Pending(CMessage),
 }
 
-pub(crate) fn on_player_message(
-    game: &CGame,
-    mut message: CMessage,
-) -> WorldPlayerMessageDispatch {
+pub(crate) fn on_player_message(game: &CGame, mut message: CMessage) -> WorldPlayerMessageDispatch {
     let request_type = message.message_type();
     let (response_type, append_map_id) = match request_type {
         SET_SKILL_LEVEL => (0x0007_FA08, true),
         DELETE_SKILL => (0x0007_FA09, false),
-        ADD_SKILL => (0x0007_FA0A, false),
-        USE_SKILL => (0x0007_FA0B, false),
+        DELETE_PLAYER_GOODS => (0x0007_FA0A, false),
+        SET_PLAYER_LEVEL => (0x0007_FA0B, false),
         _ => {
             return WorldPlayerMessageDispatch::Handled(WorldPlayerMessageOutcome::NoOp {
                 request_type,
