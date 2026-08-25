@@ -81,6 +81,10 @@
 //! `9200 / SetNewDay` из того же исполнения отправляет пустое сообщение
 //! `0x60313`; достигнутый диспетчер World проводит все страны через
 //! `CCountryHandler::set_new_day(10)` с налогами, изгнанием и сменой срока.
+//! Регионально-государственные запросы `9301..9303` сначала ищут локальный,
+//! затем прокси-регион, сравнивают его страну со страной игрока либо возвращают
+//! страну напрямую. Флаг защиты читается из точного поля
+//! `CGlobeSetup::bRegionalProtection +0x830` без логического сужения.
 //! Соседние региональные запросы `8101/8102` достигают того же диспетчера:
 //! первый сохраняет 32-битную арифметику таймера возрождения монстра, второй
 //! читает число зарегистрированных игроков конкретного `CServerRegion`.
@@ -751,6 +755,9 @@ pub(crate) const SCRIPT_FUNCTION_GET_QUEST_SWITCH: i32 = 9018;
 pub(crate) const SCRIPT_FUNCTION_SET_QUEST_SWITCH: i32 = 9019;
 pub(crate) const SCRIPT_FUNCTION_EXILE_TIME: i32 = 9021;
 pub(crate) const SCRIPT_FUNCTION_SET_NEW_COUNTRY_DAY: i32 = 9200;
+pub(crate) const SCRIPT_FUNCTION_IS_HOMELAND: i32 = 9301;
+pub(crate) const SCRIPT_FUNCTION_GET_REGION_COUNTRY: i32 = 9302;
+pub(crate) const SCRIPT_FUNCTION_IS_REGIONAL_PROTECTED: i32 = 9303;
 pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
 pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_SZL: i32 = 11124;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_PLAYER_SZL: i32 = 11128;
@@ -4261,7 +4268,13 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_CHECK_USED_GOODS
         | SCRIPT_FUNCTION_GET_CURRENT_DURABILITY
         | SCRIPT_FUNCTION_GET_SELECTED_DURABILITY => Unused,
-        SCRIPT_FUNCTION_UPGRADE_COUNTRY_TECH_LEVEL | SCRIPT_FUNCTION_SET_NEW_COUNTRY_DAY => Unused,
+        SCRIPT_FUNCTION_IS_HOMELAND | SCRIPT_FUNCTION_GET_REGION_COUNTRY => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_UPGRADE_COUNTRY_TECH_LEVEL
+        | SCRIPT_FUNCTION_SET_NEW_COUNTRY_DAY
+        | SCRIPT_FUNCTION_IS_REGIONAL_PROTECTED => Unused,
         SCRIPT_FUNCTION_FAIRY_EXP_UP => match index {
             0 => Integer,
             _ => Unused,
@@ -8464,6 +8477,36 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
                 .and_then(|region_id| game.find_region(region_id))
                 .map_or(0, |region| region.base().get_player_amount() as i32);
             return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+        }
+        SCRIPT_FUNCTION_IS_HOMELAND => {
+            let Some(player) = script_player_id.and_then(|player_id| game.find_player(player_id))
+            else {
+                return ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 };
+            };
+            let region_id = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .or_else(|| player.server_region_id());
+            let legacy_return = region_id
+                .and_then(|region_id| game.script_region_country(region_id))
+                .map_or(-1, |country| i32::from(country == player.country()));
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+        }
+        SCRIPT_FUNCTION_GET_REGION_COUNTRY => {
+            let region_id = match integer_arguments[0] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) | None => script_player_id
+                    .and_then(|player_id| game.find_player(player_id))
+                    .and_then(CPlayer::server_region_id),
+                Some(region_id) => Some(region_id),
+            };
+            let legacy_return = region_id
+                .and_then(|region_id| game.script_region_country(region_id))
+                .map_or(-1, i32::from);
+            return ScriptFunctionDispatchOutcome::Handled { legacy_return };
+        }
+        SCRIPT_FUNCTION_IS_REGIONAL_PROTECTED => {
+            return ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: game.globe_setup().regional_protection(),
+            };
         }
         _ => {}
     }

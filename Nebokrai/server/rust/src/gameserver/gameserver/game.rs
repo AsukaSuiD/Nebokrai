@@ -13086,6 +13086,17 @@ impl CGame {
         self.proxy_regions.get_mut(&region_id)
     }
 
+    /// Общий поиск страны региона для сценариев `9301/9302`: локальный
+    /// владелец имеет приоритет над снимком прокси-региона, как в точном EXE.
+    pub(crate) fn script_region_country(&self, region_id: i32) -> Option<u8> {
+        self.find_region(region_id)
+            .map(|region| region.base().country)
+            .or_else(|| {
+                self.find_proxy_region(region_id)
+                    .map(CProxyServerRegion::country)
+            })
+    }
+
     pub(crate) fn take_war_startup_owners(&mut self) -> GameWarStartupOwners {
         GameWarStartupOwners {
             attack_city: std::mem::take(&mut self.attack_city_sys),

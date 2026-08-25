@@ -158,6 +158,7 @@ const AUTO_INC_ENERGY_TIME_OFFSET: usize = 0x828;
 const AUTO_INC_TIME_OFFSET: usize = 0x81C;
 const AUTO_INC_EXP_1_OFFSET: usize = 0x820;
 const AUTO_INC_EXP_2_OFFSET: usize = 0x824;
+const REGIONAL_PROTECTION_OFFSET: usize = 0x830;
 const CARRIAGE_STOP_DISTANCE_OFFSET: usize = 0x810;
 const CARRIAGE_DISAPPEAR_TIME_OFFSET: usize = 0x814;
 const EXP_TO_VIGOUR_X_OFFSET: usize = 0x75C;
@@ -1005,6 +1006,12 @@ impl GlobeSetupSnapshot {
             .position(|byte| *byte == 0)
             .unwrap_or(slot.len());
         &slot[..visible_len]
+    }
+
+    /// Точное поле `bRegionalProtection +0x830`, которое сценарная функция
+    /// `9303 / IsRegionalProtected` читает как 32-битное целое.
+    pub(crate) fn regional_protection(&self) -> i32 {
+        self.read_i32(REGIONAL_PROTECTION_OFFSET)
     }
 
     pub(crate) fn public_talk_goods_name(&self, country: bool) -> &[u8] {
