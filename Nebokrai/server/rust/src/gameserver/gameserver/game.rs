@@ -4843,6 +4843,16 @@ struct CityReturnPointFacts {
     tile_y: i32,
 }
 
+struct CountryReturnPointRng<'a> {
+    random_state: &'a mut u32,
+}
+
+impl CountryReturnPointContext for CountryReturnPointRng<'_> {
+    fn random_country_area_key(&mut self, area_count: u32) -> i32 {
+        game_legacy_random(self.random_state, area_count as i32)
+    }
+}
+
 impl CityReturnPointContext for CityReturnPointFacts {
     fn read_city_player_tile_y(&mut self, player_id: i32) -> i32 {
         (player_id == self.player_id)
@@ -5019,7 +5029,6 @@ pub(crate) trait GameMainLoopRuntime:
     + GameOtherMessageRuntime
     + GamePlayerMessageRuntime
     + IncrementShopBillingContext
-    + CountryReturnPointContext
     + NationContendContext
     + GodsBattleNpcContendContext
     + ServerRegionAreaTransitionContext
@@ -30546,7 +30555,13 @@ impl CGame {
                     .get_return_point(Some(facts), &mut self.country_param, &mut city_facts)
                     .map_err(GameReturnPointBlock::City),
                 ServerRegionOwner::Country(region) => region
-                    .get_return_point(Some(facts), &mut self.country_param, runtime)
+                    .get_return_point(
+                        Some(facts),
+                        &mut self.country_param,
+                        &mut CountryReturnPointRng {
+                            random_state: &mut self.random_state,
+                        },
+                    )
                     .map_err(GameReturnPointBlock::Country),
                 ServerRegionOwner::Nation(region) => region
                     .war
