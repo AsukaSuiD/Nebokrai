@@ -13,8 +13,11 @@
 //! Безопасный decoder отклоняет оборванный payload вместо исходного чтения за
 //! границей буфера. Skill-script path входит в reached `CGame::run_script_file`
 //! с player/region context. Оба AI-dispatch теперь попадают в canonical
-//! player-owned `CPlayerAI`; concrete `CSkill::IsEnd/End(true)` и исполнение
-//! target/skill очередей остаются явно названными runtime-границами.
+//! player-owned `CPlayerAI`. Canonical player AI, base/city
+//! `SymbolIsAttackAble` virtual и owned region target разрешаются самим
+//! `CGame`; runtime отвечает только за ещё внешние polymorphic shape owner-ы.
+//! Concrete `CSkill::IsEnd/End(true)` и исполнение target/skill очередей
+//! остаются явно названными runtime-границами.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -23,11 +26,12 @@
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\skillmessage.cpp
 
 use crate::gameserver::appserver::player::{
-    BattleFairySkillRequest, BattleFairySkillRequestFacts, BattleFairySkillRequestReport,
-    PlayerSkillRequest, PlayerSkillRequestFacts, PlayerSkillRequestReport,
+    BattleFairySkillRequest, BattleFairySkillRequestReport, PlayerSkillRequest,
+    PlayerSkillRequestReport,
 };
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
+use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
 
@@ -86,21 +90,12 @@ pub(crate) trait GameSkillMessageRuntime: ScriptFunctionRuntime {
         skill_id: u32,
     ) -> PlayerSkillEndRuntimeOutcome;
 
-    fn player_skill_request_facts(
+    fn external_skill_target_available(
         &mut self,
         game: &CGame,
-        player_id: i32,
-        region_id: Option<i32>,
-        request: PlayerSkillRequest,
-    ) -> PlayerSkillRequestFacts;
-
-    fn battle_fairy_skill_request_facts(
-        &mut self,
-        game: &CGame,
-        player_id: i32,
-        region_id: Option<i32>,
-        request: BattleFairySkillRequest,
-    ) -> BattleFairySkillRequestFacts;
+        region_id: i32,
+        target: ShapeIdentity,
+    ) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -178,7 +173,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                     outcome: GameSkillMessageOutcome::MissingPlayer,
                 }));
             };
-            let facts = runtime.player_skill_request_facts(game, player_id, region_id, request);
+            let facts = game.player_skill_request_facts(player_id, region_id, request, runtime);
             let report = game
                 .request_player_skill(player_id, socket_id, request, facts)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
@@ -315,7 +310,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                     outcome: GameSkillMessageOutcome::MissingPlayer,
                 }));
             };
-            let facts = runtime.player_skill_request_facts(game, player_id, region_id, request);
+            let facts = game.player_skill_request_facts(player_id, region_id, request, runtime);
             let report = game
                 .request_item_skill(player_id, socket_id, request, skill_level, facts)
                 .expect("resolved message player остаётся в CGame во время item-skill dispatch");
@@ -345,7 +340,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                 }));
             };
             let facts =
-                runtime.battle_fairy_skill_request_facts(game, player_id, region_id, request);
+                game.battle_fairy_skill_request_facts(player_id, region_id, request, runtime);
             let report = game
                 .request_battle_fairy_skill(player_id, socket_id, request, facts)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");

@@ -4,7 +4,8 @@
 //! `appserver/message/shapemessage.cpp`. Материализован весь handler
 //! `0x8F901..0x8F905`: exact fixed-width decode, direction/emotion player
 //! state, region lookup, around/addressed wire и ordering внешних AI/spatial/
-//! serialization owners. Player `SetTileXY` проходит concrete region/area/
+//! serialization owners. Base/city `SymbolIsAttackAble` virtual разрешается
+//! canonical region owner-ом. Player `SetTileXY` проходит concrete region/area/
 //! block mutation и post-move `GS0163`. Quest movement замыкает attack guard,
 //! rotation correction, addressed `OnCannotMove`, emotion reset и canonical
 //! player-owned `CPlayerAI` destination FIFO. Non-player polymorphic `SetTileXY` и полные
@@ -43,7 +44,6 @@ pub(crate) struct ShapeSnapshot {
 }
 
 pub(crate) trait GameShapeMessageRuntime {
-    fn shape_symbol_attackable(&mut self, game: &CGame, player_id: i32, region_id: i32) -> bool;
     fn allow_client_change_position(&mut self, game: &CGame) -> bool;
     fn resolve_external_shape_view(
         &mut self,
@@ -228,7 +228,7 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             report.deliveries.push(GameShapeMessageDelivery::Around(
                 game.send_player_shape_around(player_id, Some(player_id), &cleared),
             ));
-            if contend_state && runtime.shape_symbol_attackable(game, player_id, region_id) {
+            if contend_state && game.region_symbol_attackable(region_id) {
                 let delivery = colored_player_notice_message(
                     0xffff_ffff,
                     0xffff_0000,
@@ -300,7 +300,7 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 let contend_state = game
                     .find_player(identity.id)
                     .is_some_and(|player| player.contend_state());
-                if contend_state && runtime.shape_symbol_attackable(game, identity.id, region_id) {
+                if contend_state && game.region_symbol_attackable(region_id) {
                     let delivery = colored_player_notice_message(
                         0xffff_ffff,
                         0xffff_0000,

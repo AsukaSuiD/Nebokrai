@@ -5266,6 +5266,14 @@ impl ServerRegionOwner {
         matches!(self, Self::GodsBattle(_))
     }
 
+    /// Exact virtual family `SymbolIsAttackAble`: единственный override у
+    /// city owner-а безусловно возвращает false; прочие subtype-ы наследуют
+    /// `CServerRegion::true`. Предварительный city `GetWarState` не мутирует
+    /// owner и не влияет на результат.
+    pub(crate) const fn symbol_is_attackable(&self) -> bool {
+        !matches!(self, Self::City(_))
+    }
+
     /// Сохраняет virtual dispatch: war-derived owners дополнительно сбрасывают
     /// symbol state, base/country используют `CServerRegion` реализацию.
     pub(crate) fn reset_war_state(&mut self, war_number: i32, state: i32) {
@@ -28202,6 +28210,65 @@ impl CGame {
             identity.ex_id,
             self,
         )
+    }
+
+    pub(crate) fn region_symbol_attackable(&self, region_id: i32) -> bool {
+        self.find_region(region_id)
+            .is_some_and(ServerRegionOwner::symbol_is_attackable)
+    }
+
+    /// Exact facts для трёх client skill family. `CPlayer::GetAI` не может
+    /// быть null у canonical Rust player: AI является его owned полем.
+    /// `FindChildObject` сначала разрешает player/monster/NPC/goods storage;
+    /// только неизвестный polymorphic shape делегируется process runtime.
+    pub(crate) fn player_skill_request_facts<Runtime: GameSkillMessageRuntime>(
+        &self,
+        player_id: i32,
+        region_id: Option<i32>,
+        request: PlayerSkillRequest,
+        runtime: &mut Runtime,
+    ) -> PlayerSkillRequestFacts {
+        let target = ShapeIdentity {
+            object_type: request.target_type,
+            id: request.target_id,
+            ex_id: CGuid::GUID_INVALID,
+        };
+        let object_target_available = request.target_type != 0
+            && request.target_id != 0
+            && region_id.is_some_and(|region_id| {
+                self.find_shape_in_region(region_id, target).is_some()
+                    || runtime.external_skill_target_available(self, region_id, target)
+            });
+        PlayerSkillRequestFacts {
+            symbol_attackable: region_id.is_some_and(|id| self.region_symbol_attackable(id)),
+            player_ai_available: self.find_player(player_id).is_some(),
+            object_target_available,
+        }
+    }
+
+    pub(crate) fn battle_fairy_skill_request_facts<Runtime: GameSkillMessageRuntime>(
+        &self,
+        player_id: i32,
+        region_id: Option<i32>,
+        request: BattleFairySkillRequest,
+        runtime: &mut Runtime,
+    ) -> BattleFairySkillRequestFacts {
+        let target = ShapeIdentity {
+            object_type: request.target_type,
+            id: request.target_id,
+            ex_id: CGuid::GUID_INVALID,
+        };
+        let object_target_available = request.target_type != 0
+            && request.target_id != 0
+            && region_id.is_some_and(|region_id| {
+                self.find_shape_in_region(region_id, target).is_some()
+                    || runtime.external_skill_target_available(self, region_id, target)
+            });
+        BattleFairySkillRequestFacts {
+            symbol_attackable: region_id.is_some_and(|id| self.region_symbol_attackable(id)),
+            player_ai_available: self.find_player(player_id).is_some(),
+            object_target_available,
+        }
     }
 
     pub(crate) fn emotion_repeated(&self, emotion_id: i32) -> bool {

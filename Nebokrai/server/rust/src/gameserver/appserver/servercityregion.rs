@@ -850,19 +850,9 @@ fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
 //
 //
 
-// ============================================================================
-// FUNCTION: CServerCityRegion::SymbolIsAttackAble
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servercityregion.cpp:468
-// RVA: 0x001CED60
-// ADDRESS: 005ced60
-// PROTOTYPE: bool __thiscall SymbolIsAttackAble(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CServerCityRegion::SymbolIsAttackAble` входит в canonical
+// `ServerRegionOwner` virtual family. Предварительный `GetWarState` не имеет
+// side effects, результат virtual безусловно false.
 
 // ============================================================================
 // FUNCTION: CServerCityRegion::IsOwner

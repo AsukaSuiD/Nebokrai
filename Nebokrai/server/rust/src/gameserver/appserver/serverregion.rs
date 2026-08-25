@@ -3784,19 +3784,9 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 //
 // IMPLEMENTED выше: state Mass; технические STL/SEH детали удалены.
 
-// ============================================================================
-// FUNCTION: CServerRegion::SymbolIsAttackAble
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.h:280
-// RVA: 0x000855C0
-// ADDRESS: 004855c0
-// PROTOTYPE: bool __thiscall SymbolIsAttackAble(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CServerRegion::SymbolIsAttackAble` входит в canonical
+// `ServerRegionOwner` virtual family и возвращает true для всех subtype-ов,
+// кроме единственного city override.
 
 // ============================================================================
 // FUNCTION: CServerRegion::SetOwnedCityOrg

@@ -1003,8 +1003,8 @@ impl PlayerSkillRequest {
     }
 }
 
-/// Facts ещё сырых virtual owner-ов `CServerRegion::SymbolIsAttackAble`,
-/// `CPlayer::GetAI` и полного player/monster region registry.
+/// Facts reached `CGame` owner-а: region virtual и canonical AI разрешаются
+/// непосредственно, unknown polymorphic target остаётся process-границей.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerSkillRequestFacts {
     pub(crate) symbol_attackable: bool,
@@ -1096,8 +1096,8 @@ impl BattleFairySkillRequest {
     }
 }
 
-/// Facts ещё сырых virtual owner-ов `CServerRegion::SymbolIsAttackAble`,
-/// `CPlayer::GetAI` и полного player/monster region registry.
+/// Facts reached `CGame` owner-а: region virtual и canonical AI разрешаются
+/// непосредственно, unknown polymorphic target остаётся process-границей.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct BattleFairySkillRequestFacts {
     pub(crate) symbol_attackable: bool,
