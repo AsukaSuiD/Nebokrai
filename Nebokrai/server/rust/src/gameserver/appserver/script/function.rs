@@ -184,6 +184,9 @@
 //! `0x5FF0C -> 0x7FC0B/0x5FF0D -> 0x7FC0C` через общий GM dispatcher.
 //! `3309 / GetMapInfo` читает concrete cell текущего script-region и сохраняет
 //! приоритет war-marker над safe/fight security с legacy кодами `2/3/1/0`.
+//! `3305 / CreateMonster` проводит local spawn через canonical property,
+//! random-position, AI/spatial и around owners; чужой region сохраняет
+//! существующий `0x5FA0B -> 0x7F80A` межсерверный маршрут.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -227,7 +230,9 @@ use crate::gameserver::appserver::servercityregion::CityGateRuntimeContext;
 use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
 };
-use crate::gameserver::appserver::serverregion::{CServerRegion, ServerRegionNpcSetup};
+use crate::gameserver::appserver::serverregion::{
+    CServerRegion, ServerRegionMonsterContext, ServerRegionNpcSetup,
+};
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, WarContendEntryContext, WarRegionContext,
 };
@@ -393,6 +398,7 @@ pub(crate) const SCRIPT_FUNCTION_DISBAND_QUEST: i32 = 6202;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
 pub(crate) const SCRIPT_FUNCTION_UPDATE_QUEST_POSITION: i32 = 6207;
 pub(crate) const SCRIPT_FUNCTION_CREATE_NPC: i32 = 3302;
+pub(crate) const SCRIPT_FUNCTION_CREATE_MONSTER: i32 = 3305;
 pub(crate) const SCRIPT_FUNCTION_GET_MAP_INFO: i32 = 3309;
 pub(crate) const SCRIPT_FUNCTION_GET_REGION_RANDOM_POSITION: i32 = 8003;
 pub(crate) const SCRIPT_FUNCTION_IS_QUEST_ENABLED: i32 = 3500;
@@ -498,6 +504,7 @@ pub(crate) trait ScriptFunctionRuntime:
     + RealmAppellationScriptContext
     + ScriptAwardAuthenticationContext
     + MoveShapeCommandContext
+    + ServerRegionMonsterContext
 {
 }
 
@@ -516,6 +523,7 @@ impl<T> ScriptFunctionRuntime for T where
         + RealmAppellationScriptContext
         + ScriptAwardAuthenticationContext
         + MoveShapeCommandContext
+        + ServerRegionMonsterContext
 {
 }
 
@@ -3420,6 +3428,11 @@ pub(crate) fn script_function_parameter_kind(
             1..=7 | 9..=11 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_CREATE_MONSTER => match index {
+            0 | 6 => String,
+            1..=5 | 7 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_GET_MAP_INFO => match index {
             0..=1 => Integer,
             _ => Unused,
@@ -4947,6 +4960,122 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     .ok()
                     .and_then(|spawn| spawn.created_ids.first().copied())
                     .unwrap_or_default(),
+            })
+        }
+        SCRIPT_FUNCTION_CREATE_MONSTER => {
+            if !(6..=8).contains(&argument_count) || game.find_player(player_id).is_none() {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(original_name) = string_arguments[0]
+                .filter(|name| !name.is_empty() && name.len() <= u8::MAX as usize)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            let mut values = [0_i32; 5];
+            for (index, destination) in values.iter_mut().enumerate() {
+                let Some(value) = integer_arguments[index + 1]
+                    .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                else {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                };
+                *destination = value;
+            }
+            let [count, left, top, right, bottom] = values;
+            if !(1..=MAXIMUM_SCRIPT_SPAWN_COUNT).contains(&count)
+                || right < left
+                || bottom < top
+                || i32::try_from(i64::from(right) - i64::from(left)).is_err()
+                || i32::try_from(i64::from(bottom) - i64::from(top)).is_err()
+            {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let script_file = match string_arguments[6] {
+                Some(script) if script.len() <= u8::MAX as usize && !script.contains(&0) => script,
+                Some(_) => return Some(ScriptFunctionDispatchOutcome::Invalid),
+                None => &[],
+            };
+            let player_region_id = game
+                .find_player(player_id)
+                .and_then(|player| player.server_region_id())
+                .unwrap_or_default();
+            let region_id = match integer_arguments[7] {
+                Some(SCRIPT_INT_PARAMETER_ERROR) => {
+                    return Some(ScriptFunctionDispatchOutcome::Invalid);
+                }
+                Some(region_id) => region_id,
+                None => player_region_id,
+            };
+            if region_id <= 0 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let Some(mut owner) = game.take_region_owner(region_id) else {
+                let mut request = CMessage::new(0x0005_fa0b);
+                request.add_byte(0);
+                request.add_long(region_id);
+                request.base_mut().add(original_name);
+                request.add_byte(0);
+                request.add_long(count);
+                request.add_long(left);
+                request.add_long(top);
+                request.add_long(right);
+                request.add_long(bottom);
+                let has_script = !script_file.is_empty() && script_file != b"0";
+                request.add_byte(u8::from(has_script));
+                if has_script {
+                    request.base_mut().add(script_file);
+                    request.add_byte(0);
+                }
+                let _ = request.send(game, false);
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let Some(property) = game
+                .find_monster_property_by_origin_name(original_name)
+                .cloned()
+            else {
+                game.restore_region_owner(owner);
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+
+            let (area_width, area_height) = game.area_dimensions();
+            let width = right.wrapping_sub(left);
+            let height = bottom.wrapping_sub(top);
+            let mut first_monster_id = 0;
+            for _ in 0..count {
+                let position = owner
+                    .base()
+                    .region
+                    .get_random_pos_in_range(left, top, width, height, runtime);
+                let Ok(position) = position else {
+                    continue;
+                };
+                let spawn = owner.base_mut().add_monster(
+                    &property,
+                    position.x,
+                    position.y,
+                    -1,
+                    true,
+                    false,
+                    runtime.now_milliseconds(),
+                    area_width,
+                    area_height,
+                    runtime,
+                );
+                let Ok(monster_id) = spawn else {
+                    continue;
+                };
+                if first_monster_id == 0 {
+                    first_monster_id = monster_id;
+                }
+                if !script_file.is_empty()
+                    && script_file != b"0"
+                    && let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id)
+                {
+                    monster.set_script_file(script_file);
+                }
+            }
+            game.restore_region_owner(owner);
+            Some(ScriptFunctionDispatchOutcome::Handled {
+                legacy_return: first_monster_id,
             })
         }
         SCRIPT_FUNCTION_SET_THING_COUNT => {
