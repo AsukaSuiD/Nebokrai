@@ -351,6 +351,8 @@
 //! lookup по original name становится общей базой concrete monster spawn.
 //! Script shape removal `3303/3306/3313/3315` публикует `0xBF504` через
 //! canonical around runtime до spatial removal либо deferred `CS_DELETE`.
+//! Talk pair `3301/3304` публикует actor/name/text `0xBF801`; monster variant
+//! дополнительно сохраняет exact-name area scan и строгий distance filter.
 //! `s_mapProxyRegion` теперь является owned ordered registry: `AddProxyRegion`
 //! `0x0000AD10` сохраняет map-assignment, а `FindProxyRegion` `0x0000AD30` —
 //! lookup/null. Proxy snapshot `0x0F` публикуется целиком до startup log.
@@ -18286,6 +18288,117 @@ impl CGame {
                 .expect("rectangle snapshot сохраняет owned monster")
                 .stage_for_delete();
             deliveries.push(delivery);
+        }
+        self.restore_region_owner(owner);
+        deliveries
+    }
+
+    /// `3301 / NpcTalk` сохраняет caller-supplied display name и публикует
+    /// один local-chat frame через обычный shape-around runtime.
+    pub(crate) fn script_npc_talk(
+        &mut self,
+        region_id: i32,
+        npc_id: i32,
+        name: &[u8],
+        text: &[u8],
+    ) -> Option<i32> {
+        let owner = self.take_region_owner(region_id)?;
+        let result = (|| {
+            let npc = owner.base().find_npc_by_id(npc_id)?;
+            let shape = npc.move_shape().shape();
+            let mut message = CMessage::new(0x000b_f801);
+            message.add_long(0);
+            message.add_long(shape.identity().object_type);
+            message.add_long(shape.identity().id);
+            message.base_mut().add(name);
+            message.add_byte(0);
+            message.base_mut().add(text);
+            message.add_byte(0);
+            let runtime = GameServerAroundRuntime::new(
+                self,
+                &self.session_factory,
+                self.globe_setup.area_width(),
+                self.globe_setup.area_height(),
+            )?;
+            message
+                .send_to_around(Some(owner.base()), shape, None, &runtime)
+                .ok()
+        })();
+        self.restore_region_owner(owner);
+        result
+    }
+
+    /// `3304 / MonsterTalk` сначала выбирает exact-name monsters в девяти
+    /// area игрока, затем каждый monster независимо фильтрует получателей по
+    /// строгому `abs(dx/dy) < AREA_WIDTH/HEIGHT` и шлёт `0xBF801`.
+    pub(crate) fn script_monsters_talk(
+        &mut self,
+        player_id: i32,
+        name: &[u8],
+        text: &[u8],
+    ) -> Vec<i32> {
+        let Some((region_id, player_area_index)) = self
+            .find_player(player_id)
+            .and_then(|player| Some((player.server_region_id()?, player.shape().area_index()?)))
+        else {
+            return Vec::new();
+        };
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return Vec::new();
+        };
+        let monster_ids = owner
+            .base()
+            .script_monster_ids_around_area(player_area_index);
+        let area_width = self.globe_setup.area_width();
+        let area_height = self.globe_setup.area_height();
+        let mut deliveries = Vec::new();
+        if area_width > 0 && area_height > 0 {
+            for monster_id in monster_ids {
+                let Some(monster) = owner
+                    .base()
+                    .find_monster_by_id(monster_id)
+                    .filter(|monster| monster.display_name() == name)
+                else {
+                    continue;
+                };
+                let shape = monster.move_shape().shape();
+                let (Ok(tile_x), Ok(tile_y)) = (shape.get_tile_x(), shape.get_tile_y()) else {
+                    continue;
+                };
+                let mut player_ids = Vec::new();
+                for offset_x in -1..=1 {
+                    for offset_y in -1..=1 {
+                        owner.base().find_player_ids_in_area(
+                            tile_x / area_width + offset_x,
+                            tile_y / area_height + offset_y,
+                            &mut player_ids,
+                        );
+                    }
+                }
+                let mut message = CMessage::new(0x000b_f801);
+                message.add_long(0);
+                message.add_long(shape.identity().object_type);
+                message.add_long(shape.identity().id);
+                message.base_mut().add(monster.display_name());
+                message.add_byte(0);
+                message.base_mut().add(text);
+                message.add_byte(0);
+                for target_id in player_ids {
+                    let Some(target) = self.find_player(target_id) else {
+                        continue;
+                    };
+                    let (Ok(target_x), Ok(target_y)) =
+                        (target.shape().get_tile_x(), target.shape().get_tile_y())
+                    else {
+                        continue;
+                    };
+                    if i64::from(target_x).abs_diff(i64::from(tile_x)) < area_width as u64
+                        && i64::from(target_y).abs_diff(i64::from(tile_y)) < area_height as u64
+                    {
+                        deliveries.push(message.send_to_player(self.net_server(), target_id));
+                    }
+                }
+            }
         }
         self.restore_region_owner(owner);
         deliveries

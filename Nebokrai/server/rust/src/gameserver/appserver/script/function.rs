@@ -193,6 +193,9 @@
 //! Batch selectors `3313/3315` переиспользуют тот же terminal owner после
 //! rectangle/original-name либо region/name lookup, сохраняя publication-first
 //! порядок для каждого найденного shape.
+//! Talk pair `3301/3304` формирует exact `0xBF801` actor/name/text wire: NPC
+//! использует canonical around-send, monster family сохраняет 3x3 area scan,
+//! exact-name match и строгий AREA_WIDTH/HEIGHT recipient filter.
 //! Его terminal `5404 / PlayEffect` проверяет live player/local region до
 //! вычисления аргументов, выбирает explicit либо player tile и публикует
 //! точный `0xBF50A(effect, x+0.5f, y+0.5f)` через canonical around runtime.
@@ -403,8 +406,10 @@ pub(crate) const SCRIPT_FUNCTION_COMPLETE_QUEST: i32 = 6201;
 pub(crate) const SCRIPT_FUNCTION_DISBAND_QUEST: i32 = 6202;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_STATE: i32 = 6203;
 pub(crate) const SCRIPT_FUNCTION_UPDATE_QUEST_POSITION: i32 = 6207;
+pub(crate) const SCRIPT_FUNCTION_NPC_TALK: i32 = 3301;
 pub(crate) const SCRIPT_FUNCTION_CREATE_NPC: i32 = 3302;
 pub(crate) const SCRIPT_FUNCTION_DELETE_NPC: i32 = 3303;
+pub(crate) const SCRIPT_FUNCTION_MONSTER_TALK: i32 = 3304;
 pub(crate) const SCRIPT_FUNCTION_CREATE_MONSTER: i32 = 3305;
 pub(crate) const SCRIPT_FUNCTION_DELETE_MONSTER: i32 = 3306;
 pub(crate) const SCRIPT_FUNCTION_GET_MAP_INFO: i32 = 3309;
@@ -3438,6 +3443,10 @@ pub(crate) fn script_function_parameter_kind(
             1..=7 | 9..=11 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_NPC_TALK | SCRIPT_FUNCTION_MONSTER_TALK => match index {
+            0..=1 => String,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_CREATE_MONSTER => match index {
             0 | 6 => String,
             1..=5 | 7 => Integer,
@@ -4985,6 +4994,33 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     .and_then(|spawn| spawn.created_ids.first().copied())
                     .unwrap_or_default(),
             })
+        }
+        SCRIPT_FUNCTION_NPC_TALK => {
+            let (Some(region_id), Some(npc_id), Some(name), Some(text)) = (
+                script_region_id,
+                script_npc_id,
+                string_arguments[0].filter(|value| {
+                    !value.is_empty() && value.len() <= 1023 && !value.contains(&0)
+                }),
+                string_arguments[1].filter(|value| {
+                    !value.is_empty() && value.len() <= 1023 && !value.contains(&0)
+                }),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            };
+            if argument_count != 2 {
+                return Some(ScriptFunctionDispatchOutcome::Invalid);
+            }
+            let _ = game.script_npc_talk(region_id, npc_id, name, text);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_MONSTER_TALK => {
+            if let (Some(player_id), Some(name), Some(text)) =
+                (script_player_id, string_arguments[0], string_arguments[1])
+            {
+                let _ = game.script_monsters_talk(player_id, name, text);
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_CREATE_MONSTER => {
             if !(6..=8).contains(&argument_count) || game.find_player(player_id).is_none() {

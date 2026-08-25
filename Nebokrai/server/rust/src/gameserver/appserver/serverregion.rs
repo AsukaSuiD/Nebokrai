@@ -75,6 +75,8 @@
 //! skills/AI Init и around serialization остаются concrete context callbacks.
 //! Script rectangle removal снимает ordered ID snapshot по live tile и
 //! original-name до publication/mutation у `CGame` owner-а.
+//! MonsterTalk area lookup использует тот же девяти-area neighborhood и
+//! active/sleeping storage, что исходный `CArea::GetAllShapes` pass.
 //! Exact EXE подтверждает legacy quirk: его пятый bool не читается, enter
 //! message отправляется всегда, а шестой bool подавляет ранний guard-hook.
 //! Clock-вариант `AddNpc` получает отдельный tick на каждый объект batch-а:
@@ -930,6 +932,24 @@ impl CServerRegion {
                 .then_some(*monster_id)
             })
             .collect()
+    }
+
+    /// `3304 / MonsterTalk` обходит ровно девять area вокруг current player
+    /// area и сохраняет внутренний active/sleeping order каждой area.
+    pub(crate) fn script_monster_ids_around_area(&self, area_index: usize) -> Vec<i32> {
+        let Some(center) = self.areas.get(area_index) else {
+            return Vec::new();
+        };
+        let center = ShapeAreaCoordinates {
+            x: center.x(),
+            y: center.y(),
+        };
+        let mut monster_ids = Vec::new();
+        for index in self.neighbor_area_indices(center) {
+            self.areas[index].append_monster_ids(&mut monster_ids);
+        }
+        monster_ids.retain(|monster_id| self.owned_monsters.contains_key(monster_id));
+        monster_ids
     }
 
     /// Exact area-array traversal `FindShapes(600)` без смены pointer owner-а.
