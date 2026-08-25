@@ -1,6 +1,58 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Состояние набора в отряд `CTeamState`.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/other states/teamstate.cpp`. Материализован достигнутый через
+//! client `0x8FF08` lifecycle: имя/пароль, state ID `100006`, бессрочное
+//! client-time и additional-data с password bit и исходным количеством один.
+//! Общий polymorphic `CState` storage заменён typed player-owned списком;
+//! begin/end visual wire публикует message owner. Team-session AI и
+//! сериализация остальных способов создания state остаются в RAW ниже.
+
+pub(crate) const TEAM_STATE_ID: i32 = 0x0001_86a6;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CTeamState {
+    team_name: Vec<u8>,
+    team_password: Vec<u8>,
+    last_check_timestamp_ms: u32,
+}
+
+impl CTeamState {
+    pub(crate) fn new(team_name: Vec<u8>, team_password: Vec<u8>) -> Self {
+        Self {
+            team_name,
+            team_password,
+            last_check_timestamp_ms: 0,
+        }
+    }
+
+    pub(crate) const fn state_id(&self) -> i32 {
+        TEAM_STATE_ID
+    }
+
+    /// Базовый `CState::GetClientStateTime` для этого бессрочного state.
+    pub(crate) const fn client_state_time(&self) -> i32 {
+        0
+    }
+
+    /// До создания team session исходный owner сообщает самого лидера как
+    /// единственного участника; bit 16 отмечает непустой пароль.
+    pub(crate) fn initial_additional_data(&self) -> u32 {
+        (u32::from(!self.team_password.is_empty()) << 16) | 1
+    }
+
+    pub(crate) fn team_name(&self) -> &[u8] {
+        &self.team_name
+    }
+
+    pub(crate) fn team_password(&self) -> &[u8] {
+        &self.team_password
+    }
+
+    pub(crate) const fn last_check_timestamp_ms(&self) -> u32 {
+        self.last_check_timestamp_ms
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -189,7 +241,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
 
 // COMPONENT_VARIANT_END: GameServer

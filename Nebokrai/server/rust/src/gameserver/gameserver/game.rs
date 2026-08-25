@@ -599,6 +599,9 @@ use crate::gameserver::appserver::message::skillmessage::{
     GameSkillMessageError, GameSkillMessageReport, GameSkillMessageRuntime,
     dispatch_game_skill_message,
 };
+use crate::gameserver::appserver::message::teammessage::{
+    GameTeamMessageError, GameTeamMessageReport, dispatch_game_team_message,
+};
 use crate::gameserver::appserver::message::unibillmessage::{
     IncrementShopBillingMessageError, IncrementShopBillingReport,
     dispatch_increment_shop_billing_message,
@@ -1786,18 +1789,6 @@ pub(crate) struct EquipmentSessionOpenReport {
     pub(crate) collected_plug_ids: Vec<i32>,
 }
 
-/// Единственная ещё polymorphic часть session-open gates: `CTeamState`
-/// хранится в общем state registry, который пока не материализован у
-/// `CMoveShape`. Progress, fight counter и region security читаются у
-/// canonical `CPlayer/CRegion` owners.
-pub(crate) trait TeamStateContext {
-    fn player_has_team_state(&mut self, player_id: i32) -> bool;
-}
-
-pub(crate) trait EquipmentSessionOpenContext: TeamStateContext {}
-
-impl<T: TeamStateContext> EquipmentSessionOpenContext for T {}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsDestroyDeleteRequest {
     pub(crate) player_id: i32,
@@ -1829,9 +1820,9 @@ pub(crate) struct GoodsDestroyAuditLog {
     pub(crate) tile_y: Result<i32, ShapeCoordinateBlock>,
 }
 
-pub(crate) trait SynthesisContext: OldClientGoodsCodec + TeamStateContext {}
+pub(crate) trait SynthesisContext: OldClientGoodsCodec {}
 
-impl<T: OldClientGoodsCodec + TeamStateContext> SynthesisContext for T {}
+impl<T: OldClientGoodsCodec> SynthesisContext for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SynthesisOpenOutcome {
@@ -5048,6 +5039,7 @@ pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
         Vec<Result<GameContainerMessageReport, GameContainerMessageError>>,
     pub(crate) goods_messages: Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
     pub(crate) skill_messages: Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
+    pub(crate) team_messages: Vec<Result<GameTeamMessageReport, GameTeamMessageError>>,
     pub(crate) shape_messages: Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
     pub(crate) other_messages: Vec<Result<GameOtherMessageReport, GameOtherMessageError>>,
     pub(crate) player_messages: Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
@@ -17529,11 +17521,10 @@ impl CGame {
             .send_to_player(self.net_server(), player_id)
     }
 
-    pub(crate) fn open_equipment_session<Context: EquipmentSessionOpenContext>(
+    pub(crate) fn open_equipment_session(
         &mut self,
         player_id: i32,
         kind: EquipmentSessionPlugKind,
-        context: &mut Context,
     ) -> EquipmentSessionOpenReport {
         let mut report = EquipmentSessionOpenReport {
             kind,
@@ -17568,7 +17559,11 @@ impl CGame {
                 Some(self.send_equipment_session_notification(player_id, string_id));
             return report;
         }
-        if kind != EquipmentSessionPlugKind::Upgrade && context.player_has_team_state(player_id) {
+        if kind != EquipmentSessionPlugKind::Upgrade
+            && self
+                .find_player(player_id)
+                .is_some_and(CPlayer::has_team_recruitment_state)
+        {
             report.outcome = EquipmentSessionOpenOutcome::TeamStateBlocked;
             let string_id = match kind {
                 EquipmentSessionPlugKind::DaKong => "GS1058",
@@ -23536,11 +23531,7 @@ impl CGame {
         FairySetupQueryReport { enabled, delivery }
     }
 
-    pub(crate) fn open_synthesis<Context: SynthesisContext>(
-        &mut self,
-        player_id: i32,
-        context: &mut Context,
-    ) -> Option<SynthesisOpenReport> {
+    pub(crate) fn open_synthesis(&mut self, player_id: i32) -> Option<SynthesisOpenReport> {
         let (region_id, tile_x, tile_y, progress, fight_state_count) = {
             let player = self.find_player(player_id)?;
             (
@@ -23564,7 +23555,10 @@ impl CGame {
             SynthesisOpenOutcome::Fighting
         } else if progress == PlayerProgress::OpenStall {
             SynthesisOpenOutcome::StallOpen
-        } else if context.player_has_team_state(player_id) {
+        } else if self
+            .find_player(player_id)
+            .is_some_and(CPlayer::has_team_recruitment_state)
+        {
             SynthesisOpenOutcome::TeamState
         } else {
             SynthesisOpenOutcome::Opened
@@ -31166,6 +31160,7 @@ impl CGame {
         let mut container_messages = Vec::new();
         let mut goods_messages = Vec::new();
         let mut skill_messages = Vec::new();
+        let mut team_messages = Vec::new();
         let mut shape_messages = Vec::new();
         let mut other_messages = Vec::new();
         let mut player_messages = Vec::new();
@@ -31196,6 +31191,7 @@ impl CGame {
                 &mut container_messages,
                 &mut goods_messages,
                 &mut skill_messages,
+                &mut team_messages,
                 &mut shape_messages,
                 &mut other_messages,
                 &mut player_messages,
@@ -31227,6 +31223,7 @@ impl CGame {
                 &mut container_messages,
                 &mut goods_messages,
                 &mut skill_messages,
+                &mut team_messages,
                 &mut shape_messages,
                 &mut other_messages,
                 &mut player_messages,
@@ -31260,6 +31257,7 @@ impl CGame {
                         &mut container_messages,
                         &mut goods_messages,
                         &mut skill_messages,
+                        &mut team_messages,
                         &mut shape_messages,
                         &mut other_messages,
                         &mut player_messages,
@@ -31292,6 +31290,7 @@ impl CGame {
             container_messages,
             goods_messages,
             skill_messages,
+            team_messages,
             shape_messages,
             other_messages,
             player_messages,
@@ -31331,6 +31330,7 @@ impl CGame {
         container_messages: &mut Vec<Result<GameContainerMessageReport, GameContainerMessageError>>,
         goods_messages: &mut Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
         skill_messages: &mut Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
+        team_messages: &mut Vec<Result<GameTeamMessageReport, GameTeamMessageError>>,
         shape_messages: &mut Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
         other_messages: &mut Vec<Result<GameOtherMessageReport, GameOtherMessageError>>,
         player_messages: &mut Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
@@ -31382,6 +31382,8 @@ impl CGame {
             goods_messages.push(report);
         } else if let Some(report) = dispatch_game_skill_message(message, self, runtime) {
             skill_messages.push(report);
+        } else if let Some(report) = dispatch_game_team_message(message, self) {
+            team_messages.push(report);
         } else if dispatch_game_region_message(message, self, runtime).is_some() {
         } else if let Some(report) = dispatch_game_shape_message(message, self, runtime) {
             shape_messages.push(report);

@@ -15,6 +15,8 @@ pub(crate) mod appserver {
     pub(crate) mod exstate;
     #[path = "other states/ridestate.rs"]
     pub(crate) mod ridestate;
+    #[path = "other states/teamstate.rs"]
+    pub(crate) mod teamstate;
     pub(crate) mod container {
         pub(crate) mod camountlimitgoodscontainer;
         pub(crate) mod camountlimitgoodsshadowcontainer;
@@ -77,6 +79,7 @@ pub(crate) mod appserver {
         pub(crate) mod shapemessage;
         pub(crate) mod shopmessage;
         pub(crate) mod skillmessage;
+        pub(crate) mod teammessage;
         pub(crate) mod unibillmessage;
     }
     #[path = "message packaging/cs2ccontainerobjectamountchange.rs"]

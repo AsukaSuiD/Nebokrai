@@ -272,8 +272,8 @@ use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlug
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
-    EquipmentDaKongContext, EquipmentSessionOpenContext, EquipmentSessionOpenReport,
-    GameClockContext, GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
+    EquipmentDaKongContext, EquipmentSessionOpenReport, GameClockContext,
+    GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
     GodsBattleSzlPlayerUpdate, NationCarriageReturnReport, NationCombatContext,
     NationContendEnterReport, RealmAppellationScriptContext, ScriptRegionChangeContext,
     ServerRegionOwner, colored_player_notice_message, colored_text_message,
@@ -540,7 +540,6 @@ pub(crate) trait ScriptAwardAuthenticationContext {
 pub(crate) trait ScriptFunctionRuntime:
     GameClockContext
     + NationCombatContext
-    + EquipmentSessionOpenContext
     + EquipmentDaKongContext
     + GameContainerMessageRuntime
     + BattleFairyDeathContext
@@ -558,7 +557,6 @@ pub(crate) trait ScriptFunctionRuntime:
 impl<T> ScriptFunctionRuntime for T where
     T: GameClockContext
         + NationCombatContext
-        + EquipmentSessionOpenContext
         + EquipmentDaKongContext
         + GameContainerMessageRuntime
         + BattleFairyDeathContext
@@ -3145,11 +3143,10 @@ pub(crate) enum EquipmentSessionScriptFunctionOutcome {
     Opened(EquipmentSessionOpenReport),
 }
 
-pub(crate) fn run_equipment_session_script_function<Context: EquipmentSessionOpenContext>(
+pub(crate) fn run_equipment_session_script_function(
     game: &mut CGame,
     player_id: i32,
     function_id: i32,
-    context: &mut Context,
 ) -> EquipmentSessionScriptFunctionOutcome {
     let kind = match function_id {
         SCRIPT_FUNCTION_OPEN_DA_KONG => EquipmentSessionPlugKind::DaKong,
@@ -3157,9 +3154,7 @@ pub(crate) fn run_equipment_session_script_function<Context: EquipmentSessionOpe
         SCRIPT_FUNCTION_OPEN_EQUIPMENT_UPGRADE => EquipmentSessionPlugKind::Upgrade,
         _ => return EquipmentSessionScriptFunctionOutcome::DifferentFunction,
     };
-    EquipmentSessionScriptFunctionOutcome::Opened(
-        game.open_equipment_session(player_id, kind, context),
-    )
+    EquipmentSessionScriptFunctionOutcome::Opened(game.open_equipment_session(player_id, kind))
 }
 
 #[must_use = "script dispatch отличает чужой ID от handled no-op и выполненного gameplay"]
@@ -7244,7 +7239,6 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         game,
         script_player_id.unwrap_or_default(),
         function_id,
-        runtime,
     ) {
         return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
     }

@@ -526,7 +526,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
         }
         QUERY_FAIRY_SETUP => GameGoodsMessageOutcome::FairySetup(game.query_fairy_setup(player_id)),
         OPEN_SYNTHESIS => GameGoodsMessageOutcome::SynthesisOpen(
-            game.open_synthesis(player_id, runtime)
+            game.open_synthesis(player_id)
                 .expect("resolved message player остаётся в CGame"),
         ),
         QUERY_SYNTHESIS_LIST => {
