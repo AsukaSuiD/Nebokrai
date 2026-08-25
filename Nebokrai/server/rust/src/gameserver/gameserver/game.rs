@@ -369,8 +369,10 @@
 //! `BF506/BFE01/BF60A/BF60B/BF612/BF504` и общий player-death tail проходят
 //! до живых owners. Passive/command pet retaliation также использует pet
 //! factors/tracing и завершает wild-monster reward/drop/script/delete через
-//! master beneficiary. Guard policy, idle/multi-skill и остальной tamed
-//! decision tree остаются на derived shape-AI границе.
+//! master beneficiary; player-target рекурсивно применяет master PvP/level/
+//! safe-cell policy и доходит до общего hurt/death/murder/equipment tail.
+//! Guard policy, idle/multi-skill и остальной tamed decision tree остаются на
+//! derived shape-AI границе.
 //! `Release` сохраняет player-save/catch, city-save, registry/script/factory,
 //! network и singleton teardown order; Rust `clear/take/Drop` заменяет manual
 //! delete, а ещё внешние process-global owners вызываются typed runtime-ом.
@@ -31066,6 +31068,19 @@ impl CGame {
         message.send_to_player(self.net_server(), player_id)
     }
 
+    fn release_reciprocal_player_target(&mut self, player_id: i32, target: ShapeIdentity) {
+        let released = self.find_player_mut(player_id).is_some_and(|player| {
+            let released = player.player_ai_mut().release_object_target(target);
+            if released {
+                player.set_current_skill_id(None);
+            }
+            released
+        });
+        if released {
+            let _ = self.send_base_attack_failure(player_id, 2);
+        }
+    }
+
     fn append_base_attack_tail(message: &mut CMessage, attack: &AttackInformation) {
         message
             .base_mut()
@@ -31582,8 +31597,8 @@ impl CGame {
 
     /// Reached `CMonsterAI/CPet::OnSchedule -> CBaseAttack(1)` path:
     /// retaliation, aggressive melee `dwAI 0/3` search/tracing и concrete
-    /// pet-to-wild-monster base attack. `false` оставляет guard policy,
-    /// idle/multi-skill и прочие derived AI.
+    /// pet-to-wild-monster либо policy-checked pet-to-player base attack.
+    /// `false` оставляет guard policy, idle/multi-skill и прочие derived AI.
     fn run_owned_monster_base_attack_in_region<Runtime: GameMainLoopRuntime>(
         &mut self,
         region: &mut CServerRegion,
@@ -31606,6 +31621,7 @@ impl CGame {
             moveable,
             trace_move_delay,
             area_index,
+            pet_action,
         )) = region.find_monster_by_id(monster_id).and_then(|monster| {
             let property = self
                 .find_monster_property_by_origin_name(monster.base_property_key()?)?
@@ -31628,6 +31644,7 @@ impl CGame {
                 monster.move_shape().is_moveable(),
                 monster.trace_move_delay(),
                 monster.move_shape().shape().area_index(),
+                monster.pet_action(),
             ))
         })
         else {
@@ -31709,9 +31726,6 @@ impl CGame {
         else {
             return false;
         };
-        if tamed && target.object_type != MONSTER_TYPE {
-            return false;
-        }
         let Some(skill_properties) = self
             .skill_factory
             .query_skill_base_properties(BASE_ATTACK_SKILL_ID, i32::from(skill.level))
@@ -31788,7 +31802,11 @@ impl CGame {
             }
             return true;
         };
-        if target_dead || target_god || target_city_dead || (property.kind == 5 && !target_badman) {
+        if target_dead
+            || target_god
+            || target_city_dead
+            || (!tamed && property.kind == 5 && !target_badman)
+        {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.clear_ai_target();
             }
@@ -31802,6 +31820,62 @@ impl CGame {
         ) else {
             return true;
         };
+
+        if tamed && cast.is_none() && pet_action == 0 {
+            let (anchor_x, anchor_y) = (attacker_master.master_type == PLAYER_TYPE
+                && attacker_master.master_id != 0)
+                .then(|| self.find_player(attacker_master.master_id))
+                .flatten()
+                .filter(|master| master.server_region_id() == Some(region.id))
+                .and_then(|master| {
+                    Some((
+                        master.shape().get_tile_x().ok()?,
+                        master.shape().get_tile_y().ok()?,
+                    ))
+                })
+                .unwrap_or((monster_x, monster_y));
+            let anchor_distance = target_x
+                .wrapping_sub(anchor_x)
+                .unsigned_abs()
+                .max(target_y.wrapping_sub(anchor_y).unsigned_abs());
+            if anchor_distance >= self.globe_setup.maximum_pet_tracing_distance() {
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.clear_ai_target();
+                }
+                return true;
+            }
+        }
+        if tamed
+            && target.object_type == PLAYER_TYPE
+            && attacker_master.master_type == PLAYER_TYPE
+            && attacker_master.master_id != 0
+            && self
+                .find_player(attacker_master.master_id)
+                .is_some_and(|master| master.server_region_id() == Some(region.id))
+        {
+            let pet_identity = ShapeIdentity {
+                object_type: MONSTER_TYPE,
+                id: monster_id,
+                ex_id: CGuid::GUID_INVALID,
+            };
+            if let Some((string_id, limit)) =
+                self.player_base_attack_level_block(attacker_master.master_id, target.id)
+            {
+                self.send_base_attack_level_block(attacker_master.master_id, string_id, limit);
+                self.release_reciprocal_player_target(target.id, pet_identity);
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.clear_ai_target();
+                }
+                return true;
+            }
+            if !self.player_base_attackable(attacker_master.master_id, target.id) {
+                self.release_reciprocal_player_target(target.id, pet_identity);
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.clear_ai_target();
+                }
+                return true;
+            }
+        }
 
         if let Some(cast) = cast {
             if !time_reached(now_ms, cast.started_at_ms, delay_ms) {

@@ -113,6 +113,25 @@ impl CPlayerAI {
         true
     }
 
+    /// Материализует встречный `CPlayerAI::OnLoseTarget`, который вызывает
+    /// `CPet::ReleaseReciprocalTarget`: удаляет только текущую object-команду,
+    /// действительно направленную на отказавшегося питомца.
+    pub(crate) fn release_object_target(
+        &mut self,
+        target: super::super::shape::ShapeIdentity,
+    ) -> bool {
+        let matches_target = matches!(
+            self.player_skills.front(),
+            Some(PlayerSkillDispatch::Object { target: current, .. }) if *current == target
+        );
+        if !matches_target {
+            return false;
+        }
+        self.player_skills.pop_front();
+        self.base_attack = None;
+        true
+    }
+
     pub(crate) const fn base_attack(&self) -> Option<BaseAttackExecutionState> {
         self.base_attack
     }

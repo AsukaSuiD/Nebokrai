@@ -253,6 +253,10 @@ impl CMonster {
         }
     }
 
+    pub(crate) const fn pet_action(&self) -> i32 {
+        self.pet_action
+    }
+
     pub(crate) const fn set_pet_target(&mut self, target: ShapeIdentity) {
         self.pet_action = 0;
         self.pet_target = Some(target);
