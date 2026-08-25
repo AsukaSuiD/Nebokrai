@@ -130,6 +130,9 @@
 //! идентификатором сценария, после чего тот же экземпляр ожидает клиентский
 //! ответ `0x8FB02` и получает `$m_TalkRet`. `2309 / Help` использует малое
 //! окно `0xBF71C` и тот же жизненный цикл ожидания, что `TalkBoxSmall`.
+//! Журналы `2314/2315` не вычисляют аргументы при выключенных настройках;
+//! включённые ветви создают временные предметы через общую фабрику и отправляют
+//! полные записи `0x60204/0x60205` владельцу журнала WorldServer.
 //! Соседняя группа `2204/2205/2212/2217/2218/2220` связывает подсчёты рюкзака
 //! и депо, выбранный предмет контейнера улучшения, локальное либо удалённое
 //! удаление и доверенный путь сценария окна `0xBF919` с подтверждением
@@ -524,6 +527,8 @@ pub(crate) const SCRIPT_FUNCTION_TALK_BOX: i32 = 2307;
 pub(crate) const SCRIPT_FUNCTION_HELP: i32 = 2309;
 pub(crate) const SCRIPT_FUNCTION_TALK_BOX_SMALL: i32 = 2324;
 pub(crate) const SCRIPT_FUNCTION_ADD_GOODS_LOG: i32 = 2313;
+pub(crate) const SCRIPT_FUNCTION_ADD_GEM_EXCHANGE_LOG: i32 = 2314;
+pub(crate) const SCRIPT_FUNCTION_ADD_JEWELRY_MADE_LOG: i32 = 2315;
 pub(crate) const SCRIPT_FUNCTION_SET_REGION_FOR_TEAM: i32 = 2310;
 pub(crate) const SCRIPT_FUNCTION_SET_TEAM_REGION: i32 = 2311;
 pub(crate) const SCRIPT_FUNCTION_IS_TEAMMATES_AROUND_ME: i32 = 2312;
@@ -3851,6 +3856,16 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_GAME_MESSAGE => match index {
             0 => String,
             1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_ADD_GEM_EXCHANGE_LOG => match index {
+            0..=1 => String,
+            2 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_ADD_JEWELRY_MADE_LOG => match index {
+            0..=2 => String,
+            3 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_RANDOM => match index {
@@ -7538,6 +7553,109 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let _ = message.send(game, false);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
+        }
+        SCRIPT_FUNCTION_ADD_GEM_EXCHANGE_LOG => {
+            let (Some(destination_name), Some(source_name), Some(source_amount)) = (
+                string_arguments[0],
+                string_arguments[1],
+                integer_arguments[2].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR),
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let destination_index = game
+                .goods_factory()
+                .query_goods_id_by_original_name(Some(destination_name));
+            let source_index = game
+                .goods_factory()
+                .query_goods_id_by_original_name(Some(source_name));
+            let Some(destination) = game.create_goods_core(destination_index) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let Some(source) = game.create_goods_core(source_index) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let Some((region_id, tile_x, tile_y)) = game.find_player(player_id).map(|player| {
+                (
+                    player.server_region_id().unwrap_or_default(),
+                    player.shape().get_tile_x().unwrap_or_default(),
+                    player.shape().get_tile_y().unwrap_or_default(),
+                )
+            }) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let mut message = CMessage::new(0x0006_0204);
+            message.add_long(player_id);
+            message.base_mut().add_guid(destination.identity().ex_id);
+            message.base_mut().add(destination.name());
+            message.add_byte(0);
+            message.base_mut().add_guid(source.identity().ex_id);
+            message.base_mut().add(source.name());
+            message.add_byte(0);
+            message.add_long(source_amount);
+            message.add_long(region_id);
+            message.add_long(tile_x);
+            message.add_long(tile_y);
+            let _ = message.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_ADD_JEWELRY_MADE_LOG => {
+            let (Some(goods_name), Some(material_name), Some(jade_name)) = (
+                string_arguments[0],
+                string_arguments[1],
+                string_arguments[2],
+            ) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let goods_index = game
+                .goods_factory()
+                .query_goods_id_by_original_name(Some(goods_name));
+            let material_index = game
+                .goods_factory()
+                .query_goods_id_by_original_name(Some(material_name));
+            let jade_index = game
+                .goods_factory()
+                .query_goods_id_by_original_name(Some(jade_name));
+            let Some(goods) = game.create_goods_core(goods_index) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let material = game.create_goods_core(material_index);
+            let Some(jade) = game.create_goods_core(jade_index) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let jade_amount = integer_arguments[3]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .unwrap_or(1);
+            let Some((region_id, tile_x, tile_y)) = game.find_player(player_id).map(|player| {
+                (
+                    player.server_region_id().unwrap_or_default(),
+                    player.shape().get_tile_x().unwrap_or_default(),
+                    player.shape().get_tile_y().unwrap_or_default(),
+                )
+            }) else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let mut message = CMessage::new(0x0006_0205);
+            message.add_long(player_id);
+            message.base_mut().add_guid(goods.identity().ex_id);
+            message.base_mut().add(goods.name());
+            message.add_byte(0);
+            if let Some(material) = material {
+                message.base_mut().add_guid(material.identity().ex_id);
+                message.base_mut().add(material.name());
+                message.add_byte(0);
+            } else {
+                message.base_mut().add_guid(CGuid::GUID_INVALID);
+                message.add_byte(0);
+            }
+            message.base_mut().add_guid(jade.identity().ex_id);
+            message.base_mut().add(jade.name());
+            message.add_byte(0);
+            message.add_long(jade_amount);
+            message.add_long(region_id);
+            message.add_long(tile_x);
+            message.add_long(tile_y);
+            let _ = message.send(game, false);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_ADD_INCREMENT_LOG => {
             let Some(description) = string_arguments[0].filter(|value| value.len() <= 0xff) else {

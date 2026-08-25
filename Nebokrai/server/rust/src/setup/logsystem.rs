@@ -1,22 +1,26 @@
 //! Настройки `CLogSystem` из WorldServer/GameServer.
 //! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
-//! `gameserver.exe + GameServer.pdb`; исходный owner `setup/logsystem.cpp`.
+//! `gameserver.exe + GameServer.pdb`; исходный владелец `setup/logsystem.cpp`.
 //!
-//! Wire — raw 64-байтный `tagLogSystem`, signed count и ordered item IDs.
-//! Парный decoder использует ABI offsets, поэтому snapshot остаётся fixed
-//! bytes с нулевым static default. `BTreeSet<i32>` сохраняет signed order и
-//! уникальность. Upgrade bytes `7/17/18` доступны battle-fairy audit caller-у;
-//! подтверждённый byte 56 немедленно передаётся
-//! `CDaKongXiangQian::SetLogKey`, остальные неподтверждённые offsets не именуются.
-//! NPC buy/sell используют подтверждённые первые два bytes. Region pickup и
-//! drop используют bytes `2/5`, причём pickup сохраняет точный item-set filter.
-//! Depot deposit/withdrawal используют bytes `9/10`, bank — `11/12`.
-//! Goods destruction, equipment compose и carriage lifecycle используют
-//! подтверждённые bytes `55/57/58`; Fairy
-//! grow/incubate/implantation/syncretize — tail `60..63` того же snapshot-а.
-//! Player level-up audit использует positional `bLevelLog` byte `24`.
-//! `CPlayer::ChangeRegion` читает adjacent `bChMap0/1/2` bytes
-//! `51..53` для same/local/remote `0x6020C` audit paths.
+//! Протокол содержит сырую 64-байтную структуру `tagLogSystem`, знаковое число
+//! и упорядоченные идентификаторы предметов. Парный декодер использует смещения
+//! ABI, поэтому снимок остаётся массивом фиксированной длины с нулевым
+//! статическим значением по умолчанию. `BTreeSet<i32>` сохраняет знаковый
+//! порядок и уникальность. Байты улучшения `7/17/18` доступны вызывающему коду
+//! аудита боевых фей; подтверждённый байт `56` немедленно передаётся в
+//! `CDaKongXiangQian::SetLogKey`, остальные неподтверждённые смещения не
+//! именуются. Покупка и продажа у NPC используют первые два подтверждённых
+//! байта. Подъём и выбрасывание предметов в регионе используют байты `2/5`,
+//! причём подъём сохраняет точный фильтр набора предметов.
+//! Обмен камней и изготовление украшений используют соседние байты `3/4` и
+//! публикуют соответственно `0x60204/0x60205`.
+//! Помещение в склад и извлечение из него используют байты `9/10`, банк —
+//! `11/12`. Уничтожение предметов, объединение снаряжения и жизненный цикл
+//! повозки используют подтверждённые байты `55/57/58`; рост, инкубация,
+//! имплантация и слияние фей — хвост `60..63` того же снимка. Аудит повышения
+//! уровня игрока использует позиционный байт `24`, названный `bLevelLog`.
+//! `CPlayer::ChangeRegion` читает соседние байты `51..53`, названные
+//! `bChMap0/1/2`, для трёх путей аудита `0x6020C`.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -51,6 +55,14 @@ impl CLogSystem {
 
     pub(crate) fn goods_get_from_region_log_enabled(&self) -> bool {
         self.setting(2)
+    }
+
+    pub(crate) fn goods_gem_exchange_log_enabled(&self) -> bool {
+        self.setting(3)
+    }
+
+    pub(crate) fn goods_jewelry_made_log_enabled(&self) -> bool {
+        self.setting(4)
     }
 
     pub(crate) fn goods_drop_to_region_log_enabled(&self) -> bool {

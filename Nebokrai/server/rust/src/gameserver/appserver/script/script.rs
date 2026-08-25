@@ -43,7 +43,8 @@ use super::buffskillfunc::{
     SCRIPT_FUNCTION_ADD_JING_JIE_BUFF, SCRIPT_FUNCTION_ADD_JING_JIE_BUFF_NAME,
 };
 use super::function::{
-    SCRIPT_FUNCTION_ADD_APPELLATION_STATE, SCRIPT_FUNCTION_ADD_INCREMENT_LOG,
+    SCRIPT_FUNCTION_ADD_APPELLATION_STATE, SCRIPT_FUNCTION_ADD_GEM_EXCHANGE_LOG,
+    SCRIPT_FUNCTION_ADD_INCREMENT_LOG, SCRIPT_FUNCTION_ADD_JEWELRY_MADE_LOG,
     SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR, SCRIPT_FUNCTION_ARGUMENT_CAPACITY,
     SCRIPT_FUNCTION_CITY_WAR_DECLARE, SCRIPT_FUNCTION_DEL_APPELLATION_STATE,
     SCRIPT_FUNCTION_GET_APPELLATION_STATE, SCRIPT_FUNCTION_GET_COPY_NUMBER,
@@ -760,6 +761,16 @@ impl<'a> CScript<'a> {
                 .context
                 .player_id
                 .is_some_and(|player_id| game.find_player(player_id).is_some())
+        {
+            return ScriptCommandOutcome::Handled {
+                function_id,
+                legacy_return: 0,
+            };
+        }
+        if (function_id == SCRIPT_FUNCTION_ADD_GEM_EXCHANGE_LOG
+            && !game.log_system().goods_gem_exchange_log_enabled())
+            || (function_id == SCRIPT_FUNCTION_ADD_JEWELRY_MADE_LOG
+                && !game.log_system().goods_jewelry_made_log_enabled())
         {
             return ScriptCommandOutcome::Handled {
                 function_id,
