@@ -54,6 +54,7 @@ const PLAYER_SPEED_OFFSET: usize = 0x7F8;
 const MONSTER_NUMBER_SCALE_OFFSET: usize = 0x508;
 const ALLOW_CLIENT_CHANGE_POSITION_OFFSET: usize = 0x50D;
 const SAVE_POINT_TIME_OFFSET: usize = 0x510;
+const CRIMINAL_TIME_OFFSET: usize = 0x4E8;
 const AUCTION_ENABLED_OFFSET: usize = 0xC87;
 const AUCTION_PLAYER_MAXIMUM_OFFSET: usize = 0xC88;
 const AUCTION_FACTOR_B_OFFSET: usize = 0xC90;
@@ -583,6 +584,12 @@ impl GlobeSetupSnapshot {
     /// Exact `dwPkCountPerKill` по подтверждённому ABI offset `+0x4F4`.
     pub(crate) fn pk_count_per_kill(&self) -> u32 {
         self.read_u32(PK_COUNT_PER_KILL_OFFSET)
+    }
+
+    /// Exact `dwCriminalTime +0x4E8`: `UpdateCurrentState` сравнивает его с
+    /// отдельным `m_dwSinStateTimeStamp`, не с murderer decrement timer-ом.
+    pub(crate) fn criminal_time_ms(&self) -> u32 {
+        self.read_u32(CRIMINAL_TIME_OFFSET)
     }
 
     /// Exact signed `lFightStateTimer +0x364`; `CPlayer::OnLost` и

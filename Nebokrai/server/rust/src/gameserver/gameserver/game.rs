@@ -621,15 +621,15 @@ use crate::gameserver::appserver::player::{
     EnhancementSelectionBlock, EnhancementSelectionReport, GoodsDestroyHandConsumption,
     GoodsSessionPlayerRelease, HotkeyHandTransferOutcome, HotkeyHandTransferReport,
     PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange, PlayerBankCurrencyAddOutcome,
-    PlayerCombatProperties, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
-    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
-    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerExitSilenceUpdate,
-    PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
-    PlayerGoodsAiDeletion, PlayerHonorResetReport, PlayerLoginGoodsLocation,
-    PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation, PlayerReliveOwnedPrelude,
-    PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
-    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerUncreatedCarriage, PlayerUncreatedPet,
-    PlayerYuanBaoChange,
+    PlayerCombatProperties, PlayerCriminalStateEnd, PlayerEquipmentAddEffect,
+    PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery,
+    PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
+    PlayerExitSilenceUpdate, PlayerFightStateTransition, PlayerGameSaveCodecError,
+    PlayerGameSaveDecodeReport, PlayerGoodsAiDeletion, PlayerHonorResetReport,
+    PlayerLoginGoodsLocation, PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation,
+    PlayerReliveOwnedPrelude, PlayerSkillRequest, PlayerSkillRequestDelivery,
+    PlayerSkillRequestEffect, PlayerSkillRequestFacts, PlayerSkillRequestReport,
+    PlayerUncreatedCarriage, PlayerUncreatedPet, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -3869,6 +3869,7 @@ pub(crate) struct GameRegionAiReport {
     pub(crate) player_auto_progress: Vec<PlayerAutoProgressReport>,
     pub(crate) player_lost_timeouts: Vec<GamePlayerLostTimeoutReport>,
     pub(crate) player_fight_states: Vec<GamePlayerFightStateReport>,
+    pub(crate) player_criminal_states: Vec<GamePlayerCriminalStateReport>,
     pub(crate) base_region: Option<BaseRegionAiReport>,
     pub(crate) nation_contend: Option<Result<NationContendAiReport, NationRegionAiError>>,
     pub(crate) city_contend: Option<CityRegionAiReport>,
@@ -3917,6 +3918,13 @@ pub(crate) struct GamePlayerAbnormalityReport {
 pub(crate) struct GamePlayerFightStateReport {
     pub(crate) phase: GamePlayerFightStatePhase,
     pub(crate) transition: PlayerFightStateTransition,
+    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GamePlayerCriminalStateReport {
+    pub(crate) phase: GamePlayerFightStatePhase,
+    pub(crate) transition: PlayerCriminalStateEnd,
     pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
 }
 
@@ -5014,10 +5022,6 @@ pub(crate) trait GameMainLoopRuntime:
     fn wall_time_seconds(&mut self) -> u32;
     fn refresh_info_text(&mut self, game: &CGame);
     fn add_runtime_log(&mut self, log: GameMainLoopRuntimeLog);
-    /// Исполняет оставшийся criminal timestamp tail virtual
-    /// `CPlayer::UpdateCurrentState` после owned combat countdown. Native
-    /// вызывает этот slot дважды: из `PeriodicalUpdate` и `CMoveShape::AI`.
-    fn player_update_criminal_state_tail(&mut self, game: &mut CGame, player_id: i32);
     /// Исполняет только ещё не материализованные state-классы из
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
@@ -21599,6 +21603,38 @@ impl CGame {
         Some(self.publish_player_fight_state(phase, transition))
     }
 
+    /// Exact criminal half `UpdateCurrentState`, вызываемый следом за combat
+    /// countdown в обоих native callers. Clock sampled только при active
+    /// `m_dwSinStateTimeStamp`; terminal transition делегирует concrete
+    /// `EnterResidentState` с around `0xBF60E`.
+    fn update_player_criminal_state<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        phase: GamePlayerFightStatePhase,
+        runtime: &mut Runtime,
+    ) -> Option<GamePlayerCriminalStateReport> {
+        if !self
+            .find_player(player_id)
+            .is_some_and(CPlayer::criminal_state_active)
+        {
+            return None;
+        }
+        let checked_at_ms = runtime.get_tick_ms();
+        let criminal_time_ms = self.globe_setup.criminal_time_ms();
+        let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
+        let transition = self.find_player(player_id)?.criminal_state_end_due(
+            checked_at_ms,
+            criminal_time_ms,
+            pk_count_per_kill,
+        )?;
+        let around_delivery = self.enter_player_resident_state(player_id);
+        Some(GamePlayerCriminalStateReport {
+            phase,
+            transition,
+            around_delivery,
+        })
+    }
+
     fn publish_relive_died_state(
         &mut self,
         region_id: Option<i32>,
@@ -29946,6 +29982,7 @@ impl CGame {
             let mut player_auto_progress = Vec::with_capacity(player_ids.len());
             let mut player_lost_timeouts = Vec::new();
             let mut player_fight_states = Vec::new();
+            let mut player_criminal_states = Vec::new();
             for player_id in player_ids {
                 if let Some(death) = self.refresh_battle_fairy_death(player_id) {
                     battle_fairy_deaths.push(death);
@@ -29965,7 +30002,13 @@ impl CGame {
                     ) {
                         player_fight_states.push(fight_state);
                     }
-                    runtime.player_update_criminal_state_tail(self, player_id);
+                    if let Some(criminal_state) = self.update_player_criminal_state(
+                        player_id,
+                        GamePlayerFightStatePhase::PeriodicalUpdate,
+                        runtime,
+                    ) {
+                        player_criminal_states.push(criminal_state);
+                    }
                     let murderer_sign = self.periodical_update_murderer_sign(player_id, runtime);
                     if let Some(ping) = self.periodical_update_player_ping(player_id, runtime) {
                         let nation_died_state =
@@ -29991,7 +30034,13 @@ impl CGame {
                             ) {
                                 player_fight_states.push(fight_state);
                             }
-                            runtime.player_update_criminal_state_tail(self, player_id);
+                            if let Some(criminal_state) = self.update_player_criminal_state(
+                                player_id,
+                                GamePlayerFightStatePhase::MoveShapeAi,
+                                runtime,
+                            ) {
+                                player_criminal_states.push(criminal_state);
+                            }
                             let mut player_ai = self
                                 .find_player_mut(player_id)
                                 .expect("active-state caller проверил canonical player")
@@ -30384,6 +30433,7 @@ impl CGame {
                             player_auto_progress,
                             player_lost_timeouts,
                             player_fight_states,
+                            player_criminal_states,
                             base_region,
                             nation_contend,
                             city_contend,
@@ -30417,6 +30467,7 @@ impl CGame {
                 player_auto_progress,
                 player_lost_timeouts,
                 player_fight_states,
+                player_criminal_states,
                 base_region,
                 nation_contend,
                 city_contend,

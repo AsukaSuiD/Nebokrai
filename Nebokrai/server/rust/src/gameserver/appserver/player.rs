@@ -1442,6 +1442,21 @@ pub(crate) struct PlayerConfirmedKillReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerCriminalStateEndReason {
+    Timeout,
+    PkThresholdExceeded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerCriminalStateEnd {
+    pub(crate) player_id: i32,
+    pub(crate) previous_timestamp_ms: u32,
+    pub(crate) checked_at_ms: u32,
+    pub(crate) pk_count: u16,
+    pub(crate) reason: PlayerCriminalStateEndReason,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerMurdererSignDecrease {
     pub(crate) player_id: i32,
     pub(crate) pk_count: u16,
@@ -1985,6 +2000,7 @@ pub(crate) struct CPlayer {
     city_war_died_state: bool,
     city_war_died_state_time_ms: i32,
     died_state_start_time_ms: u32,
+    criminal_state_timestamp_ms: u32,
     murderer_time_stamp_ms: u32,
     ping_time: i32,
     last_ping_time_ms: u32,
@@ -2319,6 +2335,7 @@ impl CPlayer {
             city_war_died_state: false,
             city_war_died_state_time_ms: 0,
             died_state_start_time_ms: 0,
+            criminal_state_timestamp_ms: 0,
             murderer_time_stamp_ms: 0,
             ping_time: 0,
             last_ping_time_ms: 0,
@@ -10493,9 +10510,42 @@ impl CPlayer {
     /// Scalar mutation exact `EnterResidentState`; around wire принадлежит
     /// `CGame`, где доступен живой region/session owner.
     pub(crate) fn enter_resident_state(&mut self) -> u32 {
-        let previous = self.murderer_time_stamp_ms;
-        self.murderer_time_stamp_ms = 0;
+        let previous = self.criminal_state_timestamp_ms;
+        self.criminal_state_timestamp_ms = 0;
         previous
+    }
+
+    pub(crate) const fn criminal_state_active(&self) -> bool {
+        self.criminal_state_timestamp_ms != 0
+    }
+
+    /// Exact criminal tail `UpdateCurrentState`: clock уже sampled caller-ом
+    /// только при active timestamp; timeout использует wrapping DWORD sum,
+    /// threshold сравнивает promoted `wPkCount` строго через `<`.
+    pub(crate) fn criminal_state_end_due(
+        &self,
+        checked_at_ms: u32,
+        criminal_time_ms: u32,
+        pk_count_per_kill: u32,
+    ) -> Option<PlayerCriminalStateEnd> {
+        let previous_timestamp_ms = self.criminal_state_timestamp_ms;
+        if previous_timestamp_ms == 0 {
+            return None;
+        }
+        let reason = if previous_timestamp_ms.wrapping_add(criminal_time_ms) <= checked_at_ms {
+            PlayerCriminalStateEndReason::Timeout
+        } else if pk_count_per_kill < u32::from(self.base_properties.pk_count) {
+            PlayerCriminalStateEndReason::PkThresholdExceeded
+        } else {
+            return None;
+        };
+        Some(PlayerCriminalStateEnd {
+            player_id: self.player_id(),
+            previous_timestamp_ms,
+            checked_at_ms,
+            pk_count: self.base_properties.pk_count,
+            reason,
+        })
     }
 
     pub(crate) const fn mana(&self) -> u32 {
@@ -11715,19 +11765,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // IMPLEMENTED, VERIFIED_DISASSEMBLY: `SetSilence/IsInSilence`
 // RVA `0x0002C8A0/0x0002C8F0` материализованы выше и достигнуты GM
 // `0x7FC0B/0x7FC0E`; покрытый raw удалён.
-// ============================================================================
-// FUNCTION: CPlayer::UpdateCurrentState
-// STATUS: PARTIALLY_MATERIALIZED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9313
-// RVA: 0x0002C940
-// ADDRESS: 0042c940
-// PROTOTYPE: void __thiscall UpdateCurrentState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED, VERIFIED_DISASSEMBLY: `UpdateCurrentState` combat/criminal
+// halves and оба caller-а принадлежат `CGame`; покрытый raw удалён.
 
 // ============================================================================
 // FUNCTION: CPlayer::EnterCriminalState
@@ -11743,19 +11782,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::EnterResidentState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9351
-// RVA: 0x0002CA40
-// ADDRESS: 0042ca40
-// PROTOTYPE: void __thiscall EnterResidentState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED, VERIFIED_DISASSEMBLY: `EnterResidentState` scalar хранит
+// `CPlayer`, exact around wire публикует `CGame`; покрытый raw удалён.
 
 // ============================================================================
 // FUNCTION: CPlayer::EnterCombatState
