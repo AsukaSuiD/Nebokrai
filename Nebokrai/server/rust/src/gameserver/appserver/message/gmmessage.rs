@@ -60,10 +60,11 @@
 //! селекторы GM остаются в сохранённом RAW ниже.
 
 use crate::gameserver::gameserver::game::{
-    CGame, GameClockContext, GameKickAroundOutcome, GameKickAroundReport, GameKickPlayerReport,
-    RealmAppellationScriptContext, ScriptRegionChangeContext, colored_text_message,
+    CGame, GameClockContext, GameKickAroundOutcome, RealmAppellationScriptContext,
+    ScriptRegionChangeContext, colored_text_message,
 };
-use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::nets::netserver::message::CMessage;
+use tracing::trace;
 
 const GM_LIST_RESPONSE_MESSAGE: i32 = 0x0007_FC12;
 const GM_LIST_WORLD_RESPONSE_MESSAGE: i32 = 0x0005_FF15;
@@ -143,168 +144,6 @@ pub(crate) enum GmMessageError {
     DeclaredLengthOutsideLegacyRange { required: usize },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GmMessageReport {
-    PlayerPropertyTargetMissing {
-        requester_id: i32,
-        target_player_id: i32,
-    },
-    PlayerPropertyReturned {
-        requester_id: i32,
-        target_player_id: i32,
-        property: Vec<u8>,
-        value: i32,
-        origin_map_id: i32,
-        script_id: i32,
-        delivery: Result<i32, SendMessageError>,
-    },
-    MovePlayerTargetMissing {
-        requester_id: i32,
-        player_name: Vec<u8>,
-    },
-    MovePlayer {
-        requester_id: i32,
-        player_name: Vec<u8>,
-        target_player_id: i32,
-        region_id: i32,
-        tile_x: i32,
-        tile_y: i32,
-        report: crate::gameserver::gameserver::game::PlayerRegionChangeReport,
-    },
-    ScriptContinued {
-        requester_id: i32,
-        script_id: i32,
-        value: i32,
-        player_present: bool,
-        requested: bool,
-    },
-    ListRequest {
-        requester_id: i32,
-        entries: Vec<GmListPublishedEntry>,
-        delivery: Result<i32, SendMessageError>,
-    },
-    Set {
-        requester_id: i32,
-        player_name: Vec<u8>,
-        minutes: i32,
-        player_id: Option<i32>,
-        delivery: Result<i32, SendMessageError>,
-    },
-    Query {
-        requester_id: i32,
-        first_pass_count: usize,
-        published_names: Vec<Vec<u8>>,
-        declared_capacity: u32,
-        delivery: Result<i32, SendMessageError>,
-    },
-    PrivateNoticeIgnored {
-        requester_id: i32,
-        declared_length: i32,
-    },
-    PrivateNotice {
-        requester_id: i32,
-        declared_length: i32,
-        published_text: Vec<u8>,
-        allocation_failed: bool,
-        delivery: i32,
-    },
-    BroadcastIgnored {
-        requester_id: i32,
-        mode: i32,
-    },
-    Broadcast {
-        requester_id: i32,
-        text: Vec<u8>,
-        first_field: i32,
-        second_field: i32,
-        mode: i32,
-        response_type: i32,
-        delivery: Result<i32, SendMessageError>,
-    },
-    RequesterFeedback {
-        requester_id: i32,
-        player_name: Vec<u8>,
-        value: i32,
-        successful: bool,
-        detail: Vec<u8>,
-        string_id: &'static [u8],
-        formatted_text: Vec<u8>,
-        delivery: i32,
-    },
-    CountryBroadcast {
-        requester_id: i32,
-        country: u32,
-        first_field: i32,
-        second_field: i32,
-        text: Vec<u8>,
-        deliveries: Vec<(i32, i32)>,
-    },
-    KickOthers {
-        requester_id: i32,
-        kicks: Vec<GameKickPlayerReport>,
-    },
-    KickRegion {
-        requester_id: i32,
-        region_id: i32,
-        region_found: bool,
-        kicks: Vec<GameKickPlayerReport>,
-    },
-    KickByName {
-        requester_id: i32,
-        player_name: Vec<u8>,
-        kick: Option<GameKickPlayerReport>,
-        delivery: Result<i32, SendMessageError>,
-    },
-    KickAround {
-        requester_id: i32,
-        player_name: Vec<u8>,
-        response_context: i32,
-        traversal: GameKickAroundReport,
-        formatted_text: Option<Vec<u8>>,
-        delivery: Option<Result<i32, SendMessageError>>,
-    },
-    PresenceFeedback {
-        requester_id: i32,
-        player_name: Vec<u8>,
-        outcome: i8,
-        string_id: &'static [u8],
-        formatted_text: Vec<u8>,
-        delivery: i32,
-    },
-    ListResponse {
-        requester_id: i32,
-        target_player_id: i32,
-        target_found: bool,
-        reserved_field: Option<i32>,
-        declared_count: Option<i32>,
-        published_texts: Vec<Vec<u8>>,
-        deliveries: Vec<i32>,
-    },
-    ActiveBanList {
-        requester_id: i32,
-        script_id: i32,
-        success: bool,
-        total_count: i32,
-        continued: bool,
-        published_texts: Vec<Vec<u8>>,
-        deliveries: Vec<i32>,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GmListPublishedEntry {
-    pub(crate) name: Vec<u8>,
-    pub(crate) level: i32,
-    pub(crate) string_id: &'static [u8],
-    pub(crate) text: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GmLocalListReport {
-    pub(crate) entries: Vec<GmListPublishedEntry>,
-    pub(crate) deliveries: Vec<i32>,
-}
-
 /// Материализует связанные ветви молчания, рассылки и адресного уведомления
 /// `OnGMMessage`. `None` оставляет прочие селекторы их сохранённому RAW-владельцу.
 pub(crate) fn dispatch_gm_message<
@@ -313,7 +152,7 @@ pub(crate) fn dispatch_gm_message<
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Option<Result<GmMessageReport, GmMessageError>> {
+) -> Option<Result<(), GmMessageError>> {
     let message_type = message.message_type();
     if !matches!(
         message_type,
@@ -399,24 +238,15 @@ pub(crate) fn dispatch_gm_message<
             5106,
             if success != 0 { total_count } else { -1 },
         );
-        let mut deliveries = Vec::new();
+        let published_count = published_texts.len();
         if continued && success != 0 && game.find_player(requester_id).is_some() {
             for text in &published_texts {
-                deliveries.push(
-                    colored_text_message(PLAYER_SYSTEM_MESSAGE, 0xffff_ffff, 0, text)
-                        .send_to_player(game.net_server(), requester_id),
-                );
+                let _delivery = colored_text_message(PLAYER_SYSTEM_MESSAGE, 0xffff_ffff, 0, text)
+                    .send_to_player(game.net_server(), requester_id);
             }
         }
-        return Some(Ok(GmMessageReport::ActiveBanList {
-            requester_id,
-            script_id,
-            success: success != 0,
-            total_count,
-            continued,
-            published_texts,
-            deliveries,
-        }));
+        trace!(requester_id, script_id, success = success != 0, total_count, continued, published_count, "Обработан список блокировок GM");
+        return Some(Ok(()));
     }
 
     if message_type == GM_GET_PLAYER_PROPERTY_REQUEST {
@@ -433,10 +263,8 @@ pub(crate) fn dispatch_gm_message<
             return Some(Err(GmMessageError::MissingScriptContinuationId));
         };
         let Some(target) = game.find_player(target_player_id) else {
-            return Some(Ok(GmMessageReport::PlayerPropertyTargetMissing {
-                requester_id,
-                target_player_id,
-            }));
+            trace!(requester_id, target_player_id, "Целевой игрок для свойства GM не найден");
+            return Some(Ok(()));
         };
         let value = target.script_value(&property).unwrap_or(0);
         let mut response = CMessage::new(0x0005_ff03);
@@ -445,15 +273,8 @@ pub(crate) fn dispatch_gm_message<
         response.add_long(origin_map_id);
         response.add_long(script_id);
         let delivery = response.send(game, false);
-        return Some(Ok(GmMessageReport::PlayerPropertyReturned {
-            requester_id,
-            target_player_id,
-            property,
-            value,
-            origin_map_id,
-            script_id,
-            delivery,
-        }));
+        trace!(requester_id, target_player_id, value, origin_map_id, script_id, ?delivery, "Возвращено свойство игрока для GM-сценария");
+        return Some(Ok(()));
     }
 
     if message_type == GM_MOVE_PLAYER_MESSAGE {
@@ -464,10 +285,8 @@ pub(crate) fn dispatch_gm_message<
             .find_player_by_name(&player_name)
             .map(|player| player.player_id())
         else {
-            return Some(Ok(GmMessageReport::MovePlayerTargetMissing {
-                requester_id,
-                player_name,
-            }));
+            trace!(requester_id, "Целевой игрок для переноса GM не найден");
+            return Some(Ok(()));
         };
         let Some(region_id) = message.base_mut().get_long() else {
             return Some(Err(GmMessageError::MissingMoveRegionId));
@@ -494,15 +313,8 @@ pub(crate) fn dispatch_gm_message<
             0,
             runtime,
         );
-        return Some(Ok(GmMessageReport::MovePlayer {
-            requester_id,
-            player_name,
-            target_player_id,
-            region_id,
-            tile_x,
-            tile_y,
-            report,
-        }));
+        trace!(requester_id, target_player_id, region_id, tile_x, tile_y, ?report, "Выполнен перенос игрока командой GM");
+        return Some(Ok(()));
     }
 
     if matches!(
@@ -523,13 +335,8 @@ pub(crate) fn dispatch_gm_message<
         if requested {
             let _ = game.continue_player_script(script_id, requester_id, value);
         }
-        return Some(Ok(GmMessageReport::ScriptContinued {
-            requester_id,
-            script_id,
-            value,
-            player_present,
-            requested,
-        }));
+        trace!(requester_id, script_id, value, player_present, requested, "Обработано продолжение GM-сценария");
+        return Some(Ok(()));
     }
 
     if message_type == GM_LIST_REQUEST_MESSAGE {
@@ -549,29 +356,19 @@ pub(crate) fn dispatch_gm_message<
             .base_mut()
             .set_message_type(GM_LIST_WORLD_RESPONSE_MESSAGE);
         message.add_long(count);
-        for entry in &entries {
-            add_legacy_c_string(message, &entry.text);
+        for text in &entries {
+            add_legacy_c_string(message, text);
         }
         let delivery = message.send(game, false);
-        return Some(Ok(GmMessageReport::ListRequest {
-            requester_id,
-            entries,
-            delivery,
-        }));
+        trace!(requester_id, count, ?delivery, "Отправлен список GM в World");
+        return Some(Ok(()));
     }
 
     if message_type == GM_LIST_RESPONSE_MESSAGE {
         let target_player_id = requester_id;
         if game.find_player(target_player_id).is_none() {
-            return Some(Ok(GmMessageReport::ListResponse {
-                requester_id,
-                target_player_id,
-                target_found: false,
-                reserved_field: None,
-                declared_count: None,
-                published_texts: Vec::new(),
-                deliveries: Vec::new(),
-            }));
+            trace!(requester_id, "Получатель списка GM не найден");
+            return Some(Ok(()));
         }
         let Some(reserved_field) = message.base_mut().get_long() else {
             return Some(Err(GmMessageError::MissingListReservedField));
@@ -579,8 +376,7 @@ pub(crate) fn dispatch_gm_message<
         let Some(declared_count) = message.base_mut().get_long() else {
             return Some(Err(GmMessageError::MissingListCount));
         };
-        let mut published_texts = Vec::new();
-        let mut deliveries = Vec::new();
+        let mut published_count = 0usize;
         for _ in 0..declared_count.max(0) {
             let text = message
                 .base_mut()
@@ -590,18 +386,11 @@ pub(crate) fn dispatch_gm_message<
             response.add_long(-1);
             response.add_long(0);
             add_legacy_c_string(&mut response, &text);
-            deliveries.push(response.send_to_player(game.net_server(), target_player_id));
-            published_texts.push(text);
+            let _delivery = response.send_to_player(game.net_server(), target_player_id);
+            published_count += 1;
         }
-        return Some(Ok(GmMessageReport::ListResponse {
-            requester_id,
-            target_player_id,
-            target_found: true,
-            reserved_field: Some(reserved_field),
-            declared_count: Some(declared_count),
-            published_texts,
-            deliveries,
-        }));
+        trace!(requester_id, reserved_field, declared_count, published_count, "Опубликован список GM игроку");
+        return Some(Ok(()));
     }
 
     if message_type == GM_KICK_BY_NAME_MESSAGE {
@@ -614,12 +403,8 @@ pub(crate) fn dispatch_gm_message<
         response.add_byte(u8::from(kick.is_some()));
         add_legacy_c_string(&mut response, &player_name);
         let delivery = response.send(game, false);
-        return Some(Ok(GmMessageReport::KickByName {
-            requester_id,
-            player_name,
-            kick,
-            delivery,
-        }));
+        trace!(requester_id, kicked = kick.is_some(), ?delivery, "Обработано отключение игрока по имени");
+        return Some(Ok(()));
     }
 
     if message_type == GM_KICK_AROUND_MESSAGE {
@@ -631,14 +416,8 @@ pub(crate) fn dispatch_gm_message<
         };
         let traversal = game.kick_players_around_name(&player_name);
         if traversal.outcome != GameKickAroundOutcome::Completed {
-            return Some(Ok(GmMessageReport::KickAround {
-                requester_id,
-                player_name,
-                response_context,
-                traversal,
-                formatted_text: None,
-                delivery: None,
-            }));
+            trace!(requester_id, response_context, ?traversal.outcome, "Отключение игроков вокруг не выполнено");
+            return Some(Ok(()));
         }
         let formatted_text = match format_gm_template(
             game.get_string_by_id(b"GS0030"),
@@ -656,14 +435,8 @@ pub(crate) fn dispatch_gm_message<
         response.add_long(0);
         add_legacy_c_string(&mut response, &formatted_text);
         let delivery = response.send(game, false);
-        return Some(Ok(GmMessageReport::KickAround {
-            requester_id,
-            player_name,
-            response_context,
-            traversal,
-            formatted_text: Some(formatted_text),
-            delivery: Some(delivery),
-        }));
+        trace!(requester_id, response_context, matched = traversal.matched_player_ids.len(), ?delivery, "Завершено отключение игроков вокруг");
+        return Some(Ok(()));
     }
 
     if message_type == GM_PRESENCE_FEEDBACK_MESSAGE {
@@ -690,21 +463,14 @@ pub(crate) fn dispatch_gm_message<
         response.add_long(0);
         add_legacy_c_string(&mut response, &formatted_text);
         let delivery = response.send_to_player(game.net_server(), requester_id);
-        return Some(Ok(GmMessageReport::PresenceFeedback {
-            requester_id,
-            player_name,
-            outcome,
-            string_id,
-            formatted_text,
-            delivery,
-        }));
+        trace!(requester_id, outcome, ?string_id, delivery, "Отправлен ответ о присутствии игрока");
+        return Some(Ok(()));
     }
 
     if message_type == GM_KICK_OTHERS_MESSAGE {
-        return Some(Ok(GmMessageReport::KickOthers {
-            requester_id,
-            kicks: game.kick_players_except(requester_id),
-        }));
+        let kicked = game.kick_players_except(requester_id).len();
+        trace!(requester_id, kicked, "Поставлено массовое отключение игроков");
+        return Some(Ok(()));
     }
 
     if message_type == GM_KICK_REGION_MESSAGE {
@@ -712,12 +478,11 @@ pub(crate) fn dispatch_gm_message<
             return Some(Err(GmMessageError::MissingKickRegionId));
         };
         let region_found = game.find_region(region_id).is_some();
-        return Some(Ok(GmMessageReport::KickRegion {
-            requester_id,
-            region_id,
-            region_found,
-            kicks: game.kick_players_in_region_except(region_id, requester_id),
-        }));
+        let kicked = game
+            .kick_players_in_region_except(region_id, requester_id)
+            .len();
+        trace!(requester_id, region_id, region_found, kicked, "Поставлено отключение игроков региона");
+        return Some(Ok(()));
     }
 
     if message_type == GM_SET_SILENCE_MESSAGE {
@@ -743,13 +508,8 @@ pub(crate) fn dispatch_gm_message<
         response.add_byte(success);
         add_legacy_c_string(&mut response, &localized);
         let delivery = response.send(game, false);
-        return Some(Ok(GmMessageReport::Set {
-            requester_id,
-            player_name,
-            minutes,
-            player_id,
-            delivery,
-        }));
+        trace!(requester_id, minutes, ?player_id, ?delivery, "Обновлено молчание игрока");
+        return Some(Ok(()));
     }
 
     if message_type == GM_REQUESTER_FEEDBACK_MESSAGE {
@@ -785,16 +545,8 @@ pub(crate) fn dispatch_gm_message<
         response.add_long(0);
         add_legacy_c_string(&mut response, &formatted_text);
         let delivery = response.send_to_player(game.net_server(), requester_id);
-        return Some(Ok(GmMessageReport::RequesterFeedback {
-            requester_id,
-            player_name,
-            value,
-            successful,
-            detail,
-            string_id,
-            formatted_text,
-            delivery,
-        }));
+        trace!(requester_id, value, successful, ?string_id, delivery, "Отправлен итог GM-команды игроку");
+        return Some(Ok(()));
     }
 
     if message_type == GM_COUNTRY_BROADCAST_MESSAGE {
@@ -814,24 +566,13 @@ pub(crate) fn dispatch_gm_message<
         response.add_long(first_field);
         response.add_long(second_field);
         add_legacy_c_string(&mut response, &text);
-        let deliveries = game
-            .player_ids_in_country(country as u32)
-            .into_iter()
-            .map(|player_id| {
-                (
-                    player_id,
-                    response.send_to_player(game.net_server(), player_id),
-                )
-            })
-            .collect();
-        return Some(Ok(GmMessageReport::CountryBroadcast {
-            requester_id,
-            country: country as u32,
-            first_field,
-            second_field,
-            text,
-            deliveries,
-        }));
+        let player_ids = game.player_ids_in_country(country as u32);
+        let recipient_count = player_ids.len();
+        for player_id in player_ids {
+            let _delivery = response.send_to_player(game.net_server(), player_id);
+        }
+        trace!(requester_id, country, first_field, second_field, recipient_count, "Отправлена рассылка GM стране");
+        return Some(Ok(()));
     }
 
     if message_type == GM_PRIVATE_NOTICE_MESSAGE {
@@ -839,10 +580,8 @@ pub(crate) fn dispatch_gm_message<
             return Some(Err(GmMessageError::MissingPrivateNoticeLength));
         };
         if matches!(declared_length, 0 | GM_PRIVATE_NOTICE_INVALID_LENGTH) {
-            return Some(Ok(GmMessageReport::PrivateNoticeIgnored {
-                requester_id,
-                declared_length,
-            }));
+            trace!(requester_id, declared_length, "Пустое адресное уведомление GM пропущено");
+            return Some(Ok(()));
         }
         let buffer_length = (declared_length as u32).wrapping_add(GM_PRIVATE_NOTICE_SLACK) as usize;
         if buffer_length == 0 {
@@ -869,13 +608,8 @@ pub(crate) fn dispatch_gm_message<
         response.add_long(0);
         add_legacy_c_string(&mut response, &published_text);
         let delivery = response.send_to_player(game.net_server(), requester_id);
-        return Some(Ok(GmMessageReport::PrivateNotice {
-            requester_id,
-            declared_length,
-            published_text,
-            allocation_failed,
-            delivery,
-        }));
+        trace!(requester_id, declared_length, allocation_failed, delivery, "Отправлено адресное уведомление GM");
+        return Some(Ok(()));
     }
 
     if message_type == GM_BROADCAST_MESSAGE {
@@ -907,21 +641,15 @@ pub(crate) fn dispatch_gm_message<
                 response
             }
             _ => {
-                return Some(Ok(GmMessageReport::BroadcastIgnored { requester_id, mode }));
+                trace!(requester_id, mode, "Неизвестный режим рассылки GM пропущен");
+                return Some(Ok(()));
             }
         };
         add_legacy_c_string(&mut response, &text);
         let response_type = response.message_type();
         let delivery = response.send_all(game.current_net_server());
-        return Some(Ok(GmMessageReport::Broadcast {
-            requester_id,
-            text,
-            first_field,
-            second_field,
-            mode,
-            response_type,
-            delivery,
-        }));
+        trace!(requester_id, first_field, second_field, mode, response_type, ?delivery, "Выполнена рассылка GM");
+        return Some(Ok(()));
     }
 
     let first_pass = game.silenced_player_names_pass(|| runtime.now_milliseconds());
@@ -932,13 +660,8 @@ pub(crate) fn dispatch_gm_message<
         response.add_ulong(GM_EMPTY_SILENCE_RESPONSE_LENGTH);
         add_legacy_c_string(&mut response, &localized);
         let delivery = response.send(game, false);
-        return Some(Ok(GmMessageReport::Query {
-            requester_id,
-            first_pass_count: 0,
-            published_names: Vec::new(),
-            declared_capacity: GM_EMPTY_SILENCE_RESPONSE_LENGTH,
-            delivery,
-        }));
+        trace!(requester_id, declared_capacity = GM_EMPTY_SILENCE_RESPONSE_LENGTH, ?delivery, "Отправлен пустой список молчания");
+        return Some(Ok(()));
     }
 
     let required = first_pass.iter().try_fold(0usize, |total, name| {
@@ -969,13 +692,8 @@ pub(crate) fn dispatch_gm_message<
     response.add_ulong(declared_capacity);
     add_legacy_c_string(&mut response, &names);
     let delivery = response.send(game, false);
-    Some(Ok(GmMessageReport::Query {
-        requester_id,
-        first_pass_count: first_pass.len(),
-        published_names,
-        declared_capacity,
-        delivery,
-    }))
+    trace!(requester_id, first_pass_count = first_pass.len(), published_count = published_names.len(), declared_capacity, ?delivery, "Отправлен список молчания");
+    Some(Ok(()))
 }
 
 /// Публикует локальную часть `5103 / ListOnlineGM` тому же игроку, который
@@ -983,25 +701,21 @@ pub(crate) fn dispatch_gm_message<
 pub(crate) fn publish_local_online_gm_list(
     game: &CGame,
     player_id: i32,
-) -> Result<GmLocalListReport, GmMessageError> {
+) -> Result<(), GmMessageError> {
     let entries = collect_online_gm_entries(game)?;
-    let deliveries = entries
-        .iter()
-        .map(|entry| {
-            let mut response = CMessage::new(PLAYER_SYSTEM_MESSAGE);
-            response.add_long(-1);
-            response.add_long(0);
-            add_legacy_c_string(&mut response, &entry.text);
-            response.send_to_player(game.net_server(), player_id)
-        })
-        .collect();
-    Ok(GmLocalListReport {
-        entries,
-        deliveries,
-    })
+    let published_count = entries.len();
+    for text in entries {
+        let mut response = CMessage::new(PLAYER_SYSTEM_MESSAGE);
+        response.add_long(-1);
+        response.add_long(0);
+        add_legacy_c_string(&mut response, &text);
+        let _delivery = response.send_to_player(game.net_server(), player_id);
+    }
+    trace!(player_id, published_count, "Опубликован локальный список GM");
+    Ok(())
 }
 
-fn collect_online_gm_entries(game: &CGame) -> Result<Vec<GmListPublishedEntry>, GmMessageError> {
+fn collect_online_gm_entries(game: &CGame) -> Result<Vec<Vec<u8>>, GmMessageError> {
     let mut entries = Vec::new();
     for info in game.gm_list().gm_info().values() {
         if game.find_player_by_name(&info.name).is_none() {
@@ -1020,12 +734,7 @@ fn collect_online_gm_entries(game: &CGame) -> Result<Vec<GmListPublishedEntry>, 
             &[GmFormatArgument::Text(&info.name)],
         )
         .map_err(|()| GmMessageError::UnsupportedFeedbackFormat)?;
-        entries.push(GmListPublishedEntry {
-            name: info.name.clone(),
-            level: info.level,
-            string_id,
-            text,
-        });
+        entries.push(text);
     }
     Ok(entries)
 }
