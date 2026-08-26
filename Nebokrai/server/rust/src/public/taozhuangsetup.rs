@@ -36,6 +36,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TaoZhuangAddItem {
     pub(crate) number: u32,
@@ -398,7 +400,11 @@ impl CTaoZhuangSetup {
             });
         }
 
-        tracing::trace!(skill_ids = self.skill_ids.len(), items = self.items.len(), "настройки TaoZhuang декодированы");
+        tracing::trace!(
+            skill_ids = self.skill_ids.len(),
+            items = self.items.len(),
+            "настройки TaoZhuang декодированы"
+        );
         Ok(())
     }
 }
@@ -478,7 +484,12 @@ fn read_wire_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, TaoZhuangDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor, field)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(|block| TaoZhuangDecodeError {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }
 
 fn read_wire_u32(
@@ -486,28 +497,12 @@ fn read_wire_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, TaoZhuangDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(source, cursor, field)?))
-}
-
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<[u8; N], TaoZhuangDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(TaoZhuangDecodeError {
-            field,
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер TaoZhuang scalar уже проверен"))
+    LegacyReader::read_u32_from(source, cursor).map_err(|block| TaoZhuangDecodeError {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }
 
 fn read_wire_c_string(
@@ -517,20 +512,22 @@ fn read_wire_c_string(
 ) -> Result<Vec<u8>, TaoZhuangDecodeError> {
     let offset = *cursor;
     let available = source.len().saturating_sub(offset);
-    let Some(relative_end) = source
-        .get(offset..)
-        .and_then(|tail| tail.iter().position(|byte| *byte == 0))
-    else {
+    if offset > source.len() {
         return Err(TaoZhuangDecodeError {
+            field,
+            offset,
+            needed: 1,
+            available,
+        });
+    }
+    LegacyReader::read_c_string_from(source, cursor, available)
+        .map(|value| value.to_vec())
+        .map_err(|_| TaoZhuangDecodeError {
             field,
             offset,
             needed: available.saturating_add(1),
             available,
-        });
-    };
-    let end = offset + relative_end;
-    *cursor = end + 1;
-    Ok(source[offset..end].to_vec())
+        })
 }
 
 fn write_tao_zhuang_count(

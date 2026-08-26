@@ -20,6 +20,8 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct LingBaoFirstNode {
     pub(crate) node_type: u32,
@@ -87,12 +89,9 @@ impl CLingBaoSetup {
             return LingBaoLoadReport::default();
         };
         for _ in 0..total {
-            let (Some(_label), Some(original_name), Some(_transform_label), Some(transforms)) = (
-                parser.token(),
-                parser.token(),
-                parser.token(),
-                parser.u32(),
-            ) else {
+            let (Some(_label), Some(original_name), Some(_transform_label), Some(transforms)) =
+                (parser.token(), parser.token(), parser.token(), parser.u32())
+            else {
                 break;
             };
             for ticket in 1..=transforms {
@@ -147,15 +146,14 @@ impl CLingBaoSetup {
         &self,
         destination: &mut Vec<u8>,
     ) -> Result<(), LingBaoSerializationBlock> {
-        let total_count = self.entries.values().try_fold(0usize, |total, group| {
-            total.checked_add(group.len())
-        });
-        let total_count = total_count.ok_or(LingBaoSerializationBlock::EntryCountOutOfRange {
-            count: usize::MAX,
-        })?;
-        let count = i32::try_from(total_count).map_err(|_| {
-            LingBaoSerializationBlock::EntryCountOutOfRange { count: total_count }
-        })?;
+        let total_count = self
+            .entries
+            .values()
+            .try_fold(0usize, |total, group| total.checked_add(group.len()));
+        let total_count = total_count
+            .ok_or(LingBaoSerializationBlock::EntryCountOutOfRange { count: usize::MAX })?;
+        let count = i32::try_from(total_count)
+            .map_err(|_| LingBaoSerializationBlock::EntryCountOutOfRange { count: total_count })?;
 
         let mut payload = Vec::new();
         payload.extend_from_slice(&count.to_le_bytes());
@@ -408,7 +406,11 @@ fn legacy_u32(token: &[u8]) -> Option<u32> {
         parsed = true;
         result = result.saturating_mul(10).saturating_add(u32::from(digit));
     }
-    parsed.then_some(if negative { 0_u32.wrapping_sub(result) } else { result })
+    parsed.then_some(if negative {
+        0_u32.wrapping_sub(result)
+    } else {
+        result
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -449,7 +451,10 @@ impl fmt::Display for LingBaoSerializationBlock {
                 "CLingBaoSetup #{entry_index} {section:?} содержит {count} записей вне signed 32-битного диапазона"
             ),
             Self::NameContainsNul { entry_index } => {
-                write!(formatter, "CLingBaoSetup #{entry_index}: имя содержит внутренний NUL")
+                write!(
+                    formatter,
+                    "CLingBaoSetup #{entry_index}: имя содержит внутренний NUL"
+                )
             }
         }
     }
@@ -482,9 +487,12 @@ fn read_wire_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, LingBaoDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(
-        source, cursor, field,
-    )?))
+    LegacyReader::read_i32_from(source, cursor).map_err(|block| LingBaoDecodeError {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }
 
 fn read_wire_u32(
@@ -492,30 +500,12 @@ fn read_wire_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, LingBaoDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(
-        source, cursor, field,
-    )?))
-}
-
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<[u8; N], LingBaoDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(LingBaoDecodeError {
-            field,
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер LingBao scalar уже проверен"))
+    LegacyReader::read_u32_from(source, cursor).map_err(|block| LingBaoDecodeError {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }
 
 fn read_wire_c_string(
@@ -525,20 +515,22 @@ fn read_wire_c_string(
 ) -> Result<Vec<u8>, LingBaoDecodeError> {
     let offset = *cursor;
     let available = source.len().saturating_sub(offset);
-    let Some(relative_end) = source
-        .get(offset..)
-        .and_then(|tail| tail.iter().position(|byte| *byte == 0))
-    else {
+    if offset > source.len() {
         return Err(LingBaoDecodeError {
+            field,
+            offset,
+            needed: 1,
+            available,
+        });
+    }
+    LegacyReader::read_c_string_from(source, cursor, available)
+        .map(|value| value.to_vec())
+        .map_err(|_| LingBaoDecodeError {
             field,
             offset,
             needed: available.saturating_add(1),
             available,
-        });
-    };
-    let end = offset + relative_end;
-    *cursor = end + 1;
-    Ok(source[offset..end].to_vec())
+        })
 }
 
 fn write_ling_bao_count(
@@ -547,13 +539,12 @@ fn write_ling_bao_count(
     section: LingBaoNodeSection,
     count: usize,
 ) -> Result<(), LingBaoSerializationBlock> {
-    let count = i32::try_from(count).map_err(|_| {
-        LingBaoSerializationBlock::NodeCountOutOfRange {
+    let count =
+        i32::try_from(count).map_err(|_| LingBaoSerializationBlock::NodeCountOutOfRange {
             entry_index,
             section,
             count,
-        }
-    })?;
+        })?;
     destination.extend_from_slice(&count.to_le_bytes());
     Ok(())
 }

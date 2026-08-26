@@ -36,6 +36,8 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CiQingMakeNode {
     pub(crate) destination_base_index: u32,
@@ -344,7 +346,12 @@ impl CCiQingSetup {
             });
         }
 
-        tracing::trace!(make = self.make.len(), compose = self.compose.len(), improve = self.improve.len(), "настройки CiQing декодированы");
+        tracing::trace!(
+            make = self.make.len(),
+            compose = self.compose.len(),
+            improve = self.improve.len(),
+            "настройки CiQing декодированы"
+        );
         Ok(())
     }
 }
@@ -400,7 +407,12 @@ fn read_wire_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, CiQingDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor, field)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(|block| CiQingDecodeError {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }
 
 fn read_wire_u32(
@@ -408,26 +420,12 @@ fn read_wire_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, CiQingDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(source, cursor, field)?))
-}
-
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-    field: &'static str,
-) -> Result<[u8; N], CiQingDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(CiQingDecodeError {
-            field,
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes.try_into().expect("размер CiQing scalar уже проверен"))
+    LegacyReader::read_u32_from(source, cursor).map_err(|block| CiQingDecodeError {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }
 
 fn write_ciqing_count(

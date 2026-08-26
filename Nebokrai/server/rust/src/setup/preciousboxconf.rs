@@ -22,6 +22,8 @@ use std::fmt;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PreciousBoxItem {
     pub(crate) item_idx: i32,
@@ -140,13 +142,13 @@ impl PreciousBoxConf {
             .odds
             .iter()
             .find(|odds| odds.min_odds <= odds_roll && odds_roll < odds.max_odds)?;
-        let item_count = i32::try_from(odds.items.len()).ok().filter(|count| *count > 0)?;
+        let item_count = i32::try_from(odds.items.len())
+            .ok()
+            .filter(|count| *count > 0)?;
         let mut item = *odds.items.get(random(item_count) as usize)?;
         let level_width = i64::from(item.max_level) - i64::from(item.min_level) + 1;
         if (2..=i64::from(i32::MAX)).contains(&level_width) {
-            item.min_level = item
-                .min_level
-                .wrapping_add(random(level_width as i32));
+            item.min_level = item.min_level.wrapping_add(random(level_width as i32));
         }
         item.max_level = item.min_level;
         Some(item)
@@ -629,28 +631,19 @@ fn write_count(
 }
 
 fn read_wire_u8(source: &[u8], cursor: &mut usize) -> Result<u8, PreciousBoxDecodeError> {
-    Ok(u8::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_u8_from(source, cursor).map_err(map_read_block)
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, PreciousBoxDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(map_read_block)
 }
 
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], PreciousBoxDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(PreciousBoxDecodeError::UnexpectedEnd {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер PreciousBox scalar уже проверен"))
+fn map_read_block(
+    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+) -> PreciousBoxDecodeError {
+    PreciousBoxDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }

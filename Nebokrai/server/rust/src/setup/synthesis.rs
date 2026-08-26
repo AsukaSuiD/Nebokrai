@@ -22,6 +22,8 @@ use std::fmt;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SynthesisFormula {
     pub(crate) goods_index: u32,
@@ -462,7 +464,11 @@ impl CSynthesis {
             });
         }
 
-        tracing::trace!(broadcasts = self.broadcasts.len(), recipes = self.recipes.len(), "правила синтеза декодированы");
+        tracing::trace!(
+            broadcasts = self.broadcasts.len(),
+            recipes = self.recipes.len(),
+            "правила синтеза декодированы"
+        );
         Ok(())
     }
 }
@@ -782,51 +788,40 @@ fn ensure_c_string(value: &[u8], field: SynthesisString) -> Result<(), Synthesis
 }
 
 fn read_wire_u16(source: &[u8], cursor: &mut usize) -> Result<u16, SynthesisDecodeError> {
-    Ok(u16::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_u16_from(source, cursor).map_err(map_read_block)
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, SynthesisDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(map_read_block)
 }
 
 fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, SynthesisDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_u32_from(source, cursor).map_err(map_read_block)
 }
 
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], SynthesisDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(SynthesisDecodeError::UnexpectedEnd {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер Synthesis scalar уже проверен"))
+fn map_read_block(
+    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+) -> SynthesisDecodeError {
+    SynthesisDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
 
 fn read_wire_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, SynthesisDecodeError> {
     let offset = *cursor;
-    let tail = source
-        .get(offset..)
-        .ok_or(SynthesisDecodeError::UnexpectedEnd {
+    if offset > source.len() {
+        return Err(SynthesisDecodeError::UnexpectedEnd {
             offset,
             needed: 1,
             available: 0,
-        })?;
-    let Some(length) = tail.iter().position(|byte| *byte == 0) else {
-        return Err(SynthesisDecodeError::UnterminatedString {
-            offset,
-            available: tail.len(),
         });
-    };
-    *cursor = offset + length + 1;
-    Ok(tail[..length].to_vec())
+    }
+    LegacyReader::read_c_string_from(source, cursor, source.len() - offset)
+        .map(|value| value.to_vec())
+        .map_err(|_| SynthesisDecodeError::UnterminatedString {
+            offset,
+            available: source.len() - offset,
+        })
 }

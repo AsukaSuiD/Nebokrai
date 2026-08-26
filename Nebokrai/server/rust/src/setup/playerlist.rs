@@ -22,6 +22,7 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::public::readwrite::read_to;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -410,7 +411,8 @@ impl CPlayerList {
         let property_count = read_wire_u32(source, cursor)?;
         if (property_count as i32) > 0 {
             for _ in 0..property_count {
-                let record = read_wire_array::<0x58>(source, cursor)?;
+                let record =
+                    LegacyReader::read_bytes_from(source, cursor, 0x58).map_err(map_read_block)?;
                 let properties = decode_player_properties(record);
                 let key = u32::from(properties.sex)
                     .wrapping_add(u32::from(properties.occupation).wrapping_mul(2));
@@ -429,7 +431,14 @@ impl CPlayerList {
         decode_upgrade_map(source, cursor, &mut self.hunter_upgrades)?;
         decode_upgrade_map(source, cursor, &mut self.taoist_upgrades)?;
 
-        tracing::trace!(player_properties = self.player_properties.len(), player_experience = self.player_experience.len(), fighter_upgrades = self.fighter_upgrades.len(), hunter_upgrades = self.hunter_upgrades.len(), taoist_upgrades = self.taoist_upgrades.len(), "шаблоны игроков декодированы");
+        tracing::trace!(
+            player_properties = self.player_properties.len(),
+            player_experience = self.player_experience.len(),
+            fighter_upgrades = self.fighter_upgrades.len(),
+            hunter_upgrades = self.hunter_upgrades.len(),
+            taoist_upgrades = self.taoist_upgrades.len(),
+            "шаблоны игроков декодированы"
+        );
         Ok(())
     }
 }
@@ -735,7 +744,7 @@ fn append_legacy_string(destination: &mut Vec<u8>, value: &[u8]) {
     destination.push(0);
 }
 
-fn decode_player_properties(record: [u8; 0x58]) -> PlayerBaseProperties {
+fn decode_player_properties(record: &[u8]) -> PlayerBaseProperties {
     PlayerBaseProperties {
         occupation: record[0],
         sex: record[1],
@@ -793,60 +802,45 @@ fn decode_upgrade_map(
 }
 
 fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, PlayerListDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_u32_from(source, cursor).map_err(map_read_block)
 }
 
 fn read_wire_u16(source: &[u8], cursor: &mut usize) -> Result<u16, PlayerListDecodeError> {
-    Ok(u16::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_u16_from(source, cursor).map_err(map_read_block)
 }
 
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], PlayerListDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(PlayerListDecodeError::UnexpectedEnd {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер PlayerList scalar уже проверен"))
+fn map_read_block(
+    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+) -> PlayerListDecodeError {
+    PlayerListDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
 
 fn read_wire_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, PlayerListDecodeError> {
     let offset = *cursor;
-    let remaining = source
-        .get(offset..)
-        .ok_or(PlayerListDecodeError::UnexpectedEnd {
+    if offset > source.len() {
+        return Err(PlayerListDecodeError::UnexpectedEnd {
             offset,
             needed: 1,
             available: 0,
-        })?;
-    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
-        return Err(PlayerListDecodeError::MissingStringTerminator { offset });
-    };
-    *cursor += length + 1;
-    Ok(remaining[..length].to_vec())
+        });
+    }
+    LegacyReader::read_c_string_from(source, cursor, source.len() - offset)
+        .map(|value| value.to_vec())
+        .map_err(|_| PlayerListDecodeError::MissingStringTerminator { offset })
 }
 
 fn wire_u32_at(source: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(
-        source[offset..offset + 4]
-            .try_into()
-            .expect("фиксированный PlayerList u32 входит в record"),
-    )
+    LegacyReader::at(source, offset)
+        .and_then(|mut reader| reader.read_u32())
+        .expect("фиксированный PlayerList u32 входит в record")
 }
 
 fn wire_u16_at(source: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes(
-        source[offset..offset + 2]
-            .try_into()
-            .expect("фиксированный PlayerList u16 входит в record"),
-    )
+    LegacyReader::at(source, offset)
+        .and_then(|mut reader| reader.read_u16())
+        .expect("фиксированный PlayerList u16 входит в record")
 }

@@ -16,6 +16,8 @@ use std::collections::BTreeMap;
 
 use flate2::{Decompress, FlushDecompress, Status};
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
+
 const PACKAGE_HEADER_LEN: usize = 12;
 const FILE_INDEX_LEN: usize = 0x118;
 const FILE_INDEX_NAME_LEN: usize = 256;
@@ -210,9 +212,9 @@ fn lowercase_ascii(value: &[u8]) -> Vec<u8> {
     value.iter().map(u8::to_ascii_lowercase).collect()
 }
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
-    bytes
-        .get(offset..offset + 4)
-        .map(|part| u32::from_le_bytes(part.try_into().expect("ровно четыре байта")))
+    LegacyReader::at(bytes, offset)
+        .and_then(|mut reader| reader.read_u32())
+        .ok()
 }
 
 // COMPONENT_VARIANT_BEGIN: ServerUpdate

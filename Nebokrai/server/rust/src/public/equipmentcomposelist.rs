@@ -27,6 +27,8 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
+
 use super::readwrite::read_to;
 
 /// Safe owner исходных static `m_mapList1` и `m_mapList2`.
@@ -106,7 +108,11 @@ impl EquipmentComposeList {
             EquipmentComposeSection::Second,
             &mut self.second,
         )?;
-        tracing::trace!(first = self.first.len(), second = self.second.len(), "правила составления снаряжения декодированы");
+        tracing::trace!(
+            first = self.first.len(),
+            second = self.second.len(),
+            "правила составления снаряжения декодированы"
+        );
         Ok(())
     }
 }
@@ -192,9 +198,12 @@ fn read_wire_i32(
     cursor: &mut usize,
     section: EquipmentComposeSection,
 ) -> Result<i32, EquipmentComposeDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(
-        source, cursor, section,
-    )?))
+    LegacyReader::read_i32_from(source, cursor).map_err(|block| EquipmentComposeDecodeError {
+        section,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }
 
 fn read_wire_u32(
@@ -202,30 +211,12 @@ fn read_wire_u32(
     cursor: &mut usize,
     section: EquipmentComposeSection,
 ) -> Result<u32, EquipmentComposeDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(
-        source, cursor, section,
-    )?))
-}
-
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-    section: EquipmentComposeSection,
-) -> Result<[u8; N], EquipmentComposeDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(EquipmentComposeDecodeError {
-            section,
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер EquipmentCompose scalar уже проверен"))
+    LegacyReader::read_u32_from(source, cursor).map_err(|block| EquipmentComposeDecodeError {
+        section,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }
 
 fn load_section<'a>(

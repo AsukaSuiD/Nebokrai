@@ -20,6 +20,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DaKongInfo {
     pub(crate) probability: i32,
@@ -389,7 +391,12 @@ impl CDaKongXiangQian {
             .flat_map(BTreeMap::values)
             .map(Vec::len)
             .sum::<usize>();
-        tracing::trace!(info = self.info.len(), external_attributes, delux_modify = self.delux_modify.len(), "настройки DaKong декодированы");
+        tracing::trace!(
+            info = self.info.len(),
+            external_attributes,
+            delux_modify = self.delux_modify.len(),
+            "настройки DaKong декодированы"
+        );
         Ok(())
     }
 }
@@ -524,26 +531,19 @@ fn parse_legacy_i32(token: &[u8]) -> Option<i32> {
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, DaKongDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(map_read_block)
 }
 
 fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, DaKongDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_u32_from(source, cursor).map_err(map_read_block)
 }
 
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], DaKongDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(DaKongDecodeError {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes.try_into().expect("размер DaKong scalar уже проверен"))
+fn map_read_block(
+    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+) -> DaKongDecodeError {
+    DaKongDecodeError {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
