@@ -729,7 +729,7 @@ use crate::gameserver::appserver::session::cequipmentupgrade::{
     EquipmentUpgradeGoodsSnapshot, EquipmentUpgradeLostAuditLog,
 };
 use crate::gameserver::appserver::session::csessionfactory::{
-    CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved, SessionEndReport,
+    CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved,
     TeamMemberInserted, TeamMemberRemoved, TeamSessionCreated, TeamSessionDisbanded,
     TeamSessionRestored, TeamSessionSnapshot, TerminalEquipmentSessionCollected,
 };
@@ -1985,7 +1985,6 @@ pub(crate) struct PlayerTradeReadyReport {
     pub(crate) equipment_removals: Vec<PlayerEquipmentRemoveReport>,
     pub(crate) money_deliveries: Vec<i32>,
     pub(crate) audit_deliveries: Vec<Result<i32, SendMessageError>>,
-    pub(crate) session_end: Option<SessionEndReport>,
     pub(crate) terminal_deliveries: Vec<i32>,
     pub(crate) collected_plug_ids: Vec<i32>,
     pub(crate) outcome: PlayerTradeReadyOutcome,
@@ -1995,7 +1994,6 @@ pub(crate) struct PlayerTradeReadyReport {
 pub(crate) struct PlayerTradeAbortReport {
     pub(crate) session_id: i32,
     pub(crate) plug_id: i32,
-    pub(crate) session_abort: Option<SessionEndReport>,
     pub(crate) terminal_deliveries: Vec<i32>,
     pub(crate) collected_plug_ids: Vec<i32>,
 }
@@ -2286,7 +2284,6 @@ pub(crate) struct GamePlayerBusinessEndReport {
     pub(crate) player_id: i32,
     pub(crate) previous_progress: PlayerProgress,
     pub(crate) session_id: Option<i32>,
-    pub(crate) session_end: Option<SessionEndReport>,
     pub(crate) player_release: Option<GoodsSessionPlayerRelease>,
     pub(crate) increment_close_delivery: Option<i32>,
 }
@@ -14747,7 +14744,7 @@ impl CGame {
         &mut self,
         session_id: i32,
         aborted: bool,
-    ) -> (Option<SessionEndReport>, Vec<i32>, Vec<i32>) {
+    ) -> (Vec<i32>, Vec<i32>) {
         let plug_ids = self
             .session_factory
             .trade_session_plug_ids(session_id)
@@ -14761,11 +14758,11 @@ impl CGame {
                 Some(owner_id)
             })
             .collect();
-        let terminal = if aborted {
+        if aborted {
             self.session_factory.abort_session(session_id)
         } else {
             self.session_factory.end_session(session_id)
-        };
+        }
         let mut deliveries = Vec::new();
         for owner_id in owner_ids {
             if let Some(player) = self.players.get_mut(&owner_id) {
@@ -14775,7 +14772,7 @@ impl CGame {
             }
         }
         let collected = self.session_factory.garbage_collect_session(session_id);
-        (terminal, deliveries, collected)
+        (deliveries, collected)
     }
 
     pub(crate) fn abort_player_trade(
@@ -14799,17 +14796,15 @@ impl CGame {
             return PlayerTradeAbortReport {
                 session_id,
                 plug_id: requested_plug_id,
-                session_abort: None,
                 terminal_deliveries: Vec::new(),
                 collected_plug_ids: Vec::new(),
             };
         }
-        let (session_abort, terminal_deliveries, collected_plug_ids) =
+        let (terminal_deliveries, collected_plug_ids) =
             self.finish_player_trade_session(session_id, true);
         PlayerTradeAbortReport {
             session_id,
             plug_id: requested_plug_id,
-            session_abort,
             terminal_deliveries,
             collected_plug_ids,
         }
@@ -15058,7 +15053,6 @@ impl CGame {
             equipment_removals: Vec::new(),
             money_deliveries: Vec::new(),
             audit_deliveries: Vec::new(),
-            session_end: None,
             terminal_deliveries: Vec::new(),
             collected_plug_ids: Vec::new(),
             outcome: PlayerTradeReadyOutcome::MissingSessionOrPlug,
@@ -15144,9 +15138,8 @@ impl CGame {
             return report;
         }
         let completed = self.commit_player_trade(parties, None, 0, &[], context, &mut report);
-        let (session_end, terminal_deliveries, collected_plug_ids) =
+        let (terminal_deliveries, collected_plug_ids) =
             self.finish_player_trade_session(session_id, false);
-        report.session_end = session_end;
         report.terminal_deliveries = terminal_deliveries;
         report.collected_plug_ids = collected_plug_ids;
         report.outcome = if completed {
@@ -15684,7 +15677,6 @@ impl CGame {
             equipment_removals: Vec::new(),
             money_deliveries: Vec::new(),
             audit_deliveries: Vec::new(),
-            session_end: None,
             terminal_deliveries: Vec::new(),
             collected_plug_ids: Vec::new(),
             outcome: PlayerTradeReadyOutcome::MissingSessionOrPlug,
@@ -15724,9 +15716,8 @@ impl CGame {
             context,
             &mut report,
         );
-        let (session_end, terminal_deliveries, collected_plug_ids) =
+        let (terminal_deliveries, collected_plug_ids) =
             self.finish_player_trade_session(session_id, false);
-        report.session_end = session_end;
         report.terminal_deliveries = terminal_deliveries;
         report.collected_plug_ids = collected_plug_ids;
         report.outcome = if completed {
@@ -18313,7 +18304,9 @@ impl CGame {
                 .query_session_id_by_owner(400, player_id)
         })
         .flatten();
-        let session_end = session_id.and_then(|id| self.session_factory.end_session(id));
+        if let Some(session_id) = session_id {
+            self.session_factory.end_session(session_id);
+        }
         let player_release = matches!(
             previous_progress,
             PlayerProgress::Shopping | PlayerProgress::Increment
@@ -18334,7 +18327,6 @@ impl CGame {
             player_id,
             previous_progress,
             session_id,
-            session_end,
             player_release,
             increment_close_delivery,
         })

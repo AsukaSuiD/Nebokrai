@@ -121,24 +121,6 @@ pub(crate) struct PersonalShopShadowRemoved {
     pub(crate) removed: ShadowRemovedReport,
 }
 
-#[must_use = "session end сохраняет ordered callback targets и terminal state"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SessionEndReport {
-    pub(crate) session_id: i32,
-    pub(crate) ended: bool,
-    pub(crate) remove_requested: bool,
-    pub(crate) callback_plug_ids: Vec<i32>,
-}
-
-#[must_use = "plug exit фиксирует session dispatch и ended state"]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlugExitReport {
-    pub(crate) session_id: i32,
-    pub(crate) plug_id: i32,
-    pub(crate) session_found: bool,
-    pub(crate) exited: bool,
-}
-
 #[must_use = "terminal GC report сохраняет session и ordered plug identities"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TerminalEquipmentSessionCollected {
@@ -665,19 +647,18 @@ impl CSessionFactory {
         session.minimum_plugs() as usize <= available
     }
 
-    pub(crate) fn abort_session(&mut self, session_id: i32) -> Option<SessionEndReport> {
-        let callback_plug_ids = self.sessions.get_mut(&session_id)?.abort();
+    pub(crate) fn abort_session(&mut self, session_id: i32) {
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            tracing::trace!(session_id, "прерываемая сессия не найдена");
+            return;
+        };
+        let callback_plug_ids = session.abort();
         let callback_plug_ids = callback_plug_ids
             .into_iter()
             .filter(|plug_id| self.plugs.contains_key(plug_id))
-            .collect();
-        let session = self.sessions.get(&session_id)?;
-        Some(SessionEndReport {
-            session_id,
-            ended: session.is_ended(),
-            remove_requested: session.remove_requested(),
-            callback_plug_ids,
-        })
+            .collect::<Vec<_>>();
+        let session = self.sessions.get(&session_id).expect("сессия остаётся до GC");
+        tracing::trace!(session_id, ended = session.is_ended(), remove_requested = session.remove_requested(), ?callback_plug_ids, "сессия прервана");
     }
 
     /// Exact normal `(1, 20, 0)` session + personal-shop seller plug `(400,
@@ -1270,25 +1251,24 @@ impl CSessionFactory {
             .filter(|session_id| self.sessions.contains_key(session_id))
     }
 
-    pub(crate) fn end_session(&mut self, session_id: i32) -> Option<SessionEndReport> {
-        let callback_plug_ids = self.sessions.get_mut(&session_id)?.end();
+    pub(crate) fn end_session(&mut self, session_id: i32) {
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            tracing::trace!(session_id, "завершаемая сессия не найдена");
+            return;
+        };
+        let callback_plug_ids = session.end();
         let callback_plug_ids = callback_plug_ids
             .into_iter()
             .filter(|plug_id| self.plugs.contains_key(plug_id))
-            .collect();
+            .collect::<Vec<_>>();
         let session = self
             .sessions
             .get(&session_id)
             .expect("ended session остаётся в registry до factory GC");
-        Some(SessionEndReport {
-            session_id,
-            ended: session.is_ended(),
-            remove_requested: session.remove_requested(),
-            callback_plug_ids,
-        })
+        tracing::trace!(session_id, ended = session.is_ended(), remove_requested = session.remove_requested(), ?callback_plug_ids, "сессия завершена");
     }
 
-    pub(crate) fn exit_plug(&mut self, session_id: i32, plug_id: i32) -> PlugExitReport {
+    pub(crate) fn exit_plug(&mut self, session_id: i32, plug_id: i32) {
         let session_found = self.sessions.contains_key(&session_id);
         let exited = if session_found {
             self.plugs
@@ -1302,12 +1282,7 @@ impl CSessionFactory {
         } else {
             false
         };
-        PlugExitReport {
-            session_id,
-            plug_id,
-            session_found,
-            exited,
-        }
+        tracing::trace!(session_id, plug_id, session_found, exited, "plug покинул сессию");
     }
 
     pub(crate) fn register_equipment_compose_plug(
