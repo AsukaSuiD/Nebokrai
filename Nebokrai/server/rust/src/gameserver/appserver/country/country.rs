@@ -34,8 +34,7 @@
 //! заменяют узлы и указатели STL.
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use crate::nets::netserver::message::CMessage;
 use super::super::legacycodec::LegacyReader;
@@ -117,25 +116,14 @@ pub(crate) struct CountryExileRestTimeReport {
     pub(crate) remaining_seconds: i32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("country snapshot обрывается на {field} в {offset}: нужно {required}, доступно {available}")]
 pub(crate) struct CountryDecodeError {
     pub(crate) field: &'static str,
     pub(crate) offset: usize,
     pub(crate) required: usize,
     pub(crate) available: usize,
 }
-
-impl fmt::Display for CountryDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "country snapshot обрывается на {} в {}: нужно {}, доступно {}",
-            self.field, self.offset, self.required, self.available
-        )
-    }
-}
-
-impl Error for CountryDecodeError {}
 
 impl CCountry {
     pub(crate) fn decord_from_byte_array(

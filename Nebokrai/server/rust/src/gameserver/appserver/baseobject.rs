@@ -26,6 +26,7 @@
 //! отрицательного ID, нижний — битовый образ ID.
 
 use std::fmt;
+use thiserror::Error;
 
 use crate::public::guid::CGuid;
 
@@ -35,14 +36,16 @@ use super::npc::CNpc;
 
 const LEGACY_NAME_CAPACITY: usize = 0x100;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum BaseObjectDecodeError {
+    #[error("base object обрывается на {field} в {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         needed: usize,
         available: usize,
     },
+    #[error("base object name вышло за legacy buffer в {first_out_of_bounds_offset}")]
     LegacyNameOverflow {
         first_out_of_bounds_offset: usize,
     },

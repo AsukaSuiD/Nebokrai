@@ -26,6 +26,7 @@ use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 use indexmap::IndexMap;
+use thiserror::Error;
 
 #[must_use = "report содержит обязательные listener- и ownership-эффекты"]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,25 +92,22 @@ pub(crate) struct CAmountLimitGoodsContainer {
     goods_amount_limit: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum AmountLimitGoodsCodecError {
-    Goods(GoodsDecodeError),
+    #[error(transparent)]
+    Goods(#[from] GoodsDecodeError),
+    #[error("amount container обрывается на {field} в {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         needed: usize,
         available: usize,
     },
+    #[error("amount container получил {count} goods при limit {limit}")]
     ContainerLimitExceeded {
         count: u32,
         limit: u32,
     },
-}
-
-impl From<GoodsDecodeError> for AmountLimitGoodsCodecError {
-    fn from(value: GoodsDecodeError) -> Self {
-        Self::Goods(value)
-    }
 }
 
 impl Default for CAmountLimitGoodsContainer {

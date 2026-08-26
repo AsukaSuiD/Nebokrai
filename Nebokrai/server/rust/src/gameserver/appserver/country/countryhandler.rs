@@ -10,8 +10,7 @@
 //! ручные удаляющие деструкторы заменены полем-владельцем `CGame` и обычным `Drop`.
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use super::country::{CCountry, CountryDecodeError};
 use super::super::legacycodec::LegacyReader;
@@ -29,43 +28,19 @@ pub(crate) struct CountryHandlerDecodeReport {
     pub(crate) replaced_duplicates: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum CountryHandlerDecodeError {
+    #[error("CountryHandler snapshot обрывается на count в {offset}: нужно 4, доступно {available}")]
     Count {
         offset: usize,
         available: usize,
     },
+    #[error("CountryHandler country record {record_index} не декодирован: {source}")]
     Country {
         record_index: usize,
+        #[source]
         source: CountryDecodeError,
     },
-}
-
-impl fmt::Display for CountryHandlerDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Count { offset, available } => write!(
-                formatter,
-                "CountryHandler snapshot обрывается на count в {offset}: нужно 4, доступно {available}"
-            ),
-            Self::Country {
-                record_index,
-                source,
-            } => write!(
-                formatter,
-                "CountryHandler country record {record_index} не декодирован: {source}"
-            ),
-        }
-    }
-}
-
-impl Error for CountryHandlerDecodeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Country { source, .. } => Some(source),
-            Self::Count { .. } => None,
-        }
-    }
 }
 
 impl CCountryHandler {

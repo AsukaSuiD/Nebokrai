@@ -16,8 +16,7 @@
 //! skill/state; реестр и все его операции поиска уже исполняются в Rust.
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use super::skillbaseproperties::{CSkillBaseProperties, UNKNOWN_SKILL_TYPE};
 use super::super::legacycodec::LegacyReader;
@@ -33,71 +32,36 @@ pub(crate) struct SkillFactoryDecodeReport {
     pub(crate) skipped_records: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum SkillFactoryDecodeError {
+    #[error("skill snapshot обрывается на {field} в {offset}: нужно {required}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         required: usize,
         available: usize,
     },
+    #[error("skill snapshot содержит отрицательное число slots {count}")]
     NegativeSlotCount {
         count: i32,
     },
+    #[error("skill slot {slot} содержит имя длиной {length} при максимуме {MAX_SKILL_NAME_LENGTH}")]
     NameTooLong {
         slot: usize,
         length: usize,
     },
+    #[error("skill slot {slot} содержит {length} байт, требуется {required}")]
     RecordTooShort {
         slot: usize,
         length: usize,
         required: usize,
     },
+    #[error("skill slot {slot} содержит непредставимое число usage-записей {count}")]
     UsageTableTooLarge {
         slot: usize,
         count: u32,
     },
 }
-
-impl fmt::Display for SkillFactoryDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                required,
-                available,
-            } => write!(
-                formatter,
-                "skill snapshot обрывается на {field} в {offset}: нужно {required}, доступно {available}"
-            ),
-            Self::NegativeSlotCount { count } => {
-                write!(
-                    formatter,
-                    "skill snapshot содержит отрицательное число slots {count}"
-                )
-            }
-            Self::NameTooLong { slot, length } => write!(
-                formatter,
-                "skill slot {slot} содержит имя длиной {length} при максимуме {MAX_SKILL_NAME_LENGTH}"
-            ),
-            Self::RecordTooShort {
-                slot,
-                length,
-                required,
-            } => write!(
-                formatter,
-                "skill slot {slot} содержит {length} байт, требуется {required}"
-            ),
-            Self::UsageTableTooLarge { slot, count } => write!(
-                formatter,
-                "skill slot {slot} содержит непредставимое число usage-записей {count}"
-            ),
-        }
-    }
-}
-
-impl Error for SkillFactoryDecodeError {}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CSkillFactory {

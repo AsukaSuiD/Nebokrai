@@ -36,6 +36,7 @@ use crate::gameserver::appserver::goods::fairyproperties::{
 };
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
+use thiserror::Error;
 
 const FAIRY_SPECIAL_POSITION: u32 = 13;
 const FAIRY_SPECIAL_ORIGINAL_NAME: &[u8] = b"FZ0885";
@@ -72,20 +73,16 @@ pub(crate) enum FairyContainerRemoveOutcome {
     Removed(VolumeGoodsRemoveOutcome),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum FairyContainerCodecError {
-    Base(VolumeGoodsCodecError),
+    #[error(transparent)]
+    Base(#[from] VolumeGoodsCodecError),
+    #[error("fairy container hatch position {position} обрывается в {offset}: доступно {available}")]
     UnexpectedEnd {
         position: u32,
         offset: usize,
         available: usize,
     },
-}
-
-impl From<VolumeGoodsCodecError> for FairyContainerCodecError {
-    fn from(value: VolumeGoodsCodecError) -> Self {
-        Self::Base(value)
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

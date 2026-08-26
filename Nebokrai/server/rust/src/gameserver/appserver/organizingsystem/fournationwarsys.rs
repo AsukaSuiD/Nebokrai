@@ -25,8 +25,7 @@
 //! process owner-у; остальные player-war-time queries ниже ещё сохраняют RAW.
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use crate::gameserver::appserver::servernationregion::ServerNationRegion;
 use crate::gameserver::appserver::legacycodec::LegacyReader;
@@ -91,48 +90,25 @@ pub(crate) struct FourNationGameInitReport {
     pub(crate) nation_regions: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum FourNationGameDecodeError {
+    #[error("FourNationWar snapshot повторно получен при {retained_setups} опубликованных setup")]
     AlreadyInitialized {
         retained_setups: usize,
     },
+    #[error("FourNationWar snapshot обрывается на {field} в {offset}: нужно {required}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         required: usize,
         available: usize,
     },
+    #[error("FourNationWar snapshot объявляет {declared} rectangles при capacity {capacity}")]
     RectCapacity {
         declared: i32,
         capacity: usize,
     },
 }
-
-impl fmt::Display for FourNationGameDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::AlreadyInitialized { retained_setups } => write!(
-                formatter,
-                "FourNationWar snapshot повторно получен при {retained_setups} опубликованных setup"
-            ),
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                required,
-                available,
-            } => write!(
-                formatter,
-                "FourNationWar snapshot обрывается на {field} в {offset}: нужно {required}, доступно {available}"
-            ),
-            Self::RectCapacity { declared, capacity } => write!(
-                formatter,
-                "FourNationWar snapshot объявляет {declared} rectangles при capacity {capacity}"
-            ),
-        }
-    }
-}
-
-impl Error for FourNationGameDecodeError {}
 
 pub(crate) trait FourNationGameStartupContext {
     type Region: Copy;

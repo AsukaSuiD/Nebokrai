@@ -55,14 +55,14 @@
 //! не выдуманный `false` либо `true`.
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use crate::public::date::TagTime;
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum AttackCityDecodeError {
+    #[error("поле {field} с offset {offset} требует {needed} байт, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
@@ -71,41 +71,12 @@ pub(crate) enum AttackCityDecodeError {
     },
 }
 
-impl fmt::Display for AttackCityDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "поле {field} с offset {offset} требует {needed} байт, доступно {available}"
-            ),
-        }
-    }
-}
-
-impl Error for AttackCityDecodeError {}
-
 /// Граница единственного недоставленного поля city-membership запроса.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("для городской войны {war_number} отсутствует bIsEveryWeek")]
 pub(crate) struct AttackCityMembershipBlock {
     pub(crate) war_number: i32,
 }
-
-impl fmt::Display for AttackCityMembershipBlock {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "для городской войны {} отсутствует bIsEveryWeek",
-            self.war_number
-        )
-    }
-}
-
-impl Error for AttackCityMembershipBlock {}
 
 #[derive(Clone, Debug)]
 pub(crate) struct AttackCityTime {

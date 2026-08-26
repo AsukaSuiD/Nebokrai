@@ -63,9 +63,8 @@
 //! фиктивного process callback-а; неизвестным остаётся только traversal при
 //! дубликатах имени NPC старого `stdext::hash_map`.
 
-use std::error::Error;
 use std::ffi::CString;
-use std::fmt;
+use thiserror::Error;
 
 use super::super::organizingsystem::attackcitysys::{
     AttackCityDecodeError, AttackCityMembershipBlock, AttackCityPhaseContext, CAttackCitySys,
@@ -145,10 +144,12 @@ pub(crate) trait WarFactionUpdateContext {
     fn update_village_contend_player(&mut self, region_id: i32, schedules: &CVillageWarSys);
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum WarFactionUpdateDispatchError {
-    AttackCity(AttackCityDecodeError),
-    Village(VillageWarDecodeError),
+    #[error("AttackCity faction update: {0}")]
+    AttackCity(#[source] AttackCityDecodeError),
+    #[error("Village faction update: {0}")]
+    Village(#[source] VillageWarDecodeError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -235,9 +236,11 @@ pub(crate) struct GamePlayerRunScriptReport {
     pub(crate) queued_script_id: Option<i32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GamePlayerQuestCommandError {
+    #[error("quest command не содержит player ID")]
     MissingPlayerId,
+    #[error("quest command не содержит quest ID")]
     MissingQuestId,
 }
 
@@ -323,101 +326,33 @@ pub(crate) enum FactionLifecycleDispatchError {
     InvalidPayload,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum OrganizingControlDispatchError {
+    #[error("OrganSys control {field} с offset {offset} требует {needed} байт, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         needed: usize,
         available: usize,
     },
+    #[error("для country {country_id} не опубликован _max_country_treasury")]
     CountryTreasuryLimitMissing {
         country_id: u8,
     },
+    #[error("для FourNation exploit игрока {player_id} не опубликован _max_exploit")]
     CountryExploitLimitMissing {
         player_id: i32,
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum WarPhaseDispatchError {
+    #[error("war phase ID с offset {offset} требует {needed} байт, доступно {available}")]
     UnexpectedEnd {
         offset: usize,
         needed: usize,
         available: usize,
     },
-}
-
-impl fmt::Display for GamePlayerQuestCommandError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingPlayerId => formatter.write_str("quest command не содержит player ID"),
-            Self::MissingQuestId => formatter.write_str("quest command не содержит quest ID"),
-        }
-    }
-}
-
-impl Error for GamePlayerQuestCommandError {}
-
-impl fmt::Display for WarPhaseDispatchError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "war phase ID с offset {offset} требует {needed} байт, доступно {available}"
-            ),
-        }
-    }
-}
-
-impl Error for WarPhaseDispatchError {}
-
-impl fmt::Display for OrganizingControlDispatchError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "OrganSys control {field} с offset {offset} требует {needed} байт, доступно {available}"
-            ),
-            Self::CountryTreasuryLimitMissing { country_id } => write!(
-                formatter,
-                "для country {country_id} не опубликован _max_country_treasury"
-            ),
-            Self::CountryExploitLimitMissing { player_id } => write!(
-                formatter,
-                "для FourNation exploit игрока {player_id} не опубликован _max_exploit"
-            ),
-        }
-    }
-}
-
-impl Error for OrganizingControlDispatchError {}
-
-impl fmt::Display for WarFactionUpdateDispatchError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::AttackCity(error) => write!(formatter, "AttackCity faction update: {error}"),
-            Self::Village(error) => write!(formatter, "Village faction update: {error}"),
-        }
-    }
-}
-
-impl Error for WarFactionUpdateDispatchError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::AttackCity(error) => Some(error),
-            Self::Village(error) => Some(error),
-        }
-    }
 }
 
 /// Обрабатывает только доказанные faction-update opcodes `0x7FE35/0x7FE36`.

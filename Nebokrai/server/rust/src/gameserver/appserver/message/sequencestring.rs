@@ -13,44 +13,22 @@
 //! догадкой из менее доверенного C++-донора.
 
 use std::collections::TryReserveError;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("не удалось зарезервировать Game sequence registry")]
 pub(crate) struct SequenceRegistryInitializationError {
+    #[source]
     source: TryReserveError,
 }
 
-impl fmt::Display for SequenceRegistryInitializationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("не удалось зарезервировать Game sequence registry")
-    }
-}
-
-impl Error for SequenceRegistryInitializationError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.source)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum SequenceSerializeError {
+    #[error("число Game sequence elements не представимо Windows long")]
     CountOutsideLegacyRange,
 }
-
-impl fmt::Display for SequenceSerializeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CountOutsideLegacyRange => {
-                formatter.write_str("число Game sequence elements не представимо Windows long")
-            }
-        }
-    }
-}
-
-impl Error for SequenceSerializeError {}
 
 #[derive(Default)]
 pub(crate) struct CSequenceRegistry {

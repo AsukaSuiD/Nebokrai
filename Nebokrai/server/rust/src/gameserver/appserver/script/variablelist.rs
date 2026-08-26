@@ -14,6 +14,7 @@
 //! остальные операции над выражениями ниже сохранены как RAW.
 
 use super::super::legacycodec::{LegacyReader, LegacyWriter};
+use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameVariableValue {
@@ -60,17 +61,21 @@ pub(crate) enum GameVariableMutationOutcome {
     NameNotFound,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GameVariableSnapshotError {
+    #[error("variable snapshot обрывается в {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         offset: usize,
         needed: usize,
         available: usize,
     },
+    #[error("variable snapshot содержит отрицательное count {0}")]
     NegativeCount(i32),
+    #[error("variable snapshot содержит имя длиной {length}")]
     NameTooLong {
         length: usize,
     },
+    #[error("variable snapshot содержит недопустимую длину массива {0}")]
     InvalidArrayLength(i32),
 }
 

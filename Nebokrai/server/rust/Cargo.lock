@@ -914,6 +914,7 @@ dependencies = [
  "reqwest",
  "rustix",
  "socket2",
+ "thiserror 2.0.20",
  "tiberius",
  "tokio",
  "tokio-util",

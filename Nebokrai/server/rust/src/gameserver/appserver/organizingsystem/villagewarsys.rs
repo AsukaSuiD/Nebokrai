@@ -56,14 +56,14 @@
 //! village membership не читает недоставленный weekly flag.
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use crate::public::date::TagTime;
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum VillageWarDecodeError {
+    #[error("поле {field} с offset {offset} требует {needed} байт, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
@@ -71,24 +71,6 @@ pub(crate) enum VillageWarDecodeError {
         available: usize,
     },
 }
-
-impl fmt::Display for VillageWarDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "поле {field} с offset {offset} требует {needed} байт, доступно {available}"
-            ),
-        }
-    }
-}
-
-impl Error for VillageWarDecodeError {}
 
 #[derive(Clone, Debug)]
 pub(crate) struct VillageWarSetup {

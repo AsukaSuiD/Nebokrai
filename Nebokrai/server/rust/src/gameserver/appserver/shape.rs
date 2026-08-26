@@ -44,6 +44,7 @@ use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::serverregion::CServerRegion;
 use crate::public::guid::CGuid;
+use thiserror::Error;
 
 const DIRECTION_OFFSETS: [(i32, i32); 8] = [
     (0, -1),
@@ -311,21 +312,17 @@ pub(crate) enum ShapeCoordinateBlock {
     NonFiniteOrOutOfRange { bits: u32 },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum ShapeDecodeError {
-    BaseObject(BaseObjectDecodeError),
+    #[error(transparent)]
+    BaseObject(#[from] BaseObjectDecodeError),
+    #[error("shape обрывается на {field} в {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         needed: usize,
         available: usize,
     },
-}
-
-impl From<BaseObjectDecodeError> for ShapeDecodeError {
-    fn from(error: BaseObjectDecodeError) -> Self {
-        Self::BaseObject(error)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

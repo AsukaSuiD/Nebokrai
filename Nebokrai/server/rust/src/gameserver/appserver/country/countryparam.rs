@@ -22,8 +22,7 @@
 //! отдельным accessor-ом без изменения формата snapshot-а.
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use super::super::legacycodec::LegacyReader;
 
@@ -118,25 +117,14 @@ pub(crate) struct CountryParamDecodeReport {
 
 /// Старый decoder не получал размер buffer-а; safe Rust останавливается в
 /// точной достигнутой позиции вместо чтения за границей.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("CountryParam snapshot обрывается на {field} в {offset}: нужно {required}, доступно {available}")]
 pub(crate) struct CountryParamInputBlock {
     pub(crate) field: &'static str,
     pub(crate) offset: usize,
     pub(crate) required: usize,
     pub(crate) available: usize,
 }
-
-impl fmt::Display for CountryParamInputBlock {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "CountryParam snapshot обрывается на {} в {}: нужно {}, доступно {}",
-            self.field, self.offset, self.required, self.available
-        )
-    }
-}
-
-impl Error for CountryParamInputBlock {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CCountryParam {

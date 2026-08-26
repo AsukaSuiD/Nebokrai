@@ -141,9 +141,8 @@
 //! уже выполненный network init и не подставляя нулевые identity. Dialog/log
 //! вызовы возвращаются ordered typed effects на внешней runtime-границе.
 
-use std::error::Error;
-use std::fmt;
 use std::sync::Arc;
+use thiserror::Error;
 
 use super::super::organizingsystem::attackcitysys::{
     AttackCityDecodeError, AttackCityInitReport, AttackCityRegionContext, CAttackCitySys,
@@ -3645,59 +3644,28 @@ pub(crate) struct MonsterListStartupReport {
     pub(crate) refreshed: MonsterBasePropertyRefreshReport,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GameScriptResourceDecodeError {
+    #[error("script resource обрывается на {field} в {offset}: нужно {required}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         required: usize,
         available: usize,
     },
+    #[error("script resource {resource} содержит отрицательную длину {declared}")]
     NegativeLength {
         resource: &'static str,
         declared: i32,
     },
 }
 
-impl fmt::Display for GameScriptResourceDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                required,
-                available,
-            } => write!(
-                formatter,
-                "script resource обрывается на {field} в {offset}: нужно {required}, доступно {available}"
-            ),
-            Self::NegativeLength { resource, declared } => write!(
-                formatter,
-                "script resource {resource} содержит отрицательную длину {declared}"
-            ),
-        }
-    }
-}
-
-impl Error for GameScriptResourceDecodeError {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("Game ID index отсутствует в {offset}: нужно 1, доступно {available}")]
 pub(crate) struct GameIdIndexDecodeError {
     pub(crate) offset: usize,
     pub(crate) available: usize,
 }
-
-impl fmt::Display for GameIdIndexDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "Game ID index отсутствует в {0}: нужно 1, доступно {1}",
-            self.offset, self.available
-        )
-    }
-}
-
-impl Error for GameIdIndexDecodeError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameOwnedStartupSnapshotReport {
@@ -3807,159 +3775,96 @@ pub(crate) enum GameOwnedStartupSnapshotReport {
     GodsBattle(GodsBattleDecodeReport),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum GameOwnedStartupSnapshotError {
+    #[error("startup owner selector {selector:#x} ещё не создан CGame::Init")]
     OwnerUnavailable { selector: i32 },
+    #[error(transparent)]
     GoodsList(GoodsFactoryDecodeError),
+    #[error(transparent)]
     PlayerList(PlayerListDecodeError),
+    #[error(transparent)]
     TradeList(TradeListDecodeError),
+    #[error(transparent)]
     IncrementShop(IncrementShopDecodeError),
+    #[error(transparent)]
     ContributeSetup(ContributeSetupDecodeError),
+    #[error(transparent)]
     SkillList(SkillFactoryDecodeError),
+    #[error(transparent)]
     GlobeSetup(GlobeSetupDecodeError),
+    #[error(transparent)]
     LogSystem(LogSystemDecodeError),
+    #[error(transparent)]
     GmList(GmListDecodeError),
+    #[error(transparent)]
     ScriptResource(GameScriptResourceDecodeError),
+    #[error("{0:?}")]
     GeneralVariables(GameVariableSnapshotError),
+    #[error(transparent)]
     ProxyRegion(ProxyRegionDecodeError),
+    #[error(transparent)]
     RegionSetup(RegionSetupDecodeError),
+    #[error(transparent)]
     IdIndex(GameIdIndexDecodeError),
+    #[error(transparent)]
     HitLevel(HitLevelDecodeError),
+    #[error(transparent)]
     Emotion(EmotionDecodeError),
+    #[error(transparent)]
     QuestSystem(QuestSystemDecodeError),
+    #[error(transparent)]
     PlayerRanks(PlayerRanksDecodeError),
+    #[error(transparent)]
     CountryParam(CountryParamInputBlock),
+    #[error(transparent)]
     CountryHandler(CountryHandlerDecodeError),
+    #[error(transparent)]
     DupliRegions(DupliRegionDecodeError),
+    #[error(transparent)]
     PrisonConf(PrisonConfDecodeError),
+    #[error(transparent)]
     PreciousBoxConf(PreciousBoxDecodeError),
+    #[error(transparent)]
     FairyExp(BattleFairyExpDecodeError),
+    #[error(transparent)]
     Synthesis(SynthesisDecodeError),
+    #[error(transparent)]
     NewSkillMonster(NewSkillMonsterDecodeError),
+    #[error(transparent)]
     GoodsDestroy(GoodsDestroyDecodeError),
+    #[error(transparent)]
     ChangeBody(ChangeBodyDecodeError),
+    #[error(transparent)]
     HonorEliminate(HonorEliminateDecodeError),
+    #[error(transparent)]
     DaKong(DaKongDecodeError),
+    #[error(transparent)]
     BattleFairyExp(BattleFairyExpDecodeError),
+    #[error(transparent)]
     BattleFairyCombine(BattleFairyComposeDecodeError),
+    #[error(transparent)]
     StringTable(MyStringTableDecodeError),
+    #[error(transparent)]
     EquipmentCompose(EquipmentComposeDecodeError),
+    #[error(transparent)]
     WordsFilter(WordsFilterDecodeError),
+    #[error(transparent)]
     JjcRegionLevel(JjcRegionLevelDecodeError),
+    #[error(transparent)]
     TaoZhuang(TaoZhuangDecodeError),
+    #[error(transparent)]
     TaoZhuangSerialize(TaoZhuangSerializationBlock),
+    #[error(transparent)]
     CiQing(CiQingDecodeError),
+    #[error(transparent)]
     LingBao(LingBaoDecodeError),
+    #[error(transparent)]
     CiQingSerialize(CiQingSerializationBlock),
+    #[error(transparent)]
     ThingSetup(ThingSetupCodecError),
+    #[error(transparent)]
     GodsBattle(GodsBattleDecodeError),
-}
-
-impl fmt::Display for GameOwnedStartupSnapshotError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::OwnerUnavailable { selector } => {
-                write!(
-                    formatter,
-                    "startup owner selector {selector:#x} ещё не создан CGame::Init"
-                )
-            }
-            Self::GoodsList(error) => error.fmt(formatter),
-            Self::PlayerList(error) => error.fmt(formatter),
-            Self::TradeList(error) => error.fmt(formatter),
-            Self::IncrementShop(error) => error.fmt(formatter),
-            Self::ContributeSetup(error) => error.fmt(formatter),
-            Self::SkillList(error) => error.fmt(formatter),
-            Self::GlobeSetup(error) => error.fmt(formatter),
-            Self::LogSystem(error) => error.fmt(formatter),
-            Self::GmList(error) => error.fmt(formatter),
-            Self::ScriptResource(error) => error.fmt(formatter),
-            Self::GeneralVariables(error) => write!(formatter, "{error:?}"),
-            Self::ProxyRegion(error) => error.fmt(formatter),
-            Self::RegionSetup(error) => error.fmt(formatter),
-            Self::IdIndex(error) => error.fmt(formatter),
-            Self::HitLevel(error) => error.fmt(formatter),
-            Self::Emotion(error) => error.fmt(formatter),
-            Self::QuestSystem(error) => error.fmt(formatter),
-            Self::PlayerRanks(error) => error.fmt(formatter),
-            Self::CountryParam(error) => error.fmt(formatter),
-            Self::CountryHandler(error) => error.fmt(formatter),
-            Self::DupliRegions(error) => error.fmt(formatter),
-            Self::PrisonConf(error) => error.fmt(formatter),
-            Self::PreciousBoxConf(error) => error.fmt(formatter),
-            Self::FairyExp(error) => error.fmt(formatter),
-            Self::Synthesis(error) => error.fmt(formatter),
-            Self::NewSkillMonster(error) => error.fmt(formatter),
-            Self::GoodsDestroy(error) => error.fmt(formatter),
-            Self::ChangeBody(error) => error.fmt(formatter),
-            Self::HonorEliminate(error) => error.fmt(formatter),
-            Self::DaKong(error) => error.fmt(formatter),
-            Self::BattleFairyExp(error) => error.fmt(formatter),
-            Self::BattleFairyCombine(error) => error.fmt(formatter),
-            Self::StringTable(error) => error.fmt(formatter),
-            Self::EquipmentCompose(error) => error.fmt(formatter),
-            Self::WordsFilter(error) => error.fmt(formatter),
-            Self::JjcRegionLevel(error) => error.fmt(formatter),
-            Self::TaoZhuang(error) => error.fmt(formatter),
-            Self::TaoZhuangSerialize(error) => error.fmt(formatter),
-            Self::CiQing(error) => error.fmt(formatter),
-            Self::LingBao(error) => error.fmt(formatter),
-            Self::CiQingSerialize(error) => error.fmt(formatter),
-            Self::ThingSetup(error) => error.fmt(formatter),
-            Self::GodsBattle(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl Error for GameOwnedStartupSnapshotError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::OwnerUnavailable { .. } => None,
-            Self::GoodsList(error) => Some(error),
-            Self::PlayerList(error) => Some(error),
-            Self::TradeList(error) => Some(error),
-            Self::IncrementShop(error) => Some(error),
-            Self::ContributeSetup(error) => Some(error),
-            Self::SkillList(error) => Some(error),
-            Self::GlobeSetup(error) => Some(error),
-            Self::LogSystem(error) => Some(error),
-            Self::GmList(error) => Some(error),
-            Self::ScriptResource(error) => Some(error),
-            Self::GeneralVariables(_) => None,
-            Self::ProxyRegion(error) => Some(error),
-            Self::RegionSetup(error) => Some(error),
-            Self::IdIndex(error) => Some(error),
-            Self::HitLevel(error) => Some(error),
-            Self::Emotion(error) => Some(error),
-            Self::QuestSystem(error) => Some(error),
-            Self::PlayerRanks(error) => Some(error),
-            Self::CountryParam(error) => Some(error),
-            Self::CountryHandler(error) => Some(error),
-            Self::DupliRegions(error) => Some(error),
-            Self::PrisonConf(error) => Some(error),
-            Self::PreciousBoxConf(error) => Some(error),
-            Self::FairyExp(error) => Some(error),
-            Self::Synthesis(error) => Some(error),
-            Self::NewSkillMonster(error) => Some(error),
-            Self::GoodsDestroy(error) => Some(error),
-            Self::ChangeBody(error) => Some(error),
-            Self::HonorEliminate(error) => Some(error),
-            Self::DaKong(error) => Some(error),
-            Self::BattleFairyExp(error) => Some(error),
-            Self::BattleFairyCombine(error) => Some(error),
-            Self::StringTable(error) => Some(error),
-            Self::EquipmentCompose(error) => Some(error),
-            Self::WordsFilter(error) => Some(error),
-            Self::JjcRegionLevel(error) => Some(error),
-            Self::TaoZhuang(error) => Some(error),
-            Self::TaoZhuangSerialize(error) => Some(error),
-            Self::CiQing(error) => Some(error),
-            Self::LingBao(error) => Some(error),
-            Self::CiQingSerialize(error) => Some(error),
-            Self::ThingSetup(error) => Some(error),
-            Self::GodsBattle(error) => Some(error),
-        }
-    }
 }
 
 /// Декодирует startup snapshots, чьи state owners уже принадлежат `CGame`.
@@ -4439,31 +4344,12 @@ pub(crate) struct HonorRankStartupReport {
     pub(crate) reset_mask: Option<u32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum HonorRankStartupError {
+    #[error("total honor reset mask обрывается в {offset}: нужно 4, доступно {available}")]
     MissingResetMask { offset: usize, available: usize },
-    Decode(HonorRanksDecodeError),
-}
-
-impl fmt::Display for HonorRankStartupError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingResetMask { offset, available } => write!(
-                formatter,
-                "total honor reset mask обрывается в {offset}: нужно 4, доступно {available}"
-            ),
-            Self::Decode(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl Error for HonorRankStartupError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::MissingResetMask { .. } => None,
-            Self::Decode(error) => Some(error),
-        }
-    }
+    #[error(transparent)]
+    Decode(#[from] HonorRanksDecodeError),
 }
 
 /// Обрабатывает четыре honor-rank startup snapshots `0x27..0x2A`.
@@ -4539,24 +4425,13 @@ pub(crate) struct GameBillingClientReplacement {
     pub(crate) connected_notice: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("JJC region-level snapshot обрывается на {offset}: нужно {needed}, доступно {available}")]
 pub(crate) struct JjcRegionLevelDecodeError {
     pub(crate) offset: usize,
     pub(crate) needed: usize,
     pub(crate) available: usize,
 }
-
-impl fmt::Display for JjcRegionLevelDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "JJC region-level snapshot обрывается на {}: нужно {}, доступно {}",
-            self.offset, self.needed, self.available
-        )
-    }
-}
-
-impl Error for JjcRegionLevelDecodeError {}
 
 fn read_jjc_level_i32(source: &[u8], cursor: &mut usize) -> Result<i32, JjcRegionLevelDecodeError> {
     let offset = *cursor;
@@ -4676,34 +4551,16 @@ pub(crate) enum WarScheduleSetupReport {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum WarScheduleSetupError {
-    AttackCity(AttackCityDecodeError),
-    Village(VillageWarDecodeError),
-    Country(CountryWarDecodeError),
-    FourNation(FourNationGameDecodeError),
-}
-
-impl fmt::Display for WarScheduleSetupError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::AttackCity(error) => write!(formatter, "AttackCity snapshot: {error}"),
-            Self::Village(error) => write!(formatter, "Village snapshot: {error}"),
-            Self::Country(error) => write!(formatter, "CountryWar snapshot: {error}"),
-            Self::FourNation(error) => write!(formatter, "FourNationWar snapshot: {error}"),
-        }
-    }
-}
-
-impl Error for WarScheduleSetupError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::AttackCity(error) => Some(error),
-            Self::Village(error) => Some(error),
-            Self::Country(error) => Some(error),
-            Self::FourNation(error) => Some(error),
-        }
-    }
+    #[error("AttackCity snapshot: {0}")]
+    AttackCity(#[source] AttackCityDecodeError),
+    #[error("Village snapshot: {0}")]
+    Village(#[source] VillageWarDecodeError),
+    #[error("CountryWar snapshot: {0}")]
+    Country(#[source] CountryWarDecodeError),
+    #[error("FourNationWar snapshot: {0}")]
+    FourNation(#[source] FourNationGameDecodeError),
 }
 
 /// Обрабатывает доказанные war startup selectors `0x1B/0x1C/0x1F/0x25`.

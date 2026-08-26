@@ -339,6 +339,7 @@ use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 use crate::setup::hitlevelsetup::HitLevelEntry;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use thiserror::Error;
 
 const PLAYER_TYPE: i32 = 400;
 const PLAYER_BASE_PROPERTY_WIRE_SIZE: usize = 0x194;
@@ -1352,7 +1353,8 @@ pub(crate) struct PlayerUncreatedCarriage {
     pub(crate) health: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("LeiTing snapshot обрывается на {field} в {offset}: нужно {needed}, доступно {available}")]
 pub(crate) struct PlayerLeiTingDecodeBlock {
     pub(crate) field: &'static str,
     pub(crate) offset: usize,
@@ -1360,86 +1362,59 @@ pub(crate) struct PlayerLeiTingDecodeBlock {
     pub(crate) available: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum PlayerGameSaveCodecError {
-    Shape(ShapeDecodeError),
-    Goods(AmountLimitGoodsCodecError),
-    Volume(VolumeGoodsCodecError),
+    #[error(transparent)]
+    Shape(#[from] ShapeDecodeError),
+    #[error(transparent)]
+    Goods(#[from] AmountLimitGoodsCodecError),
+    #[error(transparent)]
+    Volume(#[from] VolumeGoodsCodecError),
+    #[error(transparent)]
     Equipment(EquipmentContainerCodecError),
-    Fairy(FairyContainerCodecError),
-    Currency(CurrencyCodecError),
-    Variables(GameVariableSnapshotError),
-    LeiTing(PlayerLeiTingDecodeBlock),
+    #[error(transparent)]
+    Fairy(#[from] FairyContainerCodecError),
+    #[error(transparent)]
+    Currency(#[from] CurrencyCodecError),
+    #[error(transparent)]
+    Variables(#[from] GameVariableSnapshotError),
+    #[error(transparent)]
+    LeiTing(#[from] PlayerLeiTingDecodeBlock),
+    #[error("player save обрывается на {field} в {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         needed: usize,
         available: usize,
     },
+    #[error("player save содержит отрицательное count {count} в {field}")]
     NegativeCount {
         field: &'static str,
         count: i32,
     },
+    #[error("player save string {field} имеет длину {length} при максимуме {maximum}")]
     StringTooLong {
         field: &'static str,
         length: usize,
         maximum: usize,
     },
+    #[error("player save collection {field} длиной {length} не представима")]
     CollectionTooLarge {
         field: &'static str,
         length: usize,
     },
+    #[error("player save содержит object type {object_type} вместо player")]
     WrongObjectType {
         object_type: i32,
     },
+    #[error("player save отклонил equipment position {position}")]
     EquipmentRejected {
         position: u32,
     },
+    #[error("player save codec {field} вернул false")]
     CodecReturnedFalse {
         field: &'static str,
     },
-}
-
-impl From<ShapeDecodeError> for PlayerGameSaveCodecError {
-    fn from(value: ShapeDecodeError) -> Self {
-        Self::Shape(value)
-    }
-}
-
-impl From<AmountLimitGoodsCodecError> for PlayerGameSaveCodecError {
-    fn from(value: AmountLimitGoodsCodecError) -> Self {
-        Self::Goods(value)
-    }
-}
-
-impl From<VolumeGoodsCodecError> for PlayerGameSaveCodecError {
-    fn from(value: VolumeGoodsCodecError) -> Self {
-        Self::Volume(value)
-    }
-}
-
-impl From<CurrencyCodecError> for PlayerGameSaveCodecError {
-    fn from(value: CurrencyCodecError) -> Self {
-        Self::Currency(value)
-    }
-}
-
-impl From<FairyContainerCodecError> for PlayerGameSaveCodecError {
-    fn from(value: FairyContainerCodecError) -> Self {
-        Self::Fairy(value)
-    }
-}
-
-impl From<GameVariableSnapshotError> for PlayerGameSaveCodecError {
-    fn from(value: GameVariableSnapshotError) -> Self {
-        Self::Variables(value)
-    }
-}
-
-impl From<PlayerLeiTingDecodeBlock> for PlayerGameSaveCodecError {
-    fn from(value: PlayerLeiTingDecodeBlock) -> Self {
-        Self::LeiTing(value)
-    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

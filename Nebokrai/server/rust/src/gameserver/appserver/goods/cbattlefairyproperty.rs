@@ -13,8 +13,7 @@
 //! constructor не инициализировал и эти методы не читают, намеренно не
 //! получают выдуманных defaults из позднего донора.
 
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use super::cgoods::CGoods;
 use super::cgoodsbaseproperties::{
@@ -344,13 +343,15 @@ impl CBattleFairyProperty {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum BattleFairyComposeDecodeError {
+    #[error("BattleFairy combine snapshot обрывается на {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         offset: usize,
         needed: usize,
         available: usize,
     },
+    #[error("BattleFairy combine record {record}, {field}: непереносимый MSVC string length {length}, capacity {capacity}")]
     NonPortableString {
         record: usize,
         field: &'static str,
@@ -358,32 +359,6 @@ pub(crate) enum BattleFairyComposeDecodeError {
         capacity: u32,
     },
 }
-
-impl fmt::Display for BattleFairyComposeDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "BattleFairy combine snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
-            ),
-            Self::NonPortableString {
-                record,
-                field,
-                length,
-                capacity,
-            } => write!(
-                formatter,
-                "BattleFairy combine record {record}, {field}: непереносимый MSVC string length {length}, capacity {capacity}"
-            ),
-        }
-    }
-}
-
-impl Error for BattleFairyComposeDecodeError {}
 
 fn decode_legacy_string(
     record: &[u8; COMPOSE_RECORD_SIZE],

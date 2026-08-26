@@ -34,13 +34,13 @@
 //! allocation заменён owned-полем `CGame`.
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use super::super::legacycodec::LegacyReader;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum CountryWarDecodeError {
+    #[error("поле {field} с offset {offset} требует {needed} байт, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
@@ -48,24 +48,6 @@ pub(crate) enum CountryWarDecodeError {
         available: usize,
     },
 }
-
-impl fmt::Display for CountryWarDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "поле {field} с offset {offset} требует {needed} байт, доступно {available}"
-            ),
-        }
-    }
-}
-
-impl Error for CountryWarDecodeError {}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CountryWarRegion {

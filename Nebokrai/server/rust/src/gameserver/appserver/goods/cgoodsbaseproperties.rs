@@ -14,8 +14,7 @@
 //! Повреждённые count/string границы, где старый код уходил в out-of-bounds,
 //! завершаются typed error-ом с уже применённым prefix state.
 
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use super::super::legacycodec::LegacyReader;
 
@@ -232,46 +231,22 @@ pub(crate) const EQUIP_PLACE_MANTEAU: i32 = 14;
 pub(crate) const EQUIP_PLACE_FAIRY: i32 = 15;
 pub(crate) const EQUIP_PLACE_LING_BAO: i32 = 16;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GoodsBasePropertiesDecodeError {
+    #[error("goods properties обрываются на {field} в {offset}: нужно {required}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         required: usize,
         available: usize,
     },
+    #[error("goods properties не содержат NUL для {field} в {offset} ({available} байт)")]
     MissingStringTerminator {
         field: &'static str,
         offset: usize,
         available: usize,
     },
 }
-
-impl fmt::Display for GoodsBasePropertiesDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                required,
-                available,
-            } => write!(
-                formatter,
-                "goods properties обрываются на {field} в {offset}: нужно {required}, доступно {available}"
-            ),
-            Self::MissingStringTerminator {
-                field,
-                offset,
-                available,
-            } => write!(
-                formatter,
-                "goods properties не содержат NUL для {field} в {offset} ({available} байт)"
-            ),
-        }
-    }
-}
-
-impl Error for GoodsBasePropertiesDecodeError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsBaseIcon {

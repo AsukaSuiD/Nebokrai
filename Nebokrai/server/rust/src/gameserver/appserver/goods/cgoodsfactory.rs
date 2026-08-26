@@ -23,8 +23,7 @@
 //! не переносится, потому что меняла итоговое состояние игрового RNG.
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use super::cgoods::{CGoods, GoodsAddonProperty, GoodsAddonPropertyValue};
 use super::super::legacycodec::LegacyReader;
@@ -72,39 +71,16 @@ pub(crate) struct GoodsFactoryDecodeReport {
     pub(crate) unique_names: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GoodsFactoryDecodeError {
+    #[error("goods registry обрывается на {field} в {offset}: нужно 4, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         available: usize,
     },
-    BaseProperties(GoodsBasePropertiesDecodeError),
-}
-
-impl fmt::Display for GoodsFactoryDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                available,
-            } => write!(
-                formatter,
-                "goods registry обрывается на {field} в {offset}: нужно 4, доступно {available}"
-            ),
-            Self::BaseProperties(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl Error for GoodsFactoryDecodeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::UnexpectedEnd { .. } => None,
-            Self::BaseProperties(error) => Some(error),
-        }
-    }
+    #[error(transparent)]
+    BaseProperties(#[from] GoodsBasePropertiesDecodeError),
 }
 
 fn recreate_battle_fairy_property<Random>(

@@ -52,5 +52,6 @@ tiberius = { version = "0.12.3", default-features = false, features = ["chrono",
 tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7.16", features = ["compat"] }
 tracing = "0.1.44"
+thiserror = "2.0.20"
 uuid = "1.24.0"
 walkdir = "2.5.0"

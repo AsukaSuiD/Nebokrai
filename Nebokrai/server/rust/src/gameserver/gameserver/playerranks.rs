@@ -16,8 +16,7 @@
 //! получает единый process tick, применяет cooldown и отправляет `0xBFF30`.
 
 use std::collections::{BTreeMap, TryReserveError};
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::mynetserver::CMyNetServer;
@@ -151,61 +150,26 @@ impl CPlayerRanks {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum PlayerRanksSerializeError {
+    #[error("число Game player ranks не представимо unsigned long")]
     CountOutsideLegacyRange,
 }
 
-impl fmt::Display for PlayerRanksSerializeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("число Game player ranks не представимо unsigned long")
-    }
-}
-
-impl Error for PlayerRanksSerializeError {}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum PlayerRanksDecodeError {
+    #[error("player ranks обрывается на {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         offset: usize,
         needed: usize,
         available: usize,
     },
+    #[error("player ranks string с {offset} не завершена нулём")]
     MissingStringTerminator {
         offset: usize,
     },
-    Allocation(TryReserveError),
-}
-
-impl fmt::Display for PlayerRanksDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "player ranks обрывается на {offset}: нужно {needed}, доступно {available}"
-            ),
-            Self::MissingStringTerminator { offset } => {
-                write!(
-                    formatter,
-                    "player ranks string с {offset} не завершена нулём"
-                )
-            }
-            Self::Allocation(_) => formatter.write_str("не удалось выделить Game player ranks"),
-        }
-    }
-}
-
-impl Error for PlayerRanksDecodeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Allocation(source) => Some(source),
-            _ => None,
-        }
-    }
+    #[error("не удалось выделить Game player ranks")]
+    Allocation(#[source] TryReserveError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

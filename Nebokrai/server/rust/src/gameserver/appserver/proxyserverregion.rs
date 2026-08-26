@@ -13,11 +13,13 @@
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
 use super::legacycodec::LegacyReader;
 use super::serverregion::RegionParamState;
-use std::fmt;
+use thiserror::Error;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub(crate) enum ProxyRegionDecodeError {
+    #[error("proxy region base decode: {0:?}")]
     Base(BaseObjectDecodeError),
+    #[error("proxy region обрывается на {field} в {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
@@ -25,25 +27,6 @@ pub(crate) enum ProxyRegionDecodeError {
         available: usize,
     },
 }
-
-impl fmt::Display for ProxyRegionDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Base(error) => write!(formatter, "proxy region base decode: {error:?}"),
-            Self::UnexpectedEnd {
-                field,
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "proxy region обрывается на {field} в {offset}: нужно {needed}, доступно {available}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ProxyRegionDecodeError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CProxyServerRegion {

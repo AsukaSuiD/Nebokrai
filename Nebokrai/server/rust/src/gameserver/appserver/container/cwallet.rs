@@ -27,6 +27,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_STACKIN
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
+use thiserror::Error;
 
 pub(crate) trait CurrencyKind {
     const VALIDATE_EMPTY_GOODS: bool;
@@ -112,21 +113,17 @@ pub(crate) enum CurrencyGoodsAddBlock {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum CurrencyCodecError {
-    Goods(GoodsDecodeError),
+    #[error(transparent)]
+    Goods(#[from] GoodsDecodeError),
+    #[error("currency container обрывается на {field} в {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         needed: usize,
         available: usize,
     },
-}
-
-impl From<GoodsDecodeError> for CurrencyCodecError {
-    fn from(value: GoodsDecodeError) -> Self {
-        Self::Goods(value)
-    }
 }
 
 #[must_use = "результат add определяет ownership и listener-эффекты"]

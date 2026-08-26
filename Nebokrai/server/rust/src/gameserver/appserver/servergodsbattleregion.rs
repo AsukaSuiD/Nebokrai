@@ -43,8 +43,7 @@ use crate::setup::godsbattleconf::{
     GodsBattleSzlCalculation,
 };
 use std::collections::BTreeSet;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use super::serverregion::ServerRegionDecodeError;
 use super::legacycodec::LegacyReader;
@@ -72,35 +71,15 @@ pub(crate) struct GodsBattleTopTenEntry {
     pub(crate) level: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GodsBattleTopTenDecodeError {
+    #[error("GodsBattle top-ten обрывается на {offset} в поле {field}")]
     UnexpectedEnd { offset: usize, field: &'static str },
+    #[error("GodsBattle top-ten name с {offset} не имеет NUL-терминатора")]
     MissingNameTerminator { offset: usize },
+    #[error("GodsBattle top-ten name с {offset} длиной {length} не помещается в 260 байт")]
     NameOutsideLegacyBuffer { offset: usize, length: usize },
 }
-
-impl fmt::Display for GodsBattleTopTenDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd { offset, field } => {
-                write!(
-                    formatter,
-                    "GodsBattle top-ten обрывается на {offset} в поле {field}"
-                )
-            }
-            Self::MissingNameTerminator { offset } => write!(
-                formatter,
-                "GodsBattle top-ten name с {offset} не имеет NUL-терминатора"
-            ),
-            Self::NameOutsideLegacyBuffer { offset, length } => write!(
-                formatter,
-                "GodsBattle top-ten name с {offset} длиной {length} не помещается в 260 байт"
-            ),
-        }
-    }
-}
-
-impl Error for GodsBattleTopTenDecodeError {}
 
 impl CGodsBattleMgr {
     pub(crate) const fn configuration(&self) -> &CGodsBattleConf {

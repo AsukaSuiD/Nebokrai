@@ -13,8 +13,7 @@
 //! прочитанный prefix сохраняются при безопасном отказе на обрыве wire. Остальной
 //! сырой C++ ниже остаётся доказательной документацией незакрытых методов.
 
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 const RANK_TYPE_COUNT: usize = 4;
 const COUNTRY_COUNT: usize = 4;
@@ -189,14 +188,17 @@ pub(crate) struct HonorRanksDecodeReport {
     pub(crate) decoded_entries: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum HonorRanksDecodeError {
+    #[error("CHonorRanks получил rank type {rank_type} вне 0..4")]
     InvalidRankType {
         rank_type: i32,
     },
+    #[error("CHonorRanks получил country {country} вне 0..4/-1")]
     InvalidCountry {
         country: i32,
     },
+    #[error("CHonorRanks type {rank_type}, country {country}, record {rank_index:?} обрывается на {field} в {offset}: нужно {required}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         rank_type: i32,
@@ -207,39 +209,6 @@ pub(crate) enum HonorRanksDecodeError {
         available: usize,
     },
 }
-
-impl fmt::Display for HonorRanksDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidRankType { rank_type } => {
-                write!(
-                    formatter,
-                    "CHonorRanks получил rank type {rank_type} вне 0..4"
-                )
-            }
-            Self::InvalidCountry { country } => {
-                write!(
-                    formatter,
-                    "CHonorRanks получил country {country} вне 0..4/-1"
-                )
-            }
-            Self::UnexpectedEnd {
-                field,
-                rank_type,
-                country,
-                rank_index,
-                offset,
-                required,
-                available,
-            } => write!(
-                formatter,
-                "CHonorRanks type {rank_type}, country {country}, record {rank_index:?} обрывается на {field} в {offset}: нужно {required}, доступно {available}"
-            ),
-        }
-    }
-}
-
-impl Error for HonorRanksDecodeError {}
 
 fn valid_index(value: i32, length: usize) -> Option<usize> {
     let value = usize::try_from(value).ok()?;

@@ -485,7 +485,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::ffi::CString;
-use std::fmt;
 use std::fs;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
@@ -498,6 +497,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
 use tracing::{debug, info, trace, warn};
+use thiserror::Error;
 
 use crate::gameserver::appserver::ai::playerai::{
     CPlayerAI, PlayerAutoProgress, PlayerEnergyRegeneration,
@@ -932,27 +932,12 @@ pub(crate) struct GameSetupLoadReport {
     pub(crate) stopped_at_pair: Option<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("не удалось прочитать {}: {source}", .path.display())]
 pub(crate) struct GameSetupOpenError {
     pub(crate) path: PathBuf,
+    #[source]
     pub(crate) source: io::Error,
-}
-
-impl fmt::Display for GameSetupOpenError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "не удалось прочитать {}: {}",
-            self.path.display(),
-            self.source
-        )
-    }
-}
-
-impl std::error::Error for GameSetupOpenError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -983,30 +968,12 @@ pub(crate) struct GameRuntimeSetupReport {
     pub(crate) setup_ex: GameSetupExLoad,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum GameRuntimeSetupError {
-    Setup(GameSetupOpenError),
+    #[error(transparent)]
+    Setup(#[from] GameSetupOpenError),
+    #[error("GameServer setup не определил поле {0}")]
     MissingField(&'static str),
-}
-
-impl fmt::Display for GameRuntimeSetupError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Setup(error) => error.fmt(formatter),
-            Self::MissingField(field) => {
-                write!(formatter, "GameServer setup не определил поле {field}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for GameRuntimeSetupError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Setup(error) => Some(error),
-            Self::MissingField(_) => None,
-        }
-    }
 }
 
 impl GameSetup {
@@ -1412,36 +1379,17 @@ pub(crate) struct GameInitializationReport {
     pub(crate) goods_war_request: Result<i32, SendMessageError>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum GameInitializationThroughBillingError {
-    Setup(GameRuntimeSetupError),
+    #[error(transparent)]
+    Setup(#[from] GameRuntimeSetupError),
+    #[error("GameServer не подключился к обязательному WorldServer")]
     WorldUnavailable {
         setup: GameRuntimeSetupReport,
         connection: GameClientInitialization,
     },
-    Sequence(SequenceRegistryInitializationError),
-}
-
-impl fmt::Display for GameInitializationThroughBillingError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Setup(error) => error.fmt(formatter),
-            Self::WorldUnavailable { .. } => {
-                formatter.write_str("GameServer не подключился к обязательному WorldServer")
-            }
-            Self::Sequence(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl std::error::Error for GameInitializationThroughBillingError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Setup(error) => Some(error),
-            Self::WorldUnavailable { .. } => None,
-            Self::Sequence(error) => Some(error),
-        }
-    }
+    #[error(transparent)]
+    Sequence(#[from] SequenceRegistryInitializationError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

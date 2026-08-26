@@ -27,6 +27,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_AT
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::public::guid::CGuid;
+use thiserror::Error;
 
 const EXPANSION_BASE_CELL: usize = 48;
 const EXPANSION_CELL_COUNT: usize = 48;
@@ -102,21 +103,17 @@ pub(crate) enum VolumeExpandBlock {
     ExceedsMaximum { current: u32, requested: u32 },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum VolumeGoodsCodecError {
-    Amount(AmountLimitGoodsCodecError),
+    #[error(transparent)]
+    Amount(#[from] AmountLimitGoodsCodecError),
+    #[error("volume container обрывается на {field} в {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         needed: usize,
         available: usize,
     },
-}
-
-impl From<AmountLimitGoodsCodecError> for VolumeGoodsCodecError {
-    fn from(value: AmountLimitGoodsCodecError) -> Self {
-        Self::Amount(value)
-    }
 }
 
 #[must_use = "успешный expansion содержит release ownership-эффект"]

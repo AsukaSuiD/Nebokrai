@@ -47,33 +47,33 @@ use super::fairyproperties::{CFairyProperties, FairyExpBlock, FairyExpReport, Fa
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::{CShape, ShapeDecodeError, ShapeIdentity};
 use crate::public::guid::CGuid;
+use thiserror::Error;
 
 const GOODS_OBJECT_TYPE: i32 = 700;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GoodsDecodeError {
-    Shape(ShapeDecodeError),
+    #[error(transparent)]
+    Shape(#[from] ShapeDecodeError),
+    #[error("goods обрывается на {field} в {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         needed: usize,
         available: usize,
     },
+    #[error("goods description с {offset} не завершено NUL при {available} доступных байтах")]
     UnterminatedDescription {
         offset: usize,
         available: usize,
     },
+    #[error("не удалось выделить goods collection {field} для {count} записей")]
     CollectionAllocationFailed {
         field: &'static str,
         count: u32,
     },
+    #[error("не найдены base properties goods с index {}", .0.index)]
     MissingBaseProperties(GoodsBasePropertyBlock),
-}
-
-impl From<ShapeDecodeError> for GoodsDecodeError {
-    fn from(value: ShapeDecodeError) -> Self {
-        Self::Shape(value)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

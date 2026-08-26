@@ -48,6 +48,7 @@ use crate::gameserver::appserver::goods::fairyproperties::{
 };
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
+use thiserror::Error;
 
 pub(crate) const EQUIPMENT_COLUMN_LIMIT: u32 = 17;
 pub(crate) const EQUIPMENT_AROUND_UPDATE_MESSAGE_TYPE: u32 = 0x0b_f720;
@@ -331,23 +332,20 @@ pub(crate) enum EquipmentSwapOutcome {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum EquipmentContainerCodecError {
-    Goods(GoodsDecodeError),
+    #[error(transparent)]
+    Goods(#[from] GoodsDecodeError),
+    #[error("equipment container обрывается на {field} в {offset}: доступно {available}")]
     UnexpectedEnd {
         field: &'static str,
         offset: usize,
         available: usize,
     },
+    #[error("equipment container получил отрицательное число goods {count}")]
     NegativeGoodsCount {
         count: i32,
     },
-}
-
-impl From<GoodsDecodeError> for EquipmentContainerCodecError {
-    fn from(value: GoodsDecodeError) -> Self {
-        Self::Goods(value)
-    }
 }
 
 #[must_use = "entry outcome может вернуть rejected owned goods"]
