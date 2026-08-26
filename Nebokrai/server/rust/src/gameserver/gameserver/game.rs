@@ -5024,14 +5024,6 @@ impl CityReturnPointContext for CityReturnPointFacts {
     }
 }
 
-#[must_use = "recollection сохраняет signed player order и каждый World send"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PersonalShopRecollection {
-    pub(crate) player_id: i32,
-    pub(crate) client_ip: u32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PersonalShopPurchaseOutcome {
     MissingSessionOrPlug,
@@ -30355,7 +30347,7 @@ impl CGame {
         &self,
         change: &PlayerYuanBaoChange,
         context: &mut Context,
-    ) -> Vec<i32> {
+    ) {
         use crate::gameserver::appserver::container::cwallet::{
             CurrencyDecreaseOutcome, CurrencyIncreaseOutcome,
         };
@@ -30363,7 +30355,7 @@ impl CGame {
 
         const YUAN_BAO_EXTEND_ID: i32 = 5;
         match &change.outcome {
-            PlayerYuanBaoChangeOutcome::Unchanged => Vec::new(),
+            PlayerYuanBaoChangeOutcome::Unchanged => {}
             PlayerYuanBaoChangeOutcome::Increased(CurrencyIncreaseOutcome::Created(added)) => {
                 let Some(goods) = self.find_player(change.player_id).and_then(|player| {
                     player.trade_source_goods(
@@ -30372,7 +30364,7 @@ impl CGame {
                         added.identity.ex_id,
                     )
                 }) else {
-                    return Vec::new();
+                    return;
                 };
                 let mut message = CS2CContainerObjectMove::default();
                 message.set_operation(ContainerObjectMoveOperation::NewObject);
@@ -30380,7 +30372,7 @@ impl CGame {
                 message.set_destination_container_extend_id(YUAN_BAO_EXTEND_ID);
                 message.set_destination_object(added.identity.object_type, added.identity.ex_id);
                 message.set_object_stream(context.encode_goods_for_old_client(goods));
-                vec![message.send_to_player(self, change.player_id)]
+                let _ = message.send_to_player(self, change.player_id);
             }
             PlayerYuanBaoChangeOutcome::Increased(CurrencyIncreaseOutcome::Increased(amount)) => {
                 let mut message = CS2CContainerObjectAmountChange::default();
@@ -30388,7 +30380,7 @@ impl CGame {
                 message.set_source_container_extend_id(YUAN_BAO_EXTEND_ID);
                 message.set_object(amount.identity.object_type, amount.identity.ex_id);
                 message.set_object_amount(amount.new_amount);
-                vec![message.send_to_player(self, change.player_id)]
+                let _ = message.send_to_player(self, change.player_id);
             }
             PlayerYuanBaoChangeOutcome::Increased(
                 CurrencyIncreaseOutcome::NoChange
@@ -30399,7 +30391,7 @@ impl CGame {
             | PlayerYuanBaoChangeOutcome::Decreased(
                 CurrencyDecreaseOutcome::NoChange
                 | CurrencyDecreaseOutcome::InvalidStoredCurrency { .. },
-            ) => Vec::new(),
+            ) => {}
             PlayerYuanBaoChangeOutcome::Decreased(outcome) => {
                 let mut message = CS2CContainerObjectMove::default();
                 match outcome {
@@ -30435,7 +30427,7 @@ impl CGame {
                     CurrencyDecreaseOutcome::NoChange
                     | CurrencyDecreaseOutcome::InvalidStoredCurrency { .. } => unreachable!(),
                 }
-                vec![message.send_to_player(self, change.player_id)]
+                let _ = message.send_to_player(self, change.player_id);
             }
         }
     }
@@ -39310,25 +39302,25 @@ impl CGame {
         );
     }
 
-    /// Exact `ReCollectBaiTanInGs`: signed player-map order, null-free owned
-    /// traversal и `SendToGSBaiTan` progress gate перед каждым `0x60811`.
-    pub(crate) fn recollect_personal_shops(&self) -> Vec<PersonalShopRecollection> {
-        self.players
+    /// `ReCollectBaiTanInGs` обходит игроков в исходном знаковом порядке и
+    /// отправляет `0x60811` для каждой открытой лавки без накопления отчёта.
+    pub(crate) fn recollect_personal_shops(&self) {
+        let mut count = 0usize;
+        for player in self
+            .players
             .values()
             .filter(|player| player.current_progress() == PlayerProgress::OpenStall)
-            .map(|player| {
-                let player_id = player.player_id();
-                let client_ip = player.client_ip();
-                let mut request = CMessage::new(0x0006_0811);
-                request.base_mut().add_long(player_id);
-                request.base_mut().add_ulong(client_ip);
-                PersonalShopRecollection {
-                    player_id,
-                    client_ip,
-                    delivery: request.send(self, false),
-                }
-            })
-            .collect()
+        {
+            let player_id = player.player_id();
+            let client_ip = player.client_ip();
+            let mut request = CMessage::new(0x0006_0811);
+            request.base_mut().add_long(player_id);
+            request.base_mut().add_ulong(client_ip);
+            let delivery = request.send(self, false);
+            count += 1;
+            tracing::trace!(player_id, client_ip, ?delivery, "лавка возвращена WorldServer");
+        }
+        tracing::trace!(count, "завершён возврат личных лавок");
     }
 
     pub(crate) fn start_region_clear_player(

@@ -1,23 +1,16 @@
-//! Клиентские lifecycle-входы аукциона GameServer.
+//! Диспетчер клиентских сообщений аукциона GameServer.
 //!
-//! Точная пара GameServer EXE/PDB и исходный owner
-//! `server/gameserver/appserver/message/onmsg_c2s_auction.cpp` подтверждают
-//! close `0x90A01`, listing `0x90A02`, cut `0x90A03`, buy `0x90A04` и auction controls
-//! `0x90A05..0C`. Listing принимает временный goods, применяет auction-scale,
-//! сериализует полный `CGoodsNode`, отправляет World `0x60801`, sale-log
-//! `0x60215`, client-result `0xC0701` и notice; ненулевой YuanBao fee сохраняет
-//! pending node у конкретной недоступной границы process-global `g_BillMap`.
-//! Полный persisted-player snapshot `0x6080E` остаётся у этой же недоступной
-//! runtime-границы. Cut
-//! сначала посылает exact `0x60216`, затем переписывает исходный wire в
-//! `0x60809`; buy сохраняет signed client YuanBao precheck, общий 5-секундный
-//! gate и только для живого GUID посылает `0x60805`; поиск сохраняет player
-//! criteria и сбрасывает page, browse/self
-//! запросы уходят в World,
-//! клиент открытия получает `0xC0706`, player-open меняется до World `0x60810`,
-//! extension batch оплачивается `FZ0965`, логируется и добавляется в packet,
-//! а выключенный аукцион возвращает `GPM013` до чтения payload.
-//! Остальные gameplay selectors остаются RAW ниже.
+//! Источник — точная пара GameServer EXE/PDB, владелец
+//! `server/gameserver/appserver/message/onmsg_c2s_auction.cpp`. Реализованы
+//! закрытие, выставление, снятие и покупка лота, поиск, страницы, открытие
+//! аукциона и покупка расширения. Сохранены точные коды и байты сообщений,
+//! пятисекундные ограничения, порядок списаний, журналов, клиентских и
+//! межсерверных отправок, а также граница ожидающей операции Billing.
+//!
+//! Все эффекты выполняются синхронно в исходных ветвях. Результаты отправок и
+//! причины отказов фиксируются через `tracing`, не накапливаются в отчётах.
+//! Отложенных эффектов у этого владельца нет. Остальные варианты ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_PACKAGE_EXTENTION;
@@ -26,14 +19,13 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use crate::gameserver::appserver::player::{
-    AuctionBuyGate, AuctionListingGate, AuctionSelfGoodsRefresh, CiQingPacketAddition,
-    CiQingPacketConsumption,
+    AuctionBuyGate, AuctionListingGate, AuctionSelfGoodsRefresh,
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, colored_player_notice_message, game_wall_time_seconds,
 };
-use crate::nets::netserver::message::{CMessage, SendMessageError};
-use crate::public::auctionnode::{AuctionListingNodeFields, CGoodsNode, GoodsNodeSerializeError};
+use crate::nets::netserver::message::CMessage;
+use crate::public::auctionnode::{AuctionListingNodeFields, CGoodsNode};
 
 const CLIENT_AUCTION_CLOSE_MESSAGE: i32 = 0x0009_0A01;
 const CLIENT_AUCTION_LIST_MESSAGE: i32 = 0x0009_0A02;
@@ -63,122 +55,12 @@ const WORLD_AUCTION_ADD_NODE_MESSAGE: i32 = 0x0006_0801;
 const WORLD_AUCTION_SALE_LOG_MESSAGE: i32 = 0x0006_0215;
 const CLIENT_AUCTION_LIST_RESULT_MESSAGE: i32 = 0x000C_0701;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AuctionExtensionBuyBlock {
-    InvalidAmount,
-    InsufficientPacketSpace,
-    MissingGoodsProperties,
-    WrongExtensionKind,
-    MissingCrystalGoods,
-    InsufficientCrystals,
-    CrystalRemovalFailed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AuctionExtensionBuyReport {
-    pub(crate) player_id: i32,
-    pub(crate) goods_index: u32,
-    pub(crate) amount: u32,
-    pub(crate) required_crystals: u32,
-    pub(crate) consumptions: Vec<CiQingPacketConsumption>,
-    pub(crate) consumption_deliveries: Vec<Vec<i32>>,
-    pub(crate) additions: Vec<CiQingPacketAddition>,
-    pub(crate) addition_deliveries: Vec<Vec<i32>>,
-    pub(crate) rejected_goods: Vec<crate::gameserver::appserver::shape::ShapeIdentity>,
-    pub(crate) audit_delivery: Option<Result<i32, SendMessageError>>,
-    pub(crate) block: Option<AuctionExtensionBuyBlock>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ClientAuctionMessageReport {
-    MissingPlayer {
-        selector: i32,
-    },
-    Closed {
-        player_id: i32,
-    },
-    Listed {
-        player_id: i32,
-        gate: Option<AuctionListingGate>,
-        world_deliveries: Vec<Result<i32, SendMessageError>>,
-        client_deliveries: Vec<i32>,
-        snapshot_refreshes: u8,
-    },
-    ListingRejected {
-        player_id: i32,
-        gate: Option<AuctionListingGate>,
-        reason: &'static str,
-        notice_delivery: Option<i32>,
-        snapshot_refreshes: u8,
-    },
-    ListingBillingPending {
-        player_id: i32,
-        gate: Option<AuctionListingGate>,
-        fee: u32,
-        snapshot_refreshes: u8,
-    },
-    ListingSerializeBlocked {
-        player_id: i32,
-        gate: Option<AuctionListingGate>,
-        error: GoodsNodeSerializeError,
-        snapshot_refreshes: u8,
-    },
-    Disabled {
-        player_id: i32,
-        notice_delivery: i32,
-    },
-    Opened {
-        player_id: i32,
-        setup_delivery: i32,
-        world_delivery: Result<i32, SendMessageError>,
-    },
-    Forwarded {
-        selector: i32,
-        player_id: i32,
-        world_selector: i32,
-        world_delivery: Result<i32, SendMessageError>,
-    },
-    CutForwarded {
-        player_id: i32,
-        goods_id: crate::public::guid::CGuid,
-        cut_log_delivery: Option<Result<i32, SendMessageError>>,
-        world_delivery: Result<i32, SendMessageError>,
-    },
-    BuyRequested {
-        player_id: i32,
-        advertised_yuan_bao: i32,
-        goods_id: crate::public::guid::CGuid,
-        gate: AuctionBuyGate,
-        world_delivery: Option<Result<i32, SendMessageError>>,
-    },
-    BuyFundsRejected {
-        player_id: i32,
-        advertised_yuan_bao: i32,
-        available_yuan_bao: u32,
-        notice_delivery: i32,
-    },
-    Truncated {
-        selector: i32,
-        field: &'static str,
-    },
-    Refreshed {
-        player_id: i32,
-        refresh: AuctionSelfGoodsRefresh,
-        world_delivery: Option<Result<i32, SendMessageError>>,
-    },
-    GoodsMissing {
-        player_id: i32,
-        position: u32,
-    },
-    ExtensionBought(AuctionExtensionBuyReport),
-}
-
 pub(crate) fn dispatch_client_auction_message<Runtime, Tick>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
     mut tick_ms: Tick,
-) -> Option<ClientAuctionMessageReport>
+) -> Option<()>
 where
     Runtime: GameContainerMessageRuntime,
     Tick: FnMut(&mut Runtime) -> u32,
@@ -202,25 +84,26 @@ where
         return None;
     }
     let Some(player_id) = message.player_id() else {
-        return Some(ClientAuctionMessageReport::MissingPlayer { selector });
+        tracing::trace!(selector, "у сообщения аукциона нет игрока");
+        return Some(());
     };
     if game.find_player(player_id).is_none() {
-        return Some(ClientAuctionMessageReport::MissingPlayer { selector });
+        tracing::trace!(selector, player_id, "игрок сообщения аукциона не найден");
+        return Some(());
     }
     if !game.auction_now() {
         let notice_delivery =
             colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GPM013"))
                 .send_to_player(game.net_server(), player_id);
-        return Some(ClientAuctionMessageReport::Disabled {
-            player_id,
-            notice_delivery,
-        });
+        tracing::trace!(selector, player_id, notice_delivery, "аукцион отключён");
+        return Some(());
     }
     if selector == CLIENT_AUCTION_CLOSE_MESSAGE {
         game.find_player_mut(player_id)
             .expect("player проверен до close")
             .set_auction_open(false);
-        return Some(ClientAuctionMessageReport::Closed { player_id });
+        tracing::trace!(selector, player_id, "аукцион закрыт игроком");
+        return Some(());
     }
     if selector == CLIENT_AUCTION_LIST_MESSAGE {
         return Some(dispatch_auction_listing(
@@ -242,19 +125,13 @@ where
         message.set_message_type(WORLD_AUCTION_CUT_MESSAGE);
         message.base_mut().update();
         let world_delivery = message.send(game, false);
-        return Some(ClientAuctionMessageReport::CutForwarded {
-            player_id,
-            goods_id,
-            cut_log_delivery,
-            world_delivery,
-        });
+        tracing::trace!(selector, player_id, ?goods_id, ?cut_log_delivery, ?world_delivery, "снятие лота передано WorldServer");
+        return Some(());
     }
     if selector == CLIENT_AUCTION_BUY_MESSAGE {
         let Some(advertised_yuan_bao) = message.base_mut().get_long() else {
-            return Some(ClientAuctionMessageReport::Truncated {
-                selector,
-                field: "advertised yuan bao",
-            });
+            tracing::warn!(selector, player_id, field = "advertised yuan bao", "неполное сообщение аукциона");
+            return Some(());
         };
         let available_yuan_bao = game
             .find_player(player_id)
@@ -264,12 +141,8 @@ where
             let notice_delivery =
                 colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GPM021"))
                     .send_to_player(game.net_server(), player_id);
-            return Some(ClientAuctionMessageReport::BuyFundsRejected {
-                player_id,
-                advertised_yuan_bao,
-                available_yuan_bao,
-                notice_delivery,
-            });
+            tracing::trace!(selector, player_id, advertised_yuan_bao, available_yuan_bao, notice_delivery, "недостаточно YuanBao для покупки лота");
+            return Some(());
         }
         let gate = game
             .find_player_mut(player_id)
@@ -289,13 +162,8 @@ where
         } else {
             None
         };
-        return Some(ClientAuctionMessageReport::BuyRequested {
-            player_id,
-            advertised_yuan_bao,
-            goods_id,
-            gate,
-            world_delivery,
-        });
+        tracing::trace!(selector, player_id, advertised_yuan_bao, ?goods_id, ?gate, ?world_delivery, "запрос покупки лота обработан");
+        return Some(());
     }
     if selector == CLIENT_AUCTION_REFRESH_MESSAGE {
         let refresh = game
@@ -315,39 +183,31 @@ where
             }
             AuctionSelfGoodsRefresh::Throttled { .. } => None,
         };
-        return Some(ClientAuctionMessageReport::Refreshed {
-            player_id,
-            refresh,
-            world_delivery,
-        });
+        tracing::trace!(selector, player_id, ?refresh, ?world_delivery, "собственные лоты обновлены");
+        return Some(());
     }
     if selector == CLIENT_AUCTION_SEARCH_MESSAGE {
         let name = message.base_mut().get_str_bytes(0x100).unwrap_or_default();
-        let mut read = |field| {
-            message
-                .base_mut()
-                .get_long()
-                .ok_or(ClientAuctionMessageReport::Truncated { selector, field })
+        let mut read = || message.base_mut().get_long();
+        let lower_level = match read() {
+            Some(value) => value,
+            None => return Some(()),
         };
-        let lower_level = match read("lower level") {
-            Ok(value) => value,
-            Err(report) => return Some(report),
+        let upper_level = match read() {
+            Some(value) => value,
+            None => return Some(()),
         };
-        let upper_level = match read("upper level") {
-            Ok(value) => value,
-            Err(report) => return Some(report),
+        let use_self = match read() {
+            Some(value) => value,
+            None => return Some(()),
         };
-        let use_self = match read("use self") {
-            Ok(value) => value,
-            Err(report) => return Some(report),
+        let money_type = match read() {
+            Some(value) => value,
+            None => return Some(()),
         };
-        let money_type = match read("money type") {
-            Ok(value) => value,
-            Err(report) => return Some(report),
-        };
-        let weapon_type = match read("weapon type") {
-            Ok(value) => value,
-            Err(report) => return Some(report),
+        let weapon_type = match read() {
+            Some(value) => value,
+            None => return Some(()),
         };
         game.find_player_mut(player_id)
             .expect("player проверен до search")
@@ -367,194 +227,122 @@ where
         world.base_mut().add(&name);
         world.base_mut().add_byte(0);
         let world_delivery = world.send(game, false);
-        return Some(ClientAuctionMessageReport::Forwarded {
-            selector,
-            player_id,
-            world_selector: WORLD_AUCTION_SEARCH_MESSAGE,
-            world_delivery,
-        });
+        tracing::trace!(selector, player_id, ?world_delivery, "поиск аукциона передан WorldServer");
+        return Some(());
     }
     if selector == CLIENT_AUCTION_PAGE_MESSAGE {
         let Some(page) = message.base_mut().get_long() else {
-            return Some(ClientAuctionMessageReport::Truncated {
-                selector,
-                field: "page",
-            });
+            tracing::warn!(selector, player_id, field = "page", "неполное сообщение аукциона");
+            return Some(());
         };
         let mut world = CMessage::new(WORLD_AUCTION_PAGE_MESSAGE);
         world.base_mut().add_long(player_id);
         world.base_mut().add_long(page);
         let world_delivery = world.send(game, false);
-        return Some(ClientAuctionMessageReport::Forwarded {
-            selector,
-            player_id,
-            world_selector: WORLD_AUCTION_PAGE_MESSAGE,
-            world_delivery,
-        });
+        tracing::trace!(selector, player_id, page, ?world_delivery, "страница аукциона запрошена");
+        return Some(());
     }
     if selector == CLIENT_AUCTION_SELF_MESSAGE {
         let mut world = CMessage::new(WORLD_AUCTION_SELF_MESSAGE);
         world.base_mut().add_long(player_id);
         let world_delivery = world.send(game, false);
-        return Some(ClientAuctionMessageReport::Forwarded {
-            selector,
-            player_id,
-            world_selector: WORLD_AUCTION_SELF_MESSAGE,
-            world_delivery,
-        });
+        tracing::trace!(selector, player_id, ?world_delivery, "собственные лоты запрошены");
+        return Some(());
     }
     if selector == CLIENT_AUCTION_RELAY_MESSAGE {
         message.set_message_type(WORLD_AUCTION_RELAY_MESSAGE);
         let world_delivery = message.send(game, false);
-        return Some(ClientAuctionMessageReport::Forwarded {
-            selector,
-            player_id,
-            world_selector: WORLD_AUCTION_RELAY_MESSAGE,
-            world_delivery,
-        });
+        tracing::trace!(selector, player_id, ?world_delivery, "сообщение аукциона передано WorldServer");
+        return Some(());
     }
     if selector == CLIENT_AUCTION_CELL_MESSAGE {
         let Some(position) = message.base_mut().get_long() else {
-            return Some(ClientAuctionMessageReport::Truncated {
-                selector,
-                field: "auction position",
-            });
+            tracing::warn!(selector, player_id, field = "auction position", "неполное сообщение аукциона");
+            return Some(());
         };
         let position = position as u32;
         let Some(goods) = game
             .find_player(player_id)
             .and_then(|player| player.auction_goods_identity_at(position))
         else {
-            return Some(ClientAuctionMessageReport::GoodsMissing {
-                player_id,
-                position,
-            });
+            tracing::trace!(selector, player_id, position, "лот игрока не найден");
+            return Some(());
         };
         let mut world = CMessage::new(WORLD_AUCTION_CELL_MESSAGE);
         world.base_mut().add_ulong(position);
         world.base_mut().add_long(player_id);
         world.base_mut().add_guid(goods.ex_id);
         let world_delivery = world.send(game, false);
-        return Some(ClientAuctionMessageReport::Forwarded {
-            selector,
-            player_id,
-            world_selector: WORLD_AUCTION_CELL_MESSAGE,
-            world_delivery,
-        });
+        tracing::trace!(selector, player_id, position, ?world_delivery, "ячейка аукциона передана WorldServer");
+        return Some(());
     }
     if selector == CLIENT_AUCTION_BUY_EXTENSION_MESSAGE {
         let Some(goods_index) = message.base_mut().get_long() else {
-            return Some(ClientAuctionMessageReport::Truncated {
-                selector,
-                field: "extension goods index",
-            });
+            tracing::warn!(selector, player_id, field = "extension goods index", "неполное сообщение аукциона");
+            return Some(());
         };
         let Some(amount) = message.base_mut().get_long() else {
-            return Some(ClientAuctionMessageReport::Truncated {
-                selector,
-                field: "extension goods amount",
-            });
+            tracing::warn!(selector, player_id, field = "extension goods amount", "неполное сообщение аукциона");
+            return Some(());
         };
         let goods_index = goods_index as u32;
         let amount = amount as u32;
-        let mut report = AuctionExtensionBuyReport {
-            player_id,
-            goods_index,
-            amount,
-            required_crystals: 0,
-            consumptions: Vec::new(),
-            consumption_deliveries: Vec::new(),
-            additions: Vec::new(),
-            addition_deliveries: Vec::new(),
-            rejected_goods: Vec::new(),
-            audit_delivery: None,
-            block: None,
-        };
-        let block = |report: &mut AuctionExtensionBuyReport, block| {
-            report.block = Some(block);
-            ClientAuctionMessageReport::ExtensionBought(report.clone())
+        let blocked = |reason: &'static str| {
+            tracing::trace!(selector, player_id, goods_index, amount, reason, "покупка расширения аукциона отклонена");
         };
         if amount as i32 <= 0 {
-            return Some(block(&mut report, AuctionExtensionBuyBlock::InvalidAmount));
+            blocked("некорректное количество");
+            return Some(());
         }
         if game
             .find_player(player_id)
             .is_none_or(|player| player.packet().space() < amount)
         {
-            return Some(block(
-                &mut report,
-                AuctionExtensionBuyBlock::InsufficientPacketSpace,
-            ));
+            blocked("недостаточно места в рюкзаке");
+            return Some(());
         }
-        let Some(properties) = game
-            .goods_factory()
-            .query_goods_base_properties(goods_index)
-        else {
-            return Some(block(
-                &mut report,
-                AuctionExtensionBuyBlock::MissingGoodsProperties,
-            ));
+        let Some(properties) = game.goods_factory().query_goods_base_properties(goods_index) else {
+            blocked("не найдены свойства предмета");
+            return Some(());
         };
         if !properties.has_enabled_addon_property(GAP_GOODS_PACKAGE_EXTENTION) {
-            return Some(block(
-                &mut report,
-                AuctionExtensionBuyBlock::MissingGoodsProperties,
-            ));
+            blocked("нет свойства расширения");
+            return Some(());
         }
         let values = properties.get_addon_property_values(GAP_GOODS_PACKAGE_EXTENTION);
-        let kind = values
-            .iter()
-            .find(|value| value.id == 1)
-            .map_or(0, |value| value.base_value);
+        let kind = values.iter().find(|value| value.id == 1).map_or(0, |value| value.base_value);
         if kind != 3 {
-            return Some(block(
-                &mut report,
-                AuctionExtensionBuyBlock::WrongExtensionKind,
-            ));
+            blocked("неверный вид расширения");
+            return Some(());
         }
-        let price = values
-            .iter()
-            .find(|value| value.id == 2)
-            .map_or(0, |value| value.base_value) as u32;
-        report.required_crystals = price.wrapping_mul(amount).wrapping_mul(100);
-        let crystal_index = game
-            .goods_factory()
-            .query_goods_id_by_original_name(Some(b"FZ0965"));
+        let price = values.iter().find(|value| value.id == 2).map_or(0, |value| value.base_value) as u32;
+        let required_crystals = price.wrapping_mul(amount).wrapping_mul(100);
+        let crystal_index = game.goods_factory().query_goods_id_by_original_name(Some(b"FZ0965"));
         if crystal_index == 0 {
-            return Some(block(
-                &mut report,
-                AuctionExtensionBuyBlock::MissingCrystalGoods,
-            ));
+            blocked("не найден предмет оплаты");
+            return Some(());
         }
         if game.find_player(player_id).is_none_or(|player| {
-            player.check_item_in_packet(crystal_index) < report.required_crystals
+            player.check_item_in_packet(crystal_index) < required_crystals
         }) {
-            return Some(block(
-                &mut report,
-                AuctionExtensionBuyBlock::InsufficientCrystals,
-            ));
+            blocked("недостаточно кристаллов");
+            return Some(());
         }
-        report.consumptions = game
+        let consumptions = game
             .find_player_mut(player_id)
             .expect("player проверен до crystal removal")
-            .remove_item_in_packet(crystal_index, report.required_crystals);
-        if report.consumptions.is_empty() {
-            return Some(block(
-                &mut report,
-                AuctionExtensionBuyBlock::CrystalRemovalFailed,
-            ));
+            .remove_item_in_packet(crystal_index, required_crystals);
+        if consumptions.is_empty() {
+            blocked("не удалось списать кристаллы");
+            return Some(());
         }
-        report.consumption_deliveries = report
-            .consumptions
-            .iter()
-            .map(|consumption| game.send_player_packet_consumption(consumption))
-            .collect();
+        for consumption in &consumptions {
+            let _ = game.send_player_packet_consumption(consumption);
+        }
 
         let created = game.create_goods_batch(goods_index, amount);
         if let Some(first) = created.first() {
-            let player = game
-                .find_player(player_id)
-                .expect("player существует до extension audit");
+            let player = game.find_player(player_id).expect("player существует до extension audit");
             let mut audit = CMessage::new(WORLD_GOODS_AUDIT_MESSAGE);
             audit.base_mut().add_byte(b'n');
             audit.base_mut().add_long(player_id);
@@ -566,29 +354,31 @@ where
             audit.base_mut().add(first.name());
             audit.base_mut().add_byte(0);
             audit.base_mut().add_ulong(created.len() as u32);
-            audit
-                .base_mut()
-                .add_long(player.server_region_id().unwrap_or_default());
-            audit
-                .base_mut()
-                .add_ulong(player.shape().get_tile_x().unwrap_or_default() as u32);
-            audit
-                .base_mut()
-                .add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
+            audit.base_mut().add_long(player.server_region_id().unwrap_or_default());
+            audit.base_mut().add_ulong(player.shape().get_tile_x().unwrap_or_default() as u32);
+            audit.base_mut().add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
             audit.base_mut().add_ulong(player.client_ip());
-            report.audit_delivery = Some(audit.send(game, false));
+            let _ = audit.send(game, false);
         }
         let mut encode = |goods: &CGoods| runtime.encode_goods_for_old_client(goods);
         let (additions, rejected) = game
             .add_goods_to_player_packet(player_id, created, &mut encode)
             .expect("player существует до extension packet add");
-        report.addition_deliveries = additions
-            .iter()
-            .map(|addition| game.send_player_packet_addition(addition))
-            .collect();
-        report.additions = additions;
-        report.rejected_goods = rejected.iter().map(|goods| goods.identity()).collect();
-        return Some(ClientAuctionMessageReport::ExtensionBought(report));
+        for addition in &additions {
+            let _ = game.send_player_packet_addition(addition);
+        }
+        tracing::trace!(
+            selector,
+            player_id,
+            goods_index,
+            amount,
+            required_crystals,
+            consumptions = consumptions.len(),
+            additions = additions.len(),
+            rejected = rejected.len(),
+            "расширение аукциона куплено"
+        );
+        return Some(());
     }
 
     let mut setup = CMessage::new(CLIENT_AUCTION_OPEN_SETUP_MESSAGE);
@@ -602,11 +392,17 @@ where
     let mut world = CMessage::new(WORLD_AUCTION_OPEN_MESSAGE);
     world.base_mut().add_long(player_id);
     let world_delivery = world.send(game, false);
-    Some(ClientAuctionMessageReport::Opened {
-        player_id,
-        setup_delivery,
-        world_delivery,
-    })
+    tracing::trace!(selector, player_id, setup_delivery, ?world_delivery, "аукцион открыт");
+    Some(())
+}
+
+fn trace_listing_rejection(
+    player_id: i32,
+    gate: &Option<AuctionListingGate>,
+    reason: &'static str,
+    notice_delivery: Option<i32>,
+) {
+    tracing::trace!(player_id, ?gate, reason, notice_delivery, "выставление лота отклонено");
 }
 
 fn dispatch_auction_listing<Runtime, Tick>(
@@ -615,8 +411,7 @@ fn dispatch_auction_listing<Runtime, Tick>(
     runtime: &mut Runtime,
     tick_ms: &mut Tick,
     player_id: i32,
-) -> ClientAuctionMessageReport
-where
+) where
     Runtime: GameContainerMessageRuntime,
     Tick: FnMut(&mut Runtime) -> u32,
 {
@@ -631,43 +426,23 @@ where
             .begin_auction_listing(|| tick_ms(runtime));
         gate = Some(listing_gate);
         if !matches!(listing_gate, AuctionListingGate::Ready { .. }) {
-            return ClientAuctionMessageReport::ListingRejected {
-                player_id,
-                gate,
-                reason: "five-second gate",
-                notice_delivery: None,
-                snapshot_refreshes: 1,
-            };
+            trace_listing_rejection(player_id, &gate, "five-second gate", None);
+            return;
         }
 
         for field in ["client field 0", "client field 1"] {
             if message.base_mut().get_long().is_none() {
-                return ClientAuctionMessageReport::ListingRejected {
-                    player_id,
-                    gate,
-                    reason: field,
-                    notice_delivery: None,
-                    snapshot_refreshes: 1,
-                };
+                trace_listing_rejection(player_id, &gate, field, None);
+                return;
             }
         }
         let Some(seller_money_signed) = message.base_mut().get_long() else {
-            return ClientAuctionMessageReport::ListingRejected {
-                player_id,
-                gate,
-                reason: "seller money",
-                notice_delivery: None,
-                snapshot_refreshes: 1,
-            };
+            trace_listing_rejection(player_id, &gate, "seller money", None);
+            return;
         };
         let Some(client_goods_type) = message.base_mut().get_long() else {
-            return ClientAuctionMessageReport::ListingRejected {
-                player_id,
-                gate,
-                reason: "client goods type",
-                notice_delivery: None,
-                snapshot_refreshes: 1,
-            };
+            trace_listing_rejection(player_id, &gate, "client goods type", None);
+            return;
         };
 
         let setup = game.globe_setup();
@@ -675,13 +450,8 @@ where
             .round()
             .max(setup.auction_yuan_fee_minimum().round()) as i32;
         if seller_money_signed < price_gate {
-            return ClientAuctionMessageReport::ListingRejected {
-                player_id,
-                gate,
-                reason: "seller money below fee floor",
-                notice_delivery: None,
-                snapshot_refreshes: 1,
-            };
+            trace_listing_rejection(player_id, &gate, "seller money below fee floor", None);
+            return;
         }
         let time_setting = setup.auction_time_setting();
         let auction_time = match time_setting {
@@ -719,47 +489,27 @@ where
             let notice_delivery =
                 colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GPM011"))
                     .send_to_player(game.net_server(), player_id);
-            return ClientAuctionMessageReport::ListingRejected {
-                player_id,
-                gate,
-                reason: "auction limit",
-                notice_delivery: Some(notice_delivery),
-                snapshot_refreshes: 1,
-            };
+            trace_listing_rejection(player_id, &gate, "auction limit", Some(notice_delivery));
+            return;
         }
         if game
             .find_player(player_id)
             .is_none_or(|player| player.yuan_bao() < listing_fee)
         {
-            return ClientAuctionMessageReport::ListingRejected {
-                player_id,
-                gate,
-                reason: "insufficient yuan bao listing fee",
-                notice_delivery: None,
-                snapshot_refreshes: 1,
-            };
+            trace_listing_rejection(player_id, &gate, "insufficient yuan bao listing fee", None);
+            return;
         }
         let Some(listing_goods) = game
             .find_player(player_id)
             .and_then(|player| player.auction_listing().get_goods(0))
         else {
-            return ClientAuctionMessageReport::ListingRejected {
-                player_id,
-                gate,
-                reason: "missing auction listing goods",
-                notice_delivery: None,
-                snapshot_refreshes: 1,
-            };
+            trace_listing_rejection(player_id, &gate, "missing auction listing goods", None);
+            return;
         };
         let base_index = listing_goods.base_properties_index();
         if !game.globe_setup().auction_goods_allowed(base_index) {
-            return ClientAuctionMessageReport::ListingRejected {
-                player_id,
-                gate,
-                reason: "goods not allowed in auction",
-                notice_delivery: None,
-                snapshot_refreshes: 1,
-            };
+            trace_listing_rejection(player_id, &gate, "goods not allowed in auction", None);
+            return;
         }
         if game
             .auction_room()
@@ -768,13 +518,8 @@ where
             let notice_delivery =
                 colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GPM017"))
                     .send_to_player(game.net_server(), player_id);
-            return ClientAuctionMessageReport::ListingRejected {
-                player_id,
-                gate,
-                reason: "duplicate auction guid",
-                notice_delivery: Some(notice_delivery),
-                snapshot_refreshes: 1,
-            };
+            trace_listing_rejection(player_id, &gate, "duplicate auction guid", Some(notice_delivery));
+            return;
         }
 
         let mut goods = game
@@ -786,13 +531,8 @@ where
             .goods_factory()
             .query_goods_base_properties(goods.base_properties_index())
         else {
-            return ClientAuctionMessageReport::ListingRejected {
-                player_id,
-                gate,
-                reason: "missing goods base properties after delete",
-                notice_delivery: None,
-                snapshot_refreshes: 1,
-            };
+            trace_listing_rejection(player_id, &gate, "missing goods base properties after delete", None);
+            return;
         };
         let goods_type = match properties.goods_type() {
             GOODS_TYPE_USELESS => 0,
@@ -865,7 +605,7 @@ fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
     player_id: i32,
     gate: Option<AuctionListingGate>,
     fresh_request: bool,
-) -> ClientAuctionMessageReport {
+) {
     let setup_minimum = game.globe_setup().auction_yuan_fee_minimum();
     if setup_minimum != 0.0 {
         let node = game
@@ -879,12 +619,8 @@ fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
         // `SendAucAbOpt` помещал order type 0xA1 в process-global g_BillMap.
         // Его producer/consumer и подтверждение отсутствуют в достигнутом
         // runtime; pending node остаётся живым и не получает фиктивный success.
-        return ClientAuctionMessageReport::ListingBillingPending {
-            player_id,
-            gate,
-            fee,
-            snapshot_refreshes: u8::from(fresh_request),
-        };
+        tracing::trace!(player_id, ?gate, fee, fresh_request, "оплата выставления лота ожидает Billing");
+        return;
     }
 
     let node = game
@@ -895,18 +631,13 @@ fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
     let payload = match node.serialize() {
         Ok(payload) => payload,
         Err(error) => {
-            return ClientAuctionMessageReport::ListingSerializeBlocked {
-                player_id,
-                gate,
-                error,
-                snapshot_refreshes: u8::from(fresh_request),
-            };
+            tracing::error!(player_id, ?gate, ?error, fresh_request, "лот не удалось сериализовать");
+            return;
         }
     };
-    let mut world_deliveries = Vec::new();
     let mut add = CMessage::new(WORLD_AUCTION_ADD_NODE_MESSAGE);
     add.base_mut().add(&payload);
-    world_deliveries.push(add.send(game, false));
+    let add_delivery = add.send(game, false);
 
     let fee = game
         .find_player(player_id)
@@ -920,7 +651,7 @@ fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
     sale_log.base_mut().add_long(node.npc_price());
     sale_log.base_mut().add_ulong(node.auction_time() / 0xe10);
     sale_log.base_mut().add_ulong(fee);
-    world_deliveries.push(sale_log.send(game, false));
+    let sale_log_delivery = sale_log.send(game, false);
 
     let goods = game
         .decode_auction_goods(node.goods_bytes())
@@ -933,7 +664,7 @@ fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
     client.base_mut().add_ulong(node.seller_money());
     client.base_mut().add_ulong(old_client_payload.len() as u32);
     client.base_mut().add(&old_client_payload);
-    let mut client_deliveries = vec![client.send_to_player(game.net_server(), player_id)];
+    let client_delivery = client.send_to_player(game.net_server(), player_id);
 
     let cleared = game
         .find_player_mut(player_id)
@@ -943,20 +674,12 @@ fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
     game.find_player_mut(player_id)
         .expect("auction listing player проверен перед fee clear")
         .set_auction_listing_fee(0);
-    client_deliveries.push(
+    let notice_delivery =
         colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GPM016"))
-            .send_to_player(game.net_server(), player_id),
-    );
-    ClientAuctionMessageReport::Listed {
-        player_id,
-        gate,
-        world_deliveries,
-        client_deliveries,
-        // AddItemToAuction вызывает AddByteGS2WS; fresh handler затем делает
-        // это повторно. Полный persisted player snapshot остаётся владельцу
-        // уже существующей 0x6080E границы.
-        snapshot_refreshes: 1 + u8::from(fresh_request),
-    }
+            .send_to_player(game.net_server(), player_id);
+    // `AddItemToAuction` вызывает `AddByteGS2WS`; свежий запрос затем делает
+    // это повторно. Полный снимок игрока остаётся владельцу границы `0x6080E`.
+    tracing::trace!(player_id, ?gate, ?add_delivery, ?sale_log_delivery, client_delivery, notice_delivery, snapshot_refreshes = 1 + u8::from(fresh_request), "лот выставлен");
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
