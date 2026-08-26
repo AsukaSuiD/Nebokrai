@@ -71,7 +71,7 @@ pub(crate) fn dispatch_game_jjc_system_message<Runtime: GameMainLoopRuntime>(
             let Some(region_id) = message.base_mut().get_long() else {
                 return Some(Err(GameJjcSystemMessageError::MissingField));
             };
-            let changed = game.jjc_start_player(region_id, player_id, runtime).is_some();
+            let changed = game.jjc_start_player(region_id, player_id, runtime);
             debug!(player_id, region_id, changed, "обработан старт JJC для игрока");
         }
         TIMEOUT => {

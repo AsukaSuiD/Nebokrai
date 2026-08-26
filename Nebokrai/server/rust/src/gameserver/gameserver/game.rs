@@ -1756,35 +1756,22 @@ pub(crate) enum GamePlayerLoginPreludeError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerRegionChangeKind {
+pub(crate) enum PlayerRegionChangeOutcome {
     MissingPlayer,
     MissingSourceRegion,
     SameRegion,
     LocalRegion,
-    RemoteServer,
+    RemoteServer { delivered: bool },
 }
 
-#[must_use = "report сохраняет destination, lifecycle и network result"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerRegionChangeReport {
-    pub(crate) player_id: i32,
-    pub(crate) source_region_id: Option<i32>,
-    pub(crate) target_region_id: i32,
-    pub(crate) tile_x: i32,
-    pub(crate) tile_y: i32,
-    pub(crate) direction: i32,
-    pub(crate) use_goods: i32,
-    pub(crate) range: i32,
-    pub(crate) carriage_distance: i32,
-    pub(crate) kind: PlayerRegionChangeKind,
-    pub(crate) position_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    pub(crate) direction_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    pub(crate) region_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    pub(crate) faction_delivery: Option<Result<i32, SendMessageError>>,
-    pub(crate) team_delivery: Option<Result<i32, SendMessageError>>,
-    pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
-    pub(crate) change_log_delivery: Option<Result<i32, SendMessageError>>,
-    pub(crate) player_snapshot_size: Option<usize>,
+impl PlayerRegionChangeOutcome {
+    const fn succeeded(self) -> bool {
+        match self {
+            Self::SameRegion | Self::LocalRegion => true,
+            Self::RemoteServer { delivered } => delivered,
+            Self::MissingPlayer | Self::MissingSourceRegion => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15666,27 +15653,13 @@ impl CGame {
         range: i32,
         carriage_distance: i32,
         context: &mut Context,
-    ) -> PlayerRegionChangeReport {
-        let mut report = PlayerRegionChangeReport {
-            player_id,
-            source_region_id: None,
-            target_region_id,
-            tile_x,
-            tile_y,
-            direction,
-            use_goods,
-            range,
-            carriage_distance,
-            kind: PlayerRegionChangeKind::MissingPlayer,
-            position_delivery: None,
-            direction_delivery: None,
-            region_delivery: None,
-            faction_delivery: None,
-            team_delivery: None,
-            world_delivery: None,
-            change_log_delivery: None,
-            player_snapshot_size: None,
-        };
+    ) -> PlayerRegionChangeOutcome {
+        let mut position_delivery = None;
+        let mut direction_delivery = None;
+        let mut faction_delivery = None;
+        let mut team_delivery = None;
+        let mut world_delivery = None;
+        let mut player_snapshot_size = None;
         if self
             .find_player(player_id)
             .and_then(CPlayer::server_region_id)
@@ -15698,9 +15671,9 @@ impl CGame {
             .find_player(player_id)
             .and_then(CPlayer::server_region_id)
         else {
-            return report;
+            tracing::debug!(player_id, target_region_id, "смена региона отклонена: игрок отсутствует");
+            return PlayerRegionChangeOutcome::MissingPlayer;
         };
-        report.source_region_id = Some(source_region_id);
         let (source_tile_x, source_tile_y, wallet_gold, bank_gold) = self
             .find_player(player_id)
             .map(|player| {
@@ -15713,8 +15686,8 @@ impl CGame {
             })
             .expect("region-change player проверен до source snapshot");
         let Some(mut source_owner) = self.take_region_owner(source_region_id) else {
-            report.kind = PlayerRegionChangeKind::MissingSourceRegion;
-            return report;
+            tracing::debug!(player_id, source_region_id, target_region_id, "смена региона отклонена: исходный регион отсутствует");
+            return PlayerRegionChangeOutcome::MissingSourceRegion;
         };
         self.finish_player_business(player_id);
         let mut player = self
@@ -15725,9 +15698,7 @@ impl CGame {
         if !(0..8).contains(&direction) {
             direction = context.random_below(8);
         }
-        report.direction = direction;
         if target_region_id == source_region_id {
-            report.kind = PlayerRegionChangeKind::SameRegion;
             context.prepare_script_region_companions(
                 &mut player,
                 source_region_id,
@@ -15766,7 +15737,7 @@ impl CGame {
                 movement.add_long(tile_x);
                 movement.add_long(tile_y);
                 movement.add_long(use_goods);
-                report.position_delivery = Some(self.send_game_shape_around(
+                position_delivery = Some(self.send_game_shape_around(
                     source_owner.base(),
                     player.shape(),
                     None,
@@ -15789,14 +15760,14 @@ impl CGame {
                 changed.add_byte(direction as u8);
                 changed.add_long(400);
                 changed.add_long(player_id);
-                report.direction_delivery = Some(self.send_game_shape_around(
+                direction_delivery = Some(self.send_game_shape_around(
                     source_owner.base(),
                     player.shape(),
                     None,
                     &changed,
                 ));
             }
-            report.change_log_delivery = self.send_player_change_region_log(
+            let change_log_delivery = self.send_player_change_region_log(
                 0,
                 player_id,
                 wallet_gold,
@@ -15809,15 +15780,13 @@ impl CGame {
                 tile_y,
             );
             context.refresh_script_region_auto_protect(&mut player);
-            report.tile_x = tile_x;
-            report.tile_y = tile_y;
             self.restore_region_owner(source_owner);
             self.players.insert(player_id, player);
-            return report;
+            tracing::debug!(player_id, source_region_id, target_region_id, tile_x, tile_y, direction, use_goods, range, carriage_distance, ?position_delivery, ?direction_delivery, ?change_log_delivery, "игрок перемещён внутри региона");
+            return PlayerRegionChangeOutcome::SameRegion;
         }
 
         if let Some(target_owner) = self.take_region_owner(target_region_id) {
-            report.kind = PlayerRegionChangeKind::LocalRegion;
             context.prepare_script_region_companions(
                 &mut player,
                 source_region_id,
@@ -15860,7 +15829,7 @@ impl CGame {
             changed.add_long(target.war_region_type);
             changed.add_byte(target.country);
             changed.add_ulong(target.region.exp_scale_bits());
-            report.region_delivery = Some(self.send_game_shape_around(
+            let region_delivery = Some(self.send_game_shape_around(
                 source_owner.base(),
                 player.shape(),
                 None,
@@ -15874,7 +15843,7 @@ impl CGame {
                 faction.add_long(player_id);
                 faction.add_long(2);
                 faction.add_long(target_region_id);
-                report.faction_delivery = Some(faction.send(self, false));
+                faction_delivery = Some(faction.send(self, false));
             }
             if player.team_id() != 0 {
                 let mut team = CMessage::new(0x0006_0005);
@@ -15882,9 +15851,9 @@ impl CGame {
                 team.add_long(400);
                 team.add_long(player_id);
                 team.add_long(target_region_id);
-                report.team_delivery = Some(team.send(self, false));
+                team_delivery = Some(team.send(self, false));
             }
-            report.change_log_delivery = self.send_player_change_region_log(
+            let change_log_delivery = self.send_player_change_region_log(
                 1,
                 player_id,
                 wallet_gold,
@@ -15897,15 +15866,13 @@ impl CGame {
                 tile_y,
             );
             context.refresh_script_region_auto_protect(&mut player);
-            report.tile_x = tile_x;
-            report.tile_y = tile_y;
             self.restore_region_owner(target_owner);
             self.restore_region_owner(source_owner);
             self.players.insert(player_id, player);
-            return report;
+            tracing::debug!(player_id, source_region_id, target_region_id, tile_x, tile_y, direction, use_goods, range, carriage_distance, ?region_delivery, ?faction_delivery, ?team_delivery, ?change_log_delivery, "игрок переведён в локальный регион");
+            return PlayerRegionChangeOutcome::LocalRegion;
         }
 
-        report.kind = PlayerRegionChangeKind::RemoteServer;
         context.prepare_script_region_companions(
             &mut player,
             source_region_id,
@@ -15927,16 +15894,16 @@ impl CGame {
             request.add_long(use_goods);
             request.add_long(range);
             request.base_mut().add(&snapshot);
-            report.player_snapshot_size = Some(snapshot.len());
+            player_snapshot_size = Some(snapshot.len());
             let delivery = request.send(self, false);
             if !matches!(delivery, Ok(value) if value != 0) {
                 player.cancel_server_region_change();
             }
-            report.world_delivery = Some(delivery);
+            world_delivery = Some(delivery);
         } else {
             player.cancel_server_region_change();
         }
-        report.change_log_delivery = self.send_player_change_region_log(
+        let change_log_delivery = self.send_player_change_region_log(
             2,
             player_id,
             wallet_gold,
@@ -15949,11 +15916,11 @@ impl CGame {
             tile_y,
         );
         context.refresh_script_region_auto_protect(&mut player);
-        report.tile_x = tile_x;
-        report.tile_y = tile_y;
         self.restore_region_owner(source_owner);
         self.players.insert(player_id, player);
-        report
+        let delivered = matches!(&world_delivery, Some(Ok(value)) if *value != 0);
+        tracing::debug!(player_id, source_region_id, target_region_id, tile_x, tile_y, direction, use_goods, range, carriage_distance, ?player_snapshot_size, ?world_delivery, ?change_log_delivery, delivered, "игрок передан на другой сервер");
+        PlayerRegionChangeOutcome::RemoteServer { delivered }
     }
 
     /// `3314 / MovePlayer` поддерживает как полную форму из десяти аргументов,
@@ -15968,11 +15935,11 @@ impl CGame {
         &mut self,
         mut arguments: [i32; 10],
         context: &mut Context,
-    ) -> Vec<PlayerRegionChangeReport> {
+    ) -> usize {
         const PARAMETER_ERROR: i32 = 0x09ff_fff9;
 
         if arguments[0] == PARAMETER_ERROR || arguments[1] == PARAMETER_ERROR {
-            return Vec::new();
+            return 0;
         }
         if arguments[2..].iter().all(|value| *value == PARAMETER_ERROR) {
             arguments[5] = arguments[1];
@@ -16001,7 +15968,7 @@ impl CGame {
         let source_region_id = arguments[0];
         let target_region_id = arguments[5];
         if target_region_id == PARAMETER_ERROR {
-            return Vec::new();
+            return 0;
         }
         let Some((source_rectangle, player_ids)) =
             self.find_region(source_region_id).and_then(|owner| {
@@ -16016,7 +15983,7 @@ impl CGame {
                 Some((rectangle, player_ids))
             })
         else {
-            return Vec::new();
+            return 0;
         };
         let Some(target_rectangle) = self.find_region(target_region_id).and_then(|owner| {
             let region = owner.base();
@@ -16026,7 +15993,7 @@ impl CGame {
                 region.region.height,
             )
         }) else {
-            return Vec::new();
+            return 0;
         };
 
         let player_ids = player_ids
@@ -16050,7 +16017,7 @@ impl CGame {
             .collect::<Vec<_>>();
         let target_width = target_rectangle[2].wrapping_sub(target_rectangle[0]);
         let target_height = target_rectangle[3].wrapping_sub(target_rectangle[1]);
-        let mut reports = Vec::new();
+        let mut moved = 0usize;
         for player_id in player_ids {
             let destination = self.find_region(target_region_id).and_then(|owner| {
                 owner
@@ -16074,7 +16041,7 @@ impl CGame {
             else {
                 continue;
             };
-            reports.push(self.change_player_region(
+            let _ = self.change_player_region(
                 player_id,
                 target_region_id,
                 destination.x,
@@ -16084,9 +16051,10 @@ impl CGame {
                 0,
                 0,
                 context,
-            ));
+            );
+            moved = moved.wrapping_add(1);
         }
-        reports
+        moved
     }
 
     pub(crate) fn jjc_on_matched(&mut self, first: JjcInfo, second: JjcInfo) {
@@ -16213,15 +16181,18 @@ impl CGame {
         region_id: i32,
         player_id: i32,
         runtime: &mut Runtime,
-    ) -> Option<PlayerRegionChangeReport> {
+    ) -> bool {
         let (_, _, _, buff_id) = self.globe_setup.jjc_game_config();
         let direction = {
-            let player = self.players.get_mut(&player_id)?;
+            let Some(player) = self.players.get_mut(&player_id) else {
+                return false;
+            };
             player.set_jjc_pk_state(true);
             let _ = player.delete_undead_state(buff_id);
             player.shape().get_direction()
         };
-        Some(self.change_player_region(player_id, region_id, -1, -1, direction, 0, 0, 0, runtime))
+        let _ = self.change_player_region(player_id, region_id, -1, -1, direction, 0, 0, 0, runtime);
+        true
     }
 
     pub(crate) fn jjc_timeout(&mut self, player_ids: [i32; 2]) -> [Option<i32>; 2] {
@@ -21382,19 +21353,8 @@ impl CGame {
                     mutation.previous_y,
                 )
             });
-            let region_change = region_change.unwrap_or_else(|| {
-                self.missing_player_region_change_report(
-                    player_id,
-                    0,
-                    mutation.previous_x,
-                    mutation.previous_y,
-                    mutation.direction,
-                    0,
-                    3,
-                    0,
-                )
-            });
-            tracing::debug!(player_id, relive_type, ?mutation, answer_delivery, ?resident_delivery, peace_entered, ?shape_delivery, ?region_change.kind, ?cannot_move_delivery, "игрок воскрешён на месте");
+            let region_change = region_change.unwrap_or(PlayerRegionChangeOutcome::MissingPlayer);
+            tracing::debug!(player_id, relive_type, ?mutation, answer_delivery, ?resident_delivery, peace_entered, ?shape_delivery, ?region_change, ?cannot_move_delivery, "игрок воскрешён на месте");
             return;
         }
 
@@ -21460,7 +21420,7 @@ impl CGame {
             0,
             context,
         );
-        let changed_region = Self::player_region_change_succeeded(&region_change);
+        let changed_region = region_change.succeeded();
         let answer_delivery = changed_region.then(|| self.send_player_relive_answer(player_id));
         let died_state_deliveries = if self
             .find_player(player_id)
@@ -21474,7 +21434,7 @@ impl CGame {
         } else {
             None
         };
-        tracing::debug!(player_id, relive_type, ?mutation, ?return_point, x, y, changed_region, ?answer_delivery, ?resident_delivery, peace_entered, died_state_published = died_state_deliveries.is_some(), ?region_change.kind, "игрок воскрешён в точке возврата");
+        tracing::debug!(player_id, relive_type, ?mutation, ?return_point, x, y, changed_region, ?answer_delivery, ?resident_delivery, peace_entered, died_state_published = died_state_deliveries.is_some(), ?region_change, "игрок воскрешён в точке возврата");
     }
 
     fn send_player_relive_answer(&self, player_id: i32) -> i32 {
@@ -21500,52 +21460,6 @@ impl CGame {
         message.add_long(player_id);
         message.add_byte(0);
         self.send_player_shape_around(player_id, None, &message)
-    }
-
-    fn player_region_change_succeeded(report: &PlayerRegionChangeReport) -> bool {
-        match report.kind {
-            PlayerRegionChangeKind::SameRegion | PlayerRegionChangeKind::LocalRegion => true,
-            PlayerRegionChangeKind::RemoteServer => {
-                matches!(report.world_delivery, Some(Ok(delivery)) if delivery != 0)
-            }
-            PlayerRegionChangeKind::MissingPlayer | PlayerRegionChangeKind::MissingSourceRegion => {
-                false
-            }
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn missing_player_region_change_report(
-        &self,
-        player_id: i32,
-        target_region_id: i32,
-        tile_x: i32,
-        tile_y: i32,
-        direction: i32,
-        use_goods: i32,
-        range: i32,
-        carriage_distance: i32,
-    ) -> PlayerRegionChangeReport {
-        PlayerRegionChangeReport {
-            player_id,
-            source_region_id: None,
-            target_region_id,
-            tile_x,
-            tile_y,
-            direction,
-            use_goods,
-            range,
-            carriage_distance,
-            kind: PlayerRegionChangeKind::MissingPlayer,
-            position_delivery: None,
-            direction_delivery: None,
-            region_delivery: None,
-            faction_delivery: None,
-            team_delivery: None,
-            world_delivery: None,
-            change_log_delivery: None,
-            player_snapshot_size: None,
-        }
     }
 
     /// Native in-place relive вызывает `OnCannotMove(old_x, old_y)`, если
@@ -37817,7 +37731,7 @@ impl CGame {
             0,
             runtime,
         );
-        let changed_region = Self::player_region_change_succeeded(&region_change);
+        let changed_region = region_change.succeeded();
         trace!(
             target: "miracle_server::gameserver::ai",
             source_region_id,
