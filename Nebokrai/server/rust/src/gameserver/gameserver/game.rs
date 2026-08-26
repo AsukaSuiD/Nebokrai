@@ -1953,51 +1953,6 @@ pub(crate) enum PlayerTradeConditionBlock {
     YuanBaoCapacity,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerTradeBillingRequest {
-    pub(crate) payer_id: i32,
-    pub(crate) receiver_id: i32,
-    pub(crate) amount: u32,
-    pub(crate) session_id: i32,
-    pub(crate) payer_plug_id: i32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerTradeReadyOutcome {
-    MissingSessionOrPlug,
-    SessionUnavailable,
-    Changed { ready: bool },
-    ConditionBlocked(PlayerTradeConditionBlock),
-    BillingPending(PlayerTradeBillingRequest),
-    Completed,
-    RolledBack,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerTradeReadyReport {
-    pub(crate) session_id: i32,
-    pub(crate) plug_id: i32,
-    pub(crate) contrary_plug_id: Option<i32>,
-    pub(crate) ready_deliveries: Vec<i32>,
-    pub(crate) notification_deliveries: Vec<i32>,
-    pub(crate) packet_deliveries: Vec<Vec<i32>>,
-    pub(crate) equipment_removals: Vec<PlayerEquipmentRemoveReport>,
-    pub(crate) money_deliveries: Vec<i32>,
-    pub(crate) audit_deliveries: Vec<Result<i32, SendMessageError>>,
-    pub(crate) terminal_deliveries: Vec<i32>,
-    pub(crate) collected_plug_ids: Vec<i32>,
-    pub(crate) outcome: PlayerTradeReadyOutcome,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerTradeAbortReport {
-    pub(crate) session_id: i32,
-    pub(crate) plug_id: i32,
-    pub(crate) terminal_deliveries: Vec<i32>,
-    pub(crate) collected_plug_ids: Vec<i32>,
-}
-
 #[derive(Clone, Debug)]
 struct PlayerTradePartySnapshot {
     plug_id: i32,
@@ -14772,6 +14727,7 @@ impl CGame {
             }
         }
         let collected = self.session_factory.garbage_collect_session(session_id);
+        tracing::trace!(session_id, aborted, ?deliveries, ?collected, "сессия обмена завершена");
         (deliveries, collected)
     }
 
@@ -14780,7 +14736,7 @@ impl CGame {
         player_id: i32,
         session_id: i32,
         requested_plug_id: i32,
-    ) -> PlayerTradeAbortReport {
+    ) {
         let actual = self
             .session_factory
             .trader_plug_by_owner(session_id, player_id);
@@ -14793,21 +14749,12 @@ impl CGame {
                     })
                 })
         {
-            return PlayerTradeAbortReport {
-                session_id,
-                plug_id: requested_plug_id,
-                terminal_deliveries: Vec::new(),
-                collected_plug_ids: Vec::new(),
-            };
+            tracing::trace!(player_id, session_id, requested_plug_id, "прерывание обмена отклонено");
+            return;
         }
         let (terminal_deliveries, collected_plug_ids) =
             self.finish_player_trade_session(session_id, true);
-        PlayerTradeAbortReport {
-            session_id,
-            plug_id: requested_plug_id,
-            terminal_deliveries,
-            collected_plug_ids,
-        }
+        tracing::trace!(player_id, session_id, requested_plug_id, ?terminal_deliveries, ?collected_plug_ids, "обмен прерван");
     }
 
     fn player_trade_snapshots(
@@ -15042,26 +14989,13 @@ impl CGame {
         session_id: i32,
         requested_plug_id: i32,
         context: &mut Context,
-    ) -> PlayerTradeReadyReport {
-        let mut report = PlayerTradeReadyReport {
-            session_id,
-            plug_id: requested_plug_id,
-            contrary_plug_id: None,
-            ready_deliveries: Vec::new(),
-            notification_deliveries: Vec::new(),
-            packet_deliveries: Vec::new(),
-            equipment_removals: Vec::new(),
-            money_deliveries: Vec::new(),
-            audit_deliveries: Vec::new(),
-            terminal_deliveries: Vec::new(),
-            collected_plug_ids: Vec::new(),
-            outcome: PlayerTradeReadyOutcome::MissingSessionOrPlug,
-        };
+    ) {
         let actual = self
             .session_factory
             .trader_plug_by_owner(session_id, player_id);
         if actual != Some(requested_plug_id) {
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, ?actual, "plug готовности обмена не совпал");
+            return;
         }
         if !self
             .session_factory
@@ -15071,8 +15005,8 @@ impl CGame {
                 })
             })
         {
-            report.outcome = PlayerTradeReadyOutcome::SessionUnavailable;
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, "сессия обмена недоступна");
+            return;
         }
         let ready = {
             let trader = self
@@ -15086,16 +15020,14 @@ impl CGame {
         let contrary_plug_id = self
             .session_factory
             .contrary_trader_id(session_id, requested_plug_id);
-        report.contrary_plug_id = contrary_plug_id;
         if let Some(contrary_plug_id) = contrary_plug_id
             && let Some(contrary) = self.session_factory.query_trader(contrary_plug_id)
         {
             let mut state = CMessage::new(0x000b_f716);
             state.add_long(requested_plug_id);
             state.add_byte(u8::from(ready));
-            report
-                .ready_deliveries
-                .push(state.send_to_player(self.net_server(), contrary.owner_id()));
+            let delivery = state.send_to_player(self.net_server(), contrary.owner_id());
+            tracing::trace!(player_id, session_id, requested_plug_id, contrary_plug_id, ready, delivery, "готовность обмена опубликована второй стороне");
         }
         if !ready
             || contrary_plug_id.is_none_or(|plug_id| {
@@ -15105,16 +15037,16 @@ impl CGame {
                     .is_some_and(|trader| trader.ready())
             })
         {
-            report.outcome = PlayerTradeReadyOutcome::Changed { ready };
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, ready, "готовность обмена изменена без завершения");
+            return;
         }
         let parties = match self.validate_player_trade(session_id) {
             Ok(parties) => parties,
             Err(block) => {
-                report.notification_deliveries =
+                let notification_deliveries =
                     self.send_trade_notice(session_id, Self::trade_condition_notice(block));
-                report.outcome = PlayerTradeReadyOutcome::ConditionBlocked(block);
-                return report;
+                tracing::trace!(player_id, session_id, requested_plug_id, ?block, ?notification_deliveries, "условие обмена отклонено");
+                return;
             }
         };
         let yuan_difference = i64::from(parties[0].yuan_bao) - i64::from(parties[1].yuan_bao);
@@ -15127,27 +15059,13 @@ impl CGame {
             let amount = yuan_difference.unsigned_abs() as u32;
             let delivery =
                 self.send_player_trade_billing_request(payer, receiver, amount, session_id);
-            report.outcome = PlayerTradeReadyOutcome::BillingPending(PlayerTradeBillingRequest {
-                payer_id: payer.owner_id,
-                receiver_id: receiver.owner_id,
-                amount,
-                session_id,
-                payer_plug_id: payer.plug_id,
-                delivery,
-            });
-            return report;
+            tracing::trace!(payer_id = payer.owner_id, receiver_id = receiver.owner_id, amount, session_id, payer_plug_id = payer.plug_id, ?delivery, "Billing-запрос обмена отправлен");
+            return;
         }
-        let completed = self.commit_player_trade(parties, None, 0, &[], context, &mut report);
+        let completed = self.commit_player_trade(parties, None, 0, &[], context);
         let (terminal_deliveries, collected_plug_ids) =
             self.finish_player_trade_session(session_id, false);
-        report.terminal_deliveries = terminal_deliveries;
-        report.collected_plug_ids = collected_plug_ids;
-        report.outcome = if completed {
-            PlayerTradeReadyOutcome::Completed
-        } else {
-            PlayerTradeReadyOutcome::RolledBack
-        };
-        report
+        tracing::trace!(player_id, session_id, requested_plug_id, completed, ?terminal_deliveries, ?collected_plug_ids, "обмен после готовности завершён");
     }
 
     fn commit_player_trade<Context: GameContainerMessageRuntime>(
@@ -15157,7 +15075,6 @@ impl CGame {
         billing_amount: u32,
         transaction: &[u8],
         context: &mut Context,
-        report: &mut PlayerTradeReadyReport,
     ) -> bool {
         let audit_parties = parties.each_ref().map(|party| {
             let player = self
@@ -15198,12 +15115,11 @@ impl CGame {
                 };
                 if offer.goods_amount < source_amount {
                     let Some(split) = self.create_goods_core(base_properties_index) else {
-                        self.undo_delivered_trade_goods(&mut removed_by_plug, delivered, report);
+                        self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
                         self.rollback_detached_trade_goods(
                             &parties,
                             removed_by_plug,
                             context,
-                            report,
                         );
                         return false;
                     };
@@ -15211,8 +15127,8 @@ impl CGame {
                 }
             }
             let Some(mut player) = self.players.remove(&party.owner_id) else {
-                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered, report);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug, context, report);
+                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug, context);
                 return false;
             };
             let mut removed_goods = Vec::new();
@@ -15266,9 +15182,8 @@ impl CGame {
                         remaining_amount: previous_amount.wrapping_sub(offer.goods_amount),
                         removal: None,
                     };
-                    report
-                        .packet_deliveries
-                        .push(self.send_player_packet_consumption(&consumption));
+                    let deliveries = self.send_player_packet_consumption(&consumption);
+                    tracing::trace!(player_id = party.owner_id, goods = ?consumption.goods, ?deliveries, "предмет обмена удалён из инвентаря");
                     removed_goods.push(detached_goods);
                 } else if offer.original_container_extend_id == 2 {
                     let facts = context.enhancement_equipment_remove_facts(
@@ -15287,7 +15202,6 @@ impl CGame {
                     );
                     drop(recompute);
                     self.publish_player_equipment_remove_report(&mut removal);
-                    report.equipment_removals.push(removal.clone());
                     let outcome = std::mem::replace(
                         &mut removal.outcome,
                         EquipmentRemoveOutcome::Missing {
@@ -15302,14 +15216,13 @@ impl CGame {
                                 container_extend_id: 2,
                                 goods_position: offer.original_goods_position,
                             };
-                            report
-                                .packet_deliveries
-                                .push(vec![self.send_container_object_delete(
-                                    party.owner_id,
-                                    &previous,
-                                    removed.goods.identity(),
-                                    removed.goods.amount(),
-                                )]);
+                            let delivery = self.send_container_object_delete(
+                                party.owner_id,
+                                &previous,
+                                removed.goods.identity(),
+                                removed.goods.amount(),
+                            );
+                            tracing::trace!(player_id = party.owner_id, goods = ?removed.goods.identity(), delivery, "предмет обмена снят с экипировки");
                             removed_goods.push(removed.goods);
                         }
                         outcome => {
@@ -15326,8 +15239,8 @@ impl CGame {
             self.players.insert(party.owner_id, player);
             removed_by_plug.insert(party.plug_id, removed_goods);
             if failed {
-                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered, report);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug, context, report);
+                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug, context);
                 return false;
             }
         }
@@ -15339,8 +15252,8 @@ impl CGame {
             let goods = removed_by_plug.remove(&source.plug_id).unwrap_or_default();
             let Some(player) = self.players.get_mut(&receiver.owner_id) else {
                 removed_by_plug.insert(source.plug_id, goods);
-                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered, report);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug, context, report);
+                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug, context);
                 return false;
             };
             let originals = goods.clone();
@@ -15348,9 +15261,8 @@ impl CGame {
             let (additions, rejected) =
                 player.add_traded_goods_to_packet(goods, &self.goods_factory, &mut encode);
             for addition in &additions {
-                report
-                    .packet_deliveries
-                    .push(self.send_player_packet_addition(addition));
+                let deliveries = self.send_player_packet_addition(addition);
+                tracing::trace!(player_id = receiver.owner_id, goods = ?addition.source, ?deliveries, "предмет обмена добавлен получателю");
             }
             let failed = !rejected.is_empty()
                 || additions
@@ -15368,8 +15280,8 @@ impl CGame {
             }
             if failed {
                 removed_by_plug.insert(source.plug_id, rejected);
-                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered, report);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug, context, report);
+                self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug, context);
                 return false;
             }
         }
@@ -15385,9 +15297,8 @@ impl CGame {
                     .get_mut(&party.owner_id)
                     .expect("trade party остаётся online")
                     .decrease_money(current.wrapping_sub(resulting), &self.goods_factory);
-                report
-                    .money_deliveries
-                    .extend(self.send_player_money_decrease(party.owner_id, &change.outcome));
+                let deliveries = self.send_player_money_decrease(party.owner_id, &change.outcome);
+                tracing::trace!(player_id = party.owner_id, ?deliveries, "деньги обмена списаны");
             } else if current < resulting {
                 let delta = resulting.wrapping_sub(current);
                 let created =
@@ -15397,21 +15308,18 @@ impl CGame {
                     .get_mut(&party.owner_id)
                     .expect("trade party остаётся online")
                     .increase_money(delta, &self.goods_factory, created);
-                report
-                    .money_deliveries
-                    .extend(self.send_player_money_increase(party.owner_id, &outcome, context));
+                let deliveries = self.send_player_money_increase(party.owner_id, &outcome, context);
+                tracing::trace!(player_id = party.owner_id, ?deliveries, "деньги обмена начислены");
             }
         }
-        report
-            .audit_deliveries
-            .extend(self.send_player_trade_audits(
-                &parties,
-                &audit_parties,
-                &audit_goods_by_plug,
-                billing_payer_id,
-                billing_amount,
-                transaction,
-            ));
+        self.send_player_trade_audits(
+            &parties,
+            &audit_parties,
+            &audit_goods_by_plug,
+            billing_payer_id,
+            billing_amount,
+            transaction,
+        );
         true
     }
 
@@ -15423,7 +15331,7 @@ impl CGame {
         billing_payer_id: Option<i32>,
         billing_amount: u32,
         transaction: &[u8],
-    ) -> Vec<Result<i32, SendMessageError>> {
+    ) {
         let mut deliveries = Vec::new();
         if self.log_system.goods_trade_log_enabled() {
             for source_index in 0..2 {
@@ -15505,7 +15413,7 @@ impl CGame {
                 deliveries.push(audit.send(self, false));
             }
         }
-        deliveries
+        tracing::trace!(?deliveries, "журналы обмена отправлены");
     }
 
     fn send_player_trade_goods_audit(
@@ -15542,7 +15450,6 @@ impl CGame {
         &mut self,
         detached_by_plug: &mut BTreeMap<i32, Vec<CGoods>>,
         delivered: Vec<DeliveredPlayerTradeGoods>,
-        report: &mut PlayerTradeReadyReport,
     ) {
         for delivered in delivered.into_iter().rev() {
             let Some(player) = self.players.get_mut(&delivered.receiver_id) else {
@@ -15553,9 +15460,8 @@ impl CGame {
             else {
                 continue;
             };
-            report
-                .packet_deliveries
-                .push(self.send_player_packet_consumption(&consumption));
+            let deliveries = self.send_player_packet_consumption(&consumption);
+            tracing::trace!(player_id = delivered.receiver_id, goods = ?consumption.goods, ?deliveries, "доставка предмета обмена отменена");
             detached_by_plug
                 .entry(delivered.source_plug_id)
                 .or_default()
@@ -15568,7 +15474,6 @@ impl CGame {
         parties: &[PlayerTradePartySnapshot; 2],
         mut goods_by_plug: BTreeMap<i32, Vec<CGoods>>,
         context: &mut Context,
-        report: &mut PlayerTradeReadyReport,
     ) {
         for party in parties {
             let goods = goods_by_plug.remove(&party.plug_id).unwrap_or_default();
@@ -15582,19 +15487,21 @@ impl CGame {
             let (additions, unrecoverable) =
                 player.add_traded_goods_to_packet(goods, &self.goods_factory, &mut encode);
             for addition in &additions {
-                report
-                    .packet_deliveries
-                    .push(self.send_player_packet_addition(addition));
+                let deliveries = self.send_player_packet_addition(addition);
+                tracing::trace!(player_id = party.owner_id, goods = ?addition.source, ?deliveries, "отделённый предмет обмена возвращён");
             }
             if !unrecoverable.is_empty()
                 || additions
                     .iter()
                     .any(|addition| addition.resulting_amount.is_none())
             {
-                report.notification_deliveries.push(
-                    colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0277"))
-                        .send_to_player(self.net_server(), party.owner_id),
-                );
+                let notification_delivery = colored_player_notice_message(
+                    0xffff_ffff,
+                    0,
+                    self.get_string_by_id(b"GS0277"),
+                )
+                .send_to_player(self.net_server(), party.owner_id);
+                tracing::warn!(player_id = party.owner_id, notification_delivery, unrecoverable = unrecoverable.len(), "не все предметы обмена удалось вернуть");
             }
         }
     }
@@ -15646,7 +15553,7 @@ impl CGame {
         billing_amount: u32,
         transaction: &[u8],
         context: &mut Context,
-    ) -> PlayerTradeReadyReport {
+    ) {
         let selected_plug_id = self
             .session_factory
             .query_trader(requested_plug_id)
@@ -15665,22 +15572,6 @@ impl CGame {
                 }
             })
             .unwrap_or(requested_plug_id);
-        let mut report = PlayerTradeReadyReport {
-            session_id,
-            plug_id: selected_plug_id,
-            contrary_plug_id: self
-                .session_factory
-                .contrary_trader_id(session_id, selected_plug_id),
-            ready_deliveries: Vec::new(),
-            notification_deliveries: Vec::new(),
-            packet_deliveries: Vec::new(),
-            equipment_removals: Vec::new(),
-            money_deliveries: Vec::new(),
-            audit_deliveries: Vec::new(),
-            terminal_deliveries: Vec::new(),
-            collected_plug_ids: Vec::new(),
-            outcome: PlayerTradeReadyOutcome::MissingSessionOrPlug,
-        };
         if self
             .session_factory
             .query_trader(selected_plug_id)
@@ -15694,19 +15585,19 @@ impl CGame {
                 })
         {
             if self.players.contains_key(&payer_id) {
-                report.notification_deliveries.push(
-                    colored_player_notice_message(
-                        0xffff_ffff,
-                        0,
-                        b"Personal Trade has been CANCELED",
-                    )
-                    .send_to_player(self.net_server(), payer_id),
-                );
+                let notification_delivery = colored_player_notice_message(
+                    0xffff_ffff,
+                    0,
+                    b"Personal Trade has been CANCELED",
+                )
+                .send_to_player(self.net_server(), payer_id);
+                tracing::trace!(payer_id, session_id, selected_plug_id, notification_delivery, "Billing-завершение обмена отменено");
             }
-            return report;
+            return;
         }
         let Ok(parties) = self.player_trade_snapshots(session_id) else {
-            return report;
+            tracing::trace!(payer_id, session_id, selected_plug_id, "участники Billing-завершения обмена не найдены");
+            return;
         };
         let completed = self.commit_player_trade(
             parties,
@@ -15714,18 +15605,10 @@ impl CGame {
             billing_amount,
             transaction,
             context,
-            &mut report,
         );
         let (terminal_deliveries, collected_plug_ids) =
             self.finish_player_trade_session(session_id, false);
-        report.terminal_deliveries = terminal_deliveries;
-        report.collected_plug_ids = collected_plug_ids;
-        report.outcome = if completed {
-            PlayerTradeReadyOutcome::Completed
-        } else {
-            PlayerTradeReadyOutcome::RolledBack
-        };
-        report
+        tracing::trace!(payer_id, session_id, selected_plug_id, completed, ?terminal_deliveries, ?collected_plug_ids, "Billing-завершение обмена обработано");
     }
 
     fn detach_terminal_equipment_session_listeners(
