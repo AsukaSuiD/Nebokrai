@@ -1,67 +1,23 @@
 //! Владелец диспетчера сообщений организаций GameServer `OnOrgasysMessage`.
 //!
-//! Весь диспетчер с RVA `0x000895A0` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме ветвей
-//! жизненного цикла фракции `0x90101/05/06/1A/1B` и
-//! `0x7FE01/06/07/18/19/1E`, городских войн `0x7FE1F..0x7FE25`, деревенских
-//! войн `0x7FE2F..0x7FE33`, обновления фракций `0x7FE35/0x7FE36`, маршрута
-//! заданий игрока `0x7FE38/0x7FE39`, FourNation `0x7FE3C..0x7FE45` и хвоста
-//! управления `0x7FE46..0x7FE4A` со статусом `IMPLEMENTED`. Точная пара —
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\organsysmessage.cpp`.
-//! Ветви жизненного цикла проверяют соответствие сеанса, пароля и игрока,
-//! передают World снимок создания, меняют тип страницы списка на `0xBFF07` и
-//! замыкают заявку `0x60108`. Универсальный прежний диспетчер сеансов заменён
-//! минимальным состоянием в `CGame` с теми же сроками ожидания и флагами
-//! операций. Списание развития `0x7FE1E` проводит авторитетные для World деньги
-//! и предметы через основной кошелёк и контейнер живого игрока.
-//! Страницы объявления войны меняют тип на `0xBFF19`, выбор несёт снимок в
-//! `0x6011F`, а конечный `0x7FE19` после списания публикует клиенту `0xBFF31`.
-//! Разрешение World на управление городскими воротами `0x7FE2A` возвращается
-//! конкретному владельцу города, обновляет ворота и постройку и отправляет
-//! исходные уведомления `GS0042/GS0043`.
-//! Принятые World заявки деревенской/городской войны `0x7FE34/0x7FE37`
-//! возвращаются в кошелёк живого игрока, сохраняют знаковое переполнение и
-//! ограничение старого `SetMoney` и публикуют клиенту изменение контейнера;
-//! отклонённая заявка ответа не создаёт.
-//! `0x7FE06` декодирует полное сообщение OrganSys до хвоста принадлежащих
-//! регионов, обновляет у живого игрока фракцию, уровень, опыт, глав фракции и
-//! союза, имя и союз и только затем меняет тип на `0xBFF06`. Имя и союз входят
-//! в последующий жизненный цикл участников войны.
-//! Ответ рейтинга фракций `0x7FE1D` извлекает адресный ID игрока, меняет тип на
-//! клиентский `0xBFF1D` и сохраняет без повторного разбора заголовок и список,
-//! которые сформировал WorldServer.
-//! Команда `0x7FE3A` получает от WorldServer ID игрока и путь сценария, повторно
-//! проверяет живого локального игрока и ставит файл в принадлежащую `CGame`
-//! очередь `CScript`; погибший или уже вышедший игрок не получает поздний
-//! эффект.
-//! Налоговая цепочка принимает авторизацию World `0x7FE28/0x7FE29`, создаёт
-//! управляемый `CNetSession`, коррелирует ответы клиента `0x90122/0x90123` и
-//! применяет авторитетный снимок прокси-региона `0x7FE2E`.
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! исходный владелец `appserver/message/organsysmessage.cpp`. Реализованы
+//! жизненный цикл фракций, городские и деревенские войны, FourNation, задания,
+//! сценарии игрока, городские ворота и налоговые сеансы. Остальные функции
+//! сохраняются в `UNKNOWN` (исследовательский декомпилят хранится локально) ниже.
 //!
-//! Каждый фазовый case читает ровно один signed war ID и передаёт его своему
-//! owner-у. Faction-update cases передают текущие payload/cursor соответствующему
-//! `UpdateApplyWarFacs` и игнорируют legacy bool, как исходный switch. Известный
-//! opcode считается обработанным даже при отсутствующем schedule; safe
-//! short-buffer возвращается локальной ошибкой без придуманного UB-эффекта.
-//! Control tail сохраняет FourNation player-war-time; exploit идёт в exact
-//! порядке `0xBF80C` → clamped player state → `UpdateProperty` → локализованный
-//! `0xBF806(GS1177)`. Затем он ограничивает казну опубликованным CountryParam
-//! maximum и отправляет World `0x60314`, сохраняет FourNation morale либо
-//! перепаковывает входной router response в адресный `0xBFF36`. Другие opcodes
-//! helpers не интерпретируют. FourNation сохраняет отсутствующий в exact
-//! switch case `0x7FE42` как no-op, а result request отправляет World ровно
-//! пять counters сообщением `0x60319`. Достигнутая war family проходит
-//! живой FIFO `CGame`: расписания остаются owned, local-before-proxy lookup
-//! мутирует concrete City/Village/base owners, а message/player/log effects
-//! исполняет тот же runtime-контекст, который обслуживает MainLoop. Nation
-//! relive замыкает owned business/session state, canonical player
-//! `0xBF603(type=400,id,...)` и spatial mutation до `bChMap0` log. Nation
-//! clear больше не делегируется opaque callback-у: area-ordered monster pass,
-//! delete-state/list и четыре удаления `GS1120` исполняются здесь с exact
-//! `0xBF504` around-result до каждой mutation. Безопасные typed-блоки relive/
-//! clear теперь доходят до общего GameServer error-log, а не требуют
-//! фиктивного process callback-а; неизвестным остаётся только traversal при
-//! дубликатах имени NPC старого `stdext::hash_map`.
+//! Обработчик сохраняет точный разбор полей, корреляцию идентификатора и пароля
+//! сеанса, порядок списания денег и предметов, мутации владельцев регионов и
+//! маршрутизацию World/клиент. Для подвига FourNation сохранён порядок
+//! `0xBF80C` → ограниченное состояние игрока → `UpdateProperty` →
+//! `0xBF806(GS1177)`, а ответ результатов по-прежнему содержит ровно пять
+//! счётчиков в `0x60319`.
+//!
+//! Налоговые prompt/result возникают в сетевом владельце и проходят через
+//! общий типизированный `GameEffectJournal` в порядке FIFO. Остальные эффекты
+//! выполняются синхронно и в журнал не копируются. Диагностические сведения о
+//! корреляции и доставке публикуются через `tracing` в месте возникновения и
+//! не возвращаются деревьями отчётов.
 
 use std::ffi::CString;
 use thiserror::Error;
@@ -81,16 +37,16 @@ use super::super::serverregion::{CServerRegion, RegionMembershipBlock, RegionTax
 use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
-use crate::gameserver::appserver::player::PlayerExploitMutationReport;
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, GameWarRegionHandle, OldClientGoodsCodec,
     ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
     format_legacy_text_fields,
 };
-use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::nets::netserver::message::CMessage;
 use crate::public::netsessionmanager::NetSessionCallbackOutcome;
 use crate::public::tools::add_game_error_log_text;
+use tracing::trace;
 
 pub(crate) trait GameOrganizingWarRuntime:
     CityRegionContext
@@ -153,87 +109,9 @@ pub(crate) enum WarFactionUpdateDispatchError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WarFactionUpdateDispatchReport {
-    pub(crate) opcode: u32,
-    pub(crate) schedule_found: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WarPhaseDispatchReport {
-    pub(crate) opcode: u32,
-    pub(crate) war_number: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FourNationPhaseDispatchReport {
-    pub(crate) opcode: u32,
-    pub(crate) war_number: i32,
-    pub(crate) schedule_found: bool,
-    pub(crate) results: Option<[u32; 5]>,
-    pub(crate) delivery: Option<Result<i32, SendMessageError>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum OrganizingControlDispatchReport {
-    FourNationExploit(FourNationExploitDispatchReport),
-    FourNationWarTime {
-        player_id: i32,
-        time_ms: u32,
-        previous_time_ms: Option<u32>,
-    },
-    CountryTreasury {
-        country_id: u8,
-        requested: i32,
-        country_found: bool,
-        applied: Option<i32>,
-        delivery: Option<Result<i32, SendMessageError>>,
-    },
-    FourNationMorale {
-        morale: i32,
-    },
-    RegionRouter {
-        player_id: i32,
-        player_found: bool,
-        delivery: Option<i32>,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FourNationExploitDispatchReport {
-    pub(crate) player_id: i32,
-    pub(crate) increment: u32,
-    pub(crate) player_found: bool,
-    pub(crate) advertised_exploit: Option<u32>,
-    pub(crate) mutation: Option<PlayerExploitMutationReport>,
-    pub(crate) exploit_property_delivery: Option<i32>,
-    pub(crate) combat_property_delivery: Option<i32>,
-    pub(crate) tao_zhuang_ran: bool,
-    pub(crate) notice_text: Option<Vec<u8>>,
-    pub(crate) notice_delivery: Option<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GamePlayerQuestCommandKind {
     Add,
     Remove,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerQuestCommandReport {
-    pub(crate) opcode: u32,
-    pub(crate) kind: GamePlayerQuestCommandKind,
-    pub(crate) player_id: i32,
-    pub(crate) quest_id: u16,
-    pub(crate) player_found: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerRunScriptReport {
-    pub(crate) player_id: i32,
-    pub(crate) script: Vec<u8>,
-    pub(crate) player_found: bool,
-    pub(crate) player_alive: bool,
-    pub(crate) queued_script_id: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -242,22 +120,6 @@ pub(crate) enum GamePlayerQuestCommandError {
     MissingPlayerId,
     #[error("quest command не содержит quest ID")]
     MissingQuestId,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameOrganizingMessageReport {
-    FactionLifecycle(FactionLifecycleDispatchReport),
-    FactionBillboard(FactionBillboardDispatchReport),
-    CityGate(CityGateDispatchReport),
-    VillageApplication(WarApplicationResponseReport),
-    CityApplication(WarApplicationResponseReport),
-    FactionUpdate(WarFactionUpdateDispatchReport),
-    Phase(WarPhaseDispatchReport),
-    FourNationPhase(FourNationPhaseDispatchReport),
-    Control(OrganizingControlDispatchReport),
-    PlayerQuest(GamePlayerQuestCommandReport),
-    PlayerRunScript(GamePlayerRunScriptReport),
-    RegionTax(RegionTaxDispatchReport),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -273,50 +135,6 @@ pub(crate) enum GameOrganizingMessageError {
     PlayerQuest(GamePlayerQuestCommandError),
     PlayerRunScript(FactionLifecycleDispatchError),
     RegionTax(FactionLifecycleDispatchError),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RegionTaxDispatchReport {
-    pub(crate) opcode: u32,
-    pub(crate) player_id: Option<i32>,
-    pub(crate) region_id: Option<i32>,
-    pub(crate) session_id: Option<i64>,
-    pub(crate) callback: Option<NetSessionCallbackOutcome>,
-    pub(crate) applied: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CityGateDispatchReport {
-    pub(crate) player_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) gate_id: i32,
-    pub(crate) operation: i32,
-    pub(crate) operated: bool,
-    pub(crate) notice_delivery: Option<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WarApplicationResponseReport {
-    pub(crate) player_id: i32,
-    pub(crate) fee: i32,
-    pub(crate) player_found: bool,
-    pub(crate) previous_money: Option<u32>,
-    pub(crate) resulting_money: Option<u32>,
-    pub(crate) deliveries: Vec<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FactionLifecycleDispatchReport {
-    pub(crate) opcode: u32,
-    pub(crate) player_id: i32,
-    pub(crate) correlated: bool,
-    pub(crate) delivery: Option<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FactionBillboardDispatchReport {
-    pub(crate) player_id: i32,
-    pub(crate) delivery: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -363,7 +181,7 @@ pub(crate) fn dispatch_war_faction_update<Context: WarFactionUpdateContext>(
     attack_city_sys: &mut CAttackCitySys,
     village_war_sys: &mut CVillageWarSys,
     context: &mut Context,
-) -> Option<Result<WarFactionUpdateDispatchReport, WarFactionUpdateDispatchError>> {
+) -> Option<Result<(), WarFactionUpdateDispatchError>> {
     match opcode {
         0x7fe35 => {
             let region_id = match attack_city_sys.update_apply_war_factions(payload, cursor) {
@@ -375,10 +193,8 @@ pub(crate) fn dispatch_war_faction_update<Context: WarFactionUpdateContext>(
             if let Some(region_id) = region_id {
                 context.update_attack_city_contend_player(region_id, attack_city_sys);
             }
-            Some(Ok(WarFactionUpdateDispatchReport {
-                opcode,
-                schedule_found: region_id.is_some(),
-            }))
+            trace!(opcode, schedule_found = region_id.is_some(), "Обновлены участники городской войны");
+            Some(Ok(()))
         }
         0x7fe36 => {
             let region_id = match village_war_sys.update_apply_war_factions(payload, cursor) {
@@ -390,10 +206,8 @@ pub(crate) fn dispatch_war_faction_update<Context: WarFactionUpdateContext>(
             if let Some(region_id) = region_id {
                 context.update_village_contend_player(region_id, village_war_sys);
             }
-            Some(Ok(WarFactionUpdateDispatchReport {
-                opcode,
-                schedule_found: region_id.is_some(),
-            }))
+            trace!(opcode, schedule_found = region_id.is_some(), "Обновлены участники деревенской войны");
+            Some(Ok(()))
         }
         _ => None,
     }
@@ -407,7 +221,7 @@ pub(crate) fn dispatch_war_phase<Context>(
     attack_city_sys: &mut CAttackCitySys,
     village_war_sys: &mut CVillageWarSys,
     context: &mut Context,
-) -> Option<Result<WarPhaseDispatchReport, WarPhaseDispatchError>>
+) -> Option<Result<(), WarPhaseDispatchError>>
 where
     Context: AttackCityPhaseContext + VillageWarPhaseContext,
 {
@@ -434,14 +248,15 @@ where
         0x7fe33 => village_war_sys.on_clear_player(war_number, context),
         _ => unreachable!("opcode отфильтрован перед чтением payload"),
     }
-    Some(Ok(WarPhaseDispatchReport { opcode, war_number }))
+    trace!(opcode, war_number, "Обработана фаза войны");
+    Some(Ok(()))
 }
 
 fn dispatch_game_player_quest_command(
     opcode: u32,
     message: &mut CMessage,
     game: &mut CGame,
-) -> Result<GamePlayerQuestCommandReport, GamePlayerQuestCommandError> {
+) -> Result<(), GamePlayerQuestCommandError> {
     let player_id = message
         .base_mut()
         .get_long()
@@ -464,19 +279,14 @@ fn dispatch_game_player_quest_command(
             }
         }
     }
-    Ok(GamePlayerQuestCommandReport {
-        opcode,
-        kind,
-        player_id,
-        quest_id,
-        player_found,
-    })
+    trace!(opcode, ?kind, player_id, quest_id, player_found, "Обработана команда задания игрока");
+    Ok(())
 }
 
 fn dispatch_game_player_run_script(
     message: &mut CMessage,
     game: &mut CGame,
-) -> Result<GamePlayerRunScriptReport, FactionLifecycleDispatchError> {
+) -> Result<(), FactionLifecycleDispatchError> {
     let player_id = message
         .base_mut()
         .get_long()
@@ -493,13 +303,8 @@ fn dispatch_game_player_run_script(
     let queued_script_id = player_alive
         .then(|| game.queue_player_script(player_id, &script))
         .flatten();
-    Ok(GamePlayerRunScriptReport {
-        player_id,
-        script,
-        player_found,
-        player_alive,
-        queued_script_id,
-    })
+    trace!(player_id, player_found, player_alive, ?queued_script_id, "Обработан запуск сценария игрока");
+    Ok(())
 }
 
 /// Подключает всю достигнутую OrganSys family к живому `CGame` owner-у.
@@ -509,7 +314,7 @@ pub(crate) fn dispatch_game_organizing_message<
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Option<Result<GameOrganizingMessageReport, GameOrganizingMessageError>> {
+) -> Option<Result<(), GameOrganizingMessageError>> {
     let opcode = message.message_type() as u32;
     if !matches!(
         opcode,
@@ -551,7 +356,6 @@ pub(crate) fn dispatch_game_organizing_message<
     if matches!(opcode, 0x7fe38 | 0x7fe39) {
         return Some(
             dispatch_game_player_quest_command(opcode, message, game)
-                .map(GameOrganizingMessageReport::PlayerQuest)
                 .map_err(GameOrganizingMessageError::PlayerQuest),
         );
     }
@@ -559,7 +363,6 @@ pub(crate) fn dispatch_game_organizing_message<
     if opcode == 0x7fe3a {
         return Some(
             dispatch_game_player_run_script(message, game)
-                .map(GameOrganizingMessageReport::PlayerRunScript)
                 .map_err(GameOrganizingMessageError::PlayerRunScript),
         );
     }
@@ -567,7 +370,6 @@ pub(crate) fn dispatch_game_organizing_message<
     if matches!(opcode, 0x90122 | 0x90123 | 0x7fe28 | 0x7fe29 | 0x7fe2e) {
         return Some(
             dispatch_region_tax_message(opcode, message, game, runtime)
-                .map(GameOrganizingMessageReport::RegionTax)
                 .map_err(GameOrganizingMessageError::RegionTax),
         );
     }
@@ -575,7 +377,6 @@ pub(crate) fn dispatch_game_organizing_message<
     if opcode == 0x7fe2a {
         return Some(
             dispatch_city_gate_response(message, game, runtime)
-                .map(GameOrganizingMessageReport::CityGate)
                 .map_err(GameOrganizingMessageError::CityGate),
         );
     }
@@ -583,7 +384,6 @@ pub(crate) fn dispatch_game_organizing_message<
     if opcode == 0x7fe34 {
         return Some(
             dispatch_village_war_application_response(message, game, runtime)
-                .map(GameOrganizingMessageReport::VillageApplication)
                 .map_err(GameOrganizingMessageError::VillageApplication),
         );
     }
@@ -591,7 +391,6 @@ pub(crate) fn dispatch_game_organizing_message<
     if opcode == 0x7fe37 {
         return Some(
             dispatch_war_application_response(message, game, runtime)
-                .map(GameOrganizingMessageReport::CityApplication)
                 .map_err(GameOrganizingMessageError::CityApplication),
         );
     }
@@ -599,7 +398,6 @@ pub(crate) fn dispatch_game_organizing_message<
     if opcode == 0x7fe1d {
         return Some(
             dispatch_faction_billboard_response(message, game)
-                .map(GameOrganizingMessageReport::FactionBillboard)
                 .map_err(GameOrganizingMessageError::FactionBillboard),
         );
     }
@@ -620,7 +418,6 @@ pub(crate) fn dispatch_game_organizing_message<
     ) {
         return Some(
             dispatch_faction_lifecycle_message(opcode, message, game, runtime)
-                .map(GameOrganizingMessageReport::FactionLifecycle)
                 .map_err(GameOrganizingMessageError::FactionLifecycle),
         );
     }
@@ -628,7 +425,6 @@ pub(crate) fn dispatch_game_organizing_message<
     if matches!(opcode, 0x7fe46..=0x7fe4a) {
         return Some(
             dispatch_organizing_control_message(opcode, message, game, runtime)
-                .map(GameOrganizingMessageReport::Control)
                 .map_err(GameOrganizingMessageError::Control),
         );
     }
@@ -639,7 +435,6 @@ pub(crate) fn dispatch_game_organizing_message<
     ) {
         return Some(
             dispatch_four_nation_phase_message(opcode, message, game, runtime)
-                .map(GameOrganizingMessageReport::FourNationPhase)
                 .map_err(GameOrganizingMessageError::Phase),
         );
     }
@@ -658,7 +453,6 @@ pub(crate) fn dispatch_game_organizing_message<
                 &mut context,
             )
             .expect("faction opcode проверен перед dispatcher-ом")
-            .map(GameOrganizingMessageReport::FactionUpdate)
             .map_err(GameOrganizingMessageError::FactionUpdate)
         } else {
             dispatch_war_phase(
@@ -670,7 +464,6 @@ pub(crate) fn dispatch_game_organizing_message<
                 &mut context,
             )
             .expect("phase opcode проверен перед dispatcher-ом")
-            .map(GameOrganizingMessageReport::Phase)
             .map_err(GameOrganizingMessageError::Phase)
         }
     };
@@ -681,17 +474,15 @@ pub(crate) fn dispatch_game_organizing_message<
 fn dispatch_faction_billboard_response(
     message: &mut CMessage,
     game: &CGame,
-) -> Result<FactionBillboardDispatchReport, FactionLifecycleDispatchError> {
+) -> Result<(), FactionLifecycleDispatchError> {
     let player_id = message
         .base_mut()
         .get_long()
         .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field: "player ID" })?;
     message.set_message_type(0x000b_ff1d);
     let delivery = message.send_to_player(game.net_server(), player_id);
-    Ok(FactionBillboardDispatchReport {
-        player_id,
-        delivery,
-    })
+    trace!(player_id, delivery, "Опубликован рейтинг фракций");
+    Ok(())
 }
 
 fn dispatch_region_tax_message<Runtime: RegionRandomContext + OldClientGoodsCodec>(
@@ -699,7 +490,7 @@ fn dispatch_region_tax_message<Runtime: RegionRandomContext + OldClientGoodsCode
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Result<RegionTaxDispatchReport, FactionLifecycleDispatchError> {
+) -> Result<(), FactionLifecycleDispatchError> {
     let read_i32 = |message: &mut CMessage, field| {
         message
             .base_mut()
@@ -733,16 +524,8 @@ fn dispatch_region_tax_message<Runtime: RegionRandomContext + OldClientGoodsCode
             }
             let callback = game
                 .submit_region_tax_session_result(player_id, session_id, password, value, runtime);
-            Ok(RegionTaxDispatchReport {
-                opcode,
-                player_id: Some(player_id),
-                region_id: game
-                    .find_player(player_id)
-                    .and_then(|player| player.server_region_id()),
-                session_id: Some(session_id),
-                callback: Some(callback),
-                applied: callback == NetSessionCallbackOutcome::Delivered,
-            })
+            trace!(opcode, player_id, session_id, ?callback, applied = callback == NetSessionCallbackOutcome::Delivered, "Обработан ответ налогового сеанса");
+            Ok(())
         }
         0x7fe28 | 0x7fe29 => {
             let player_id = read_i32(message, "player ID")?;
@@ -758,14 +541,8 @@ fn dispatch_region_tax_message<Runtime: RegionRandomContext + OldClientGoodsCode
             let session_id = game.start_region_tax_session(player_id, region_id, kind, |bound| {
                 runtime.random_below(bound)
             });
-            Ok(RegionTaxDispatchReport {
-                opcode,
-                player_id: Some(player_id),
-                region_id: Some(region_id),
-                session_id,
-                callback: None,
-                applied: session_id.is_some(),
-            })
+            trace!(opcode, player_id, region_id, ?session_id, applied = session_id.is_some(), "Запущен налоговый сеанс");
+            Ok(())
         }
         0x7fe2e => {
             let region_id = read_i32(message, "region ID")?;
@@ -781,14 +558,8 @@ fn dispatch_region_tax_message<Runtime: RegionRandomContext + OldClientGoodsCode
                 total_tax,
                 current_tax_rate,
             );
-            Ok(RegionTaxDispatchReport {
-                opcode,
-                player_id: None,
-                region_id: Some(region_id),
-                session_id: None,
-                callback: None,
-                applied,
-            })
+            trace!(opcode, region_id, applied, "Применён налоговый снимок региона");
+            Ok(())
         }
         _ => unreachable!("налоговый opcode проверен перед разбором"),
     }
@@ -798,7 +569,7 @@ fn dispatch_village_war_application_response<Runtime: OldClientGoodsCodec>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Result<WarApplicationResponseReport, FactionLifecycleDispatchError> {
+) -> Result<(), FactionLifecycleDispatchError> {
     dispatch_war_application_response(message, game, runtime)
 }
 
@@ -806,7 +577,7 @@ fn dispatch_war_application_response<Runtime: OldClientGoodsCodec>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Result<WarApplicationResponseReport, FactionLifecycleDispatchError> {
+) -> Result<(), FactionLifecycleDispatchError> {
     let player_id = message
         .base_mut()
         .get_long()
@@ -822,24 +593,15 @@ fn dispatch_war_application_response<Runtime: OldClientGoodsCodec>(
         return Err(FactionLifecycleDispatchError::InvalidPayload);
     }
     let money = game.apply_war_application_money(player_id, fee, runtime);
-    let (previous_money, resulting_money, deliveries) = money
-        .map(|(previous, resulting, deliveries)| (Some(previous), Some(resulting), deliveries))
-        .unwrap_or((None, None, Vec::new()));
-    Ok(WarApplicationResponseReport {
-        player_id,
-        fee,
-        player_found: previous_money.is_some(),
-        previous_money,
-        resulting_money,
-        deliveries,
-    })
+    trace!(player_id, fee, player_found = money.is_some(), ?money, "Обработан возврат платы за заявку войны");
+    Ok(())
 }
 
 fn dispatch_city_gate_response<Runtime: GameOrganizingWarRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Result<CityGateDispatchReport, FactionLifecycleDispatchError> {
+) -> Result<(), FactionLifecycleDispatchError> {
     let player_id = message
         .base_mut()
         .get_long()
@@ -870,14 +632,8 @@ fn dispatch_city_gate_response<Runtime: GameOrganizingWarRuntime>(
         colored_player_notice_message(0xffff_ffff, 0xffff_0000, game.get_string_by_id(notice_id))
             .send_to_player(game.net_server(), player_id)
     });
-    Ok(CityGateDispatchReport {
-        player_id,
-        region_id,
-        gate_id,
-        operation,
-        operated,
-        notice_delivery,
-    })
+    trace!(player_id, region_id, gate_id, operation, operated, ?notice_delivery, "Обработано управление городскими воротами");
+    Ok(())
 }
 
 fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
@@ -885,7 +641,7 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Result<FactionLifecycleDispatchReport, FactionLifecycleDispatchError> {
+) -> Result<(), FactionLifecycleDispatchError> {
     let read_i64 = |message: &mut CMessage, field| {
         message
             .base_mut()
@@ -923,12 +679,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 faction_name.as_deref(),
                 runtime,
             );
-            Ok(FactionLifecycleDispatchReport {
-                opcode,
-                player_id,
-                correlated,
-                delivery: None,
-            })
+            trace!(opcode, player_id, correlated, "Обработано создание фракции");
+            Ok(())
         }
         0x7fe01 => {
             let session_id = read_i64(message, "session ID")?;
@@ -940,12 +692,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
             }
             let correlated =
                 game.finish_script_faction_creation(session_id, password, player_id, result);
-            Ok(FactionLifecycleDispatchReport {
-                opcode,
-                player_id,
-                correlated,
-                delivery: None,
-            })
+            trace!(opcode, player_id, correlated, "Получен итог создания фракции");
+            Ok(())
         }
         0x7fe06 => {
             let player_id = read_i32(message, "player ID")?;
@@ -1033,12 +781,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 let _ = game.send_player_shape_around(player_id, None, message);
                 message.send_to_player(game.net_server(), player_id)
             });
-            Ok(FactionLifecycleDispatchReport {
-                opcode,
-                player_id,
-                correlated,
-                delivery,
-            })
+            trace!(opcode, player_id, correlated, ?delivery, "Обновлена принадлежность игрока к фракции");
+            Ok(())
         }
         0x90105 => {
             message.resolve_player_context(game);
@@ -1053,12 +797,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 return Err(FactionLifecycleDispatchError::InvalidPayload);
             }
             let correlated = game.continue_script_faction_application(player_id, session_id);
-            Ok(FactionLifecycleDispatchReport {
-                opcode,
-                player_id,
-                correlated,
-                delivery: None,
-            })
+            trace!(opcode, player_id, correlated, "Продолжен список заявок фракции");
+            Ok(())
         }
         0x90106 => {
             message.resolve_player_context(game);
@@ -1084,12 +824,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 accepted,
                 &faction_name,
             );
-            Ok(FactionLifecycleDispatchReport {
-                opcode,
-                player_id,
-                correlated,
-                delivery: None,
-            })
+            trace!(opcode, player_id, correlated, "Выбрана заявка фракции");
+            Ok(())
         }
         0x7fe07 => {
             let player_id = read_i32(message, "player ID")?;
@@ -1105,12 +841,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 }
                 let correlated =
                     game.finish_empty_script_faction_application(player_id, session_id, password);
-                return Ok(FactionLifecycleDispatchReport {
-                    opcode,
-                    player_id,
-                    correlated,
-                    delivery: None,
-                });
+                trace!(opcode, player_id, correlated, "Завершён пустой список заявок фракции");
+                return Ok(());
             }
             let correlated =
                 game.script_faction_application_is_active(player_id, session_id, password);
@@ -1118,12 +850,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 message.set_message_type(0x000b_ff07);
                 message.send_to_player(game.net_server(), player_id)
             });
-            Ok(FactionLifecycleDispatchReport {
-                opcode,
-                player_id,
-                correlated,
-                delivery,
-            })
+            trace!(opcode, player_id, correlated, ?delivery, "Опубликован список заявок фракции");
+            Ok(())
         }
         0x7fe1e => {
             let player_id = read_i32(message, "player ID")?;
@@ -1137,12 +865,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
             }
             let correlated =
                 game.apply_script_faction_upgrade_debit(player_id, money as u32, &goods_name);
-            Ok(FactionLifecycleDispatchReport {
-                opcode,
-                player_id,
-                correlated,
-                delivery: None,
-            })
+            trace!(opcode, player_id, correlated, "Списаны ресурсы развития фракции");
+            Ok(())
         }
         0x9011a => {
             message.resolve_player_context(game);
@@ -1155,12 +879,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 return Err(FactionLifecycleDispatchError::InvalidPayload);
             }
             let correlated = game.continue_script_faction_war_page(player_id, session_id, password);
-            Ok(FactionLifecycleDispatchReport {
-                opcode,
-                player_id,
-                correlated,
-                delivery: None,
-            })
+            trace!(opcode, player_id, correlated, "Продолжена страница войны фракций");
+            Ok(())
         }
         0x9011b => {
             message.resolve_player_context(game);
@@ -1190,12 +910,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
             } else {
                 game.close_script_faction_war_declaration(player_id, session_id, password)
             };
-            Ok(FactionLifecycleDispatchReport {
-                opcode,
-                player_id,
-                correlated,
-                delivery: None,
-            })
+            trace!(opcode, player_id, correlated, target_faction_id, war_type, "Обработан выбор цели войны фракций");
+            Ok(())
         }
         0x7fe18 => {
             let player_id = read_i32(message, "player ID")?;
@@ -1211,24 +927,16 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 }
                 let correlated =
                     game.close_script_faction_war_declaration(player_id, session_id, password);
-                return Ok(FactionLifecycleDispatchReport {
-                    opcode,
-                    player_id,
-                    correlated,
-                    delivery: None,
-                });
+                trace!(opcode, player_id, correlated, "Закрыт пустой список войны фракций");
+                return Ok(());
             }
             let correlated = game.script_faction_war_is_active(player_id, session_id, password);
             let delivery = correlated.then(|| {
                 message.set_message_type(0x000b_ff19);
                 message.send_to_player(game.net_server(), player_id)
             });
-            Ok(FactionLifecycleDispatchReport {
-                opcode,
-                player_id,
-                correlated,
-                delivery,
-            })
+            trace!(opcode, player_id, correlated, ?delivery, "Опубликован список войны фракций");
+            Ok(())
         }
         0x7fe19 => {
             let session_id = read_i64(message, "session ID")?;
@@ -1244,12 +952,8 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                 password,
                 money as u32,
             );
-            Ok(FactionLifecycleDispatchReport {
-                opcode,
-                player_id,
-                correlated: delivery.is_some(),
-                delivery,
-            })
+            trace!(opcode, player_id, correlated = delivery.is_some(), ?delivery, "Завершён результат войны фракций");
+            Ok(())
         }
         _ => unreachable!("faction lifecycle opcode проверен caller-ом"),
     }
@@ -1260,7 +964,7 @@ fn dispatch_four_nation_phase_message<Runtime: GameOrganizingWarRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Result<FourNationPhaseDispatchReport, WarPhaseDispatchError> {
+) -> Result<(), WarPhaseDispatchError> {
     let (payload, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     let war_number = read_phase_war_number(payload, cursor)?;
     let schedule_exists = game
@@ -1344,13 +1048,8 @@ fn dispatch_four_nation_phase_message<Runtime: GameOrganizingWarRuntime>(
         }
         response.send(game, false)
     });
-    Ok(FourNationPhaseDispatchReport {
-        opcode,
-        war_number,
-        schedule_found,
-        results,
-        delivery,
-    })
+    trace!(opcode, war_number, schedule_found, has_results = results.is_some(), ?delivery, "Обработана фаза FourNation");
+    Ok(())
 }
 
 fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
@@ -1358,7 +1057,7 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Result<OrganizingControlDispatchReport, OrganizingControlDispatchError> {
+) -> Result<(), OrganizingControlDispatchError> {
     match opcode {
         0x7fe46 => {
             let player_id = read_control_i32(message, "exploit player ID")?;
@@ -1367,20 +1066,8 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
                 .find_player(player_id)
                 .map(|player| player.base_properties().exploit)
             else {
-                return Ok(OrganizingControlDispatchReport::FourNationExploit(
-                    FourNationExploitDispatchReport {
-                        player_id,
-                        increment,
-                        player_found: false,
-                        advertised_exploit: None,
-                        mutation: None,
-                        exploit_property_delivery: None,
-                        combat_property_delivery: None,
-                        tao_zhuang_ran: false,
-                        notice_text: None,
-                        notice_delivery: None,
-                    },
-                ));
+                trace!(player_id, increment, "Игрок для изменения подвига FourNation не найден");
+                return Ok(());
             };
             let maximum = game
                 .country_param()
@@ -1416,20 +1103,8 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
                 notice.base_mut().add_str(Some(&text));
                 notice.send_to_player(game.net_server(), player_id)
             });
-            Ok(OrganizingControlDispatchReport::FourNationExploit(
-                FourNationExploitDispatchReport {
-                    player_id,
-                    increment,
-                    player_found: true,
-                    advertised_exploit: Some(advertised_exploit),
-                    mutation: Some(mutation),
-                    exploit_property_delivery: Some(exploit_property_delivery),
-                    combat_property_delivery: Some(combat_property_delivery),
-                    tao_zhuang_ran,
-                    notice_text,
-                    notice_delivery,
-                },
-            ))
+            trace!(player_id, increment, advertised_exploit, ?mutation, exploit_property_delivery, combat_property_delivery, tao_zhuang_ran, ?notice_delivery, "Обновлён подвиг FourNation");
+            Ok(())
         }
         0x7fe47 => {
             let player_id = read_control_i32(message, "war-time player ID")?;
@@ -1437,23 +1112,15 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
             let previous_time_ms = game
                 .four_nation_war_sys_mut()
                 .set_one_player_war_time(player_id, time_ms);
-            Ok(OrganizingControlDispatchReport::FourNationWarTime {
-                player_id,
-                time_ms,
-                previous_time_ms,
-            })
+            trace!(player_id, time_ms, ?previous_time_ms, "Обновлено время игрока в FourNation");
+            Ok(())
         }
         0x7fe48 => {
             let country_id = read_control_i32(message, "country ID")? as u8;
             let requested = read_control_i32(message, "country treasury")?;
             if game.country_handler().country(country_id).is_none() {
-                return Ok(OrganizingControlDispatchReport::CountryTreasury {
-                    country_id,
-                    requested,
-                    country_found: false,
-                    applied: None,
-                    delivery: None,
-                });
+                trace!(country_id, requested, "Страна для обновления казны не найдена");
+                return Ok(());
             }
             let maximum = game.country_param().max_country_treasury().ok_or(
                 OrganizingControlDispatchError::CountryTreasuryLimitMissing { country_id },
@@ -1468,19 +1135,15 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
                 .country_mut(country_id)
                 .expect("country проверен до exact treasury mutation")
                 .set_country_treasury(applied);
-            let delivery = Some(update.send(game, false));
-            Ok(OrganizingControlDispatchReport::CountryTreasury {
-                country_id,
-                requested,
-                country_found: true,
-                applied: Some(applied),
-                delivery,
-            })
+            let delivery = update.send(game, false);
+            trace!(country_id, requested, applied, ?delivery, "Обновлена казна страны");
+            Ok(())
         }
         0x7fe49 => {
             let morale = read_control_i32(message, "FourNation morale")?;
             game.four_nation_war_sys_mut().set_morale(morale);
-            Ok(OrganizingControlDispatchReport::FourNationMorale { morale })
+            trace!(morale, "Обновлена мораль FourNation");
+            Ok(())
         }
         0x7fe4a => {
             let player_id = read_control_i32(message, "router player ID")?;
@@ -1490,11 +1153,8 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
                 message.base_mut().update();
                 message.send_to_player(game.net_server(), player_id)
             });
-            Ok(OrganizingControlDispatchReport::RegionRouter {
-                player_id,
-                player_found,
-                delivery,
-            })
+            trace!(player_id, player_found, ?delivery, "Обработан маршрут региона FourNation");
+            Ok(())
         }
         _ => unreachable!("control opcode отфильтрован перед dispatcher-ом"),
     }
