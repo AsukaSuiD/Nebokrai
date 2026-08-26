@@ -4827,47 +4827,10 @@ impl CityReturnPointContext for CityReturnPointFacts {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PersonalShopPurchaseOutcome {
-    MissingSessionOrPlug,
-    ShopClosed,
-    MissingGoods,
-    UnsupportedPriceType { price_type: u32 },
-    InsufficientMoney { notice_delivery: i32 },
-    PacketFull { notice_delivery: i32 },
-    BurdenExceeded { notice_delivery: i32 },
-    SellerMoneyCapacity { notice_delivery: i32 },
-    SourceRemovalFailed,
-    BuyerAddFailed,
-    Completed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PersonalShopPurchaseReport {
-    pub(crate) session_id: i32,
-    pub(crate) buyer_plug_id: i32,
-    pub(crate) seller_plug_id: Option<i32>,
-    pub(crate) buyer_id: Option<i32>,
-    pub(crate) seller_id: Option<i32>,
-    pub(crate) goods_id: CGuid,
-    pub(crate) price: Option<u32>,
-    pub(crate) seller_delete_delivery: Option<i32>,
-    pub(crate) buyer_packet_deliveries: Vec<Vec<i32>>,
-    pub(crate) money_deliveries: Vec<i32>,
-    pub(crate) audit_delivery: Option<Result<i32, SendMessageError>>,
-    pub(crate) outcome: PersonalShopPurchaseOutcome,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PersonalShopTerminalReport {
-    pub(crate) session_id: i32,
-    pub(crate) seller_plug_id: Option<i32>,
-    pub(crate) seller_id: Option<i32>,
-    pub(crate) buyer_plug_ids: Vec<i32>,
-    pub(crate) buyer_ids: Vec<i32>,
-    pub(crate) deliveries: Vec<i32>,
-    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    pub(crate) collected_plug_ids: Vec<i32>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PersonalShopBillingCompletion {
+    ShopUnavailable,
+    Processed,
 }
 
 
@@ -5666,8 +5629,14 @@ impl CGame {
         buyer_plug_id: i32,
         goods_id: CGuid,
         context: &mut Context,
-    ) -> PersonalShopPurchaseReport {
-        self.transact_personal_shop_goods(session_id, buyer_plug_id, goods_id, false, context)
+    ) {
+        let _ = self.transact_personal_shop_goods(
+            session_id,
+            buyer_plug_id,
+            goods_id,
+            false,
+            context,
+        );
     }
 
     pub(crate) fn complete_personal_shop_billing_goods<Context: GameContainerMessageRuntime>(
@@ -5676,7 +5645,7 @@ impl CGame {
         buyer_plug_id: i32,
         goods_id: CGuid,
         context: &mut Context,
-    ) -> PersonalShopPurchaseReport {
+    ) -> PersonalShopBillingCompletion {
         self.transact_personal_shop_goods(session_id, buyer_plug_id, goods_id, true, context)
     }
 
@@ -5687,23 +5656,10 @@ impl CGame {
         goods_id: CGuid,
         billing_completion: bool,
         context: &mut Context,
-    ) -> PersonalShopPurchaseReport {
-        let mut report = PersonalShopPurchaseReport {
-            session_id,
-            buyer_plug_id,
-            seller_plug_id: None,
-            buyer_id: None,
-            seller_id: None,
-            goods_id,
-            price: None,
-            seller_delete_delivery: None,
-            buyer_packet_deliveries: Vec::new(),
-            money_deliveries: Vec::new(),
-            audit_delivery: None,
-            outcome: PersonalShopPurchaseOutcome::MissingSessionOrPlug,
-        };
+    ) -> PersonalShopBillingCompletion {
         if !self.personal_shop_session_available(session_id, context) {
-            return report;
+            tracing::trace!(session_id, buyer_plug_id, ?goods_id, "сессия личной лавки недоступна");
+            return PersonalShopBillingCompletion::ShopUnavailable;
         }
         let Some(buyer) = self
             .session_factory
@@ -5711,46 +5667,43 @@ impl CGame {
             .filter(|buyer| buyer.session_id() == session_id)
             .copied()
         else {
-            return report;
+            tracing::trace!(session_id, buyer_plug_id, ?goods_id, "подключение покупателя личной лавки не найдено");
+            return PersonalShopBillingCompletion::ShopUnavailable;
         };
         let Some(seller_plug_id) = self
             .session_factory
             .personal_shop_seller_plug_id(session_id)
         else {
-            return report;
+            tracing::trace!(session_id, buyer_plug_id, ?goods_id, "подключение продавца личной лавки не найдено");
+            return PersonalShopBillingCompletion::ShopUnavailable;
         };
         let Some(seller_id) = self
             .session_factory
             .query_plug(seller_plug_id)
             .map(|plug| plug.owner_id())
         else {
-            return report;
+            tracing::trace!(session_id, buyer_plug_id, seller_plug_id, ?goods_id, "владелец подключения продавца не найден");
+            return PersonalShopBillingCompletion::ShopUnavailable;
         };
-        report.seller_plug_id = Some(seller_plug_id);
-        report.buyer_id = Some(buyer.owner_id());
-        report.seller_id = Some(seller_id);
         let Some(seller) = self
             .session_factory
             .personal_shop_seller(seller_plug_id)
             .filter(|seller| seller.shop_opened())
         else {
-            report.outcome = PersonalShopPurchaseOutcome::ShopClosed;
-            return report;
+            tracing::trace!(session_id, buyer_plug_id, seller_plug_id, seller_id, ?goods_id, "личная лавка закрыта");
+            return PersonalShopBillingCompletion::ShopUnavailable;
         };
         let Some(price) = seller.goods_price(goods_id) else {
-            report.outcome = PersonalShopPurchaseOutcome::MissingGoods;
-            return report;
+            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, "товар личной лавки не найден");
+            return PersonalShopBillingCompletion::Processed;
         };
-        report.price = Some(price.price);
         if price.price == 0 {
-            report.outcome = PersonalShopPurchaseOutcome::MissingGoods;
-            return report;
+            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, "товар личной лавки имеет нулевую цену");
+            return PersonalShopBillingCompletion::Processed;
         }
         if !billing_completion && price.price_type != 0 {
-            report.outcome = PersonalShopPurchaseOutcome::UnsupportedPriceType {
-                price_type: price.price_type,
-            };
-            return report;
+            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, price_type = price.price_type, "тип цены требует ответа Billing");
+            return PersonalShopBillingCompletion::Processed;
         }
         let Some(previous) = seller
             .goods()
@@ -5758,8 +5711,8 @@ impl CGame {
             .base()
             .original_container_information(goods_id)
         else {
-            report.outcome = PersonalShopPurchaseOutcome::MissingGoods;
-            return report;
+            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, "исходная позиция товара личной лавки не найдена");
+            return PersonalShopBillingCompletion::Processed;
         };
         let Some(goods) = self
             .players
@@ -5773,47 +5726,45 @@ impl CGame {
             })
             .cloned()
         else {
-            report.outcome = PersonalShopPurchaseOutcome::MissingGoods;
-            return report;
+            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, "исходный товар продавца не найден");
+            return PersonalShopBillingCompletion::Processed;
         };
         let Some(buyer_player) = self.players.get(&buyer.owner_id()) else {
-            return report;
+            tracing::trace!(session_id, buyer_plug_id, buyer_id = buyer.owner_id(), ?goods_id, "игрок-покупатель не найден");
+            return PersonalShopBillingCompletion::Processed;
         };
         if !billing_completion && buyer_player.money() < price.price {
-            report.outcome = PersonalShopPurchaseOutcome::InsufficientMoney {
-                notice_delivery: colored_player_notice_message(
-                    0xffff_ffff,
-                    0,
-                    self.get_string_by_id(b"GS0261"),
-                )
-                .send_to_player(self.net_server(), buyer.owner_id()),
-            };
-            return report;
+            let delivery = colored_player_notice_message(
+                0xffff_ffff,
+                0,
+                self.get_string_by_id(b"GS0261"),
+            )
+            .send_to_player(self.net_server(), buyer.owner_id());
+            tracing::trace!(session_id, buyer_plug_id, buyer_id = buyer.owner_id(), ?goods_id, delivery, "у покупателя недостаточно денег");
+            return PersonalShopBillingCompletion::Processed;
         }
         if buyer_player.packet().is_full(&self.goods_factory) {
-            report.outcome = PersonalShopPurchaseOutcome::PacketFull {
-                notice_delivery: colored_player_notice_message(
-                    0xffff_ffff,
-                    0,
-                    self.get_string_by_id(b"GS0260"),
-                )
-                .send_to_player(self.net_server(), buyer.owner_id()),
-            };
-            return report;
+            let delivery = colored_player_notice_message(
+                0xffff_ffff,
+                0,
+                self.get_string_by_id(b"GS0260"),
+            )
+            .send_to_player(self.net_server(), buyer.owner_id());
+            tracing::trace!(session_id, buyer_plug_id, buyer_id = buyer.owner_id(), ?goods_id, delivery, "инвентарь покупателя заполнен");
+            return PersonalShopBillingCompletion::Processed;
         }
         let burden = buyer_player.current_burden(&self.goods_factory);
         if u32::from(buyer_player.combat_properties().burden)
             < burden.wrapping_add(goods.weight(&self.goods_factory))
         {
-            report.outcome = PersonalShopPurchaseOutcome::BurdenExceeded {
-                notice_delivery: colored_player_notice_message(
-                    0xffff_ffff,
-                    0,
-                    self.get_string_by_id(b"GS0259"),
-                )
-                .send_to_player(self.net_server(), buyer.owner_id()),
-            };
-            return report;
+            let delivery = colored_player_notice_message(
+                0xffff_ffff,
+                0,
+                self.get_string_by_id(b"GS0259"),
+            )
+            .send_to_player(self.net_server(), buyer.owner_id());
+            tracing::trace!(session_id, buyer_plug_id, buyer_id = buyer.owner_id(), ?goods_id, delivery, burden, "товар превышает допустимую нагрузку покупателя");
+            return PersonalShopBillingCompletion::Processed;
         }
         let maximum_gold = self
             .goods_factory
@@ -5826,29 +5777,27 @@ impl CGame {
                     .map_or(0, CPlayer::money)
                     .wrapping_add(price.price)
         {
-            report.outcome = PersonalShopPurchaseOutcome::SellerMoneyCapacity {
-                notice_delivery: colored_player_notice_message(
-                    0xffff_ffff,
-                    0,
-                    self.get_string_by_id(b"GS0258"),
-                )
-                .send_to_player(self.net_server(), buyer.owner_id()),
-            };
-            return report;
+            let delivery = colored_player_notice_message(
+                0xffff_ffff,
+                0,
+                self.get_string_by_id(b"GS0258"),
+            )
+            .send_to_player(self.net_server(), buyer.owner_id());
+            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, delivery, "деньги продавца достигли предела");
+            return PersonalShopBillingCompletion::Processed;
         }
         let mut packet_probe = buyer_player.packet().clone();
         let mut probe_goods = Some(goods.clone());
         let probe = packet_probe.add_goods(&mut probe_goods, &self.goods_factory, true);
         if probe_goods.is_some() || matches!(probe, VolumeGoodsAddOutcome::Rejected(_)) {
-            report.outcome = PersonalShopPurchaseOutcome::PacketFull {
-                notice_delivery: colored_player_notice_message(
-                    0xffff_ffff,
-                    0,
-                    self.get_string_by_id(b"GS0260"),
-                )
-                .send_to_player(self.net_server(), buyer.owner_id()),
-            };
-            return report;
+            let delivery = colored_player_notice_message(
+                0xffff_ffff,
+                0,
+                self.get_string_by_id(b"GS0260"),
+            )
+            .send_to_player(self.net_server(), buyer.owner_id());
+            tracing::trace!(session_id, buyer_plug_id, buyer_id = buyer.owner_id(), ?goods_id, delivery, "пробное добавление товара в инвентарь отклонено");
+            return PersonalShopBillingCompletion::Processed;
         }
         let audit = {
             let seller = self.players.get(&seller_id).expect("seller проверен");
@@ -5914,19 +5863,20 @@ impl CGame {
         };
         self.players.insert(seller_id, seller_player);
         let Some(removed) = removed else {
-            report.outcome = PersonalShopPurchaseOutcome::SourceRemovalFailed;
-            return report;
+            tracing::warn!(session_id, buyer_plug_id, seller_id, ?goods_id, "не удалось изъять проданный товар у продавца");
+            return PersonalShopBillingCompletion::Processed;
         };
         self.session_factory
             .personal_shop_seller_mut(seller_plug_id)
             .expect("seller plug проверен")
             .remove_goods(goods_id);
-        report.seller_delete_delivery = Some(self.send_container_object_delete(
+        let seller_delete_delivery = self.send_container_object_delete(
             seller_id,
             &previous,
             removed.identity(),
             removed.amount(),
-        ));
+        );
+        tracing::trace!(session_id, seller_id, ?goods_id, seller_delete_delivery, "удаление товара отправлено продавцу");
 
         let original = removed.clone();
         let (additions, rejected) = {
@@ -5938,9 +5888,8 @@ impl CGame {
             buyer_player.add_traded_goods_to_packet(vec![removed], &self.goods_factory, &mut encode)
         };
         for addition in &additions {
-            report
-                .buyer_packet_deliveries
-                .push(self.send_player_packet_addition(addition));
+            let deliveries = self.send_player_packet_addition(addition);
+            tracing::trace!(session_id, buyer_id = buyer.owner_id(), ?goods_id, ?deliveries, "добавление товара отправлено покупателю");
         }
         if !rejected.is_empty()
             || additions
@@ -5962,12 +5911,11 @@ impl CGame {
                 &mut encode,
             );
             for addition in &rollback {
-                report
-                    .buyer_packet_deliveries
-                    .push(self.send_player_packet_addition(addition));
+                let deliveries = self.send_player_packet_addition(addition);
+                tracing::trace!(session_id, seller_id, ?goods_id, ?deliveries, "возврат товара отправлен продавцу");
             }
-            report.outcome = PersonalShopPurchaseOutcome::BuyerAddFailed;
-            return report;
+            tracing::warn!(session_id, buyer_id = buyer.owner_id(), seller_id, ?goods_id, "добавление товара покупателю завершилось возвратом продавцу");
+            return PersonalShopBillingCompletion::Processed;
         }
 
         if !billing_completion {
@@ -5976,9 +5924,9 @@ impl CGame {
                 .get_mut(&buyer.owner_id())
                 .expect("buyer остаётся online")
                 .decrease_money(price.price, &self.goods_factory);
-            report
-                .money_deliveries
-                .extend(self.send_player_money_decrease(buyer.owner_id(), &buyer_change.outcome));
+            let buyer_deliveries =
+                self.send_player_money_decrease(buyer.owner_id(), &buyer_change.outcome);
+            tracing::trace!(session_id, buyer_id = buyer.owner_id(), ?buyer_deliveries, "уменьшение денег отправлено покупателю");
             let created =
                 self.create_goods_batch(self.goods_factory.get_gold_coin_index(), price.price);
             let seller_increase = self
@@ -5986,9 +5934,9 @@ impl CGame {
                 .get_mut(&seller_id)
                 .expect("seller остаётся online")
                 .increase_money(price.price, &self.goods_factory, created);
-            report
-                .money_deliveries
-                .extend(self.send_player_money_increase(seller_id, &seller_increase, context));
+            let seller_deliveries =
+                self.send_player_money_increase(seller_id, &seller_increase, context);
+            tracing::trace!(session_id, seller_id, ?seller_deliveries, "увеличение денег отправлено продавцу");
         }
         if !billing_completion && self.log_system.goods_trade_log_enabled() {
             let mut message = CMessage::new(0x0006_0201);
@@ -6009,33 +5957,20 @@ impl CGame {
             add_legacy_c_string(message.base_mut(), &audit.11);
             message.add_ulong(audit.9);
             message.add_ulong(audit.4);
-            report.audit_delivery = Some(message.send(self, false));
+            let audit_delivery = message.send(self, false);
+            tracing::trace!(session_id, buyer_id = buyer.owner_id(), seller_id, ?goods_id, ?audit_delivery, "аудит сделки личной лавки отправлен");
         }
-        report.outcome = PersonalShopPurchaseOutcome::Completed;
-        report
+        tracing::debug!(session_id, buyer_id = buyer.owner_id(), seller_id, ?goods_id, price = price.price, billing_completion, "сделка личной лавки завершена");
+        PersonalShopBillingCompletion::Processed
     }
 
-    pub(crate) fn finish_personal_shop_session(
-        &mut self,
-        session_id: i32,
-    ) -> PersonalShopTerminalReport {
-        let mut report = PersonalShopTerminalReport {
-            session_id,
-            seller_plug_id: None,
-            seller_id: None,
-            buyer_plug_ids: Vec::new(),
-            buyer_ids: Vec::new(),
-            deliveries: Vec::new(),
-            around_delivery: None,
-            collected_plug_ids: Vec::new(),
-        };
+    pub(crate) fn finish_personal_shop_session(&mut self, session_id: i32) {
         let Some((seller_plug_id, seller_id, buyers)) =
             self.session_factory.personal_shop_participants(session_id)
         else {
-            return report;
+            tracing::trace!(session_id, "участники личной лавки не найдены");
+            return;
         };
-        report.seller_plug_id = Some(seller_plug_id);
-        report.seller_id = Some(seller_id);
         if let Some(seller) = self
             .session_factory
             .personal_shop_seller_mut(seller_plug_id)
@@ -6050,64 +5985,42 @@ impl CGame {
         let mut around = CMessage::new(0x000c_0007);
         around.add_long(seller_id);
         around.add_long(seller_plug_id);
-        report.around_delivery = self.send_player_shape_around(seller_id, None, &around);
+        let around_delivery = self.send_player_shape_around(seller_id, None, &around);
+        tracing::trace!(session_id, seller_plug_id, seller_id, ?around_delivery, "закрытие личной лавки отправлено окружению");
         for buyer in buyers {
-            report.buyer_plug_ids.push(buyer.plug_id());
-            report.buyer_ids.push(buyer.owner_id());
             if let Some(player) = self.players.get_mut(&buyer.owner_id()) {
                 player.set_current_progress_snapshot(PlayerProgress::None);
                 let mut message = CMessage::new(0x000c_0008);
                 message.add_long(session_id);
-                report
-                    .deliveries
-                    .push(message.send_to_player(self.net_server(), buyer.owner_id()));
+                let delivery = message.send_to_player(self.net_server(), buyer.owner_id());
+                tracing::trace!(session_id, buyer_plug_id = buyer.plug_id(), buyer_id = buyer.owner_id(), delivery, "завершение личной лавки отправлено покупателю");
             }
         }
         let _ = self.session_factory.end_session(session_id);
-        report.collected_plug_ids = self.session_factory.garbage_collect_session(session_id);
-        report
+        let collected_plug_ids = self.session_factory.garbage_collect_session(session_id);
+        tracing::debug!(session_id, seller_plug_id, seller_id, ?collected_plug_ids, "сессия личной лавки завершена");
     }
 
     pub(crate) fn exit_personal_shop_buyer(
         &mut self,
         session_id: i32,
         plug_id: i32,
-    ) -> PersonalShopTerminalReport {
-        let mut report = PersonalShopTerminalReport {
-            session_id,
-            seller_plug_id: self
-                .session_factory
-                .personal_shop_seller_plug_id(session_id),
-            seller_id: None,
-            buyer_plug_ids: Vec::new(),
-            buyer_ids: Vec::new(),
-            deliveries: Vec::new(),
-            around_delivery: None,
-            collected_plug_ids: Vec::new(),
-        };
-        report.seller_id = report.seller_plug_id.and_then(|seller_plug_id| {
-            self.session_factory
-                .query_plug(seller_plug_id)
-                .map(|plug| plug.owner_id())
-        });
+    ) {
         let Some(buyer) = self
             .session_factory
             .remove_personal_shop_buyer(session_id, plug_id)
         else {
-            return report;
+            tracing::trace!(session_id, plug_id, "покупатель личной лавки не найден");
+            return;
         };
-        report.buyer_plug_ids.push(plug_id);
-        report.buyer_ids.push(buyer.owner_id());
-        report.collected_plug_ids.push(plug_id);
         if let Some(player) = self.players.get_mut(&buyer.owner_id()) {
             player.set_current_progress_snapshot(PlayerProgress::None);
             let mut message = CMessage::new(0x000c_0008);
             message.add_long(session_id);
-            report
-                .deliveries
-                .push(message.send_to_player(self.net_server(), buyer.owner_id()));
+            let delivery = message.send_to_player(self.net_server(), buyer.owner_id());
+            tracing::trace!(session_id, plug_id, buyer_id = buyer.owner_id(), delivery, "выход из личной лавки отправлен покупателю");
         }
-        report
+        tracing::debug!(session_id, plug_id, buyer_id = buyer.owner_id(), "покупатель вышел из личной лавки");
     }
 
     /// Создаёт достигнутую process-owned проекцию `CGame` с подтверждёнными

@@ -163,7 +163,7 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
             } else if !buyer_owned_by(game, session_id, buyer_plug_id, player_id) {
                 trace!(player_id, session_id, buyer_plug_id, "покупка отклонена владельцем сессии");
             } else {
-                let _ = game.purchase_personal_shop_goods(
+                game.purchase_personal_shop_goods(
                     session_id,
                     buyer_plug_id,
                     goods_id,
@@ -281,7 +281,7 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
             if seller_owned_by(game, session_id, plug_id, player_id)
                 && game.personal_shop_session_available(session_id, context)
             {
-                let _ = game.finish_personal_shop_session(session_id);
+                game.finish_personal_shop_session(session_id);
                 debug!(player_id, session_id, plug_id, "сессия личной лавки завершена продавцом");
             } else {
                 trace!(player_id, session_id, plug_id, "завершение личной лавки отклонено");
@@ -292,7 +292,7 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
             if buyer_owned_by(game, session_id, plug_id, player_id)
                 && game.personal_shop_session_available(session_id, context)
             {
-                let _ = game.exit_personal_shop_buyer(session_id, plug_id);
+                game.exit_personal_shop_buyer(session_id, plug_id);
                 debug!(player_id, session_id, plug_id, "покупатель вышел из личной лавки");
             } else {
                 trace!(player_id, session_id, plug_id, "выход из личной лавки отклонён");

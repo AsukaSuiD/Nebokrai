@@ -436,12 +436,11 @@ fn dispatch_personal_shop_billing_trade<Context: GameContainerMessageRuntime>(
     let transaction = message.base_mut().get_str_bytes(0x200).ok_or(
         IncrementShopBillingMessageError::MissingField("personal-shop transaction"),
     )?;
-    let purchase =
+    let completion =
         game.complete_personal_shop_billing_goods(session_id, buyer_plug_id, goods_id, context);
     if matches!(
-        purchase.outcome,
-        crate::gameserver::gameserver::game::PersonalShopPurchaseOutcome::MissingSessionOrPlug
-            | crate::gameserver::gameserver::game::PersonalShopPurchaseOutcome::ShopClosed
+        completion,
+        crate::gameserver::gameserver::game::PersonalShopBillingCompletion::ShopUnavailable
     ) {
         let _ = colored_player_notice_message(0xffff_ffff, 0, b"Personal Shop has been CLOSED")
             .send_to_player(game.net_server(), buyer_id);
