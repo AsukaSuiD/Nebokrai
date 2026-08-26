@@ -318,6 +318,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
+use super::gameeffectjournal::{GameEffect, GameEffectJournal};
 use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionFacts,
@@ -340,6 +341,7 @@ use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 use crate::setup::hitlevelsetup::HitLevelEntry;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use thiserror::Error;
+use tracing::trace;
 
 const PLAYER_TYPE: i32 = 400;
 const PLAYER_BASE_PROPERTY_WIRE_SIZE: usize = 0x194;
@@ -1056,57 +1058,6 @@ pub(crate) enum PlayerSkillDispatch {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerSkillRequestOutcome {
-    Unauthorized,
-    CoordinateBlocked(ShapeCoordinateBlock),
-    AiUnavailable,
-    MissingRegion,
-    MissingTarget,
-    Queued,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerSkillRequestEffect {
-    Notification {
-        player_id: i32,
-        string_id: &'static str,
-        color: u32,
-        message_type: u32,
-    },
-    ClearEmotion,
-    SocketReject {
-        message_type: u32,
-        reason: u32,
-        code: u8,
-    },
-    AiDispatch(PlayerSkillDispatch),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerSkillRequestDelivery {
-    Player(i32),
-    EmotionAround(Option<Result<i32, ShapeCoordinateBlock>>),
-    SocketReject(i32),
-    AiQueued,
-}
-
-#[must_use = "skill report содержит emotion, authorization, target и dispatch effects"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerSkillRequestReport {
-    pub(crate) player_id: i32,
-    pub(crate) region_id: Option<i32>,
-    pub(crate) skill_id: u32,
-    pub(crate) skill_level: i32,
-    pub(crate) target_type: i32,
-    pub(crate) target_id: i32,
-    pub(crate) target_x: i32,
-    pub(crate) target_y: i32,
-    pub(crate) outcome: PlayerSkillRequestOutcome,
-    pub(crate) effects: Vec<PlayerSkillRequestEffect>,
-    pub(crate) deliveries: Vec<PlayerSkillRequestDelivery>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairySkillRequest {
     pub(crate) raw_skill_id: i32,
     pub(crate) target_type: i32,
@@ -1146,57 +1097,6 @@ pub(crate) enum BattleFairySkillDispatch {
         skill_id: u32,
         target: super::shape::ShapeIdentity,
     },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairySkillRequestOutcome {
-    FeatureDisabled,
-    MissingHeadgear,
-    NoHitPoints,
-    Unauthorized,
-    CoordinateBlocked(ShapeCoordinateBlock),
-    AiUnavailable,
-    MissingRegion,
-    MissingTarget,
-    Queued,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairySkillRequestEffect {
-    Notification {
-        player_id: i32,
-        string_id: &'static str,
-        color: u32,
-        message_type: u32,
-    },
-    SocketReject {
-        message_type: u32,
-        reason: u32,
-        code: u8,
-    },
-    AiDispatch(BattleFairySkillDispatch),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairySkillRequestDelivery {
-    Player(i32),
-    SocketReject(i32),
-    AiQueued,
-}
-
-#[must_use = "war-soul skill report содержит authorization, target rewrite и dispatch"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairySkillRequestReport {
-    pub(crate) player_id: i32,
-    pub(crate) skill_id: u32,
-    pub(crate) skill_level: i32,
-    pub(crate) target_type: i32,
-    pub(crate) target_id: i32,
-    pub(crate) target_x: i32,
-    pub(crate) target_y: i32,
-    pub(crate) outcome: BattleFairySkillRequestOutcome,
-    pub(crate) effects: Vec<BattleFairySkillRequestEffect>,
-    pub(crate) deliveries: Vec<BattleFairySkillRequestDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -10823,50 +10723,59 @@ impl CPlayer {
     /// предшествует authorization и AI dispatch.
     pub(crate) fn request_player_skill(
         &mut self,
+        socket_id: i32,
         request: PlayerSkillRequest,
         facts: PlayerSkillRequestFacts,
         skill_factory: &CSkillFactory,
-    ) -> PlayerSkillRequestReport {
-        self.request_player_skill_core(request, facts, None, "GS0090", skill_factory)
+    ) -> GameEffectJournal {
+        self.request_player_skill_core(
+            socket_id,
+            request,
+            facts,
+            None,
+            "GS0090",
+            skill_factory,
+        )
     }
 
     /// Item-skill `0x90004` использует переданный client level, а успешная
     /// ветвь добавляет ID в native ordered item-skill vector перед AI effect.
     pub(crate) fn request_item_skill(
         &mut self,
+        socket_id: i32,
         request: PlayerSkillRequest,
         skill_level: i32,
         facts: PlayerSkillRequestFacts,
         skill_factory: &CSkillFactory,
-    ) -> PlayerSkillRequestReport {
-        self.request_player_skill_core(request, facts, Some(skill_level), "GS1039", skill_factory)
+    ) -> GameEffectJournal {
+        self.request_player_skill_core(
+            socket_id,
+            request,
+            facts,
+            Some(skill_level),
+            "GS1039",
+            skill_factory,
+        )
     }
 
     fn request_player_skill_core(
         &mut self,
+        socket_id: i32,
         request: PlayerSkillRequest,
         facts: PlayerSkillRequestFacts,
         item_skill_level: Option<i32>,
         contend_string_id: &'static str,
         skill_factory: &CSkillFactory,
-    ) -> PlayerSkillRequestReport {
+    ) -> GameEffectJournal {
         let player_id = self.player_id();
         let skill_id = request.skill_id();
-        let mut report = PlayerSkillRequestReport {
-            player_id,
-            region_id: self.server_region_id,
-            skill_id,
-            skill_level: 0,
-            target_type: request.target_type,
-            target_id: request.target_id,
-            target_x: request.target_x,
-            target_y: request.target_y,
-            outcome: PlayerSkillRequestOutcome::Unauthorized,
-            effects: Vec::new(),
-            deliveries: Vec::new(),
-        };
+        let mut journal = GameEffectJournal::default();
+        let mut target_type = request.target_type;
+        let mut target_id = request.target_id;
+        let mut target_x = request.target_x;
+        let mut target_y = request.target_y;
         if self.contend_state && facts.symbol_attackable {
-            report.effects.push(PlayerSkillRequestEffect::Notification {
+            journal.push(GameEffect::SkillNotification {
                 player_id,
                 string_id: contend_string_id,
                 color: 0xffff_ffff,
@@ -10876,42 +10785,46 @@ impl CPlayer {
 
         self.emotion_index = 0;
         self.emotion_timestamp_ms = 0;
-        report.effects.push(PlayerSkillRequestEffect::ClearEmotion);
+        journal.push(GameEffect::ClearPlayerEmotion {
+            player_id,
+            region_id: self.server_region_id,
+        });
 
         let skill_level = item_skill_level.unwrap_or_else(|| {
             self.move_shape
                 .skill(skill_id)
                 .map_or(0, MoveShapeSkill::level)
         });
-        report.skill_level = skill_level;
         if skill_level == 0 {
-            push_player_skill_reject(&mut report);
-            return report;
+            push_player_skill_reject(&mut journal, socket_id);
+            trace!(player_id, skill_id, "Запрос навыка отклонён: навык не разрешён");
+            return journal;
         }
         if skill_factory
             .query_skill_base_properties(skill_id, skill_level)
             .is_some_and(|properties| properties.is_target_self() != 0)
         {
-            let (target_x, target_y) = match (self.shape().get_tile_x(), self.shape().get_tile_y())
+            let (resolved_x, resolved_y) =
+                match (self.shape().get_tile_x(), self.shape().get_tile_y())
             {
                 (Ok(x), Ok(y)) => (x, y),
                 (Err(error), _) | (_, Err(error)) => {
-                    report.outcome = PlayerSkillRequestOutcome::CoordinateBlocked(error);
-                    return report;
+                    trace!(player_id, skill_id, ?error, "Запрос навыка отклонён координатной границей");
+                    return journal;
                 }
             };
-            report.target_type = self.shape().identity().object_type;
-            report.target_id = player_id;
-            report.target_x = target_x;
-            report.target_y = target_y;
+            target_type = self.shape().identity().object_type;
+            target_id = player_id;
+            target_x = resolved_x;
+            target_y = resolved_y;
         }
         if !facts.player_ai_available {
-            report.outcome = PlayerSkillRequestOutcome::AiUnavailable;
-            return report;
+            trace!(player_id, skill_id, "Запрос навыка отклонён: отсутствует AI игрока");
+            return journal;
         }
 
-        let dispatch = if report.target_type == 0 || report.target_id == 0 {
-            if report.target_x == 0 || report.target_y == 0 {
+        let dispatch = if target_type == 0 || target_id == 0 {
+            if target_x == 0 || target_y == 0 {
                 PlayerSkillDispatch::SelfTarget {
                     skill_id,
                     player_id,
@@ -10919,35 +10832,36 @@ impl CPlayer {
             } else {
                 PlayerSkillDispatch::Point {
                     skill_id,
-                    x: report.target_x,
-                    y: report.target_y,
+                    x: target_x,
+                    y: target_y,
                 }
             }
         } else {
             if self.server_region_id.is_none() {
-                report.outcome = PlayerSkillRequestOutcome::MissingRegion;
-                return report;
+                trace!(player_id, skill_id, "Запрос навыка отклонён: отсутствует регион");
+                return journal;
             }
             let target = ShapeIdentity {
-                object_type: report.target_type,
-                id: report.target_id,
+                object_type: target_type,
+                id: target_id,
                 ex_id: CGuid::GUID_INVALID,
             };
             if !facts.object_target_available {
-                report.outcome = PlayerSkillRequestOutcome::MissingTarget;
-                push_player_skill_reject(&mut report);
-                return report;
+                push_player_skill_reject(&mut journal, socket_id);
+                trace!(player_id, skill_id, target_type, target_id, "Запрос навыка отклонён: цель отсутствует");
+                return journal;
             }
             PlayerSkillDispatch::Object { skill_id, target }
         };
         if item_skill_level.is_some() {
             self.move_shape.set_item_skill(skill_id);
         }
-        report
-            .effects
-            .push(PlayerSkillRequestEffect::AiDispatch(dispatch));
-        report.outcome = PlayerSkillRequestOutcome::Queued;
-        report
+        journal.push(GameEffect::QueuePlayerSkill {
+            player_id,
+            dispatch,
+        });
+        trace!(player_id, skill_id, skill_level, ?dispatch, "Запрос навыка передан AI");
+        journal
     }
 
     /// Полный player-side `skillmessage` opcode `0x90005` после успешного
@@ -10955,88 +10869,79 @@ impl CPlayer {
     pub(crate) fn request_battle_fairy_skill(
         &self,
         battle_fairy_enabled: bool,
+        socket_id: i32,
         request: BattleFairySkillRequest,
         facts: BattleFairySkillRequestFacts,
         goods_factory: &CGoodsFactory,
         skill_factory: &CSkillFactory,
-    ) -> BattleFairySkillRequestReport {
+    ) -> GameEffectJournal {
         let player_id = self.player_id();
         let skill_id = request.skill_id();
-        let mut report = BattleFairySkillRequestReport {
-            player_id,
-            skill_id,
-            skill_level: 0,
-            target_type: request.target_type,
-            target_id: request.target_id,
-            target_x: request.target_x,
-            target_y: request.target_y,
-            outcome: BattleFairySkillRequestOutcome::MissingHeadgear,
-            effects: Vec::new(),
-            deliveries: Vec::new(),
-        };
+        let mut journal = GameEffectJournal::default();
+        let mut target_type = request.target_type;
+        let mut target_id = request.target_id;
+        let mut target_x = request.target_x;
+        let mut target_y = request.target_y;
         if !battle_fairy_enabled {
-            report.outcome = BattleFairySkillRequestOutcome::FeatureDisabled;
-            report
-                .effects
-                .push(BattleFairySkillRequestEffect::Notification {
-                    player_id,
-                    string_id: "ZHGS0037",
-                    color: 0xffff_0000,
-                    message_type: 0,
-                });
-            return report;
+            journal.push(GameEffect::SkillNotification {
+                player_id,
+                string_id: "ZHGS0037",
+                color: 0xffff_0000,
+                message_type: 0,
+            });
+            trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: подсистема выключена");
+            return journal;
         }
         let Some(goods) = self.equipment.get_goods(10) else {
-            return report;
+            trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: отсутствует головной предмет");
+            return journal;
         };
         if goods.addon_property_value(goods_factory, GAP_BF_HP, 1) == 0 {
-            report.outcome = BattleFairySkillRequestOutcome::NoHitPoints;
-            return report;
+            trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: нет здоровья");
+            return journal;
         }
         if self.contend_state && facts.symbol_attackable {
-            report
-                .effects
-                .push(BattleFairySkillRequestEffect::Notification {
-                    player_id,
-                    string_id: "ZHGS0038",
-                    color: 0xffff_ffff,
-                    message_type: 0xffff_0000,
-                });
+            journal.push(GameEffect::SkillNotification {
+                player_id,
+                string_id: "ZHGS0038",
+                color: 0xffff_ffff,
+                message_type: 0xffff_0000,
+            });
         }
 
         let skill_level =
             check_battle_fairy_skill(goods, goods_factory, request.property_offset, skill_id);
-        report.skill_level = skill_level;
         if skill_level == 0 {
-            report.outcome = BattleFairySkillRequestOutcome::Unauthorized;
-            push_battle_fairy_skill_reject(&mut report);
-            return report;
+            push_battle_fairy_skill_reject(&mut journal, socket_id);
+            trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: навык не разрешён");
+            return journal;
         }
 
         if skill_factory
             .query_skill_base_properties(skill_id, skill_level)
             .is_some_and(|properties| properties.is_target_self() != 0)
         {
-            let (target_x, target_y) = match (self.shape().get_tile_x(), self.shape().get_tile_y())
+            let (resolved_x, resolved_y) =
+                match (self.shape().get_tile_x(), self.shape().get_tile_y())
             {
                 (Ok(x), Ok(y)) => (x, y),
                 (Err(error), _) | (_, Err(error)) => {
-                    report.outcome = BattleFairySkillRequestOutcome::CoordinateBlocked(error);
-                    return report;
+                    trace!(player_id, skill_id, ?error, "Запрос навыка боевой феи отклонён координатной границей");
+                    return journal;
                 }
             };
-            report.target_type = self.shape().identity().object_type;
-            report.target_id = player_id;
-            report.target_x = target_x;
-            report.target_y = target_y;
+            target_type = self.shape().identity().object_type;
+            target_id = player_id;
+            target_x = resolved_x;
+            target_y = resolved_y;
         }
         if !facts.player_ai_available {
-            report.outcome = BattleFairySkillRequestOutcome::AiUnavailable;
-            return report;
+            trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: отсутствует AI игрока");
+            return journal;
         }
 
-        let dispatch = if report.target_type == 0 || report.target_id == 0 {
-            if report.target_x == 0 || report.target_y == 0 {
+        let dispatch = if target_type == 0 || target_id == 0 {
+            if target_x == 0 || target_y == 0 {
                 BattleFairySkillDispatch::SelfTarget {
                     skill_id,
                     player_id,
@@ -11044,32 +10949,33 @@ impl CPlayer {
             } else {
                 BattleFairySkillDispatch::Point {
                     skill_id,
-                    x: report.target_x,
-                    y: report.target_y,
+                    x: target_x,
+                    y: target_y,
                 }
             }
         } else {
             if self.server_region_id.is_none() {
-                report.outcome = BattleFairySkillRequestOutcome::MissingRegion;
-                return report;
+                trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: отсутствует регион");
+                return journal;
             }
             let target = ShapeIdentity {
-                object_type: report.target_type,
-                id: report.target_id,
+                object_type: target_type,
+                id: target_id,
                 ex_id: CGuid::GUID_INVALID,
             };
             if !facts.object_target_available {
-                report.outcome = BattleFairySkillRequestOutcome::MissingTarget;
-                push_battle_fairy_skill_reject(&mut report);
-                return report;
+                push_battle_fairy_skill_reject(&mut journal, socket_id);
+                trace!(player_id, skill_id, target_type, target_id, "Запрос навыка боевой феи отклонён: цель отсутствует");
+                return journal;
             }
             BattleFairySkillDispatch::Object { skill_id, target }
         };
-        report
-            .effects
-            .push(BattleFairySkillRequestEffect::AiDispatch(dispatch));
-        report.outcome = BattleFairySkillRequestOutcome::Queued;
-        report
+        journal.push(GameEffect::QueueBattleFairySkill {
+            player_id,
+            dispatch,
+        });
+        trace!(player_id, skill_id, skill_level, ?dispatch, "Запрос навыка боевой феи передан AI");
+        journal
     }
 
     /// Достигнутая часть exact `RefreshContainerOwners`: owner ID должен быть
@@ -11921,18 +11827,18 @@ fn check_battle_fairy_skill(
     0
 }
 
-fn push_battle_fairy_skill_reject(report: &mut BattleFairySkillRequestReport) {
-    report
-        .effects
-        .push(BattleFairySkillRequestEffect::SocketReject {
-            message_type: SKILL_EFFECT_MESSAGE_TYPE,
-            reason: SKILL_REJECT_WAR_SOUL_REASON,
-            code: SKILL_REJECT_CODE,
-        });
+fn push_battle_fairy_skill_reject(journal: &mut GameEffectJournal, socket_id: i32) {
+    journal.push(GameEffect::SkillSocketReject {
+        socket_id,
+        message_type: SKILL_EFFECT_MESSAGE_TYPE,
+        reason: SKILL_REJECT_WAR_SOUL_REASON,
+        code: SKILL_REJECT_CODE,
+    });
 }
 
-fn push_player_skill_reject(report: &mut PlayerSkillRequestReport) {
-    report.effects.push(PlayerSkillRequestEffect::SocketReject {
+fn push_player_skill_reject(journal: &mut GameEffectJournal, socket_id: i32) {
+    journal.push(GameEffect::SkillSocketReject {
+        socket_id,
         message_type: SKILL_EFFECT_MESSAGE_TYPE,
         reason: SKILL_REJECT_REASON,
         code: SKILL_REJECT_CODE,

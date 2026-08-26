@@ -1,6 +1,6 @@
-//! Входные skill-сообщения GameServer.
+//! Входные сообщения навыков GameServer.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `server/gameserver/appserver/message/skillmessage.cpp`. Достигнутый
 //! исполняемый контракт `0x90001` строго читает пять Windows `long`, сохраняет
 //! contend notice, безусловный ClearEmotion, learned-skill authorization,
@@ -25,15 +25,13 @@
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\skillmessage.cpp
 
-use crate::gameserver::appserver::player::{
-    BattleFairySkillRequest, BattleFairySkillRequestReport, PlayerSkillRequest,
-    PlayerSkillRequestReport,
-};
+use crate::gameserver::appserver::player::{BattleFairySkillRequest, PlayerSkillRequest};
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
+use tracing::trace;
 
 const USE_PLAYER_SKILL: u32 = 0x0009_0001;
 const END_PLAYER_SKILL: u32 = 0x0009_0002;
@@ -45,41 +43,6 @@ const USE_BATTLE_FAIRY_SKILL: u32 = 0x0009_0005;
 pub(crate) enum PlayerSkillEndRuntimeOutcome {
     AlreadyEnded,
     Ended,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerSkillEndOutcome {
-    MissingCurrentSkill,
-    SkillMismatch,
-    AlreadyEnded,
-    Ended,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerSkillEndReport {
-    pub(crate) player_id: i32,
-    pub(crate) requested_skill_id: i32,
-    pub(crate) current_skill_id: Option<u32>,
-    pub(crate) outcome: PlayerSkillEndOutcome,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerSkillScriptOutcome {
-    MissingPlayer,
-    FeatureDisabled,
-    Dispatched { script_present: bool },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerSkillScriptReport {
-    pub(crate) player_id: Option<i32>,
-    pub(crate) region_id: Option<i32>,
-    pub(crate) skill_id: i32,
-    pub(crate) level: i32,
-    pub(crate) variant: i32,
-    pub(crate) path: Option<Vec<u8>>,
-    pub(crate) notice_delivery: Option<i32>,
-    pub(crate) outcome: PlayerSkillScriptOutcome,
 }
 
 pub(crate) trait GameSkillMessageRuntime: ScriptFunctionRuntime {
@@ -103,31 +66,11 @@ pub(crate) enum GameSkillMessageError {
     MissingField(&'static str),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameSkillMessageOutcome {
-    MissingPlayer,
-    PlayerSkill(PlayerSkillRequestReport),
-    PlayerSkillEnd(PlayerSkillEndReport),
-    PlayerSkillScript(PlayerSkillScriptReport),
-    ItemSkill(PlayerSkillRequestReport),
-    BattleFairy(BattleFairySkillRequestReport),
-}
-
-#[must_use = "skill-message report содержит decode, routing и gameplay result"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameSkillMessageReport {
-    pub(crate) message_type: u32,
-    pub(crate) socket_id: i32,
-    pub(crate) player_id: Option<i32>,
-    pub(crate) region_id: Option<i32>,
-    pub(crate) outcome: GameSkillMessageOutcome,
-}
-
 pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Option<Result<GameSkillMessageReport, GameSkillMessageError>> {
+) -> Option<Result<(), GameSkillMessageError>> {
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
@@ -150,7 +93,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
             .get_long()
             .ok_or(GameSkillMessageError::MissingField(field))
     };
-    let outcome = match message_type {
+    match message_type {
         USE_PLAYER_SKILL => {
             let request = match (|| {
                 Ok(PlayerSkillRequest {
@@ -165,19 +108,14 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                 Err(error) => return Some(Err(error)),
             };
             let Some(player_id) = player_id else {
-                return Some(Ok(GameSkillMessageReport {
-                    message_type,
-                    socket_id,
-                    player_id: None,
-                    region_id,
-                    outcome: GameSkillMessageOutcome::MissingPlayer,
-                }));
+                trace!(message_type, socket_id, "Команда навыка не имеет игрока");
+                return Some(Ok(()));
             };
             let facts = game.player_skill_request_facts(player_id, region_id, request, runtime);
-            let report = game
+            game
                 .request_player_skill(player_id, socket_id, request, facts)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
-            GameSkillMessageOutcome::PlayerSkill(report)
+            trace!(player_id, skill_id = request.skill_id(), "Обработан запрос навыка игрока");
         }
         END_PLAYER_SKILL => {
             let requested_skill_id = match read_long(message, "skill id") {
@@ -185,35 +123,21 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                 Err(error) => return Some(Err(error)),
             };
             let Some(player_id) = player_id else {
-                return Some(Ok(GameSkillMessageReport {
-                    message_type,
-                    socket_id,
-                    player_id: None,
-                    region_id,
-                    outcome: GameSkillMessageOutcome::MissingPlayer,
-                }));
+                trace!(message_type, socket_id, "Команда завершения навыка не имеет игрока");
+                return Some(Ok(()));
             };
             let current_skill_id = game
                 .find_player(player_id)
                 .and_then(|player| player.current_skill_id());
             let outcome = match current_skill_id {
-                None => PlayerSkillEndOutcome::MissingCurrentSkill,
-                Some(current) if current != requested_skill_id as u32 => {
-                    PlayerSkillEndOutcome::SkillMismatch
-                }
+                None => "нет текущего навыка",
+                Some(current) if current != requested_skill_id as u32 => "идентификатор не совпал",
                 Some(current) => match runtime.end_current_player_skill(game, player_id, current) {
-                    PlayerSkillEndRuntimeOutcome::AlreadyEnded => {
-                        PlayerSkillEndOutcome::AlreadyEnded
-                    }
-                    PlayerSkillEndRuntimeOutcome::Ended => PlayerSkillEndOutcome::Ended,
+                    PlayerSkillEndRuntimeOutcome::AlreadyEnded => "уже завершён",
+                    PlayerSkillEndRuntimeOutcome::Ended => "завершён",
                 },
             };
-            GameSkillMessageOutcome::PlayerSkillEnd(PlayerSkillEndReport {
-                player_id,
-                requested_skill_id,
-                current_skill_id,
-                outcome,
-            })
+            trace!(player_id, requested_skill_id, ?current_skill_id, outcome, "Обработано завершение навыка");
         }
         RUN_SKILL_SCRIPT => {
             let (skill_id, level, variant) = match (|| {
@@ -226,38 +150,20 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                 Ok(fields) => fields,
                 Err(error) => return Some(Err(error)),
             };
-            let mut report = PlayerSkillScriptReport {
-                player_id,
-                region_id,
-                skill_id,
-                level,
-                variant,
-                path: None,
-                notice_delivery: None,
-                outcome: PlayerSkillScriptOutcome::MissingPlayer,
-            };
             let Some(player_id) = player_id else {
-                return Some(Ok(GameSkillMessageReport {
-                    message_type,
-                    socket_id,
-                    player_id: None,
-                    region_id,
-                    outcome: GameSkillMessageOutcome::PlayerSkillScript(report),
-                }));
+                trace!(message_type, socket_id, skill_id, "Команда сценария навыка не имеет игрока");
+                return Some(Ok(()));
             };
             let battle_fairy_script =
                 (530..=545).contains(&skill_id) || (960..=962).contains(&skill_id);
             if battle_fairy_script && !game.battle_fairy_enabled() {
-                report.notice_delivery = Some(
-                    colored_player_notice_message(
-                        0xffff_0000,
-                        0,
-                        game.get_string_by_id(b"ZHGS0037"),
-                    )
-                    .send_to_player(game.net_server(), player_id),
-                );
-                report.outcome = PlayerSkillScriptOutcome::FeatureDisabled;
-                GameSkillMessageOutcome::PlayerSkillScript(report)
+                let delivery = colored_player_notice_message(
+                    0xffff_0000,
+                    0,
+                    game.get_string_by_id(b"ZHGS0037"),
+                )
+                .send_to_player(game.net_server(), player_id);
+                trace!(player_id, skill_id, delivery, "Сценарий навыка боевой феи отклонён");
             } else {
                 let path = if (530..=545).contains(&skill_id) {
                     format!("scripts/skills/{skill_id}0{level}.script").into_bytes()
@@ -266,8 +172,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                 } else {
                     format!("scripts/skills/{skill_id}.script").into_bytes()
                 };
-                let script_data = game.script_file_data(&path).map(<[u8]>::to_vec);
-                report.path = Some(path.clone());
+                let script_present = game.script_file_data(&path).is_some();
                 let _ = game.run_script_file(
                     &path,
                     ScriptExecutionContext {
@@ -277,10 +182,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                     },
                     runtime,
                 );
-                report.outcome = PlayerSkillScriptOutcome::Dispatched {
-                    script_present: script_data.is_some(),
-                };
-                GameSkillMessageOutcome::PlayerSkillScript(report)
+                trace!(player_id, skill_id, level, variant, script_present, "Сценарий навыка передан исполнителю");
             }
         }
         USE_ITEM_SKILL => {
@@ -302,19 +204,14 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                 Err(error) => return Some(Err(error)),
             };
             let Some(player_id) = player_id else {
-                return Some(Ok(GameSkillMessageReport {
-                    message_type,
-                    socket_id,
-                    player_id: None,
-                    region_id,
-                    outcome: GameSkillMessageOutcome::MissingPlayer,
-                }));
+                trace!(message_type, socket_id, "Команда предметного навыка не имеет игрока");
+                return Some(Ok(()));
             };
             let facts = game.player_skill_request_facts(player_id, region_id, request, runtime);
-            let report = game
+            game
                 .request_item_skill(player_id, socket_id, request, skill_level, facts)
                 .expect("resolved message player остаётся в CGame во время item-skill dispatch");
-            GameSkillMessageOutcome::ItemSkill(report)
+            trace!(player_id, skill_id = request.skill_id(), skill_level, "Обработан запрос предметного навыка");
         }
         USE_BATTLE_FAIRY_SKILL => {
             let request = match (|| {
@@ -331,30 +228,19 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                 Err(error) => return Some(Err(error)),
             };
             let Some(player_id) = player_id else {
-                return Some(Ok(GameSkillMessageReport {
-                    message_type,
-                    socket_id,
-                    player_id: None,
-                    region_id,
-                    outcome: GameSkillMessageOutcome::MissingPlayer,
-                }));
+                trace!(message_type, socket_id, "Команда навыка боевой феи не имеет игрока");
+                return Some(Ok(()));
             };
             let facts =
                 game.battle_fairy_skill_request_facts(player_id, region_id, request, runtime);
-            let report = game
+            game
                 .request_battle_fairy_skill(player_id, socket_id, request, facts)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
-            GameSkillMessageOutcome::BattleFairy(report)
+            trace!(player_id, skill_id = request.skill_id(), "Обработан запрос навыка боевой феи");
         }
         _ => unreachable!("unsupported skill message отфильтрован до decode"),
     };
-    Some(Ok(GameSkillMessageReport {
-        message_type,
-        socket_id,
-        player_id,
-        region_id,
-        outcome,
-    }))
+    Some(Ok(()))
 }
 
 // COMPONENT_VARIANT_END: GameServer

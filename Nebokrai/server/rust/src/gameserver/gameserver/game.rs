@@ -566,7 +566,7 @@ use crate::gameserver::appserver::goodswarmember::{
     CGoodsWarMember, dispatch_game_goods_war_message,
 };
 use crate::gameserver::appserver::gameeffectjournal::{
-    GameEffect, GameEffectJournal, SharedGameEffectJournal,
+    GameEffect, GameEffectJournal, SharedGameEffectJournal, shared_game_effect_journal,
 };
 use crate::gameserver::appserver::jjcsystem::{CJJcSystem, JjcInfo};
 use crate::gameserver::appserver::message::containermessage::{
@@ -649,8 +649,7 @@ use crate::gameserver::appserver::player::{
     BattleFairyFollowReport, BattleFairyObjectMove, BattleFairyObjectMoveOperation,
     BattleFairyPotentialAllocationDelivery, BattleFairyPotentialAllocationEffect,
     BattleFairyPotentialResetDelivery, BattleFairyPotentialResetEffect, BattleFairySkillAdded,
-    BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestDelivery,
-    BattleFairySkillRequestEffect, BattleFairySkillRequestFacts, BattleFairySkillRequestReport,
+    BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestFacts,
     BattleFairySkillResetDelivery, BattleFairySkillResetEffect, BattleFairySkillResetReport,
     BattleFairySummonDelivery, BattleFairySummonEffect, BattleFairySummonReport,
     BattleFairyUpgradeDelivery, BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer,
@@ -666,8 +665,8 @@ use crate::gameserver::appserver::player::{
     PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
     PlayerGoodsAiDeletion, PlayerHonorResetReport, PlayerLoginGoodsLocation,
     PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation, PlayerReliveOwnedPrelude,
-    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestDelivery, PlayerSkillRequestEffect,
-    PlayerSkillRequestFacts, PlayerSkillRequestReport, PlayerTalkChannel, PlayerUncreatedCarriage,
+    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestFacts, PlayerTalkChannel,
+    PlayerUncreatedCarriage,
     PlayerUncreatedPet, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
@@ -6418,7 +6417,7 @@ impl CGame {
             world_reconnect_task: None,
             billing_reconnect_task: None,
             net_session_manager: CNetSessionManager::new(NetSessionManagerVariant::GameServer),
-            effect_journal: Arc::new(GameEffectJournal::default()),
+            effect_journal: shared_game_effect_journal(),
             session_factory: CSessionFactory::default(),
             players: BTreeMap::new(),
             regions: BTreeMap::new(),
@@ -30792,6 +30791,13 @@ impl CGame {
                     region_id,
                     value,
                 } => self.apply_region_tax_rate(player_id, region_id, value),
+                GameEffect::SkillNotification { .. }
+                | GameEffect::ClearPlayerEmotion { .. }
+                | GameEffect::SkillSocketReject { .. }
+                | GameEffect::QueuePlayerSkill { .. }
+                | GameEffect::QueueBattleFairySkill { .. } => {
+                    warn!("Эффект навыка попал в разделяемый налоговый журнал");
+                }
             }
         }
     }
@@ -33675,12 +33681,15 @@ impl CGame {
         socket_id: i32,
         request: PlayerSkillRequest,
         facts: PlayerSkillRequestFacts,
-    ) -> Option<PlayerSkillRequestReport> {
-        let report = self
+    ) -> Option<()> {
+        let journal = self
             .players
             .get_mut(&player_id)
-            .map(|player| player.request_player_skill(request, facts, &self.skill_factory))?;
-        Some(self.deliver_player_skill_report(player_id, socket_id, report))
+            .map(|player| {
+                player.request_player_skill(socket_id, request, facts, &self.skill_factory)
+            })?;
+        self.apply_skill_effect_journal(journal);
+        Some(())
     }
 
     pub(crate) fn request_item_skill(
@@ -33690,22 +33699,24 @@ impl CGame {
         request: PlayerSkillRequest,
         skill_level: i32,
         facts: PlayerSkillRequestFacts,
-    ) -> Option<PlayerSkillRequestReport> {
-        let report = self.players.get_mut(&player_id).map(|player| {
-            player.request_item_skill(request, skill_level, facts, &self.skill_factory)
+    ) -> Option<()> {
+        let journal = self.players.get_mut(&player_id).map(|player| {
+            player.request_item_skill(
+                socket_id,
+                request,
+                skill_level,
+                facts,
+                &self.skill_factory,
+            )
         })?;
-        Some(self.deliver_player_skill_report(player_id, socket_id, report))
+        self.apply_skill_effect_journal(journal);
+        Some(())
     }
 
-    fn deliver_player_skill_report(
-        &mut self,
-        player_id: i32,
-        socket_id: i32,
-        mut report: PlayerSkillRequestReport,
-    ) -> PlayerSkillRequestReport {
-        for effect in report.effects.clone() {
+    fn apply_skill_effect_journal(&mut self, mut journal: GameEffectJournal) {
+        for effect in journal.take_all() {
             match effect {
-                PlayerSkillRequestEffect::Notification {
+                GameEffect::SkillNotification {
                     player_id,
                     string_id,
                     color,
@@ -33717,13 +33728,13 @@ impl CGame {
                         self.get_string_by_id(string_id.as_bytes()),
                     )
                     .send_to_player(self.net_server(), player_id);
-                    report
-                        .deliveries
-                        .push(PlayerSkillRequestDelivery::Player(delivery));
+                    trace!(player_id, string_id, delivery, "Отправлено уведомление навыка");
                 }
-                PlayerSkillRequestEffect::ClearEmotion => {
-                    let delivery = report
-                        .region_id
+                GameEffect::ClearPlayerEmotion {
+                    player_id,
+                    region_id,
+                } => {
+                    let delivery = region_id
                         .and_then(|region_id| self.take_region_owner(region_id))
                         .and_then(|owner| {
                             let delivery = self.find_player(player_id).map(|player| {
@@ -33741,11 +33752,10 @@ impl CGame {
                             self.restore_region_owner(owner);
                             delivery
                         });
-                    report
-                        .deliveries
-                        .push(PlayerSkillRequestDelivery::EmotionAround(delivery));
+                    trace!(player_id, ?region_id, ?delivery, "Очищена эмоция перед навыком");
                 }
-                PlayerSkillRequestEffect::SocketReject {
+                GameEffect::SkillSocketReject {
+                    socket_id,
                     message_type,
                     reason,
                     code,
@@ -33753,13 +33763,13 @@ impl CGame {
                     let mut message = CMessage::new(message_type as i32);
                     message.base_mut().add_byte(reason as u8);
                     message.base_mut().add_byte(code);
-                    report
-                        .deliveries
-                        .push(PlayerSkillRequestDelivery::SocketReject(
-                            message.send_to_socket(self.net_server(), socket_id),
-                        ));
+                    let delivery = message.send_to_socket(self.net_server(), socket_id);
+                    trace!(socket_id, message_type, reason, code, delivery, "Отправлен отказ навыка");
                 }
-                PlayerSkillRequestEffect::AiDispatch(dispatch) => {
+                GameEffect::QueuePlayerSkill {
+                    player_id,
+                    dispatch,
+                } => {
                     let rejected = self
                         .players
                         .get_mut(&player_id)
@@ -33770,15 +33780,27 @@ impl CGame {
                         let mut message = CMessage::new(0x000b_fe01);
                         message.add_byte(0);
                         message.add_byte(2);
-                        report.deliveries.push(PlayerSkillRequestDelivery::Player(
-                            message.send_to_player(self.net_server(), player_id),
-                        ));
+                        let _delivery = message.send_to_player(self.net_server(), player_id);
                     }
-                    report.deliveries.push(PlayerSkillRequestDelivery::AiQueued);
+                    trace!(player_id, ?dispatch, rejected, "Навык поставлен в очередь AI");
+                }
+                GameEffect::QueueBattleFairySkill {
+                    player_id,
+                    dispatch,
+                } => {
+                    let replaced = self
+                        .players
+                        .get_mut(&player_id)
+                        .expect("battle-fairy dispatch сохраняет canonical player")
+                        .player_ai_mut()
+                        .queue_battle_fairy_skill(dispatch);
+                    trace!(player_id, ?dispatch, replaced, "Навык боевой феи поставлен в очередь AI");
+                }
+                GameEffect::RegionTaxPrompt { .. } | GameEffect::RegionTaxResult { .. } => {
+                    warn!("Налоговый эффект попал в локальный журнал навыка");
                 }
             }
         }
-        report
     }
 
     /// Reached `CPKSys::OnFirstSkill` caller: вызывается AI execution owner-ом
@@ -38427,63 +38449,20 @@ impl CGame {
         socket_id: i32,
         request: BattleFairySkillRequest,
         facts: BattleFairySkillRequestFacts,
-    ) -> Option<BattleFairySkillRequestReport> {
+    ) -> Option<()> {
         let enabled = self.globe_setup.battle_fairy_enabled();
-        let mut report = self.players.get(&player_id).map(|player| {
+        let journal = self.players.get(&player_id).map(|player| {
             player.request_battle_fairy_skill(
                 enabled,
+                socket_id,
                 request,
                 facts,
                 &self.goods_factory,
                 &self.skill_factory,
             )
         })?;
-        for effect in report.effects.clone() {
-            match effect {
-                BattleFairySkillRequestEffect::Notification {
-                    player_id,
-                    string_id,
-                    color,
-                    message_type,
-                } => {
-                    let delivery = colored_player_notice_message(
-                        color,
-                        message_type,
-                        self.get_string_by_id(string_id.as_bytes()),
-                    )
-                    .send_to_player(self.net_server(), player_id);
-                    report
-                        .deliveries
-                        .push(BattleFairySkillRequestDelivery::Player(delivery));
-                }
-                BattleFairySkillRequestEffect::SocketReject {
-                    message_type,
-                    reason,
-                    code,
-                } => {
-                    let mut message = CMessage::new(message_type as i32);
-                    message.base_mut().add_byte(reason as u8);
-                    message.base_mut().add_byte(code);
-                    report
-                        .deliveries
-                        .push(BattleFairySkillRequestDelivery::SocketReject(
-                            message.send_to_socket(self.net_server(), socket_id),
-                        ));
-                }
-                BattleFairySkillRequestEffect::AiDispatch(dispatch) => {
-                    let _replaced = self
-                        .players
-                        .get_mut(&player_id)
-                        .expect("battle-fairy dispatch сохраняет canonical player")
-                        .player_ai_mut()
-                        .queue_battle_fairy_skill(dispatch);
-                    report
-                        .deliveries
-                        .push(BattleFairySkillRequestDelivery::AiQueued);
-                }
-            }
-        }
-        Some(report)
+        self.apply_skill_effect_journal(journal);
+        Some(())
     }
 
     /// Завершает periodic `ComputeWarSoulXY` tick через тот же region area-map,

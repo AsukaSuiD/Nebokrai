@@ -8,8 +8,11 @@
 //! Диагностика публикуется через `tracing` в месте возникновения и журналом не
 //! является.
 
+use std::collections::VecDeque;
+use std::mem;
 use std::sync::Arc;
 
+use super::player::{BattleFairySkillDispatch, PlayerSkillDispatch};
 use super::serverregion::RegionTaxSessionKind;
 use crate::nets::msgqueue::CMsgQueue;
 
@@ -29,25 +32,53 @@ pub(crate) enum GameEffect {
         region_id: i32,
         value: i32,
     },
+    SkillNotification {
+        player_id: i32,
+        string_id: &'static str,
+        color: u32,
+        message_type: u32,
+    },
+    ClearPlayerEmotion {
+        player_id: i32,
+        region_id: Option<i32>,
+    },
+    SkillSocketReject {
+        socket_id: i32,
+        message_type: u32,
+        reason: u32,
+        code: u8,
+    },
+    QueuePlayerSkill {
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+    },
+    QueueBattleFairySkill {
+        player_id: i32,
+        dispatch: BattleFairySkillDispatch,
+    },
 }
 
 #[derive(Default)]
 pub(crate) struct GameEffectJournal {
-    effects: CMsgQueue<GameEffect>,
+    effects: VecDeque<GameEffect>,
 }
 
 impl GameEffectJournal {
-    pub(crate) fn push(&self, effect: GameEffect) {
-        self.effects.push(effect);
+    pub(crate) fn push(&mut self, effect: GameEffect) {
+        self.effects.push_back(effect);
     }
 
-    pub(crate) fn take_all(&self) -> std::collections::VecDeque<GameEffect> {
-        self.effects.take_all()
+    pub(crate) fn take_all(&mut self) -> VecDeque<GameEffect> {
+        mem::take(&mut self.effects)
     }
 
-    pub(crate) fn extend(&self, effects: impl IntoIterator<Item = GameEffect>) {
+    pub(crate) fn extend(&mut self, effects: impl IntoIterator<Item = GameEffect>) {
         self.effects.extend(effects);
     }
 }
 
-pub(crate) type SharedGameEffectJournal = Arc<GameEffectJournal>;
+pub(crate) type SharedGameEffectJournal = Arc<CMsgQueue<GameEffect>>;
+
+pub(crate) fn shared_game_effect_journal() -> SharedGameEffectJournal {
+    Arc::new(CMsgQueue::default())
+}
