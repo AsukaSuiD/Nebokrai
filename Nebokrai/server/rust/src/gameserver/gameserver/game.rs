@@ -760,6 +760,7 @@ use crate::gameserver::appserver::skills::fightdefense::{
     defend_monster_base_attack, defend_monster_from_monster_base_attack, defend_player_base_attack,
     defend_player_from_monster_base_attack,
 };
+use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -1687,22 +1688,6 @@ struct PetMonsterKillingBlow {
     pos_x_bits: u32,
     pos_y_bits: u32,
     property: crate::setup::monsterlist::MonsterProperties,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameQueuedSkillDispatch {
-    Player(PlayerSkillDispatch),
-    BattleFairy(BattleFairySkillDispatch),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameQueuedSkillExecutionReport {
-    pub(crate) player_id: i32,
-    pub(crate) dispatch: GameQueuedSkillDispatch,
-    pub(crate) outcome: QueuedSkillExecutionOutcome,
-    pub(crate) removed_from_queue: bool,
-    pub(crate) pk_first_skill: Option<FirstSkillPkReport>,
-    pub(crate) death: Option<GamePlayerDeathReport>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36187,10 +36172,9 @@ impl CGame {
             start.add_long(player_id);
             start.add_long(direction);
             let _ = self.send_player_shape_around(player_id, None, &start);
-            player_ai.begin_base_attack(BaseAttackExecutionState {
-                dispatch,
-                started_at_ms: now_ms,
-            });
+            let mut execution = BaseAttackExecutionState::begin(dispatch, now_ms);
+            let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
+            player_ai.begin_base_attack(execution);
             if !time_reached(now_ms, now_ms, delay_ms) {
                 return QueuedSkillExecutionOutcome {
                     state: QueuedSkillExecutionState::Pending,
@@ -36200,14 +36184,14 @@ impl CGame {
             }
         } else if player_ai
             .base_attack()
-            .is_none_or(|state| state.dispatch != dispatch)
+            .is_none_or(|state| state.dispatch() != dispatch)
         {
             return rejected();
         } else if !time_reached(
             now_ms,
             player_ai
                 .base_attack()
-                .map_or(now_ms, |state| state.started_at_ms),
+                .map_or(now_ms, BaseAttackExecutionState::started_at_ms),
             delay_ms,
         ) {
             return QueuedSkillExecutionOutcome {
@@ -36246,6 +36230,7 @@ impl CGame {
                 return rejected();
             }
         }
+        let _ = player_ai.advance_base_attack(SkillStage::Check, SkillStage::Calculate);
         let (target_type, target_id, target_x, target_y) = match target {
             Some((target, view)) => (target.object_type, target.id, view.tile_x, view.tile_y),
             None => match dispatch {
@@ -36391,6 +36376,7 @@ impl CGame {
                 &self.globe_setup,
                 &mut random,
             );
+            let _ = player_ai.advance_base_attack(SkillStage::Calculate, SkillStage::Attack);
             first_contact = true;
             let damage = attack.hp_damage().min(target_health);
             if attack.full_miss != 0 {
@@ -36640,6 +36626,7 @@ impl CGame {
                 &self.globe_setup,
                 &mut random,
             );
+            let _ = player_ai.advance_base_attack(SkillStage::Calculate, SkillStage::Attack);
             first_contact = true;
             let damage = attack.hp_damage().min(monster_health);
             let current_health = monster_health - damage;
@@ -36791,6 +36778,8 @@ impl CGame {
                 attacker.movement_shape_mut().set_action(1);
             }
         }
+        let _ = player_ai.advance_base_attack(SkillStage::Calculate, SkillStage::Attack);
+        let _ = player_ai.advance_base_attack(SkillStage::Attack, SkillStage::Apply);
         self.damage_player_weapon(player_id, runtime);
         player_ai.mark_base_attack_used(now_ms);
         if let Some(player) = self.find_player_mut(player_id) {
@@ -36808,8 +36797,8 @@ impl CGame {
         player_id: i32,
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
-    ) -> Vec<GameQueuedSkillExecutionReport> {
-        let mut reports = Vec::with_capacity(2);
+    ) -> usize {
+        let mut execution_count = 0;
         if let Some(dispatch) = player_ai.next_player_skill() {
             let concrete_base_attack = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
@@ -36824,7 +36813,7 @@ impl CGame {
             } else {
                 runtime.execute_player_skill_dispatch(self, player_id, dispatch)
             };
-            let pk_first_skill = if outcome.first_contact {
+            if outcome.first_contact {
                 match dispatch {
                     PlayerSkillDispatch::Object { target, .. } if target.object_type == 400 => self
                         .find_player(player_id)
@@ -36838,11 +36827,9 @@ impl CGame {
                             )
                         }),
                     _ => None,
-                }
-            } else {
-                None
-            };
-            let death = outcome
+                };
+            }
+            let _death = outcome
                 .killing_blow
                 .and_then(|blow| self.player_on_death(blow, runtime));
             let removed_from_queue = match outcome.state {
@@ -36851,18 +36838,12 @@ impl CGame {
                     player_ai.finish_player_skill(dispatch)
                 }
             };
-            reports.push(GameQueuedSkillExecutionReport {
-                player_id,
-                dispatch: GameQueuedSkillDispatch::Player(dispatch),
-                outcome,
-                removed_from_queue,
-                pk_first_skill,
-                death,
-            });
+            execution_count += 1;
+            trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
         }
         if let Some(dispatch) = player_ai.next_battle_fairy_skill() {
             let outcome = runtime.execute_battle_fairy_skill_dispatch(self, player_id, dispatch);
-            let pk_first_skill = if outcome.first_contact {
+            if outcome.first_contact {
                 match dispatch {
                     BattleFairySkillDispatch::Object { target, .. }
                         if target.object_type == 400 =>
@@ -36879,11 +36860,9 @@ impl CGame {
                             })
                     }
                     _ => None,
-                }
-            } else {
-                None
-            };
-            let death = outcome
+                };
+            }
+            let _death = outcome
                 .killing_blow
                 .and_then(|blow| self.player_on_death(blow, runtime));
             let removed_from_queue = match outcome.state {
@@ -36892,16 +36871,10 @@ impl CGame {
                     player_ai.finish_battle_fairy_skill(dispatch)
                 }
             };
-            reports.push(GameQueuedSkillExecutionReport {
-                player_id,
-                dispatch: GameQueuedSkillDispatch::BattleFairy(dispatch),
-                outcome,
-                removed_from_queue,
-                pk_first_skill,
-                death,
-            });
+            execution_count += 1;
+            trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка боевой феи");
         }
-        reports
+        execution_count
     }
 
     fn send_player_contribution_update(&self, player_id: i32) -> Option<i32> {
@@ -39813,7 +39786,7 @@ impl CGame {
             let mut player_abnormalities = Vec::with_capacity(player_ids.len());
             let mut battle_fairy_follows = Vec::with_capacity(player_ids.len());
             let mut player_ai_tails = Vec::with_capacity(player_ids.len());
-            let mut player_skill_executions = Vec::with_capacity(player_ids.len());
+            let mut player_skill_executions = 0usize;
             let mut player_energy_regenerations = Vec::with_capacity(player_ids.len());
             let mut player_auto_progress = Vec::with_capacity(player_ids.len());
             let mut player_lost_timeouts = Vec::new();
@@ -39881,11 +39854,11 @@ impl CGame {
                                 .find_player_mut(player_id)
                                 .expect("active-state caller проверил canonical player")
                                 .take_player_ai();
-                            player_skill_executions.extend(self.execute_queued_player_skills(
+                            player_skill_executions += self.execute_queued_player_skills(
                                 player_id,
                                 &mut player_ai,
                                 runtime,
-                            ));
+                            );
                             if self.find_player(player_id).is_some() {
                                 restored = runtime.player_move_shape_active_state_ai(
                                     self,
@@ -40300,7 +40273,7 @@ impl CGame {
                             player_abnormalities.len(),
                             battle_fairy_follows.len(),
                             player_ai_tails.len(),
-                            player_skill_executions.len(),
+                            player_skill_executions,
                             player_energy_regenerations.len(),
                             player_auto_progress.len(),
                             player_lost_timeouts.len(),
@@ -40333,7 +40306,7 @@ impl CGame {
                 player_abnormalities.len(),
                 battle_fairy_follows.len(),
                 player_ai_tails.len(),
-                player_skill_executions.len(),
+                player_skill_executions,
                 player_energy_regenerations.len(),
                 player_auto_progress.len(),
                 player_lost_timeouts.len(),

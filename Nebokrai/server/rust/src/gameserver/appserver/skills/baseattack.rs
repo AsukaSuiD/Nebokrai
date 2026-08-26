@@ -10,6 +10,7 @@
 //! маршрутизируются.
 
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
 
 pub(crate) const BASE_ATTACK_SKILL_ID: u32 = 1;
 pub(crate) const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5003;
@@ -17,11 +18,7 @@ pub(crate) const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
 pub(crate) const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
 pub(crate) const SKILL_USAGE_USER_HIT_MODIFIER: u32 = 20_001;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BaseAttackExecutionState {
-    pub(crate) dispatch: PlayerSkillDispatch,
-    pub(crate) started_at_ms: u32,
-}
+pub(crate) type BaseAttackExecutionState = SkillExecutionKernel<PlayerSkillDispatch>;
 
 pub(crate) const fn time_reached(now_ms: u32, started_at_ms: u32, delay_ms: u32) -> bool {
     now_ms.wrapping_sub(started_at_ms) >= delay_ms

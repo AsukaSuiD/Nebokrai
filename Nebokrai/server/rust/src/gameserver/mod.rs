@@ -60,6 +60,7 @@ pub(crate) mod appserver {
     pub(crate) mod skills {
         pub(crate) mod baseattack;
         pub(crate) mod fightdefense;
+        pub(crate) mod kernel;
         pub(crate) mod realmappellation;
         pub(crate) mod skillbaseproperties;
         pub(crate) mod skillfactory;

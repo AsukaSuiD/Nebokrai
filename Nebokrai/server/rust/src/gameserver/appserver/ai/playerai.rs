@@ -23,6 +23,7 @@ use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
+use crate::gameserver::appserver::skills::kernel::SkillStage;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAiDestination {
@@ -138,6 +139,16 @@ impl CPlayerAI {
 
     pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {
         self.base_attack = Some(state);
+    }
+
+    pub(crate) fn advance_base_attack(
+        &mut self,
+        expected: SkillStage,
+        next: SkillStage,
+    ) -> bool {
+        self.base_attack
+            .as_mut()
+            .is_some_and(|state| state.advance(expected, next))
     }
 
     pub(crate) const fn base_attack_last_used_ms(&self) -> u32 {
