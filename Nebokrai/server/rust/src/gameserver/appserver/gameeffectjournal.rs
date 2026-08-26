@@ -12,11 +12,17 @@ use std::collections::VecDeque;
 use std::mem;
 use std::sync::Arc;
 
-use super::player::{BattleFairySkillDispatch, PlayerSkillDispatch};
+use super::player::{
+    BattleFairyCombineEffect, BattleFairyEquipmentMutationEffect, BattleFairyFollowEffect,
+    BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetEffect,
+    BattleFairySkillDispatch, BattleFairySkillResetEffect, BattleFairySummonEffect,
+    BattleFairyUpgradeEffect, PlayerEquipmentAddEffect, PlayerEquipmentRemoveEffect,
+    PlayerSkillDispatch,
+};
 use super::serverregion::RegionTaxSessionKind;
 use crate::nets::msgqueue::CMsgQueue;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameEffect {
     RegionTaxPrompt {
         kind: RegionTaxSessionKind,
@@ -56,24 +62,75 @@ pub(crate) enum GameEffect {
         player_id: i32,
         dispatch: BattleFairySkillDispatch,
     },
+    BattleFairyCombine(BattleFairyCombineEffect),
+    BattleFairySummon(BattleFairySummonEffect),
+    BattleFairyFollow(BattleFairyFollowEffect),
+    PlayerEquipmentRemove(PlayerEquipmentRemoveEffect),
+    PlayerEquipmentAdd(PlayerEquipmentAddEffect),
+    BattleFairyEquipmentMutation(BattleFairyEquipmentMutationEffect),
+    BattleFairyPotentialAllocation(BattleFairyPotentialAllocationEffect),
+    BattleFairyUpgrade(BattleFairyUpgradeEffect),
+    BattleFairyPotentialReset(BattleFairyPotentialResetEffect),
+    BattleFairySkillReset(BattleFairySkillResetEffect),
 }
 
-#[derive(Default)]
+macro_rules! game_effect_conversion {
+    ($source:ty, $variant:ident) => {
+        impl From<$source> for GameEffect {
+            fn from(effect: $source) -> Self {
+                Self::$variant(effect)
+            }
+        }
+    };
+}
+
+game_effect_conversion!(BattleFairyCombineEffect, BattleFairyCombine);
+game_effect_conversion!(BattleFairySummonEffect, BattleFairySummon);
+game_effect_conversion!(BattleFairyFollowEffect, BattleFairyFollow);
+game_effect_conversion!(PlayerEquipmentRemoveEffect, PlayerEquipmentRemove);
+game_effect_conversion!(PlayerEquipmentAddEffect, PlayerEquipmentAdd);
+game_effect_conversion!(
+    BattleFairyEquipmentMutationEffect,
+    BattleFairyEquipmentMutation
+);
+game_effect_conversion!(
+    BattleFairyPotentialAllocationEffect,
+    BattleFairyPotentialAllocation
+);
+game_effect_conversion!(BattleFairyUpgradeEffect, BattleFairyUpgrade);
+game_effect_conversion!(BattleFairyPotentialResetEffect, BattleFairyPotentialReset);
+game_effect_conversion!(BattleFairySkillResetEffect, BattleFairySkillReset);
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GameEffectJournal {
     effects: VecDeque<GameEffect>,
 }
 
 impl GameEffectJournal {
-    pub(crate) fn push(&mut self, effect: GameEffect) {
-        self.effects.push_back(effect);
+    pub(crate) fn push(&mut self, effect: impl Into<GameEffect>) {
+        self.effects.push_back(effect.into());
     }
 
     pub(crate) fn take_all(&mut self) -> VecDeque<GameEffect> {
         mem::take(&mut self.effects)
     }
 
-    pub(crate) fn extend(&mut self, effects: impl IntoIterator<Item = GameEffect>) {
-        self.effects.extend(effects);
+    pub(crate) fn extend<Effect>(&mut self, effects: impl IntoIterator<Item = Effect>)
+    where
+        Effect: Into<GameEffect>,
+    {
+        self.effects.extend(effects.into_iter().map(Into::into));
+    }
+}
+
+impl<Effect> FromIterator<Effect> for GameEffectJournal
+where
+    Effect: Into<GameEffect>,
+{
+    fn from_iter<Effects: IntoIterator<Item = Effect>>(effects: Effects) -> Self {
+        let mut journal = Self::default();
+        journal.extend(effects);
+        journal
     }
 }
 

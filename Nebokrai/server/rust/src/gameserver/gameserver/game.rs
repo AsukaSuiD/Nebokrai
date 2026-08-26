@@ -496,8 +496,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
-use tracing::{debug, info, trace, warn};
 use thiserror::Error;
+use tracing::{debug, info, trace, warn};
 
 use crate::gameserver::appserver::ai::playerai::{CPlayerAI, PlayerAutoProgress};
 use crate::gameserver::appserver::area::{AreaAiContext, AreaMonsterAiFacts};
@@ -522,11 +522,11 @@ use crate::gameserver::appserver::container::cequipmentcontainer::{
 use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::UpgradeEquipmentCell;
 use crate::gameserver::appserver::container::cfairycontainer::{
     FairyContainerAddOutcome, FairyContainerAmountChange, FairyContainerGoodsUpdate,
-    FairyContainerMoveOperation, FairyContainerRemoveOutcome,
-    FairyImplantDelivery, FairyIncubateLog, FairyStateChangeEffect,
-    FairyStateChangeOutcome, FairySyncreticProperty, FairySyncretizeConfig,
-    FairySyncretizeFragmentEffect, FairySyncretizeLog, FairySyncretizePlayer,
-    FairySyncretizePlayerUpdate, FairySyncretizeRemoval, FairySyncretizeReport,
+    FairyContainerMoveOperation, FairyContainerRemoveOutcome, FairyImplantDelivery,
+    FairyIncubateLog, FairyStateChangeEffect, FairyStateChangeOutcome, FairySyncreticProperty,
+    FairySyncretizeConfig, FairySyncretizeFragmentEffect, FairySyncretizeLog,
+    FairySyncretizePlayer, FairySyncretizePlayerUpdate, FairySyncretizeRemoval,
+    FairySyncretizeReport,
 };
 use crate::gameserver::appserver::container::cgoodscontainer::GoodsStackMergeOutcome;
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::{
@@ -543,6 +543,9 @@ use crate::gameserver::appserver::cs2ccontainerobjectmove::{
     CS2CContainerObjectMove, ContainerObjectMoveOperation,
 };
 use crate::gameserver::appserver::exstate::{ExtendedState, ExtendedStateKind};
+use crate::gameserver::appserver::gameeffectjournal::{
+    GameEffect, GameEffectJournal, SharedGameEffectJournal, shared_game_effect_journal,
+};
 use crate::gameserver::appserver::goods::cbattlefairyproperty::{
     BattleFairyExpUpResult, BattleFairyPlayerFacts, CBattleFairyProperty,
 };
@@ -563,9 +566,6 @@ use crate::gameserver::appserver::goods::fairyproperties::{
 use crate::gameserver::appserver::goodswarmember::{
     CGoodsWarMember, dispatch_game_goods_war_message,
 };
-use crate::gameserver::appserver::gameeffectjournal::{
-    GameEffect, GameEffectJournal, SharedGameEffectJournal, shared_game_effect_journal,
-};
 use crate::gameserver::appserver::jjcsystem::{CJJcSystem, JjcInfo};
 use crate::gameserver::appserver::message::containermessage::{
     AuctionListingTransferBlock, AuctionListingTransferRemoval, AuctionListingTransferReport,
@@ -574,8 +574,7 @@ use crate::gameserver::appserver::message::containermessage::{
     EnhancementTransferBlock, EnhancementTransferOutcome, EnhancementTransferRemoval,
     EnhancementTransferReport, EquipmentSessionClearBlock, EquipmentSessionSelectionBlock,
     EquipmentSessionSelectionReport, PersonalShopClearBlock, PersonalShopSelectionBlock,
-    PersonalShopSelectionReport,
-    dispatch_game_container_message, send_enhancement_goods_collected,
+    PersonalShopSelectionReport, dispatch_game_container_message, send_enhancement_goods_collected,
     send_enhancement_shadow_deleted,
 };
 use crate::gameserver::appserver::message::countrymessage::{
@@ -637,30 +636,25 @@ use crate::gameserver::appserver::pksys::{
     KillPkDisposition, KillPkFacts,
 };
 use crate::gameserver::appserver::player::{
-    AuctionSelfGoodsRefresh, BattleFairyCombineEffect,
-    BattleFairyDeathOutcome, BattleFairyEquipmentMutationEffect,
-    BattleFairyEquipmentMutationOutcome,
-    BattleFairyEquipmentMutationReport, BattleFairyFollowEffect,
-    BattleFairyObjectMove, BattleFairyObjectMoveOperation,
-    BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetEffect,
-    BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestFacts,
-    BattleFairySkillResetEffect, BattleFairySkillResetReport,
+    AuctionSelfGoodsRefresh, BattleFairyCombineEffect, BattleFairyDeathOutcome,
+    BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationOutcome,
+    BattleFairyEquipmentMutationReport, BattleFairyFollowEffect, BattleFairyObjectMove,
+    BattleFairyObjectMoveOperation, BattleFairyPotentialAllocationEffect,
+    BattleFairyPotentialResetEffect, BattleFairySkillDispatch, BattleFairySkillRequest,
+    BattleFairySkillRequestFacts, BattleFairySkillResetEffect, BattleFairySkillResetReport,
     BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeEffect,
-    BattleFairyWarSoulAction, CPlayer,
-    CiQingContainerAddition, CiQingContainerConsumption, CiQingHandConsumption,
-    CiQingPacketAddition, CiQingPacketConsumption, EnhancementDeselectionBlock,
-    EnhancementDeselectionReport, EnhancementSelectionBlock, EnhancementSelectionReport,
-    GoodsDestroyHandConsumption, HotkeyHandTransferOutcome,
+    BattleFairyWarSoulAction, CPlayer, CiQingContainerAddition, CiQingContainerConsumption,
+    CiQingHandConsumption, CiQingPacketAddition, CiQingPacketConsumption,
+    EnhancementDeselectionBlock, EnhancementDeselectionReport, EnhancementSelectionBlock,
+    EnhancementSelectionReport, GoodsDestroyHandConsumption, HotkeyHandTransferOutcome,
     HotkeyHandTransferReport, PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange,
-    PlayerBankCurrencyAddOutcome, PlayerCombatProperties,
-    PlayerDeathGoodsCandidate, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
-    PlayerEquipmentAddRuntimeFacts, PlayerEquipmentRemoveEffect,
-    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
-    PlayerFightStateTransition, PlayerGameSaveCodecError,
-    PlayerGoodsAiDeletion, PlayerLoginGoodsLocation, PlayerProgress,
-    PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestFacts, PlayerTalkChannel,
-    PlayerUncreatedCarriage,
-    PlayerUncreatedPet, PlayerYuanBaoChange,
+    PlayerBankCurrencyAddOutcome, PlayerCombatProperties, PlayerDeathGoodsCandidate,
+    PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
+    PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
+    PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGoodsAiDeletion,
+    PlayerLoginGoodsLocation, PlayerProgress, PlayerSkillDispatch, PlayerSkillRequest,
+    PlayerSkillRequestFacts, PlayerTalkChannel, PlayerUncreatedCarriage, PlayerUncreatedPet,
+    PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -688,22 +682,20 @@ use crate::gameserver::appserver::servergodsbattleregion::{
 };
 use crate::gameserver::appserver::servernationregion::{
     NationCarriageReturnOutcome, NationContendCancelOutcome, NationMonsterDamageNotice,
-    NationMoraleMutation, ServerNationRegion,
-    classify_nation_morale_target,
+    NationMoraleMutation, ServerNationRegion, classify_nation_morale_target,
 };
 use crate::gameserver::appserver::serverregion::{
-    CServerRegion, RegionMembershipBlock, RegionTaxSessionBegin,
-    RegionTaxSessionEndpoint, RegionTaxSessionKind, ServerRegionAreaTransitionContext,
-    ServerRegionClearPlayerTick,
+    CServerRegion, RegionMembershipBlock, RegionTaxSessionBegin, RegionTaxSessionEndpoint,
+    RegionTaxSessionKind, ServerRegionAreaTransitionContext, ServerRegionClearPlayerTick,
     ServerRegionMembershipContext, ServerRegionMonsterContext, ServerRegionMonsterRectBlock,
-    ServerRegionNpcContext, ServerRegionNpcSetup,
-    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnOutcome, ServerRegionWeather,
-    ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
+    ServerRegionNpcContext, ServerRegionNpcSetup, ServerRegionNpcSpawnBlock,
+    ServerRegionNpcSpawnOutcome, ServerRegionWeather, ServerRegionWeatherTick, ServerReturnPlayer,
+    ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
-    ContendPlayerState, SymbolCaptureLog, WarContendContext,
-    WarContendEntryContext, WarRegionContext, WarRegionOwnership,
+    ContendPlayerState, SymbolCaptureLog, WarContendContext, WarContendEntryContext,
+    WarRegionContext, WarRegionOwnership,
 };
 use crate::gameserver::appserver::session::cequipmentcompose::{
     CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
@@ -718,13 +710,13 @@ use crate::gameserver::appserver::session::cequipmentdakong::{
 };
 use crate::gameserver::appserver::session::cequipmentupgrade::{
     CEquipmentUpgrade, EQUIPMENT_UPGRADE_FAILURE_LOG_REASON, EQUIPMENT_UPGRADE_LOST_LOG_REASON,
-    EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON, EquipmentUpgradeAuditLog,
-    EquipmentUpgradeGoodsSnapshot, EquipmentUpgradeLostAuditLog,
+    EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON, EquipmentUpgradeAuditLog, EquipmentUpgradeGoodsSnapshot,
+    EquipmentUpgradeLostAuditLog,
 };
 use crate::gameserver::appserver::session::csessionfactory::{
-    CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved,
-    TeamMemberInserted, TeamMemberRemoved, TeamSessionCreated, TeamSessionDisbanded,
-    TeamSessionRestored, TeamSessionSnapshot, TerminalEquipmentSessionCollected,
+    CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved, TeamMemberInserted,
+    TeamMemberRemoved, TeamSessionCreated, TeamSessionDisbanded, TeamSessionRestored,
+    TeamSessionSnapshot, TerminalEquipmentSessionCollected,
 };
 use crate::gameserver::appserver::session::ctrader::{
     TraderContainerKind, TraderOfferAdded, TraderOfferBlock, TraderOfferRemoved,
@@ -754,9 +746,7 @@ use crate::gameserver::gameserver::playerranks::{
 };
 use crate::nets::clients::ClientConnectError;
 use crate::nets::mysocket::legacy_ipv4_word;
-use crate::nets::netserver::message::{
-    CMessage, GameServerAroundRuntime, SendMessageError,
-};
+use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime, SendMessageError};
 use crate::nets::netserver::mynetclient::{
     CMyNetClient, GameClientIoError, GameClientIoStep, ServerType,
 };
@@ -796,9 +786,9 @@ use crate::setup::leitingsetup::CThingSetup;
 use crate::setup::lingbao::CLingBaoSetup;
 use crate::setup::logsystem::CLogSystem;
 use crate::setup::monsterlist::{
-    MonsterDropRegistry, MonsterListDecodeError, MonsterProperties,
-    MonsterRegistry, decode_monster_list, get_monster_property_by_origin_index,
-    get_monster_property_by_origin_name, get_monster_property_by_origin_name_mut,
+    MonsterDropRegistry, MonsterListDecodeError, MonsterProperties, MonsterRegistry,
+    decode_monster_list, get_monster_property_by_origin_index, get_monster_property_by_origin_name,
+    get_monster_property_by_origin_name_mut,
 };
 use crate::setup::newskillmonsterlist::NewSkillMonsterConf;
 use crate::setup::playerlist::CPlayerList;
@@ -2202,7 +2192,6 @@ pub(crate) struct BattleFairyStorageRemoval {
     pub(crate) listeners: Vec<ContainerListenerHandle>,
     pub(crate) cell: BattleFairyCell,
     pub(crate) property_applied: bool,
-    pub(crate) effects: Vec<BattleFairyEquipmentMutationEffect>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2765,14 +2754,24 @@ impl<Runtime: GameMainLoopRuntime> CountryContendEntryContext
         let mut message = CMessage::new(0x000b_ff29);
         message.add_long(time);
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        tracing::trace!(player_id, percentage = time, delivery, "отправлено время захвата символа государства");
+        tracing::trace!(
+            player_id,
+            percentage = time,
+            delivery,
+            "отправлено время захвата символа государства"
+        );
     }
 
     fn set_known_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
                 .publish_war_player_contend_state(&self.region, player_id, state);
-        tracing::trace!(player_id, state, ?around_delivery, "опубликовано состояние захвата символа государства");
+        tracing::trace!(
+            player_id,
+            state,
+            ?around_delivery,
+            "опубликовано состояние захвата символа государства"
+        );
     }
 
     fn notify_player(&mut self, player_id: i32, string_id: &'static str) {
@@ -2782,7 +2781,12 @@ impl<Runtime: GameMainLoopRuntime> CountryContendEntryContext
             self.game.get_string_by_id(string_id.as_bytes()),
         );
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление захвата символа государства");
+        tracing::trace!(
+            player_id,
+            string_id,
+            delivery,
+            "отправлено уведомление захвата символа государства"
+        );
     }
 }
 
@@ -2839,7 +2843,12 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
         );
         let delivery = colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
             .send_to_region(Some(&self.region), None, self.game);
-        tracing::trace!(country, symbol_name, delivery, "отправлено уведомление региона о захвате символа государства");
+        tracing::trace!(
+            country,
+            symbol_name,
+            delivery,
+            "отправлено уведомление региона о захвате символа государства"
+        );
     }
 
     fn send_country_symbol_captured_top_info(
@@ -2859,7 +2868,13 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
             0x3ff,
         );
         let delivery = self.game.send_top_info_to_client(-1, 0, 1, 1, &text);
-        tracing::trace!(country, region_name, symbol_name, ?delivery, "отправлена верхняя строка о захвате символа государства");
+        tracing::trace!(
+            country,
+            region_name,
+            symbol_name,
+            ?delivery,
+            "отправлена верхняя строка о захвате символа государства"
+        );
     }
 }
 
@@ -2890,14 +2905,24 @@ impl<Runtime: GameMainLoopRuntime> WarRegionContext for GameCityRegionAiContext<
         let mut message = CMessage::new(0x000b_ff29);
         message.add_long(time);
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        tracing::trace!(player_id, percentage = time, delivery, "отправлено время захвата городского символа");
+        tracing::trace!(
+            player_id,
+            percentage = time,
+            delivery,
+            "отправлено время захвата городского символа"
+        );
     }
 
     fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
                 .publish_war_player_contend_state(&self.region, player_id, state);
-        tracing::trace!(player_id, state, ?around_delivery, "опубликовано состояние захвата городского символа");
+        tracing::trace!(
+            player_id,
+            state,
+            ?around_delivery,
+            "опубликовано состояние захвата городского символа"
+        );
     }
 
     fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool) {
@@ -2941,7 +2966,12 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext for GameCityRegionAiCo
             self.game.get_string_by_id(string_id.as_bytes()),
         );
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление захвата городского символа");
+        tracing::trace!(
+            player_id,
+            string_id,
+            delivery,
+            "отправлено уведомление захвата городского символа"
+        );
     }
 
     fn register_needed_good(&mut self, _good_name: &str) {
@@ -2970,7 +3000,13 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext for GameCityRegionAiCo
         );
         let delivery = colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
             .send_to_region(Some(&self.region), None, self.game);
-        tracing::trace!(country, faction_name, symbol_name, delivery, "отправлено уведомление о первом претенденте на городской символ");
+        tracing::trace!(
+            country,
+            faction_name,
+            symbol_name,
+            delivery,
+            "отправлено уведомление о первом претенденте на городской символ"
+        );
     }
 }
 
@@ -3051,7 +3087,10 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
             self.game.get_string_by_id(b"GS0241"),
         )
         .send_to_region(Some(&self.region), None, self.game);
-        tracing::trace!(delivery, "отправлено уведомление региона о захвате городского символа");
+        tracing::trace!(
+            delivery,
+            "отправлено уведомление региона о захвате городского символа"
+        );
     }
 
     fn send_symbol_captured_top_info(&mut self, faction_name: &str, symbol_name: &str) {
@@ -3061,12 +3100,27 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
             0x3ff,
         );
         let delivery = self.game.send_top_info_to_client(-1, 0, 1, 1, &text);
-        tracing::trace!(faction_name, symbol_name, ?delivery, "отправлена верхняя строка о захвате городского символа");
+        tracing::trace!(
+            faction_name,
+            symbol_name,
+            ?delivery,
+            "отправлена верхняя строка о захвате городского символа"
+        );
     }
 
     fn write_symbol_capture_logs(&mut self, capture: SymbolCaptureLog<'_>) {
         self.game.write_war_symbol_capture_log(&capture);
-        tracing::trace!(war_number = capture.war_number, owned_faction_id = capture.owned_faction_id, owned_union_id = capture.owned_union_id, faction_name = capture.faction_name, faction_id = capture.faction_id, player_id = capture.player_id, symbol_id = capture.symbol_id, union_id = capture.union_id, "записан журнал захвата городского символа");
+        tracing::trace!(
+            war_number = capture.war_number,
+            owned_faction_id = capture.owned_faction_id,
+            owned_union_id = capture.owned_union_id,
+            faction_name = capture.faction_name,
+            faction_id = capture.faction_id,
+            player_id = capture.player_id,
+            symbol_id = capture.symbol_id,
+            union_id = capture.union_id,
+            "записан журнал захвата городского символа"
+        );
     }
 }
 
@@ -3098,14 +3152,24 @@ impl<Runtime: GameMainLoopRuntime> WarRegionContext for GameVillageRegionAiConte
         let mut message = CMessage::new(0x000b_ff29);
         message.add_long(time);
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        tracing::trace!(player_id, percentage = time, delivery, "отправлено время захвата деревенского символа");
+        tracing::trace!(
+            player_id,
+            percentage = time,
+            delivery,
+            "отправлено время захвата деревенского символа"
+        );
     }
 
     fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
                 .publish_war_player_contend_state(&self.region, player_id, state);
-        tracing::trace!(player_id, state, ?around_delivery, "опубликовано состояние захвата деревенского символа");
+        tracing::trace!(
+            player_id,
+            state,
+            ?around_delivery,
+            "опубликовано состояние захвата деревенского символа"
+        );
     }
 
     fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool) {
@@ -3165,7 +3229,12 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext
             self.game.get_string_by_id(string_id.as_bytes()),
         );
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление захвата деревенского символа");
+        tracing::trace!(
+            player_id,
+            string_id,
+            delivery,
+            "отправлено уведомление захвата деревенского символа"
+        );
     }
 
     fn register_needed_good(&mut self, good_name: &str) {
@@ -3173,7 +3242,10 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext
             return;
         }
         self.needed_goods.push(good_name.to_owned());
-        tracing::trace!(good_name, "зарегистрирован необходимый предмет деревенской войны");
+        tracing::trace!(
+            good_name,
+            "зарегистрирован необходимый предмет деревенской войны"
+        );
     }
 
     fn send_first_faction_contender_notice(
@@ -3198,7 +3270,13 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext
         );
         let delivery = colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
             .send_to_region(Some(&self.region), None, self.game);
-        tracing::trace!(country, faction_name, symbol_name, delivery, "отправлено уведомление о первом претенденте на деревенский символ");
+        tracing::trace!(
+            country,
+            faction_name,
+            symbol_name,
+            delivery,
+            "отправлено уведомление о первом претенденте на деревенский символ"
+        );
     }
 }
 
@@ -3260,7 +3338,10 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
             self.game.get_string_by_id(b"GS0241"),
         )
         .send_to_region(Some(&self.region), None, self.game);
-        tracing::trace!(delivery, "отправлено уведомление региона о захвате деревенского символа");
+        tracing::trace!(
+            delivery,
+            "отправлено уведомление региона о захвате деревенского символа"
+        );
     }
 
     fn send_symbol_captured_top_info(&mut self, faction_name: &str, symbol_name: &str) {
@@ -3270,12 +3351,27 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
             0x3ff,
         );
         let delivery = self.game.send_top_info_to_client(-1, 0, 1, 1, &text);
-        tracing::trace!(faction_name, symbol_name, ?delivery, "отправлена верхняя строка о захвате деревенского символа");
+        tracing::trace!(
+            faction_name,
+            symbol_name,
+            ?delivery,
+            "отправлена верхняя строка о захвате деревенского символа"
+        );
     }
 
     fn write_symbol_capture_logs(&mut self, capture: SymbolCaptureLog<'_>) {
         self.game.write_war_symbol_capture_log(&capture);
-        tracing::trace!(war_number = capture.war_number, owned_faction_id = capture.owned_faction_id, owned_union_id = capture.owned_union_id, faction_name = capture.faction_name, faction_id = capture.faction_id, player_id = capture.player_id, symbol_id = capture.symbol_id, union_id = capture.union_id, "записан журнал захвата деревенского символа");
+        tracing::trace!(
+            war_number = capture.war_number,
+            owned_faction_id = capture.owned_faction_id,
+            owned_union_id = capture.owned_union_id,
+            faction_name = capture.faction_name,
+            faction_id = capture.faction_id,
+            player_id = capture.player_id,
+            symbol_id = capture.symbol_id,
+            union_id = capture.union_id,
+            "записан журнал захвата деревенского символа"
+        );
     }
 }
 
@@ -3331,7 +3427,6 @@ pub(crate) enum PersonalShopBillingCompletion {
     ShopUnavailable,
     Processed,
 }
-
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameTeamJoinResult {
@@ -3868,13 +3963,8 @@ impl CGame {
         goods_id: CGuid,
         context: &mut Context,
     ) {
-        let _ = self.transact_personal_shop_goods(
-            session_id,
-            buyer_plug_id,
-            goods_id,
-            false,
-            context,
-        );
+        let _ =
+            self.transact_personal_shop_goods(session_id, buyer_plug_id, goods_id, false, context);
     }
 
     pub(crate) fn complete_personal_shop_billing_goods<Context: GameContainerMessageRuntime>(
@@ -3896,7 +3986,12 @@ impl CGame {
         context: &mut Context,
     ) -> PersonalShopBillingCompletion {
         if !self.personal_shop_session_available(session_id, context) {
-            tracing::trace!(session_id, buyer_plug_id, ?goods_id, "сессия личной лавки недоступна");
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                ?goods_id,
+                "сессия личной лавки недоступна"
+            );
             return PersonalShopBillingCompletion::ShopUnavailable;
         }
         let Some(buyer) = self
@@ -3905,14 +4000,24 @@ impl CGame {
             .filter(|buyer| buyer.session_id() == session_id)
             .copied()
         else {
-            tracing::trace!(session_id, buyer_plug_id, ?goods_id, "подключение покупателя личной лавки не найдено");
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                ?goods_id,
+                "подключение покупателя личной лавки не найдено"
+            );
             return PersonalShopBillingCompletion::ShopUnavailable;
         };
         let Some(seller_plug_id) = self
             .session_factory
             .personal_shop_seller_plug_id(session_id)
         else {
-            tracing::trace!(session_id, buyer_plug_id, ?goods_id, "подключение продавца личной лавки не найдено");
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                ?goods_id,
+                "подключение продавца личной лавки не найдено"
+            );
             return PersonalShopBillingCompletion::ShopUnavailable;
         };
         let Some(seller_id) = self
@@ -3920,7 +4025,13 @@ impl CGame {
             .query_plug(seller_plug_id)
             .map(|plug| plug.owner_id())
         else {
-            tracing::trace!(session_id, buyer_plug_id, seller_plug_id, ?goods_id, "владелец подключения продавца не найден");
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                seller_plug_id,
+                ?goods_id,
+                "владелец подключения продавца не найден"
+            );
             return PersonalShopBillingCompletion::ShopUnavailable;
         };
         let Some(seller) = self
@@ -3928,19 +4039,45 @@ impl CGame {
             .personal_shop_seller(seller_plug_id)
             .filter(|seller| seller.shop_opened())
         else {
-            tracing::trace!(session_id, buyer_plug_id, seller_plug_id, seller_id, ?goods_id, "личная лавка закрыта");
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                seller_plug_id,
+                seller_id,
+                ?goods_id,
+                "личная лавка закрыта"
+            );
             return PersonalShopBillingCompletion::ShopUnavailable;
         };
         let Some(price) = seller.goods_price(goods_id) else {
-            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, "товар личной лавки не найден");
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                seller_id,
+                ?goods_id,
+                "товар личной лавки не найден"
+            );
             return PersonalShopBillingCompletion::Processed;
         };
         if price.price == 0 {
-            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, "товар личной лавки имеет нулевую цену");
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                seller_id,
+                ?goods_id,
+                "товар личной лавки имеет нулевую цену"
+            );
             return PersonalShopBillingCompletion::Processed;
         }
         if !billing_completion && price.price_type != 0 {
-            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, price_type = price.price_type, "тип цены требует ответа Billing");
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                seller_id,
+                ?goods_id,
+                price_type = price.price_type,
+                "тип цены требует ответа Billing"
+            );
             return PersonalShopBillingCompletion::Processed;
         }
         let Some(previous) = seller
@@ -3949,7 +4086,13 @@ impl CGame {
             .base()
             .original_container_information(goods_id)
         else {
-            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, "исходная позиция товара личной лавки не найдена");
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                seller_id,
+                ?goods_id,
+                "исходная позиция товара личной лавки не найдена"
+            );
             return PersonalShopBillingCompletion::Processed;
         };
         let Some(goods) = self
@@ -3964,44 +4107,69 @@ impl CGame {
             })
             .cloned()
         else {
-            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, "исходный товар продавца не найден");
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                seller_id,
+                ?goods_id,
+                "исходный товар продавца не найден"
+            );
             return PersonalShopBillingCompletion::Processed;
         };
         let Some(buyer_player) = self.players.get(&buyer.owner_id()) else {
-            tracing::trace!(session_id, buyer_plug_id, buyer_id = buyer.owner_id(), ?goods_id, "игрок-покупатель не найден");
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                buyer_id = buyer.owner_id(),
+                ?goods_id,
+                "игрок-покупатель не найден"
+            );
             return PersonalShopBillingCompletion::Processed;
         };
         if !billing_completion && buyer_player.money() < price.price {
-            let delivery = colored_player_notice_message(
-                0xffff_ffff,
-                0,
-                self.get_string_by_id(b"GS0261"),
-            )
-            .send_to_player(self.net_server(), buyer.owner_id());
-            tracing::trace!(session_id, buyer_plug_id, buyer_id = buyer.owner_id(), ?goods_id, delivery, "у покупателя недостаточно денег");
+            let delivery =
+                colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0261"))
+                    .send_to_player(self.net_server(), buyer.owner_id());
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                buyer_id = buyer.owner_id(),
+                ?goods_id,
+                delivery,
+                "у покупателя недостаточно денег"
+            );
             return PersonalShopBillingCompletion::Processed;
         }
         if buyer_player.packet().is_full(&self.goods_factory) {
-            let delivery = colored_player_notice_message(
-                0xffff_ffff,
-                0,
-                self.get_string_by_id(b"GS0260"),
-            )
-            .send_to_player(self.net_server(), buyer.owner_id());
-            tracing::trace!(session_id, buyer_plug_id, buyer_id = buyer.owner_id(), ?goods_id, delivery, "инвентарь покупателя заполнен");
+            let delivery =
+                colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0260"))
+                    .send_to_player(self.net_server(), buyer.owner_id());
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                buyer_id = buyer.owner_id(),
+                ?goods_id,
+                delivery,
+                "инвентарь покупателя заполнен"
+            );
             return PersonalShopBillingCompletion::Processed;
         }
         let burden = buyer_player.current_burden(&self.goods_factory);
         if u32::from(buyer_player.combat_properties().burden)
             < burden.wrapping_add(goods.weight(&self.goods_factory))
         {
-            let delivery = colored_player_notice_message(
-                0xffff_ffff,
-                0,
-                self.get_string_by_id(b"GS0259"),
-            )
-            .send_to_player(self.net_server(), buyer.owner_id());
-            tracing::trace!(session_id, buyer_plug_id, buyer_id = buyer.owner_id(), ?goods_id, delivery, burden, "товар превышает допустимую нагрузку покупателя");
+            let delivery =
+                colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0259"))
+                    .send_to_player(self.net_server(), buyer.owner_id());
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                buyer_id = buyer.owner_id(),
+                ?goods_id,
+                delivery,
+                burden,
+                "товар превышает допустимую нагрузку покупателя"
+            );
             return PersonalShopBillingCompletion::Processed;
         }
         let maximum_gold = self
@@ -4015,26 +4183,34 @@ impl CGame {
                     .map_or(0, CPlayer::money)
                     .wrapping_add(price.price)
         {
-            let delivery = colored_player_notice_message(
-                0xffff_ffff,
-                0,
-                self.get_string_by_id(b"GS0258"),
-            )
-            .send_to_player(self.net_server(), buyer.owner_id());
-            tracing::trace!(session_id, buyer_plug_id, seller_id, ?goods_id, delivery, "деньги продавца достигли предела");
+            let delivery =
+                colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0258"))
+                    .send_to_player(self.net_server(), buyer.owner_id());
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                seller_id,
+                ?goods_id,
+                delivery,
+                "деньги продавца достигли предела"
+            );
             return PersonalShopBillingCompletion::Processed;
         }
         let mut packet_probe = buyer_player.packet().clone();
         let mut probe_goods = Some(goods.clone());
         let probe = packet_probe.add_goods(&mut probe_goods, &self.goods_factory, true);
         if probe_goods.is_some() || matches!(probe, VolumeGoodsAddOutcome::Rejected(_)) {
-            let delivery = colored_player_notice_message(
-                0xffff_ffff,
-                0,
-                self.get_string_by_id(b"GS0260"),
-            )
-            .send_to_player(self.net_server(), buyer.owner_id());
-            tracing::trace!(session_id, buyer_plug_id, buyer_id = buyer.owner_id(), ?goods_id, delivery, "пробное добавление товара в инвентарь отклонено");
+            let delivery =
+                colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0260"))
+                    .send_to_player(self.net_server(), buyer.owner_id());
+            tracing::trace!(
+                session_id,
+                buyer_plug_id,
+                buyer_id = buyer.owner_id(),
+                ?goods_id,
+                delivery,
+                "пробное добавление товара в инвентарь отклонено"
+            );
             return PersonalShopBillingCompletion::Processed;
         }
         let audit = {
@@ -4101,7 +4277,13 @@ impl CGame {
         };
         self.players.insert(seller_id, seller_player);
         let Some(removed) = removed else {
-            tracing::warn!(session_id, buyer_plug_id, seller_id, ?goods_id, "не удалось изъять проданный товар у продавца");
+            tracing::warn!(
+                session_id,
+                buyer_plug_id,
+                seller_id,
+                ?goods_id,
+                "не удалось изъять проданный товар у продавца"
+            );
             return PersonalShopBillingCompletion::Processed;
         };
         self.session_factory
@@ -4114,7 +4296,13 @@ impl CGame {
             removed.identity(),
             removed.amount(),
         );
-        tracing::trace!(session_id, seller_id, ?goods_id, seller_delete_delivery, "удаление товара отправлено продавцу");
+        tracing::trace!(
+            session_id,
+            seller_id,
+            ?goods_id,
+            seller_delete_delivery,
+            "удаление товара отправлено продавцу"
+        );
 
         let original = removed.clone();
         let (additions, rejected) = {
@@ -4127,7 +4315,13 @@ impl CGame {
         };
         for addition in &additions {
             let deliveries = self.send_player_packet_addition(addition);
-            tracing::trace!(session_id, buyer_id = buyer.owner_id(), ?goods_id, ?deliveries, "добавление товара отправлено покупателю");
+            tracing::trace!(
+                session_id,
+                buyer_id = buyer.owner_id(),
+                ?goods_id,
+                ?deliveries,
+                "добавление товара отправлено покупателю"
+            );
         }
         if !rejected.is_empty()
             || additions
@@ -4150,9 +4344,21 @@ impl CGame {
             );
             for addition in &rollback {
                 let deliveries = self.send_player_packet_addition(addition);
-                tracing::trace!(session_id, seller_id, ?goods_id, ?deliveries, "возврат товара отправлен продавцу");
+                tracing::trace!(
+                    session_id,
+                    seller_id,
+                    ?goods_id,
+                    ?deliveries,
+                    "возврат товара отправлен продавцу"
+                );
             }
-            tracing::warn!(session_id, buyer_id = buyer.owner_id(), seller_id, ?goods_id, "добавление товара покупателю завершилось возвратом продавцу");
+            tracing::warn!(
+                session_id,
+                buyer_id = buyer.owner_id(),
+                seller_id,
+                ?goods_id,
+                "добавление товара покупателю завершилось возвратом продавцу"
+            );
             return PersonalShopBillingCompletion::Processed;
         }
 
@@ -4164,7 +4370,12 @@ impl CGame {
                 .decrease_money(price.price, &self.goods_factory);
             let buyer_deliveries =
                 self.send_player_money_decrease(buyer.owner_id(), &buyer_change.outcome);
-            tracing::trace!(session_id, buyer_id = buyer.owner_id(), ?buyer_deliveries, "уменьшение денег отправлено покупателю");
+            tracing::trace!(
+                session_id,
+                buyer_id = buyer.owner_id(),
+                ?buyer_deliveries,
+                "уменьшение денег отправлено покупателю"
+            );
             let created =
                 self.create_goods_batch(self.goods_factory.get_gold_coin_index(), price.price);
             let seller_increase = self
@@ -4174,7 +4385,12 @@ impl CGame {
                 .increase_money(price.price, &self.goods_factory, created);
             let seller_deliveries =
                 self.send_player_money_increase(seller_id, &seller_increase, context);
-            tracing::trace!(session_id, seller_id, ?seller_deliveries, "увеличение денег отправлено продавцу");
+            tracing::trace!(
+                session_id,
+                seller_id,
+                ?seller_deliveries,
+                "увеличение денег отправлено продавцу"
+            );
         }
         if !billing_completion && self.log_system.goods_trade_log_enabled() {
             let mut message = CMessage::new(0x0006_0201);
@@ -4196,9 +4412,24 @@ impl CGame {
             message.add_ulong(audit.9);
             message.add_ulong(audit.4);
             let audit_delivery = message.send(self, false);
-            tracing::trace!(session_id, buyer_id = buyer.owner_id(), seller_id, ?goods_id, ?audit_delivery, "аудит сделки личной лавки отправлен");
+            tracing::trace!(
+                session_id,
+                buyer_id = buyer.owner_id(),
+                seller_id,
+                ?goods_id,
+                ?audit_delivery,
+                "аудит сделки личной лавки отправлен"
+            );
         }
-        tracing::debug!(session_id, buyer_id = buyer.owner_id(), seller_id, ?goods_id, price = price.price, billing_completion, "сделка личной лавки завершена");
+        tracing::debug!(
+            session_id,
+            buyer_id = buyer.owner_id(),
+            seller_id,
+            ?goods_id,
+            price = price.price,
+            billing_completion,
+            "сделка личной лавки завершена"
+        );
         PersonalShopBillingCompletion::Processed
     }
 
@@ -4224,26 +4455,40 @@ impl CGame {
         around.add_long(seller_id);
         around.add_long(seller_plug_id);
         let around_delivery = self.send_player_shape_around(seller_id, None, &around);
-        tracing::trace!(session_id, seller_plug_id, seller_id, ?around_delivery, "закрытие личной лавки отправлено окружению");
+        tracing::trace!(
+            session_id,
+            seller_plug_id,
+            seller_id,
+            ?around_delivery,
+            "закрытие личной лавки отправлено окружению"
+        );
         for buyer in buyers {
             if let Some(player) = self.players.get_mut(&buyer.owner_id()) {
                 player.set_current_progress_snapshot(PlayerProgress::None);
                 let mut message = CMessage::new(0x000c_0008);
                 message.add_long(session_id);
                 let delivery = message.send_to_player(self.net_server(), buyer.owner_id());
-                tracing::trace!(session_id, buyer_plug_id = buyer.plug_id(), buyer_id = buyer.owner_id(), delivery, "завершение личной лавки отправлено покупателю");
+                tracing::trace!(
+                    session_id,
+                    buyer_plug_id = buyer.plug_id(),
+                    buyer_id = buyer.owner_id(),
+                    delivery,
+                    "завершение личной лавки отправлено покупателю"
+                );
             }
         }
         let _ = self.session_factory.end_session(session_id);
         let collected_plug_ids = self.session_factory.garbage_collect_session(session_id);
-        tracing::debug!(session_id, seller_plug_id, seller_id, ?collected_plug_ids, "сессия личной лавки завершена");
+        tracing::debug!(
+            session_id,
+            seller_plug_id,
+            seller_id,
+            ?collected_plug_ids,
+            "сессия личной лавки завершена"
+        );
     }
 
-    pub(crate) fn exit_personal_shop_buyer(
-        &mut self,
-        session_id: i32,
-        plug_id: i32,
-    ) {
+    pub(crate) fn exit_personal_shop_buyer(&mut self, session_id: i32, plug_id: i32) {
         let Some(buyer) = self
             .session_factory
             .remove_personal_shop_buyer(session_id, plug_id)
@@ -4256,9 +4501,20 @@ impl CGame {
             let mut message = CMessage::new(0x000c_0008);
             message.add_long(session_id);
             let delivery = message.send_to_player(self.net_server(), buyer.owner_id());
-            tracing::trace!(session_id, plug_id, buyer_id = buyer.owner_id(), delivery, "выход из личной лавки отправлен покупателю");
+            tracing::trace!(
+                session_id,
+                plug_id,
+                buyer_id = buyer.owner_id(),
+                delivery,
+                "выход из личной лавки отправлен покупателю"
+            );
         }
-        tracing::debug!(session_id, plug_id, buyer_id = buyer.owner_id(), "покупатель вышел из личной лавки");
+        tracing::debug!(
+            session_id,
+            plug_id,
+            buyer_id = buyer.owner_id(),
+            "покупатель вышел из личной лавки"
+        );
     }
 
     /// Создаёт достигнутую process-owned проекцию `CGame` с подтверждёнными
@@ -5359,7 +5615,6 @@ impl CGame {
                     listeners: removed.listeners,
                     cell,
                     property_applied: report.property_applied,
-                    effects: report.effects,
                 };
                 (
                     AuctionListingTransferRemoval::BattleFairy(storage),
@@ -5421,7 +5676,6 @@ impl CGame {
                 (
                     AuctionListingTransferRemoval::Equipment {
                         event: removed.event,
-                        effects: report.effects,
                     },
                     Some(removed.goods),
                 )
@@ -5854,7 +6108,19 @@ impl CGame {
         moved.set_destination_object(GOODS_TYPE, destination_identity.ex_id);
         moved.set_destination_object_amount(destination_amount);
         let delivery = moved.send_to_player(self, player_id);
-        tracing::trace!(player_id, ?destination_identity, amount, source_extend_id, destination_extend_id, ?removal, ?addition, ?previous_last_operated, ?audit_deliveries, delivery, "перевод валюты банка выполнен");
+        tracing::trace!(
+            player_id,
+            ?destination_identity,
+            amount,
+            source_extend_id,
+            destination_extend_id,
+            ?removal,
+            ?addition,
+            ?previous_last_operated,
+            ?audit_deliveries,
+            delivery,
+            "перевод валюты банка выполнен"
+        );
         Ok(())
     }
 
@@ -5998,7 +6264,6 @@ impl CGame {
             (
                 DepotStorageTransferRemoval::Player(EnhancementTransferRemoval::Equipment {
                     event: removed.event,
-                    effects: report.effects,
                 }),
                 Some(removed.goods),
             )
@@ -6186,7 +6451,21 @@ impl CGame {
         moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
         moved.set_destination_object_amount(destination_amount);
         let delivery = moved.send_to_player(self, player_id);
-        tracing::trace!(player_id, ?source_identity, amount, source_extend_id, source_position, destination_extend_id, destination_position = actual_destination_position, ?removal, ?addition, ?previous_last_operated, ?audit_deliveries, delivery, "перемещение между хранилищами выполнено");
+        tracing::trace!(
+            player_id,
+            ?source_identity,
+            amount,
+            source_extend_id,
+            source_position,
+            destination_extend_id,
+            destination_position = actual_destination_position,
+            ?removal,
+            ?addition,
+            ?previous_last_operated,
+            ?audit_deliveries,
+            delivery,
+            "перемещение между хранилищами выполнено"
+        );
         Ok(())
     }
 
@@ -6311,7 +6590,6 @@ impl CGame {
             (
                 PlayerHandMoveRemoval::Player(EnhancementTransferRemoval::Equipment {
                     event: removed.event,
-                    effects: report.effects,
                 }),
                 Some(removed.goods),
             )
@@ -6411,7 +6689,19 @@ impl CGame {
         moved.set_destination_object(GOODS_TYPE, destination_identity.ex_id);
         moved.set_destination_object_amount(destination_amount);
         let delivery = moved.send_to_player(self, player_id);
-        tracing::trace!(player_id, ?source_identity, amount, source_extend_id, source_position, ?removal, ?addition, ?previous_last_operated, ?audit_deliveries, delivery, "предмет перемещён в руку");
+        tracing::trace!(
+            player_id,
+            ?source_identity,
+            amount,
+            source_extend_id,
+            source_position,
+            ?removal,
+            ?addition,
+            ?previous_last_operated,
+            ?audit_deliveries,
+            delivery,
+            "предмет перемещён в руку"
+        );
         Ok(())
     }
 
@@ -6530,7 +6820,6 @@ impl CGame {
             (
                 FairyStorageTransferRemoval::Player(EnhancementTransferRemoval::Equipment {
                     event: removed.event,
-                    effects: report.effects,
                 }),
                 Some(removed.goods),
             )
@@ -6740,7 +7029,21 @@ impl CGame {
         moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
         moved.set_destination_object_amount(destination_amount);
         let delivery = moved.send_to_player(self, player_id);
-        tracing::trace!(player_id, ?source_identity, amount, source_extend_id, source_position, destination_extend_id, destination_position = actual_position, ?removal, ?addition, ?previous_last_operated, ?audit_deliveries, delivery, "перемещение феи выполнено");
+        tracing::trace!(
+            player_id,
+            ?source_identity,
+            amount,
+            source_extend_id,
+            source_position,
+            destination_extend_id,
+            destination_position = actual_position,
+            ?removal,
+            ?addition,
+            ?previous_last_operated,
+            ?audit_deliveries,
+            delivery,
+            "перемещение феи выполнено"
+        );
         Ok(())
     }
 
@@ -6987,7 +7290,6 @@ impl CGame {
             (
                 BattleFairyTransferRemoval::Player(EnhancementTransferRemoval::Equipment {
                     event: removed.event,
-                    effects: report.effects,
                 }),
                 Some(removed.goods),
             )
@@ -7156,7 +7458,6 @@ impl CGame {
                         listeners: removed.listeners,
                         cell,
                         property_applied: report.property_applied,
-                        effects: report.effects,
                     },
                 ),
                 AmountLimitGoodsTaken::Split(split) => (
@@ -7169,7 +7470,6 @@ impl CGame {
                         listeners: split.listeners,
                         cell,
                         property_applied: report.property_applied,
-                        effects: report.effects,
                     },
                 ),
             };
@@ -7263,7 +7563,21 @@ impl CGame {
         moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
         moved.set_destination_object_amount(destination_amount);
         let delivery = moved.send_to_player(self, player_id);
-        tracing::trace!(player_id, ?source_identity, amount, source_extend_id, source_position, destination_extend_id, destination_position = actual_position, ?removal, ?addition, ?previous_last_operated, ?audit_deliveries, delivery, "перемещение боевой феи выполнено");
+        tracing::trace!(
+            player_id,
+            ?source_identity,
+            amount,
+            source_extend_id,
+            source_position,
+            destination_extend_id,
+            destination_position = actual_position,
+            ?removal,
+            ?addition,
+            ?previous_last_operated,
+            ?audit_deliveries,
+            delivery,
+            "перемещение боевой феи выполнено"
+        );
         Ok(())
     }
 
@@ -7379,10 +7693,7 @@ impl CGame {
             }
             BattleFairyTransferAddition::BattleFairy(report) => {
                 let BattleFairyEquipmentMutationOutcome::Added(
-                    crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyContainerAddOutcome::Stored {
-                        base,
-                        ..
-                    },
+                    crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyContainerAddOutcome::Stored { base, .. },
                 ) = &report.outcome
                 else {
                     unreachable!("успешный battle-fairy add")
@@ -7540,7 +7851,6 @@ impl CGame {
             (
                 CiQingComposeTransferRemoval::Player(EnhancementTransferRemoval::Equipment {
                     event: removed.event,
-                    effects: report.effects,
                 }),
                 Some(removed.goods),
             )
@@ -7709,7 +8019,6 @@ impl CGame {
                         listeners: removed.listeners,
                         cell,
                         property_applied: report.property_applied,
-                        effects: report.effects,
                     },
                 ),
                 AmountLimitGoodsTaken::Split(split) => (
@@ -7722,7 +8031,6 @@ impl CGame {
                         listeners: split.listeners,
                         cell,
                         property_applied: report.property_applied,
-                        effects: report.effects,
                     },
                 ),
             };
@@ -7882,7 +8190,21 @@ impl CGame {
         moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
         moved.set_destination_object_amount(destination_amount);
         let delivery = moved.send_to_player(self, player_id);
-        tracing::trace!(player_id, ?source_identity, amount, source_extend_id, source_position, destination_extend_id, destination_position = actual_position, ?removal, ?addition, ?previous_last_operated, ?audit_deliveries, delivery, "перемещение состава CiQing выполнено");
+        tracing::trace!(
+            player_id,
+            ?source_identity,
+            amount,
+            source_extend_id,
+            source_position,
+            destination_extend_id,
+            destination_position = actual_position,
+            ?removal,
+            ?addition,
+            ?previous_last_operated,
+            ?audit_deliveries,
+            delivery,
+            "перемещение состава CiQing выполнено"
+        );
         Ok(())
     }
 
@@ -8003,10 +8325,7 @@ impl CGame {
             }
             CiQingComposeTransferAddition::BattleFairy(report) => {
                 let BattleFairyEquipmentMutationOutcome::Added(
-                    crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyContainerAddOutcome::Stored {
-                        base,
-                        ..
-                    },
+                    crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyContainerAddOutcome::Stored { base, .. },
                 ) = &report.outcome
                 else {
                     unreachable!("успешный battle-fairy add")
@@ -8233,7 +8552,21 @@ impl CGame {
         moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
         moved.set_destination_object_amount(destination_amount);
         let delivery = moved.send_to_player(self, player_id);
-        tracing::trace!(player_id, ?source_identity, amount, source_position, destination_extend_id, destination_position = actual_destination_position, ?removal, bind_cleared, ?addition, ?previous_last_operated, ?audit_deliveries, delivery, "аукционный предмет возвращён в инвентарь");
+        tracing::trace!(
+            player_id,
+            ?source_identity,
+            amount,
+            source_position,
+            destination_extend_id,
+            destination_position = actual_destination_position,
+            ?removal,
+            bind_cleared,
+            ?addition,
+            ?previous_last_operated,
+            ?audit_deliveries,
+            delivery,
+            "аукционный предмет возвращён в инвентарь"
+        );
         Ok(())
     }
 
@@ -8491,7 +8824,20 @@ impl CGame {
         moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
         moved.set_destination_object_amount(destination_amount);
         let delivery = moved.send_to_player(self, player_id);
-        tracing::trace!(player_id, ?source_identity, amount, source_extend_id, source_position, destination_extend_id, destination_position = actual_position, ?removal, ?addition, ?previous_last_operated, delivery, "перемещение между рукой и аукционным лотом выполнено");
+        tracing::trace!(
+            player_id,
+            ?source_identity,
+            amount,
+            source_extend_id,
+            source_position,
+            destination_extend_id,
+            destination_position = actual_position,
+            ?removal,
+            ?addition,
+            ?previous_last_operated,
+            delivery,
+            "перемещение между рукой и аукционным лотом выполнено"
+        );
         Ok(())
     }
 
@@ -8676,7 +9022,19 @@ impl CGame {
             moved.set_destination_object(GOODS_TYPE, destination_goods.ex_id);
             moved.set_destination_object_amount(destination_amount);
             let delivery = moved.send_to_player(self, player_id);
-            tracing::trace!(player_id, ?source_identity, amount, destination_extend_id, destination_position = actual_position, ?removal, ?addition, ?previous_last_operated, ?audit_deliveries, delivery, "предмет из руки перемещён в контейнер");
+            tracing::trace!(
+                player_id,
+                ?source_identity,
+                amount,
+                destination_extend_id,
+                destination_position = actual_position,
+                ?removal,
+                ?addition,
+                ?previous_last_operated,
+                ?audit_deliveries,
+                delivery,
+                "предмет из руки перемещён в контейнер"
+            );
             return Ok(());
         }
 
@@ -8808,7 +9166,21 @@ impl CGame {
         moved.set_source_object(GOODS_TYPE, goods_id, amount);
         moved.set_destination_object(GOODS_TYPE, displaced_identity.ex_id);
         let delivery = moved.send_to_player(self, player_id);
-        tracing::trace!(player_id, ?source_identity, amount, destination_extend_id, destination_position, ?removal, ?destination, ?displaced_identity, ?hand_addition, displaced_collected, ?previous_last_operated, delivery, "предмет из руки обменён с контейнером");
+        tracing::trace!(
+            player_id,
+            ?source_identity,
+            amount,
+            destination_extend_id,
+            destination_position,
+            ?removal,
+            ?destination,
+            ?displaced_identity,
+            ?hand_addition,
+            displaced_collected,
+            ?previous_last_operated,
+            delivery,
+            "предмет из руки обменён с контейнером"
+        );
         Ok(())
     }
 
@@ -8949,7 +9321,6 @@ impl CGame {
         };
         let removed_mutation = EnhancementTransferRemoval::Equipment {
             event: removed.event,
-            effects: removed_report.effects,
         };
         let mut outgoing = Some(removed.goods);
         let added = self.add_enhancement_transfer_goods(
@@ -9254,7 +9625,6 @@ impl CGame {
             };
             let mutation = EnhancementTransferRemoval::Equipment {
                 event: removed.event,
-                effects: report.effects,
             };
             (removed.goods, Some(mutation), None, None, None, None)
         } else if source_extend_id == 3 {
@@ -9632,7 +10002,24 @@ impl CGame {
         appeared.set_object_stream(old_client_payload);
         let around_message = appeared.message();
         let around_delivery = self.send_player_shape_around(player_id, None, &around_message);
-        tracing::trace!(player_id, region_id, ?goods, amount, source_position, destination_position, ?source_mutation, ?source_hand_mutation, ?source_currency_mutation, ?source_depot_mutation, ?source_fairy_mutation, ?previous_last_operated, ?audit_deliveries, player_delivery, ?around_delivery, "предмет выброшен в регион");
+        tracing::trace!(
+            player_id,
+            region_id,
+            ?goods,
+            amount,
+            source_position,
+            destination_position,
+            ?source_mutation,
+            ?source_hand_mutation,
+            ?source_currency_mutation,
+            ?source_depot_mutation,
+            ?source_fairy_mutation,
+            ?previous_last_operated,
+            ?audit_deliveries,
+            player_delivery,
+            ?around_delivery,
+            "предмет выброшен в регион"
+        );
         Ok(())
     }
 
@@ -10153,7 +10540,6 @@ impl CGame {
             };
             let removal = EnhancementTransferRemoval::Equipment {
                 event: removed.event,
-                effects: report.effects,
             };
             (removal, Some(removed.goods))
         };
@@ -10324,7 +10710,6 @@ impl CGame {
                 (
                     EnhancementTransferRemoval::Equipment {
                         event: removed.event,
-                        effects: report.effects,
                     },
                     Some(removed.goods),
                 )
@@ -10758,7 +11143,12 @@ impl CGame {
                 }
             }
         }
-        tracing::trace!(monsters, resolved, missing, "ссылки свойств живых монстров проверены");
+        tracing::trace!(
+            monsters,
+            resolved,
+            missing,
+            "ссылки свойств живых монстров проверены"
+        );
     }
 
     /// Сохраняет исходный `std::map::operator[] = pointer`: повторный ID
@@ -10966,7 +11356,13 @@ impl CGame {
                     .send_to_region(Some(&region.war.base), None, self)
             });
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        tracing::debug!(region_id, country, ?outcome, ?morale_delivery, "обоз войны наций возвращён в город");
+        tracing::debug!(
+            region_id,
+            country,
+            ?outcome,
+            ?morale_delivery,
+            "обоз войны наций возвращён в город"
+        );
         Some(())
     }
 
@@ -10990,8 +11386,14 @@ impl CGame {
             Some(player) => {
                 let country = player.country();
                 if region.flag_belong_to_id() == i32::from(country) {
-                    let delivery = self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS1130"));
-                    tracing::trace!(region_id, player_id, delivery, "страна игрока уже владеет символом войны наций");
+                    let delivery =
+                        self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS1130"));
+                    tracing::trace!(
+                        region_id,
+                        player_id,
+                        delivery,
+                        "страна игрока уже владеет символом войны наций"
+                    );
                     NationContendEnterOutcome::CountryAlreadyOwnsSymbol
                 } else if let Some(contender_player_id) =
                     region.contender_for_country(i32::from(country))
@@ -11003,7 +11405,13 @@ impl CGame {
                             0xff,
                         );
                         let delivery = self.send_nation_player_notice(player_id, &text);
-                        tracing::trace!(region_id, player_id, contender_player_id, delivery, "для страны уже существует претендент войны наций");
+                        tracing::trace!(
+                            region_id,
+                            player_id,
+                            contender_player_id,
+                            delivery,
+                            "для страны уже существует претендент войны наций"
+                        );
                         NationContendEnterOutcome::CountryContenderExists {
                             contender_player_id,
                         }
@@ -11028,7 +11436,12 @@ impl CGame {
             }
         };
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        tracing::debug!(region_id, player_id, ?outcome, "обработан вход в захват войны наций");
+        tracing::debug!(
+            region_id,
+            player_id,
+            ?outcome,
+            "обработан вход в захват войны наций"
+        );
         Some(())
     }
 
@@ -11060,14 +11473,18 @@ impl CGame {
             (Some(outcome), delivery, state_delivery)
         };
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        tracing::debug!(region_id, player_id, ?outcome, ?delivery, ?state_delivery, "отменён захват игрока на войне наций");
+        tracing::debug!(
+            region_id,
+            player_id,
+            ?outcome,
+            ?delivery,
+            ?state_delivery,
+            "отменён захват игрока на войне наций"
+        );
         Some(())
     }
 
-    pub(crate) fn nation_cancel_all_contenders(
-        &mut self,
-        region_id: i32,
-    ) -> Option<()> {
+    pub(crate) fn nation_cancel_all_contenders(&mut self, region_id: i32) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(region) = owner else {
             self.restore_region_owner(owner);
@@ -11076,12 +11493,23 @@ impl CGame {
         let mut contender_count = 0usize;
         for player_id in region.contender_player_ids() {
             let time_delivery = self.send_nation_contend_time(player_id, 0);
-            let state_delivery = self.set_nation_player_contend_state(&region.war.base, player_id, false);
+            let state_delivery =
+                self.set_nation_player_contend_state(&region.war.base, player_id, false);
             contender_count = contender_count.wrapping_add(1);
-            tracing::trace!(region_id, player_id, time_delivery, ?state_delivery, "сброшен претендент войны наций");
+            tracing::trace!(
+                region_id,
+                player_id,
+                time_delivery,
+                ?state_delivery,
+                "сброшен претендент войны наций"
+            );
         }
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        tracing::debug!(region_id, contender_count, "сброшены все претенденты войны наций");
+        tracing::debug!(
+            region_id,
+            contender_count,
+            "сброшены все претенденты войны наций"
+        );
         Some(())
     }
 
@@ -11097,9 +11525,15 @@ impl CGame {
             region.cancel_contend_by_player_id(player_id),
             NationContendCancelOutcome::MissingReset
         ) {
-            let state_delivery = self.set_nation_player_contend_state(&region.war.base, player_id, false);
+            let state_delivery =
+                self.set_nation_player_contend_state(&region.war.base, player_id, false);
             let time_delivery = self.send_nation_contend_time(player_id, 0);
-            tracing::trace!(player_id, ?state_delivery, time_delivery, "сброшен прежний захват войны наций");
+            tracing::trace!(
+                player_id,
+                ?state_delivery,
+                time_delivery,
+                "сброшен прежний захват войны наций"
+            );
         }
         let first_for_country = region.add_contend(
             player_id,
@@ -11107,7 +11541,8 @@ impl CGame {
             max_time as i32,
             context.now_milliseconds(),
         );
-        let state_delivery = self.set_nation_player_contend_state(&region.war.base, player_id, true);
+        let state_delivery =
+            self.set_nation_player_contend_state(&region.war.base, player_id, true);
         let time_delivery = self.send_nation_contend_time(player_id, 0);
         if first_for_country && (1..=4).contains(&country) {
             let text = format_legacy_text_fields(
@@ -11115,12 +11550,26 @@ impl CGame {
                 &[region.country_name(country)],
                 0xff,
             );
-            let first_delivery = nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
-                .send_to_region(Some(&region.war.base), None, self);
-            tracing::trace!(player_id, country, first_delivery, "опубликован первый претендент страны");
+            let first_delivery =
+                nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
+                    .send_to_region(Some(&region.war.base), None, self);
+            tracing::trace!(
+                player_id,
+                country,
+                first_delivery,
+                "опубликован первый претендент страны"
+            );
         }
-        let notice_delivery = self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS1132"));
-        tracing::trace!(player_id, country, ?state_delivery, time_delivery, notice_delivery, "начат захват войны наций");
+        let notice_delivery =
+            self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS1132"));
+        tracing::trace!(
+            player_id,
+            country,
+            ?state_delivery,
+            time_delivery,
+            notice_delivery,
+            "начат захват войны наций"
+        );
         NationContendEnterOutcome::Entered { first_for_country }
     }
 
@@ -11148,7 +11597,13 @@ impl CGame {
             mutation.map(|mutation| self.send_nation_contend_time(player_id, mutation.percentage))
         });
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        tracing::trace!(region_id, player_id, ?mutation, ?delivery, "обработан урон претенденту войны наций");
+        tracing::trace!(
+            region_id,
+            player_id,
+            ?mutation,
+            ?delivery,
+            "обработан урон претенденту войны наций"
+        );
         Some(())
     }
 
@@ -11170,10 +11625,15 @@ impl CGame {
             tick_interval_ms,
             runtime,
         ) {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(error) => {
                 self.restore_region_owner(ServerRegionOwner::Nation(region));
-                tracing::warn!(region_id, ai_tick, ?error, "базовый проход ИИ войны наций заблокирован");
+                tracing::warn!(
+                    region_id,
+                    ai_tick,
+                    ?error,
+                    "базовый проход ИИ войны наций заблокирован"
+                );
                 return Some(());
             }
         }
@@ -11186,14 +11646,25 @@ impl CGame {
             Ok(advance) => advance.unwrap_or_default(),
             Err(error) => {
                 self.restore_region_owner(ServerRegionOwner::Nation(region));
-                tracing::warn!(region_id, ai_tick, ?error, "продвижение захвата войны наций заблокировано");
+                tracing::warn!(
+                    region_id,
+                    ai_tick,
+                    ?error,
+                    "продвижение захвата войны наций заблокировано"
+                );
                 return Some(());
             }
         };
         let progress_count = advance.progress.len();
         for (player_id, percentage) in advance.progress {
             let delivery = self.send_nation_contend_time(player_id, percentage);
-            tracing::trace!(region_id, player_id, percentage, delivery, "отправлено время захвата войны наций");
+            tracing::trace!(
+                region_id,
+                player_id,
+                percentage,
+                delivery,
+                "отправлено время захвата войны наций"
+            );
         }
 
         let completed = advance.completed;
@@ -11204,20 +11675,39 @@ impl CGame {
         if let Some(contender) = completed {
             let delivery = self.send_nation_contend_time(contender.player_id, 100);
             completion_deliveries = completion_deliveries.wrapping_add(1);
-            tracing::trace!(region_id, player_id = contender.player_id, delivery, "отправлено завершение захвата войны наций");
+            tracing::trace!(
+                region_id,
+                player_id = contender.player_id,
+                delivery,
+                "отправлено завершение захвата войны наций"
+            );
             add_game_log_text(self.get_string_by_id(b"GS1072"));
             match self.find_player(contender.player_id) {
-                None => tracing::warn!(region_id, player_id = contender.player_id, "игрок завершённого захвата войны наций не найден"),
+                None => tracing::warn!(
+                    region_id,
+                    player_id = contender.player_id,
+                    "игрок завершённого захвата войны наций не найден"
+                ),
                 Some(player) if !player.can_attack_nation_monster() => {
-                    tracing::warn!(region_id, player_id = contender.player_id, "игрок завершённого захвата войны наций недоступен")
+                    tracing::warn!(
+                        region_id,
+                        player_id = contender.player_id,
+                        "игрок завершённого захвата войны наций недоступен"
+                    )
                 }
                 Some(player) => {
                     let country = player.country();
                     match region.capture_contend_symbol(country) {
-                        None => tracing::warn!(region_id, player_id = contender.player_id, country, "государство игрока не участвует в войне наций"),
+                        None => tracing::warn!(
+                            region_id,
+                            player_id = contender.player_id,
+                            country,
+                            "государство игрока не участвует в войне наций"
+                        ),
                         Some(capture) => {
                             for cancelled_player_id in &capture.cancelled_player_ids {
-                                let delivery = self.send_nation_contend_time(*cancelled_player_id, 0);
+                                let delivery =
+                                    self.send_nation_contend_time(*cancelled_player_id, 0);
                                 completion_deliveries = completion_deliveries.wrapping_add(1);
                                 if let Some(delivery) = self.set_nation_player_contend_state(
                                     &region.war.base,
@@ -11225,13 +11715,26 @@ impl CGame {
                                     false,
                                 ) {
                                     state_deliveries = state_deliveries.wrapping_add(1);
-                                    tracing::trace!(region_id, player_id = *cancelled_player_id, ?delivery, "сброшено состояние захвата войны наций");
+                                    tracing::trace!(
+                                        region_id,
+                                        player_id = *cancelled_player_id,
+                                        ?delivery,
+                                        "сброшено состояние захвата войны наций"
+                                    );
                                 }
-                                tracing::trace!(region_id, player_id = *cancelled_player_id, delivery, "сброшено время захвата войны наций");
+                                tracing::trace!(
+                                    region_id,
+                                    player_id = *cancelled_player_id,
+                                    delivery,
+                                    "сброшено время захвата войны наций"
+                                );
                             }
                             add_game_log_text(self.get_string_by_id(b"GS1073"));
                             let morale_delivery = self
-                                .four_nation_morale_snapshot(*region.morale(), *region.nation_failed())
+                                .four_nation_morale_snapshot(
+                                    *region.morale(),
+                                    *region.nation_failed(),
+                                )
                                 .send_to_region(Some(&region.war.base), None, self);
                             completion_deliveries = completion_deliveries.wrapping_add(1);
                             let notice_delivery = nation_colored_text_message(
@@ -11244,7 +11747,11 @@ impl CGame {
                                     0xff,
                                 ),
                             )
-                            .send_to_region(Some(&region.war.base), None, self);
+                            .send_to_region(
+                                Some(&region.war.base),
+                                None,
+                                self,
+                            );
                             completion_deliveries = completion_deliveries.wrapping_add(1);
                             let mut top = CMessage::new(0xbf804);
                             top.add_long(0);
@@ -11260,7 +11767,14 @@ impl CGame {
                                 ),
                             );
                             let top_info_delivery = top.send_all(self.current_net_server());
-                            tracing::trace!(region_id, country, morale_delivery, notice_delivery, ?top_info_delivery, "опубликован захват символа войны наций");
+                            tracing::trace!(
+                                region_id,
+                                country,
+                                morale_delivery,
+                                notice_delivery,
+                                ?top_info_delivery,
+                                "опубликован захват символа войны наций"
+                            );
                             for (name_id, script, x, y) in [
                                 (
                                     b"GS1025".as_slice(),
@@ -11290,9 +11804,20 @@ impl CGame {
                                     runtime,
                                 );
                                 treasure_spawns = treasure_spawns.wrapping_add(1);
-                                tracing::trace!(region_id, country, ?spawn, "обработано создание сокровища войны наций");
+                                tracing::trace!(
+                                    region_id,
+                                    country,
+                                    ?spawn,
+                                    "обработано создание сокровища войны наций"
+                                );
                             }
-                            tracing::debug!(region_id, player_id = contender.player_id, country, cancelled = capture.cancelled_player_ids.len(), "завершён захват символа войны наций");
+                            tracing::debug!(
+                                region_id,
+                                player_id = contender.player_id,
+                                country,
+                                cancelled = capture.cancelled_player_ids.len(),
+                                "завершён захват символа войны наций"
+                            );
                         }
                     }
                 }
@@ -11325,7 +11850,10 @@ impl CGame {
             3 => (b"GS1086".as_slice(), b"GS1140".as_slice(), 0x25, 0xfc),
             4 => (b"GS1087".as_slice(), b"GS1141".as_slice(), 0x1dc, 0x105),
             _ => {
-                tracing::warn!(country, "неизвестное государство для замены магического камня");
+                tracing::warn!(
+                    country,
+                    "неизвестное государство для замены магического камня"
+                );
                 return;
             }
         };
@@ -11337,7 +11865,11 @@ impl CGame {
                 return;
             }
             Err(block) => {
-                tracing::warn!(country, matches = block.matches, "имя NPC магического камня неоднозначно");
+                tracing::warn!(
+                    country,
+                    matches = block.matches,
+                    "имя NPC магического камня неоднозначно"
+                );
                 return;
             }
         };
@@ -11346,14 +11878,24 @@ impl CGame {
         let npc_tile_x = match shape.get_tile_x() {
             Ok(tile_x) => tile_x,
             Err(error) => {
-                tracing::warn!(country, npc_id, ?error, "координата X магического камня недоступна");
+                tracing::warn!(
+                    country,
+                    npc_id,
+                    ?error,
+                    "координата X магического камня недоступна"
+                );
                 return;
             }
         };
         let npc_tile_y = match shape.get_tile_y() {
             Ok(tile_y) => tile_y,
             Err(error) => {
-                tracing::warn!(country, npc_id, ?error, "координата Y магического камня недоступна");
+                tracing::warn!(
+                    country,
+                    npc_id,
+                    ?error,
+                    "координата Y магического камня недоступна"
+                );
                 return;
             }
         };
@@ -11382,7 +11924,14 @@ impl CGame {
         );
 
         if let Err(error) = region.war.base.remove_owned_npc_by_id(npc_id) {
-            tracing::warn!(country, npc_id, ?explosion_delivery, ?removal_delivery, ?error, "удаление NPC магического камня заблокировано");
+            tracing::warn!(
+                country,
+                npc_id,
+                ?explosion_delivery,
+                ?removal_delivery,
+                ?error,
+                "удаление NPC магического камня заблокировано"
+            );
             return;
         }
 
@@ -11391,7 +11940,13 @@ impl CGame {
             .find_monster_property_by_origin_name(monster_name)
             .cloned()
         else {
-            tracing::warn!(country, npc_id, ?explosion_delivery, ?removal_delivery, "свойства монстра магического камня не найдены");
+            tracing::warn!(
+                country,
+                npc_id,
+                ?explosion_delivery,
+                ?removal_delivery,
+                "свойства монстра магического камня не найдены"
+            );
             return;
         };
         let (area_width, area_height) = self.area_dimensions();
@@ -11407,8 +11962,22 @@ impl CGame {
             area_height,
             context,
         ) {
-            Ok(monster_id) => tracing::debug!(country, npc_id, monster_id, ?explosion_delivery, ?removal_delivery, "завершена замена магического камня"),
-            Err(error) => tracing::warn!(country, npc_id, ?error, ?explosion_delivery, ?removal_delivery, "создание монстра магического камня заблокировано"),
+            Ok(monster_id) => tracing::debug!(
+                country,
+                npc_id,
+                monster_id,
+                ?explosion_delivery,
+                ?removal_delivery,
+                "завершена замена магического камня"
+            ),
+            Err(error) => tracing::warn!(
+                country,
+                npc_id,
+                ?error,
+                ?explosion_delivery,
+                ?removal_delivery,
+                "создание монстра магического камня заблокировано"
+            ),
         }
     }
 
@@ -11599,16 +12168,24 @@ impl CGame {
             );
         }
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        tracing::debug!(region_id, player_id, timing_finished, ?contend_outcome, ?contend_state_delivery, ?contend_time_delivery, ?notice_delivery, died_state_time_ms, ?died_state_start_time_ms, "обработана смерть игрока в регионе войны наций");
+        tracing::debug!(
+            region_id,
+            player_id,
+            timing_finished,
+            ?contend_outcome,
+            ?contend_state_delivery,
+            ?contend_time_delivery,
+            ?notice_delivery,
+            died_state_time_ms,
+            ?died_state_start_time_ms,
+            "обработана смерть игрока в регионе войны наций"
+        );
         Some(())
     }
 
     /// Две достижимые `OnRelive` ветви сходятся в этом exact tail: positive
     /// remaining time активирует state и публикует self, затем around.
-    pub(crate) fn publish_nation_died_state_after_relive(
-        &mut self,
-        player_id: i32,
-    ) -> Option<()> {
+    pub(crate) fn publish_nation_died_state_after_relive(&mut self, player_id: i32) -> Option<()> {
         let player = self.find_player(player_id)?;
         if player.city_war_died_state_time_ms() <= 0 {
             return None;
@@ -11631,7 +12208,11 @@ impl CGame {
     ) -> Option<()> {
         let count = self.find_player_mut(player_id)?.advance_periodical_ping();
         if count <= 250 {
-            tracing::trace!(player_id, count, "периодическая проверка связи ожидает порога");
+            tracing::trace!(
+                player_id,
+                count,
+                "периодическая проверка связи ожидает порога"
+            );
             return Some(());
         }
         let sampled_at_ms = context.now_milliseconds();
@@ -11665,7 +12246,12 @@ impl CGame {
         message.base_mut().add_word(mutation.pk_count);
         message.add_ulong(mutation.kill_count);
         let around_delivery = self.send_player_shape_around(player_id, None, &message);
-        tracing::trace!(player_id, ?mutation, ?around_delivery, "уменьшен признак убийцы");
+        tracing::trace!(
+            player_id,
+            ?mutation,
+            ?around_delivery,
+            "уменьшен признак убийцы"
+        );
         Some(())
     }
 
@@ -11685,7 +12271,11 @@ impl CGame {
         }
         let elapsed_ms = now_ms.wrapping_sub(player.died_state_start_time_ms());
         if elapsed_ms <= 1000 {
-            tracing::trace!(player_id, elapsed_ms, "ожидает счётчик состояния смерти на войне наций");
+            tracing::trace!(
+                player_id,
+                elapsed_ms,
+                "ожидает счётчик состояния смерти на войне наций"
+            );
             return Some(());
         }
         self.find_player_mut(player_id)?
@@ -11804,7 +12394,14 @@ impl CGame {
             _ => None,
         };
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        tracing::debug!(region_id, monster_id, attacker_player_id, ?outcome, ?world_delivery, "обработан первый удар по цели войны наций");
+        tracing::debug!(
+            region_id,
+            monster_id,
+            attacker_player_id,
+            ?outcome,
+            ?world_delivery,
+            "обработан первый удар по цели войны наций"
+        );
         Some(())
     }
 
@@ -11951,7 +12548,17 @@ impl CGame {
                     .send_to_region(Some(&region.war.base), None, self)
             });
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        tracing::debug!(region_id, monster_id, killer_player_id, ?outcome, ?morale_delivery, ?first_guard_delivery, nation_fail_delivery_count, yu_ying_shi_spawn_count, "обработана смерть цели войны наций");
+        tracing::debug!(
+            region_id,
+            monster_id,
+            killer_player_id,
+            ?outcome,
+            ?morale_delivery,
+            ?first_guard_delivery,
+            nation_fail_delivery_count,
+            yu_ying_shi_spawn_count,
+            "обработана смерть цели войны наций"
+        );
         Some(())
     }
 
@@ -12066,7 +12673,12 @@ impl CGame {
             context,
         );
         if spawn.is_err() {
-            tracing::warn!(country, notify_country, ?spawn, "не удалось создать Юйинши войны наций");
+            tracing::warn!(
+                country,
+                notify_country,
+                ?spawn,
+                "не удалось создать Юйинши войны наций"
+            );
             return;
         }
 
@@ -12090,9 +12702,21 @@ impl CGame {
                 i32::from(notify_country),
                 self,
             );
-            tracing::trace!(country, notify_country, repetition, delivery, "отправлено уведомление страны о Юйинши");
+            tracing::trace!(
+                country,
+                notify_country,
+                repetition,
+                delivery,
+                "отправлено уведомление страны о Юйинши"
+            );
         }
-        tracing::debug!(country, notify_country, ?spawn, ?region_delivery, "создан Юйинши войны наций");
+        tracing::debug!(
+            country,
+            notify_country,
+            ?spawn,
+            ?region_delivery,
+            "создан Юйинши войны наций"
+        );
     }
 
     fn four_nation_morale_snapshot(&self, morale: [i32; 5], failed: [bool; 5]) -> CMessage {
@@ -12515,11 +13139,7 @@ impl CGame {
             .collect()
     }
 
-    fn finish_player_trade_session(
-        &mut self,
-        session_id: i32,
-        aborted: bool,
-    ) {
+    fn finish_player_trade_session(&mut self, session_id: i32, aborted: bool) {
         let plug_ids = self
             .session_factory
             .trade_session_plug_ids(session_id)
@@ -12543,7 +13163,12 @@ impl CGame {
                 player.set_current_progress_snapshot(PlayerProgress::None);
                 let delivery =
                     CMessage::new(0x000b_f717).send_to_player(self.net_server(), owner_id);
-                tracing::trace!(session_id, owner_id, delivery, "завершение обмена отправлено игроку");
+                tracing::trace!(
+                    session_id,
+                    owner_id,
+                    delivery,
+                    "завершение обмена отправлено игроку"
+                );
             }
         }
         let collected = self.session_factory.garbage_collect_session(session_id);
@@ -12568,7 +13193,12 @@ impl CGame {
                     })
                 })
         {
-            tracing::trace!(player_id, session_id, requested_plug_id, "прерывание обмена отклонено");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                "прерывание обмена отклонено"
+            );
             return;
         }
         self.finish_player_trade_session(session_id, true);
@@ -12812,7 +13442,13 @@ impl CGame {
             .session_factory
             .trader_plug_by_owner(session_id, player_id);
         if actual != Some(requested_plug_id) {
-            tracing::trace!(player_id, session_id, requested_plug_id, ?actual, "plug готовности обмена не совпал");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                ?actual,
+                "plug готовности обмена не совпал"
+            );
             return;
         }
         if !self
@@ -12823,7 +13459,12 @@ impl CGame {
                 })
             })
         {
-            tracing::trace!(player_id, session_id, requested_plug_id, "сессия обмена недоступна");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                "сессия обмена недоступна"
+            );
             return;
         }
         let ready = {
@@ -12845,7 +13486,15 @@ impl CGame {
             state.add_long(requested_plug_id);
             state.add_byte(u8::from(ready));
             let delivery = state.send_to_player(self.net_server(), contrary.owner_id());
-            tracing::trace!(player_id, session_id, requested_plug_id, contrary_plug_id, ready, delivery, "готовность обмена опубликована второй стороне");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                contrary_plug_id,
+                ready,
+                delivery,
+                "готовность обмена опубликована второй стороне"
+            );
         }
         if !ready
             || contrary_plug_id.is_none_or(|plug_id| {
@@ -12855,7 +13504,13 @@ impl CGame {
                     .is_some_and(|trader| trader.ready())
             })
         {
-            tracing::trace!(player_id, session_id, requested_plug_id, ready, "готовность обмена изменена без завершения");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                ready,
+                "готовность обмена изменена без завершения"
+            );
             return;
         }
         let parties = match self.validate_player_trade(session_id) {
@@ -12863,7 +13518,14 @@ impl CGame {
             Err(block) => {
                 let notification_deliveries =
                     self.send_trade_notice(session_id, Self::trade_condition_notice(block));
-                tracing::trace!(player_id, session_id, requested_plug_id, ?block, ?notification_deliveries, "условие обмена отклонено");
+                tracing::trace!(
+                    player_id,
+                    session_id,
+                    requested_plug_id,
+                    ?block,
+                    ?notification_deliveries,
+                    "условие обмена отклонено"
+                );
                 return;
             }
         };
@@ -12877,12 +13539,26 @@ impl CGame {
             let amount = yuan_difference.unsigned_abs() as u32;
             let delivery =
                 self.send_player_trade_billing_request(payer, receiver, amount, session_id);
-            tracing::trace!(payer_id = payer.owner_id, receiver_id = receiver.owner_id, amount, session_id, payer_plug_id = payer.plug_id, ?delivery, "Billing-запрос обмена отправлен");
+            tracing::trace!(
+                payer_id = payer.owner_id,
+                receiver_id = receiver.owner_id,
+                amount,
+                session_id,
+                payer_plug_id = payer.plug_id,
+                ?delivery,
+                "Billing-запрос обмена отправлен"
+            );
             return;
         }
         let completed = self.commit_player_trade(parties, None, 0, &[], context);
         self.finish_player_trade_session(session_id, false);
-        tracing::trace!(player_id, session_id, requested_plug_id, completed, "обмен после готовности завершён");
+        tracing::trace!(
+            player_id,
+            session_id,
+            requested_plug_id,
+            completed,
+            "обмен после готовности завершён"
+        );
     }
 
     fn commit_player_trade<Context: GameContainerMessageRuntime>(
@@ -12933,11 +13609,7 @@ impl CGame {
                 if offer.goods_amount < source_amount {
                     let Some(split) = self.create_goods_core(base_properties_index) else {
                         self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
-                        self.rollback_detached_trade_goods(
-                            &parties,
-                            removed_by_plug,
-                            context,
-                        );
+                        self.rollback_detached_trade_goods(&parties, removed_by_plug, context);
                         return false;
                     };
                     packet_splits.insert(offer.goods_id, split);
@@ -13115,7 +13787,11 @@ impl CGame {
                     .expect("trade party остаётся online")
                     .decrease_money(current.wrapping_sub(resulting), &self.goods_factory);
                 let deliveries = self.send_player_money_decrease(party.owner_id, &change.outcome);
-                tracing::trace!(player_id = party.owner_id, ?deliveries, "деньги обмена списаны");
+                tracing::trace!(
+                    player_id = party.owner_id,
+                    ?deliveries,
+                    "деньги обмена списаны"
+                );
             } else if current < resulting {
                 let delta = resulting.wrapping_sub(current);
                 let created =
@@ -13126,7 +13802,11 @@ impl CGame {
                     .expect("trade party остаётся online")
                     .increase_money(delta, &self.goods_factory, created);
                 let deliveries = self.send_player_money_increase(party.owner_id, &outcome, context);
-                tracing::trace!(player_id = party.owner_id, ?deliveries, "деньги обмена начислены");
+                tracing::trace!(
+                    player_id = party.owner_id,
+                    ?deliveries,
+                    "деньги обмена начислены"
+                );
             }
         }
         self.send_player_trade_audits(
@@ -13227,7 +13907,12 @@ impl CGame {
                 audit.add_long(party.owner_id);
                 audit.add_ulong(balance);
                 let delivery = audit.send(self, false);
-                tracing::trace!(kind, player_id = party.owner_id, ?delivery, "журнал валюты обмена отправлен");
+                tracing::trace!(
+                    kind,
+                    player_id = party.owner_id,
+                    ?delivery,
+                    "журнал валюты обмена отправлен"
+                );
             }
         }
     }
@@ -13312,13 +13997,15 @@ impl CGame {
                     .iter()
                     .any(|addition| addition.resulting_amount.is_none())
             {
-                let notification_delivery = colored_player_notice_message(
-                    0xffff_ffff,
-                    0,
-                    self.get_string_by_id(b"GS0277"),
-                )
-                .send_to_player(self.net_server(), party.owner_id);
-                tracing::warn!(player_id = party.owner_id, notification_delivery, unrecoverable = unrecoverable.len(), "не все предметы обмена удалось вернуть");
+                let notification_delivery =
+                    colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0277"))
+                        .send_to_player(self.net_server(), party.owner_id);
+                tracing::warn!(
+                    player_id = party.owner_id,
+                    notification_delivery,
+                    unrecoverable = unrecoverable.len(),
+                    "не все предметы обмена удалось вернуть"
+                );
             }
         }
     }
@@ -13346,7 +14033,11 @@ impl CGame {
                 message.set_destination_object(added.identity.object_type, added.identity.ex_id);
                 message.set_object_stream(context.encode_goods_for_old_client(goods));
                 let delivery = message.send_to_player(self, player_id);
-                tracing::trace!(player_id, delivery, "создание денежного предмета отправлено игроку");
+                tracing::trace!(
+                    player_id,
+                    delivery,
+                    "создание денежного предмета отправлено игроку"
+                );
             }
             CurrencyIncreaseOutcome::Increased(change) => {
                 let mut message = CS2CContainerObjectAmountChange::default();
@@ -13410,12 +14101,23 @@ impl CGame {
                     b"Personal Trade has been CANCELED",
                 )
                 .send_to_player(self.net_server(), payer_id);
-                tracing::trace!(payer_id, session_id, selected_plug_id, notification_delivery, "Billing-завершение обмена отменено");
+                tracing::trace!(
+                    payer_id,
+                    session_id,
+                    selected_plug_id,
+                    notification_delivery,
+                    "Billing-завершение обмена отменено"
+                );
             }
             return;
         }
         let Ok(parties) = self.player_trade_snapshots(session_id) else {
-            tracing::trace!(payer_id, session_id, selected_plug_id, "участники Billing-завершения обмена не найдены");
+            tracing::trace!(
+                payer_id,
+                session_id,
+                selected_plug_id,
+                "участники Billing-завершения обмена не найдены"
+            );
             return;
         };
         let completed = self.commit_player_trade(
@@ -13426,7 +14128,13 @@ impl CGame {
             context,
         );
         self.finish_player_trade_session(session_id, false);
-        tracing::trace!(payer_id, session_id, selected_plug_id, completed, "Billing-завершение обмена обработано");
+        tracing::trace!(
+            payer_id,
+            session_id,
+            selected_plug_id,
+            completed,
+            "Billing-завершение обмена обработано"
+        );
     }
 
     fn detach_terminal_equipment_session_listeners(
@@ -14332,22 +15040,24 @@ impl CGame {
         &self.general_variables
     }
 
-    pub(crate) fn set_general_variable_integer(
-        &mut self,
-        name: &[u8],
-        value: i32,
-    ) {
+    pub(crate) fn set_general_variable_integer(&mut self, name: &[u8], value: i32) {
         let outcome = self.general_variables.set_integer(name, 0, value);
-        tracing::trace!(name_bytes = name.len(), value, ?outcome, "целая общая переменная изменена");
+        tracing::trace!(
+            name_bytes = name.len(),
+            value,
+            ?outcome,
+            "целая общая переменная изменена"
+        );
     }
 
-    pub(crate) fn set_general_variable_string(
-        &mut self,
-        name: &[u8],
-        value: &[u8],
-    ) {
+    pub(crate) fn set_general_variable_string(&mut self, name: &[u8], value: &[u8]) {
         let outcome = self.general_variables.set_string(name, value);
-        tracing::trace!(name_bytes = name.len(), value_bytes = value.len(), ?outcome, "строковая общая переменная изменена");
+        tracing::trace!(
+            name_bytes = name.len(),
+            value_bytes = value.len(),
+            ?outcome,
+            "строковая общая переменная изменена"
+        );
     }
 
     /// Reached `SetMe` для DWORD-полей восстановительного script-а. До записи
@@ -14979,7 +15689,11 @@ impl CGame {
             .find_player(player_id)
             .and_then(CPlayer::server_region_id)
         else {
-            tracing::debug!(player_id, target_region_id, "смена региона отклонена: игрок отсутствует");
+            tracing::debug!(
+                player_id,
+                target_region_id,
+                "смена региона отклонена: игрок отсутствует"
+            );
             return PlayerRegionChangeOutcome::MissingPlayer;
         };
         let (source_tile_x, source_tile_y, wallet_gold, bank_gold) = self
@@ -14994,7 +15708,12 @@ impl CGame {
             })
             .expect("region-change player проверен до source snapshot");
         let Some(mut source_owner) = self.take_region_owner(source_region_id) else {
-            tracing::debug!(player_id, source_region_id, target_region_id, "смена региона отклонена: исходный регион отсутствует");
+            tracing::debug!(
+                player_id,
+                source_region_id,
+                target_region_id,
+                "смена региона отклонена: исходный регион отсутствует"
+            );
             return PlayerRegionChangeOutcome::MissingSourceRegion;
         };
         self.finish_player_business(player_id);
@@ -15090,7 +15809,21 @@ impl CGame {
             context.refresh_script_region_auto_protect(&mut player);
             self.restore_region_owner(source_owner);
             self.players.insert(player_id, player);
-            tracing::debug!(player_id, source_region_id, target_region_id, tile_x, tile_y, direction, use_goods, range, carriage_distance, ?position_delivery, ?direction_delivery, ?change_log_delivery, "игрок перемещён внутри региона");
+            tracing::debug!(
+                player_id,
+                source_region_id,
+                target_region_id,
+                tile_x,
+                tile_y,
+                direction,
+                use_goods,
+                range,
+                carriage_distance,
+                ?position_delivery,
+                ?direction_delivery,
+                ?change_log_delivery,
+                "игрок перемещён внутри региона"
+            );
             return PlayerRegionChangeOutcome::SameRegion;
         }
 
@@ -15177,7 +15910,22 @@ impl CGame {
             self.restore_region_owner(target_owner);
             self.restore_region_owner(source_owner);
             self.players.insert(player_id, player);
-            tracing::debug!(player_id, source_region_id, target_region_id, tile_x, tile_y, direction, use_goods, range, carriage_distance, ?region_delivery, ?faction_delivery, ?team_delivery, ?change_log_delivery, "игрок переведён в локальный регион");
+            tracing::debug!(
+                player_id,
+                source_region_id,
+                target_region_id,
+                tile_x,
+                tile_y,
+                direction,
+                use_goods,
+                range,
+                carriage_distance,
+                ?region_delivery,
+                ?faction_delivery,
+                ?team_delivery,
+                ?change_log_delivery,
+                "игрок переведён в локальный регион"
+            );
             return PlayerRegionChangeOutcome::LocalRegion;
         }
 
@@ -15227,7 +15975,22 @@ impl CGame {
         self.restore_region_owner(source_owner);
         self.players.insert(player_id, player);
         let delivered = matches!(&world_delivery, Some(Ok(value)) if *value != 0);
-        tracing::debug!(player_id, source_region_id, target_region_id, tile_x, tile_y, direction, use_goods, range, carriage_distance, ?player_snapshot_size, ?world_delivery, ?change_log_delivery, delivered, "игрок передан на другой сервер");
+        tracing::debug!(
+            player_id,
+            source_region_id,
+            target_region_id,
+            tile_x,
+            tile_y,
+            direction,
+            use_goods,
+            range,
+            carriage_distance,
+            ?player_snapshot_size,
+            ?world_delivery,
+            ?change_log_delivery,
+            delivered,
+            "игрок передан на другой сервер"
+        );
         PlayerRegionChangeOutcome::RemoteServer { delivered }
     }
 
@@ -15499,7 +16262,8 @@ impl CGame {
             let _ = player.delete_undead_state(buff_id);
             player.shape().get_direction()
         };
-        let _ = self.change_player_region(player_id, region_id, -1, -1, direction, 0, 0, 0, runtime);
+        let _ =
+            self.change_player_region(player_id, region_id, -1, -1, direction, 0, 0, 0, runtime);
         true
     }
 
@@ -15536,7 +16300,11 @@ impl CGame {
                 player.clear_jjc_week();
             }
             let world_delivery = self.send_jjc_data(player_id);
-            tracing::trace!(player_id, ?world_delivery, "сброшены недельные данные JJC игрока");
+            tracing::trace!(
+                player_id,
+                ?world_delivery,
+                "сброшены недельные данные JJC игрока"
+            );
         }
         tracing::debug!(players, "завершён недельный сброс JJC");
         players
@@ -15551,7 +16319,11 @@ impl CGame {
                 player.clear_jjc_season(default_level);
             }
             let world_delivery = self.send_jjc_data(player_id);
-            tracing::trace!(player_id, ?world_delivery, "сброшены сезонные данные JJC игрока");
+            tracing::trace!(
+                player_id,
+                ?world_delivery,
+                "сброшены сезонные данные JJC игрока"
+            );
         }
         tracing::debug!(players, default_level, "завершён сезонный сброс JJC");
         players
@@ -15569,16 +16341,27 @@ impl CGame {
                 ))
             })
         else {
-            tracing::trace!(player_id, "выход из JJC пропущен: игрок или регион отсутствует");
+            tracing::trace!(
+                player_id,
+                "выход из JJC пропущен: игрок или регион отсутствует"
+            );
             return false;
         };
         let in_jjc_region = region_min <= region_id && region_id <= region_max;
         if !in_jjc_region && changing_region && changing_server {
-            tracing::trace!(player_id, region_id, "выход из JJC пропущен во время межсерверного перехода");
+            tracing::trace!(
+                player_id,
+                region_id,
+                "выход из JJC пропущен во время межсерверного перехода"
+            );
             return false;
         }
         if in_jjc_region && !pk_state {
-            tracing::trace!(player_id, region_id, "выход из JJC пропущен: боевое состояние не активно");
+            tracing::trace!(
+                player_id,
+                region_id,
+                "выход из JJC пропущен: боевое состояние не активно"
+            );
             return false;
         }
         let mut opponent_id = None;
@@ -15589,10 +16372,14 @@ impl CGame {
                 player.set_jjc_pk_state(false);
             }
             opponent_id = self.jjc_system.opponent_info(1, region_id, player_id);
-            let Some(existing_opponent_id) =
-                opponent_id.filter(|id| self.players.contains_key(id))
+            let Some(existing_opponent_id) = opponent_id.filter(|id| self.players.contains_key(id))
             else {
-                tracing::trace!(player_id, region_id, ?opponent_id, "JJC-состояние игрока снято без доступного соперника");
+                tracing::trace!(
+                    player_id,
+                    region_id,
+                    ?opponent_id,
+                    "JJC-состояние игрока снято без доступного соперника"
+                );
                 return true;
             };
             if let Some(opponent) = self.players.get_mut(&existing_opponent_id) {
@@ -15623,7 +16410,15 @@ impl CGame {
         message.add_long(player_id);
         message.add_long(region_id);
         let world_delivery = message.send(self, false).unwrap_or_default();
-        tracing::debug!(player_id, region_id, ?opponent_id, ?player_script_id, ?opponent_script_id, world_delivery, "игрок выведен из JJC");
+        tracing::debug!(
+            player_id,
+            region_id,
+            ?opponent_id,
+            ?player_script_id,
+            ?opponent_script_id,
+            world_delivery,
+            "игрок выведен из JJC"
+        );
         true
     }
 
@@ -15770,7 +16565,13 @@ impl CGame {
                 source.amount,
                 runtime,
             );
-            tracing::trace!(player_id, region_id, ?source, ?result, "особый предмет обработан при потере игрока");
+            tracing::trace!(
+                player_id,
+                region_id,
+                ?source,
+                ?result,
+                "особый предмет обработан при потере игрока"
+            );
         }
     }
 
@@ -15964,13 +16765,13 @@ impl CGame {
     /// Reached `CPlayer::end_business`: session lookup/end остаётся в factory,
     /// player progress всегда сбрасывается, а shopping/increment дополнительно
     /// снимают один movement lock; increment публикует exact `0xC0404`.
-    pub(crate) fn finish_player_business(
-        &mut self,
-        player_id: i32,
-    ) {
+    pub(crate) fn finish_player_business(&mut self, player_id: i32) {
         let Some(previous_progress) = self.find_player(player_id).map(CPlayer::current_progress)
         else {
-            tracing::trace!(player_id, "завершение business-состояния пропущено: игрок отсутствует");
+            tracing::trace!(
+                player_id,
+                "завершение business-состояния пропущено: игрок отсутствует"
+            );
             return;
         };
         let session_id = matches!(
@@ -16301,15 +17102,27 @@ impl CGame {
             return ScriptNpcShopOpenOutcome::MissingContext;
         };
         if player.current_progress() != PlayerProgress::None {
-            tracing::trace!(player_id, npc_id, "игрок занят при открытии сценарного магазина");
+            tracing::trace!(
+                player_id,
+                npc_id,
+                "игрок занят при открытии сценарного магазина"
+            );
             return ScriptNpcShopOpenOutcome::Busy;
         }
         let Some(trade) = self.trade_list.get_trade(trade_name) else {
-            tracing::trace!(player_id, npc_id, "торговый список сценарного магазина не найден");
+            tracing::trace!(
+                player_id,
+                npc_id,
+                "торговый список сценарного магазина не найден"
+            );
             return ScriptNpcShopOpenOutcome::MissingTrade;
         };
         let Ok(goods_count) = i32::try_from(trade.goods().len()) else {
-            tracing::warn!(player_id, npc_id, "торговый список сценарного магазина не помещается в wire-счётчик");
+            tracing::warn!(
+                player_id,
+                npc_id,
+                "торговый список сценарного магазина не помещается в wire-счётчик"
+            );
             return ScriptNpcShopOpenOutcome::InvalidTradeGoods;
         };
         let mut message = CMessage::new(0x000b_fa01);
@@ -16320,7 +17133,12 @@ impl CGame {
                 .goods_factory
                 .query_goods_base_properties(goods.goods_id)
             else {
-                tracing::warn!(player_id, npc_id, goods_id = goods.goods_id, "базовые свойства товара сценарного магазина не найдены");
+                tracing::warn!(
+                    player_id,
+                    npc_id,
+                    goods_id = goods.goods_id,
+                    "базовые свойства товара сценарного магазина не найдены"
+                );
                 return ScriptNpcShopOpenOutcome::InvalidTradeGoods;
             };
             if goods.page >= 4
@@ -16328,7 +17146,12 @@ impl CGame {
                 || goods.position_y >= 11
                 || goods.amount == 0
             {
-                tracing::warn!(player_id, npc_id, goods_id = goods.goods_id, "товар сценарного магазина имеет недопустимые координаты или количество");
+                tracing::warn!(
+                    player_id,
+                    npc_id,
+                    goods_id = goods.goods_id,
+                    "товар сценарного магазина имеет недопустимые координаты или количество"
+                );
                 return ScriptNpcShopOpenOutcome::InvalidTradeGoods;
             }
             message.add_byte(goods.page);
@@ -16347,10 +17170,23 @@ impl CGame {
             let rollback = self
                 .find_player_mut(player_id)
                 .map(|player| player.release_goods_session_state());
-            tracing::warn!(player_id, npc_id, delivery, ?transition, ?rollback, "отправка открытия сценарного магазина завершилась ошибкой");
+            tracing::warn!(
+                player_id,
+                npc_id,
+                delivery,
+                ?transition,
+                ?rollback,
+                "отправка открытия сценарного магазина завершилась ошибкой"
+            );
             return ScriptNpcShopOpenOutcome::SendFailed;
         }
-        tracing::trace!(player_id, npc_id, delivery, ?transition, "сценарный магазин открыт");
+        tracing::trace!(
+            player_id,
+            npc_id,
+            delivery,
+            ?transition,
+            "сценарный магазин открыт"
+        );
         ScriptNpcShopOpenOutcome::Opened
     }
 
@@ -16365,7 +17201,11 @@ impl CGame {
         }
         let goods_amount = player.depot().goods_amount(&self.goods_factory);
         if goods_amount > 96 {
-            tracing::warn!(player_id, goods_amount, "число товаров сценарного склада превышает wire-предел");
+            tracing::warn!(
+                player_id,
+                goods_amount,
+                "число товаров сценарного склада превышает wire-предел"
+            );
             return ScriptDepotOpenOutcome::TooManyGoods;
         }
         let password_required = !player.depot_password().is_empty();
@@ -16403,14 +17243,24 @@ impl CGame {
                 self.find_player_mut(player_id)
                     .expect("игрок сохраняется при отказе снимка склада")
                     .close_depot_storage();
-                tracing::warn!(player_id, goods_amount, "базовые свойства товара сценарного склада не найдены");
+                tracing::warn!(
+                    player_id,
+                    goods_amount,
+                    "базовые свойства товара сценарного склада не найдены"
+                );
                 return ScriptDepotOpenOutcome::InvalidGoods;
             };
             if goods.amount() == 0 || goods.amount() > u16::MAX as u32 || position >= 96 {
                 self.find_player_mut(player_id)
                     .expect("игрок сохраняется при отказе снимка склада")
                     .close_depot_storage();
-                tracing::warn!(player_id, goods_amount, position, amount = goods.amount(), "товар сценарного склада не помещается в wire-поля");
+                tracing::warn!(
+                    player_id,
+                    goods_amount,
+                    position,
+                    amount = goods.amount(),
+                    "товар сценарного склада не помещается в wire-поля"
+                );
                 return ScriptDepotOpenOutcome::InvalidGoods;
             }
             let mut payload = Vec::new();
@@ -16418,7 +17268,12 @@ impl CGame {
                 self.find_player_mut(player_id)
                     .expect("игрок сохраняется при отказе снимка склада")
                     .close_depot_storage();
-                tracing::warn!(player_id, goods_amount, position, "товар сценарного склада не сериализован для старого клиента");
+                tracing::warn!(
+                    player_id,
+                    goods_amount,
+                    position,
+                    "товар сценарного склада не сериализован для старого клиента"
+                );
                 return ScriptDepotOpenOutcome::InvalidGoods;
             }
             message.add_byte(u8::from(properties.goods_type() == GOODS_TYPE_EQUIPMENT));
@@ -16434,10 +17289,22 @@ impl CGame {
             self.find_player_mut(player_id)
                 .expect("игрок сохраняется при откате открытия склада")
                 .close_depot_storage();
-            tracing::warn!(player_id, password_required, goods_amount, delivery, "отправка открытия сценарного склада завершилась ошибкой");
+            tracing::warn!(
+                player_id,
+                password_required,
+                goods_amount,
+                delivery,
+                "отправка открытия сценарного склада завершилась ошибкой"
+            );
             return ScriptDepotOpenOutcome::SendFailed;
         }
-        tracing::trace!(player_id, password_required, goods_amount, delivery, "сценарный склад открыт");
+        tracing::trace!(
+            player_id,
+            password_required,
+            goods_amount,
+            delivery,
+            "сценарный склад открыт"
+        );
         ScriptDepotOpenOutcome::Opened
     }
 
@@ -16451,11 +17318,19 @@ impl CGame {
             return;
         }
         let Some(player) = self.find_player(player_id) else {
-            tracing::trace!(player_id, ?kind, "игрок открытия сессии оборудования не найден");
+            tracing::trace!(
+                player_id,
+                ?kind,
+                "игрок открытия сессии оборудования не найден"
+            );
             return;
         };
         if player.is_dead() {
-            tracing::trace!(player_id, ?kind, "мёртвый игрок не может открыть сессию оборудования");
+            tracing::trace!(
+                player_id,
+                ?kind,
+                "мёртвый игрок не может открыть сессию оборудования"
+            );
             return;
         }
         if player.current_progress() != PlayerProgress::None {
@@ -16464,8 +17339,14 @@ impl CGame {
                 EquipmentSessionPlugKind::DaKong => "GS1057",
                 EquipmentSessionPlugKind::Compose => "GS1061",
             };
-            let notification_delivery = self.send_equipment_session_notification(player_id, string_id);
-            tracing::trace!(player_id, ?kind, notification_delivery, "игрок занят при открытии сессии оборудования");
+            let notification_delivery =
+                self.send_equipment_session_notification(player_id, string_id);
+            tracing::trace!(
+                player_id,
+                ?kind,
+                notification_delivery,
+                "игрок занят при открытии сессии оборудования"
+            );
             return;
         }
         if kind != EquipmentSessionPlugKind::Upgrade
@@ -16478,8 +17359,14 @@ impl CGame {
                 EquipmentSessionPlugKind::Compose => "GS1062",
                 EquipmentSessionPlugKind::Upgrade => unreachable!(),
             };
-            let notification_delivery = self.send_equipment_session_notification(player_id, string_id);
-            tracing::trace!(player_id, ?kind, notification_delivery, "командное состояние блокирует сессию оборудования");
+            let notification_delivery =
+                self.send_equipment_session_notification(player_id, string_id);
+            tracing::trace!(
+                player_id,
+                ?kind,
+                notification_delivery,
+                "командное состояние блокирует сессию оборудования"
+            );
             return;
         }
         let Some((session_id, plug_id)) = self
@@ -16515,10 +17402,28 @@ impl CGame {
                 let _listener_detach = player.detach_equipment_session_listener(plug_id);
                 let _ = player.release_goods_session_state();
             }
-            tracing::trace!(player_id, ?kind, session_id, plug_id, ?listener_attach, ?player_transition, ?collected_plug_ids, "открытие сессии оборудования не доставлено");
+            tracing::trace!(
+                player_id,
+                ?kind,
+                session_id,
+                plug_id,
+                ?listener_attach,
+                ?player_transition,
+                ?collected_plug_ids,
+                "открытие сессии оборудования не доставлено"
+            );
             return;
         }
-        tracing::trace!(player_id, ?kind, session_id, plug_id, ?listener_attach, ?player_transition, delivery, "сессия оборудования открыта");
+        tracing::trace!(
+            player_id,
+            ?kind,
+            session_id,
+            plug_id,
+            ?listener_attach,
+            ?player_transition,
+            delivery,
+            "сессия оборудования открыта"
+        );
     }
 
     pub(crate) fn upgrade_equipment<Context: EquipmentUpgradeContext>(
@@ -16529,7 +17434,12 @@ impl CGame {
         context: &mut Context,
     ) {
         if self.session_factory.query_session(session_id).is_none() {
-            tracing::trace!(player_id, session_id, requested_plug_id, "сессия улучшения не найдена");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                "сессия улучшения не найдена"
+            );
             return;
         }
         let actual_plug_id = self
@@ -16537,24 +17447,45 @@ impl CGame {
             .query_session_plug_by_owner(session_id, 400, player_id)
             .map(|plug| plug.id());
         let Some(actual_plug_id) = actual_plug_id else {
-            tracing::trace!(player_id, session_id, requested_plug_id, "plug улучшения не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                "plug улучшения не найден"
+            );
             return;
         };
         if actual_plug_id != requested_plug_id {
-            tracing::trace!(player_id, session_id, requested_plug_id, actual_plug_id, "plug улучшения не совпал");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                actual_plug_id,
+                "plug улучшения не совпал"
+            );
             return;
         }
         let Some(mut plug) = self
             .session_factory
             .take_equipment_upgrade_plug(actual_plug_id)
         else {
-            tracing::trace!(player_id, session_id, actual_plug_id, "владелец plug улучшения не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                actual_plug_id,
+                "владелец plug улучшения не найден"
+            );
             return;
         };
         let Some(mut player) = self.players.remove(&player_id) else {
             self.session_factory
                 .register_equipment_upgrade_plug(actual_plug_id, plug);
-            tracing::trace!(player_id, session_id, actual_plug_id, "игрок улучшения не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                actual_plug_id,
+                "игрок улучшения не найден"
+            );
             return;
         };
         self.upgrade_equipment_inner(
@@ -16579,7 +17510,12 @@ impl CGame {
     ) {
         let player_id = player.player_id();
         let Some(region_id) = player.server_region_id() else {
-            tracing::trace!(player_id, session_id, requested_plug_id, "регион игрока улучшения не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                "регион игрока улучшения не найден"
+            );
             return;
         };
         let tile_x = player.shape().get_tile_x().unwrap_or(0);
@@ -16591,21 +17527,41 @@ impl CGame {
         });
         if player.money() < price {
             self.send_equipment_upgrade_notification(player_id, "GS0250", Some(price));
-            tracing::trace!(player_id, session_id, requested_plug_id, price, "недостаточно денег при проверке улучшения");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                price,
+                "недостаточно денег при проверке улучшения"
+            );
             return;
         }
         let Some(equipment_id) = plug.goods_id(UpgradeEquipmentCell::Equipment) else {
             self.send_equipment_upgrade_notification(player_id, "GS0249", None);
-            tracing::trace!(player_id, session_id, "оборудование для улучшения не выбрано");
+            tracing::trace!(
+                player_id,
+                session_id,
+                "оборудование для улучшения не выбрано"
+            );
             return;
         };
         let Some(equipment) = player.get_goods_by_id(equipment_id) else {
-            tracing::trace!(player_id, session_id, ?equipment_id, "оборудование для улучшения не найдено");
+            tracing::trace!(
+                player_id,
+                session_id,
+                ?equipment_id,
+                "оборудование для улучшения не найдено"
+            );
             return;
         };
         if !equipment.can_upgraded(&self.goods_factory) {
             self.send_equipment_upgrade_notification(player_id, "GS0249", None);
-            tracing::trace!(player_id, session_id, ?equipment_id, "оборудование нельзя улучшить");
+            tracing::trace!(
+                player_id,
+                session_id,
+                ?equipment_id,
+                "оборудование нельзя улучшить"
+            );
             return;
         }
         let current_level = equipment.addon_property_value(
@@ -16619,7 +17575,12 @@ impl CGame {
             return;
         };
         let Some(base_gem) = player.get_goods_by_id(base_gem_id) else {
-            tracing::trace!(player_id, session_id, ?base_gem_id, "базовый камень улучшения не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                ?base_gem_id,
+                "базовый камень улучшения не найден"
+            );
             return;
         };
         let minimum_level = base_gem.addon_property_value(
@@ -16634,12 +17595,24 @@ impl CGame {
         ));
         if current_level < minimum_level || maximum_level < current_level {
             self.send_equipment_upgrade_notification(player_id, "GS0247", None);
-            tracing::trace!(player_id, session_id, current_level, minimum_level, maximum_level, "уровень оборудования вне диапазона камня");
+            tracing::trace!(
+                player_id,
+                session_id,
+                current_level,
+                minimum_level,
+                maximum_level,
+                "уровень оборудования вне диапазона камня"
+            );
             return;
         }
         if 98 < current_level as u32 {
             self.send_equipment_upgrade_notification(player_id, "GS0257", None);
-            tracing::trace!(player_id, session_id, current_level, "достигнут максимальный уровень улучшения");
+            tracing::trace!(
+                player_id,
+                session_id,
+                current_level,
+                "достигнут максимальный уровень улучшения"
+            );
             return;
         }
         let probability = plug.probability(|goods_id, property, value_id| {
@@ -16649,13 +17622,25 @@ impl CGame {
         });
         if player.money() < price {
             self.send_equipment_upgrade_notification(player_id, "GS0256", None);
-            tracing::trace!(player_id, session_id, price, "недостаточно денег при выполнении улучшения");
+            tracing::trace!(
+                player_id,
+                session_id,
+                price,
+                "недостаточно денег при выполнении улучшения"
+            );
             return;
         }
 
         let money = player.decrease_money(price, &self.goods_factory);
         let money_deliveries = self.send_player_money_decrease(player_id, &money.outcome);
-        tracing::trace!(player_id, session_id, previous_money = money.previous, current_money = money.current, ?money_deliveries, "списана стоимость улучшения");
+        tracing::trace!(
+            player_id,
+            session_id,
+            previous_money = money.previous,
+            current_money = money.current,
+            ?money_deliveries,
+            "списана стоимость улучшения"
+        );
         let roll = game_legacy_random(&mut self.random_state, 100) as u32 + 1;
 
         let gem_cells = [
@@ -16704,7 +17689,16 @@ impl CGame {
                 self.send_equipment_upgrade_audit(&audit);
             }
             self.publish_equipment_upgrade_update(player, equipment_id, context);
-            tracing::trace!(player_id, session_id, price, probability, roll, previous_level = current_level, resulting_level = target_level, "оборудование улучшено");
+            tracing::trace!(
+                player_id,
+                session_id,
+                price,
+                probability,
+                roll,
+                previous_level = current_level,
+                resulting_level = target_level,
+                "оборудование улучшено"
+            );
         } else {
             let equipment_snapshot = player
                 .get_goods_by_id(equipment_id)
@@ -16729,7 +17723,14 @@ impl CGame {
             }) {
                 1 => {
                     self.send_equipment_upgrade_notification(player_id, "GS0252", None);
-                    tracing::trace!(player_id, session_id, probability, roll, current_level, "неудачное улучшение не изменило уровень");
+                    tracing::trace!(
+                        player_id,
+                        session_id,
+                        probability,
+                        roll,
+                        current_level,
+                        "неудачное улучшение не изменило уровень"
+                    );
                 }
                 2 => {
                     let target_level = current_level.saturating_sub(1);
@@ -16741,7 +17742,15 @@ impl CGame {
                     }
                     self.send_equipment_upgrade_notification(player_id, "GS0253", None);
                     self.publish_equipment_upgrade_update(player, equipment_id, context);
-                    tracing::trace!(player_id, session_id, probability, roll, previous_level = current_level, resulting_level = target_level, "неудачное улучшение снизило уровень");
+                    tracing::trace!(
+                        player_id,
+                        session_id,
+                        probability,
+                        roll,
+                        previous_level = current_level,
+                        resulting_level = target_level,
+                        "неудачное улучшение снизило уровень"
+                    );
                 }
                 3 => {
                     if let Some(equipment) = player.get_goods_by_id_mut(equipment_id) {
@@ -16752,7 +17761,14 @@ impl CGame {
                     }
                     self.send_equipment_upgrade_notification(player_id, "GS0254", None);
                     self.publish_equipment_upgrade_update(player, equipment_id, context);
-                    tracing::trace!(player_id, session_id, probability, roll, previous_level = current_level, "неудачное улучшение сбросило уровень");
+                    tracing::trace!(
+                        player_id,
+                        session_id,
+                        probability,
+                        roll,
+                        previous_level = current_level,
+                        "неудачное улучшение сбросило уровень"
+                    );
                 }
                 _ => {
                     self.send_equipment_upgrade_notification(player_id, "GS0255", None);
@@ -16778,7 +17794,13 @@ impl CGame {
                         UpgradeEquipmentCell::Equipment,
                         context,
                     );
-                    tracing::trace!(player_id, session_id, probability, roll, "неудачное улучшение уничтожило оборудование");
+                    tracing::trace!(
+                        player_id,
+                        session_id,
+                        probability,
+                        roll,
+                        "неудачное улучшение уничтожило оборудование"
+                    );
                 }
             }
         }
@@ -16801,7 +17823,12 @@ impl CGame {
         );
         let delivery = colored_player_notice_message(0xffff_ffff, 0, &text)
             .send_to_player(self.net_server(), player_id);
-        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление улучшения");
+        tracing::trace!(
+            player_id,
+            string_id,
+            delivery,
+            "отправлено уведомление улучшения"
+        );
     }
 
     fn send_equipment_upgrade_audit(&self, audit: &EquipmentUpgradeAuditLog) {
@@ -16816,7 +17843,12 @@ impl CGame {
         message.add_long(audit.tile_x);
         message.add_long(audit.tile_y);
         let deliveries = message.send(self, false);
-        tracing::trace!(player_id = audit.player_id, reason = audit.reason, ?deliveries, "отправлен журнал улучшения в World");
+        tracing::trace!(
+            player_id = audit.player_id,
+            reason = audit.reason,
+            ?deliveries,
+            "отправлен журнал улучшения в World"
+        );
     }
 
     fn send_equipment_upgrade_lost_audit(&self, audit: &EquipmentUpgradeLostAuditLog) {
@@ -16837,7 +17869,12 @@ impl CGame {
         message.add_long(audit.tile_y);
         message.add_ulong(audit.client_ip);
         let deliveries = message.send(self, false);
-        tracing::trace!(player_id = audit.player_id, reason = audit.reason, ?deliveries, "отправлен журнал потери оборудования в World");
+        tracing::trace!(
+            player_id = audit.player_id,
+            reason = audit.reason,
+            ?deliveries,
+            "отправлен журнал потери оборудования в World"
+        );
     }
 
     fn send_equipment_upgrade_consumption(
@@ -16899,7 +17936,9 @@ impl CGame {
         let player_id = player.player_id();
         let goods = goods.identity();
         let old_client_payload = context.encode_goods_for_old_client(
-            player.get_goods_by_id(equipment_id).expect("оборудование проверено"),
+            player
+                .get_goods_by_id(equipment_id)
+                .expect("оборудование проверено"),
         );
         let mut message = CMessage::new(0x0b_f918);
         message.add_long(player_id);
@@ -16907,7 +17946,12 @@ impl CGame {
         message.add_ulong(old_client_payload.len() as u32);
         message.base_mut().add(&old_client_payload);
         let delivery = message.send_to_player(self.net_server(), player_id);
-        tracing::trace!(player_id, ?goods, delivery, "отправлено обновление улучшенного оборудования");
+        tracing::trace!(
+            player_id,
+            ?goods,
+            delivery,
+            "отправлено обновление улучшенного оборудования"
+        );
     }
 
     fn consume_equipment_upgrade_cell<Context: EquipmentUpgradeContext>(
@@ -16967,7 +18011,12 @@ impl CGame {
                     identity,
                     previous_amount,
                 );
-                tracing::trace!(player_id = player.player_id(), ?identity, delivery, "отправлено удаление расходника улучшения из экипировки");
+                tracing::trace!(
+                    player_id = player.player_id(),
+                    ?identity,
+                    delivery,
+                    "отправлено удаление расходника улучшения из экипировки"
+                );
             }
             matches!(removal.outcome, EquipmentRemoveOutcome::Removed(_))
         } else {
@@ -16976,16 +18025,22 @@ impl CGame {
         if source_removed {
             let _ = plug.upgrade_container_mut().on_source_removed(goods_id, 1);
         }
-        tracing::trace!(player_id = player.player_id(), ?cell, ?identity, source_removed, "обработан расход ячейки улучшения");
+        tracing::trace!(
+            player_id = player.player_id(),
+            ?cell,
+            ?identity,
+            source_removed,
+            "обработан расход ячейки улучшения"
+        );
     }
 
-    pub(crate) fn close_equipment_upgrade(
-        &mut self,
-        player_id: i32,
-        session_id: i32,
-    ) {
+    pub(crate) fn close_equipment_upgrade(&mut self, player_id: i32, session_id: i32) {
         if self.session_factory.query_session(session_id).is_none() {
-            tracing::trace!(player_id, session_id, "закрываемая сессия улучшения не найдена");
+            tracing::trace!(
+                player_id,
+                session_id,
+                "закрываемая сессия улучшения не найдена"
+            );
             return;
         }
         let plug_id = self
@@ -16993,11 +18048,20 @@ impl CGame {
             .query_session_plug_by_owner(session_id, 400, player_id)
             .map(|plug| plug.id());
         let Some(plug_id) = plug_id else {
-            tracing::trace!(player_id, session_id, "закрываемый plug улучшения не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                "закрываемый plug улучшения не найден"
+            );
             return;
         };
         let Some(mut plug) = self.session_factory.take_equipment_upgrade_plug(plug_id) else {
-            tracing::trace!(player_id, session_id, plug_id, "владелец закрываемого plug улучшения не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                plug_id,
+                "владелец закрываемого plug улучшения не найден"
+            );
             return;
         };
         let session_end = self.session_factory.end_session(session_id);
@@ -17013,7 +18077,18 @@ impl CGame {
         let message = CMessage::new(0x0b_f913);
         let close_delivery = message.send_to_player(self.net_server(), player_id);
         let collected_plug_ids = self.session_factory.garbage_collect_session(session_id);
-        tracing::trace!(player_id, session_id, plug_id, ?session_end, ?listener_detach, ?previous_progress, cleared_shadows, close_delivery, ?collected_plug_ids, "сессия улучшения закрыта");
+        tracing::trace!(
+            player_id,
+            session_id,
+            plug_id,
+            ?session_end,
+            ?listener_detach,
+            ?previous_progress,
+            cleared_shadows,
+            close_delivery,
+            ?collected_plug_ids,
+            "сессия улучшения закрыта"
+        );
     }
 
     pub(crate) fn compose_equipment<Context: EquipmentComposeContext + ScriptFunctionRuntime>(
@@ -17024,7 +18099,12 @@ impl CGame {
         context: &mut Context,
     ) {
         if self.session_factory.query_session(session_id).is_none() {
-            tracing::trace!(player_id, session_id, requested_plug_id, "сессия соединения оборудования не найдена");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                "сессия соединения оборудования не найдена"
+            );
             return;
         }
         let actual_plug_id = self
@@ -17032,18 +18112,34 @@ impl CGame {
             .query_session_plug_by_owner(session_id, 400, player_id)
             .map(|plug| plug.id());
         let Some(actual_plug_id) = actual_plug_id else {
-            tracing::trace!(player_id, session_id, requested_plug_id, "plug соединения оборудования не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                "plug соединения оборудования не найден"
+            );
             return;
         };
         if actual_plug_id != requested_plug_id {
-            tracing::trace!(player_id, session_id, requested_plug_id, actual_plug_id, "plug соединения оборудования не совпал");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                actual_plug_id,
+                "plug соединения оборудования не совпал"
+            );
             return;
         }
         let Some(mut plug) = self
             .session_factory
             .take_equipment_compose_plug(actual_plug_id)
         else {
-            tracing::trace!(player_id, session_id, actual_plug_id, "владелец plug соединения оборудования не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                actual_plug_id,
+                "владелец plug соединения оборудования не найден"
+            );
             return;
         };
         self.compose_equipment_inner(player_id, session_id, &mut plug, context);
@@ -17059,11 +18155,19 @@ impl CGame {
         context: &mut Context,
     ) {
         let Some(player) = self.find_player(player_id) else {
-            tracing::trace!(player_id, session_id, "игрок соединения оборудования не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                "игрок соединения оборудования не найден"
+            );
             return;
         };
         if player.server_region_id().is_none() {
-            tracing::trace!(player_id, session_id, "регион игрока соединения оборудования не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                "регион игрока соединения оборудования не найден"
+            );
             return;
         }
         let Some(base_id) = plug
@@ -17071,7 +18175,11 @@ impl CGame {
             .goods_id(ComposeEquipmentCell::BaseEquipment)
         else {
             self.send_equipment_compose_notification(player_id, "GS1156", &[]);
-            tracing::trace!(player_id, session_id, "основное оборудование для соединения не выбрано");
+            tracing::trace!(
+                player_id,
+                session_id,
+                "основное оборудование для соединения не выбрано"
+            );
             return;
         };
         let Some(sub_id) = plug
@@ -17079,21 +18187,35 @@ impl CGame {
             .goods_id(ComposeEquipmentCell::SubEquipment)
         else {
             self.send_equipment_compose_notification(player_id, "GS1157", &[]);
-            tracing::trace!(player_id, session_id, "дополнительное оборудование для соединения не выбрано");
+            tracing::trace!(
+                player_id,
+                session_id,
+                "дополнительное оборудование для соединения не выбрано"
+            );
             return;
         };
         let Some(base_source) = player
             .get_goods_by_id(base_id)
             .map(|goods| EquipmentComposeSourceSnapshot::capture(goods, &self.goods_factory))
         else {
-            tracing::trace!(player_id, session_id, ?base_id, "основное оборудование для соединения не найдено");
+            tracing::trace!(
+                player_id,
+                session_id,
+                ?base_id,
+                "основное оборудование для соединения не найдено"
+            );
             return;
         };
         let Some(sub_source) = player
             .get_goods_by_id(sub_id)
             .map(|goods| EquipmentComposeSourceSnapshot::capture(goods, &self.goods_factory))
         else {
-            tracing::trace!(player_id, session_id, ?sub_id, "дополнительное оборудование для соединения не найдено");
+            tracing::trace!(
+                player_id,
+                session_id,
+                ?sub_id,
+                "дополнительное оборудование для соединения не найдено"
+            );
             return;
         };
         if player.check_item_in_packet(COMPOSE_STONE_GOODS_INDEX) == 0 {
@@ -17103,7 +18225,13 @@ impl CGame {
         }
         if base_source.base_index == 0 || base_source.base_index != sub_source.base_index {
             self.send_equipment_compose_notification(player_id, "GS1159", &[]);
-            tracing::trace!(player_id, session_id, base_index = base_source.base_index, sub_index = sub_source.base_index, "оборудование для соединения различается");
+            tracing::trace!(
+                player_id,
+                session_id,
+                base_index = base_source.base_index,
+                sub_index = sub_source.base_index,
+                "оборудование для соединения различается"
+            );
             return;
         }
         let first = self
@@ -17119,22 +18247,45 @@ impl CGame {
         };
         if result_index == 0 {
             self.send_equipment_compose_notification(player_id, "GS1160", &[]);
-            tracing::trace!(player_id, session_id, base_index = base_source.base_index, "рецепт соединения не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                base_index = base_source.base_index,
+                "рецепт соединения не найден"
+            );
             return;
         }
         if base_source.weapon_level < required_level || sub_source.weapon_level < required_level {
             self.send_equipment_compose_notification(player_id, "GS1161", &[step, required_level]);
-            tracing::trace!(player_id, session_id, step, required_level, base_level = base_source.weapon_level, sub_level = sub_source.weapon_level, "уровень оборудования недостаточен для соединения");
+            tracing::trace!(
+                player_id,
+                session_id,
+                step,
+                required_level,
+                base_level = base_source.weapon_level,
+                sub_level = sub_source.weapon_level,
+                "уровень оборудования недостаточен для соединения"
+            );
             return;
         }
         if base_source.anima_bind != 1 || sub_source.anima_bind != 1 {
             self.send_equipment_compose_notification(player_id, "GS1162", &[]);
-            tracing::trace!(player_id, session_id, "оборудование для соединения не привязано");
+            tracing::trace!(
+                player_id,
+                session_id,
+                "оборудование для соединения не привязано"
+            );
             return;
         }
         if base_source.quality != sub_source.quality {
             self.send_equipment_compose_notification(player_id, "GS1163", &[]);
-            tracing::trace!(player_id, session_id, base_quality = base_source.quality, sub_quality = sub_source.quality, "качество оборудования для соединения различается");
+            tracing::trace!(
+                player_id,
+                session_id,
+                base_quality = base_source.quality,
+                sub_quality = sub_source.quality,
+                "качество оборудования для соединения различается"
+            );
             return;
         }
 
@@ -17155,7 +18306,12 @@ impl CGame {
             )
         };
         let Some(mut result) = created.pop() else {
-            tracing::trace!(player_id, session_id, result_index, "фабрика отклонила результат соединения");
+            tracing::trace!(
+                player_id,
+                session_id,
+                result_index,
+                "фабрика отклонила результат соединения"
+            );
             return;
         };
 
@@ -17178,12 +18334,8 @@ impl CGame {
                 .compose_container()
                 .original_container_information(source.identity.ex_id)
                 .unwrap_or_default();
-            let removed = self.consume_equipment_compose_source(
-                player_id,
-                &source,
-                &previous,
-                context,
-            );
+            let removed =
+                self.consume_equipment_compose_source(player_id, &source, &previous, context);
             if removed {
                 plug.compose_container_mut()
                     .remove_shadow(source.identity.ex_id);
@@ -17283,7 +18435,12 @@ impl CGame {
             return;
         }
         let addition_deliveries = self.send_player_packet_addition(&addition);
-        tracing::trace!(player_id, session_id, ?addition_deliveries, "результат соединения опубликован в инвентарь");
+        tracing::trace!(
+            player_id,
+            session_id,
+            ?addition_deliveries,
+            "результат соединения опубликован в инвентарь"
+        );
 
         if let Some(stored) = self
             .find_player(player_id)
@@ -17300,7 +18457,12 @@ impl CGame {
                 stored,
                 previous,
             );
-            tracing::trace!(player_id, session_id, ?result_shadow, "результат соединения помещён в shadow");
+            tracing::trace!(
+                player_id,
+                session_id,
+                ?result_shadow,
+                "результат соединения помещён в shadow"
+            );
         }
         let region_id = self
             .find_player(player_id)
@@ -17316,15 +18478,17 @@ impl CGame {
                 context,
             )
             .is_some();
-        tracing::trace!(player_id, session_id, result_index, required_level, script_dispatched, "соединение оборудования завершено");
+        tracing::trace!(
+            player_id,
+            session_id,
+            result_index,
+            required_level,
+            script_dispatched,
+            "соединение оборудования завершено"
+        );
     }
 
-    fn send_equipment_compose_notification(
-        &self,
-        player_id: i32,
-        string_id: &str,
-        values: &[i32],
-    ) {
+    fn send_equipment_compose_notification(&self, player_id: i32, string_id: &str, values: &[i32]) {
         let template = self.get_string_by_id(string_id.as_bytes());
         let text = if let [first, second] = values {
             format_two_legacy_i32(template, *first, *second, 255)
@@ -17333,7 +18497,12 @@ impl CGame {
         };
         let delivery = colored_player_notice_message(0xffff_ffff, 0, &text)
             .send_to_player(self.net_server(), player_id);
-        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление соединения оборудования");
+        tracing::trace!(
+            player_id,
+            string_id,
+            delivery,
+            "отправлено уведомление соединения оборудования"
+        );
     }
 
     fn record_equipment_compose_log(&self, log: &EquipmentComposeAuditLog) {
@@ -17358,7 +18527,12 @@ impl CGame {
         message.add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
         message.add_ulong(player.client_ip());
         let deliveries = message.send(self, false);
-        tracing::trace!(player_id = log.player_id, reason = log.reason, ?deliveries, "отправлен журнал соединения оборудования в World");
+        tracing::trace!(
+            player_id = log.player_id,
+            reason = log.reason,
+            ?deliveries,
+            "отправлен журнал соединения оборудования в World"
+        );
     }
 
     fn consume_equipment_compose_source<Context: EquipmentComposeContext>(
@@ -17376,7 +18550,12 @@ impl CGame {
             match player.remove_packet_goods_by_id(goods_id, source.amount) {
                 Some(packet) => {
                     let deliveries = self.send_player_packet_consumption(&packet);
-                    tracing::trace!(player_id, ?goods_id, ?deliveries, "опубликован расход источника соединения из инвентаря");
+                    tracing::trace!(
+                        player_id,
+                        ?goods_id,
+                        ?deliveries,
+                        "опубликован расход источника соединения из инвентаря"
+                    );
                     true
                 }
                 None => false,
@@ -17405,7 +18584,12 @@ impl CGame {
                     source.identity,
                     source.amount,
                 );
-                tracing::trace!(player_id, ?goods_id, delivery, "опубликован расход источника соединения из экипировки");
+                tracing::trace!(
+                    player_id,
+                    ?goods_id,
+                    delivery,
+                    "опубликован расход источника соединения из экипировки"
+                );
             }
             matches!(equipment.outcome, EquipmentRemoveOutcome::Removed(_))
         } else {
@@ -17452,7 +18636,12 @@ impl CGame {
         runtime: &mut Runtime,
     ) {
         if self.session_factory.query_session(session_id).is_none() {
-            tracing::trace!(player_id, session_id, requested_plug_id, "закрываемая сессия DaKong не найдена");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                "закрываемая сессия DaKong не найдена"
+            );
             return;
         }
         let actual_plug_id = self
@@ -17460,11 +18649,22 @@ impl CGame {
             .query_session_plug_by_owner(session_id, 400, player_id)
             .map(|plug| plug.id());
         let Some(actual_plug_id) = actual_plug_id else {
-            tracing::trace!(player_id, session_id, requested_plug_id, "закрываемый plug DaKong не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                "закрываемый plug DaKong не найден"
+            );
             return;
         };
         if actual_plug_id != requested_plug_id {
-            tracing::trace!(player_id, session_id, requested_plug_id, actual_plug_id, "закрываемый plug DaKong не совпал");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                actual_plug_id,
+                "закрываемый plug DaKong не совпал"
+            );
             return;
         }
         let Some(last_equipment_id) = self
@@ -17472,7 +18672,12 @@ impl CGame {
             .query_equipment_da_kong_plug(actual_plug_id)
             .map(CEquipmentDaKong::last_equipment_id)
         else {
-            tracing::trace!(player_id, session_id, actual_plug_id, "владелец закрываемого plug DaKong не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                actual_plug_id,
+                "владелец закрываемого plug DaKong не найден"
+            );
             return;
         };
 
@@ -17488,7 +18693,16 @@ impl CGame {
             .find_player(player_id)
             .and_then(|player| player.get_goods_by_id(last_equipment_id))
         else {
-            tracing::trace!(player_id, session_id, actual_plug_id, ?last_equipment_id, ?session_end, ?previous_progress, ?plug_exit, "сессия DaKong закрыта без оборудования");
+            tracing::trace!(
+                player_id,
+                session_id,
+                actual_plug_id,
+                ?last_equipment_id,
+                ?session_end,
+                ?previous_progress,
+                ?plug_exit,
+                "сессия DaKong закрыта без оборудования"
+            );
             return;
         };
         let update = EquipmentDaKongClientUpdate {
@@ -17502,7 +18716,17 @@ impl CGame {
         message.add_ulong(update.old_client_payload.len() as u32);
         message.base_mut().add(&update.old_client_payload);
         let client_update_delivery = message.send_to_player(self.net_server(), update.player_id);
-        tracing::trace!(player_id, session_id, actual_plug_id, ?last_equipment_id, ?session_end, ?previous_progress, ?plug_exit, client_update_delivery, "сессия DaKong закрыта с обновлением оборудования");
+        tracing::trace!(
+            player_id,
+            session_id,
+            actual_plug_id,
+            ?last_equipment_id,
+            ?session_end,
+            ?previous_progress,
+            ?plug_exit,
+            client_update_delivery,
+            "сессия DaKong закрыта с обновлением оборудования"
+        );
     }
 
     pub(crate) fn process_equipment_da_kong<Context: ScriptFunctionRuntime>(
@@ -17514,7 +18738,13 @@ impl CGame {
         context: &mut Context,
     ) {
         if self.session_factory.query_session(session_id).is_none() {
-            tracing::trace!(player_id, session_id, requested_plug_id, ?operation, "сессия DaKong не найдена");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                ?operation,
+                "сессия DaKong не найдена"
+            );
             return;
         }
         let actual_plug_id = self
@@ -17522,24 +18752,49 @@ impl CGame {
             .query_session_plug_by_owner(session_id, 400, player_id)
             .map(|plug| plug.id());
         let Some(actual_plug_id) = actual_plug_id else {
-            tracing::trace!(player_id, session_id, requested_plug_id, ?operation, "plug DaKong не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                ?operation,
+                "plug DaKong не найден"
+            );
             return;
         };
         if actual_plug_id != requested_plug_id {
-            tracing::trace!(player_id, session_id, requested_plug_id, actual_plug_id, ?operation, "plug DaKong не совпал");
+            tracing::trace!(
+                player_id,
+                session_id,
+                requested_plug_id,
+                actual_plug_id,
+                ?operation,
+                "plug DaKong не совпал"
+            );
             return;
         }
         let Some(mut plug) = self
             .session_factory
             .take_equipment_da_kong_plug(actual_plug_id)
         else {
-            tracing::trace!(player_id, session_id, actual_plug_id, ?operation, "владелец plug DaKong не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                actual_plug_id,
+                ?operation,
+                "владелец plug DaKong не найден"
+            );
             return;
         };
         let Some(mut player) = self.players.remove(&player_id) else {
             self.session_factory
                 .register_equipment_da_kong_plug(actual_plug_id, plug);
-            tracing::trace!(player_id, session_id, actual_plug_id, ?operation, "игрок DaKong не найден");
+            tracing::trace!(
+                player_id,
+                session_id,
+                actual_plug_id,
+                ?operation,
+                "игрок DaKong не найден"
+            );
             return;
         };
         self.process_equipment_da_kong_inner(
@@ -17565,11 +18820,17 @@ impl CGame {
             return;
         }
         if cost_original_name.is_empty() {
-            tracing::trace!(player_id, "не задан материал обновления внешнего свойства DaKong");
+            tracing::trace!(
+                player_id,
+                "не задан материал обновления внешнего свойства DaKong"
+            );
             return;
         }
         let Some(mut player) = self.players.remove(&player_id) else {
-            tracing::trace!(player_id, "игрок обновления внешнего свойства DaKong не найден");
+            tracing::trace!(
+                player_id,
+                "игрок обновления внешнего свойства DaKong не найден"
+            );
             return;
         };
         self.reflush_equipment_da_kong_external_property_inner(
@@ -17602,28 +18863,54 @@ impl CGame {
             .query_goods_base_properties(cost_base_index)
             .is_none()
         {
-            tracing::trace!(player_id, ?kind, cost_base_index, "описание материала сценарной модификации DaKong не найдено");
+            tracing::trace!(
+                player_id,
+                ?kind,
+                cost_base_index,
+                "описание материала сценарной модификации DaKong не найдено"
+            );
             return;
         }
         let Some(mut player) = self.players.remove(&player_id) else {
-            tracing::trace!(player_id, ?kind, "игрок сценарной модификации DaKong не найден");
+            tracing::trace!(
+                player_id,
+                ?kind,
+                "игрок сценарной модификации DaKong не найден"
+            );
             return;
         };
         let Some(equipment_id) = player.enhancement_selected_goods_id() else {
-            tracing::trace!(player_id, ?kind, "оборудование сценарной модификации DaKong не выбрано");
+            tracing::trace!(
+                player_id,
+                ?kind,
+                "оборудование сценарной модификации DaKong не выбрано"
+            );
             self.players.insert(player_id, player);
             return;
         };
         if player.get_goods_by_id(equipment_id).is_none() {
-            tracing::trace!(player_id, ?kind, ?equipment_id, "оборудование сценарной модификации DaKong не найдено");
+            tracing::trace!(
+                player_id,
+                ?kind,
+                ?equipment_id,
+                "оборудование сценарной модификации DaKong не найдено"
+            );
             self.players.insert(player_id, player);
             return;
         }
         if player.check_item_in_packet(cost_base_index) == 0 {
             let text = self.get_string_by_id(b"GS1060");
-            let notification_delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
-                .send_to_player(self.net_server(), player_id);
-            tracing::trace!(player_id, ?kind, ?equipment_id, cost_base_index, notification_delivery, "материал сценарной модификации DaKong не найден");
+            let notification_delivery =
+                colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                    .send_to_player(self.net_server(), player_id);
+            tracing::trace!(
+                player_id,
+                ?kind,
+                ?equipment_id,
+                cost_base_index,
+                notification_delivery,
+                "материал сценарной модификации DaKong не найден"
+            );
             self.players.insert(player_id, player);
             return;
         }
@@ -17646,7 +18933,13 @@ impl CGame {
             .next()
         {
             let consumption_deliveries = self.send_player_packet_consumption(&consumption);
-            tracing::trace!(player_id, ?kind, ?equipment_id, ?consumption_deliveries, "израсходован материал сценарной модификации DaKong");
+            tracing::trace!(
+                player_id,
+                ?kind,
+                ?equipment_id,
+                ?consumption_deliveries,
+                "израсходован материал сценарной модификации DaKong"
+            );
         }
         let equipment = player
             .get_goods_by_id(equipment_id)
@@ -17660,7 +18953,14 @@ impl CGame {
         let text = self.get_string_by_id(b"GS1059");
         let notification_delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
             .send_to_player(self.net_server(), player_id);
-        tracing::trace!(player_id, ?kind, ?equipment_id, client_update_delivery, notification_delivery, "сценарная модификация DaKong завершена");
+        tracing::trace!(
+            player_id,
+            ?kind,
+            ?equipment_id,
+            client_update_delivery,
+            notification_delivery,
+            "сценарная модификация DaKong завершена"
+        );
         self.players.insert(player_id, player);
     }
 
@@ -17675,11 +18975,18 @@ impl CGame {
         };
 
         let Some(equipment_id) = player.enhancement_selected_goods_id() else {
-            tracing::trace!(player_id = player.player_id(), "оборудование обновления внешнего свойства DaKong не выбрано");
+            tracing::trace!(
+                player_id = player.player_id(),
+                "оборудование обновления внешнего свойства DaKong не выбрано"
+            );
             return;
         };
         let Some(equipment) = player.get_goods_by_id(equipment_id) else {
-            tracing::trace!(player_id = player.player_id(), ?equipment_id, "оборудование обновления внешнего свойства DaKong не найдено");
+            tracing::trace!(
+                player_id = player.player_id(),
+                ?equipment_id,
+                "оборудование обновления внешнего свойства DaKong не найдено"
+            );
             return;
         };
         let old_seven = EquipmentDaKongGemSnapshot::from_catalog(
@@ -17751,7 +19058,12 @@ impl CGame {
                         ),
                     };
                     let log_deliveries = self.send_equipment_da_kong_log(player, &log);
-                    tracing::trace!(player_id = player.player_id(), ?equipment_id, ?log_deliveries, "отправлен журнал обновления внешнего свойства DaKong");
+                    tracing::trace!(
+                        player_id = player.player_id(),
+                        ?equipment_id,
+                        ?log_deliveries,
+                        "отправлен журнал обновления внешнего свойства DaKong"
+                    );
                 }
                 if let Some(consumption) = player
                     .remove_item_in_packet(cost_base_index, 1)
@@ -17759,7 +19071,12 @@ impl CGame {
                     .next()
                 {
                     let consumption_deliveries = self.send_player_packet_consumption(&consumption);
-                    tracing::trace!(player_id = player.player_id(), ?equipment_id, ?consumption_deliveries, "израсходован материал обновления внешнего свойства DaKong");
+                    tracing::trace!(
+                        player_id = player.player_id(),
+                        ?equipment_id,
+                        ?consumption_deliveries,
+                        "израсходован материал обновления внешнего свойства DaKong"
+                    );
                 }
                 if let (Some(region_id), Ok(tile_x), Ok(tile_y)) = (
                     player.server_region_id(),
@@ -17773,7 +19090,13 @@ impl CGame {
                         tile_y,
                     };
                     let effect_delivery = self.send_equipment_da_kong_around_effect(&effect);
-                    tracing::trace!(player_id = player.player_id(), ?equipment_id, ?effect, effect_delivery, "отправлен эффект обновления внешнего свойства DaKong");
+                    tracing::trace!(
+                        player_id = player.player_id(),
+                        ?equipment_id,
+                        ?effect,
+                        effect_delivery,
+                        "отправлен эффект обновления внешнего свойства DaKong"
+                    );
                 }
                 refreshed = true;
             }
@@ -17798,7 +19121,13 @@ impl CGame {
             old_client_payload: context.encode_goods_for_old_client(equipment),
         };
         let client_update_delivery = self.send_equipment_da_kong_update(&update);
-        tracing::trace!(player_id = player.player_id(), ?equipment_id, refreshed, client_update_delivery, "обновление внешнего свойства DaKong завершено");
+        tracing::trace!(
+            player_id = player.player_id(),
+            ?equipment_id,
+            refreshed,
+            client_update_delivery,
+            "обновление внешнего свойства DaKong завершено"
+        );
     }
 
     fn process_equipment_da_kong_inner<Context: ScriptFunctionRuntime>(
@@ -17810,24 +19139,29 @@ impl CGame {
         context: &mut Context,
     ) {
         if player.server_region_id().is_none() {
-            tracing::trace!(player_id = player.player_id(), session_id, ?operation, "регион игрока DaKong не найден");
+            tracing::trace!(
+                player_id = player.player_id(),
+                session_id,
+                ?operation,
+                "регион игрока DaKong не найден"
+            );
             return;
         }
         match operation {
             EquipmentDaKongOperation::DaKong { color_index } => {
-                self.equipment_da_kong_create_socket(
-                    player,
-                    plug,
-                    color_index,
-                    context,
-                );
+                self.equipment_da_kong_create_socket(player, plug, color_index, context);
             }
             EquipmentDaKongOperation::ChangeRoleColor { socket } => {
                 self.equipment_da_kong_change_color(player, plug, socket, context);
             }
             EquipmentDaKongOperation::QueryResult => {
                 let published = self.equipment_da_kong_publish_preview(player, plug, context);
-                tracing::trace!(player_id = player.player_id(), session_id, published, "обработан запрос результата DaKong");
+                tracing::trace!(
+                    player_id = player.player_id(),
+                    session_id,
+                    published,
+                    "обработан запрос результата DaKong"
+                );
             }
             EquipmentDaKongOperation::EnchaseGem { parameter } => {
                 self.equipment_da_kong_enchase(player, plug, parameter, context);
@@ -17839,9 +19173,8 @@ impl CGame {
     }
 
     fn equipment_da_kong_equipment_id(plug: &CEquipmentDaKong) -> Option<CGuid> {
-        plug.upgrade_container().goods_id(
-            crate::gameserver::appserver::container::cequipmentdakongcontainer::DaKongCell::Equipment,
-        )
+        plug.upgrade_container()
+            .goods_id(crate::gameserver::appserver::container::cequipmentdakongcontainer::DaKongCell::Equipment)
     }
 
     fn equipment_da_kong_gems(
@@ -17867,15 +19200,16 @@ impl CGame {
         })
     }
 
-    fn equipment_da_kong_notify(
-        &self,
-        player_id: i32,
-        string_id: &'static str,
-    ) {
+    fn equipment_da_kong_notify(&self, player_id: i32, string_id: &'static str) {
         let text = self.get_string_by_id(string_id.as_bytes());
         let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
             .send_to_player(self.net_server(), player_id);
-        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление DaKong");
+        tracing::trace!(
+            player_id,
+            string_id,
+            delivery,
+            "отправлено уведомление DaKong"
+        );
     }
 
     fn equipment_da_kong_publish_update<Context: EquipmentDaKongContext>(
@@ -17893,11 +19227,7 @@ impl CGame {
         tracing::trace!(player_id, goods = ?update.goods, delivery, "отправлено обновление оборудования DaKong");
     }
 
-    fn equipment_da_kong_consume_packet(
-        &self,
-        player: &mut CPlayer,
-        base_index: u32,
-    ) {
+    fn equipment_da_kong_consume_packet(&self, player: &mut CPlayer, base_index: u32) {
         for consumption in player.remove_item_in_packet(base_index, 1) {
             let deliveries = self.send_player_packet_consumption(&consumption);
             tracing::trace!(player_id = player.player_id(), goods = ?consumption.goods, ?deliveries, "израсходован материал DaKong");
@@ -17944,7 +19274,12 @@ impl CGame {
             equipment,
         };
         let deliveries = self.send_equipment_da_kong_log(player, &log);
-        tracing::trace!(player_id = player.player_id(), reason, ?deliveries, "отправлен журнал DaKong в World");
+        tracing::trace!(
+            player_id = player.player_id(),
+            reason,
+            ?deliveries,
+            "отправлен журнал DaKong в World"
+        );
     }
 
     fn send_equipment_da_kong_update(&self, update: &EquipmentDaKongClientUpdate) -> i32 {
@@ -18963,16 +20298,28 @@ impl CGame {
         ];
         let player_id = player.player_id();
         let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
-            tracing::trace!(player_id, "оборудование для создания сокета DaKong не выбрано");
+            tracing::trace!(
+                player_id,
+                "оборудование для создания сокета DaKong не выбрано"
+            );
             return;
         };
         let Some(equipment) = player.get_goods_by_id(equipment_id) else {
-            tracing::trace!(player_id, ?equipment_id, "оборудование для создания сокета DaKong не найдено");
+            tracing::trace!(
+                player_id,
+                ?equipment_id,
+                "оборудование для создания сокета DaKong не найдено"
+            );
             return;
         };
         let socket_count = equipment.da_kong_count(&self.goods_factory) as usize;
         if socket_count > 6 {
-            tracing::trace!(player_id, ?equipment_id, socket_count, "число сокетов DaKong достигло предела");
+            tracing::trace!(
+                player_id,
+                ?equipment_id,
+                socket_count,
+                "число сокетов DaKong достигло предела"
+            );
             return;
         }
         let stone_index = self
@@ -18987,7 +20334,13 @@ impl CGame {
             ) != 1
         {
             self.equipment_da_kong_notify(player_id, "GS1166");
-            tracing::trace!(player_id, ?equipment_id, stone_index, socket_count, "материал создания сокета DaKong отсутствует");
+            tracing::trace!(
+                player_id,
+                ?equipment_id,
+                stone_index,
+                socket_count,
+                "материал создания сокета DaKong отсутствует"
+            );
             return;
         }
         let succeeded = {
@@ -19066,7 +20419,14 @@ impl CGame {
         self.equipment_da_kong_log(player, 1, stone_index, equipment);
         self.equipment_da_kong_consume_packet(player, stone_index);
         let preview_published = self.equipment_da_kong_publish_preview(player, plug, context);
-        tracing::trace!(player_id, ?equipment_id, socket_count, succeeded, preview_published, "создание сокета DaKong завершено");
+        tracing::trace!(
+            player_id,
+            ?equipment_id,
+            socket_count,
+            succeeded,
+            preview_published,
+            "создание сокета DaKong завершено"
+        );
     }
 
     fn equipment_da_kong_publish_preview<Context: EquipmentDaKongContext>(
@@ -19095,25 +20455,45 @@ impl CGame {
         context: &mut Context,
     ) {
         if !(1..=7).contains(&socket) {
-            tracing::trace!(player_id = player.player_id(), socket, "неверный сокет смены цвета DaKong");
+            tracing::trace!(
+                player_id = player.player_id(),
+                socket,
+                "неверный сокет смены цвета DaKong"
+            );
             return;
         }
         let player_id = player.player_id();
         let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
-            tracing::trace!(player_id, socket, "оборудование смены цвета DaKong не выбрано");
+            tracing::trace!(
+                player_id,
+                socket,
+                "оборудование смены цвета DaKong не выбрано"
+            );
             return;
         };
         let property =
             crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_DAKONG_1 + socket - 1;
         let Some(equipment) = player.get_goods_by_id(equipment_id) else {
-            tracing::trace!(player_id, ?equipment_id, socket, "оборудование смены цвета DaKong не найдено");
+            tracing::trace!(
+                player_id,
+                ?equipment_id,
+                socket,
+                "оборудование смены цвета DaKong не найдено"
+            );
             return;
         };
         let color = equipment.addon_property_value(&self.goods_factory, property, 1);
         let gem_index = equipment.addon_property_value(&self.goods_factory, property, 2);
         if !(2..=8).contains(&color) || gem_index != 0 {
             self.equipment_da_kong_notify(player_id, "GS1170");
-            tracing::trace!(player_id, ?equipment_id, socket, color, gem_index, "условие смены цвета DaKong отклонено");
+            tracing::trace!(
+                player_id,
+                ?equipment_id,
+                socket,
+                color,
+                gem_index,
+                "условие смены цвета DaKong отклонено"
+            );
             return;
         }
         let stone_index = self
@@ -19121,7 +20501,13 @@ impl CGame {
             .query_goods_id_by_original_name(Some(b"FZ1049"));
         if player.check_item_in_packet(stone_index) == 0 {
             self.equipment_da_kong_notify(player_id, "GS1171");
-            tracing::trace!(player_id, ?equipment_id, socket, stone_index, "материал смены цвета DaKong отсутствует");
+            tracing::trace!(
+                player_id,
+                ?equipment_id,
+                socket,
+                stone_index,
+                "материал смены цвета DaKong отсутствует"
+            );
             return;
         }
         self.equipment_da_kong_consume_packet(player, stone_index);
@@ -19132,7 +20518,12 @@ impl CGame {
             })
         {
             self.equipment_da_kong_notify(player_id, "GS1172");
-            tracing::trace!(player_id, ?equipment_id, socket, "сокет DaKong уже занят после расхода материала");
+            tracing::trace!(
+                player_id,
+                ?equipment_id,
+                socket,
+                "сокет DaKong уже занят после расхода материала"
+            );
             return;
         }
         let mut new_color = {
@@ -19154,7 +20545,13 @@ impl CGame {
             .expect("color equipment сохраняется до audit/update");
         self.equipment_da_kong_log(player, 0, stone_index, equipment);
         self.equipment_da_kong_publish_update(context, player_id, equipment);
-        tracing::trace!(player_id, ?equipment_id, socket, new_color, "цвет сокета DaKong изменён");
+        tracing::trace!(
+            player_id,
+            ?equipment_id,
+            socket,
+            new_color,
+            "цвет сокета DaKong изменён"
+        );
     }
 
     fn equipment_da_kong_consume_shadow_gems(
@@ -19189,12 +20586,23 @@ impl CGame {
                 let _ = plug
                     .upgrade_container_mut()
                     .on_source_removed(Some(goods_id), 1);
-                tracing::trace!(player_id = player.player_id(), ?cell, ?identity, ?external_deliveries, "израсходован shadow-камень DaKong");
+                tracing::trace!(
+                    player_id = player.player_id(),
+                    ?cell,
+                    ?identity,
+                    ?external_deliveries,
+                    "израсходован shadow-камень DaKong"
+                );
             } else {
                 let _ = plug
                     .upgrade_container_mut()
                     .invalidate_equipment_goods(position);
-                tracing::trace!(player_id = player.player_id(), ?cell, ?identity, "shadow-камень DaKong отсутствует в инвентаре");
+                tracing::trace!(
+                    player_id = player.player_id(),
+                    ?cell,
+                    ?identity,
+                    "shadow-камень DaKong отсутствует в инвентаре"
+                );
             }
         }
     }
@@ -19214,7 +20622,11 @@ impl CGame {
         let gems = self.equipment_da_kong_gems(player, plug);
         let effects = {
             let Some(equipment) = player.get_goods_by_id_mut(equipment_id) else {
-                tracing::trace!(player_id, ?equipment_id, "оборудование инкрустации DaKong не найдено");
+                tracing::trace!(
+                    player_id,
+                    ?equipment_id,
+                    "оборудование инкрустации DaKong не найдено"
+                );
                 return;
             };
             deal_enchase_gems(equipment, &gems, &self.goods_factory, true)
@@ -19234,12 +20646,7 @@ impl CGame {
                     audit,
                 } => {
                     if audit {
-                        self.equipment_da_kong_log_snapshot(
-                            player,
-                            2,
-                            gem.base_index,
-                            equipment,
-                        );
+                        self.equipment_da_kong_log_snapshot(player, 2, gem.base_index, equipment);
                     }
                 }
                 EquipmentDaKongEnchaseEvent::Script(script) => {
@@ -19255,7 +20662,12 @@ impl CGame {
             .get_goods_by_id(equipment_id)
             .expect("enchase equipment сохраняется после gem consumption");
         self.equipment_da_kong_publish_update(context, player_id, equipment);
-        tracing::trace!(player_id, ?equipment_id, changed, "инкрустация DaKong завершена");
+        tracing::trace!(
+            player_id,
+            ?equipment_id,
+            changed,
+            "инкрустация DaKong завершена"
+        );
     }
 
     fn equipment_da_kong_destroy_gem<Context: EquipmentDaKongContext>(
@@ -19267,12 +20679,21 @@ impl CGame {
     ) {
         let player_id = player.player_id();
         let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
-            tracing::trace!(player_id, socket, "оборудование удаления камня DaKong не выбрано");
+            tracing::trace!(
+                player_id,
+                socket,
+                "оборудование удаления камня DaKong не выбрано"
+            );
             return;
         };
         if player.check_item_in_packet(DA_KONG_USE_SINKER_INDEX) == 0 {
             self.equipment_da_kong_notify(player_id, "GS1174");
-            tracing::trace!(player_id, ?equipment_id, socket, "инструмент удаления камня DaKong отсутствует");
+            tracing::trace!(
+                player_id,
+                ?equipment_id,
+                socket,
+                "инструмент удаления камня DaKong отсутствует"
+            );
             return;
         }
         let gems = self.equipment_da_kong_gems(player, plug);
@@ -19398,7 +20819,13 @@ impl CGame {
             .clone();
         let _ = deal_enchase_gems(&mut preview, &gems, &self.goods_factory, false);
         self.equipment_da_kong_publish_update(context, player_id, &preview);
-        tracing::trace!(player_id, ?equipment_id, socket, removed, "удаление камня DaKong завершено");
+        tracing::trace!(
+            player_id,
+            ?equipment_id,
+            socket,
+            removed,
+            "удаление камня DaKong завершено"
+        );
     }
 
     pub(crate) const fn words_filter(&self) -> &CWordsFilter {
@@ -19477,7 +20904,13 @@ impl CGame {
             let delivery = message.send_to_player(self.net_server(), player_id);
             let stop = !old_client_payload.is_empty();
             sent += 1;
-            tracing::trace!(player_id, base_index, payload_len = old_client_payload.len(), delivery, "предпросмотр CiQing отправлен");
+            tracing::trace!(
+                player_id,
+                base_index,
+                payload_len = old_client_payload.len(),
+                delivery,
+                "предпросмотр CiQing отправлен"
+            );
             if stop {
                 break;
             }
@@ -19535,9 +20968,21 @@ impl CGame {
             message.base_mut().add(&old_client_payload);
             let delivery = message.send_to_player(self.net_server(), player_id);
             sent += 1;
-            tracing::trace!(player_id, base_index, payload_len = old_client_payload.len(), delivery, "сценарный предпросмотр CiQing отправлен");
+            tracing::trace!(
+                player_id,
+                base_index,
+                payload_len = old_client_payload.len(),
+                delivery,
+                "сценарный предпросмотр CiQing отправлен"
+            );
         }
-        tracing::debug!(player_id, base_index, inserted, sent, "сценарный предмет CiQing обработан");
+        tracing::debug!(
+            player_id,
+            base_index,
+            inserted,
+            sent,
+            "сценарный предмет CiQing обработан"
+        );
         Some(())
     }
 
@@ -19562,7 +21007,12 @@ impl CGame {
                 let mut message = CMessage::new(0x0c_010d);
                 message.base_mut().add(&payload);
                 let delivery = message.send_to_player(self.net_server(), player_id);
-                tracing::trace!(player_id, payload_len, delivery, "настройки CiQing отправлены");
+                tracing::trace!(
+                    player_id,
+                    payload_len,
+                    delivery,
+                    "настройки CiQing отправлены"
+                );
             }
             Err(error) => tracing::warn!(player_id, ?error, "настройки CiQing не сериализованы"),
         }
@@ -19597,12 +21047,24 @@ impl CGame {
         let player = self.find_player(player_id)?;
         if !player.ci_qing_list().any(|entry| entry == base_index) {
             let delivery = self.finish_ci_qing_make(player_id, 0);
-            tracing::trace!(player_id, base_index, amount, delivery, "узел CiQing не открыт");
+            tracing::trace!(
+                player_id,
+                base_index,
+                amount,
+                delivery,
+                "узел CiQing не открыт"
+            );
             return Some(());
         }
         if amount >= 10 {
             let delivery = self.finish_ci_qing_make(player_id, 0);
-            tracing::trace!(player_id, base_index, amount, delivery, "количество создаваемых узлов CiQing вне диапазона");
+            tracing::trace!(
+                player_id,
+                base_index,
+                amount,
+                delivery,
+                "количество создаваемых узлов CiQing вне диапазона"
+            );
             return Some(());
         }
         let Some(recipe) = self
@@ -19613,24 +21075,48 @@ impl CGame {
             .copied()
         else {
             let delivery = self.finish_ci_qing_make(player_id, 0);
-            tracing::trace!(player_id, base_index, amount, delivery, "рецепт узла CiQing не найден");
+            tracing::trace!(
+                player_id,
+                base_index,
+                amount,
+                delivery,
+                "рецепт узла CiQing не найден"
+            );
             return Some(());
         };
         let need_a = recipe.source_a_count.wrapping_mul(amount);
         let need_b = recipe.source_b_count.wrapping_mul(amount);
         if player.check_item_in_packet(recipe.source_a_base_index) < need_a {
             let delivery = self.finish_ci_qing_make(player_id, 0);
-            tracing::trace!(player_id, base_index, amount, delivery, "не хватает первого материала узла CiQing");
+            tracing::trace!(
+                player_id,
+                base_index,
+                amount,
+                delivery,
+                "не хватает первого материала узла CiQing"
+            );
             return Some(());
         }
         if player.check_item_in_packet(recipe.source_b_base_index) < need_b {
             let delivery = self.finish_ci_qing_make(player_id, 0);
-            tracing::trace!(player_id, base_index, amount, delivery, "не хватает второго материала узла CiQing");
+            tracing::trace!(
+                player_id,
+                base_index,
+                amount,
+                delivery,
+                "не хватает второго материала узла CiQing"
+            );
             return Some(());
         }
         if !player.packet().check_space(amount) {
             let delivery = self.finish_ci_qing_make(player_id, 0);
-            tracing::trace!(player_id, base_index, amount, delivery, "для узла CiQing не хватает места");
+            tracing::trace!(
+                player_id,
+                base_index,
+                amount,
+                delivery,
+                "для узла CiQing не хватает места"
+            );
             return Some(());
         }
 
@@ -19646,7 +21132,13 @@ impl CGame {
                 amount: required,
             };
             let audit_deliveries = self.send_ci_qing_log(&log);
-            tracing::trace!(player_id, source_base_index, required, ?audit_deliveries, "аудит расхода материала CiQing отправлен");
+            tracing::trace!(
+                player_id,
+                source_base_index,
+                required,
+                ?audit_deliveries,
+                "аудит расхода материала CiQing отправлен"
+            );
             let consumptions = self
                 .players
                 .get_mut(&player_id)
@@ -19654,7 +21146,12 @@ impl CGame {
                 .remove_item_in_packet(source_base_index, required);
             for consumption in consumptions {
                 let deliveries = self.send_player_packet_consumption(&consumption);
-                tracing::trace!(player_id, source_base_index, ?deliveries, "расход материала CiQing отправлен");
+                tracing::trace!(
+                    player_id,
+                    source_base_index,
+                    ?deliveries,
+                    "расход материала CiQing отправлен"
+                );
             }
         }
 
@@ -19687,7 +21184,12 @@ impl CGame {
         for addition in additions {
             if addition.resulting_amount.is_some() {
                 let deliveries = self.send_player_packet_addition(&addition);
-                tracing::trace!(player_id, base_index = recipe.destination_base_index, ?deliveries, "созданный узел CiQing отправлен");
+                tracing::trace!(
+                    player_id,
+                    base_index = recipe.destination_base_index,
+                    ?deliveries,
+                    "созданный узел CiQing отправлен"
+                );
             }
         }
         let log = CiQingLog {
@@ -19699,7 +21201,15 @@ impl CGame {
         };
         let audit_deliveries = self.send_ci_qing_log(&log);
         let delivery = self.finish_ci_qing_make(player_id, recipe.destination_base_index);
-        tracing::debug!(player_id, base_index, amount, rejected_count = rejected.len(), ?audit_deliveries, delivery, "создание узла CiQing завершено");
+        tracing::debug!(
+            player_id,
+            base_index,
+            amount,
+            rejected_count = rejected.len(),
+            ?audit_deliveries,
+            delivery,
+            "создание узла CiQing завершено"
+        );
         Some(())
     }
 
@@ -19747,7 +21257,13 @@ impl CGame {
                 self.get_string_by_id(b"PLAYER001005"),
             )
             .send_to_player(self.net_server(), player_id);
-            tracing::trace!(player_id, source_a_index, source_b_index, delivery, "позиция результата соединения CiQing занята");
+            tracing::trace!(
+                player_id,
+                source_a_index,
+                source_b_index,
+                delivery,
+                "позиция результата соединения CiQing занята"
+            );
             return Some(());
         }
 
@@ -19773,7 +21289,15 @@ impl CGame {
                 self.get_string_by_id(b"PLAYER001001"),
             )
             .send_to_player(self.net_server(), player_id);
-            tracing::trace!(player_id, source_a_index, source_b_index, required_crystal, required_money, delivery, "для соединения CiQing не хватает оплаты");
+            tracing::trace!(
+                player_id,
+                source_a_index,
+                source_b_index,
+                required_crystal,
+                required_money,
+                delivery,
+                "для соединения CiQing не хватает оплаты"
+            );
             return Some(());
         }
 
@@ -19789,7 +21313,11 @@ impl CGame {
             };
             let money_deliveries =
                 self.send_player_money_decrease(player_id, &money_change.outcome);
-            tracing::trace!(player_id, ?money_deliveries, "уменьшение денег за соединение CiQing отправлено");
+            tracing::trace!(
+                player_id,
+                ?money_deliveries,
+                "уменьшение денег за соединение CiQing отправлено"
+            );
             let crystal_log = CiQingLog {
                 player_id,
                 delta: -1,
@@ -19798,7 +21326,11 @@ impl CGame {
                 amount: required_crystal,
             };
             let audit_deliveries = self.send_ci_qing_log(&crystal_log);
-            tracing::trace!(player_id, ?audit_deliveries, "аудит кристаллов соединения CiQing отправлен");
+            tracing::trace!(
+                player_id,
+                ?audit_deliveries,
+                "аудит кристаллов соединения CiQing отправлен"
+            );
             let consumptions = self
                 .players
                 .get_mut(&player_id)
@@ -19806,7 +21338,11 @@ impl CGame {
                 .remove_item_in_packet(crystal_index, required_crystal);
             for consumption in consumptions {
                 let deliveries = self.send_player_packet_consumption(&consumption);
-                tracing::trace!(player_id, ?deliveries, "расход кристаллов соединения CiQing отправлен");
+                tracing::trace!(
+                    player_id,
+                    ?deliveries,
+                    "расход кристаллов соединения CiQing отправлен"
+                );
             }
             if roll < recipe.compose_probability {
                 let selected = CCiQingSetup::random_choice(recipe, |upper_bound| {
@@ -19850,9 +21386,19 @@ impl CGame {
                 };
                 if addition.resulting_amount.is_some() {
                     let deliveries = self.send_ci_qing_container_addition(&addition);
-                    tracing::trace!(player_id, result_index, ?deliveries, "результат соединения CiQing добавлен");
+                    tracing::trace!(
+                        player_id,
+                        result_index,
+                        ?deliveries,
+                        "результат соединения CiQing добавлен"
+                    );
                 }
-                tracing::trace!(player_id, result_index, rejected = rejected.is_some(), "создание результата соединения CiQing обработано");
+                tracing::trace!(
+                    player_id,
+                    result_index,
+                    rejected = rejected.is_some(),
+                    "создание результата соединения CiQing обработано"
+                );
             }
         }
 
@@ -19865,7 +21411,13 @@ impl CGame {
                 amount: source.1,
             };
             let audit_deliveries = self.send_ci_qing_log(&log);
-            tracing::trace!(player_id, position, source_index = source.0, ?audit_deliveries, "аудит исходного узла CiQing отправлен");
+            tracing::trace!(
+                player_id,
+                position,
+                source_index = source.0,
+                ?audit_deliveries,
+                "аудит исходного узла CiQing отправлен"
+            );
             if let Some(consumption) = self
                 .players
                 .get_mut(&player_id)
@@ -19873,7 +21425,12 @@ impl CGame {
                 .remove_ci_qing_compose_goods(position)
             {
                 let deliveries = self.send_ci_qing_container_consumption(&consumption);
-                tracing::trace!(player_id, position, ?deliveries, "расход исходного узла CiQing отправлен");
+                tracing::trace!(
+                    player_id,
+                    position,
+                    ?deliveries,
+                    "расход исходного узла CiQing отправлен"
+                );
             }
         }
 
@@ -19909,9 +21466,28 @@ impl CGame {
                 amount: result_amount,
             };
             let audit_deliveries = self.send_ci_qing_log(&log);
-            tracing::debug!(player_id, source_a_index, source_b_index, recipe_found, roll, result_index, result_amount, result_delivery, ?audit_deliveries, "соединение CiQing завершено успешно");
+            tracing::debug!(
+                player_id,
+                source_a_index,
+                source_b_index,
+                recipe_found,
+                roll,
+                result_index,
+                result_amount,
+                result_delivery,
+                ?audit_deliveries,
+                "соединение CiQing завершено успешно"
+            );
         } else {
-            tracing::debug!(player_id, source_a_index, source_b_index, recipe_found, roll, result_delivery, "соединение CiQing завершилось неудачей");
+            tracing::debug!(
+                player_id,
+                source_a_index,
+                source_b_index,
+                recipe_found,
+                roll,
+                result_delivery,
+                "соединение CiQing завершилось неудачей"
+            );
         }
         Some(())
     }
@@ -19936,7 +21512,13 @@ impl CGame {
                 self.get_string_by_id(b"PLAYER001004"),
             )
             .send_to_player(self.net_server(), player_id);
-            tracing::trace!(player_id, position, reset_index, delivery, "удаление CiQing отклонено");
+            tracing::trace!(
+                player_id,
+                position,
+                reset_index,
+                delivery,
+                "удаление CiQing отклонено"
+            );
             return self.find_player(player_id).map(|_| ());
         }
         let reset_log = CiQingLog {
@@ -19947,7 +21529,12 @@ impl CGame {
             amount: 1,
         };
         let audit_deliveries = self.send_ci_qing_log(&reset_log);
-        tracing::trace!(player_id, position, ?audit_deliveries, "аудит предмета сброса CiQing отправлен");
+        tracing::trace!(
+            player_id,
+            position,
+            ?audit_deliveries,
+            "аудит предмета сброса CiQing отправлен"
+        );
         let reset_consumptions = self
             .players
             .get_mut(&player_id)
@@ -19955,7 +21542,12 @@ impl CGame {
             .remove_item_in_packet(reset_index, 1);
         for consumption in reset_consumptions {
             let deliveries = self.send_player_packet_consumption(&consumption);
-            tracing::trace!(player_id, position, ?deliveries, "расход предмета сброса CiQing отправлен");
+            tracing::trace!(
+                player_id,
+                position,
+                ?deliveries,
+                "расход предмета сброса CiQing отправлен"
+            );
         }
         if let Some(consumption) = self
             .players
@@ -19964,7 +21556,12 @@ impl CGame {
             .remove_ci_qing_goods(position, 1)
         {
             let deliveries = self.send_ci_qing_container_consumption(&consumption);
-            tracing::trace!(player_id, position, ?deliveries, "удаление узла CiQing отправлено");
+            tracing::trace!(
+                player_id,
+                position,
+                ?deliveries,
+                "удаление узла CiQing отправлено"
+            );
         }
         self.refresh_ci_qing_player_property(player_id, context);
         tracing::debug!(player_id, position, "узел CiQing удалён");
@@ -19981,7 +21578,11 @@ impl CGame {
         let Some((position, improve_level, base_chance)) =
             player.ci_qing_mount_facts(&self.goods_factory)
         else {
-            tracing::trace!(player_id, amount, "предмет в руке нельзя установить как CiQing");
+            tracing::trace!(
+                player_id,
+                amount,
+                "предмет в руке нельзя установить как CiQing"
+            );
             return Some(());
         };
         if player.ci_qing_goods(position).is_some() {
@@ -19989,11 +21590,23 @@ impl CGame {
             return Some(());
         }
         let Some(node) = self.ci_qing_setup.improve_node(improve_level) else {
-            tracing::trace!(player_id, amount, position, improve_level, "настройка улучшения CiQing не найдена");
+            tracing::trace!(
+                player_id,
+                amount,
+                position,
+                improve_level,
+                "настройка улучшения CiQing не найдена"
+            );
             return Some(());
         };
         if player.check_item_in_packet(node.base_index) < amount {
-            tracing::trace!(player_id, amount, position, material_index = node.base_index, "материала для установки CiQing недостаточно");
+            tracing::trace!(
+                player_id,
+                amount,
+                position,
+                material_index = node.base_index,
+                "материала для установки CiQing недостаточно"
+            );
             return Some(());
         }
         let chance = base_chance
@@ -20008,7 +21621,12 @@ impl CGame {
         let hand_base_index = hand_goods.base_properties_index();
         let cloned_hand_goods = if succeeded {
             let Some(cloned) = context.clone_ci_qing_hand_goods(hand_goods) else {
-                tracing::warn!(player_id, amount, position, "не удалось клонировать предмет для установки CiQing");
+                tracing::warn!(
+                    player_id,
+                    amount,
+                    position,
+                    "не удалось клонировать предмет для установки CiQing"
+                );
                 return Some(());
             };
             Some(cloned)
@@ -20025,7 +21643,12 @@ impl CGame {
                 amount: 1,
             };
             let audit_deliveries = self.send_ci_qing_log(&log);
-            tracing::trace!(player_id, position, ?audit_deliveries, "аудит неудачной установки CiQing отправлен");
+            tracing::trace!(
+                player_id,
+                position,
+                ?audit_deliveries,
+                "аудит неудачной установки CiQing отправлен"
+            );
         }
         if let Some(consumption) = self
             .players
@@ -20034,7 +21657,12 @@ impl CGame {
             .remove_ci_qing_hand_goods()
         {
             let deliveries = self.send_ci_qing_hand_consumption(&consumption);
-            tracing::trace!(player_id, position, ?deliveries, "расход предмета в руке для CiQing отправлен");
+            tracing::trace!(
+                player_id,
+                position,
+                ?deliveries,
+                "расход предмета в руке для CiQing отправлен"
+            );
         }
 
         if succeeded {
@@ -20055,10 +21683,20 @@ impl CGame {
             };
             if addition.resulting_amount.is_some() {
                 let deliveries = self.send_ci_qing_container_addition(&addition);
-                tracing::trace!(player_id, position, ?deliveries, "установленный CiQing добавлен");
+                tracing::trace!(
+                    player_id,
+                    position,
+                    ?deliveries,
+                    "установленный CiQing добавлен"
+                );
             }
             self.refresh_ci_qing_player_property(player_id, context);
-            tracing::trace!(player_id, position, rejected = rejected.is_some(), "свойства установленного CiQing обновлены");
+            tracing::trace!(
+                player_id,
+                position,
+                rejected = rejected.is_some(),
+                "свойства установленного CiQing обновлены"
+            );
         }
 
         let material_log = CiQingLog {
@@ -20076,12 +21714,27 @@ impl CGame {
             .remove_item_in_packet(node.base_index, amount);
         for consumption in consumptions {
             let deliveries = self.send_player_packet_consumption(&consumption);
-            tracing::trace!(player_id, position, ?deliveries, "расход материала установки CiQing отправлен");
+            tracing::trace!(
+                player_id,
+                position,
+                ?deliveries,
+                "расход материала установки CiQing отправлен"
+            );
         }
         let mut message = CMessage::new(0x0c_0111);
         message.add_ulong(u32::from(succeeded));
         let result_delivery = message.send_to_player(self.net_server(), player_id);
-        tracing::debug!(player_id, amount, position, chance, roll, succeeded, ?material_audit_deliveries, result_delivery, "установка CiQing завершена");
+        tracing::debug!(
+            player_id,
+            amount,
+            position,
+            chance,
+            roll,
+            succeeded,
+            ?material_audit_deliveries,
+            result_delivery,
+            "установка CiQing завершена"
+        );
         Some(())
     }
 
@@ -20128,7 +21781,13 @@ impl CGame {
         let mut message = CMessage::new(0x0c_010f);
         message.base_mut().add(&payload);
         let delivery = message.send_to_player(self.net_server(), requester_id);
-        tracing::debug!(requester_id, target_player_id, payload_len = payload.len(), delivery, "данные CiQing другого игрока отправлены");
+        tracing::debug!(
+            requester_id,
+            target_player_id,
+            payload_len = payload.len(),
+            delivery,
+            "данные CiQing другого игрока отправлены"
+        );
     }
 
     fn refresh_ci_qing_player_property<Context: CiQingComposeContext>(
@@ -20167,7 +21826,11 @@ impl CGame {
                 message.add_ulong(*value);
             }
             let delivery = message.send_to_player(self.net_server(), player_id);
-            tracing::trace!(player_id, delivery, "изменение свойств CiQing отправлено игроку");
+            tracing::trace!(
+                player_id,
+                delivery,
+                "изменение свойств CiQing отправлено игроку"
+            );
         }
     }
 
@@ -20189,28 +21852,29 @@ impl CGame {
 
     /// Script primitive at call-site `0x4C3D96`: пустой `0x5FA10` сначала
     /// уходит WorldServer-у, затем single pending requester перезаписывается.
-    pub(crate) fn request_gods_battle_top_ten(
-        &mut self,
-        player_id: i32,
-    ) {
+    pub(crate) fn request_gods_battle_top_ten(&mut self, player_id: i32) {
         let request = CMessage::new(0x5fa10);
         let delivery = request.send(self, false);
         self.gods_battle_mgr.record_top_ten_request(player_id);
-        tracing::trace!(player_id, ?delivery, "запрошена десятка лидеров битвы богов");
+        tracing::trace!(
+            player_id,
+            ?delivery,
+            "запрошена десятка лидеров битвы богов"
+        );
     }
 
     /// Script producer at `0x4C3C11/0x4C3C2E`: factions 5/6 преобразуются
     /// в World indices 1/2; local XYD меняется только обратным `0x7F80E`.
-    pub(crate) fn request_gods_battle_faction_xyd(
-        &self,
-        faction: i32,
-        xyd: u32,
-    ) -> bool {
+    pub(crate) fn request_gods_battle_faction_xyd(&self, faction: i32, xyd: u32) -> bool {
         let world_faction = match faction {
             5 => 1,
             6 => 2,
             _ => {
-                tracing::debug!(faction, xyd, "запрос XYD отклонён: фракция не поддерживается");
+                tracing::debug!(
+                    faction,
+                    xyd,
+                    "запрос XYD отклонён: фракция не поддерживается"
+                );
                 return false;
             }
         };
@@ -20224,11 +21888,7 @@ impl CGame {
     }
 
     /// Точный player-tail после успешного base `CServerRegion::AddObject`.
-    pub(crate) fn enter_gods_battle_player(
-        &mut self,
-        region_id: i32,
-        player_id: i32,
-    ) -> bool {
+    pub(crate) fn enter_gods_battle_player(&mut self, region_id: i32, player_id: i32) -> bool {
         let Some((country, previous_faction)) = self
             .find_player(player_id)
             .map(|player| (player.country(), player.gods_battle_faction()))
@@ -20265,16 +21925,20 @@ impl CGame {
         let region_state_delivery = gods_battle_property_message(player_id, b"m_lIsInGodRegion", 1)
             .send_to_player(self.net_server(), player_id);
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        tracing::trace!(region_id, player_id, ?assigned_faction, ?faction_delivery, membership_changed, region_state_delivery, "игрок добавлен во фракцию битвы богов");
+        tracing::trace!(
+            region_id,
+            player_id,
+            ?assigned_faction,
+            ?faction_delivery,
+            membership_changed,
+            region_state_delivery,
+            "игрок добавлен во фракцию битвы богов"
+        );
         true
     }
 
     /// Общий player-tail `RemoveObject/DelObj` после spatial/base удаления.
-    pub(crate) fn leave_gods_battle_player(
-        &mut self,
-        region_id: i32,
-        player_id: i32,
-    ) -> bool {
+    pub(crate) fn leave_gods_battle_player(&mut self, region_id: i32, player_id: i32) -> bool {
         let Some(owner) = self.take_region_owner(region_id) else {
             return false;
         };
@@ -20286,7 +21950,13 @@ impl CGame {
         let region_state_delivery = gods_battle_property_message(player_id, b"m_lIsInGodRegion", 0)
             .send_to_player(self.net_server(), player_id);
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        tracing::trace!(region_id, player_id, membership_changed, region_state_delivery, "игрок удалён из фракции битвы богов");
+        tracing::trace!(
+            region_id,
+            player_id,
+            membership_changed,
+            region_state_delivery,
+            "игрок удалён из фракции битвы богов"
+        );
         true
     }
 
@@ -20328,7 +21998,15 @@ impl CGame {
         self.gods_battle_mgr
             .reset_npc_killed_monster_count(&npc_name);
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        tracing::debug!(region_id, npc_id, faction, spawned_monsters, blocked_spawns, npc_name_bytes = npc_name.len(), "NPC добавлен во фракцию битвы богов");
+        tracing::debug!(
+            region_id,
+            npc_id,
+            faction,
+            spawned_monsters,
+            blocked_spawns,
+            npc_name_bytes = npc_name.len(),
+            "NPC добавлен во фракцию битвы богов"
+        );
         true
     }
 
@@ -20356,7 +22034,11 @@ impl CGame {
                     token: token.to_vec(),
                 });
                 blocked_spawns = blocked_spawns.wrapping_add(1);
-                tracing::warn!(fields = fields.len(), token_bytes = token.len(), "некорректное описание монстра NPC битвы богов");
+                tracing::warn!(
+                    fields = fields.len(),
+                    token_bytes = token.len(),
+                    "некорректное описание монстра NPC битвы богов"
+                );
                 break;
             }
             let original_name = fields[0];
@@ -20369,7 +22051,10 @@ impl CGame {
                     monster: original_name.to_vec(),
                 });
                 blocked_spawns = blocked_spawns.wrapping_add(1);
-                tracing::warn!(original_name_bytes = original_name.len(), "свойства монстра NPC битвы богов отсутствуют");
+                tracing::warn!(
+                    original_name_bytes = original_name.len(),
+                    "свойства монстра NPC битвы богов отсутствуют"
+                );
                 continue;
             };
             let spawn = region.war.base.add_monster(
@@ -20385,13 +22070,13 @@ impl CGame {
                 context,
             );
             if let Err(block) = spawn {
-                    record_gods_battle_log(GodsBattleNpcLog::MonsterSpawnFailed {
-                        npc_name: configuration.name.clone(),
-                        monster: original_name.to_vec(),
-                    });
-                    blocked_spawns = blocked_spawns.wrapping_add(1);
-                    tracing::warn!(?block, "создание монстра NPC битвы богов заблокировано");
-                    continue;
+                record_gods_battle_log(GodsBattleNpcLog::MonsterSpawnFailed {
+                    npc_name: configuration.name.clone(),
+                    monster: original_name.to_vec(),
+                });
+                blocked_spawns = blocked_spawns.wrapping_add(1);
+                tracing::warn!(?block, "создание монстра NPC битвы богов заблокировано");
+                continue;
             }
             if let Some(property) = self.find_monster_property_by_origin_name_mut(original_name) {
                 property.race = faction as u32;
@@ -20455,7 +22140,16 @@ impl CGame {
                 message.send(self, false)
             });
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        tracing::debug!(region_id, npc_id, faction, spawned_monsters, blocked_spawns, npc_name_bytes = npc_name.len(), ?world_delivery, "фракция NPC битвы богов изменена");
+        tracing::debug!(
+            region_id,
+            npc_id,
+            faction,
+            spawned_monsters,
+            blocked_spawns,
+            npc_name_bytes = npc_name.len(),
+            ?world_delivery,
+            "фракция NPC битвы богов изменена"
+        );
         true
     }
 
@@ -20503,7 +22197,12 @@ impl CGame {
                 point,
             });
             self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-            tracing::trace!(player_id, faction, ?point, "выбрана точка возврата конфигурации битвы богов");
+            tracing::trace!(
+                player_id,
+                faction,
+                ?point,
+                "выбрана точка возврата конфигурации битвы богов"
+            );
             return Ok(Some(point));
         }
         let fallback = region
@@ -20512,7 +22211,12 @@ impl CGame {
             .get_return_point(Some(player_facts), &mut self.country_param);
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
         fallback.map(|point| {
-            tracing::trace!(player_id, faction, ?point, "выбрана базовая точка возврата из битвы богов");
+            tracing::trace!(
+                player_id,
+                faction,
+                ?point,
+                "выбрана базовая точка возврата из битвы богов"
+            );
             Some(point)
         })
     }
@@ -20563,11 +22267,24 @@ impl CGame {
             .as_ref()
             .ok()
             .and_then(|_| self.publish_player_states(player_id));
-        tracing::trace!(player_id, relive_type, ?owned, combat_property_delivery, tao_zhuang_ran, states_published = states_published.is_some(), "начальная часть воскрешения выполнена");
+        tracing::trace!(
+            player_id,
+            relive_type,
+            ?owned,
+            combat_property_delivery,
+            tao_zhuang_ran,
+            states_published = states_published.is_some(),
+            "начальная часть воскрешения выполнена"
+        );
         let mutation = match mutation {
             Ok(mutation) => mutation,
             Err(block) => {
-                tracing::warn!(player_id, relive_type, ?block, "позиция игрока при воскрешении недоступна");
+                tracing::warn!(
+                    player_id,
+                    relive_type,
+                    ?block,
+                    "позиция игрока при воскрешении недоступна"
+                );
                 return;
             }
         };
@@ -20624,7 +22341,18 @@ impl CGame {
                 )
             });
             let region_change = region_change.unwrap_or(PlayerRegionChangeOutcome::MissingPlayer);
-            tracing::debug!(player_id, relive_type, ?mutation, answer_delivery, ?resident_delivery, peace_entered, ?shape_delivery, ?region_change, ?cannot_move_delivery, "игрок воскрешён на месте");
+            tracing::debug!(
+                player_id,
+                relive_type,
+                ?mutation,
+                answer_delivery,
+                ?resident_delivery,
+                peace_entered,
+                ?shape_delivery,
+                ?region_change,
+                ?cannot_move_delivery,
+                "игрок воскрешён на месте"
+            );
             return;
         }
 
@@ -20639,13 +22367,23 @@ impl CGame {
                 match self.select_player_return_point(region_id, player_id, source_is_gods_battle) {
                     Ok(point) => point,
                     Err(block) => {
-                        tracing::warn!(player_id, relive_type, ?block, "точка возврата для воскрешения недоступна");
+                        tracing::warn!(
+                            player_id,
+                            relive_type,
+                            ?block,
+                            "точка возврата для воскрешения недоступна"
+                        );
                         return;
                     }
                 }
             }
             None => {
-                tracing::warn!(player_id, relive_type, ?mutation, "текущий регион игрока для воскрешения не найден");
+                tracing::warn!(
+                    player_id,
+                    relive_type,
+                    ?mutation,
+                    "текущий регион игрока для воскрешения не найден"
+                );
                 return;
             }
         };
@@ -20671,7 +22409,12 @@ impl CGame {
                         y = position.y;
                     }
                     Err(block) => {
-                        tracing::warn!(player_id, relive_type, ?block, "случайная позиция воскрешения недоступна");
+                        tracing::warn!(
+                            player_id,
+                            relive_type,
+                            ?block,
+                            "случайная позиция воскрешения недоступна"
+                        );
                         return;
                     }
                 }
@@ -20704,7 +22447,21 @@ impl CGame {
         } else {
             None
         };
-        tracing::debug!(player_id, relive_type, ?mutation, ?return_point, x, y, changed_region, ?answer_delivery, ?resident_delivery, peace_entered, died_state_published = died_state_deliveries.is_some(), ?region_change, "игрок воскрешён в точке возврата");
+        tracing::debug!(
+            player_id,
+            relive_type,
+            ?mutation,
+            ?return_point,
+            x,
+            y,
+            changed_region,
+            ?answer_delivery,
+            ?resident_delivery,
+            peace_entered,
+            died_state_published = died_state_deliveries.is_some(),
+            ?region_change,
+            "игрок воскрешён в точке возврата"
+        );
     }
 
     fn send_player_relive_answer(&self, player_id: i32) -> i32 {
@@ -20796,7 +22553,12 @@ impl CGame {
                 self.send_player_shape_around(transition.player_id, None, &message)
             })
             .flatten();
-        tracing::trace!(?phase, ?transition, ?around_delivery, "обновлено боевое состояние игрока");
+        tracing::trace!(
+            ?phase,
+            ?transition,
+            ?around_delivery,
+            "обновлено боевое состояние игрока"
+        );
     }
 
     /// Достигнутый `EnterPeaceState`, общий для воскрешения и перехода
@@ -20842,15 +22604,16 @@ impl CGame {
             pk_count_per_kill,
         )?;
         let around_delivery = self.enter_player_resident_state(player_id);
-        tracing::trace!(?phase, ?transition, ?around_delivery, "завершено преступное состояние игрока");
+        tracing::trace!(
+            ?phase,
+            ?transition,
+            ?around_delivery,
+            "завершено преступное состояние игрока"
+        );
         Some(())
     }
 
-    fn publish_relive_died_state(
-        &mut self,
-        region_id: Option<i32>,
-        player_id: i32,
-    ) -> Option<()> {
+    fn publish_relive_died_state(&mut self, region_id: Option<i32>, player_id: i32) -> Option<()> {
         let player = self.find_player_mut(player_id)?;
         player.set_city_war_died_state(true);
         let mut message = CMessage::new(0xbff2a);
@@ -20869,7 +22632,12 @@ impl CGame {
             }
             self.restore_region_owner(owner);
         }
-        tracing::trace!(player_id, self_delivery, ?around_delivery, "опубликовано состояние смерти после воскрешения");
+        tracing::trace!(
+            player_id,
+            self_delivery,
+            ?around_delivery,
+            "опубликовано состояние смерти после воскрешения"
+        );
         Some(())
     }
 
@@ -20908,7 +22676,11 @@ impl CGame {
             record_gods_battle_log(GodsBattleNpcLog::MonsterWithoutNpc {
                 monster: display_name,
             });
-            tracing::debug!(region_id, monster_id, "для погибшего стража битвы богов не найден NPC");
+            tracing::debug!(
+                region_id,
+                monster_id,
+                "для погибшего стража битвы богов не найден NPC"
+            );
             return Some(());
         };
         let Some(killed) = self
@@ -21018,7 +22790,14 @@ impl CGame {
                     );
                     let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
                         .send_to_player(self.net_server(), player_id);
-                    tracing::trace!(region_id, player_id, npc_id, remaining, delivery, "захват битвы богов заблокирован оставшимися стражами");
+                    tracing::trace!(
+                        region_id,
+                        player_id,
+                        npc_id,
+                        remaining,
+                        delivery,
+                        "захват битвы богов заблокирован оставшимися стражами"
+                    );
                     "остались стражи"
                 } else if region.npc_faction(npc_id) == Some(gods_faction) {
                     let text = format_legacy_mixed(
@@ -21028,7 +22807,13 @@ impl CGame {
                     );
                     let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
                         .send_to_player(self.net_server(), player_id);
-                    tracing::trace!(region_id, player_id, npc_id, delivery, "сторона игрока уже владеет NPC битвы богов");
+                    tracing::trace!(
+                        region_id,
+                        player_id,
+                        npc_id,
+                        delivery,
+                        "сторона игрока уже владеет NPC битвы богов"
+                    );
                     "сторона уже владеет NPC"
                 } else if region.is_player_contending_symbol(player_id, npc_id) {
                     "игрок уже захватывает NPC"
@@ -21042,10 +22827,20 @@ impl CGame {
                             player_id,
                             false,
                         ) {
-                            tracing::trace!(region_id, player_id, delivery, "сброшено прежнее состояние захвата битвы богов");
+                            tracing::trace!(
+                                region_id,
+                                player_id,
+                                delivery,
+                                "сброшено прежнее состояние захвата битвы богов"
+                            );
                         }
                         let delivery = self.send_gods_battle_contend_time(player_id, 0);
-                        tracing::trace!(region_id, player_id, delivery, "сброшено прежнее время захвата битвы богов");
+                        tracing::trace!(
+                            region_id,
+                            player_id,
+                            delivery,
+                            "сброшено прежнее время захвата битвы богов"
+                        );
                     }
                     let first_for_legacy_faction = region.add_contender(
                         player_id,
@@ -21059,7 +22854,12 @@ impl CGame {
                     if let Some(delivery) =
                         self.set_gods_battle_player_contend_state(&region.war.base, player_id, true)
                     {
-                        tracing::trace!(region_id, player_id, delivery, "опубликовано состояние захвата битвы богов");
+                        tracing::trace!(
+                            region_id,
+                            player_id,
+                            delivery,
+                            "опубликовано состояние захвата битвы богов"
+                        );
                     }
                     let time_delivery = self.send_gods_battle_contend_time(player_id, 0);
                     if first_for_legacy_faction {
@@ -21070,23 +22870,44 @@ impl CGame {
                         };
                         let text =
                             format_legacy_text_fields(b"%s%s", &[faction_text, &npc_name], 0xff);
-                        let delivery = nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
-                            .send_to_region(Some(&region.war.base), None, self);
-                        tracing::trace!(region_id, player_id, npc_id, delivery, "опубликован первый претендент стороны битвы богов");
+                        let delivery =
+                            nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
+                                .send_to_region(Some(&region.war.base), None, self);
+                        tracing::trace!(
+                            region_id,
+                            player_id,
+                            npc_id,
+                            delivery,
+                            "опубликован первый претендент стороны битвы богов"
+                        );
                     }
                     let notice_delivery = colored_player_notice_message(
-                            0xffff_ffff,
-                            0xffff_0000,
-                            self.get_string_by_id(b"SZLGS3"),
-                        )
-                        .send_to_player(self.net_server(), player_id);
-                    tracing::trace!(region_id, player_id, npc_id, first_for_legacy_faction, time_delivery, notice_delivery, "начат захват NPC битвы богов");
+                        0xffff_ffff,
+                        0xffff_0000,
+                        self.get_string_by_id(b"SZLGS3"),
+                    )
+                    .send_to_player(self.net_server(), player_id);
+                    tracing::trace!(
+                        region_id,
+                        player_id,
+                        npc_id,
+                        first_for_legacy_faction,
+                        time_delivery,
+                        notice_delivery,
+                        "начат захват NPC битвы богов"
+                    );
                     "захват начат"
                 }
             }
         };
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        tracing::debug!(region_id, player_id, npc_id, outcome, "обработан вход в захват битвы богов");
+        tracing::debug!(
+            region_id,
+            player_id,
+            npc_id,
+            outcome,
+            "обработан вход в захват битвы богов"
+        );
         Some(())
     }
 
@@ -21108,10 +22929,15 @@ impl CGame {
             tick_interval_ms,
             runtime,
         ) {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(error) => {
                 self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-                tracing::warn!(region_id, ai_tick, ?error, "базовый проход ИИ битвы богов заблокирован");
+                tracing::warn!(
+                    region_id,
+                    ai_tick,
+                    ?error,
+                    "базовый проход ИИ битвы богов заблокирован"
+                );
                 return Some(());
             }
         }
@@ -21120,13 +22946,24 @@ impl CGame {
         let completion_count = advance.completed.len();
         for (player_id, percentage) in advance.progress {
             let delivery = self.send_gods_battle_contend_time(player_id, percentage);
-            tracing::trace!(region_id, player_id, percentage, delivery, "отправлено время захвата в битве богов");
+            tracing::trace!(
+                region_id,
+                player_id,
+                percentage,
+                delivery,
+                "отправлено время захвата в битве богов"
+            );
         }
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
         for contender in advance.completed {
             self.complete_gods_battle_contend(region_id, contender, runtime);
         }
-        tracing::trace!(region_id, progress_count, completion_count, "завершён проход захватов битвы богов");
+        tracing::trace!(
+            region_id,
+            progress_count,
+            completion_count,
+            "завершён проход захватов битвы богов"
+        );
         Some(())
     }
 
@@ -21140,14 +22977,25 @@ impl CGame {
             .find_player(contender.player_id)
             .map(CPlayer::gods_battle_faction)
         else {
-            tracing::warn!(region_id, player_id = contender.player_id, symbol_id = contender.symbol_id, "игрок завершённого захвата битвы богов не найден");
+            tracing::warn!(
+                region_id,
+                player_id = contender.player_id,
+                symbol_id = contender.symbol_id,
+                "игрок завершённого захвата битвы богов не найден"
+            );
             return;
         };
         let changed =
             self.change_gods_battle_npc_faction(region_id, contender.symbol_id, faction, context);
         let mut deliveries = self.cancel_gods_battle_contend_symbol(region_id, contender.symbol_id);
         if !changed {
-            tracing::warn!(region_id, player_id = contender.player_id, symbol_id = contender.symbol_id, deliveries, "смена фракции символа битвы богов отклонена");
+            tracing::warn!(
+                region_id,
+                player_id = contender.player_id,
+                symbol_id = contender.symbol_id,
+                deliveries,
+                "смена фракции символа битвы богов отклонена"
+            );
             return;
         }
         let capture_text = match faction {
@@ -21157,15 +23005,15 @@ impl CGame {
         };
         if let Some(owner) = self.take_region_owner(region_id) {
             if let ServerRegionOwner::GodsBattle(region) = &owner {
-                let delivery = nation_colored_text_message(
-                    0xbf806,
-                    0xffff_ffff,
-                    0xffff_0000,
-                    &capture_text,
-                )
-                .send_to_region(Some(&region.war.base), None, self);
+                let delivery =
+                    nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &capture_text)
+                        .send_to_region(Some(&region.war.base), None, self);
                 deliveries = deliveries.wrapping_add(1);
-                tracing::trace!(region_id, delivery, "отправлено уведомление о захвате символа битвы богов");
+                tracing::trace!(
+                    region_id,
+                    delivery,
+                    "отправлено уведомление о захвате символа битвы богов"
+                );
             }
             self.restore_region_owner(owner);
         }
@@ -21215,7 +23063,17 @@ impl CGame {
             npc_name: contender.symbol_name.clone(),
             faction,
         });
-        tracing::debug!(region_id, player_id = contender.player_id, symbol_id = contender.symbol_id, faction, award_variable_result, ?award_script_result, ?top_info_delivery, deliveries, "завершён захват символа битвы богов");
+        tracing::debug!(
+            region_id,
+            player_id = contender.player_id,
+            symbol_id = contender.symbol_id,
+            faction,
+            award_variable_result,
+            ?award_script_result,
+            ?top_info_delivery,
+            deliveries,
+            "завершён захват символа битвы богов"
+        );
     }
 
     fn cancel_gods_battle_contend_symbol(&mut self, region_id: i32, symbol_id: i32) -> usize {
@@ -21236,9 +23094,22 @@ impl CGame {
                 false,
             ) {
                 deliveries = deliveries.wrapping_add(1);
-                tracing::trace!(region_id, symbol_id, player_id = contender.player_id, time_delivery, delivery, "отменён захват символа битвы богов");
+                tracing::trace!(
+                    region_id,
+                    symbol_id,
+                    player_id = contender.player_id,
+                    time_delivery,
+                    delivery,
+                    "отменён захват символа битвы богов"
+                );
             } else {
-                tracing::trace!(region_id, symbol_id, player_id = contender.player_id, time_delivery, "отменён захват символа битвы богов без смены состояния");
+                tracing::trace!(
+                    region_id,
+                    symbol_id,
+                    player_id = contender.player_id,
+                    time_delivery,
+                    "отменён захват символа битвы богов без смены состояния"
+                );
             }
         }
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
@@ -21292,11 +23163,7 @@ impl CGame {
         }
     }
 
-    pub(crate) fn apply_gods_battle_xyd(
-        &mut self,
-        faction_a: u32,
-        faction_b: u32,
-    ) {
+    pub(crate) fn apply_gods_battle_xyd(&mut self, faction_a: u32, faction_b: u32) {
         let updates = self.gods_battle_mgr.set_xyd(faction_a, faction_b);
         let region_ids = self.gods_battle_mgr.region_ids();
         let mut deliveries = 0usize;
@@ -21328,11 +23195,24 @@ impl CGame {
                     let delivery = gods_battle_property_message(player_id, b"dwXYD", xyd as i32)
                         .send_to_player(self.net_server(), player_id);
                     deliveries = deliveries.wrapping_add(1);
-                    tracing::trace!(region_id, player_id, faction, xyd, delivery, "XYD битвы богов отправлен игроку");
+                    tracing::trace!(
+                        region_id,
+                        player_id,
+                        faction,
+                        xyd,
+                        delivery,
+                        "XYD битвы богов отправлен игроку"
+                    );
                 }
             }
         }
-        tracing::debug!(faction_a, faction_b, ?updates, deliveries, "значения XYD битвы богов применены");
+        tracing::debug!(
+            faction_a,
+            faction_b,
+            ?updates,
+            deliveries,
+            "значения XYD битвы богов применены"
+        );
     }
 
     /// Достигнутый GodsBattle-tail `CPlayer::OnDied` после общих death effects.
@@ -21450,7 +23330,16 @@ impl CGame {
             add_legacy_c_string(message.base_mut(), &text[..text.len().min(0xff)]);
             Some(message.send_to_region(Some(region.base()), None, self))
         })();
-        tracing::debug!(killer_id, victim_id, ?gain, ?loss, team_players = team.as_ref().map_or(0, |team| team.player_ids.len()), updates, ?region_notice_delivery, "SZL после смерти в битве богов применён");
+        tracing::debug!(
+            killer_id,
+            victim_id,
+            ?gain,
+            ?loss,
+            team_players = team.as_ref().map_or(0, |team| team.player_ids.len()),
+            updates,
+            ?region_notice_delivery,
+            "SZL после смерти в битве богов применён"
+        );
         Some(())
     }
 
@@ -21491,7 +23380,16 @@ impl CGame {
             colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"SZLGS10"))
                 .send_to_player(self.net_server(), player_id)
         });
-        tracing::trace!(player_id, previous, current, property_delivery, notice_delivery, ?removed_attempt_appellation, ?appellation_notice_delivery, "SZL игрока битвы богов обновлён");
+        tracing::trace!(
+            player_id,
+            previous,
+            current,
+            property_delivery,
+            notice_delivery,
+            ?removed_attempt_appellation,
+            ?appellation_notice_delivery,
+            "SZL игрока битвы богов обновлён"
+        );
     }
 
     /// Script scalar `11128 / ChangePlayerSZL`: вычисляется только первый
@@ -21524,18 +23422,25 @@ impl CGame {
         context: &mut Context,
     ) {
         let Some(target) = self.find_player(target_id) else {
-            tracing::trace!(requester_id, target_id, "игрок для просмотра экипировки не найден");
+            tracing::trace!(
+                requester_id,
+                target_id,
+                "игрок для просмотра экипировки не найден"
+            );
             return;
         };
         let (head_picture, face_picture, mode) = target.appearance_and_mode();
         if mode != 0 {
-            let delivery = colored_player_notice_message(
-                0xffff_0000,
-                0,
-                self.get_string_by_id(b"GSN0336"),
-            )
-            .send_to_player(self.net_server(), requester_id);
-            tracing::trace!(requester_id, target_id, mode, delivery, "режим игрока запрещает просмотр экипировки");
+            let delivery =
+                colored_player_notice_message(0xffff_0000, 0, self.get_string_by_id(b"GSN0336"))
+                    .send_to_player(self.net_server(), requester_id);
+            tracing::trace!(
+                requester_id,
+                target_id,
+                mode,
+                delivery,
+                "режим игрока запрещает просмотр экипировки"
+            );
             return;
         }
 
@@ -21555,7 +23460,13 @@ impl CGame {
                 .add(&context.encode_goods_for_old_client(goods));
         }
         let delivery = response.send_to_player(self.net_server(), requester_id);
-        tracing::trace!(requester_id, target_id, equipment_count, delivery, "экипировка игрока отправлена");
+        tracing::trace!(
+            requester_id,
+            target_id,
+            equipment_count,
+            delivery,
+            "экипировка игрока отправлена"
+        );
     }
 
     pub(crate) fn handle_container_script_action<Runtime: ScriptFunctionRuntime>(
@@ -21569,11 +23480,20 @@ impl CGame {
             let shadows = self
                 .find_player_mut(player_id)?
                 .clear_all_enhancement_selection();
-            tracing::trace!(player_id, action, shadows, "выбор контейнерного сценария очищен");
+            tracing::trace!(
+                player_id,
+                action,
+                shadows,
+                "выбор контейнерного сценария очищен"
+            );
             return Some(());
         }
         if action != 1 {
-            tracing::trace!(player_id, action, "неверное действие контейнерного сценария");
+            tracing::trace!(
+                player_id,
+                action,
+                "неверное действие контейнерного сценария"
+            );
             return Some(());
         }
         self.run_last_container_script(player_id, region_id, Some(action), runtime)
@@ -21733,7 +23653,13 @@ impl CGame {
             },
             runtime,
         );
-        tracing::trace!(player_id, ?action, ?script_name, script_data_found, "контейнерный сценарий выполнен");
+        tracing::trace!(
+            player_id,
+            ?action,
+            ?script_name,
+            script_data_found,
+            "контейнерный сценарий выполнен"
+        );
         Some(())
     }
 
@@ -21823,48 +23749,53 @@ impl CGame {
             }
             HotkeyHandTransferOutcome::MissingHandGoods
             | HotkeyHandTransferOutcome::NotConsumable
-            | HotkeyHandTransferOutcome::UnsupportedSource => return None,
+            | HotkeyHandTransferOutcome::UnsupportedSource => {
+                return None;
+            }
         }
         Some(message.send_to_player(self, player.player_id()))
     }
 
-    pub(crate) fn assign_hotkey(
-        &mut self,
-        player_id: i32,
-        slot: u8,
-        value: u32,
-    ) -> Option<()> {
+    pub(crate) fn assign_hotkey(&mut self, player_id: i32, slot: u8, value: u32) -> Option<()> {
         if usize::from(slot) >= 24 {
             // Старый negative-value path писал за `dwHotKey[24]`; это UB без
             // подтверждённого wire-эффекта, поэтому malformed slot получает
             // тот же безопасный reject, что и обычная out-of-range ветвь.
             let delivery = send_hotkey_response(self, player_id, 0x0b_f908, b'.', None);
-            tracing::trace!(player_id, slot, value, delivery, "назначение горячей клавиши отклонено из-за номера ячейки");
+            tracing::trace!(
+                player_id,
+                slot,
+                value,
+                delivery,
+                "назначение горячей клавиши отклонено из-за номера ячейки"
+            );
             return Some(());
         }
         if (value as i32) < 0 {
             self.find_player_mut(player_id)?.set_hotkey(slot, value);
-            let delivery = send_hotkey_response(
-                self,
+            let delivery =
+                send_hotkey_response(self, player_id, 0x0b_f908, b'-', Some((slot, Some(value))));
+            tracing::trace!(
                 player_id,
-                0x0b_f908,
-                b'-',
-                Some((slot, Some(value))),
+                slot,
+                value,
+                delivery,
+                "назначена горячая клавиша с отрицательным значением"
             );
-            tracing::trace!(player_id, slot, value, delivery, "назначена горячая клавиша с отрицательным значением");
             return Some(());
         }
         let hand_missing = self.find_player(player_id)?.ci_qing_hand_goods().is_none();
         if hand_missing {
             self.find_player_mut(player_id)?.set_hotkey(slot, value);
-            let delivery = send_hotkey_response(
-                self,
+            let delivery =
+                send_hotkey_response(self, player_id, 0x0b_f908, b'-', Some((slot, Some(value))));
+            tracing::trace!(
                 player_id,
-                0x0b_f908,
-                b'-',
-                Some((slot, Some(value))),
+                slot,
+                value,
+                delivery,
+                "назначена горячая клавиша без предмета в руке"
             );
-            tracing::trace!(player_id, slot, value, delivery, "назначена горячая клавиша без предмета в руке");
             return Some(());
         }
 
@@ -21888,25 +23819,21 @@ impl CGame {
             None
         };
         let transfer_delivery = if transfer.hand_removal.is_some() || assigned {
-            self
-                .find_player(player_id)
+            self.find_player(player_id)
                 .map(|player| self.send_hotkey_hand_transfer(player, &transfer))
                 .flatten()
         } else {
             None
         };
-        let rejection_delivery = transfer.hand_removal.is_none().then(|| {
-            send_hotkey_response(self, player_id, 0x0b_f908, b'.', None)
-        });
+        let rejection_delivery = transfer
+            .hand_removal
+            .is_none()
+            .then(|| send_hotkey_response(self, player_id, 0x0b_f908, b'.', None));
         tracing::trace!(player_id, slot, value, assigned, transfer = ?transfer, ?transfer_delivery, ?response_delivery, ?rejection_delivery, "обработано назначение горячей клавиши");
         Some(())
     }
 
-    pub(crate) fn remove_hotkey(
-        &mut self,
-        player_id: i32,
-        slot: u8,
-    ) -> Option<()> {
+    pub(crate) fn remove_hotkey(&mut self, player_id: i32, slot: u8) -> Option<()> {
         let removed = self
             .find_player(player_id)?
             .hotkey(slot)
@@ -21921,16 +23848,17 @@ impl CGame {
             if removed { b'/' } else { b'0' },
             removed.then_some((slot, None)),
         );
-        tracing::trace!(player_id, slot, removed, delivery, "обработано удаление горячей клавиши");
+        tracing::trace!(
+            player_id,
+            slot,
+            removed,
+            delivery,
+            "обработано удаление горячей клавиши"
+        );
         Some(())
     }
 
-    pub(crate) fn change_hotkey(
-        &mut self,
-        player_id: i32,
-        slot: u8,
-        value: u32,
-    ) -> Option<()> {
+    pub(crate) fn change_hotkey(&mut self, player_id: i32, slot: u8, value: u32) -> Option<()> {
         let changed = self
             .find_player(player_id)?
             .hotkey(slot)
@@ -21947,7 +23875,14 @@ impl CGame {
         } else {
             None
         };
-        tracing::trace!(player_id, slot, value, changed, ?delivery, "обработано изменение горячей клавиши");
+        tracing::trace!(
+            player_id,
+            slot,
+            value,
+            changed,
+            ?delivery,
+            "обработано изменение горячей клавиши"
+        );
         Some(())
     }
 
@@ -22067,7 +24002,12 @@ impl CGame {
         context: &mut Context,
     ) {
         let Some(player) = self.find_player(player_id) else {
-            tracing::trace!(player_id, slot, action, "игрок для управления инкубатором не найден");
+            tracing::trace!(
+                player_id,
+                slot,
+                action,
+                "игрок для управления инкубатором не найден"
+            );
             return;
         };
         if !player.fairy_container_enabled() {
@@ -22097,7 +24037,12 @@ impl CGame {
             goods.hatch_stop()
         };
         if !changed {
-            tracing::trace!(player_id, slot, action, "состояние инкубатора не изменилось");
+            tracing::trace!(
+                player_id,
+                slot,
+                action,
+                "состояние инкубатора не изменилось"
+            );
             return;
         }
         let mut response = CMessage::new(0x0b_f91d);
@@ -22107,7 +24052,13 @@ impl CGame {
             response.add_ulong(self.globe_setup.fairy_hatch_time());
         }
         let delivery = response.send_to_player(self.net_server(), player_id);
-        tracing::debug!(player_id, slot, action, delivery, "состояние инкубатора изменено");
+        tracing::debug!(
+            player_id,
+            slot,
+            action,
+            delivery,
+            "состояние инкубатора изменено"
+        );
     }
 
     /// Конкретный хвост `CPlayer::PeriodicalUpdate -> CFairyContainer::CheckHatcher`.
@@ -22173,8 +24124,8 @@ impl CGame {
         let mut state_effects = 0usize;
         let mut world_messages = 0usize;
         for entry in &entries {
-            state_effects = state_effects
-                .wrapping_add(deliver_fairy_state_change(&entry.transition, self));
+            state_effects =
+                state_effects.wrapping_add(deliver_fairy_state_change(&entry.transition, self));
             if let Some(log) = &entry.incubate_log {
                 let deliveries = self.send_fairy_incubate_log(log);
                 world_messages = world_messages.wrapping_add(deliveries.len());
@@ -22198,7 +24149,11 @@ impl CGame {
         context: &mut Context,
     ) {
         let Some(player) = self.find_player(player_id) else {
-            tracing::trace!(player_id, requested_vigour, "игрок для имплантации опыта феи не найден");
+            tracing::trace!(
+                player_id,
+                requested_vigour,
+                "игрок для имплантации опыта феи не найден"
+            );
             return;
         };
         if !player.fairy_container_enabled() {
@@ -22212,23 +24167,42 @@ impl CGame {
             .and_then(CGoods::fairy_properties)
         else {
             let delivery = send_fairy_long(self, player_id, 0x0b_f91e, 1);
-            tracing::trace!(player_id, requested_vigour, delivery, "фея для имплантации не найдена");
+            tracing::trace!(
+                player_id,
+                requested_vigour,
+                delivery,
+                "фея для имплантации не найдена"
+            );
             return;
         };
         if (fairy.fairy_state == 0 && self.globe_setup.fairy_egg_max_level() <= fairy.level)
             || fairy.ripe_max_level <= fairy.level
         {
             let delivery = send_fairy_long(self, player_id, 0x0b_f91e, 2);
-            tracing::trace!(player_id, requested_vigour, delivery, "фея достигла максимального уровня");
+            tracing::trace!(
+                player_id,
+                requested_vigour,
+                delivery,
+                "фея достигла максимального уровня"
+            );
             return;
         }
         if requested_vigour == 0 || 0x98_9681 <= requested_vigour {
-            tracing::trace!(player_id, requested_vigour, "неверное количество энергии для имплантации");
+            tracing::trace!(
+                player_id,
+                requested_vigour,
+                "неверное количество энергии для имплантации"
+            );
             return;
         }
         if player.vigour() < requested_vigour {
             let delivery = send_fairy_long(self, player_id, 0x0b_f91e, 3);
-            tracing::trace!(player_id, requested_vigour, delivery, "недостаточно энергии для имплантации");
+            tracing::trace!(
+                player_id,
+                requested_vigour,
+                delivery,
+                "недостаточно энергии для имплантации"
+            );
             return;
         }
         let crystal_scale = self.globe_setup.fairy_vigour_crystal_scale();
@@ -22239,7 +24213,14 @@ impl CGame {
             .query_goods_id_by_original_name(Some(b"FZ0965"));
         if crystal_index == 0 || player.check_item_in_packet(crystal_index) < initial_crystals {
             let delivery = send_fairy_long(self, player_id, 0x0b_f91e, 4);
-            tracing::trace!(player_id, requested_vigour, crystal_index, initial_crystals, delivery, "недостаточно кристаллов для имплантации");
+            tracing::trace!(
+                player_id,
+                requested_vigour,
+                crystal_index,
+                initial_crystals,
+                delivery,
+                "недостаточно кристаллов для имплантации"
+            );
             return;
         }
 
@@ -22289,7 +24270,11 @@ impl CGame {
             )
         };
         let Ok(Some(implantation)) = implantation else {
-            tracing::trace!(player_id, requested_vigour, "имплантация заблокирована свойствами феи");
+            tracing::trace!(
+                player_id,
+                requested_vigour,
+                "имплантация заблокирована свойствами феи"
+            );
             return;
         };
         for log in &implantation.exp.grow_logs {
@@ -22310,7 +24295,11 @@ impl CGame {
                 crystal_amount: initial_crystals,
             };
             let deliveries = self.send_fairy_implantation_log(&log);
-            tracing::trace!(player_id, ?deliveries, "журнал имплантации опыта феи отправлен");
+            tracing::trace!(
+                player_id,
+                ?deliveries,
+                "журнал имплантации опыта феи отправлен"
+            );
         }
         let consumed_vigour = if implantation.exp.remaining_experience != 0 && exp_scale != 0.0 {
             requested_vigour.wrapping_sub(round_fairy_value(
@@ -22339,7 +24328,11 @@ impl CGame {
             .remove_item_in_packet(crystal_index, crystal_amount);
         for consumption in consumptions {
             let deliveries = self.send_player_packet_consumption(&consumption);
-            tracing::trace!(player_id, ?deliveries, "расход кристаллов имплантации отправлен");
+            tracing::trace!(
+                player_id,
+                ?deliveries,
+                "расход кристаллов имплантации отправлен"
+            );
         }
         let goods_update_delivery = send_fairy_goods_update(
             self,
@@ -22351,7 +24344,16 @@ impl CGame {
             },
         );
         let result_delivery = send_fairy_long(self, player_id, 0x0b_f91e, 5);
-        tracing::debug!(player_id, requested_vigour, consumed_vigour, crystal_amount, ?property_delivery, goods_update_delivery, result_delivery, "имплантация опыта феи завершена");
+        tracing::debug!(
+            player_id,
+            requested_vigour,
+            consumed_vigour,
+            crystal_amount,
+            ?property_delivery,
+            goods_update_delivery,
+            result_delivery,
+            "имплантация опыта феи завершена"
+        );
     }
 
     pub(crate) fn syncretize_fairy<Context: FairyContext>(
@@ -22442,7 +24444,12 @@ impl CGame {
             None
         };
         let (state_effects, amount_changes) = deliver_fairy_syncretize_effects(&report, self);
-        tracing::trace!(player_id, state_effects, amount_changes, "эффекты соединения фей отправлены");
+        tracing::trace!(
+            player_id,
+            state_effects,
+            amount_changes,
+            "эффекты соединения фей отправлены"
+        );
         let money_deliveries = money_change
             .as_ref()
             .map(|change| self.send_player_money_decrease(player_id, &change.outcome))
@@ -22522,7 +24529,13 @@ impl CGame {
                     .map(CPlayer::begin_synthesis)
             })
             .flatten();
-        tracing::debug!(player_id, ?outcome, delivery, player_mutated = player_mutation.is_some(), "открытие синтеза обработано");
+        tracing::debug!(
+            player_id,
+            ?outcome,
+            delivery,
+            player_mutated = player_mutation.is_some(),
+            "открытие синтеза обработано"
+        );
         Some(())
     }
 
@@ -22545,10 +24558,7 @@ impl CGame {
         Some((enabled, delivery))
     }
 
-    pub(crate) fn close_synthesis(
-        &mut self,
-        player_id: i32,
-    ) -> Option<()> {
+    pub(crate) fn close_synthesis(&mut self, player_id: i32) -> Option<()> {
         let release = self.find_player_mut(player_id)?.close_synthesis();
         tracing::trace!(player_id, ?release, "сессия синтеза закрыта");
         Some(())
@@ -22581,7 +24591,12 @@ impl CGame {
             })
             .cloned()
         else {
-            tracing::trace!(player_id, synthesis_index, amount, "рецепт синтеза не найден");
+            tracing::trace!(
+                player_id,
+                synthesis_index,
+                amount,
+                "рецепт синтеза не найден"
+            );
             return Some(());
         };
         let required = |formula: &SynthesisFormula| u64::from(formula.amount) * u64::from(amount);
@@ -22597,18 +24612,36 @@ impl CGame {
         };
         if missing_ingredients {
             let delivery = send_synthesis_result(self, player_id, 0);
-            tracing::trace!(player_id, synthesis_index, amount, delivery, "для синтеза не хватает ингредиентов");
+            tracing::trace!(
+                player_id,
+                synthesis_index,
+                amount,
+                delivery,
+                "для синтеза не хватает ингредиентов"
+            );
             return Some(());
         }
         let total_coins = u64::from(recipe.coins as u32) * u64::from(amount);
         if u64::from(player_money) < total_coins {
             let delivery = send_synthesis_result(self, player_id, 1);
-            tracing::trace!(player_id, synthesis_index, amount, delivery, "для синтеза не хватает денег");
+            tracing::trace!(
+                player_id,
+                synthesis_index,
+                amount,
+                delivery,
+                "для синтеза не хватает денег"
+            );
             return Some(());
         }
         if player_contribution < recipe.prestige {
             let delivery = send_synthesis_result(self, player_id, 2);
-            tracing::trace!(player_id, synthesis_index, amount, delivery, "для синтеза не хватает вклада");
+            tracing::trace!(
+                player_id,
+                synthesis_index,
+                amount,
+                delivery,
+                "для синтеза не хватает вклада"
+            );
             return Some(());
         }
         if recipe.probability != 100
@@ -22638,7 +24671,13 @@ impl CGame {
         };
         if !created.is_empty() && !self.synthesis_result_fits_packet(player_id, &created) {
             let delivery = send_synthesis_result(self, player_id, 3);
-            tracing::trace!(player_id, synthesis_index, amount, delivery, "для результата синтеза не хватает места");
+            tracing::trace!(
+                player_id,
+                synthesis_index,
+                amount,
+                delivery,
+                "для результата синтеза не хватает места"
+            );
             return Some(());
         }
 
@@ -22649,7 +24688,12 @@ impl CGame {
                 .decrease_money(total_coins as u32, goods_factory)
         };
         let money_delivery = self.send_player_money_decrease(player_id, &money_change.outcome);
-        tracing::trace!(player_id, synthesis_index, ?money_delivery, "уменьшение денег за синтез отправлено");
+        tracing::trace!(
+            player_id,
+            synthesis_index,
+            ?money_delivery,
+            "уменьшение денег за синтез отправлено"
+        );
         for formula in &recipe.formulas {
             let consumptions = self.find_player_mut(player_id)?.remove_item_in_packet(
                 formula.goods_index,
@@ -22657,7 +24701,12 @@ impl CGame {
             );
             for consumption in consumptions {
                 let deliveries = self.send_player_packet_consumption(&consumption);
-                tracing::trace!(player_id, synthesis_index, ?deliveries, "расход ингредиента синтеза отправлен");
+                tracing::trace!(
+                    player_id,
+                    synthesis_index,
+                    ?deliveries,
+                    "расход ингредиента синтеза отправлен"
+                );
             }
         }
         if result_amount == 0 {
@@ -22665,7 +24714,14 @@ impl CGame {
             let text = self.get_string_by_id(b"GS1017");
             let notice_delivery = colored_player_notice_message(0xffff_ffff, 0, text)
                 .send_to_player(self.net_server(), player_id);
-            tracing::debug!(player_id, synthesis_index, amount, result_delivery, notice_delivery, "синтез завершился случайной неудачей");
+            tracing::debug!(
+                player_id,
+                synthesis_index,
+                amount,
+                result_delivery,
+                notice_delivery,
+                "синтез завершился случайной неудачей"
+            );
             return Some(());
         }
         let (additions, rejected) = {
@@ -22676,7 +24732,12 @@ impl CGame {
         };
         for addition in additions {
             let deliveries = self.send_player_packet_addition(&addition);
-            tracing::trace!(player_id, synthesis_index, ?deliveries, "результат синтеза отправлен в инвентарь");
+            tracing::trace!(
+                player_id,
+                synthesis_index,
+                ?deliveries,
+                "результат синтеза отправлен в инвентарь"
+            );
         }
         let rejected_count = rejected.len();
         let result_delivery = send_synthesis_result(self, player_id, 4);
@@ -22685,7 +24746,16 @@ impl CGame {
             .send_to_player(self.net_server(), player_id);
         let broadcast_delivery = synthesis_broadcast_message(self, player_id, &recipe, amount)
             .map(|message| message.send(self, false));
-        tracing::debug!(player_id, synthesis_index, amount, rejected_count, result_delivery, notice_delivery, ?broadcast_delivery, "синтез завершён");
+        tracing::debug!(
+            player_id,
+            synthesis_index,
+            amount,
+            rejected_count,
+            result_delivery,
+            notice_delivery,
+            ?broadcast_delivery,
+            "синтез завершён"
+        );
         Some(())
     }
 
@@ -22697,10 +24767,7 @@ impl CGame {
         &mut self.goods_destroy_setup
     }
 
-    fn send_goods_destroy_hand_consumption(
-        &self,
-        consumption: &GoodsDestroyHandConsumption,
-    ) {
+    fn send_goods_destroy_hand_consumption(&self, consumption: &GoodsDestroyHandConsumption) {
         if consumption.removed_amount == 0 {
             return;
         }
@@ -22715,7 +24782,11 @@ impl CGame {
                 consumption.previous_amount,
             );
             let delivery = message.send_to_player(self, consumption.player_id);
-            tracing::trace!(player_id = consumption.player_id, delivery, "удаление уничтоженного предмета отправлено игроку");
+            tracing::trace!(
+                player_id = consumption.player_id,
+                delivery,
+                "удаление уничтоженного предмета отправлено игроку"
+            );
             return;
         }
         let mut message = CS2CContainerObjectAmountChange::default();
@@ -22724,7 +24795,11 @@ impl CGame {
         message.set_object(consumption.goods.object_type, consumption.goods.ex_id);
         message.set_object_amount(consumption.remaining_amount);
         let delivery = message.send_to_player(self, consumption.player_id);
-        tracing::trace!(player_id = consumption.player_id, delivery, "остаток уничтоженного предмета отправлен игроку");
+        tracing::trace!(
+            player_id = consumption.player_id,
+            delivery,
+            "остаток уничтоженного предмета отправлен игроку"
+        );
     }
 
     fn send_goods_destroy_log(&self, player: &CPlayer, log: &GoodsDestroyAuditLog) {
@@ -22866,7 +24941,12 @@ impl CGame {
                     context,
                 );
             } else {
-                tracing::trace!(player_id, container_extend_id, requested_amount, "идентификатор удаляемого предмета отсутствует");
+                tracing::trace!(
+                    player_id,
+                    container_extend_id,
+                    requested_amount,
+                    "идентификатор удаляемого предмета отсутствует"
+                );
             }
             return;
         }
@@ -22884,7 +24964,13 @@ impl CGame {
         let mut response = CMessage::new(0x0b_f926);
         response.base_mut().add_byte(u8::from(enabled));
         let response_delivery = response.send_to_player(self.net_server(), player_id);
-        tracing::debug!(player_id, enabled, ?notice_delivery, response_delivery, "страница уничтожения предметов обработана");
+        tracing::debug!(
+            player_id,
+            enabled,
+            ?notice_delivery,
+            response_delivery,
+            "страница уничтожения предметов обработана"
+        );
     }
 
     pub(crate) fn confirm_goods_destroy(&mut self, player_id: i32) {
@@ -22905,7 +24991,11 @@ impl CGame {
             .goods_factory
             .query_goods_base_properties(hand_goods.base_properties_index())
         else {
-            tracing::warn!(player_id, ?identity, "базовые свойства уничтожаемого предмета не найдены");
+            tracing::warn!(
+                player_id,
+                ?identity,
+                "базовые свойства уничтожаемого предмета не найдены"
+            );
             return;
         };
         if self
@@ -22917,7 +25007,12 @@ impl CGame {
             let text = self.get_string_by_id(b"GS1015");
             let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
                 .send_to_player(self.net_server(), player_id);
-            tracing::trace!(player_id, ?identity, delivery, "уничтожение предмета запрещено по исходному имени");
+            tracing::trace!(
+                player_id,
+                ?identity,
+                delivery,
+                "уничтожение предмета запрещено по исходному имени"
+            );
             return;
         }
         let type_key = if properties.goods_type() == GOODS_TYPE_EQUIPMENT {
@@ -22929,7 +25024,13 @@ impl CGame {
             let text = self.get_string_by_id(b"GS1014");
             let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
                 .send_to_player(self.net_server(), player_id);
-            tracing::trace!(player_id, ?identity, type_key, delivery, "тип предмета запрещён для уничтожения");
+            tracing::trace!(
+                player_id,
+                ?identity,
+                type_key,
+                delivery,
+                "тип предмета запрещён для уничтожения"
+            );
             return;
         }
         let equipment_state =
@@ -22938,7 +25039,13 @@ impl CGame {
             let text = self.get_string_by_id(b"GSN1014");
             let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
                 .send_to_player(self.net_server(), player_id);
-            tracing::trace!(player_id, ?identity, equipment_state, delivery, "состояние экипировки запрещает уничтожение");
+            tracing::trace!(
+                player_id,
+                ?identity,
+                equipment_state,
+                delivery,
+                "состояние экипировки запрещает уничтожение"
+            );
             return;
         }
 
@@ -22975,7 +25082,16 @@ impl CGame {
         let mut response = CMessage::new(0x0b_f927);
         response.add_ulong(removed_amount);
         let result_delivery = response.send_to_player(self.net_server(), player_id);
-        tracing::debug!(player_id, ?identity, type_key, equipment_state, amount, removed_amount, result_delivery, "уничтожение предмета завершено");
+        tracing::debug!(
+            player_id,
+            ?identity,
+            type_key,
+            equipment_state,
+            amount,
+            removed_amount,
+            result_delivery,
+            "уничтожение предмета завершено"
+        );
     }
 
     pub(crate) const fn change_body_conf_mut(&mut self) -> &mut CChangeBodyConf {
@@ -24295,10 +26411,7 @@ impl CGame {
     /// `Drop` и `take/clear`; порядок владельцев и внешних отправок сохранён.
     /// Диагностика публикуется в точке действия и не повторяет teardown в
     /// возвращаемом дереве.
-    pub(crate) async fn release<Runtime: GameThreadRuntime>(
-        &mut self,
-        runtime: &mut Runtime,
-    ) {
+    pub(crate) async fn release<Runtime: GameThreadRuntime>(&mut self, runtime: &mut Runtime) {
         tracing::info!("GameServer начинает завершение");
 
         self.stop_reconnect_tasks().await;
@@ -24381,7 +26494,10 @@ impl CGame {
         if let Some(server) = self.net_server.as_mut() {
             runtime.exit_network_server_worker(server);
         }
-        tracing::debug!(network_server_present, "остановлен сетевой worker GameServer");
+        tracing::debug!(
+            network_server_present,
+            "остановлен сетевой worker GameServer"
+        );
 
         let world_client_present = self.world_client.is_some();
         if let Some(client) = self.world_client.as_mut() {
@@ -24577,7 +26693,11 @@ impl CGame {
         let notice_delivery =
             colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0156"))
                 .send_to_player(self.net_server(), player_id);
-        tracing::trace!(player_id, notice_delivery, "уведомление о восстановлении питомцев отправлено");
+        tracing::trace!(
+            player_id,
+            notice_delivery,
+            "уведомление о восстановлении питомцев отправлено"
+        );
         let (taming_level, current_pets) = self.players.get(&player_id).map_or((0, 0), |player| {
             (
                 player.learned_skill_level(0xd4),
@@ -24613,7 +26733,11 @@ impl CGame {
             })
             .unwrap_or_default();
         let Some(mut owner) = self.take_region_owner(region_id) else {
-            tracing::warn!(player_id, region_id, "питомцы при входе не восстановлены: регион отсутствует");
+            tracing::warn!(
+                player_id,
+                region_id,
+                "питомцы при входе не восстановлены: регион отсутствует"
+            );
             return;
         };
         let (area_width, area_height) = self.area_dimensions();
@@ -24622,7 +26746,11 @@ impl CGame {
                 .find_monster_property_by_origin_name(&record.original_name)
                 .cloned()
             else {
-                tracing::warn!(player_id, original_name_bytes = record.original_name.len(), "питомец при входе не восстановлен: свойства отсутствуют");
+                tracing::warn!(
+                    player_id,
+                    original_name_bytes = record.original_name.len(),
+                    "питомец при входе не восстановлен: свойства отсутствуют"
+                );
                 continue;
             };
             let position = owner
@@ -24648,7 +26776,11 @@ impl CGame {
             ) {
                 Ok(monster_id) => monster_id,
                 Err(_) => {
-                    tracing::warn!(player_id, original_name_bytes = record.original_name.len(), "питомец при входе не создан");
+                    tracing::warn!(
+                        player_id,
+                        original_name_bytes = record.original_name.len(),
+                        "питомец при входе не создан"
+                    );
                     continue;
                 }
             };
@@ -24694,7 +26826,13 @@ impl CGame {
             let around_delivery = self
                 .send_game_shape_around(owner.base(), &shape, None, &message)
                 .ok();
-            tracing::trace!(player_id, monster_id, original_name_bytes = record.original_name.len(), ?around_delivery, "питомец при входе восстановлен");
+            tracing::trace!(
+                player_id,
+                monster_id,
+                original_name_bytes = record.original_name.len(),
+                ?around_delivery,
+                "питомец при входе восстановлен"
+            );
         }
         self.restore_region_owner(owner);
     }
@@ -24757,12 +26895,20 @@ impl CGame {
                 .cloned()
             else {
                 self.restore_region_owner(owner);
-                tracing::warn!(player_id, original_name_bytes = record.original_name.len(), "повозка при входе не восстановлена: свойства отсутствуют");
+                tracing::warn!(
+                    player_id,
+                    original_name_bytes = record.original_name.len(),
+                    "повозка при входе не восстановлена: свойства отсутствуют"
+                );
                 return Some(());
             };
             if !(property.tamable == 1 && property.maximum_tame_attempt_count == 0) {
                 self.restore_region_owner(owner);
-                tracing::warn!(player_id, original_name_bytes = record.original_name.len(), "повозка при входе не восстановлена: свойства несовместимы");
+                tracing::warn!(
+                    player_id,
+                    original_name_bytes = record.original_name.len(),
+                    "повозка при входе не восстановлена: свойства несовместимы"
+                );
                 return Some(());
             }
             let Some(position) = owner
@@ -24772,7 +26918,11 @@ impl CGame {
                 .ok()
             else {
                 self.restore_region_owner(owner);
-                tracing::warn!(player_id, region_id, "повозка при входе не восстановлена: позиция недоступна");
+                tracing::warn!(
+                    player_id,
+                    region_id,
+                    "повозка при входе не восстановлена: позиция недоступна"
+                );
                 return Some(());
             };
             let Some(monster_id) = owner
@@ -24856,7 +27006,13 @@ impl CGame {
             );
         }
         self.restore_region_owner(owner);
-        tracing::trace!(player_id, monster_id, original_name_bytes = original_name.len(), ?around_delivery, "повозка при входе восстановлена");
+        tracing::trace!(
+            player_id,
+            monster_id,
+            original_name_bytes = original_name.len(),
+            ?around_delivery,
+            "повозка при входе восстановлена"
+        );
         Some(())
     }
 
@@ -25361,7 +27517,13 @@ impl CGame {
             } else {
                 update.send_to_player(self.net_server(), expected_player_id)
             };
-            tracing::trace!(player_id = expected_player_id, ?location, ?goods, delivery, "состояние снаряжения обновлено при входе");
+            tracing::trace!(
+                player_id = expected_player_id,
+                ?location,
+                ?goods,
+                delivery,
+                "состояние снаряжения обновлено при входе"
+            );
         }
 
         tracing::trace!(
@@ -25904,7 +28066,15 @@ impl CGame {
         message.add_long(owner_region_id);
         for recipient in recipients {
             let delivery = message.send_to_player(self.net_server(), recipient);
-            tracing::trace!(team_id, owner_type, owner_id, owner_region_id, recipient, delivery, "регион участника группы опубликован");
+            tracing::trace!(
+                team_id,
+                owner_type,
+                owner_id,
+                owner_region_id,
+                recipient,
+                delivery,
+                "регион участника группы опубликован"
+            );
         }
     }
 
@@ -25927,7 +28097,15 @@ impl CGame {
         add_legacy_c_string(message.base_mut(), owner_name);
         for recipient in recipients {
             let delivery = message.send_to_player(self.net_server(), recipient);
-            tracing::trace!(team_id, owner_type, owner_id, owner_region_id, recipient, delivery, "вступление участника группы опубликовано");
+            tracing::trace!(
+                team_id,
+                owner_type,
+                owner_id,
+                owner_region_id,
+                recipient,
+                delivery,
+                "вступление участника группы опубликовано"
+            );
         }
     }
 
@@ -25946,7 +28124,14 @@ impl CGame {
         message.add_long(owner_region_id);
         add_legacy_c_string(message.base_mut(), owner_name);
         let delivery = message.send(self, false);
-        tracing::trace!(team_id, owner_type, owner_id, owner_region_id, ?delivery, "вступление участника группы отправлено WorldServer");
+        tracing::trace!(
+            team_id,
+            owner_type,
+            owner_id,
+            owner_region_id,
+            ?delivery,
+            "вступление участника группы отправлено WorldServer"
+        );
     }
 
     fn player_team_hp_ratio_bits(&self, player_id: i32) -> u32 {
@@ -25956,11 +28141,7 @@ impl CGame {
         ((player.health() as f32) / (player.maximum_health() as f32)).to_bits()
     }
 
-    fn publish_team_recruitment_count(
-        &mut self,
-        leader_id: i32,
-        teammate_count: usize,
-    ) {
+    fn publish_team_recruitment_count(&mut self, leader_id: i32, teammate_count: usize) {
         let Some(state) = self
             .players
             .get(&leader_id)
@@ -25974,7 +28155,12 @@ impl CGame {
         message.add_long(state.state_id());
         message.add_ulong(state.additional_data(teammate_count));
         let delivery = self.send_player_shape_around(leader_id, None, &message);
-        tracing::trace!(leader_id, teammate_count, ?delivery, "число участников набора опубликовано вокруг лидера");
+        tracing::trace!(
+            leader_id,
+            teammate_count,
+            ?delivery,
+            "число участников набора опубликовано вокруг лидера"
+        );
     }
 
     pub(crate) fn join_team_accepted(
@@ -26017,7 +28203,11 @@ impl CGame {
             let mut started = CMessage::new(0x0006_0001);
             started.base_mut().add(&created.empty_snapshot);
             let started_delivery = started.send(self, false);
-            tracing::trace!(team_id, ?started_delivery, "создание группы отправлено WorldServer");
+            tracing::trace!(
+                team_id,
+                ?started_delivery,
+                "создание группы отправлено WorldServer"
+            );
 
             self.send_team_snapshot(leader_id, &created.leader_snapshot);
             self.publish_world_team_member_joined(
@@ -26058,13 +28248,24 @@ impl CGame {
                 changed.add_ulong(team_id);
                 changed.add_long(leader_id);
                 let delivery = changed.send_to_player(self.net_server(), *player_id);
-                tracing::trace!(team_id, leader_id, player_id, delivery, "смена лидера отправлена участнику группы");
+                tracing::trace!(
+                    team_id,
+                    leader_id,
+                    player_id,
+                    delivery,
+                    "смена лидера отправлена участнику группы"
+                );
             }
             let mut leader_changed = CMessage::new(0x0006_0006);
             leader_changed.add_ulong(team_id);
             leader_changed.add_long(leader_id);
             let delivery = leader_changed.send(self, false);
-            tracing::trace!(team_id, leader_id, ?delivery, "смена лидера отправлена WorldServer");
+            tracing::trace!(
+                team_id,
+                leader_id,
+                ?delivery,
+                "смена лидера отправлена WorldServer"
+            );
             (created.session_id, team_id, created.teammate_ids.len())
         } else {
             let session_id = self.get_team_session_id(leader_team_id as u32);
@@ -26079,30 +28280,30 @@ impl CGame {
                 .set_team_membership(inserted.team_id as i32);
             self.players.get_mut(&candidate_id)?.set_team_captain(false);
             self.publish_team_member_region(
-                    inserted.team_id,
-                    400,
-                    candidate_id,
-                    candidate_region_id,
-                    inserted
-                        .teammate_ids
-                        .iter()
-                        .copied()
-                        .filter(|player_id| *player_id != candidate_id),
-                );
+                inserted.team_id,
+                400,
+                candidate_id,
+                candidate_region_id,
+                inserted
+                    .teammate_ids
+                    .iter()
+                    .copied()
+                    .filter(|player_id| *player_id != candidate_id),
+            );
             self.send_team_snapshot(candidate_id, &inserted.snapshot);
             self.publish_team_member_joined(
-                    inserted.team_id,
-                    400,
-                    candidate_id,
-                    candidate_region_id,
-                    &candidate_name,
-                    self.player_team_hp_ratio_bits(candidate_id),
-                    inserted
-                        .teammate_ids
-                        .iter()
-                        .copied()
-                        .filter(|player_id| *player_id != candidate_id),
-                );
+                inserted.team_id,
+                400,
+                candidate_id,
+                candidate_region_id,
+                &candidate_name,
+                self.player_team_hp_ratio_bits(candidate_id),
+                inserted
+                    .teammate_ids
+                    .iter()
+                    .copied()
+                    .filter(|player_id| *player_id != candidate_id),
+            );
             self.publish_world_team_member_joined(
                 inserted.team_id,
                 400,
@@ -26128,10 +28329,22 @@ impl CGame {
             audit.add_long(leader.shape().get_tile_x().unwrap_or_default());
             audit.add_long(leader.shape().get_tile_y().unwrap_or_default());
             let delivery = audit.send(self, false);
-            tracing::trace!(leader_id, candidate_id, ?delivery, "аудит вступления в группу отправлен");
+            tracing::trace!(
+                leader_id,
+                candidate_id,
+                ?delivery,
+                "аудит вступления в группу отправлен"
+            );
         }
 
-        tracing::trace!(leader_id, candidate_id, session_id, team_id, teammate_count, "участник добавлен в группу");
+        tracing::trace!(
+            leader_id,
+            candidate_id,
+            session_id,
+            team_id,
+            teammate_count,
+            "участник добавлен в группу"
+        );
         Some(())
     }
 
@@ -26147,21 +28360,23 @@ impl CGame {
         left.add_long(player_id);
         for recipient in recipients {
             let delivery = left.send_to_player(self.net_server(), recipient);
-            tracing::trace!(team_id, player_id, recipient, delivery, "выход участника группы опубликован");
+            tracing::trace!(
+                team_id,
+                player_id,
+                recipient,
+                delivery,
+                "выход участника группы опубликован"
+            );
         }
     }
 
-    fn remove_local_team_member(
-        &mut self,
-        session_id: i32,
-        player_id: i32,
-    ) -> Option<()> {
+    fn remove_local_team_member(&mut self, session_id: i32, player_id: i32) -> Option<()> {
         let removed: TeamMemberRemoved = self
             .session_factory
             .remove_team_member(session_id, player_id)?;
         self.players.get_mut(&player_id)?.set_team_membership(0);
-        let recipients = std::iter::once(player_id)
-            .chain(removed.remaining_player_ids.iter().copied());
+        let recipients =
+            std::iter::once(player_id).chain(removed.remaining_player_ids.iter().copied());
         self.publish_team_member_left(removed.team_id, player_id, recipients);
         let mut changed = CMessage::new(0x0006_0004);
         changed.add_ulong(removed.team_id);
@@ -26169,7 +28384,13 @@ impl CGame {
         changed.add_long(player_id);
         let world_delivery = changed.send(self, false);
         self.publish_team_recruitment_count(removed.leader_id, removed.remaining_player_ids.len());
-        tracing::trace!(player_id, session_id = removed.session_id, team_id = removed.team_id, ?world_delivery, "локальный участник удалён из группы");
+        tracing::trace!(
+            player_id,
+            session_id = removed.session_id,
+            team_id = removed.team_id,
+            ?world_delivery,
+            "локальный участник удалён из группы"
+        );
         Some(())
     }
 
@@ -26182,11 +28403,7 @@ impl CGame {
         self.remove_local_team_member(session_id, player_id)
     }
 
-    pub(crate) fn change_team_leader(
-        &mut self,
-        actor_id: i32,
-        new_leader_id: i32,
-    ) -> Option<()> {
+    pub(crate) fn change_team_leader(&mut self, actor_id: i32, new_leader_id: i32) -> Option<()> {
         let team_id = self.players.get(&actor_id)?.team_id();
         let session_id = self.get_team_session_id(team_id as u32);
         if self.session_factory.query_team(session_id)?.leader_id() != actor_id {
@@ -26217,21 +28434,30 @@ impl CGame {
         client.add_long(new_leader_id);
         for recipient in recipients {
             let delivery = client.send_to_player(self.net_server(), recipient);
-            tracing::trace!(team_id, new_leader_id, recipient, delivery, "смена лидера отправлена участнику группы");
+            tracing::trace!(
+                team_id,
+                new_leader_id,
+                recipient,
+                delivery,
+                "смена лидера отправлена участнику группы"
+            );
         }
         let mut world = CMessage::new(0x0006_0006);
         world.add_ulong(team_id as u32);
         world.add_long(new_leader_id);
         let world_delivery = world.send(self, false);
-        tracing::trace!(session_id, team_id, previous_leader_id = previous, new_leader_id, ?world_delivery, "лидер группы изменён");
+        tracing::trace!(
+            session_id,
+            team_id,
+            previous_leader_id = previous,
+            new_leader_id,
+            ?world_delivery,
+            "лидер группы изменён"
+        );
         Some(())
     }
 
-    pub(crate) fn kick_team_member(
-        &mut self,
-        actor_id: i32,
-        kicked_id: i32,
-    ) -> Option<()> {
+    pub(crate) fn kick_team_member(&mut self, actor_id: i32, kicked_id: i32) -> Option<()> {
         let team_id = self.players.get(&actor_id)?.team_id();
         let session_id = self.get_team_session_id(team_id as u32);
         if self.session_factory.query_team(session_id)?.leader_id() != actor_id {
@@ -26246,7 +28472,13 @@ impl CGame {
         world.add_ulong(team_id as u32);
         world.add_long(kicked_id);
         let world_delivery = world.send(self, false);
-        tracing::trace!(session_id, team_id, kicked_id, ?world_delivery, "запрошено удалённое исключение участника группы");
+        tracing::trace!(
+            session_id,
+            team_id,
+            kicked_id,
+            ?world_delivery,
+            "запрошено удалённое исключение участника группы"
+        );
         Some(())
     }
 
@@ -26267,11 +28499,7 @@ impl CGame {
             let recipients = std::iter::once(*player_id)
                 .chain(disbanded.player_ids[index + 1..].iter().copied())
                 .filter(|recipient| self.players.contains_key(recipient));
-            self.publish_team_member_left(
-                disbanded.team_id,
-                *player_id,
-                recipients,
-            );
+            self.publish_team_member_left(disbanded.team_id, *player_id, recipients);
         }
         self.team_session_ids.remove(&disbanded.team_id);
         self.publish_team_recruitment_count(disbanded.leader_id, 1);
@@ -26299,13 +28527,26 @@ impl CGame {
         client.add_long(allocation_scheme);
         for player_id in recipients {
             let delivery = client.send_to_player(self.net_server(), player_id);
-            tracing::trace!(team_id, allocation_scheme, player_id, delivery, "схема распределения отправлена участнику группы");
+            tracing::trace!(
+                team_id,
+                allocation_scheme,
+                player_id,
+                delivery,
+                "схема распределения отправлена участнику группы"
+            );
         }
         let mut world = CMessage::new(0x0006_000a);
         world.add_ulong(team_id);
         world.add_long(allocation_scheme);
         let world_delivery = world.send(self, false);
-        tracing::trace!(actor_id, session_id, team_id, allocation_scheme, ?world_delivery, "схема распределения группы изменена");
+        tracing::trace!(
+            actor_id,
+            session_id,
+            team_id,
+            allocation_scheme,
+            ?world_delivery,
+            "схема распределения группы изменена"
+        );
         Some(())
     }
 
@@ -26349,7 +28590,13 @@ impl CGame {
         add_legacy_c_string(client.base_mut(), &text);
         for player_id in recipients {
             let delivery = client.send_to_player(self.net_server(), player_id);
-            tracing::trace!(team_id, actor_id, player_id, delivery, "сообщение группы отправлено участнику");
+            tracing::trace!(
+                team_id,
+                actor_id,
+                player_id,
+                delivery,
+                "сообщение группы отправлено участнику"
+            );
         }
         let mut world = CMessage::new(0x0006_000b);
         world.add_ulong(team_id);
@@ -26357,7 +28604,14 @@ impl CGame {
         world.add_long(actor_id);
         add_legacy_c_string(world.base_mut(), &text);
         let world_delivery = world.send(self, false);
-        tracing::trace!(actor_id, session_id, team_id, text_len = text.len(), ?world_delivery, "сообщение группы отправлено");
+        tracing::trace!(
+            actor_id,
+            session_id,
+            team_id,
+            text_len = text.len(),
+            ?world_delivery,
+            "сообщение группы отправлено"
+        );
         GameTeamChatResult::Sent
     }
 
@@ -26417,39 +28671,47 @@ impl CGame {
                 .expect("remote insert source-local player остаётся canonical");
             player.set_team_membership(team_id as i32);
             self.publish_team_member_region(
-                    team_id,
-                    owner_type,
-                    owner_id,
-                    owner_region_id,
-                    local_recipients
-                        .iter()
-                        .copied()
-                        .filter(|recipient| *recipient != owner_id),
-                );
-            self.send_team_snapshot(owner_id, &inserted.snapshot);
-        }
-        self.publish_team_member_joined(
                 team_id,
                 owner_type,
                 owner_id,
                 owner_region_id,
-                &owner_name,
-                self.player_team_hp_ratio_bits(owner_id),
                 local_recipients
                     .iter()
                     .copied()
                     .filter(|recipient| *recipient != owner_id),
             );
+            self.send_team_snapshot(owner_id, &inserted.snapshot);
+        }
+        self.publish_team_member_joined(
+            team_id,
+            owner_type,
+            owner_id,
+            owner_region_id,
+            &owner_name,
+            self.player_team_hp_ratio_bits(owner_id),
+            local_recipients
+                .iter()
+                .copied()
+                .filter(|recipient| *recipient != owner_id),
+        );
         if source_local {
             self.publish_world_team_member_joined(
-                    team_id,
-                    owner_type,
-                    owner_id,
-                    owner_region_id,
-                    &owner_name,
-                );
+                team_id,
+                owner_type,
+                owner_id,
+                owner_region_id,
+                &owner_name,
+            );
         }
-        tracing::trace!(session_id, team_id, owner_type, owner_id, owner_region_id, source_local, "удалённый участник добавлен в группу");
+        tracing::trace!(
+            session_id,
+            team_id,
+            owner_type,
+            owner_id,
+            owner_region_id,
+            source_local,
+            "удалённый участник добавлен в группу"
+        );
         Some(())
     }
 
@@ -26486,9 +28748,22 @@ impl CGame {
             world.add_long(owner_type);
             world.add_long(owner_id);
             let delivery = world.send(self, false);
-            tracing::trace!(team_id, owner_type, owner_id, ?delivery, "удаление участника группы отправлено WorldServer");
+            tracing::trace!(
+                team_id,
+                owner_type,
+                owner_id,
+                ?delivery,
+                "удаление участника группы отправлено WorldServer"
+            );
         }
-        tracing::trace!(session_id, team_id, owner_type, owner_id, source_local, "удалённый участник исключён из группы");
+        tracing::trace!(
+            session_id,
+            team_id,
+            owner_type,
+            owner_id,
+            source_local,
+            "удалённый участник исключён из группы"
+        );
         Some(())
     }
 
@@ -26509,22 +28784,19 @@ impl CGame {
         let recipients = recipients
             .into_iter()
             .filter(|player_id| *player_id != owner_id && self.players.contains_key(player_id));
-        self.publish_team_member_region(
+        self.publish_team_member_region(team_id, owner_type, owner_id, owner_region_id, recipients);
+        tracing::trace!(
+            session_id,
             team_id,
             owner_type,
             owner_id,
             owner_region_id,
-            recipients,
+            "регион удалённого участника группы изменён"
         );
-        tracing::trace!(session_id, team_id, owner_type, owner_id, owner_region_id, "регион удалённого участника группы изменён");
         Some(())
     }
 
-    pub(crate) fn kick_remote_team_player(
-        &mut self,
-        team_id: u32,
-        player_id: i32,
-    ) -> Option<()> {
+    pub(crate) fn kick_remote_team_player(&mut self, team_id: u32, player_id: i32) -> Option<()> {
         if self.players.contains_key(&player_id) {
             return self.remove_remote_team_member(team_id, 400, player_id);
         }
@@ -26535,15 +28807,17 @@ impl CGame {
         world.add_ulong(team_id);
         world.add_long(player_id);
         let delivery = world.send(self, false);
-        tracing::trace!(session_id, team_id, player_id, ?delivery, "удалённое исключение участника группы запрошено");
+        tracing::trace!(
+            session_id,
+            team_id,
+            player_id,
+            ?delivery,
+            "удалённое исключение участника группы запрошено"
+        );
         Some(())
     }
 
-    pub(crate) fn change_remote_team_leader(
-        &mut self,
-        team_id: u32,
-        player_id: i32,
-    ) -> Option<()> {
+    pub(crate) fn change_remote_team_leader(&mut self, team_id: u32, player_id: i32) -> Option<()> {
         let session_id = self.get_team_session_id(team_id);
         let previous = self.session_factory.query_team(session_id)?.leader_id();
         if previous == player_id {
@@ -26567,23 +28841,37 @@ impl CGame {
         client.add_long(player_id);
         for recipient in recipients {
             let delivery = client.send_to_player(self.net_server(), recipient);
-            tracing::trace!(team_id, player_id, recipient, delivery, "новый лидер удалённой группы опубликован");
+            tracing::trace!(
+                team_id,
+                player_id,
+                recipient,
+                delivery,
+                "новый лидер удалённой группы опубликован"
+            );
         }
         if self.players.contains_key(&previous) {
             let mut world = CMessage::new(0x0006_0006);
             world.add_ulong(team_id);
             world.add_long(player_id);
             let delivery = world.send(self, false);
-            tracing::trace!(team_id, player_id, ?delivery, "новый лидер группы отправлен WorldServer");
+            tracing::trace!(
+                team_id,
+                player_id,
+                ?delivery,
+                "новый лидер группы отправлен WorldServer"
+            );
         }
-        tracing::trace!(session_id, team_id, previous_leader_id = previous, player_id, "лидер удалённой группы изменён");
+        tracing::trace!(
+            session_id,
+            team_id,
+            previous_leader_id = previous,
+            player_id,
+            "лидер удалённой группы изменён"
+        );
         Some(())
     }
 
-    pub(crate) fn restore_remote_team(
-        &mut self,
-        mut snapshot: TeamSessionSnapshot,
-    ) -> Option<()> {
+    pub(crate) fn restore_remote_team(&mut self, mut snapshot: TeamSessionSnapshot) -> Option<()> {
         if self.get_team_session_id(snapshot.team_id) != 0 {
             return None;
         }
@@ -26619,59 +28907,57 @@ impl CGame {
                 player.set_team_membership(restored.team_id as i32);
                 player.set_team_captain(member.owner_id == leader_id);
                 self.publish_team_member_region(
-                        restored.team_id,
-                        member.owner_type,
-                        member.owner_id,
-                        member.owner_region_id,
-                        local_recipients
-                            .iter()
-                            .copied()
-                            .filter(|recipient| *recipient != member.owner_id),
-                    );
-                self.send_team_snapshot(
-                    member.owner_id,
-                    restored.insertion_snapshots.get(index)?,
-                );
-            }
-            self.publish_team_member_joined(
                     restored.team_id,
                     member.owner_type,
                     member.owner_id,
                     member.owner_region_id,
-                    &member.owner_name,
-                    self.player_team_hp_ratio_bits(member.owner_id),
                     local_recipients
                         .iter()
                         .copied()
                         .filter(|recipient| *recipient != member.owner_id),
                 );
+                self.send_team_snapshot(member.owner_id, restored.insertion_snapshots.get(index)?);
+            }
+            self.publish_team_member_joined(
+                restored.team_id,
+                member.owner_type,
+                member.owner_id,
+                member.owner_region_id,
+                &member.owner_name,
+                self.player_team_hp_ratio_bits(member.owner_id),
+                local_recipients
+                    .iter()
+                    .copied()
+                    .filter(|recipient| *recipient != member.owner_id),
+            );
             if source_local {
                 self.publish_world_team_member_joined(
-                        restored.team_id,
-                        member.owner_type,
-                        member.owner_id,
-                        member.owner_region_id,
-                        &member.owner_name,
-                    );
+                    restored.team_id,
+                    member.owner_type,
+                    member.owner_id,
+                    member.owner_region_id,
+                    &member.owner_name,
+                );
             }
         }
         tracing::trace!(session_id = restored.session_id, team_id = restored.team_id, affected_player_ids = ?restored.player_ids, "снимок удалённой группы восстановлен");
         Some(())
     }
 
-    pub(crate) fn answer_remote_team_online_query(
-        &self,
-        first: i32,
-        second: i32,
-        player_id: i32,
-    ) {
+    pub(crate) fn answer_remote_team_online_query(&self, first: i32, second: i32, player_id: i32) {
         let mut world = CMessage::new(0x0006_0009);
         world.add_long(first);
         world.add_long(second);
         world.add_long(player_id);
         world.add_long(i32::from(self.players.contains_key(&player_id)));
         let delivery = world.send(self, false);
-        tracing::trace!(first, second, player_id, ?delivery, "ответ о присутствии участника группы отправлен");
+        tracing::trace!(
+            first,
+            second,
+            player_id,
+            ?delivery,
+            "ответ о присутствии участника группы отправлен"
+        );
     }
 
     pub(crate) fn change_remote_team_allocation(
@@ -26694,16 +28980,33 @@ impl CGame {
             .filter(|id| self.players.contains_key(id))
         {
             let delivery = client.send_to_player(self.net_server(), recipient);
-            tracing::trace!(team_id, allocation_scheme, recipient, delivery, "удалённая схема распределения отправлена участнику группы");
+            tracing::trace!(
+                team_id,
+                allocation_scheme,
+                recipient,
+                delivery,
+                "удалённая схема распределения отправлена участнику группы"
+            );
         }
         if self.players.contains_key(&leader_id) {
             let mut world = CMessage::new(0x0006_000a);
             world.add_ulong(team_id);
             world.add_long(allocation_scheme);
             let delivery = world.send(self, false);
-            tracing::trace!(team_id, allocation_scheme, ?delivery, "удалённая схема распределения отправлена WorldServer");
+            tracing::trace!(
+                team_id,
+                allocation_scheme,
+                ?delivery,
+                "удалённая схема распределения отправлена WorldServer"
+            );
         }
-        tracing::trace!(session_id, team_id, leader_id, allocation_scheme, "удалённая схема распределения изменена");
+        tracing::trace!(
+            session_id,
+            team_id,
+            leader_id,
+            allocation_scheme,
+            "удалённая схема распределения изменена"
+        );
         Some(())
     }
 
@@ -26729,7 +29032,14 @@ impl CGame {
         add_legacy_c_string(client.base_mut(), text);
         for recipient in recipients {
             let delivery = client.send_to_player(self.net_server(), recipient);
-            tracing::trace!(team_id, owner_type, owner_id, recipient, delivery, "удалённое сообщение группы передано участнику");
+            tracing::trace!(
+                team_id,
+                owner_type,
+                owner_id,
+                recipient,
+                delivery,
+                "удалённое сообщение группы передано участнику"
+            );
         }
         if owner_type == 400 && self.players.contains_key(&owner_id) {
             let mut world = CMessage::new(0x0006_000b);
@@ -26738,9 +29048,22 @@ impl CGame {
             world.add_long(owner_id);
             add_legacy_c_string(world.base_mut(), text);
             let delivery = world.send(self, false);
-            tracing::trace!(team_id, owner_type, owner_id, ?delivery, "удалённое сообщение группы отправлено WorldServer");
+            tracing::trace!(
+                team_id,
+                owner_type,
+                owner_id,
+                ?delivery,
+                "удалённое сообщение группы отправлено WorldServer"
+            );
         }
-        tracing::trace!(session_id, team_id, owner_type, owner_id, text_len = text.len(), "удалённое сообщение группы передано");
+        tracing::trace!(
+            session_id,
+            team_id,
+            owner_type,
+            owner_id,
+            text_len = text.len(),
+            "удалённое сообщение группы передано"
+        );
         Some(())
     }
 
@@ -26766,7 +29089,14 @@ impl CGame {
         client.add_ulong(state.to_bits());
         for recipient in recipients {
             let delivery = client.send_to_player(self.net_server(), recipient);
-            tracing::trace!(team_id, owner_type, owner_id, recipient, delivery, "состояние участника группы передано локальному участнику");
+            tracing::trace!(
+                team_id,
+                owner_type,
+                owner_id,
+                recipient,
+                delivery,
+                "состояние участника группы передано локальному участнику"
+            );
         }
         if owner_type == 400 && self.players.contains_key(&owner_id) {
             let mut world = CMessage::new(0x0006_000c);
@@ -26775,9 +29105,22 @@ impl CGame {
             world.add_long(owner_id);
             world.add_ulong(state.to_bits());
             let delivery = world.send(self, false);
-            tracing::trace!(team_id, owner_type, owner_id, ?delivery, "состояние участника группы отправлено WorldServer");
+            tracing::trace!(
+                team_id,
+                owner_type,
+                owner_id,
+                ?delivery,
+                "состояние участника группы отправлено WorldServer"
+            );
         }
-        tracing::trace!(session_id, team_id, owner_type, owner_id, state_bits = state.to_bits(), "состояние участника группы передано");
+        tracing::trace!(
+            session_id,
+            team_id,
+            owner_type,
+            owner_id,
+            state_bits = state.to_bits(),
+            "состояние участника группы передано"
+        );
         Some(())
     }
 
@@ -26806,7 +29149,17 @@ impl CGame {
         let team = (team_id != 0)
             .then(|| self.relay_remote_team_state(team_id as u32, 400, player_id, health_ratio))
             .flatten();
-        tracing::trace!(player_id, health, mana, rp, yp, health_ratio_bits = health_ratio.to_bits(), player_delivery, ?team, "состояние игрока опубликовано");
+        tracing::trace!(
+            player_id,
+            health,
+            mana,
+            rp,
+            yp,
+            health_ratio_bits = health_ratio.to_bits(),
+            player_delivery,
+            ?team,
+            "состояние игрока опубликовано"
+        );
         Some(())
     }
 
@@ -26935,7 +29288,9 @@ impl CGame {
                         );
                     }
                     CurrencyDecreaseOutcome::NoChange
-                    | CurrencyDecreaseOutcome::InvalidStoredCurrency { .. } => unreachable!(),
+                    | CurrencyDecreaseOutcome::InvalidStoredCurrency { .. } => {
+                        unreachable!()
+                    }
                 }
                 let _ = message.send_to_player(self, change.player_id);
             }
@@ -27018,7 +29373,12 @@ impl CGame {
                 transfer.add_long(current_id);
                 transfer.add_ulong(current_amount);
                 let delivery = transfer.send(self, false);
-                tracing::trace!(region_id = current_id, amount = current_amount, ?delivery, "налог передан внешнему владельцу после обнаружения цикла");
+                tracing::trace!(
+                    region_id = current_id,
+                    amount = current_amount,
+                    ?delivery,
+                    "налог передан внешнему владельцу после обнаружения цикла"
+                );
                 continue;
             }
             let Some(stage) = self
@@ -27029,7 +29389,12 @@ impl CGame {
                 transfer.add_long(current_id);
                 transfer.add_ulong(current_amount);
                 let delivery = transfer.send(self, false);
-                tracing::trace!(region_id = current_id, amount = current_amount, ?delivery, "налог передан внешнему владельцу региона");
+                tracing::trace!(
+                    region_id = current_id,
+                    amount = current_amount,
+                    ?delivery,
+                    "налог передан внешнему владельцу региона"
+                );
                 continue;
             };
             updates.push(stage);
@@ -27044,7 +29409,12 @@ impl CGame {
                     transfer.add_long(parent_id);
                     transfer.add_ulong(stage.superior_share);
                     let delivery = transfer.send(self, false);
-                    tracing::trace!(region_id = parent_id, amount = stage.superior_share, ?delivery, "доля налога передана внешнему владельцу региона");
+                    tracing::trace!(
+                        region_id = parent_id,
+                        amount = stage.superior_share,
+                        ?delivery,
+                        "доля налога передана внешнему владельцу региона"
+                    );
                 }
             }
         }
@@ -27055,7 +29425,14 @@ impl CGame {
             update.add_ulong(stage.total_tax);
             update.add_long(stage.current_tax_rate);
             let delivery = update.send(self, false);
-            tracing::trace!(region_id = stage.region_id, today_total_tax = stage.today_total_tax, total_tax = stage.total_tax, current_tax_rate = stage.current_tax_rate, ?delivery, "изменение налога региона отправлено WorldServer");
+            tracing::trace!(
+                region_id = stage.region_id,
+                today_total_tax = stage.today_total_tax,
+                total_tax = stage.total_tax,
+                current_tax_rate = stage.current_tax_rate,
+                ?delivery,
+                "изменение налога региона отправлено WorldServer"
+            );
         }
     }
 
@@ -27124,11 +29501,7 @@ impl CGame {
         {
             return None;
         }
-        if self
-            .net_session_manager
-            .beging(created.id, 2_000)
-            .is_err()
-        {
+        if self.net_session_manager.beging(created.id, 2_000).is_err() {
             return None;
         }
         self.apply_region_tax_session_effects_no_result();
@@ -27278,8 +29651,18 @@ impl CGame {
                 | GameEffect::ClearPlayerEmotion { .. }
                 | GameEffect::SkillSocketReject { .. }
                 | GameEffect::QueuePlayerSkill { .. }
-                | GameEffect::QueueBattleFairySkill { .. } => {
-                    warn!("Эффект навыка попал в разделяемый налоговый журнал");
+                | GameEffect::QueueBattleFairySkill { .. }
+                | GameEffect::BattleFairyCombine(_)
+                | GameEffect::BattleFairySummon(_)
+                | GameEffect::BattleFairyFollow(_)
+                | GameEffect::PlayerEquipmentRemove(_)
+                | GameEffect::PlayerEquipmentAdd(_)
+                | GameEffect::BattleFairyEquipmentMutation(_)
+                | GameEffect::BattleFairyPotentialAllocation(_)
+                | GameEffect::BattleFairyUpgrade(_)
+                | GameEffect::BattleFairyPotentialReset(_)
+                | GameEffect::BattleFairySkillReset(_) => {
+                    warn!("Неналоговый эффект попал в разделяемый налоговый журнал");
                 }
             }
         }
@@ -27321,8 +29704,7 @@ impl CGame {
         if resulting_money >= 999_999_999 {
             return;
         }
-        let Some(()) = self.increase_player_money(player_id, amount, context)
-        else {
+        let Some(()) = self.increase_player_money(player_id, amount, context) else {
             return;
         };
         if self.find_player(player_id).map(CPlayer::money) != Some(resulting_money) {
@@ -27439,7 +29821,12 @@ impl CGame {
     /// исходное возвращаемое логическое значение всегда равно `false`.
     pub(crate) fn kick_player(&self, player_id: i32) {
         let command_result = self.net_server().command_handle().quit_by_map_id(player_id);
-        tracing::trace!(player_id, command_result, legacy_return = false, "поставлено отключение игрока");
+        tracing::trace!(
+            player_id,
+            command_result,
+            legacy_return = false,
+            "поставлено отключение игрока"
+        );
     }
 
     /// Exact `OnGMMessage 0x7FC09` recipient pass: requester остаётся,
@@ -27500,25 +29887,42 @@ impl CGame {
         };
         let target_player_id = player.player_id();
         let Some(server_region_id) = player.server_region_id() else {
-            tracing::debug!(target_player_id, "массовое отключение вокруг заблокировано: регион игрока отсутствует");
+            tracing::debug!(
+                target_player_id,
+                "массовое отключение вокруг заблокировано: регион игрока отсутствует"
+            );
             return GameKickAroundOutcome::Blocked;
         };
         let tile_x = match player.shape().get_tile_x() {
             Ok(tile_x) => tile_x,
             Err(block) => {
-                tracing::debug!(target_player_id, server_region_id, ?block, "массовое отключение вокруг заблокировано координатой X");
+                tracing::debug!(
+                    target_player_id,
+                    server_region_id,
+                    ?block,
+                    "массовое отключение вокруг заблокировано координатой X"
+                );
                 return GameKickAroundOutcome::Blocked;
             }
         };
         let tile_y = match player.shape().get_tile_y() {
             Ok(tile_y) => tile_y,
             Err(block) => {
-                tracing::debug!(target_player_id, server_region_id, ?block, "массовое отключение вокруг заблокировано координатой Y");
+                tracing::debug!(
+                    target_player_id,
+                    server_region_id,
+                    ?block,
+                    "массовое отключение вокруг заблокировано координатой Y"
+                );
                 return GameKickAroundOutcome::Blocked;
             }
         };
         let Some(region) = self.regions.get(&server_region_id) else {
-            tracing::debug!(target_player_id, server_region_id, "массовое отключение вокруг заблокировано: владелец региона отсутствует");
+            tracing::debug!(
+                target_player_id,
+                server_region_id,
+                "массовое отключение вокруг заблокировано: владелец региона отсутствует"
+            );
             return GameKickAroundOutcome::Blocked;
         };
         let region = region.base();
@@ -27527,7 +29931,12 @@ impl CGame {
             .into_iter()
             .find(|identity| self.resolve_shape(*identity).is_none())
         {
-            tracing::warn!(target_player_id, server_region_id, ?identity, "массовое отключение вокруг заблокировано неразрешённой формой");
+            tracing::warn!(
+                target_player_id,
+                server_region_id,
+                ?identity,
+                "массовое отключение вокруг заблокировано неразрешённой формой"
+            );
             return GameKickAroundOutcome::Blocked;
         }
         let window_x = gm_kick_window_origin(tile_x, region.region.width);
@@ -27543,7 +29952,15 @@ impl CGame {
                 let shape = match region.get_shape(scan_x, scan_y, area_width, area_height, self) {
                     Ok(shape) => shape,
                     Err(block) => {
-                        tracing::debug!(target_player_id, server_region_id, window_x, window_y, ?block, matched_players = matched_player_ids.len(), "массовое отключение вокруг заблокировано пространственным поиском");
+                        tracing::debug!(
+                            target_player_id,
+                            server_region_id,
+                            window_x,
+                            window_y,
+                            ?block,
+                            matched_players = matched_player_ids.len(),
+                            "массовое отключение вокруг заблокировано пространственным поиском"
+                        );
                         return GameKickAroundOutcome::Blocked;
                     }
                 };
@@ -27911,7 +30328,14 @@ impl CGame {
             placed_amount += 1;
             tracing::trace!(player_id, region_id, goods_id = identity.id, goods_ex_id = ?identity.ex_id, player_delivery, ?around_delivery, "сценарный товар размещён в регионе");
         }
-        tracing::trace!(player_id, region_id, requested = amount, created = created_amount, placed = placed_amount, "сценарное выпадение товаров завершено");
+        tracing::trace!(
+            player_id,
+            region_id,
+            requested = amount,
+            created = created_amount,
+            placed = placed_amount,
+            "сценарное выпадение товаров завершено"
+        );
     }
 
     /// Точная сценарная функция `3306 / DeleteMonster` не запускает владельца
@@ -27987,7 +30411,12 @@ impl CGame {
                 .find_monster_by_id_mut(monster_id)
                 .expect("rectangle snapshot сохраняет owned monster")
                 .stage_for_delete();
-            tracing::trace!(region_id, monster_id, delivery, "сценарный монстр удалён из прямоугольника");
+            tracing::trace!(
+                region_id,
+                monster_id,
+                delivery,
+                "сценарный монстр удалён из прямоугольника"
+            );
         }
         self.restore_region_owner(owner);
     }
@@ -28032,12 +30461,7 @@ impl CGame {
     /// имени в девяти областях игрока, затем каждый монстр независимо
     /// фильтрует получателей по строгому
     /// `abs(dx/dy) < AREA_WIDTH/HEIGHT` и отправляет `0xBF801`.
-    pub(crate) fn script_monsters_talk(
-        &mut self,
-        player_id: i32,
-        name: &[u8],
-        text: &[u8],
-    ) {
+    pub(crate) fn script_monsters_talk(&mut self, player_id: i32, name: &[u8], text: &[u8]) {
         let Some((region_id, player_area_index)) = self
             .find_player(player_id)
             .and_then(|player| Some((player.server_region_id()?, player.shape().area_index()?)))
@@ -28096,7 +30520,13 @@ impl CGame {
                         && i64::from(target_y).abs_diff(i64::from(tile_y)) < area_height as u64
                     {
                         let delivery = message.send_to_player(self.net_server(), target_id);
-                        tracing::trace!(player_id, monster_id, target_id, delivery, "реплика сценарного монстра отправлена игроку");
+                        tracing::trace!(
+                            player_id,
+                            monster_id,
+                            target_id,
+                            delivery,
+                            "реплика сценарного монстра отправлена игроку"
+                        );
                     }
                 }
             }
@@ -28277,14 +30707,22 @@ impl CGame {
                 self.get_string_by_id(notification.string_id().as_bytes()),
             )
             .send_to_player(self.net_server(), player_id);
-            tracing::trace!(player_id, delivery, "уведомление проверки соединения боевой феи отправлено");
+            tracing::trace!(
+                player_id,
+                delivery,
+                "уведомление проверки соединения боевой феи отправлено"
+            );
         }
         if let Some(availability) = check.availability {
             let mut message = CMessage::new(availability.message_type as i32);
             message.add_ulong(availability.deplete_fetch);
             message.add_ulong(availability.truncated_success_rate);
             let delivery = message.send_to_player(self.net_server(), player_id);
-            tracing::trace!(player_id, delivery, "доступность соединения боевой феи отправлена");
+            tracing::trace!(
+                player_id,
+                delivery,
+                "доступность соединения боевой феи отправлена"
+            );
         }
         tracing::trace!(player_id, ?check.result, "проверка соединения боевой феи завершена");
     }
@@ -28328,7 +30766,7 @@ impl CGame {
                 |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
             )
         };
-        let report = {
+        let mut report = {
             let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.combine_battle_fairy(
                 battle_fairy_enabled,
@@ -28341,7 +30779,11 @@ impl CGame {
                 &mut encode_old_client,
             )
         };
-        for effect in report.effects.clone() {
+        for effect in report.effects.take_all() {
+            let GameEffect::BattleFairyCombine(effect) = effect else {
+                tracing::error!("журнал соединения боевой феи содержит чужой эффект");
+                continue;
+            };
             match effect {
                 BattleFairyCombineEffect::Notification {
                     player_id,
@@ -28354,7 +30796,11 @@ impl CGame {
                         self.get_string_by_id(string_id.as_bytes()),
                     )
                     .send_to_player(self.net_server(), player_id);
-                    tracing::trace!(player_id, delivery, "уведомление соединения боевой феи отправлено");
+                    tracing::trace!(
+                        player_id,
+                        delivery,
+                        "уведомление соединения боевой феи отправлено"
+                    );
                 }
                 BattleFairyCombineEffect::FetchPowerChanged {
                     message_type,
@@ -28373,7 +30819,11 @@ impl CGame {
                 }
                 BattleFairyCombineEffect::ObjectMove(object_move) => {
                     let delivery = self.send_battle_fairy_container_object_move(&object_move);
-                    tracing::trace!(player_id, delivery, "перемещение предмета соединения боевой феи отправлено");
+                    tracing::trace!(
+                        player_id,
+                        delivery,
+                        "перемещение предмета соединения боевой феи отправлено"
+                    );
                 }
                 BattleFairyCombineEffect::SkillAdded(skill) => {
                     if let Some(message) = player_skill_learned_message(
@@ -28386,12 +30836,20 @@ impl CGame {
                         false,
                     ) {
                         let delivery = message.send_to_player(self.net_server(), skill.player_id);
-                        tracing::trace!(player_id = skill.player_id, delivery, "навык соединённой боевой феи отправлен");
+                        tracing::trace!(
+                            player_id = skill.player_id,
+                            delivery,
+                            "навык соединённой боевой феи отправлен"
+                        );
                     }
                 }
                 BattleFairyCombineEffect::GoodsUpdated(update) => {
                     let delivery = self.send_battle_fairy_goods_update(&update);
-                    tracing::trace!(player_id = update.player_id, delivery, "предмет соединённой боевой феи обновлён");
+                    tracing::trace!(
+                        player_id = update.player_id,
+                        delivery,
+                        "предмет соединённой боевой феи обновлён"
+                    );
                 }
                 BattleFairyCombineEffect::Audit(audit) => {
                     let template = self.get_string_by_id(audit.string_id.as_bytes());
@@ -28454,11 +30912,7 @@ impl CGame {
     /// Player сохраняет порядок guards и broadcast effects, а region map
     /// меняется здесь, потому что `CGame` — первый живой owner обоих runtime
     /// объектов. Around transport использует те же owned session и area maps.
-    pub(crate) fn summon_battle_fairy(
-        &mut self,
-        player_id: i32,
-        mode: i32,
-    ) -> Option<()> {
+    pub(crate) fn summon_battle_fairy(&mut self, player_id: i32, mode: i32) -> Option<()> {
         let battle_fairy_enabled = self.globe_setup.battle_fairy_enabled();
         let mut report = {
             let player = self.players.get_mut(&player_id)?;
@@ -28478,13 +30932,12 @@ impl CGame {
                         .delete_war_soul(player_id as u32, previous),
                 }
             });
-            report.spatial_applied = spatial_applied;
             if let Some(player) = self.players.get_mut(&player_id) {
                 player.apply_war_soul_action(action, spatial_applied);
             }
         }
         self.deliver_battle_fairy_summon_effects(&mut report);
-        tracing::debug!(player_id, mode, ?report.outcome, spatial_applied = report.spatial_applied, "призыв боевой феи обработан");
+        tracing::debug!(player_id, mode, ?report.outcome, "призыв боевой феи обработан");
         Some(())
     }
 
@@ -28512,8 +30965,12 @@ impl CGame {
         Some((property_delivery, tao_zhuang_ran))
     }
 
-    fn deliver_battle_fairy_summon_effects(&mut self, report: &BattleFairySummonReport) {
-        for effect in report.effects.clone() {
+    fn deliver_battle_fairy_summon_effects(&mut self, report: &mut BattleFairySummonReport) {
+        for effect in report.effects.take_all() {
+            let GameEffect::BattleFairySummon(effect) = effect else {
+                tracing::error!("журнал призыва боевой феи содержит чужой эффект");
+                continue;
+            };
             match effect {
                 BattleFairySummonEffect::Notification {
                     player_id,
@@ -28523,7 +30980,11 @@ impl CGame {
                     let text = self.get_string_by_id(string_id.as_bytes());
                     let delivery = colored_player_notice_message(color, 0, text)
                         .send_to_player(self.net_server(), player_id);
-                    tracing::trace!(player_id, delivery, "уведомление призыва боевой феи отправлено");
+                    tracing::trace!(
+                        player_id,
+                        delivery,
+                        "уведомление призыва боевой феи отправлено"
+                    );
                 }
                 BattleFairySummonEffect::AroundMessage {
                     message_type,
@@ -28557,12 +31018,20 @@ impl CGame {
                             delivery
                         })
                         .flatten();
-                    tracing::trace!(player_id, ?delivery, "состояние призыва боевой феи отправлено окружению");
+                    tracing::trace!(
+                        player_id,
+                        ?delivery,
+                        "состояние призыва боевой феи отправлено окружению"
+                    );
                 }
                 BattleFairySummonEffect::PropertiesChanged { player_id } => {
                     if let Some(player) = self.find_player(player_id) {
                         let delivery = self.send_player_properties_changed(player);
-                        tracing::trace!(player_id, delivery, "свойства после призыва боевой феи отправлены");
+                        tracing::trace!(
+                            player_id,
+                            delivery,
+                            "свойства после призыва боевой феи отправлены"
+                        );
                     }
                 }
             }
@@ -28624,14 +31093,23 @@ impl CGame {
     }
 
     fn publish_player_equipment_remove_report(&self, report: &mut PlayerEquipmentRemoveReport) {
-        for effect in report.effects.clone() {
+        for effect in report.effects.take_all() {
+            let GameEffect::PlayerEquipmentRemove(effect) = effect else {
+                tracing::error!("журнал снятия экипировки содержит чужой эффект");
+                continue;
+            };
             match effect {
                 PlayerEquipmentRemoveEffect::WarSoulSkillDetached { .. } => {}
                 PlayerEquipmentRemoveEffect::SkillRemoved(skill) => {
                     let mut message = CMessage::new(skill.message_type as i32);
                     add_legacy_c_string(message.base_mut(), &skill.skill_name);
                     let delivery = message.send_to_player(self.net_server(), skill.player_id);
-                    tracing::trace!(player_id = skill.player_id, skill_id = skill.skill_id, delivery, "удаление навыка экипировки отправлено игроку");
+                    tracing::trace!(
+                        player_id = skill.player_id,
+                        skill_id = skill.skill_id,
+                        delivery,
+                        "удаление навыка экипировки отправлено игроку"
+                    );
                 }
                 PlayerEquipmentRemoveEffect::WarSoulStatusAround {
                     message_type,
@@ -28642,19 +31120,31 @@ impl CGame {
                     message.add_long(values[0]);
                     message.add_long(values[1]);
                     let deliveries = self.send_player_equipment_around(player_id, None, &message);
-                    tracing::trace!(player_id, ?deliveries, "изменение статуса боевой феи опубликовано вокруг игрока");
+                    tracing::trace!(
+                        player_id,
+                        ?deliveries,
+                        "изменение статуса боевой феи опубликовано вокруг игрока"
+                    );
                 }
                 PlayerEquipmentRemoveEffect::PropertiesChangedWithoutRemovedSlot { .. } => {
                     let deliveries = self
                         .find_player(report.player_id)
                         .map(|player| vec![self.send_player_properties_changed(player)])
                         .unwrap_or_default();
-                    tracing::trace!(player_id = report.player_id, ?deliveries, "изменение свойств после снятия экипировки отправлено");
+                    tracing::trace!(
+                        player_id = report.player_id,
+                        ?deliveries,
+                        "изменение свойств после снятия экипировки отправлено"
+                    );
                 }
                 PlayerEquipmentRemoveEffect::VitalsClamped { .. } => {}
                 PlayerEquipmentRemoveEffect::AroundUpdate(update) => {
                     let deliveries = self.send_player_equipment_update(update);
-                    tracing::trace!(player_id = report.player_id, ?deliveries, "снятие экипировки опубликовано вокруг игрока");
+                    tracing::trace!(
+                        player_id = report.player_id,
+                        ?deliveries,
+                        "снятие экипировки опубликовано вокруг игрока"
+                    );
                 }
             }
         }
@@ -28692,7 +31182,11 @@ impl CGame {
     }
 
     fn publish_player_equipment_add_report(&self, report: &mut PlayerEquipmentAddReport) {
-        for effect in report.effects.clone() {
+        for effect in report.effects.take_all() {
+            let GameEffect::PlayerEquipmentAdd(effect) = effect else {
+                tracing::error!("журнал надевания экипировки содержит чужой эффект");
+                continue;
+            };
             match effect {
                 PlayerEquipmentAddEffect::WarSoulSkillAttached { .. } => {}
                 PlayerEquipmentAddEffect::SkillAdded(skill) => {
@@ -28706,7 +31200,12 @@ impl CGame {
                         true,
                     ) {
                         let delivery = message.send_to_player(self.net_server(), skill.player_id);
-                        tracing::trace!(player_id = skill.player_id, skill_id = skill.skill_id, delivery, "добавление навыка экипировки отправлено игроку");
+                        tracing::trace!(
+                            player_id = skill.player_id,
+                            skill_id = skill.skill_id,
+                            delivery,
+                            "добавление навыка экипировки отправлено игроку"
+                        );
                     }
                 }
                 PlayerEquipmentAddEffect::PropertiesChanged { .. } => {
@@ -28714,11 +31213,19 @@ impl CGame {
                         .find_player(report.player_id)
                         .map(|player| vec![self.send_player_properties_changed(player)])
                         .unwrap_or_default();
-                    tracing::trace!(player_id = report.player_id, ?deliveries, "изменение свойств после надевания экипировки отправлено");
+                    tracing::trace!(
+                        player_id = report.player_id,
+                        ?deliveries,
+                        "изменение свойств после надевания экипировки отправлено"
+                    );
                 }
                 PlayerEquipmentAddEffect::AroundUpdate(update) => {
                     let deliveries = self.send_player_equipment_update(update);
-                    tracing::trace!(player_id = report.player_id, ?deliveries, "надевание экипировки опубликовано вокруг игрока");
+                    tracing::trace!(
+                        player_id = report.player_id,
+                        ?deliveries,
+                        "надевание экипировки опубликовано вокруг игрока"
+                    );
                 }
                 PlayerEquipmentAddEffect::PackageExtensionLogged {
                     category,
@@ -28798,7 +31305,7 @@ impl CGame {
 
     fn deliver_battle_fairy_equipment_effects(
         &self,
-        report: &BattleFairyEquipmentMutationReport,
+        report: &mut BattleFairyEquipmentMutationReport,
     ) {
         let player = self.find_player(report.player_id);
         self.deliver_battle_fairy_equipment_effects_for_player(player, report);
@@ -28807,19 +31314,31 @@ impl CGame {
     fn deliver_battle_fairy_equipment_effects_for_player(
         &self,
         player: Option<&CPlayer>,
-        report: &BattleFairyEquipmentMutationReport,
+        report: &mut BattleFairyEquipmentMutationReport,
     ) {
-        for effect in report.effects.clone() {
+        for effect in report.effects.take_all() {
+            let GameEffect::BattleFairyEquipmentMutation(effect) = effect else {
+                tracing::error!("журнал экипировки боевой феи содержит чужой эффект");
+                continue;
+            };
             match effect {
                 BattleFairyEquipmentMutationEffect::PropertiesChanged { player_id } => {
                     if let Some(player) = player.filter(|player| player.player_id() == player_id) {
                         let delivery = self.send_player_properties_changed(player);
-                        tracing::trace!(player_id, delivery, "изменение свойств боевой феи отправлено игроку");
+                        tracing::trace!(
+                            player_id,
+                            delivery,
+                            "изменение свойств боевой феи отправлено игроку"
+                        );
                     }
                 }
                 BattleFairyEquipmentMutationEffect::BattleFairyUpdated(update) => {
                     let delivery = self.send_battle_fairy_goods_update(&update);
-                    tracing::trace!(player_id = update.player_id, delivery, "изменение экипировки боевой феи отправлено игроку");
+                    tracing::trace!(
+                        player_id = update.player_id,
+                        delivery,
+                        "изменение экипировки боевой феи отправлено игроку"
+                    );
                 }
             }
         }
@@ -28847,7 +31366,7 @@ impl CGame {
     ) -> Option<()> {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let coefficients = self.globe_setup.player_property_coefficients();
-        let report = {
+        let mut report = {
             let player = self.players.get_mut(&player_id)?;
             let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.allocate_battle_fairy_potential(
@@ -28858,7 +31377,11 @@ impl CGame {
                 &mut encode_old_client,
             )
         };
-        for effect in report.effects.clone() {
+        for effect in report.effects.take_all() {
+            let GameEffect::BattleFairyPotentialAllocation(effect) = effect else {
+                tracing::error!("журнал потенциала боевой феи содержит чужой эффект");
+                continue;
+            };
             match effect {
                 BattleFairyPotentialAllocationEffect::Notification {
                     player_id,
@@ -28871,21 +31394,33 @@ impl CGame {
                         self.get_string_by_id(string_id.as_bytes()),
                     )
                     .send_to_player(self.net_server(), player_id);
-                    tracing::trace!(player_id, delivery, "уведомление распределения потенциала боевой феи отправлено");
+                    tracing::trace!(
+                        player_id,
+                        delivery,
+                        "уведомление распределения потенциала боевой феи отправлено"
+                    );
                 }
                 BattleFairyPotentialAllocationEffect::PropertiesChanged { player_id } => {
                     if let Some(player) = self.find_player(player_id) {
                         let delivery = self.send_player_properties_changed(player);
-                        tracing::trace!(player_id, delivery, "свойства после распределения потенциала боевой феи отправлены");
+                        tracing::trace!(
+                            player_id,
+                            delivery,
+                            "свойства после распределения потенциала боевой феи отправлены"
+                        );
                     }
                 }
                 BattleFairyPotentialAllocationEffect::GoodsUpdated(update) => {
                     let delivery = self.send_battle_fairy_goods_update(&update);
-                    tracing::trace!(player_id = update.player_id, delivery, "предмет после распределения потенциала боевой феи обновлён");
+                    tracing::trace!(
+                        player_id = update.player_id,
+                        delivery,
+                        "предмет после распределения потенциала боевой феи обновлён"
+                    );
                 }
             }
         }
-        tracing::debug!(player_id, ?report.outcome, aggregate_client_points = report.aggregate_client_points, processed = report.processed_properties.len(), "потенциал боевой феи распределён");
+        tracing::debug!(player_id, ?report.outcome, "потенциал боевой феи распределён");
         Some(())
     }
 
@@ -28902,7 +31437,7 @@ impl CGame {
             failure: self.log_system.goods_upgrade_failure_enabled(),
             lost_target: self.log_system.goods_lost_by_upgrade_enabled(),
         };
-        let report = {
+        let mut report = {
             let (players, random_state, goods_factory) = (
                 &mut self.players,
                 &mut self.random_state,
@@ -28918,7 +31453,11 @@ impl CGame {
                 &mut encode_old_client,
             )
         };
-        for effect in report.effects.clone() {
+        for effect in report.effects.take_all() {
+            let GameEffect::BattleFairyUpgrade(effect) = effect else {
+                tracing::error!("журнал улучшения боевой феи содержит чужой эффект");
+                continue;
+            };
             match effect {
                 BattleFairyUpgradeEffect::Notification {
                     player_id,
@@ -28933,30 +31472,50 @@ impl CGame {
                     );
                     let delivery = colored_player_notice_message(color, 0, &text)
                         .send_to_player(self.net_server(), player_id);
-                    tracing::trace!(player_id, delivery, "уведомление улучшения боевой феи отправлено");
+                    tracing::trace!(
+                        player_id,
+                        delivery,
+                        "уведомление улучшения боевой феи отправлено"
+                    );
                 }
                 BattleFairyUpgradeEffect::MoneyChanged {
                     player_id, outcome, ..
                 } => {
                     let deliveries = self.send_player_money_decrease(player_id, &outcome);
-                    tracing::trace!(player_id, ?deliveries, "уменьшение денег за улучшение боевой феи отправлено");
+                    tracing::trace!(
+                        player_id,
+                        ?deliveries,
+                        "уменьшение денег за улучшение боевой феи отправлено"
+                    );
                 }
                 BattleFairyUpgradeEffect::GoodsUpdated(update) => {
                     let delivery = self.send_battle_fairy_goods_update(&update);
-                    tracing::trace!(player_id = update.player_id, delivery, "улучшенный предмет боевой феи обновлён");
+                    tracing::trace!(
+                        player_id = update.player_id,
+                        delivery,
+                        "улучшенный предмет боевой феи обновлён"
+                    );
                 }
                 effect @ (BattleFairyUpgradeEffect::GemConsumed { .. }
                 | BattleFairyUpgradeEffect::TargetDeleted { .. }) => {
                     let deliveries = self.send_battle_fairy_upgrade_container(&effect);
-                    tracing::trace!(player_id, ?deliveries, "контейнерный эффект улучшения боевой феи отправлен");
+                    tracing::trace!(
+                        player_id,
+                        ?deliveries,
+                        "контейнерный эффект улучшения боевой феи отправлен"
+                    );
                 }
                 effect @ BattleFairyUpgradeEffect::Audit { .. } => {
                     let deliveries = self.send_battle_fairy_upgrade_audit(&effect);
-                    tracing::trace!(player_id, ?deliveries, "аудит улучшения боевой феи отправлен");
+                    tracing::trace!(
+                        player_id,
+                        ?deliveries,
+                        "аудит улучшения боевой феи отправлен"
+                    );
                 }
             }
         }
-        tracing::debug!(player_id, ?report.outcome, price = report.price, probability = report.probability, ?report.previous_level, ?report.resulting_level, consumed_gems = report.consumed_gems.len(), "улучшение боевой феи завершено");
+        tracing::debug!(player_id, ?report.outcome, "улучшение боевой феи завершено");
         Some(())
     }
 
@@ -29071,7 +31630,13 @@ impl CGame {
             self.send_player_money_increase(player_id, &outcome, context);
         }
         let current = self.find_player(player_id)?.money();
-        tracing::trace!(player_id, fee, previous, current, "плата за заявку войны применена");
+        tracing::trace!(
+            player_id,
+            fee,
+            previous,
+            current,
+            "плата за заявку войны применена"
+        );
         Some(())
     }
 
@@ -29104,12 +31669,14 @@ impl CGame {
                 goods,
                 position,
                 ..
-            } => vec![self.send_battle_fairy_upgrade_delete_for_player(
-                *player_id,
-                goods.identity,
-                *position,
-                goods.amount,
-            )],
+            } => {
+                vec![self.send_battle_fairy_upgrade_delete_for_player(
+                    *player_id,
+                    goods.identity,
+                    *position,
+                    goods.amount,
+                )]
+            }
             _ => Vec::new(),
         }
     }
@@ -29217,7 +31784,7 @@ impl CGame {
         context: &mut Context,
     ) -> Option<()> {
         let enabled = self.globe_setup.battle_fairy_enabled();
-        let report = {
+        let mut report = {
             let player = self.players.get_mut(&player_id)?;
             let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.reset_battle_fairy_potential(
@@ -29226,7 +31793,11 @@ impl CGame {
                 &mut encode_old_client,
             )
         };
-        for effect in report.effects.clone() {
+        for effect in report.effects.take_all() {
+            let GameEffect::BattleFairyPotentialReset(effect) = effect else {
+                tracing::error!("журнал сброса потенциала боевой феи содержит чужой эффект");
+                continue;
+            };
             match effect {
                 BattleFairyPotentialResetEffect::Notification {
                     player_id,
@@ -29239,25 +31810,41 @@ impl CGame {
                         self.get_string_by_id(string_id.as_bytes()),
                     )
                     .send_to_player(self.net_server(), player_id);
-                    tracing::trace!(player_id, delivery, "уведомление сброса потенциала боевой феи отправлено");
+                    tracing::trace!(
+                        player_id,
+                        delivery,
+                        "уведомление сброса потенциала боевой феи отправлено"
+                    );
                 }
                 effect @ BattleFairyPotentialResetEffect::PacketItemConsumed { .. } => {
                     let deliveries = self.send_battle_fairy_packet_consumption(&effect);
-                    tracing::trace!(player_id, ?deliveries, "расход предмета сброса потенциала боевой феи отправлен");
+                    tracing::trace!(
+                        player_id,
+                        ?deliveries,
+                        "расход предмета сброса потенциала боевой феи отправлен"
+                    );
                 }
                 BattleFairyPotentialResetEffect::PropertiesChanged { player_id } => {
                     if let Some(player) = self.find_player(player_id) {
                         let delivery = self.send_player_properties_changed(player);
-                        tracing::trace!(player_id, delivery, "свойства после сброса потенциала боевой феи отправлены");
+                        tracing::trace!(
+                            player_id,
+                            delivery,
+                            "свойства после сброса потенциала боевой феи отправлены"
+                        );
                     }
                 }
                 BattleFairyPotentialResetEffect::GoodsUpdated(update) => {
                     let delivery = self.send_battle_fairy_goods_update(&update);
-                    tracing::trace!(player_id = update.player_id, delivery, "предмет после сброса потенциала боевой феи обновлён");
+                    tracing::trace!(
+                        player_id = update.player_id,
+                        delivery,
+                        "предмет после сброса потенциала боевой феи обновлён"
+                    );
                 }
             }
         }
-        tracing::debug!(player_id, ?report.outcome, recovered_potential = report.recovered_potential, "потенциал боевой феи сброшен");
+        tracing::debug!(player_id, ?report.outcome, "потенциал боевой феи сброшен");
         Some(())
     }
 
@@ -29275,7 +31862,7 @@ impl CGame {
         Context: BattleFairySkillResetContext + OldClientGoodsCodec,
     {
         let enabled = self.globe_setup.battle_fairy_enabled();
-        let report = {
+        let mut report = {
             let (players, random_state, goods_factory, skill_factory) = (
                 &mut self.players,
                 &mut self.random_state,
@@ -29295,7 +31882,11 @@ impl CGame {
                 &mut encode_old_client,
             )
         };
-        for effect in report.effects.clone() {
+        for effect in report.effects.take_all() {
+            let GameEffect::BattleFairySkillReset(effect) = effect else {
+                tracing::error!("журнал сброса навыка боевой феи содержит чужой эффект");
+                continue;
+            };
             match effect {
                 BattleFairySkillResetEffect::Notification {
                     player_id,
@@ -29308,18 +31899,31 @@ impl CGame {
                         self.get_string_by_id(string_id.as_bytes()),
                     )
                     .send_to_player(self.net_server(), player_id);
-                    tracing::trace!(player_id, delivery, "уведомление сброса навыка боевой феи отправлено");
+                    tracing::trace!(
+                        player_id,
+                        delivery,
+                        "уведомление сброса навыка боевой феи отправлено"
+                    );
                 }
                 effect @ BattleFairySkillResetEffect::PacketItemConsumed { .. } => {
                     let deliveries =
                         context.publish_battle_fairy_skill_reset_packet_consumption(&effect);
-                    tracing::trace!(player_id, ?deliveries, "расход предмета сброса навыка боевой феи опубликован");
+                    tracing::trace!(
+                        player_id,
+                        ?deliveries,
+                        "расход предмета сброса навыка боевой феи опубликован"
+                    );
                 }
                 BattleFairySkillResetEffect::SkillRemoved(skill) => {
                     let mut message = CMessage::new(skill.message_type as i32);
                     add_legacy_c_string(message.base_mut(), &skill.skill_name);
                     let delivery = message.send_to_player(self.net_server(), skill.player_id);
-                    tracing::trace!(player_id = skill.player_id, skill_id = skill.skill_id, delivery, "удаление навыка боевой феи отправлено");
+                    tracing::trace!(
+                        player_id = skill.player_id,
+                        skill_id = skill.skill_id,
+                        delivery,
+                        "удаление навыка боевой феи отправлено"
+                    );
                 }
                 BattleFairySkillResetEffect::SkillAdded(skill) => {
                     if let Some(message) = player_skill_learned_message(
@@ -29332,7 +31936,12 @@ impl CGame {
                         true,
                     ) {
                         let delivery = message.send_to_player(self.net_server(), skill.player_id);
-                        tracing::trace!(player_id = skill.player_id, skill_id = skill.skill_id, delivery, "возвращённый навык боевой феи отправлен");
+                        tracing::trace!(
+                            player_id = skill.player_id,
+                            skill_id = skill.skill_id,
+                            delivery,
+                            "возвращённый навык боевой феи отправлен"
+                        );
                     }
                 }
                 BattleFairySkillResetEffect::SelectedSkillLearned(skill) => {
@@ -29346,12 +31955,21 @@ impl CGame {
                         false,
                     ) {
                         let delivery = message.send_to_player(self.net_server(), skill.player_id);
-                        tracing::trace!(player_id = skill.player_id, skill_id = skill.skill_id, delivery, "выбранный навык боевой феи отправлен");
+                        tracing::trace!(
+                            player_id = skill.player_id,
+                            skill_id = skill.skill_id,
+                            delivery,
+                            "выбранный навык боевой феи отправлен"
+                        );
                     }
                 }
                 BattleFairySkillResetEffect::GoodsUpdated(update) => {
                     let delivery = self.send_battle_fairy_goods_update(&update);
-                    tracing::trace!(player_id = update.player_id, delivery, "предмет после сброса навыка боевой феи обновлён");
+                    tracing::trace!(
+                        player_id = update.player_id,
+                        delivery,
+                        "предмет после сброса навыка боевой феи обновлён"
+                    );
                 }
             }
         }
@@ -29381,10 +31999,7 @@ impl CGame {
     /// Завершающий player/equipment участок `0x8FC29` после script mutation.
     /// Safe owner перечитывает equipped headgear вместо удержания native raw
     /// pointer через произвольный script callback.
-    pub(crate) fn attach_battle_fairy_script_skills(
-        &mut self,
-        player_id: i32,
-    ) {
+    pub(crate) fn attach_battle_fairy_script_skills(&mut self, player_id: i32) {
         let skills = self
             .players
             .get_mut(&player_id)
@@ -29402,10 +32017,19 @@ impl CGame {
                 true,
             ) {
                 let delivery = message.send_to_player(self.net_server(), skill.player_id);
-                tracing::trace!(player_id = skill.player_id, skill_id = skill.skill_id, delivery, "сценарный навык боевой феи отправлен игроку");
+                tracing::trace!(
+                    player_id = skill.player_id,
+                    skill_id = skill.skill_id,
+                    delivery,
+                    "сценарный навык боевой феи отправлен игроку"
+                );
             }
         }
-        tracing::debug!(player_id, skill_count = skills.len(), "сценарные навыки боевой феи подключены");
+        tracing::debug!(
+            player_id,
+            skill_count = skills.len(),
+            "сценарные навыки боевой феи подключены"
+        );
     }
 
     /// Script `2249 / FairyExpUp`: enhancement хранит только shadow, поэтому
@@ -29973,12 +32597,13 @@ impl CGame {
                         return 0;
                     }
                     let _ = goods.save_battle_fairy_property(factory);
-                    let update = crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
-                        message_type: 0x0b_f918,
-                        player_id: target_player_id,
-                        goods: goods.identity(),
-                        old_client_payload: context.encode_goods_for_old_client(goods),
-                    };
+                    let update =
+                        crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
+                            message_type: 0x0b_f918,
+                            player_id: target_player_id,
+                            goods: goods.identity(),
+                            old_client_payload: context.encode_goods_for_old_client(goods),
+                        };
                     (report, update)
                 };
                 for log in report_and_update.0.level_logs {
@@ -30053,12 +32678,9 @@ impl CGame {
         request: PlayerSkillRequest,
         facts: PlayerSkillRequestFacts,
     ) -> Option<()> {
-        let journal = self
-            .players
-            .get_mut(&player_id)
-            .map(|player| {
-                player.request_player_skill(socket_id, request, facts, &self.skill_factory)
-            })?;
+        let journal = self.players.get_mut(&player_id).map(|player| {
+            player.request_player_skill(socket_id, request, facts, &self.skill_factory)
+        })?;
         self.apply_skill_effect_journal(journal);
         Some(())
     }
@@ -30072,13 +32694,7 @@ impl CGame {
         facts: PlayerSkillRequestFacts,
     ) -> Option<()> {
         let journal = self.players.get_mut(&player_id).map(|player| {
-            player.request_item_skill(
-                socket_id,
-                request,
-                skill_level,
-                facts,
-                &self.skill_factory,
-            )
+            player.request_item_skill(socket_id, request, skill_level, facts, &self.skill_factory)
         })?;
         self.apply_skill_effect_journal(journal);
         Some(())
@@ -30099,7 +32715,10 @@ impl CGame {
                         self.get_string_by_id(string_id.as_bytes()),
                     )
                     .send_to_player(self.net_server(), player_id);
-                    trace!(player_id, string_id, delivery, "Отправлено уведомление навыка");
+                    trace!(
+                        player_id,
+                        string_id, delivery, "Отправлено уведомление навыка"
+                    );
                 }
                 GameEffect::ClearPlayerEmotion {
                     player_id,
@@ -30123,7 +32742,12 @@ impl CGame {
                             self.restore_region_owner(owner);
                             delivery
                         });
-                    trace!(player_id, ?region_id, ?delivery, "Очищена эмоция перед навыком");
+                    trace!(
+                        player_id,
+                        ?region_id,
+                        ?delivery,
+                        "Очищена эмоция перед навыком"
+                    );
                 }
                 GameEffect::SkillSocketReject {
                     socket_id,
@@ -30135,7 +32759,10 @@ impl CGame {
                     message.base_mut().add_byte(reason as u8);
                     message.base_mut().add_byte(code);
                     let delivery = message.send_to_socket(self.net_server(), socket_id);
-                    trace!(socket_id, message_type, reason, code, delivery, "Отправлен отказ навыка");
+                    trace!(
+                        socket_id,
+                        message_type, reason, code, delivery, "Отправлен отказ навыка"
+                    );
                 }
                 GameEffect::QueuePlayerSkill {
                     player_id,
@@ -30153,7 +32780,12 @@ impl CGame {
                         message.add_byte(2);
                         let _delivery = message.send_to_player(self.net_server(), player_id);
                     }
-                    trace!(player_id, ?dispatch, rejected, "Навык поставлен в очередь AI");
+                    trace!(
+                        player_id,
+                        ?dispatch,
+                        rejected,
+                        "Навык поставлен в очередь AI"
+                    );
                 }
                 GameEffect::QueueBattleFairySkill {
                     player_id,
@@ -30165,10 +32797,26 @@ impl CGame {
                         .expect("battle-fairy dispatch сохраняет canonical player")
                         .player_ai_mut()
                         .queue_battle_fairy_skill(dispatch);
-                    trace!(player_id, ?dispatch, replaced, "Навык боевой феи поставлен в очередь AI");
+                    trace!(
+                        player_id,
+                        ?dispatch,
+                        replaced,
+                        "Навык боевой феи поставлен в очередь AI"
+                    );
                 }
-                GameEffect::RegionTaxPrompt { .. } | GameEffect::RegionTaxResult { .. } => {
-                    warn!("Налоговый эффект попал в локальный журнал навыка");
+                GameEffect::RegionTaxPrompt { .. }
+                | GameEffect::RegionTaxResult { .. }
+                | GameEffect::BattleFairyCombine(_)
+                | GameEffect::BattleFairySummon(_)
+                | GameEffect::BattleFairyFollow(_)
+                | GameEffect::PlayerEquipmentRemove(_)
+                | GameEffect::PlayerEquipmentAdd(_)
+                | GameEffect::BattleFairyEquipmentMutation(_)
+                | GameEffect::BattleFairyPotentialAllocation(_)
+                | GameEffect::BattleFairyUpgrade(_)
+                | GameEffect::BattleFairyPotentialReset(_)
+                | GameEffect::BattleFairySkillReset(_) => {
+                    warn!("Чужой эффект попал в локальный журнал навыка");
                 }
             }
         }
@@ -30251,7 +32899,17 @@ impl CGame {
                 message.add_long(victim_y);
                 message.send(self, false)
             });
-        tracing::debug!(attacker_id, victim_id, region_id, ?disposition, criminal_timestamp_refreshed, criminal_state_started, ?criminal_delivery, ?world_log_delivery, "обработан первый удар навыком по игроку");
+        tracing::debug!(
+            attacker_id,
+            victim_id,
+            region_id,
+            ?disposition,
+            criminal_timestamp_refreshed,
+            criminal_state_started,
+            ?criminal_delivery,
+            ?world_log_delivery,
+            "обработан первый удар навыком по игроку"
+        );
         Some(())
     }
 
@@ -30568,8 +33226,16 @@ impl CGame {
             let Some(goods) = player.equipment_mut().get_goods_mut(position) else {
                 return;
             };
-            let maximum = goods.addon_property_value(factory, crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_MAXIMUM_DURABILITY, 1);
-            let old = goods.addon_property_value(factory, crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_MAXIMUM_DURABILITY, 2);
+            let maximum = goods.addon_property_value(
+                factory,
+                crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_MAXIMUM_DURABILITY,
+                1,
+            );
+            let old = goods.addon_property_value(
+                factory,
+                crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_MAXIMUM_DURABILITY,
+                2,
+            );
             if maximum <= 0 || old == 0 {
                 return;
             }
@@ -33463,7 +36129,10 @@ impl CGame {
                 .and_then(|owner| owner.base().find_monster_by_id(blow.attacker_id))
                 .is_some_and(|monster| !monster.is_tamed());
             if !non_tamed_monster {
-                tracing::trace!(victim_id = blow.victim_id, "убийство игрока прирученным монстром не меняет вклад");
+                tracing::trace!(
+                    victim_id = blow.victim_id,
+                    "убийство игрока прирученным монстром не меняет вклад"
+                );
                 return Some(());
             }
             let deliveries = self.apply_victim_region_contribution_loss(
@@ -33476,7 +36145,10 @@ impl CGame {
             return Some(());
         }
         let Some(murderer_id) = murderer_id else {
-            tracing::trace!(victim_id = blow.victim_id, "владелец убийства игрока не определён");
+            tracing::trace!(
+                victim_id = blow.victim_id,
+                "владелец убийства игрока не определён"
+            );
             return Some(());
         };
         let (murderer_country, murderer_level, murderer_faction, murderer_team, same_gods_faction) =
@@ -33537,7 +36209,11 @@ impl CGame {
                 runtime,
             );
             client_deliveries = client_deliveries.wrapping_add(deliveries.len());
-            tracing::trace!(victim_id = blow.victim_id, ?deliveries, "применена потеря вклада в своём государстве");
+            tracing::trace!(
+                victim_id = blow.victim_id,
+                ?deliveries,
+                "применена потеря вклада в своём государстве"
+            );
         } else if !no_contribute {
             let (combat_a, combat_b) = self.contribute_setup.combat_levels();
             let lower = combat_a.min(combat_b);
@@ -33553,8 +36229,12 @@ impl CGame {
                 if u32::from(victim_level) <= self.globe_setup.new_soldier_level() {
                     let protected = self.get_string_by_id(protected_string).to_vec();
                     let murderer_notice = self.get_string_by_id(b"GS0164").to_vec();
-                    record_client_delivery!(self.send_player_other_info(blow.victim_id, &protected));
-                    record_client_delivery!(self.send_player_other_info(murderer_id, &murderer_notice));
+                    record_client_delivery!(
+                        self.send_player_other_info(blow.victim_id, &protected)
+                    );
+                    record_client_delivery!(
+                        self.send_player_other_info(murderer_id, &murderer_notice)
+                    );
                 } else if region_country == murderer_country {
                     let deliveries = self.apply_victim_region_contribution_loss(
                         blow.victim_id,
@@ -33563,7 +36243,11 @@ impl CGame {
                         runtime,
                     );
                     client_deliveries = client_deliveries.wrapping_add(deliveries.len());
-                    tracing::trace!(victim_id = blow.victim_id, ?deliveries, "применена потеря вклада в государстве убийцы");
+                    tracing::trace!(
+                        victim_id = blow.victim_id,
+                        ?deliveries,
+                        "применена потеря вклада в государстве убийцы"
+                    );
                     let notice = self.get_string_by_id(b"GS0164").to_vec();
                     record_client_delivery!(self.send_player_other_info(murderer_id, &notice));
                 }
@@ -33572,7 +36256,11 @@ impl CGame {
                         let current = murderer.contribution();
                         murderer.set_contribution(current.wrapping_sub(penalty));
                         contribution_updates = contribution_updates.wrapping_add(1);
-                        tracing::trace!(player_id = murderer_id, contribution_change = -penalty, "изменён вклад убийцы");
+                        tracing::trace!(
+                            player_id = murderer_id,
+                            contribution_change = -penalty,
+                            "изменён вклад убийцы"
+                        );
                         if let Some(delivery) = self.send_player_contribution_update(murderer_id) {
                             record_client_delivery!(delivery);
                         }
@@ -33590,8 +36278,12 @@ impl CGame {
                         &[LegacyFormatArgument::Signed(limit)],
                         255,
                     );
-                    record_client_delivery!(self.send_player_other_info(murderer_id, &murderer_text));
-                    record_client_delivery!(self.send_player_other_info(blow.victim_id, &victim_text));
+                    record_client_delivery!(
+                        self.send_player_other_info(murderer_id, &murderer_text)
+                    );
+                    record_client_delivery!(
+                        self.send_player_other_info(blow.victim_id, &victim_text)
+                    );
                 }
             } else if u32::from(victim_level) <= self.globe_setup.new_soldier_level() {
                 let text = self.get_string_by_id(b"GS0135").to_vec();
@@ -33694,7 +36386,11 @@ impl CGame {
                             );
                         }
                         contribution_updates = contribution_updates.wrapping_add(1);
-                        tracing::trace!(player_id = id, contribution_change = share, "изменён вклад участника группы");
+                        tracing::trace!(
+                            player_id = id,
+                            contribution_change = share,
+                            "изменён вклад участника группы"
+                        );
                     }
                     if let Some(delivery) = self.send_player_contribution_update(id) {
                         record_client_delivery!(delivery);
@@ -33718,7 +36414,11 @@ impl CGame {
                     if let Some(victim) = self.find_player_mut(blow.victim_id) {
                         victim.set_contribution(victim_contribution.wrapping_sub(victim_loss));
                         contribution_updates = contribution_updates.wrapping_add(1);
-                        tracing::trace!(player_id = blow.victim_id, contribution_change = -victim_loss, "изменён вклад погибшего игрока");
+                        tracing::trace!(
+                            player_id = blow.victim_id,
+                            contribution_change = -victim_loss,
+                            "изменён вклад погибшего игрока"
+                        );
                     }
                     if let Some(delivery) = self.send_player_contribution_update(blow.victim_id) {
                         record_client_delivery!(delivery);
@@ -33853,7 +36553,11 @@ impl CGame {
         }
         self.change_body_after_player_death(blow.victim_id, runtime);
         let nation = self.player_died_in_nation_region(blow.victim_id, runtime);
-        tracing::trace!(victim_id = blow.victim_id, ?nation, "обработана смерть в регионе войны наций");
+        tracing::trace!(
+            victim_id = blow.victim_id,
+            ?nation,
+            "обработана смерть в регионе войны наций"
+        );
         let mut owner = self.take_region_owner(region_id)?;
         if owner
             .base_mut()
@@ -33881,7 +36585,11 @@ impl CGame {
         let gods_battle = (blow.attacker_type == PLAYER_TYPE)
             .then(|| self.apply_gods_battle_death_szl(blow.attacker_id, blow.victim_id, runtime))
             .flatten();
-        tracing::trace!(victim_id = blow.victim_id, ?gods_battle, "обработана смерть в битве богов");
+        tracing::trace!(
+            victim_id = blow.victim_id,
+            ?gods_battle,
+            "обработана смерть в битве богов"
+        );
 
         let loss_allowed = self.globe_setup.newbie_level_limit() < u32::from(level)
             || self.globe_setup.pk_count_per_kill() < u32::from(pk_count)
@@ -34059,13 +36767,15 @@ impl CGame {
                                             particular_on_death: false,
                                             table_drop_allowed: true,
                                         };
-                                        record_death_world_delivery!(self.send_goods_lost_by_death_log(
-                                            blow.victim_id,
-                                            region_id,
-                                            tile_x,
-                                            tile_y,
-                                            &money_candidate,
-                                        ));
+                                        record_death_world_delivery!(
+                                            self.send_goods_lost_by_death_log(
+                                                blow.victim_id,
+                                                region_id,
+                                                tile_x,
+                                                tile_y,
+                                                &money_candidate,
+                                            )
+                                        );
                                     }
                                     drops = drops.wrapping_add(1);
                                     tracing::trace!(victim_id = blow.victim_id, goods_id = ?money_id, ?result, "обработана потеря денег при смерти");
@@ -34100,11 +36810,19 @@ impl CGame {
             let text = self.get_string_by_id(b"GS0138").to_vec();
             let notice_delivery = self.send_nation_player_notice(blow.victim_id, &text);
             pet_deliveries = pet_deliveries.wrapping_add(1);
-            tracing::trace!(victim_id = blow.victim_id, notice_delivery, "отправлено уведомление об отзыве питомца погибшего игрока");
+            tracing::trace!(
+                victim_id = blow.victim_id,
+                notice_delivery,
+                "отправлено уведомление об отзыве питомца погибшего игрока"
+            );
             if let Some(delivery) = self.dismiss_player_pet(blow.victim_id, pet.object_type, pet.id)
             {
                 pet_deliveries = pet_deliveries.wrapping_add(1);
-                tracing::trace!(victim_id = blow.victim_id, delivery, "отозван питомец погибшего игрока");
+                tracing::trace!(
+                    victim_id = blow.victim_id,
+                    delivery,
+                    "отозван питомец погибшего игрока"
+                );
             }
         }
         let attacker_notice_delivery = if blow.attacker_type == PLAYER_TYPE {
@@ -34836,7 +37554,7 @@ impl CGame {
         player_id: i32,
         current_war_soul_skill_restored: Option<bool>,
     ) -> Option<()> {
-        let plan = self
+        let mut plan = self
             .players
             .get_mut(&player_id)?
             .compute_war_soul_xy(current_war_soul_skill_restored);
@@ -34858,8 +37576,13 @@ impl CGame {
         if let Some(player) = self.players.get_mut(&player_id) {
             player.apply_war_soul_action(action, spatial_applied);
         }
-        let effect_count = plan.effects.len();
-        for effect in plan.effects {
+        let effects = plan.effects.take_all();
+        let effect_count = effects.len();
+        for effect in effects {
+            let GameEffect::BattleFairyFollow(effect) = effect else {
+                tracing::error!("журнал следования боевой феи содержит чужой эффект");
+                continue;
+            };
             match effect {
                 BattleFairyFollowEffect::AroundMove {
                     message_type,
@@ -34889,7 +37612,11 @@ impl CGame {
                             delivery
                         })
                         .flatten();
-                    tracing::trace!(player_id, ?delivery, "отправлено движение боевой феи вокруг игрока");
+                    tracing::trace!(
+                        player_id,
+                        ?delivery,
+                        "отправлено движение боевой феи вокруг игрока"
+                    );
                 }
             }
         }
@@ -34899,10 +37626,7 @@ impl CGame {
 
     /// Мёртвая половина той же ветви `CPlayer::AI`: в отличие от живого
     /// follow она меняет только region spatial membership и visual-координаты.
-    pub(crate) fn clear_dead_war_soul_xy(
-        &mut self,
-        player_id: i32,
-    ) -> Option<()> {
+    pub(crate) fn clear_dead_war_soul_xy(&mut self, player_id: i32) -> Option<()> {
         let plan = self.players.get_mut(&player_id)?.clear_dead_war_soul_xy();
         let action = plan
             .spatial_action
@@ -35571,23 +38295,24 @@ impl CGame {
 
     /// Выполняет periodic HP-death prefix `CPlayer::AI` и немедленно замыкает
     /// reached virtual `OnChangeProperties` точным адресным `0xBF721`.
-    pub(crate) fn refresh_battle_fairy_death(
-        &mut self,
-        player_id: i32,
-    ) -> Option<()> {
+    pub(crate) fn refresh_battle_fairy_death(&mut self, player_id: i32) -> Option<()> {
         let factory = &self.goods_factory;
         let outcome = self
             .players
             .get_mut(&player_id)
             .map(|player| player.refresh_battle_fairy_death(factory))?;
         let property_delivery = if outcome == BattleFairyDeathOutcome::Died {
-            self
-                .find_player(player_id)
+            self.find_player(player_id)
                 .map(|player| self.send_player_properties_changed(player))
         } else {
             None
         };
-        tracing::trace!(player_id, ?outcome, ?property_delivery, "проверено состояние смерти боевой феи");
+        tracing::trace!(
+            player_id,
+            ?outcome,
+            ?property_delivery,
+            "проверено состояние смерти боевой феи"
+        );
         Some(())
     }
 
@@ -35657,17 +38382,19 @@ impl CGame {
                 .set_change_state(SHAPE_CHANGE_DELETE);
             true
         });
-        tracing::trace!(player_id, sampled_at_ms, staged_for_delete, "задержанный выход игрока завершён");
+        tracing::trace!(
+            player_id,
+            sampled_at_ms,
+            staged_for_delete,
+            "задержанный выход игрока завершён"
+        );
         true
     }
 
     /// Один exact `CGame::RunAuction` pass. Feature gate не читает часы;
     /// strict 999-ms gate читает wall-clock только при срабатывании.
     /// Goods snapshot и оба World sends сохраняют исходный порядок.
-    pub(crate) fn run_auction<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        runtime: &mut Runtime,
-    ) {
+    pub(crate) fn run_auction<Runtime: GameMainLoopRuntime>(&mut self, runtime: &mut Runtime) {
         if !self.globe_setup.auction_enabled() {
             return;
         }
@@ -35732,7 +38459,12 @@ impl CGame {
             request.base_mut().add_ulong(client_ip);
             let delivery = request.send(self, false);
             count += 1;
-            tracing::trace!(player_id, client_ip, ?delivery, "лавка возвращена WorldServer");
+            tracing::trace!(
+                player_id,
+                client_ip,
+                ?delivery,
+                "лавка возвращена WorldServer"
+            );
         }
         tracing::trace!(count, "завершён возврат личных лавок");
     }
@@ -35779,7 +38511,12 @@ impl CGame {
             ServerRegionWeatherTick::Waiting { .. }
             | ServerRegionWeatherTick::AdvancedWithoutSelection { .. } => None,
         };
-        tracing::trace!(region_id = region.id, ?tick, ?delivery, "обновлена погода региона");
+        tracing::trace!(
+            region_id = region.id,
+            ?tick,
+            ?delivery,
+            "обновлена погода региона"
+        );
     }
 
     fn region_shape_change_state<Runtime: GameMainLoopRuntime>(
@@ -35926,14 +38663,14 @@ impl CGame {
                         runtime,
                         monster_facts,
                     };
-                    region.finish_area_ai(
-                        area_index,
-                        goods_protected_timer_ms,
-                        &mut context,
-                    );
+                    region.finish_area_ai(area_index, goods_protected_timer_ms, &mut context);
                 }
                 area_ai_passes = area_ai_passes.wrapping_add(1);
-                tracing::trace!(region_id = region.id, area_index, "завершён проход ИИ области");
+                tracing::trace!(
+                    region_id = region.id,
+                    area_index,
+                    "завершён проход ИИ области"
+                );
             }
             for identity in region.active_shape_candidates(area_index) {
                 let Some(change_state) = self.region_shape_change_state(region, identity, runtime)
@@ -35959,7 +38696,10 @@ impl CGame {
                     _ => {
                         if identity.object_type == NPC_TYPE {
                             let now_ms = runtime.now_milliseconds();
-                            if self.run_region_npc_ai(region, identity.id, now_ms).is_some() {
+                            if self
+                                .run_region_npc_ai(region, identity.id, now_ms)
+                                .is_some()
+                            {
                                 npc_expirations = npc_expirations.wrapping_add(1);
                             }
                         } else if identity.object_type == MONSTER_TYPE
@@ -36016,7 +38756,12 @@ impl CGame {
             self.run_region_weather_tick(region, runtime);
         }
         self.run_region_shape_scan(region, runtime);
-        tracing::trace!(region_id = region.id, ai_tick, periodic_due, "завершён базовый проход ИИ региона");
+        tracing::trace!(
+            region_id = region.id,
+            ai_tick,
+            periodic_due,
+            "завершён базовый проход ИИ региона"
+        );
         Ok(())
     }
 
@@ -36037,7 +38782,12 @@ impl CGame {
         let base_ai =
             self.run_server_region_base_ai(&mut region, ai_tick, tick_interval_ms, runtime);
         self.restore_region_owner(ServerRegionOwner::Base(region));
-        tracing::trace!(region_id, ai_tick, ?base_ai, "завершён проход ИИ базового региона");
+        tracing::trace!(
+            region_id,
+            ai_tick,
+            ?base_ai,
+            "завершён проход ИИ базового региона"
+        );
         Some(())
     }
 
@@ -36065,7 +38815,11 @@ impl CGame {
         let result = region.ai(&mut context);
         drop(context);
         self.restore_region_owner(ServerRegionOwner::Country(region));
-        tracing::trace!(region_id, ?result, "завершён проход ИИ государственного региона");
+        tracing::trace!(
+            region_id,
+            ?result,
+            "завершён проход ИИ государственного региона"
+        );
         Some(())
     }
 
@@ -36157,10 +38911,7 @@ impl CGame {
     /// Exact `CGame::AI`: signed region-map order, reached player AI prefix и
     /// virtual region AI, после которого выполняется base-tail `ClearPlayerAI`
     /// того же owner-а.
-    pub(crate) fn ai<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        runtime: &mut Runtime,
-    ) {
+    pub(crate) fn ai<Runtime: GameMainLoopRuntime>(&mut self, runtime: &mut Runtime) {
         if self.net_server.is_none() {
             return;
         }
@@ -36209,7 +38960,11 @@ impl CGame {
                         GamePlayerFightStatePhase::PeriodicalUpdate,
                     ) {
                         player_fight_states = player_fight_states.wrapping_add(1);
-                        tracing::trace!(player_id, ?fight_state, "обновлено боевое состояние игрока");
+                        tracing::trace!(
+                            player_id,
+                            ?fight_state,
+                            "обновлено боевое состояние игрока"
+                        );
                     }
                     if let Some(criminal_state) = self.update_player_criminal_state(
                         player_id,
@@ -36217,10 +38972,17 @@ impl CGame {
                         runtime,
                     ) {
                         player_criminal_states = player_criminal_states.wrapping_add(1);
-                        tracing::trace!(player_id, ?criminal_state, "обновлено преступное состояние игрока");
+                        tracing::trace!(
+                            player_id,
+                            ?criminal_state,
+                            "обновлено преступное состояние игрока"
+                        );
                     }
                     let _ = self.periodical_update_murderer_sign(player_id, runtime);
-                    if self.periodical_update_player_ping(player_id, runtime).is_some() {
+                    if self
+                        .periodical_update_player_ping(player_id, runtime)
+                        .is_some()
+                    {
                         let _ = self.periodical_update_nation_died_state(player_id, runtime);
                         let _ = self.run_fairy_hatcher(player_id, runtime);
                         periodical_updates = periodical_updates.wrapping_add(1);
@@ -36234,7 +38996,11 @@ impl CGame {
                                 GamePlayerFightStatePhase::MoveShapeAi,
                             ) {
                                 player_fight_states = player_fight_states.wrapping_add(1);
-                                tracing::trace!(player_id, ?fight_state, "обновлено боевое состояние движения игрока");
+                                tracing::trace!(
+                                    player_id,
+                                    ?fight_state,
+                                    "обновлено боевое состояние движения игрока"
+                                );
                             }
                             if let Some(criminal_state) = self.update_player_criminal_state(
                                 player_id,
@@ -36242,7 +39008,11 @@ impl CGame {
                                 runtime,
                             ) {
                                 player_criminal_states = player_criminal_states.wrapping_add(1);
-                                tracing::trace!(player_id, ?criminal_state, "обновлено преступное состояние движения игрока");
+                                tracing::trace!(
+                                    player_id,
+                                    ?criminal_state,
+                                    "обновлено преступное состояние движения игрока"
+                                );
                             }
                             let mut player_ai = self
                                 .find_player_mut(player_id)
@@ -36280,9 +39050,12 @@ impl CGame {
                                     &mut || runtime.now_milliseconds(),
                                 )
                             });
-                            if progress.and_then(|mutation| {
-                                self.finish_player_auto_progress(mutation, runtime)
-                            }).is_some() {
+                            if progress
+                                .and_then(|mutation| {
+                                    self.finish_player_auto_progress(mutation, runtime)
+                                })
+                                .is_some()
+                            {
                                 player_auto_progress = player_auto_progress.wrapping_add(1);
                             }
                             let interval_ms = self.globe_setup.auto_inc_energy_time_ms();
@@ -36302,7 +39075,11 @@ impl CGame {
                                     message.send_to_player(self.net_server(), mutation.player_id);
                                 player_energy_regenerations =
                                     player_energy_regenerations.wrapping_add(1);
-                                tracing::trace!(?mutation, delivery, "восстановлена энергия игрока");
+                                tracing::trace!(
+                                    ?mutation,
+                                    delivery,
+                                    "восстановлена энергия игрока"
+                                );
                             }
                         }
                     }
@@ -36502,7 +39279,12 @@ impl CGame {
                     completed_deletions.insert(identity);
                 }
                 deletions = deletions.wrapping_add(1);
-                tracing::trace!(region_id, ?identity, ?result, "обработано удаление объекта региона");
+                tracing::trace!(
+                    region_id,
+                    ?identity,
+                    ?result,
+                    "обработано удаление объекта региона"
+                );
             }
             owner
                 .base_mut()
@@ -36541,7 +39323,12 @@ impl CGame {
                     _ => runtime.remove_external_region_shape(self, owner.base_mut(), identity),
                 };
                 removals = removals.wrapping_add(1);
-                tracing::trace!(region_id, ?identity, ?result, "обработано изъятие объекта региона");
+                tracing::trace!(
+                    region_id,
+                    ?identity,
+                    ?result,
+                    "обработано изъятие объекта региона"
+                );
             }
             let staged_area_transitions = owner.base().staged_area_transitions();
             let mut area_transitions = 0usize;
@@ -36587,7 +39374,12 @@ impl CGame {
                     _ => None,
                 };
                 area_transitions = area_transitions.wrapping_add(1);
-                tracing::trace!(region_id, ?identity, ?result, "обработан переход объекта между областями");
+                tracing::trace!(
+                    region_id,
+                    ?identity,
+                    ?result,
+                    "обработан переход объекта между областями"
+                );
             }
             owner.base_mut().clear_staged_area_transitions();
             let region_changes: Vec<GameLocalRegionChange> = owner
@@ -36950,10 +39742,7 @@ impl CGame {
     }
 
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
-    pub(crate) fn process_messages<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        runtime: &mut Runtime,
-    ) {
+    pub(crate) fn process_messages<Runtime: GameMainLoopRuntime>(&mut self, runtime: &mut Runtime) {
         let world_messages = self
             .world_client
             .as_ref()
@@ -37522,10 +40311,7 @@ fn send_fairy_goods_update(game: &CGame, update: &FairyContainerGoodsUpdate) -> 
     message.send_to_player(game.net_server(), update.player_id)
 }
 
-fn deliver_fairy_state_change(
-    outcome: &FairyStateChangeOutcome,
-    game: &CGame,
-) -> usize {
+fn deliver_fairy_state_change(outcome: &FairyStateChangeOutcome, game: &CGame) -> usize {
     let effects = match outcome {
         FairyStateChangeOutcome::ReplacementRejected { effects, .. }
         | FairyStateChangeOutcome::Changed { effects, .. } => effects,
@@ -37557,7 +40343,10 @@ fn deliver_fairy_syncretize_effects(
     match &report.fragment_effect {
         Some(FairySyncretizeFragmentEffect::AmountChanged(change)) => {
             let deliveries = game.send_fairy_amount_change(change);
-            tracing::trace!(?deliveries, "отправлено изменение количества фрагментов феи");
+            tracing::trace!(
+                ?deliveries,
+                "отправлено изменение количества фрагментов феи"
+            );
             amount_changes = amount_changes.wrapping_add(1);
         }
         Some(FairySyncretizeFragmentEffect::Removed { effects, .. }) => {

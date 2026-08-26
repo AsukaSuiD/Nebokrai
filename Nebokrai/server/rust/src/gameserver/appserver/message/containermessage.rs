@@ -26,8 +26,7 @@ use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::player::{
     BattleFairyEquipmentMutationReport, CPlayer, EnhancementSelectionReport,
-    PlayerEquipmentAddReport, PlayerEquipmentRemoveEffect,
-    PlayerEquipmentRemoveReport, PlayerProgress,
+    PlayerEquipmentAddReport, PlayerEquipmentRemoveReport, PlayerProgress,
 };
 use crate::gameserver::appserver::session::csessionfactory::{
     EquipmentSessionShadowAddBlock, EquipmentSessionShadowAdded, PersonalShopShadowAddBlock,
@@ -120,7 +119,6 @@ pub(crate) enum AuctionListingTransferRemoval {
     },
     Equipment {
         event: EquipmentRemovedEvent,
-        effects: Vec<PlayerEquipmentRemoveEffect>,
     },
     AuctionGoods {
         owner_type: i32,
@@ -220,7 +218,6 @@ pub(crate) enum EnhancementTransferRemoval {
     },
     Equipment {
         event: EquipmentRemovedEvent,
-        effects: Vec<PlayerEquipmentRemoveEffect>,
     },
 }
 
@@ -330,7 +327,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
     let player_id = message.player_id();
     let region_id = message.region_id();
     let Some(player_id) = player_id else {
-        tracing::trace!(message_type, region_id, "у перемещения контейнера нет игрока");
+        tracing::trace!(
+            message_type,
+            region_id,
+            "у перемещения контейнера нет игрока"
+        );
         return Some(Ok(()));
     };
 
@@ -645,7 +646,14 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
     };
 
     let trace = |outcome: &'static str| {
-        tracing::trace!(message_type, player_id, region_id, ?request, outcome, "перемещение контейнера обработано");
+        tracing::trace!(
+            message_type,
+            player_id,
+            region_id,
+            ?request,
+            outcome,
+            "перемещение контейнера обработано"
+        );
     };
     let Some(player) = game.find_player(player_id) else {
         trace("игрок не найден");
@@ -666,7 +674,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
     if player.current_progress() == PlayerProgress::Synthesis {
         let text = game.get_string_by_id(b"GS1013").to_vec();
         let delivery = send_notify(game, player_id, &text, 0xffff_0000, 0);
-        tracing::trace!(message_type, player_id, delivery, "перемещение запрещено во время синтеза");
+        tracing::trace!(
+            message_type,
+            player_id,
+            delivery,
+            "перемещение запрещено во время синтеза"
+        );
         return Some(Ok(()));
     }
     if CMoveShape::is_died(player.health()) {
@@ -677,7 +690,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             0xffff_ffff,
             0,
         );
-        tracing::trace!(message_type, player_id, delivery, "перемещение запрещено после смерти");
+        tracing::trace!(
+            message_type,
+            player_id,
+            delivery,
+            "перемещение запрещено после смерти"
+        );
         return Some(Ok(()));
     }
     if request.object_type != GOODS_OBJECT_TYPE {
@@ -723,7 +741,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
         );
         match transfer {
-            Ok(()) => tracing::trace!(outcome = "AuctionMoneyReturned", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(
+                outcome = "AuctionMoneyReturned",
+                "перемещение контейнера выполнено"
+            ),
             Err(reason) => {
                 let receive_rejected = matches!(
                     &reason,
@@ -760,7 +781,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     notification_count += 1;
                 }
                 let delivery = (!receive_rejected).then(|| send_rollback(game, player_id));
-                tracing::trace!(?reason, delivery, notifications = notification_count, "возврат аукционных денег отклонён");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    notifications = notification_count,
+                    "возврат аукционных денег отклонён"
+                );
             }
         }
         return Some(Ok(()));
@@ -777,7 +803,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
         );
         match transfer {
-            Ok(()) => tracing::trace!(outcome = "BankCurrencyMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(
+                outcome = "BankCurrencyMoved",
+                "перемещение контейнера выполнено"
+            ),
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
                 tracing::trace!(?reason, delivery, "перевод валюты банка отменён");
@@ -798,7 +827,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(()) => tracing::trace!(outcome = "CiQingComposeMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(
+                outcome = "CiQingComposeMoved",
+                "перемещение контейнера выполнено"
+            ),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     CiQingComposeTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -832,7 +864,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     )
                 });
                 let delivery = send_rollback(game, player_id);
-                tracing::trace!(?reason, delivery, notification_delivery, "перемещение состава CiQing отменено");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    notification_delivery,
+                    "перемещение состава CiQing отменено"
+                );
             }
         }
         return Some(Ok(()));
@@ -850,7 +887,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(()) => tracing::trace!(outcome = "BattleFairyMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(
+                outcome = "BattleFairyMoved",
+                "перемещение контейнера выполнено"
+            ),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     BattleFairyTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -883,7 +923,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     )
                 });
                 let delivery = send_rollback(game, player_id);
-                tracing::trace!(?reason, delivery, notification_delivery, "перемещение боевой феи отменено");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    notification_delivery,
+                    "перемещение боевой феи отменено"
+                );
             }
         }
         return Some(Ok(()));
@@ -901,7 +946,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(()) => tracing::trace!(outcome = "FairyStorageMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(
+                outcome = "FairyStorageMoved",
+                "перемещение контейнера выполнено"
+            ),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     FairyStorageTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -934,7 +982,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     )
                 });
                 let delivery = send_rollback(game, player_id);
-                tracing::trace!(?reason, delivery, notification_delivery, "перемещение феи отменено");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    notification_delivery,
+                    "перемещение феи отменено"
+                );
             }
         }
         return Some(Ok(()));
@@ -950,7 +1003,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(()) => tracing::trace!(outcome = "PlayerHandMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(
+                outcome = "PlayerHandMoved",
+                "перемещение контейнера выполнено"
+            ),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     PlayerHandMoveBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -975,7 +1031,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     )
                 });
                 let delivery = send_rollback(game, player_id);
-                tracing::trace!(?reason, delivery, notification_delivery, "перемещение в руку отменено");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    notification_delivery,
+                    "перемещение в руку отменено"
+                );
             }
         }
         return Some(Ok(()));
@@ -992,7 +1053,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
         );
         match transfer {
-            Ok(()) => tracing::trace!(outcome = "HandAuctionListingMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(
+                outcome = "HandAuctionListingMoved",
+                "перемещение контейнера выполнено"
+            ),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     HandAuctionListingBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -1018,7 +1082,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     )
                 });
                 let delivery = send_rollback(game, player_id);
-                tracing::trace!(?reason, delivery, notification_delivery, "перемещение руки и лота отменено");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    notification_delivery,
+                    "перемещение руки и лота отменено"
+                );
             }
         }
         return Some(Ok(()));
@@ -1034,7 +1103,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(()) => tracing::trace!(outcome = "HandContainerMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(
+                outcome = "HandContainerMoved",
+                "перемещение контейнера выполнено"
+            ),
             Err(reason) => {
                 let rejected = match &reason {
                     HandContainerMoveBlock::SwapBusy { rejected, .. }
@@ -1084,7 +1156,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     )
                 });
                 let delivery = send_rollback(game, player_id);
-                tracing::trace!(?reason, delivery, notification_delivery, "перемещение из руки отменено");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    notification_delivery,
+                    "перемещение из руки отменено"
+                );
             }
         }
         return Some(Ok(()));
@@ -1101,7 +1178,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(()) => tracing::trace!(outcome = "AuctionGoodsInventoryMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(
+                outcome = "AuctionGoodsInventoryMoved",
+                "перемещение контейнера выполнено"
+            ),
             Err(reason) => {
                 let mut notification_count = 0usize;
                 let progress_notice: Option<&[u8]> = match &reason {
@@ -1169,7 +1249,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     notification_count += 1;
                 }
                 let delivery = send_rollback(game, player_id);
-                tracing::trace!(?reason, delivery, notifications = notification_count, "возврат аукционного предмета отменён");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    notifications = notification_count,
+                    "возврат аукционного предмета отменён"
+                );
             }
         }
         return Some(Ok(()));
@@ -1187,7 +1272,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(()) => tracing::trace!(outcome = "DepotStorageMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(
+                outcome = "DepotStorageMoved",
+                "перемещение контейнера выполнено"
+            ),
             Err(reason) => {
                 let rejected = match &reason {
                     DepotStorageTransferBlock::RolledBack { rejected, .. }
@@ -1241,7 +1329,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     )
                 });
                 let delivery = send_rollback(game, player_id);
-                tracing::trace!(?reason, delivery, notification_delivery, "перемещение хранилища отменено");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    notification_delivery,
+                    "перемещение хранилища отменено"
+                );
             }
         }
         return Some(Ok(()));
@@ -1305,7 +1398,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             )
         };
         match transfer {
-            Ok(()) => tracing::trace!(outcome = "GroundGoodsMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(
+                outcome = "GroundGoodsMoved",
+                "перемещение контейнера выполнено"
+            ),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     GroundGoodsMoveBlock::PickupProtected => Some(b"GS0112"),
@@ -1328,7 +1424,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     )
                 });
                 let delivery = send_rollback(game, player_id);
-                tracing::trace!(?reason, delivery, notification_delivery, "перемещение наземного предмета отменено");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    notification_delivery,
+                    "перемещение наземного предмета отменено"
+                );
             }
         }
         return Some(Ok(()));
@@ -1355,7 +1456,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         let move_delivery = send_auction_listing_move_moved(game, player_id, request, &transfer);
         let snapshot_refresh_required =
             transfer.listing_slot_zero_was_empty && request.destination_position == 0;
-        tracing::trace!(?transfer, move_delivery, snapshot_refresh_required, "лот перемещён");
+        tracing::trace!(
+            ?transfer,
+            move_delivery,
+            snapshot_refresh_required,
+            "лот перемещён"
+        );
         return Some(Ok(()));
     }
 
@@ -1383,7 +1489,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         )
                     });
                 let delivery = send_rollback(game, player_id);
-                tracing::trace!(?reason, delivery, notification_delivery, "снятие лота отменено");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    notification_delivery,
+                    "снятие лота отменено"
+                );
                 return Some(Ok(()));
             }
         };
@@ -1417,7 +1528,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             }
             AuctionListingWithdrawalOutcome::Moved { .. } => None,
         };
-        tracing::trace!(?withdrawal, move_delivery, notification_delivery, "лот снят");
+        tracing::trace!(
+            ?withdrawal,
+            move_delivery,
+            notification_delivery,
+            "лот снят"
+        );
         return Some(Ok(()));
     }
 
@@ -1473,7 +1589,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         }
         game.reset_player_trade_ready(request.destination_container_id);
         let move_delivery = send_rollback(game, player_id);
-        tracing::trace!(?added, owners = owners.len(), move_delivery, "предложение обмена добавлено");
+        tracing::trace!(
+            ?added,
+            owners = owners.len(),
+            move_delivery,
+            "предложение обмена добавлено"
+        );
         return Some(Ok(()));
     }
 
@@ -1516,7 +1637,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         }
         game.reset_player_trade_ready(request.source_container_id);
         let move_delivery = send_rollback(game, player_id);
-        tracing::trace!(?removed, owners = owners.len(), move_delivery, "предложение обмена удалено");
+        tracing::trace!(
+            ?removed,
+            owners = owners.len(),
+            move_delivery,
+            "предложение обмена удалено"
+        );
         return Some(Ok(()));
     }
 
@@ -1550,7 +1676,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             &removed.removed,
         );
         let move_delivery = send_rollback(game, player_id);
-        tracing::trace!(?removed, delete_shadow_delivery, move_delivery, "сессия снаряжения очищена");
+        tracing::trace!(
+            ?removed,
+            delete_shadow_delivery,
+            move_delivery,
+            "сессия снаряжения очищена"
+        );
         return Some(Ok(()));
     }
 
@@ -1584,7 +1715,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             &removed.removed,
         );
         let move_delivery = send_rollback(game, player_id);
-        tracing::trace!(?removed, delete_shadow_delivery, move_delivery, "выбор личной лавки очищен");
+        tracing::trace!(
+            ?removed,
+            delete_shadow_delivery,
+            move_delivery,
+            "выбор личной лавки очищен"
+        );
         return Some(Ok(()));
     }
 
@@ -1615,7 +1751,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             EnhancementTransferOutcome::RolledBack { .. }
             | EnhancementTransferOutcome::GoodsCollected { .. } => send_rollback(game, player_id),
         };
-        tracing::trace!(?transfer, move_delivery, "предмет сессии снаряжения перемещён");
+        tracing::trace!(
+            ?transfer,
+            move_delivery,
+            "предмет сессии снаряжения перемещён"
+        );
         return Some(Ok(()));
     }
 
@@ -1641,7 +1781,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             &deselection.removed,
         );
         let move_delivery = send_rollback(game, player_id);
-        tracing::trace!(?deselection, delete_shadow_delivery, move_delivery, "выбор усиления очищен");
+        tracing::trace!(
+            ?deselection,
+            delete_shadow_delivery,
+            move_delivery,
+            "выбор усиления очищен"
+        );
         return Some(Ok(()));
     }
 
@@ -1689,7 +1834,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             Ok(selection) => selection,
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
-                tracing::trace!(?reason, delivery, "выбор предмета сессии снаряжения отменён");
+                tracing::trace!(
+                    ?reason,
+                    delivery,
+                    "выбор предмета сессии снаряжения отменён"
+                );
                 return Some(Ok(()));
             }
         };
@@ -1706,7 +1855,13 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             &old_client_payload,
         );
         let move_delivery = send_rollback(game, player_id);
-        tracing::trace!(?selection, payload_bytes = old_client_payload.len(), add_shadow_delivery, move_delivery, "предмет сессии снаряжения выбран");
+        tracing::trace!(
+            ?selection,
+            payload_bytes = old_client_payload.len(),
+            add_shadow_delivery,
+            move_delivery,
+            "предмет сессии снаряжения выбран"
+        );
         return Some(Ok(()));
     }
 
@@ -1742,7 +1897,13 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             &old_client_payload,
         );
         let move_delivery = send_rollback(game, player_id);
-        tracing::trace!(?selection, payload_bytes = old_client_payload.len(), add_shadow_delivery, move_delivery, "предмет личной лавки выбран");
+        tracing::trace!(
+            ?selection,
+            payload_bytes = old_client_payload.len(),
+            add_shadow_delivery,
+            move_delivery,
+            "предмет личной лавки выбран"
+        );
         return Some(Ok(()));
     }
 
@@ -1769,7 +1930,13 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
     let old_client_payload = context.encode_goods_for_old_client(goods);
     let add_shadow_delivery = send_add_shadow(game, player_id, &selection, &old_client_payload);
     let move_delivery = send_move_result(game, player_id, request, &selection);
-    tracing::trace!(?selection, payload_bytes = old_client_payload.len(), add_shadow_delivery, move_delivery, "предмет усиления выбран");
+    tracing::trace!(
+        ?selection,
+        payload_bytes = old_client_payload.len(),
+        add_shadow_delivery,
+        move_delivery,
+        "предмет усиления выбран"
+    );
     Some(Ok(()))
 }
 

@@ -263,10 +263,9 @@ use super::container::camountlimitgoodsshadowcontainer::{
 };
 use super::container::cbank::{BankGoodsAddOutcome, CBank};
 use super::container::cbattlefairycontainer::{
-    BattleFairyCell, BattleFairyCombineCheck, BattleFairyCombineRemovedInput,
-    BattleFairyContainerAddOutcome, BattleFairyDefaultGoodsUpdate,
-    BattleFairyDefaultPropertyReport, BattleFairyDefaultSkill, BattleFairyPropertyAddEffect,
-    BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
+    BattleFairyCell, BattleFairyCombineCheck, BattleFairyContainerAddOutcome,
+    BattleFairyDefaultGoodsUpdate, BattleFairyDefaultPropertyReport, BattleFairyDefaultSkill,
+    BattleFairyPropertyAddEffect, BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
 };
 use super::container::ccontainer::ContainerListenerHandle;
 use super::container::ccontainer::PreviousContainer;
@@ -289,6 +288,7 @@ use super::container::cwallet::{
     CurrencyGoodsTaken, CurrencyIncreaseOutcome,
 };
 use super::container::cyuanbao::CYuanBao;
+use super::gameeffectjournal::{GameEffect, GameEffectJournal};
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
 use super::goods::cgoodsbaseproperties::{
@@ -318,7 +318,6 @@ use super::goods::cgoodsbaseproperties::{
     GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
-use super::gameeffectjournal::{GameEffect, GameEffectJournal};
 use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionFacts,
@@ -499,8 +498,7 @@ pub(crate) enum BattleFairyCombineOutcome {
 pub(crate) struct BattleFairyCombineReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: BattleFairyCombineOutcome,
-    pub(crate) removed_inputs: Vec<BattleFairyCombineRemovedInput>,
-    pub(crate) effects: Vec<BattleFairyCombineEffect>,
+    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -555,8 +553,7 @@ pub(crate) struct BattleFairySummonReport {
     pub(crate) outcome: BattleFairySummonOutcome,
     pub(crate) region_id: Option<i32>,
     pub(crate) spatial_action: Option<BattleFairyWarSoulAction>,
-    pub(crate) spatial_applied: bool,
-    pub(crate) effects: Vec<BattleFairySummonEffect>,
+    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -589,7 +586,7 @@ pub(crate) struct BattleFairyFollowPlan {
     pub(crate) outcome: BattleFairyFollowOutcome,
     pub(crate) region_id: Option<i32>,
     pub(crate) spatial_action: Option<BattleFairyWarSoulAction>,
-    pub(crate) effects: Vec<BattleFairyFollowEffect>,
+    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -636,7 +633,7 @@ pub(crate) enum PlayerEquipmentRemoveEffect {
 pub(crate) struct PlayerEquipmentRemoveReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: EquipmentRemoveOutcome,
-    pub(crate) effects: Vec<PlayerEquipmentRemoveEffect>,
+    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -668,7 +665,7 @@ pub(crate) enum PlayerEquipmentAddEffect {
 pub(crate) struct PlayerEquipmentAddReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: EquipmentAddOutcome,
-    pub(crate) effects: Vec<PlayerEquipmentAddEffect>,
+    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -689,10 +686,9 @@ pub(crate) enum BattleFairyEquipmentMutationEffect {
 pub(crate) struct BattleFairyEquipmentMutationReport {
     pub(crate) player_id: i32,
     pub(crate) cell: Option<BattleFairyCell>,
-    pub(crate) delta: i32,
     pub(crate) property_applied: bool,
     pub(crate) outcome: BattleFairyEquipmentMutationOutcome,
-    pub(crate) effects: Vec<BattleFairyEquipmentMutationEffect>,
+    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -721,9 +717,7 @@ pub(crate) enum BattleFairyPotentialAllocationEffect {
 pub(crate) struct BattleFairyPotentialAllocationReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: BattleFairyPotentialAllocationOutcome,
-    pub(crate) aggregate_client_points: i32,
-    pub(crate) processed_properties: Vec<i32>,
-    pub(crate) effects: Vec<BattleFairyPotentialAllocationEffect>,
+    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -819,12 +813,7 @@ pub(crate) enum BattleFairyUpgradeEffect {
 pub(crate) struct BattleFairyUpgradeReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: BattleFairyUpgradeOutcome,
-    pub(crate) price: u32,
-    pub(crate) probability: u32,
-    pub(crate) previous_level: Option<i32>,
-    pub(crate) resulting_level: Option<i32>,
-    pub(crate) consumed_gems: Vec<BattleFairyUpgradeConsumedGem>,
-    pub(crate) effects: Vec<BattleFairyUpgradeEffect>,
+    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -863,8 +852,7 @@ pub(crate) enum BattleFairyPotentialResetEffect {
 pub(crate) struct BattleFairyPotentialResetReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: BattleFairyPotentialResetOutcome,
-    pub(crate) recovered_potential: i32,
-    pub(crate) effects: Vec<BattleFairyPotentialResetEffect>,
+    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -913,11 +901,7 @@ pub(crate) struct BattleFairySkillResetReport {
     pub(crate) player_id: i32,
     pub(crate) position: i32,
     pub(crate) outcome: BattleFairySkillResetOutcome,
-    pub(crate) previous_skill: Option<u32>,
-    pub(crate) selected_skill: Option<u32>,
-    pub(crate) detached_skill_ids: Vec<u32>,
-    pub(crate) attached_skill_ids: Vec<u32>,
-    pub(crate) effects: Vec<BattleFairySkillResetEffect>,
+    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1192,10 +1176,7 @@ pub(crate) enum PlayerGameSaveCodecError {
         available: usize,
     },
     #[error("player save содержит отрицательное count {count} в {field}")]
-    NegativeCount {
-        field: &'static str,
-        count: i32,
-    },
+    NegativeCount { field: &'static str, count: i32 },
     #[error("player save string {field} имеет длину {length} при максимуме {maximum}")]
     StringTooLong {
         field: &'static str,
@@ -1203,22 +1184,13 @@ pub(crate) enum PlayerGameSaveCodecError {
         maximum: usize,
     },
     #[error("player save collection {field} длиной {length} не представима")]
-    CollectionTooLarge {
-        field: &'static str,
-        length: usize,
-    },
+    CollectionTooLarge { field: &'static str, length: usize },
     #[error("player save содержит object type {object_type} вместо player")]
-    WrongObjectType {
-        object_type: i32,
-    },
+    WrongObjectType { object_type: i32 },
     #[error("player save отклонил equipment position {position}")]
-    EquipmentRejected {
-        position: u32,
-    },
+    EquipmentRejected { position: u32 },
     #[error("player save codec {field} вернул false")]
-    CodecReturnedFalse {
-        field: &'static str,
-    },
+    CodecReturnedFalse { field: &'static str },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2548,7 +2520,11 @@ impl CPlayer {
         player.refresh_reached_container_owners(player.player_id());
 
         let consumed_bytes = cursor.saturating_sub(start);
-        tracing::trace!(player_id = player.player_id(), consumed_bytes, "сохранение игрока декодировано");
+        tracing::trace!(
+            player_id = player.player_id(),
+            consumed_bytes,
+            "сохранение игрока декодировано"
+        );
         Ok(player)
     }
 
@@ -3369,7 +3345,14 @@ impl CPlayer {
         if (1..5).contains(&requested) {
             self.country = requested as u8;
         }
-        tracing::trace!(player_id = self.player_id(), previous, requested, applied = self.country, changed = self.country != previous, "страна игрока изменена ответом World");
+        tracing::trace!(
+            player_id = self.player_id(),
+            previous,
+            requested,
+            applied = self.country,
+            changed = self.country != previous,
+            "страна игрока изменена ответом World"
+        );
     }
 
     /// Сбрасывает подтверждённые счётчики чести; путь корректировки ранга в
@@ -3699,8 +3682,19 @@ impl CPlayer {
         ) -> Result<u32, PlayerLeiTingDecodeBlock> {
             let offset = *cursor;
             let available = source.len().saturating_sub(offset);
-            let mut reader = LegacyReader::at(source, offset).map_err(|_| PlayerLeiTingDecodeBlock { field, offset, needed: 4, available })?;
-            let value = reader.read_u32().map_err(|_| PlayerLeiTingDecodeBlock { field, offset, needed: 4, available })?;
+            let mut reader =
+                LegacyReader::at(source, offset).map_err(|_| PlayerLeiTingDecodeBlock {
+                    field,
+                    offset,
+                    needed: 4,
+                    available,
+                })?;
+            let value = reader.read_u32().map_err(|_| PlayerLeiTingDecodeBlock {
+                field,
+                offset,
+                needed: 4,
+                available,
+            })?;
             *cursor = reader.position();
             Ok(value)
         }
@@ -3711,8 +3705,19 @@ impl CPlayer {
         ) -> Result<u16, PlayerLeiTingDecodeBlock> {
             let offset = *cursor;
             let available = source.len().saturating_sub(offset);
-            let mut reader = LegacyReader::at(source, offset).map_err(|_| PlayerLeiTingDecodeBlock { field, offset, needed: 2, available })?;
-            let value = reader.read_u16().map_err(|_| PlayerLeiTingDecodeBlock { field, offset, needed: 2, available })?;
+            let mut reader =
+                LegacyReader::at(source, offset).map_err(|_| PlayerLeiTingDecodeBlock {
+                    field,
+                    offset,
+                    needed: 2,
+                    available,
+                })?;
+            let value = reader.read_u16().map_err(|_| PlayerLeiTingDecodeBlock {
+                field,
+                offset,
+                needed: 2,
+                available,
+            })?;
             *cursor = reader.position();
             Ok(value)
         }
@@ -4904,27 +4909,31 @@ impl CPlayer {
         self.base_properties.exploit
     }
 
-    pub(crate) fn set_exploit(
-        &mut self,
-        requested: u32,
-        maximum: i32,
-    ) -> u32 {
+    pub(crate) fn set_exploit(&mut self, requested: u32, maximum: i32) -> u32 {
         let previous = self.base_properties.exploit;
         let applied = requested.min(maximum as u32);
         self.base_properties.exploit = applied;
-        tracing::trace!(player_id = self.player_id(), previous, requested, applied, "подвиг игрока изменён");
+        tracing::trace!(
+            player_id = self.player_id(),
+            previous,
+            requested,
+            applied,
+            "подвиг игрока изменён"
+        );
         applied
     }
 
     /// Exact `SetValue("dwExploit", value)` из region reward path:
     /// generic property map пишет `DWORD` напрямую и не вызывает `SetExploit` clamp.
-    pub(crate) fn set_exploit_property_value(
-        &mut self,
-        requested: u32,
-    ) {
+    pub(crate) fn set_exploit_property_value(&mut self, requested: u32) {
         let previous = self.base_properties.exploit;
         self.base_properties.exploit = requested;
-        tracing::trace!(player_id = self.player_id(), previous, requested, "свойство подвига игрока изменено напрямую");
+        tracing::trace!(
+            player_id = self.player_id(),
+            previous,
+            requested,
+            "свойство подвига игрока изменено напрямую"
+        );
     }
 
     /// `OnPlayerTimgingStart` отсеивает action `ACT_DIED == 6`
@@ -7199,7 +7208,13 @@ impl CPlayer {
         if murderer_timestamp_started {
             self.murderer_time_stamp_ms = now_ms();
         }
-        tracing::trace!(player_id = self.player_id(), pk_count = self.base_properties.pk_count, kill_count = self.base_properties.kill_count, murderer_timestamp_started, "убийца зарегистрирован");
+        tracing::trace!(
+            player_id = self.player_id(),
+            pk_count = self.base_properties.pk_count,
+            kill_count = self.base_properties.kill_count,
+            murderer_timestamp_started,
+            "убийца зарегистрирован"
+        );
         self.base_properties.pk_count
     }
 
@@ -7228,7 +7243,12 @@ impl CPlayer {
         let previous_kill_count = self.base_properties.kill_count;
         self.base_properties.pk_count = 0;
         self.base_properties.kill_count = 0;
-        tracing::trace!(player_id = self.player_id(), previous_pk_count, previous_kill_count, "счётчики убийств игрока сброшены");
+        tracing::trace!(
+            player_id = self.player_id(),
+            previous_pk_count,
+            previous_kill_count,
+            "счётчики убийств игрока сброшены"
+        );
     }
 
     /// World kill confirmation tail: unsigned saturation, wrapping kill count
@@ -7249,8 +7269,17 @@ impl CPlayer {
         } else if murderer_timestamp_started {
             self.murderer_time_stamp_ms = now_ms();
         }
-        tracing::trace!(player_id = self.player_id(), pk_count = self.base_properties.pk_count, kill_count = self.base_properties.kill_count, murderer_timestamp_started, "подтверждённое убийство применено");
-        (self.base_properties.pk_count, self.base_properties.kill_count)
+        tracing::trace!(
+            player_id = self.player_id(),
+            pk_count = self.base_properties.pk_count,
+            kill_count = self.base_properties.kill_count,
+            murderer_timestamp_started,
+            "подтверждённое убийство применено"
+        );
+        (
+            self.base_properties.pk_count,
+            self.base_properties.kill_count,
+        )
     }
 
     /// Exact `OnDecreaseMurdererSign`: timer идёт только у живого murderer-а,
@@ -8193,8 +8222,7 @@ impl CPlayer {
             outcome: BattleFairySummonOutcome::IgnoredMode,
             region_id: self.server_region_id,
             spatial_action: None,
-            spatial_applied: false,
-            effects: Vec::new(),
+            effects: GameEffectJournal::default(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairySummonOutcome::FeatureDisabled;
@@ -8387,7 +8415,7 @@ impl CPlayer {
         PlayerEquipmentRemoveReport {
             player_id,
             outcome,
-            effects,
+            effects: effects.into_iter().collect(),
         }
     }
 
@@ -8479,7 +8507,7 @@ impl CPlayer {
         PlayerEquipmentAddReport {
             player_id,
             outcome,
-            effects,
+            effects: effects.into_iter().collect(),
         }
     }
 
@@ -8517,7 +8545,7 @@ impl CPlayer {
             outcome: BattleFairyFollowOutcome::NotSummoned,
             region_id: self.server_region_id,
             spatial_action: None,
-            effects: Vec::new(),
+            effects: GameEffectJournal::default(),
         };
         if current_war_soul_skill_restored == Some(false) {
             plan.outcome = BattleFairyFollowOutcome::ActiveSkill;
@@ -8623,7 +8651,7 @@ impl CPlayer {
                 previous: self.war_soul_point,
                 target,
             }),
-            effects: Vec::new(),
+            effects: GameEffectJournal::default(),
         }
     }
 
@@ -9418,10 +9446,9 @@ impl CPlayer {
         BattleFairyEquipmentMutationReport {
             player_id,
             cell: Some(cell),
-            delta: 1,
             property_applied,
             outcome: BattleFairyEquipmentMutationOutcome::Added(outcome),
-            effects,
+            effects: effects.into_iter().collect(),
         }
     }
 
@@ -9458,10 +9485,9 @@ impl CPlayer {
         BattleFairyEquipmentMutationReport {
             player_id,
             cell: None,
-            delta: 1,
             property_applied: false,
             outcome: BattleFairyEquipmentMutationOutcome::Added(outcome),
-            effects: Vec::new(),
+            effects: GameEffectJournal::default(),
         }
     }
 
@@ -9488,19 +9514,17 @@ impl CPlayer {
             return BattleFairyEquipmentMutationReport {
                 player_id,
                 cell,
-                delta: -1,
                 property_applied: false,
                 outcome: BattleFairyEquipmentMutationOutcome::MissingGoods,
-                effects: Vec::new(),
+                effects: GameEffectJournal::default(),
             };
         };
         let mut report = BattleFairyEquipmentMutationReport {
             player_id,
             cell,
-            delta: -1,
             property_applied: false,
             outcome: BattleFairyEquipmentMutationOutcome::Removed(outcome),
-            effects: Vec::new(),
+            effects: GameEffectJournal::default(),
         };
         if let (Some(cell), Some(addons)) = (cell, addons)
             && let Some(first_update) = self.apply_battle_fairy_property(
@@ -9561,10 +9585,9 @@ impl CPlayer {
             return BattleFairyEquipmentMutationReport {
                 player_id,
                 cell: Some(cell),
-                delta: -1,
                 property_applied: false,
                 outcome: BattleFairyEquipmentMutationOutcome::MissingGoods,
-                effects: Vec::new(),
+                effects: GameEffectJournal::default(),
             };
         };
         if goods.amount() == amount {
@@ -9584,13 +9607,12 @@ impl CPlayer {
         BattleFairyEquipmentMutationReport {
             player_id,
             cell: Some(cell),
-            delta: -1,
             property_applied: false,
             outcome: outcome.map_or(
                 BattleFairyEquipmentMutationOutcome::MissingGoods,
                 BattleFairyEquipmentMutationOutcome::Removed,
             ),
-            effects: Vec::new(),
+            effects: GameEffectJournal::default(),
         }
     }
 
@@ -9613,9 +9635,7 @@ impl CPlayer {
         let mut report = BattleFairyPotentialAllocationReport {
             player_id,
             outcome: BattleFairyPotentialAllocationOutcome::MissingHeadgear,
-            aggregate_client_points,
-            processed_properties: Vec::new(),
-            effects: Vec::new(),
+            effects: GameEffectJournal::default(),
         };
         let Some(goods) = self.equipment.get_goods(10) else {
             return report;
@@ -9657,7 +9677,12 @@ impl CPlayer {
             }
             let amount = points.wrapping_mul(10_000);
             self.allocate_one_battle_fairy_potential(property, amount, factory, coefficients);
-            report.processed_properties.push(property);
+            tracing::trace!(
+                player_id,
+                property,
+                points,
+                "свойство потенциала боевой феи обработано"
+            );
             report
                 .effects
                 .push(BattleFairyPotentialAllocationEffect::PropertiesChanged { player_id });
@@ -9807,12 +9832,7 @@ impl CPlayer {
         let mut report = BattleFairyUpgradeReport {
             player_id,
             outcome: BattleFairyUpgradeOutcome::MissingRegion,
-            price,
-            probability: 0,
-            previous_level: None,
-            resulting_level: None,
-            consumed_gems: Vec::new(),
-            effects: Vec::new(),
+            effects: GameEffectJournal::default(),
         };
         if self.server_region_id.is_none() {
             return report;
@@ -9837,7 +9857,6 @@ impl CPlayer {
             return report;
         }
         let current_level = equipment.addon_property_value(factory, GAP_BF_WEAPON_LEVEL, 1);
-        report.previous_level = Some(current_level);
         let target = BattleFairyUpgradeGoodsSnapshot::capture(equipment);
         let Some(base_gem) = self
             .battle_fairy_container
@@ -9862,7 +9881,14 @@ impl CPlayer {
             push_battle_fairy_upgrade_notification(&mut report, "ZHGS0021", None);
             return report;
         }
-        report.probability = self.battle_fairy_container.probability(factory);
+        let probability = self.battle_fairy_container.probability(factory);
+        tracing::trace!(
+            player_id,
+            price,
+            probability,
+            current_level,
+            "параметры улучшения боевой феи рассчитаны"
+        );
         if self.wallet.currency_amount() < price {
             report.outcome = BattleFairyUpgradeOutcome::InsufficientMoney;
             push_battle_fairy_upgrade_notification(&mut report, "ZHGS0020", None);
@@ -9898,7 +9924,7 @@ impl CPlayer {
             client_ip: self.client_ip,
         };
 
-        let success = (random(100) as u32).wrapping_add(1) <= report.probability;
+        let success = (random(100) as u32).wrapping_add(1) <= probability;
         let mut target_present = true;
         if success {
             let increase = self.battle_fairy_container.success_result(factory, random);
@@ -10000,8 +10026,6 @@ impl CPlayer {
                 .base()
                 .get_goods(BattleFairyCell::Equipment.position())
         {
-            report.resulting_level =
-                Some(goods.addon_property_value(factory, GAP_BF_WEAPON_LEVEL, 1));
             report.effects.push(BattleFairyUpgradeEffect::GoodsUpdated(
                 BattleFairyDefaultGoodsUpdate {
                     message_type: 0x0b_f918,
@@ -10030,7 +10054,7 @@ impl CPlayer {
                 }
                 continue;
             };
-            report.consumed_gems.push(consumed.clone());
+            tracing::trace!(player_id, cell = ?cell, removed = consumed.removed, previous_amount = consumed.previous_amount, remaining_amount = consumed.remaining_amount, "камень улучшения боевой феи израсходован");
             report.effects.push(BattleFairyUpgradeEffect::GemConsumed {
                 player_id,
                 consumed: consumed.clone(),
@@ -10064,8 +10088,7 @@ impl CPlayer {
         let mut report = BattleFairyPotentialResetReport {
             player_id,
             outcome: BattleFairyPotentialResetOutcome::MissingHeadgear,
-            recovered_potential: 0,
-            effects: Vec::new(),
+            effects: GameEffectJournal::default(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairyPotentialResetOutcome::FeatureDisabled;
@@ -10183,7 +10206,11 @@ impl CPlayer {
             );
             (recovered, brave, agility, spiritualism, strength)
         };
-        report.recovered_potential = recovered.0;
+        tracing::trace!(
+            player_id,
+            recovered_potential = recovered.0,
+            "потенциал боевой феи восстановлен"
+        );
         self.set_strength(
             self.combat_properties
                 .strength
@@ -10243,11 +10270,7 @@ impl CPlayer {
             player_id,
             position,
             outcome: BattleFairySkillResetOutcome::MissingHeadgear,
-            previous_skill: None,
-            selected_skill: None,
-            detached_skill_ids: Vec::new(),
-            attached_skill_ids: Vec::new(),
-            effects: Vec::new(),
+            effects: GameEffectJournal::default(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairySkillResetOutcome::FeatureDisabled;
@@ -10360,7 +10383,12 @@ impl CPlayer {
                 return report;
             }
         };
-        report.previous_skill = Some(previous_skill);
+        tracing::trace!(
+            player_id,
+            position,
+            previous_skill,
+            "прежний навык боевой феи выбран для сброса"
+        );
 
         // В каждом native switch-case полный detach расположен перед первым
         // random(), а не только перед addon mutation.
@@ -10370,7 +10398,11 @@ impl CPlayer {
                 continue;
             }
             let _deleted = self.move_shape.delete_skill(skill_id, skill_factory);
-            report.detached_skill_ids.push(skill_id);
+            tracing::trace!(
+                player_id,
+                skill_id,
+                "навык боевой феи отсоединён при сбросе"
+            );
             // Native `DelWarSoulSkillInPlayer` вызывает TellClient после
             // DelSkill. Поэтому packet удаления существует лишь если skill
             // пережил отказ category lookup.
@@ -10411,7 +10443,11 @@ impl CPlayer {
                 }
             },
         };
-        report.selected_skill = Some(selected_skill);
+        tracing::trace!(
+            player_id,
+            selected_skill,
+            "новый навык боевой феи выбран при сбросе"
+        );
 
         {
             let goods = self
@@ -10429,7 +10465,11 @@ impl CPlayer {
         for (skill_id, level) in new_entries {
             let _added = self.move_shape.add_skill(skill_id, level, skill_factory);
             if let Some(skill) = self.move_shape.skill(skill_id) {
-                report.attached_skill_ids.push(skill_id);
+                tracing::trace!(
+                    player_id,
+                    skill_id,
+                    "навык боевой феи присоединён после сброса"
+                );
                 report.effects.push(BattleFairySkillResetEffect::SkillAdded(
                     battle_fairy_skill_snapshot(player_id, skill),
                 ));
@@ -10521,14 +10561,7 @@ impl CPlayer {
         facts: PlayerSkillRequestFacts,
         skill_factory: &CSkillFactory,
     ) -> GameEffectJournal {
-        self.request_player_skill_core(
-            socket_id,
-            request,
-            facts,
-            None,
-            "GS0090",
-            skill_factory,
-        )
+        self.request_player_skill_core(socket_id, request, facts, None, "GS0090", skill_factory)
     }
 
     /// Item-skill `0x90004` использует переданный client level, а успешная
@@ -10590,7 +10623,10 @@ impl CPlayer {
         });
         if skill_level == 0 {
             push_player_skill_reject(&mut journal, socket_id);
-            trace!(player_id, skill_id, "Запрос навыка отклонён: навык не разрешён");
+            trace!(
+                player_id,
+                skill_id, "Запрос навыка отклонён: навык не разрешён"
+            );
             return journal;
         }
         if skill_factory
@@ -10598,21 +10634,28 @@ impl CPlayer {
             .is_some_and(|properties| properties.is_target_self() != 0)
         {
             let (resolved_x, resolved_y) =
-                match (self.shape().get_tile_x(), self.shape().get_tile_y())
-            {
-                (Ok(x), Ok(y)) => (x, y),
-                (Err(error), _) | (_, Err(error)) => {
-                    trace!(player_id, skill_id, ?error, "Запрос навыка отклонён координатной границей");
-                    return journal;
-                }
-            };
+                match (self.shape().get_tile_x(), self.shape().get_tile_y()) {
+                    (Ok(x), Ok(y)) => (x, y),
+                    (Err(error), _) | (_, Err(error)) => {
+                        trace!(
+                            player_id,
+                            skill_id,
+                            ?error,
+                            "Запрос навыка отклонён координатной границей"
+                        );
+                        return journal;
+                    }
+                };
             target_type = self.shape().identity().object_type;
             target_id = player_id;
             target_x = resolved_x;
             target_y = resolved_y;
         }
         if !facts.player_ai_available {
-            trace!(player_id, skill_id, "Запрос навыка отклонён: отсутствует AI игрока");
+            trace!(
+                player_id,
+                skill_id, "Запрос навыка отклонён: отсутствует AI игрока"
+            );
             return journal;
         }
 
@@ -10631,7 +10674,10 @@ impl CPlayer {
             }
         } else {
             if self.server_region_id.is_none() {
-                trace!(player_id, skill_id, "Запрос навыка отклонён: отсутствует регион");
+                trace!(
+                    player_id,
+                    skill_id, "Запрос навыка отклонён: отсутствует регион"
+                );
                 return journal;
             }
             let target = ShapeIdentity {
@@ -10641,7 +10687,10 @@ impl CPlayer {
             };
             if !facts.object_target_available {
                 push_player_skill_reject(&mut journal, socket_id);
-                trace!(player_id, skill_id, target_type, target_id, "Запрос навыка отклонён: цель отсутствует");
+                trace!(
+                    player_id,
+                    skill_id, target_type, target_id, "Запрос навыка отклонён: цель отсутствует"
+                );
                 return journal;
             }
             PlayerSkillDispatch::Object { skill_id, target }
@@ -10653,7 +10702,13 @@ impl CPlayer {
             player_id,
             dispatch,
         });
-        trace!(player_id, skill_id, skill_level, ?dispatch, "Запрос навыка передан AI");
+        trace!(
+            player_id,
+            skill_id,
+            skill_level,
+            ?dispatch,
+            "Запрос навыка передан AI"
+        );
         journal
     }
 
@@ -10682,15 +10737,24 @@ impl CPlayer {
                 color: 0xffff_0000,
                 message_type: 0,
             });
-            trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: подсистема выключена");
+            trace!(
+                player_id,
+                skill_id, "Запрос навыка боевой феи отклонён: подсистема выключена"
+            );
             return journal;
         }
         let Some(goods) = self.equipment.get_goods(10) else {
-            trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: отсутствует головной предмет");
+            trace!(
+                player_id,
+                skill_id, "Запрос навыка боевой феи отклонён: отсутствует головной предмет"
+            );
             return journal;
         };
         if goods.addon_property_value(goods_factory, GAP_BF_HP, 1) == 0 {
-            trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: нет здоровья");
+            trace!(
+                player_id,
+                skill_id, "Запрос навыка боевой феи отклонён: нет здоровья"
+            );
             return journal;
         }
         if self.contend_state && facts.symbol_attackable {
@@ -10706,7 +10770,10 @@ impl CPlayer {
             check_battle_fairy_skill(goods, goods_factory, request.property_offset, skill_id);
         if skill_level == 0 {
             push_battle_fairy_skill_reject(&mut journal, socket_id);
-            trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: навык не разрешён");
+            trace!(
+                player_id,
+                skill_id, "Запрос навыка боевой феи отклонён: навык не разрешён"
+            );
             return journal;
         }
 
@@ -10715,21 +10782,28 @@ impl CPlayer {
             .is_some_and(|properties| properties.is_target_self() != 0)
         {
             let (resolved_x, resolved_y) =
-                match (self.shape().get_tile_x(), self.shape().get_tile_y())
-            {
-                (Ok(x), Ok(y)) => (x, y),
-                (Err(error), _) | (_, Err(error)) => {
-                    trace!(player_id, skill_id, ?error, "Запрос навыка боевой феи отклонён координатной границей");
-                    return journal;
-                }
-            };
+                match (self.shape().get_tile_x(), self.shape().get_tile_y()) {
+                    (Ok(x), Ok(y)) => (x, y),
+                    (Err(error), _) | (_, Err(error)) => {
+                        trace!(
+                            player_id,
+                            skill_id,
+                            ?error,
+                            "Запрос навыка боевой феи отклонён координатной границей"
+                        );
+                        return journal;
+                    }
+                };
             target_type = self.shape().identity().object_type;
             target_id = player_id;
             target_x = resolved_x;
             target_y = resolved_y;
         }
         if !facts.player_ai_available {
-            trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: отсутствует AI игрока");
+            trace!(
+                player_id,
+                skill_id, "Запрос навыка боевой феи отклонён: отсутствует AI игрока"
+            );
             return journal;
         }
 
@@ -10748,7 +10822,10 @@ impl CPlayer {
             }
         } else {
             if self.server_region_id.is_none() {
-                trace!(player_id, skill_id, "Запрос навыка боевой феи отклонён: отсутствует регион");
+                trace!(
+                    player_id,
+                    skill_id, "Запрос навыка боевой феи отклонён: отсутствует регион"
+                );
                 return journal;
             }
             let target = ShapeIdentity {
@@ -10758,7 +10835,13 @@ impl CPlayer {
             };
             if !facts.object_target_available {
                 push_battle_fairy_skill_reject(&mut journal, socket_id);
-                trace!(player_id, skill_id, target_type, target_id, "Запрос навыка боевой феи отклонён: цель отсутствует");
+                trace!(
+                    player_id,
+                    skill_id,
+                    target_type,
+                    target_id,
+                    "Запрос навыка боевой феи отклонён: цель отсутствует"
+                );
                 return journal;
             }
             BattleFairySkillDispatch::Object { skill_id, target }
@@ -10767,7 +10850,13 @@ impl CPlayer {
             player_id,
             dispatch,
         });
-        trace!(player_id, skill_id, skill_level, ?dispatch, "Запрос навыка боевой феи передан AI");
+        trace!(
+            player_id,
+            skill_id,
+            skill_level,
+            ?dispatch,
+            "Запрос навыка боевой феи передан AI"
+        );
         journal
     }
 
@@ -11311,8 +11400,7 @@ impl CPlayer {
         let mut report = BattleFairyCombineReport {
             player_id,
             outcome: BattleFairyCombineOutcome::Rejected,
-            removed_inputs: Vec::with_capacity(3),
-            effects: Vec::new(),
+            effects: GameEffectJournal::default(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairyCombineOutcome::FeatureDisabled;
@@ -11394,7 +11482,7 @@ impl CPlayer {
                     old_client_payload: None,
                 },
             ));
-            report.removed_inputs.push(removed);
+            tracing::trace!(player_id, cell = ?removed.cell, goods = ?removed.goods, amount = removed.amount, "материал соединения боевой феи удалён");
         }
 
         if !success {
