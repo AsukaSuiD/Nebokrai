@@ -469,7 +469,7 @@ pub(crate) fn dispatch_game_team_message(
                 return Some(Err(GameTeamMessageError::MissingChatText));
             };
             match game.send_team_chat(player_id, text, game_tick_milliseconds()) {
-                GameTeamChatResult::Sent(_control) => {
+                GameTeamChatResult::Sent => {
                     trace!(player_id, "Сообщение группы отправлено");
                 }
                 GameTeamChatResult::Cooldown => {

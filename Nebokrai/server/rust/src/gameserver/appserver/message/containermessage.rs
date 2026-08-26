@@ -26,7 +26,7 @@ use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::player::{
     BattleFairyEquipmentMutationReport, CPlayer, EnhancementSelectionReport,
-    PlayerEquipmentAddReport, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
+    PlayerEquipmentAddReport, PlayerEquipmentRemoveEffect,
     PlayerEquipmentRemoveReport, PlayerProgress,
 };
 use crate::gameserver::appserver::session::csessionfactory::{
@@ -121,7 +121,6 @@ pub(crate) enum AuctionListingTransferRemoval {
     Equipment {
         event: EquipmentRemovedEvent,
         effects: Vec<PlayerEquipmentRemoveEffect>,
-        deliveries: Vec<PlayerEquipmentDelivery>,
     },
     AuctionGoods {
         owner_type: i32,
@@ -222,7 +221,6 @@ pub(crate) enum EnhancementTransferRemoval {
     Equipment {
         event: EquipmentRemovedEvent,
         effects: Vec<PlayerEquipmentRemoveEffect>,
-        deliveries: Vec<PlayerEquipmentDelivery>,
     },
 }
 
@@ -725,7 +723,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
         );
         match transfer {
-            Ok(transfer) => tracing::trace!(?transfer, outcome = "AuctionMoneyReturned", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(outcome = "AuctionMoneyReturned", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let receive_rejected = matches!(
                     &reason,
@@ -779,7 +777,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
         );
         match transfer {
-            Ok(transfer) => tracing::trace!(?transfer, outcome = "BankCurrencyMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(outcome = "BankCurrencyMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
                 tracing::trace!(?reason, delivery, "перевод валюты банка отменён");
@@ -800,7 +798,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(transfer) => tracing::trace!(?transfer, outcome = "CiQingComposeMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(outcome = "CiQingComposeMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     CiQingComposeTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -852,7 +850,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(transfer) => tracing::trace!(?transfer, outcome = "BattleFairyMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(outcome = "BattleFairyMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     BattleFairyTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -903,7 +901,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(transfer) => tracing::trace!(?transfer, outcome = "FairyStorageMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(outcome = "FairyStorageMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     FairyStorageTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -952,7 +950,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(transfer) => tracing::trace!(?transfer, outcome = "PlayerHandMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(outcome = "PlayerHandMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     PlayerHandMoveBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -994,7 +992,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
         );
         match transfer {
-            Ok(transfer) => tracing::trace!(?transfer, outcome = "HandAuctionListingMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(outcome = "HandAuctionListingMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     HandAuctionListingBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -1036,7 +1034,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(transfer) => tracing::trace!(?transfer, outcome = "HandContainerMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(outcome = "HandContainerMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let rejected = match &reason {
                     HandContainerMoveBlock::SwapBusy { rejected, .. }
@@ -1103,7 +1101,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(transfer) => tracing::trace!(?transfer, outcome = "AuctionGoodsInventoryMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(outcome = "AuctionGoodsInventoryMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let mut notification_count = 0usize;
                 let progress_notice: Option<&[u8]> = match &reason {
@@ -1189,7 +1187,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             context,
         );
         match transfer {
-            Ok(transfer) => tracing::trace!(?transfer, outcome = "DepotStorageMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(outcome = "DepotStorageMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let rejected = match &reason {
                     DepotStorageTransferBlock::RolledBack { rejected, .. }
@@ -1307,7 +1305,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             )
         };
         match transfer {
-            Ok(transfer) => tracing::trace!(?transfer, outcome = "GroundGoodsMoved", "перемещение контейнера выполнено"),
+            Ok(()) => tracing::trace!(outcome = "GroundGoodsMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     GroundGoodsMoveBlock::PickupProtected => Some(b"GS0112"),

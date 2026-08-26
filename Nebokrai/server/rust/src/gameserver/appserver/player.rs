@@ -637,7 +637,6 @@ pub(crate) struct PlayerEquipmentRemoveReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: EquipmentRemoveOutcome,
     pub(crate) effects: Vec<PlayerEquipmentRemoveEffect>,
-    pub(crate) deliveries: Vec<PlayerEquipmentDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -670,14 +669,6 @@ pub(crate) struct PlayerEquipmentAddReport {
     pub(crate) player_id: i32,
     pub(crate) outcome: EquipmentAddOutcome,
     pub(crate) effects: Vec<PlayerEquipmentAddEffect>,
-    pub(crate) deliveries: Vec<PlayerEquipmentDelivery>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerEquipmentDelivery {
-    SkillAdded(i32),
-    SkillRemoved(i32),
-    Runtime(Vec<i32>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -693,12 +684,6 @@ pub(crate) enum BattleFairyEquipmentMutationEffect {
     BattleFairyUpdated(BattleFairyDefaultGoodsUpdate),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyEquipmentMutationDelivery {
-    Properties(i32),
-    GoodsUpdated(i32),
-}
-
 #[must_use = "equipment report сохраняет container ownership и ранние property effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyEquipmentMutationReport {
@@ -708,7 +693,6 @@ pub(crate) struct BattleFairyEquipmentMutationReport {
     pub(crate) property_applied: bool,
     pub(crate) outcome: BattleFairyEquipmentMutationOutcome,
     pub(crate) effects: Vec<BattleFairyEquipmentMutationEffect>,
-    pub(crate) deliveries: Vec<BattleFairyEquipmentMutationDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -923,16 +907,6 @@ pub(crate) enum BattleFairySkillResetEffect {
     GoodsUpdated(BattleFairyDefaultGoodsUpdate),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairySkillResetDelivery {
-    Player(i32),
-    PacketItem(Vec<i32>),
-    SkillRemoved(i32),
-    SkillAdded(i32),
-    SelectedSkillLearned(i32),
-    GoodsUpdated(i32),
-}
-
 #[must_use = "skill reset report содержит packet, skill-state и network effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairySkillResetReport {
@@ -944,7 +918,6 @@ pub(crate) struct BattleFairySkillResetReport {
     pub(crate) detached_skill_ids: Vec<u32>,
     pub(crate) attached_skill_ids: Vec<u32>,
     pub(crate) effects: Vec<BattleFairySkillResetEffect>,
-    pub(crate) deliveries: Vec<BattleFairySkillResetDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8415,7 +8388,6 @@ impl CPlayer {
             player_id,
             outcome,
             effects,
-            deliveries: Vec::new(),
         }
     }
 
@@ -8508,7 +8480,6 @@ impl CPlayer {
             player_id,
             outcome,
             effects,
-            deliveries: Vec::new(),
         }
     }
 
@@ -9451,7 +9422,6 @@ impl CPlayer {
             property_applied,
             outcome: BattleFairyEquipmentMutationOutcome::Added(outcome),
             effects,
-            deliveries: Vec::new(),
         }
     }
 
@@ -9492,7 +9462,6 @@ impl CPlayer {
             property_applied: false,
             outcome: BattleFairyEquipmentMutationOutcome::Added(outcome),
             effects: Vec::new(),
-            deliveries: Vec::new(),
         }
     }
 
@@ -9523,7 +9492,6 @@ impl CPlayer {
                 property_applied: false,
                 outcome: BattleFairyEquipmentMutationOutcome::MissingGoods,
                 effects: Vec::new(),
-                deliveries: Vec::new(),
             };
         };
         let mut report = BattleFairyEquipmentMutationReport {
@@ -9533,7 +9501,6 @@ impl CPlayer {
             property_applied: false,
             outcome: BattleFairyEquipmentMutationOutcome::Removed(outcome),
             effects: Vec::new(),
-            deliveries: Vec::new(),
         };
         if let (Some(cell), Some(addons)) = (cell, addons)
             && let Some(first_update) = self.apply_battle_fairy_property(
@@ -9598,7 +9565,6 @@ impl CPlayer {
                 property_applied: false,
                 outcome: BattleFairyEquipmentMutationOutcome::MissingGoods,
                 effects: Vec::new(),
-                deliveries: Vec::new(),
             };
         };
         if goods.amount() == amount {
@@ -9625,7 +9591,6 @@ impl CPlayer {
                 BattleFairyEquipmentMutationOutcome::Removed,
             ),
             effects: Vec::new(),
-            deliveries: Vec::new(),
         }
     }
 
@@ -10283,7 +10248,6 @@ impl CPlayer {
             detached_skill_ids: Vec::new(),
             attached_skill_ids: Vec::new(),
             effects: Vec::new(),
-            deliveries: Vec::new(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairySkillResetOutcome::FeatureDisabled;
