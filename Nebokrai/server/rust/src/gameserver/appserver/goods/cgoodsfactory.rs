@@ -429,6 +429,43 @@ impl CGoodsFactory {
         let _ = deal_enchase_gems(goods, &gems, self, false);
     }
 
+    /// Точный проход `DaKongXiangQian(goods, true)`: сначала выбирает три
+    /// внешних свойства по загруженной конфигурации, затем накладывает свойства
+    /// уже записанных камней и рассчитанные внешние прибавки.
+    pub(crate) fn da_kong_xiang_qian<Random>(
+        &self,
+        goods: &mut CGoods,
+        setup: &CDaKongXiangQian,
+        mut random: Random,
+    ) where
+        Random: FnMut(i32) -> i32,
+    {
+        let goods_index = goods.base_properties_index();
+        let socket_count = goods.da_kong_count(self);
+        for (group, minimum, property) in [
+            (0, 3, GAP_DAKONG_EXTERN_1),
+            (1, 6, GAP_DAKONG_EXTERN_2),
+            (2, 7, GAP_DAKONG_EXTERN_3),
+        ] {
+            let allowed = setup.check_external_property(goods_index, group + 1)
+                && if group == 2 {
+                    socket_count == minimum
+                } else {
+                    socket_count >= minimum
+                };
+            let (property_type, value) = if allowed {
+                setup
+                    .make_sure_external_attribute(group, goods_index, &mut random)
+                    .unwrap_or_default()
+            } else {
+                (0, 0)
+            };
+            let _ = goods.set_addon_property_value_core(property, 1, property_type);
+            let _ = goods.set_addon_property_modifier_core(property, 2, value);
+        }
+        apply_embedded_gem_properties(goods, self, random);
+    }
+
     /// Ограничивает особые свойства пределом из базы предмета, вкладом
     /// вставленных камней и зависящей от уровня прибавкой, как
     /// `CGoodsFactory::DaKongDeluxModify`.

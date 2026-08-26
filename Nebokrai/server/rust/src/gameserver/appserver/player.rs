@@ -264,8 +264,9 @@ use super::container::camountlimitgoodsshadowcontainer::{
 use super::container::cbank::{BankGoodsAddOutcome, CBank};
 use super::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck, BattleFairyCombineRemovedInput,
-    BattleFairyContainerAddOutcome, BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill,
-    BattleFairyPropertyAddEffect, BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
+    BattleFairyContainerAddOutcome, BattleFairyDefaultGoodsUpdate,
+    BattleFairyDefaultPropertyReport, BattleFairyDefaultSkill, BattleFairyPropertyAddEffect,
+    BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
 };
 use super::container::ccontainer::ContainerListenerHandle;
 use super::container::ccontainer::PreviousContainer;
@@ -7893,8 +7894,51 @@ impl CPlayer {
         &mut self.battle_fairy_container
     }
 
-    /// Account принадлежит player snapshot и используется exact audit-log
-    /// combine; отсутствие ещё не загруженного account остаётся пустой строкой.
+    /// Выполняет player-часть `LoadBFDefualtProperty` для ещё не добавленного
+    /// сценарного предмета: изменяет сам предмет и регистрирует три начальных
+    /// навыка в каноническом `CMoveShape` игрока.
+    pub(crate) fn initialize_script_battle_fairy_goods(
+        &mut self,
+        goods: &mut CGoods,
+        factory: &CGoodsFactory,
+        skill_factory: &CSkillFactory,
+        encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
+    ) -> Option<(BattleFairyDefaultPropertyReport, Vec<BattleFairySkillAdded>)> {
+        let player_id = self.player_id();
+        let mut skills = Vec::with_capacity(3);
+        let mut register_skill = |skill: BattleFairyDefaultSkill| {
+            if !self
+                .move_shape
+                .add_skill(skill.id, skill.level, skill_factory)
+            {
+                return false;
+            }
+            let stored = self
+                .move_shape
+                .skill(skill.id)
+                .expect("успешный AddSkill оставляет навык доступным");
+            skills.push(BattleFairySkillAdded {
+                message_type: BATTLE_FAIRY_SKILL_ADDED_MESSAGE_TYPE,
+                player_id,
+                skill_id: stored.id(),
+                skill_level: stored.level(),
+                skill_type: stored.skill_type(),
+                skill_name: stored.name().to_vec(),
+            });
+            true
+        };
+        let report = CBattleFairyContainer::load_default_properties(
+            Some(player_id),
+            goods,
+            factory,
+            &mut register_skill,
+            encode_old_client,
+        )?;
+        Some((report, skills))
+    }
+
+    /// Учётная запись принадлежит снимку игрока и используется точным журналом
+    /// объединения; до загрузки она остаётся пустой строкой.
     pub(crate) fn set_account(&mut self, account: impl AsRef<[u8]>) {
         self.account.clear();
         self.account.extend_from_slice(account.as_ref());

@@ -12,9 +12,11 @@
 //! функция внутри выражения сохраняет позицию и при повторном проходе один раз
 //! потребляет результат продолжения.
 //!
-//! Проход аргументов хранит 12 позиций — подтверждённую границу достигнутого
-//! `CreateNpc`. Поэтому регион, видимость и срок жизни вычисляет тот же
-//! вычислитель выражений до входа в диспетчер. `MonsterTalk 3304` сохраняет
+//! Проход аргументов хранит 32 позиции — подтверждённую границу достигнутого
+//! `AddTimeGoods`; первые 12 также покрывают полный `CreateNpc`. Поэтому регион,
+//! видимость и срок жизни вычисляет тот же вычислитель выражений до входа в
+//! диспетчер, а десять пар отверстий `AddTimeGoods` вычисляются позднее заново
+//! для каждого подходящего созданного предмета. `MonsterTalk 3304` сохраняет
 //! отдельный порядок выражений `text -> name` и намеренно не вычисляет хвост
 //! команды. `PlayerMessage 3308` вычисляет тип сообщения только после успешно
 //! вычисленного явного цвета, сохраняя раннее прекращение исходного владельца.
@@ -45,21 +47,22 @@ use super::buffskillfunc::{
 use super::function::{
     SCRIPT_FUNCTION_ADD_APPELLATION_STATE, SCRIPT_FUNCTION_ADD_GEM_EXCHANGE_LOG,
     SCRIPT_FUNCTION_ADD_INCREMENT_LOG, SCRIPT_FUNCTION_ADD_JEWELRY_MADE_LOG,
-    SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR, SCRIPT_FUNCTION_ARGUMENT_CAPACITY,
-    SCRIPT_FUNCTION_CITY_WAR_DECLARE, SCRIPT_FUNCTION_DEL_APPELLATION_STATE,
-    SCRIPT_FUNCTION_GET_APPELLATION_STATE, SCRIPT_FUNCTION_GET_COPY_NUMBER,
-    SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE, SCRIPT_FUNCTION_GET_NAME,
-    SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID, SCRIPT_FUNCTION_GET_OWNED_REGION_UNION_ID,
-    SCRIPT_FUNCTION_GET_STRING_BY_ID, SCRIPT_FUNCTION_GET_TEAMER_NAME,
-    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME,
-    SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME,
-    SCRIPT_FUNCTION_LIST_BANNED_PLAYER, SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT,
-    SCRIPT_FUNCTION_PLAY_SOUND, SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
+    SCRIPT_FUNCTION_ADD_TIME_GOODS, SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR,
+    SCRIPT_FUNCTION_ARGUMENT_CAPACITY, SCRIPT_FUNCTION_CITY_WAR_DECLARE,
+    SCRIPT_FUNCTION_DEL_APPELLATION_STATE, SCRIPT_FUNCTION_GET_APPELLATION_STATE,
+    SCRIPT_FUNCTION_GET_COPY_NUMBER, SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE,
+    SCRIPT_FUNCTION_GET_NAME, SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID,
+    SCRIPT_FUNCTION_GET_OWNED_REGION_UNION_ID, SCRIPT_FUNCTION_GET_STRING_BY_ID,
+    SCRIPT_FUNCTION_GET_TEAMER_NAME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME,
+    SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME,
+    SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME, SCRIPT_FUNCTION_LIST_BANNED_PLAYER,
+    SCRIPT_FUNCTION_MONSTER_TALK, SCRIPT_FUNCTION_PLAY_EFFECT, SCRIPT_FUNCTION_PLAY_SOUND,
+    SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
     SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
     ScriptFunctionParameterKind, ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome,
     dispatch_script_function, dispatch_script_string_function, owned_region_script_caller_is_live,
-    script_function_parameter_kind, script_player_npc_caller_exists,
-    village_war_script_caller_is_live,
+    run_add_time_goods_script_function, script_function_parameter_kind,
+    script_player_npc_caller_exists, village_war_script_caller_is_live,
 };
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
@@ -849,6 +852,11 @@ impl<'a> CScript<'a> {
                         break;
                     }
                 }
+                if function_id == SCRIPT_FUNCTION_ADD_TIME_GOODS && index == 12 {
+                    // Пары отверстий исходный владелец вычисляет позднее,
+                    // внутри прохода каждого фактически созданного предмета.
+                    break;
+                }
                 match script_function_parameter_kind(function_id, index) {
                     ScriptFunctionParameterKind::Integer => {
                         integer_arguments[index] = Some(
@@ -863,22 +871,52 @@ impl<'a> CScript<'a> {
                 }
             }
         }
-        match dispatch_script_function(
-            game,
-            runtime,
-            self.context.player_id,
-            self.context.npc_id,
-            self.context.region_id,
-            self.context.used_item_id,
-            self.context.died_monster_index,
-            self.context.drop_goods_position,
-            self.script_id,
-            self.path,
-            function_id,
-            parameters.len(),
-            integer_arguments,
-            std::array::from_fn(|index| string_arguments[index].as_deref()),
-        ) {
+        let dispatch_outcome = if function_id == SCRIPT_FUNCTION_ADD_TIME_GOODS {
+            let player_id = self.context.player_id;
+            run_add_time_goods_script_function(
+                game,
+                runtime,
+                player_id,
+                string_arguments[0].as_deref(),
+                &integer_arguments,
+                |game, runtime| {
+                    let mut sockets = [(0, 0); 10];
+                    for (socket, pair) in sockets.iter_mut().enumerate() {
+                        let color = parameters
+                            .get(12 + socket * 2)
+                            .and_then(|parameter| self.evaluate_integer(game, runtime, parameter))
+                            .unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+                        let gem_index = parameters
+                            .get(13 + socket * 2)
+                            .and_then(|parameter| self.evaluate_integer(game, runtime, parameter))
+                            .unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+                        if matches!(color, SCRIPT_INT_PARAMETER_ERROR | -1) {
+                            return None;
+                        }
+                        *pair = (color, gem_index);
+                    }
+                    Some(sockets)
+                },
+            )
+        } else {
+            dispatch_script_function(
+                game,
+                runtime,
+                self.context.player_id,
+                self.context.npc_id,
+                self.context.region_id,
+                self.context.used_item_id,
+                self.context.died_monster_index,
+                self.context.drop_goods_position,
+                self.script_id,
+                self.path,
+                function_id,
+                parameters.len(),
+                integer_arguments,
+                std::array::from_fn(|index| string_arguments[index].as_deref()),
+            )
+        };
+        match dispatch_outcome {
             ScriptFunctionDispatchOutcome::Invalid => ScriptCommandOutcome::InvalidExpression,
             ScriptFunctionDispatchOutcome::DifferentFunction => {
                 ScriptCommandOutcome::UnknownFunction

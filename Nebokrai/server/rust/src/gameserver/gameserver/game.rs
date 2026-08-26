@@ -545,10 +545,11 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::{
 };
 use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
-    GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE, GAP_BF_CURRENT_MAX_EXP, GAP_BF_DEFUALT_SKLL, GAP_BF_HP,
-    GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAX_MP, GAP_BF_MODULE,
-    GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_CIQING_PROPERTY1, GAP_EQUIP_STATE,
-    GAP_GOODS_AUCTION_SCALE, GAP_GOODS_BIND, GAP_GOODS_PACKAGE_EXTENTION, GAP_PARTICULAR_ATTRIBUTE,
+    GAP_ANIMA_BIND, GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE, GAP_BF_CURRENT_MAX_EXP, GAP_BF_DEFUALT_SKLL,
+    GAP_BF_HP, GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAX_MP,
+    GAP_BF_MODULE, GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_CIQING_PROPERTY1,
+    GAP_DAKONG_1, GAP_EQUIP_ACTIVE, GAP_EQUIP_STATE, GAP_GOODS_AUCTION_SCALE, GAP_GOODS_BIND,
+    GAP_GOODS_PACKAGE_EXTENTION, GAP_ITEM_QUALITY, GAP_PARTICULAR_ATTRIBUTE,
     GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_WEAPON_DAMAGE_LEVEL, GOODS_TYPE_CONSUMABLE,
     GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
@@ -1991,6 +1992,21 @@ pub(crate) struct ScriptGoodsDropReport {
     pub(crate) placed: Vec<ShapeIdentity>,
     pub(crate) player_deliveries: Vec<i32>,
     pub(crate) around_deliveries: Vec<Option<Result<i32, ShapeCoordinateBlock>>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ScriptTimedGoodsParameters {
+    pub(crate) amount: u32,
+    pub(crate) upgrade_level: i32,
+    pub(crate) particular_attribute: i32,
+    pub(crate) time_type: u32,
+    pub(crate) lifetime: u32,
+    pub(crate) item_quality: i32,
+    pub(crate) equipment_active: i32,
+    pub(crate) anima_bind: i32,
+    pub(crate) anima_bind_enabled: bool,
+    pub(crate) equipment_state: i32,
+    pub(crate) equipment_state_value: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12992,6 +13008,174 @@ impl CGame {
             }
         }
         goods
+    }
+
+    /// Полный проход `9605 / AddTimeGoods`: каждый созданный предмет получает
+    /// свойства в исходном порядке, отдельно проходит добавление в сумку и
+    /// публикует результат до перехода к следующему предмету.
+    pub(crate) fn add_script_timed_goods<Context, EvaluateSockets>(
+        &mut self,
+        player_id: i32,
+        original_name: &[u8],
+        goods_index: u32,
+        parameters: ScriptTimedGoodsParameters,
+        context: &mut Context,
+        mut evaluate_sockets: EvaluateSockets,
+    ) -> i32
+    where
+        Context: OldClientGoodsCodec,
+        EvaluateSockets: FnMut(&mut Self, &mut Context) -> Option<[(i32, i32); 10]>,
+    {
+        if !self.players.contains_key(&player_id) {
+            return 0;
+        }
+        let created = self.create_goods_batch(goods_index, parameters.amount);
+        for mut goods in created {
+            if goods.addon_property_value(&self.goods_factory, GAP_BF_BATTLE_FAIRY, 1) == 1 {
+                let initialized = {
+                    let (players, factory, skill_factory) =
+                        (&mut self.players, &self.goods_factory, &self.skill_factory);
+                    let player = players
+                        .get_mut(&player_id)
+                        .expect("игрок проверен перед LoadBFDefualtProperty");
+                    let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+                    player.initialize_script_battle_fairy_goods(
+                        &mut goods,
+                        factory,
+                        skill_factory,
+                        &mut encode,
+                    )
+                };
+                if let Some((report, skills)) = initialized {
+                    for skill in skills {
+                        if let Some(message) = player_skill_learned_message(
+                            skill.message_type,
+                            skill.skill_id,
+                            skill.skill_level,
+                            skill.skill_level,
+                            &skill.skill_name,
+                            &self.skill_factory,
+                            false,
+                        ) {
+                            let _ = message.send_to_player(self.net_server(), skill.player_id);
+                        }
+                    }
+                    let _ = self.send_battle_fairy_goods_update(&report.goods_update);
+                }
+            }
+
+            if parameters.upgrade_level != 0 {
+                let (factory, random_state) = (&self.goods_factory, &mut self.random_state);
+                let _ =
+                    factory.upgrade_equipment(&mut goods, parameters.upgrade_level, |maximum| {
+                        game_legacy_random(random_state, maximum)
+                    });
+            }
+            if parameters.particular_attribute != 0 {
+                let _ = goods.set_addon_property_modifier_core(
+                    GAP_PARTICULAR_ATTRIBUTE,
+                    1,
+                    parameters.particular_attribute,
+                );
+            }
+            if parameters.item_quality != 0 {
+                let _ = goods.set_addon_property_modifier_core(
+                    GAP_ITEM_QUALITY,
+                    1,
+                    parameters.item_quality,
+                );
+                let text = format_legacy_text_fields(
+                    self.get_string_by_id(b"ZHGS0043"),
+                    &[original_name],
+                    0xff,
+                );
+                add_game_log_text(&text);
+            }
+            if parameters.equipment_active != 0 {
+                let _ = goods.set_addon_property_modifier_core(
+                    GAP_EQUIP_ACTIVE,
+                    2,
+                    parameters.equipment_active,
+                );
+            }
+            if parameters.anima_bind != 0 {
+                let _ = goods.set_addon_property_modifier_core(
+                    GAP_ANIMA_BIND,
+                    2,
+                    parameters.anima_bind,
+                );
+            }
+            if parameters.anima_bind_enabled {
+                let _ = goods.set_addon_property_modifier_core(GAP_ANIMA_BIND, 1, 1);
+            }
+            if parameters.equipment_state != 0 {
+                let _ = goods.set_addon_property_modifier_core(
+                    GAP_EQUIP_STATE,
+                    1,
+                    parameters.equipment_state,
+                );
+            }
+            if parameters.equipment_state_value != 0 {
+                let _ = goods.set_addon_property_modifier_core(
+                    GAP_EQUIP_STATE,
+                    2,
+                    parameters.equipment_state_value,
+                );
+            }
+
+            if goods.query_attribute(GAP_DAKONG_1)
+                && let Some(mut sockets) = evaluate_sockets(self, context)
+            {
+                for (socket, (color, gem_index)) in sockets.iter_mut().enumerate() {
+                    if *gem_index == 1 {
+                        let (setup, random_state) =
+                            (&self.da_kong_xiang_qian, &mut self.random_state);
+                        *color = setup
+                            .get_color(socket as i32, |maximum| {
+                                game_legacy_random(random_state, maximum)
+                            })
+                            .wrapping_add(2);
+                        *gem_index = 0;
+                        if socket == 6 {
+                            *color = 8;
+                        }
+                    }
+                    let property = GAP_DAKONG_1 + socket as i32;
+                    let _ = goods.set_addon_property_value_core(property, 1, *color);
+                    let _ = goods.set_addon_property_modifier_core(property, 2, *gem_index);
+                }
+                let (factory, setup, random_state) = (
+                    &self.goods_factory,
+                    &self.da_kong_xiang_qian,
+                    &mut self.random_state,
+                );
+                factory.da_kong_xiang_qian(&mut goods, setup, |maximum| {
+                    game_legacy_random(random_state, maximum)
+                });
+            }
+
+            goods.set_goods_time_type(parameters.time_type);
+            goods.set_goods_lifetime(parameters.lifetime);
+            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let Some((additions, _rejected)) =
+                self.add_goods_to_player_packet(player_id, vec![goods], &mut encode)
+            else {
+                continue;
+            };
+            for addition in &additions {
+                if let VolumeGoodsAddOutcome::Added(added) = &addition.outcome {
+                    let _ = self.players.get_mut(&player_id).is_some_and(|player| {
+                        player.register_goods_ai_by_id(
+                            added.identity.ex_id,
+                            &self.goods_factory,
+                            game_wall_time_seconds(),
+                        )
+                    });
+                }
+                let _ = self.send_player_packet_addition(addition);
+            }
+        }
+        1
     }
 
     pub(crate) const fn skill_factory(&self) -> &CSkillFactory {

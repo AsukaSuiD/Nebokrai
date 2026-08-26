@@ -179,6 +179,11 @@
 //! канонические состояние игрока, фабрику предметов и кодек старого клиента:
 //! открытие отправляет `0xC0112`, а подтверждённый предмет с дополнением `243`
 //! сохраняется в списке и публикует весь упорядоченный набор через `0xC010C`.
+//! `AddTimeGoods 9605` создаёт предметы через общую фабрику, последовательно
+//! применяет свойства боевой феи, качества, привязки и экипировки, а пары
+//! отверстий вычисляет заново только для каждого созданного предмета, который
+//! поддерживает инкрустацию. Успешное добавление проходит через пакет игрока,
+//! клиентские сообщения и регистрацию временного предмета в `GoodsAI`.
 //! PreciousBox `2221/2222/2237` сохраняет доверенный сценарий действия у
 //! игрока, клиентский обмен открытия, результата и закрытия, общий RNG игры,
 //! бросок конфигурации, владение фабрикой, улучшением и пакетом предметов, а
@@ -450,8 +455,8 @@ use crate::gameserver::gameserver::game::{
     GodsBattleSzlPlayerUpdate, MonsterDeathContext, NationCarriageReturnReport,
     NationCombatContext, NationContendEnterReport, PlayerReliveContext,
     RealmAppellationScriptContext, ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome,
-    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
-    colored_text_message, format_legacy_text_fields,
+    ScriptRegionChangeContext, ScriptTimedGoodsParameters, ServerRegionOwner,
+    colored_player_notice_message, colored_text_message, format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
@@ -466,6 +471,7 @@ pub(crate) const SCRIPT_FUNCTION_DA_KONG_DELUX_MODIFY: i32 = 9353;
 pub(crate) const SCRIPT_FUNCTION_MODIFY_GOODS_TIME: i32 = 9509;
 pub(crate) const SCRIPT_FUNCTION_MODIFY_AUCTION_SPACE: i32 = 9513;
 pub(crate) const SCRIPT_FUNCTION_AUTO_ADD_AUCTION_GOODS: i32 = 9514;
+pub(crate) const SCRIPT_FUNCTION_ADD_TIME_GOODS: i32 = 9605;
 pub(crate) const SCRIPT_FUNCTION_OPEN_CI_QING_PAGE: i32 = 9628;
 pub(crate) const SCRIPT_FUNCTION_PUSH_ITEM_TO_CI_QING: i32 = 9629;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
@@ -814,7 +820,7 @@ pub(crate) const SCRIPT_FUNCTION_ADD_BATTLE_FAIRY_EXPERIENCE: i32 = 9409;
 pub(crate) const SCRIPT_FUNCTION_GET_BATTLE_FAIRY_ATTRIBUTE: i32 = 9410;
 pub(crate) const SCRIPT_FUNCTION_RECREATE_BATTLE_FAIRY_ATTRIBUTES: i32 = 9411;
 const SCRIPT_INT_PARAMETER_ERROR: i32 = 0x09ff_fff9;
-pub(crate) const SCRIPT_FUNCTION_ARGUMENT_CAPACITY: usize = 12;
+pub(crate) const SCRIPT_FUNCTION_ARGUMENT_CAPACITY: usize = 32;
 const MAXIMUM_SCRIPT_SPAWN_COUNT: i32 = 4096;
 const SCRIPT_PLAYER_TYPE: i32 = 400;
 const SCRIPT_NPC_TYPE: i32 = 500;
@@ -4292,6 +4298,11 @@ pub(crate) fn script_function_parameter_kind(
             0..=2 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_ADD_TIME_GOODS => match index {
+            0 => String,
+            1..=31 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_DELETE_USED_GOODS
         | SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_1
         | SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_2
@@ -5294,6 +5305,64 @@ fn format_script_diagnostic(
     }
     output.truncate(0x18fff);
     output
+}
+
+/// Выполняет общую часть `AddTimeGoods`, сохраняя позднее вычисление отверстий
+/// за вызывающим владельцем `CScript`.
+pub(crate) fn run_add_time_goods_script_function<Runtime, EvaluateSockets>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    script_player_id: Option<i32>,
+    name: Option<&[u8]>,
+    integer_arguments: &[Option<i32>; SCRIPT_FUNCTION_ARGUMENT_CAPACITY],
+    mut evaluate_sockets: EvaluateSockets,
+) -> ScriptFunctionDispatchOutcome
+where
+    Runtime: ScriptFunctionRuntime,
+    EvaluateSockets: FnMut(&mut CGame, &mut Runtime) -> Option<[(i32, i32); 10]>,
+{
+    let Some(name) = name.filter(|name| !name.is_empty()) else {
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+    };
+    let amount = integer_arguments[1].unwrap_or(1);
+    if amount < 1 {
+        return ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 };
+    }
+    let mut upgrade_level = integer_arguments[2].unwrap_or_default();
+    if !(0..=100).contains(&upgrade_level) {
+        upgrade_level = 0;
+    }
+    let normalized = |index: usize, default| {
+        integer_arguments[index]
+            .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+            .unwrap_or(default)
+    };
+    let goods_index = game
+        .goods_factory()
+        .query_goods_id_by_original_name(Some(name));
+    let legacy_return = script_player_id.map_or(0, |player_id| {
+        game.add_script_timed_goods(
+            player_id,
+            name,
+            goods_index,
+            ScriptTimedGoodsParameters {
+                amount: amount as u32,
+                upgrade_level,
+                particular_attribute: normalized(3, 0),
+                time_type: normalized(4, 0) as u32,
+                lifetime: normalized(5, 0) as u32,
+                item_quality: normalized(6, 0),
+                equipment_active: normalized(7, 0),
+                anima_bind: normalized(8, 0),
+                anima_bind_enabled: normalized(9, 0) != 0,
+                equipment_state: normalized(10, 3),
+                equipment_state_value: normalized(11, 0),
+            },
+            runtime,
+            &mut evaluate_sockets,
+        )
+    });
+    ScriptFunctionDispatchOutcome::Handled { legacy_return }
 }
 
 fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
@@ -7573,6 +7642,26 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 );
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_ADD_TIME_GOODS => {
+            let socket_values = std::array::from_fn(|socket| {
+                (
+                    integer_arguments[12 + socket * 2].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+                    integer_arguments[13 + socket * 2].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+                )
+            });
+            let sockets = socket_values
+                .iter()
+                .all(|(color, _)| !matches!(*color, SCRIPT_INT_PARAMETER_ERROR | -1))
+                .then_some(socket_values);
+            Some(run_add_time_goods_script_function(
+                game,
+                runtime,
+                script_player_id,
+                string_arguments[0],
+                &integer_arguments,
+                |_, _| sockets,
+            ))
         }
         SCRIPT_FUNCTION_ADD_QUEST
         | SCRIPT_FUNCTION_COMPLETE_QUEST
