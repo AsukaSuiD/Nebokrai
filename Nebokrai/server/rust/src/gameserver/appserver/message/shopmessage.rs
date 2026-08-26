@@ -1,16 +1,19 @@
-//! Полный входной lifecycle магазина NPC GameServer.
+//! Полный входной жизненный цикл магазина NPC GameServer.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `appserver/message/shopmessage.cpp`. Материализованы selectors
-//! `0x8FD01..06`: shopping/death/region/NPC-distance gates, покупка из
-//! `CTradeList`, packet placement, wallet, продажа hand goods, ремонт одного
-//! и всех предметов, региональный налог с superior propagation, client wires
-//! `0xBFA04/05/07`, container wires и optional `0x60202` audit.
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/message/shopmessage.cpp`. Материализованы селекторы
+//! `0x8FD01..06`: проверки процесса покупки, смерти, региона и расстояния до
+//! NPC, покупка из `CTradeList`, размещение в packet, изменение кошелька,
+//! продажа товара из hand, ремонт одного или всех предметов, региональный
+//! налог с распространением владельцу superior, клиентские сообщения
+//! `0xBFA04/05/07`, сообщения контейнеров и необязательный аудит `0x60202`.
 //!
-//! Rust owners заменяют allocator/RTTI/visitor plumbing. Повреждённый wire
-//! становится typed error; исходные wrapping, integer durability ratio,
-//! ties-even rounding, repair tax multiplier и отсутствие rollback уже
-//! добавленного purchase-prefix сохранены явно.
+//! Владельцы Rust заменяют служебный код allocator/RTTI/visitor. Повреждённый
+//! wire становится типизированной ошибкой; исходные wrapping, целочисленное
+//! отношение прочности, округление к ближайшему чётному, налоговый множитель
+//! ремонта и отсутствие rollback уже добавленного префикса покупки сохранены
+//! явно. Синхронные эффекты не дублируются отчётами; их диагностические итоги
+//! публикуются через `tracing`.
 
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::AmountLimitGoodsRemoved;
 use crate::gameserver::appserver::cs2ccontainerobjectmove::{
@@ -20,13 +23,13 @@ use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_PARTICULAR_ATTRIBUTE, GOODS_TYPE_EQUIPMENT,
 };
-use crate::gameserver::appserver::player::{GoodsSessionPlayerRelease, PlayerProgress};
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::gameserver::game::{
     CGame, OldClientGoodsCodec, colored_player_notice_message,
 };
-use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
+use tracing::{debug, trace};
 
 const BUY: i32 = 0x0008_fd01;
 const SELL: i32 = 0x0008_fd02;
@@ -52,87 +55,11 @@ pub(crate) enum ShopMessageError {
     MissingRepairSlot,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ShopIgnoreReason {
-    MissingPlayerContext,
-    MissingPlayer,
-    WrongProgress(PlayerProgress),
-    MissingTradeGoods,
-    MissingGoodsProperties,
-    EmptyHand,
-    MissingHandGoods,
-    MissingRepairGoods,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ShopMessageOutcome {
-    Ignored(ShopIgnoreReason),
-    Cancelled {
-        release: GoodsSessionPlayerRelease,
-        delivery: i32,
-        notice: Option<i32>,
-    },
-    Notice {
-        string_id: &'static str,
-        delivery: i32,
-    },
-    Bought {
-        goods_id: u32,
-        amount: u32,
-        gross: u32,
-        tax: u32,
-        charged: u32,
-        additions: usize,
-        packet_deliveries: Vec<i32>,
-        money_deliveries: Vec<i32>,
-        tax_deliveries: Vec<Result<i32, SendMessageError>>,
-        audit_delivery: Option<Result<i32, SendMessageError>>,
-    },
-    Sold {
-        goods: ShapeIdentity,
-        amount: u32,
-        gross: u32,
-        tax: u32,
-        proceeds: u32,
-        move_delivery: i32,
-        money_deliveries: Vec<i32>,
-        tax_deliveries: Vec<Result<i32, SendMessageError>>,
-        audit_delivery: Option<Result<i32, SendMessageError>>,
-    },
-    SaleRolledBack {
-        delivery: i32,
-    },
-    RepairedOne {
-        slot: u8,
-        price: u32,
-        delivery: i32,
-        money_deliveries: Vec<i32>,
-    },
-    RepairedAll {
-        count: u32,
-        price: u32,
-        delivery: i32,
-        money_deliveries: Vec<i32>,
-    },
-    DistanceAccepted,
-    Closed {
-        release: GoodsSessionPlayerRelease,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ShopMessageReport {
-    pub(crate) message_type: i32,
-    pub(crate) player_id: Option<i32>,
-    pub(crate) region_id: Option<i32>,
-    pub(crate) outcome: ShopMessageOutcome,
-}
-
 pub(crate) fn dispatch_shop_message<Context: OldClientGoodsCodec>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
-) -> Option<Result<ShopMessageReport, ShopMessageError>> {
+) -> Option<Result<(), ShopMessageError>> {
     let message_type = message.message_type();
     if !matches!(
         message_type,
@@ -144,44 +71,24 @@ pub(crate) fn dispatch_shop_message<Context: OldClientGoodsCodec>(
     let player_id = message.player_id();
     let region_id = message.region_id();
     let Some(player_id) = player_id else {
-        return Some(Ok(report(
-            message_type,
-            None,
-            region_id,
-            ShopMessageOutcome::Ignored(ShopIgnoreReason::MissingPlayerContext),
-        )));
+        trace!(message_type, ?region_id, "сообщение магазина пропущено: нет контекста игрока");
+        return Some(Ok(()));
     };
     let Some(player) = game.find_player(player_id) else {
-        return Some(Ok(report(
-            message_type,
-            Some(player_id),
-            region_id,
-            ShopMessageOutcome::Ignored(ShopIgnoreReason::MissingPlayer),
-        )));
+        trace!(message_type, player_id, ?region_id, "сообщение магазина пропущено: игрок не найден");
+        return Some(Ok(()));
     };
     if player.current_progress() != PlayerProgress::Shopping {
-        return Some(Ok(report(
-            message_type,
-            Some(player_id),
-            region_id,
-            ShopMessageOutcome::Ignored(ShopIgnoreReason::WrongProgress(player.current_progress())),
-        )));
+        trace!(message_type, player_id, ?region_id, progress = ?player.current_progress(), "сообщение магазина пропущено из-за процесса игрока");
+        return Some(Ok(()));
     }
     if player.is_dead() {
-        return Some(Ok(report(
-            message_type,
-            Some(player_id),
-            region_id,
-            cancel(game, player_id, Some("GS0079")),
-        )));
+        cancel(game, player_id, Some("GS0079"));
+        return Some(Ok(()));
     }
     let Some(region_id) = region_id.filter(|id| game.find_region(*id).is_some()) else {
-        return Some(Ok(report(
-            message_type,
-            Some(player_id),
-            region_id,
-            cancel(game, player_id, None),
-        )));
+        cancel(game, player_id, None);
+        return Some(Ok(()));
     };
 
     let outcome = match message_type {
@@ -190,15 +97,17 @@ pub(crate) fn dispatch_shop_message<Context: OldClientGoodsCodec>(
         REPAIR_ONE => handle_repair_one(message, game, player_id, region_id),
         REPAIR_ALL => handle_repair_all(message, game, player_id, region_id),
         DISTANCE_PROBE => handle_distance_probe(message, game, player_id, region_id),
-        CLOSE => Ok(ShopMessageOutcome::Closed {
-            release: game
+        CLOSE => {
+            let _ = game
                 .find_player_mut(player_id)
                 .expect("shop player остаётся live")
-                .release_goods_session_state(),
-        }),
+                .release_goods_session_state();
+            debug!(player_id, region_id, "сессия магазина закрыта");
+            Ok(())
+        }
         _ => unreachable!(),
     };
-    Some(outcome.map(|outcome| report(message_type, Some(player_id), Some(region_id), outcome)))
+    Some(outcome)
 }
 
 fn handle_buy<Context: OldClientGoodsCodec>(
@@ -207,7 +116,7 @@ fn handle_buy<Context: OldClientGoodsCodec>(
     context: &mut Context,
     player_id: i32,
     region_id: i32,
-) -> Result<ShopMessageOutcome, ShopMessageError> {
+) -> Result<(), ShopMessageError> {
     let npc_id = message
         .base_mut()
         .get_long()
@@ -230,12 +139,12 @@ fn handle_buy<Context: OldClientGoodsCodec>(
         .map(|value| value as u32)
         .ok_or(ShopMessageError::MissingAmount)?;
     if amount == 0 {
-        return Ok(ShopMessageOutcome::Ignored(
-            ShopIgnoreReason::MissingTradeGoods,
-        ));
+        trace!(player_id, region_id, "покупка с нулевым количеством пропущена");
+        return Ok(());
     }
     let Some(npc_name) = nearby_npc_name(game, player_id, region_id, npc_id)? else {
-        return Ok(cancel(game, player_id, None));
+        cancel(game, player_id, None);
+        return Ok(());
     };
     let Some(entry) =
         game.trade_list()
@@ -247,17 +156,15 @@ fn handle_buy<Context: OldClientGoodsCodec>(
             })
             .copied()
     else {
-        return Ok(ShopMessageOutcome::Ignored(
-            ShopIgnoreReason::MissingTradeGoods,
-        ));
+        trace!(player_id, region_id, npc_id, "товар не найден в торговом списке NPC");
+        return Ok(());
     };
     let Some(properties) = game
         .goods_factory()
         .query_goods_base_properties(entry.goods_id)
     else {
-        return Ok(ShopMessageOutcome::Ignored(
-            ShopIgnoreReason::MissingGoodsProperties,
-        ));
+        trace!(player_id, region_id, goods_id = entry.goods_id, "свойства товара магазина не найдены");
+        return Ok(());
     };
     if properties.goods_type() == GOODS_TYPE_EQUIPMENT {
         amount = 1;
@@ -276,7 +183,8 @@ fn handle_buy<Context: OldClientGoodsCodec>(
         .wrapping_mul(properties.weight())
         .wrapping_mul(amount);
     if maximum_burden < burden.wrapping_add(added_burden) {
-        return Ok(notice(game, player_id, "GS0080"));
+        notice(game, player_id, "GS0080");
+        return Ok(());
     }
     let unit_price = properties.price();
     let gross = unit_price.wrapping_mul(amount);
@@ -296,7 +204,8 @@ fn handle_buy<Context: OldClientGoodsCodec>(
         || money / unit_price < amount
         || charged_f64 < unit_price as f64
     {
-        return Ok(notice(game, player_id, "GS0081"));
+        notice(game, player_id, "GS0081");
+        return Ok(());
     }
     let charged = charged_f64.round_ties_even() as u32;
     let created = game.create_goods_batch(entry.goods_id, amount);
@@ -321,19 +230,19 @@ fn handle_buy<Context: OldClientGoodsCodec>(
     let (additions, rejected) = game
         .add_npc_shop_goods_to_packet(player_id, created, context)
         .expect("shop player live");
-    let packet_deliveries = additions
-        .iter()
-        .flat_map(|addition| game.send_player_packet_addition(addition))
-        .collect::<Vec<_>>();
+    for addition in &additions {
+        let _ = game.send_player_packet_addition(addition);
+    }
     if !rejected.is_empty() || additions.iter().any(|addition| addition.position.is_none()) {
-        return Ok(notice(game, player_id, "GS0082"));
+        notice(game, player_id, "GS0082");
+        return Ok(());
     }
     let decrease = game
         .decrease_player_money(player_id, charged)
         .expect("shop player live");
-    let money_deliveries = game.send_player_money_decrease(player_id, &decrease.outcome);
-    let tax_deliveries = game.add_region_tax(region_id, tax);
-    let audit_delivery = game.log_system().goods_trade_log_enabled().then(|| {
+    let _ = game.send_player_money_decrease(player_id, &decrease.outcome);
+    let _ = game.add_region_tax(region_id, tax);
+    if game.log_system().goods_trade_log_enabled() {
         send_audit(
             game,
             1,
@@ -343,20 +252,10 @@ fn handle_buy<Context: OldClientGoodsCodec>(
             &log_name,
             amount,
             region_id,
-        )
-    });
-    Ok(ShopMessageOutcome::Bought {
-        goods_id: entry.goods_id,
-        amount,
-        gross,
-        tax,
-        charged,
-        additions: additions.len(),
-        packet_deliveries,
-        money_deliveries,
-        tax_deliveries,
-        audit_delivery,
-    })
+        );
+    }
+    debug!(player_id, region_id, goods_id = entry.goods_id, amount, gross, tax, charged, additions = additions.len(), "товар куплен у NPC");
+    Ok(())
 }
 
 fn handle_sell<Context: OldClientGoodsCodec>(
@@ -365,7 +264,7 @@ fn handle_sell<Context: OldClientGoodsCodec>(
     context: &mut Context,
     player_id: i32,
     region_id: i32,
-) -> Result<ShopMessageOutcome, ShopMessageError> {
+) -> Result<(), ShopMessageError> {
     if game
         .find_player(player_id)
         .expect("shop player live")
@@ -374,16 +273,21 @@ fn handle_sell<Context: OldClientGoodsCodec>(
         .len()
         == 0
     {
-        return Ok(ShopMessageOutcome::Ignored(ShopIgnoreReason::EmptyHand));
+        trace!(player_id, region_id, "продажа пропущена: рука пуста");
+        return Ok(());
     }
     let npc_id = message
         .base_mut()
         .get_long()
         .ok_or(ShopMessageError::MissingNpcId)?;
     match npc_distance(game, player_id, region_id, npc_id)? {
-        None => return Ok(cancel(game, player_id, None)),
+        None => {
+            cancel(game, player_id, None);
+            return Ok(());
+        }
         Some(distance) if 10 < distance => {
-            return Ok(cancel_with_distance_notice(game, player_id));
+            cancel_with_distance_notice(game, player_id);
+            return Ok(());
         }
         Some(_) => {}
     }
@@ -394,9 +298,8 @@ fn handle_sell<Context: OldClientGoodsCodec>(
             .hand()
             .get_goods(0)
         else {
-            return Ok(ShopMessageOutcome::Ignored(
-                ShopIgnoreReason::MissingHandGoods,
-            ));
+            trace!(player_id, region_id, "товар для продажи не найден в руке");
+            return Ok(());
         };
         (
             goods.identity(),
@@ -411,10 +314,12 @@ fn handle_sell<Context: OldClientGoodsCodec>(
         )
     };
     if snapshot.3 as u32 & 0x100 != 0 {
-        return Ok(notice(game, player_id, "GS0086"));
+        notice(game, player_id, "GS0086");
+        return Ok(());
     }
     if snapshot.4 == 0 {
-        return Ok(notice(game, player_id, "GS0084"));
+        notice(game, player_id, "GS0084");
+        return Ok(());
     }
     let gross = snapshot.4.wrapping_mul(snapshot.2);
     let tax_rate = game
@@ -431,7 +336,8 @@ fn handle_sell<Context: OldClientGoodsCodec>(
         .expect("shop player live")
         .money();
     if maximum < money.wrapping_add(proceeds) {
-        return Ok(notice(game, player_id, "GS0085"));
+        notice(game, player_id, "GS0085");
+        return Ok(());
     }
     let removed = game
         .find_player_mut(player_id)
@@ -439,17 +345,17 @@ fn handle_sell<Context: OldClientGoodsCodec>(
         .hand_mut()
         .remove_goods(snapshot.0.ex_id);
     let Some(removed) = removed else {
-        return Ok(ShopMessageOutcome::SaleRolledBack {
-            delivery: CS2CContainerObjectMove::default().send_to_player(game, player_id),
-        });
+        let _ = CS2CContainerObjectMove::default().send_to_player(game, player_id);
+        trace!(player_id, region_id, "продажа отменена после неудачного изъятия товара");
+        return Ok(());
     };
-    let move_delivery = send_hand_delete(game, player_id, &removed);
-    let (_, money_deliveries) = game
+    let _ = send_hand_delete(game, player_id, &removed);
+    let _ = game
         .increase_player_money(player_id, proceeds, context)
         .expect("shop player live");
     let tax = gross.wrapping_sub(proceeds);
-    let tax_deliveries = game.add_region_tax(region_id, tax);
-    let audit_delivery = game.log_system().goods_sell_to_npc_log_enabled().then(|| {
+    let _ = game.add_region_tax(region_id, tax);
+    if game.log_system().goods_sell_to_npc_log_enabled() {
         send_audit(
             game,
             2,
@@ -459,19 +365,10 @@ fn handle_sell<Context: OldClientGoodsCodec>(
             &snapshot.1,
             snapshot.2,
             region_id,
-        )
-    });
-    Ok(ShopMessageOutcome::Sold {
-        goods: snapshot.0,
-        amount: snapshot.2,
-        gross,
-        tax,
-        proceeds,
-        move_delivery,
-        money_deliveries,
-        tax_deliveries,
-        audit_delivery,
-    })
+        );
+    }
+    debug!(player_id, region_id, amount = snapshot.2, gross, tax, proceeds, "товар продан NPC");
+    Ok(())
 }
 
 fn handle_repair_one(
@@ -479,15 +376,19 @@ fn handle_repair_one(
     game: &mut CGame,
     player_id: i32,
     region_id: i32,
-) -> Result<ShopMessageOutcome, ShopMessageError> {
+) -> Result<(), ShopMessageError> {
     let npc_id = message
         .base_mut()
         .get_long()
         .ok_or(ShopMessageError::MissingNpcId)?;
     match npc_distance(game, player_id, region_id, npc_id)? {
-        None => return Ok(cancel(game, player_id, None)),
+        None => {
+            cancel(game, player_id, None);
+            return Ok(());
+        }
         Some(distance) if 10 < distance => {
-            return Ok(cancel_with_distance_notice(game, player_id));
+            cancel_with_distance_notice(game, player_id);
+            return Ok(());
         }
         Some(_) => {}
     }
@@ -500,9 +401,8 @@ fn handle_repair_one(
             .calculate_repair_price(goods, game.globe_setup().repair_factor())
     });
     let Some(base_price) = base_price else {
-        return Ok(ShopMessageOutcome::Ignored(
-            ShopIgnoreReason::MissingRepairGoods,
-        ));
+        trace!(player_id, region_id, slot, "предмет для ремонта не найден");
+        return Ok(());
     };
     let multiplier = (game
         .find_region(region_id)
@@ -518,26 +418,25 @@ fn handle_repair_one(
         .money()
         < price
     {
-        return Ok(notice(game, player_id, "GS0088"));
+        notice(game, player_id, "GS0088");
+        return Ok(());
     }
     let repaired = repair_slot_mut(game, player_id, slot);
     if !repaired {
-        return Ok(notice(game, player_id, "GS0087"));
+        notice(game, player_id, "GS0087");
+        return Ok(());
     }
     let decrease = game
         .decrease_player_money(player_id, price)
         .expect("shop player live");
-    let money_deliveries = game.send_player_money_decrease(player_id, &decrease.outcome);
+    let _ = game.send_player_money_decrease(player_id, &decrease.outcome);
     let mut response = CMessage::new(CLIENT_REPAIR_ONE);
     response.add_byte(b':');
     response.add_byte(slot);
     response.add_ulong(price);
-    Ok(ShopMessageOutcome::RepairedOne {
-        slot,
-        price,
-        delivery: response.send_to_player(game.net_server(), player_id),
-        money_deliveries,
-    })
+    let _ = response.send_to_player(game.net_server(), player_id);
+    debug!(player_id, region_id, slot, price, "предмет отремонтирован");
+    Ok(())
 }
 
 fn handle_repair_all(
@@ -545,15 +444,19 @@ fn handle_repair_all(
     game: &mut CGame,
     player_id: i32,
     region_id: i32,
-) -> Result<ShopMessageOutcome, ShopMessageError> {
+) -> Result<(), ShopMessageError> {
     let npc_id = message
         .base_mut()
         .get_long()
         .ok_or(ShopMessageError::MissingNpcId)?;
     match npc_distance(game, player_id, region_id, npc_id)? {
-        None => return Ok(cancel(game, player_id, None)),
+        None => {
+            cancel(game, player_id, None);
+            return Ok(());
+        }
         Some(distance) if 10 < distance => {
-            return Ok(cancel_with_distance_notice(game, player_id));
+            cancel_with_distance_notice(game, player_id);
+            return Ok(());
         }
         Some(_) => {}
     }
@@ -576,7 +479,8 @@ fn handle_repair_all(
         }
     }
     if slots.is_empty() {
-        return Ok(notice(game, player_id, "GS0089"));
+        notice(game, player_id, "GS0089");
+        return Ok(());
     }
     let base_price = slots
         .iter()
@@ -595,25 +499,22 @@ fn handle_repair_all(
         .money()
         < price
     {
-        return Ok(notice(game, player_id, "GS0088"));
+        notice(game, player_id, "GS0088");
+        return Ok(());
     }
     let decrease = game
         .decrease_player_money(player_id, price)
         .expect("shop player live");
-    let money_deliveries = game.send_player_money_decrease(player_id, &decrease.outcome);
+    let _ = game.send_player_money_decrease(player_id, &decrease.outcome);
     let mut response = CMessage::new(CLIENT_REPAIR_ALL);
     response.add_byte(b':');
     response.add_ulong(price);
-    let delivery = response.send_to_player(game.net_server(), player_id);
+    let _ = response.send_to_player(game.net_server(), player_id);
     for (slot, _) in &slots {
         let _ = repair_slot_mut(game, player_id, *slot);
     }
-    Ok(ShopMessageOutcome::RepairedAll {
-        count: slots.len() as u32,
-        price,
-        delivery,
-        money_deliveries,
-    })
+    debug!(player_id, region_id, count = slots.len(), price, "все подходящие предметы отремонтированы");
+    Ok(())
 }
 
 fn handle_distance_probe(
@@ -621,18 +522,18 @@ fn handle_distance_probe(
     game: &mut CGame,
     player_id: i32,
     region_id: i32,
-) -> Result<ShopMessageOutcome, ShopMessageError> {
+) -> Result<(), ShopMessageError> {
     let npc_id = message
         .base_mut()
         .get_long()
         .ok_or(ShopMessageError::MissingNpcId)?;
     let Some(distance) = npc_distance(game, player_id, region_id, npc_id)? else {
-        return Ok(ShopMessageOutcome::DistanceAccepted);
+        return Ok(());
     };
     if 11 <= distance {
-        return Ok(notice(game, player_id, "GS0083"));
+        notice(game, player_id, "GS0083");
     }
-    Ok(ShopMessageOutcome::DistanceAccepted)
+    Ok(())
 }
 
 fn nearby_npc_name(
@@ -695,48 +596,26 @@ fn repair_slot_mut(game: &mut CGame, player_id: i32, slot: u8) -> bool {
     goods.is_some_and(|goods| factory.repair_equipment(goods))
 }
 
-fn cancel(game: &mut CGame, player_id: i32, string_id: Option<&'static str>) -> ShopMessageOutcome {
-    let release = game
+fn cancel(game: &mut CGame, player_id: i32, string_id: Option<&'static str>) {
+    let _ = game
         .find_player_mut(player_id)
         .expect("shop player live")
         .release_goods_session_state();
-    let delivery = CMessage::new(CLIENT_CANCEL).send_to_player(game.net_server(), player_id);
-    let notice = string_id.map(|id| match notice(game, player_id, id) {
-        ShopMessageOutcome::Notice { delivery, .. } => delivery,
-        _ => 0,
-    });
-    ShopMessageOutcome::Cancelled {
-        release,
-        delivery,
-        notice,
+    let _ = CMessage::new(CLIENT_CANCEL).send_to_player(game.net_server(), player_id);
+    if let Some(string_id) = string_id {
+        notice(game, player_id, string_id);
     }
 }
 
-fn cancel_with_distance_notice(game: &mut CGame, player_id: i32) -> ShopMessageOutcome {
-    let distance = match notice(game, player_id, "GS0083") {
-        ShopMessageOutcome::Notice { delivery, .. } => delivery,
-        _ => 0,
-    };
-    match cancel(game, player_id, None) {
-        ShopMessageOutcome::Cancelled {
-            release, delivery, ..
-        } => ShopMessageOutcome::Cancelled {
-            release,
-            delivery,
-            notice: Some(distance),
-        },
-        outcome => outcome,
-    }
+fn cancel_with_distance_notice(game: &mut CGame, player_id: i32) {
+    notice(game, player_id, "GS0083");
+    cancel(game, player_id, None);
 }
 
-fn notice(game: &CGame, player_id: i32, string_id: &'static str) -> ShopMessageOutcome {
-    let delivery =
+fn notice(game: &CGame, player_id: i32, string_id: &'static str) {
+    let _ =
         colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(string_id.as_bytes()))
             .send_to_player(game.net_server(), player_id);
-    ShopMessageOutcome::Notice {
-        string_id,
-        delivery,
-    }
 }
 
 fn send_hand_delete(game: &CGame, player_id: i32, removed: &AmountLimitGoodsRemoved) -> i32 {
@@ -758,7 +637,7 @@ fn send_audit(
     name: &[u8],
     amount: u32,
     region_id: i32,
-) -> Result<i32, SendMessageError> {
+) {
     let player = game.find_player(player_id).expect("shop player live");
     let mut message = CMessage::new(WORLD_AUDIT);
     message.add_byte(reason);
@@ -774,25 +653,11 @@ fn send_audit(
     message.add_ulong(player.shape().get_tile_x().unwrap_or_default() as u32);
     message.add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
     message.add_ulong(player.client_ip());
-    message.send(game, false)
+    let _ = message.send(game, false);
 }
 
 fn add_c_string(message: &mut CMessage, bytes: &[u8]) {
     let visible = bytes.split(|byte| *byte == 0).next().unwrap_or_default();
     message.base_mut().add(visible);
     message.add_byte(0);
-}
-
-fn report(
-    message_type: i32,
-    player_id: Option<i32>,
-    region_id: Option<i32>,
-    outcome: ShopMessageOutcome,
-) -> ShopMessageReport {
-    ShopMessageReport {
-        message_type,
-        player_id,
-        region_id,
-        outcome,
-    }
 }
