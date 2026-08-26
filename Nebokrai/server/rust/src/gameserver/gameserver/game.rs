@@ -687,9 +687,8 @@ use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleCancelByPlayer, GodsBattleContender,
 };
 use crate::gameserver::appserver::servernationregion::{
-    NationCarriageReturnOutcome, NationContendArithmeticBlock,
-    NationContendCancelOutcome, NationContendDamageMutation,
-    NationMonsterDamageNotice, NationMoraleMutation, ServerNationRegion,
+    NationCarriageReturnOutcome, NationContendCancelOutcome, NationMonsterDamageNotice,
+    NationMoraleMutation, ServerNationRegion,
     classify_nation_morale_target,
 };
 use crate::gameserver::appserver::serverregion::{
@@ -2817,38 +2816,6 @@ fn append_gods_battle_number(output: &mut Vec<u8>, label: &[u8], value: i32) {
     output.extend_from_slice(value.to_string().as_bytes());
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GodsBattleContendEnterOutcome {
-    PlayerMissing,
-    NpcMissing,
-    PlayerUnavailable,
-    AlreadyContending,
-    InvalidPlayerFaction,
-    InvalidNpcFaction,
-    GuardsRemain { remaining: u32 },
-    AlreadyOwned,
-    Entered { first_for_legacy_faction: bool },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleContendEnterReport {
-    pub(crate) region_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) npc_id: i32,
-    pub(crate) outcome: GodsBattleContendEnterOutcome,
-    pub(crate) deliveries: Vec<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleMonsterDeathReport {
-    pub(crate) region_id: i32,
-    pub(crate) monster_id: i32,
-    pub(crate) npc_name: Option<Vec<u8>>,
-    pub(crate) killed: Option<u32>,
-    pub(crate) total: Option<u32>,
-    pub(crate) player_notice_delivery: Option<i32>,
-}
-
 pub(crate) trait NationCombatContext: ServerRegionNpcContext + GameClockContext {}
 
 impl<T> NationCombatContext for T where T: ServerRegionNpcContext + GameClockContext {}
@@ -2861,7 +2828,7 @@ pub(crate) trait NationContendContext:
 impl<T> NationContendContext for T where T: NationCombatContext + ServerRegionMonsterContext {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NationMonsterDamageOutcome {
+enum NationMonsterDamageOutcome {
     AttackerMissing,
     AttackerUnavailable,
     MonsterMissing,
@@ -2874,24 +2841,7 @@ pub(crate) enum NationMonsterDamageOutcome {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationMonsterDamageReport {
-    pub(crate) region_id: i32,
-    pub(crate) monster_id: i32,
-    pub(crate) attacker_player_id: i32,
-    pub(crate) outcome: NationMonsterDamageOutcome,
-    pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationCarriageReturnReport {
-    pub(crate) region_id: i32,
-    pub(crate) requested_country: i32,
-    pub(crate) outcome: NationCarriageReturnOutcome,
-    pub(crate) morale_delivery: Option<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum NationContendEnterOutcome {
+enum NationContendEnterOutcome {
     PlayerMissing,
     PlayerUnavailable,
     CountryAlreadyOwnsSymbol,
@@ -2899,87 +2849,21 @@ pub(crate) enum NationContendEnterOutcome {
     Entered { first_for_country: bool },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationContendEnterReport {
-    pub(crate) region_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) outcome: NationContendEnterOutcome,
-    pub(crate) deliveries: Vec<i32>,
-    pub(crate) state_deliveries: Vec<Result<i32, ShapeCoordinateBlock>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationContendCancelReport {
-    pub(crate) region_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) outcome: Option<NationContendCancelOutcome>,
-    pub(crate) delivery: Option<i32>,
-    pub(crate) state_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationContendCancelAllReport {
-    pub(crate) time_deliveries: Vec<i32>,
-    pub(crate) state_deliveries: Vec<(i32, Result<i32, ShapeCoordinateBlock>)>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationContendDamageReport {
-    pub(crate) region_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) mutation: Result<Option<NationContendDamageMutation>, NationContendArithmeticBlock>,
-    pub(crate) delivery: Option<i32>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NationPlayerDeathContendOutcome {
+enum NationPlayerDeathContendOutcome {
     NotContending,
     MissingReset,
     RemovedLegacyReturnIndeterminate,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationPlayerDeathReport {
-    pub(crate) region_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) timing_finished: bool,
-    pub(crate) contend_outcome: NationPlayerDeathContendOutcome,
-    pub(crate) contend_state_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    pub(crate) contend_time_delivery: Option<i32>,
-    pub(crate) notice_delivery: Option<i32>,
-    pub(crate) died_state_time_ms: i32,
-    pub(crate) died_state_start_time_ms: Option<u32>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NationMonsterDeathOutcome {
+enum NationMonsterDeathOutcome {
     KillerMissing,
     MonsterMissing,
     MonsterPropertyMissing,
     Unclassified,
     CountryOutsideNation,
     MoraleChanged(NationMoraleMutation),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationMonsterDeathReport {
-    pub(crate) region_id: i32,
-    pub(crate) monster_id: i32,
-    pub(crate) killer_player_id: i32,
-    pub(crate) outcome: NationMonsterDeathOutcome,
-    pub(crate) morale_delivery: Option<i32>,
-    pub(crate) first_guard_delivery: Option<i32>,
-    pub(crate) nation_fail_deliveries: Vec<Result<i32, SendMessageError>>,
-    pub(crate) yu_ying_shi_spawns: Vec<NationYuYingShiSpawnReport>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationYuYingShiSpawnReport {
-    pub(crate) country: u8,
-    pub(crate) notify_country: u8,
-    pub(crate) spawn: Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock>,
-    pub(crate) region_delivery: Option<i32>,
-    pub(crate) country_deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -11472,7 +11356,7 @@ impl CGame {
         &mut self,
         region_id: i32,
         country: i32,
-    ) -> Option<NationCarriageReturnReport> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -11485,12 +11369,8 @@ impl CGame {
                     .send_to_region(Some(&region.war.base), None, self)
             });
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        Some(NationCarriageReturnReport {
-            region_id,
-            requested_country: country,
-            outcome,
-            morale_delivery,
-        })
+        tracing::debug!(region_id, country, ?outcome, ?morale_delivery, "обоз войны наций возвращён в город");
+        Some(())
     }
 
     pub(crate) fn nation_enter_contend<Context: NationCombatContext>(
@@ -11499,14 +11379,12 @@ impl CGame {
         player_id: i32,
         max_time: u32,
         context: &mut Context,
-    ) -> Option<NationContendEnterReport> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
             self.restore_region_owner(owner);
             return None;
         };
-        let mut deliveries = Vec::new();
-        let mut state_deliveries = Vec::new();
         let outcome = match self.find_player(player_id) {
             None => NationContendEnterOutcome::PlayerMissing,
             Some(player) if !player.can_attack_nation_monster() => {
@@ -11515,9 +11393,8 @@ impl CGame {
             Some(player) => {
                 let country = player.country();
                 if region.flag_belong_to_id() == i32::from(country) {
-                    deliveries.push(
-                        self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS1130")),
-                    );
+                    let delivery = self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS1130"));
+                    tracing::trace!(region_id, player_id, delivery, "страна игрока уже владеет символом войны наций");
                     NationContendEnterOutcome::CountryAlreadyOwnsSymbol
                 } else if let Some(contender_player_id) =
                     region.contender_for_country(i32::from(country))
@@ -11528,7 +11405,8 @@ impl CGame {
                             &[contender.shape().base_object().get_name()],
                             0xff,
                         );
-                        deliveries.push(self.send_nation_player_notice(player_id, &text));
+                        let delivery = self.send_nation_player_notice(player_id, &text);
+                        tracing::trace!(region_id, player_id, contender_player_id, delivery, "для страны уже существует претендент войны наций");
                         NationContendEnterOutcome::CountryContenderExists {
                             contender_player_id,
                         }
@@ -11539,8 +11417,6 @@ impl CGame {
                             country,
                             max_time,
                             context,
-                            &mut deliveries,
-                            &mut state_deliveries,
                         )
                     }
                 } else {
@@ -11550,27 +11426,20 @@ impl CGame {
                         country,
                         max_time,
                         context,
-                        &mut deliveries,
-                        &mut state_deliveries,
                     )
                 }
             }
         };
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        Some(NationContendEnterReport {
-            region_id,
-            player_id,
-            outcome,
-            deliveries,
-            state_deliveries,
-        })
+        tracing::debug!(region_id, player_id, ?outcome, "обработан вход в захват войны наций");
+        Some(())
     }
 
     pub(crate) fn nation_cancel_contend_by_player_id(
         &mut self,
         region_id: i32,
         player_id: i32,
-    ) -> Option<NationContendCancelReport> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -11594,39 +11463,29 @@ impl CGame {
             (Some(outcome), delivery, state_delivery)
         };
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        Some(NationContendCancelReport {
-            region_id,
-            player_id,
-            outcome,
-            delivery,
-            state_delivery,
-        })
+        tracing::debug!(region_id, player_id, ?outcome, ?delivery, ?state_delivery, "отменён захват игрока на войне наций");
+        Some(())
     }
 
     pub(crate) fn nation_cancel_all_contenders(
         &mut self,
         region_id: i32,
-    ) -> Option<NationContendCancelAllReport> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(region) = owner else {
             self.restore_region_owner(owner);
             return None;
         };
-        let mut time_deliveries = Vec::new();
-        let mut state_deliveries = Vec::new();
+        let mut contender_count = 0usize;
         for player_id in region.contender_player_ids() {
-            time_deliveries.push(self.send_nation_contend_time(player_id, 0));
-            if let Some(delivery) =
-                self.set_nation_player_contend_state(&region.war.base, player_id, false)
-            {
-                state_deliveries.push((player_id, delivery));
-            }
+            let time_delivery = self.send_nation_contend_time(player_id, 0);
+            let state_delivery = self.set_nation_player_contend_state(&region.war.base, player_id, false);
+            contender_count = contender_count.wrapping_add(1);
+            tracing::trace!(region_id, player_id, time_delivery, ?state_delivery, "сброшен претендент войны наций");
         }
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        Some(NationContendCancelAllReport {
-            time_deliveries,
-            state_deliveries,
-        })
+        tracing::debug!(region_id, contender_count, "сброшены все претенденты войны наций");
+        Some(())
     }
 
     fn finish_nation_contend_entry<Context: NationCombatContext>(
@@ -11636,19 +11495,14 @@ impl CGame {
         country: u8,
         max_time: u32,
         context: &mut Context,
-        deliveries: &mut Vec<i32>,
-        state_deliveries: &mut Vec<Result<i32, ShapeCoordinateBlock>>,
     ) -> NationContendEnterOutcome {
         if matches!(
             region.cancel_contend_by_player_id(player_id),
             NationContendCancelOutcome::MissingReset
         ) {
-            if let Some(delivery) =
-                self.set_nation_player_contend_state(&region.war.base, player_id, false)
-            {
-                state_deliveries.push(delivery);
-            }
-            deliveries.push(self.send_nation_contend_time(player_id, 0));
+            let state_delivery = self.set_nation_player_contend_state(&region.war.base, player_id, false);
+            let time_delivery = self.send_nation_contend_time(player_id, 0);
+            tracing::trace!(player_id, ?state_delivery, time_delivery, "сброшен прежний захват войны наций");
         }
         let first_for_country = region.add_contend(
             player_id,
@@ -11656,25 +11510,20 @@ impl CGame {
             max_time as i32,
             context.now_milliseconds(),
         );
-        if let Some(delivery) =
-            self.set_nation_player_contend_state(&region.war.base, player_id, true)
-        {
-            state_deliveries.push(delivery);
-        }
-        deliveries.push(self.send_nation_contend_time(player_id, 0));
+        let state_delivery = self.set_nation_player_contend_state(&region.war.base, player_id, true);
+        let time_delivery = self.send_nation_contend_time(player_id, 0);
         if first_for_country && (1..=4).contains(&country) {
             let text = format_legacy_text_fields(
                 self.get_string_by_id(b"GS1133"),
                 &[region.country_name(country)],
                 0xff,
             );
-            deliveries.push(
-                nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
-                    .send_to_region(Some(&region.war.base), None, self),
-            );
+            let first_delivery = nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
+                .send_to_region(Some(&region.war.base), None, self);
+            tracing::trace!(player_id, country, first_delivery, "опубликован первый претендент страны");
         }
-        deliveries
-            .push(self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS1132")));
+        let notice_delivery = self.send_nation_player_notice(player_id, self.get_string_by_id(b"GS1132"));
+        tracing::trace!(player_id, country, ?state_delivery, time_delivery, notice_delivery, "начат захват войны наций");
         NationContendEnterOutcome::Entered { first_for_country }
     }
 
@@ -11683,7 +11532,7 @@ impl CGame {
         region_id: i32,
         player_id: i32,
         damage: i32,
-    ) -> Option<NationContendDamageReport> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -11702,12 +11551,8 @@ impl CGame {
             mutation.map(|mutation| self.send_nation_contend_time(player_id, mutation.percentage))
         });
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        Some(NationContendDamageReport {
-            region_id,
-            player_id,
-            mutation,
-            delivery,
-        })
+        tracing::trace!(region_id, player_id, ?mutation, ?delivery, "обработан урон претенденту войны наций");
+        Some(())
     }
 
     pub(crate) fn nation_contend_ai<Runtime: GameMainLoopRuntime>(
@@ -12110,7 +11955,7 @@ impl CGame {
         &mut self,
         player_id: i32,
         context: &mut Context,
-    ) -> Option<NationPlayerDeathReport> {
+    ) -> Option<()> {
         let region_id = self.find_player(player_id)?.server_region_id()?;
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
@@ -12157,17 +12002,8 @@ impl CGame {
             );
         }
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        Some(NationPlayerDeathReport {
-            region_id,
-            player_id,
-            timing_finished,
-            contend_outcome,
-            contend_state_delivery,
-            contend_time_delivery,
-            notice_delivery,
-            died_state_time_ms,
-            died_state_start_time_ms,
-        })
+        tracing::debug!(region_id, player_id, timing_finished, ?contend_outcome, ?contend_state_delivery, ?contend_time_delivery, ?notice_delivery, died_state_time_ms, ?died_state_start_time_ms, "обработана смерть игрока в регионе войны наций");
+        Some(())
     }
 
     /// Две достижимые `OnRelive` ветви сходятся в этом exact tail: positive
@@ -12303,7 +12139,7 @@ impl CGame {
         monster_id: i32,
         attacker_type: i32,
         attacker_id: i32,
-    ) -> Option<NationMonsterDamageReport> {
+    ) -> Option<()> {
         (attacker_type == 400)
             .then(|| self.nation_monster_damaged(region_id, monster_id, attacker_id))?
     }
@@ -12313,7 +12149,7 @@ impl CGame {
         region_id: i32,
         monster_id: i32,
         attacker_player_id: i32,
-    ) -> Option<NationMonsterDamageReport> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -12332,24 +12168,14 @@ impl CGame {
                     .map(|property| property.race)
                 else {
                     self.restore_region_owner(ServerRegionOwner::Nation(region));
-                    return Some(NationMonsterDamageReport {
-                        region_id,
-                        monster_id,
-                        attacker_player_id,
-                        outcome: NationMonsterDamageOutcome::MonsterPropertyMissing,
-                        world_delivery: None,
-                    });
+                    tracing::debug!(region_id, monster_id, attacker_player_id, outcome = ?NationMonsterDamageOutcome::MonsterPropertyMissing, "обработан первый удар по цели войны наций");
+                    return Some(());
                 };
                 let monster_original_name = monster.original_name().to_vec();
                 let Some(attacker) = self.find_player(attacker_player_id) else {
                     self.restore_region_owner(ServerRegionOwner::Nation(region));
-                    return Some(NationMonsterDamageReport {
-                        region_id,
-                        monster_id,
-                        attacker_player_id,
-                        outcome: NationMonsterDamageOutcome::AttackerMissing,
-                        world_delivery: None,
-                    });
+                    tracing::debug!(region_id, monster_id, attacker_player_id, outcome = ?NationMonsterDamageOutcome::AttackerMissing, "обработан первый удар по цели войны наций");
+                    return Some(());
                 };
                 if !attacker.can_attack_nation_monster() {
                     NationMonsterDamageOutcome::AttackerUnavailable
@@ -12381,13 +12207,8 @@ impl CGame {
             _ => None,
         };
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        Some(NationMonsterDamageReport {
-            region_id,
-            monster_id,
-            attacker_player_id,
-            outcome,
-            world_delivery,
-        })
+        tracing::debug!(region_id, monster_id, attacker_player_id, ?outcome, ?world_delivery, "обработан первый удар по цели войны наций");
+        Some(())
     }
 
     /// Reached `CMonster::OnDied` Nation callback. Context оставляет снаружи
@@ -12399,7 +12220,7 @@ impl CGame {
         monster_id: i32,
         killer_player_id: i32,
         context: &mut Context,
-    ) -> Option<NationMonsterDeathReport> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -12425,16 +12246,8 @@ impl CGame {
                         .map(|property| property.race)
                     else {
                         self.restore_region_owner(ServerRegionOwner::Nation(region));
-                        return Some(NationMonsterDeathReport {
-                            region_id,
-                            monster_id,
-                            killer_player_id,
-                            outcome: NationMonsterDeathOutcome::MonsterPropertyMissing,
-                            morale_delivery: None,
-                            first_guard_delivery: None,
-                            nation_fail_deliveries: Vec::new(),
-                            yu_ying_shi_spawns: Vec::new(),
-                        });
+                        tracing::debug!(region_id, monster_id, killer_player_id, outcome = ?NationMonsterDeathOutcome::MonsterPropertyMissing, "обработана смерть цели войны наций");
+                        return Some(());
                     };
                     let target = classify_nation_morale_target(monster.original_name(), |id| {
                         self.get_string_by_id(id).to_vec()
@@ -12468,8 +12281,8 @@ impl CGame {
         }
 
         let mut first_guard_delivery = None;
-        let mut nation_fail_deliveries = Vec::new();
-        let mut yu_ying_shi_spawns = Vec::new();
+        let mut nation_fail_delivery_count = 0usize;
+        let mut yu_ying_shi_spawn_count = 0usize;
         if let NationMonsterDeathOutcome::MoraleChanged(mutation) = outcome {
             if mutation.first_guard_notice {
                 let defender = region.country_name(mutation.defender_country);
@@ -12488,22 +12301,24 @@ impl CGame {
             if mutation.check_morale_spawn
                 && region.mark_yu_ying_shi_due_to_morale(mutation.defender_country)
             {
-                yu_ying_shi_spawns.push(self.spawn_nation_yu_ying_shi(
+                self.spawn_nation_yu_ying_shi(
                     &mut region,
                     mutation.defender_country,
                     mutation.attacker_country,
                     context,
-                ));
+                );
+                yu_ying_shi_spawn_count = yu_ying_shi_spawn_count.wrapping_add(1);
             }
             if mutation.check_admiral_spawn
                 && region.mark_yu_ying_shi_due_to_admiral(mutation.defender_country)
             {
-                yu_ying_shi_spawns.push(self.spawn_nation_yu_ying_shi(
+                self.spawn_nation_yu_ying_shi(
                     &mut region,
                     mutation.defender_country,
                     mutation.defender_country,
                     context,
-                ));
+                );
+                yu_ying_shi_spawn_count = yu_ying_shi_spawn_count.wrapping_add(1);
             }
 
             if mutation.nation_failed {
@@ -12522,11 +12337,13 @@ impl CGame {
                     ));
                     text.truncate(0xff);
                 }
-                nation_fail_deliveries.push(nation_world_notice_message(&text).send(self, false));
+                let notice_delivery = nation_world_notice_message(&text).send(self, false);
                 let mut failure = CMessage::new(0x6031d);
                 failure.add_long(i32::from(mutation.defender_country));
                 failure.add_long(i32::from(mutation.attacker_country));
-                nation_fail_deliveries.push(failure.send(self, false));
+                let failure_delivery = failure.send(self, false);
+                nation_fail_delivery_count = 2;
+                tracing::trace!(region_id, notice_delivery = ?notice_delivery, failure_delivery = ?failure_delivery, "опубликовано поражение страны");
             }
 
             add_game_log_text(self.get_string_by_id(b"GS1129"));
@@ -12537,16 +12354,8 @@ impl CGame {
                     .send_to_region(Some(&region.war.base), None, self)
             });
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        Some(NationMonsterDeathReport {
-            region_id,
-            monster_id,
-            killer_player_id,
-            outcome,
-            morale_delivery,
-            first_guard_delivery,
-            nation_fail_deliveries,
-            yu_ying_shi_spawns,
-        })
+        tracing::debug!(region_id, monster_id, killer_player_id, ?outcome, ?morale_delivery, ?first_guard_delivery, nation_fail_delivery_count, yu_ying_shi_spawn_count, "обработана смерть цели войны наций");
+        Some(())
     }
 
     fn nation_first_hit_notice_message(
@@ -12608,7 +12417,7 @@ impl CGame {
         country: u8,
         notify_country: u8,
         context: &mut Context,
-    ) -> NationYuYingShiSpawnReport {
+    ) {
         let (script, x, y, coordinates): (&[u8], i32, i32, &[u8]) = match country {
             1 => (
                 b"scripts/npc/npc_siguoyuyingshi_11000.script",
@@ -12660,13 +12469,8 @@ impl CGame {
             context,
         );
         if spawn.is_err() {
-            return NationYuYingShiSpawnReport {
-                country,
-                notify_country,
-                spawn,
-                region_delivery: None,
-                country_deliveries: Vec::new(),
-            };
+            tracing::warn!(country, notify_country, ?spawn, "не удалось создать Юйинши войны наций");
+            return;
         }
 
         let country_name = region.country_name(country);
@@ -12683,22 +12487,15 @@ impl CGame {
             format_legacy_text_fields(self.get_string_by_id(b"GS1138"), &[coordinates], 0x7f);
         let country_message =
             nation_colored_text_message(0xbf811, 0xffff_ff00, 0xff00_0000, &country_text);
-        let country_deliveries = (0..3)
-            .map(|_| {
-                country_message.send_to_region_contry_player(
-                    Some(&region.war.base),
-                    i32::from(notify_country),
-                    self,
-                )
-            })
-            .collect();
-        NationYuYingShiSpawnReport {
-            country,
-            notify_country,
-            spawn,
-            region_delivery,
-            country_deliveries,
+        for repetition in 0..3 {
+            let delivery = country_message.send_to_region_contry_player(
+                Some(&region.war.base),
+                i32::from(notify_country),
+                self,
+            );
+            tracing::trace!(country, notify_country, repetition, delivery, "отправлено уведомление страны о Юйинши");
         }
+        tracing::debug!(country, notify_country, ?spawn, ?region_delivery, "создан Юйинши войны наций");
     }
 
     fn four_nation_morale_snapshot(&self, morale: [i32; 5], failed: [bool; 5]) -> CMessage {
@@ -21488,7 +21285,7 @@ impl CGame {
         monster_id: i32,
         killer_type: i32,
         killer_id: i32,
-    ) -> Option<GodsBattleMonsterDeathReport> {
+    ) -> Option<()> {
         let (original_name, display_name) = self
             .find_region(region_id)
             .and_then(|owner| match owner {
@@ -21517,14 +21314,8 @@ impl CGame {
             record_gods_battle_log(GodsBattleNpcLog::MonsterWithoutNpc {
                 monster: display_name,
             });
-            return Some(GodsBattleMonsterDeathReport {
-                region_id,
-                monster_id,
-                npc_name: None,
-                killed: None,
-                total: None,
-                player_notice_delivery: None,
-            });
+            tracing::debug!(region_id, monster_id, "для погибшего стража битвы богов не найден NPC");
+            return Some(());
         };
         let Some(killed) = self
             .gods_battle_mgr
@@ -21533,14 +21324,8 @@ impl CGame {
             record_gods_battle_log(GodsBattleNpcLog::MissingKillCounter {
                 npc_name: npc_name.clone(),
             });
-            return Some(GodsBattleMonsterDeathReport {
-                region_id,
-                monster_id,
-                npc_name: Some(npc_name),
-                killed: None,
-                total: None,
-                player_notice_delivery: None,
-            });
+            tracing::debug!(region_id, monster_id, npc_name = %String::from_utf8_lossy(&npc_name), "для NPC битвы богов не найден счётчик убийств");
+            return Some(());
         };
         record_gods_battle_log(GodsBattleNpcLog::MonsterKilled {
             npc_name: npc_name.clone(),
@@ -21553,14 +21338,8 @@ impl CGame {
             record_gods_battle_log(GodsBattleNpcLog::NoConfiguredMonsters {
                 npc_name: npc_name.clone(),
             });
-            return Some(GodsBattleMonsterDeathReport {
-                region_id,
-                monster_id,
-                npc_name: Some(npc_name),
-                killed: Some(killed),
-                total: Some(total),
-                player_notice_delivery: None,
-            });
+            tracing::debug!(region_id, monster_id, npc_name = %String::from_utf8_lossy(&npc_name), killed, total, "для NPC битвы богов не настроены стражи");
+            return Some(());
         }
         let remaining = (total as i32).wrapping_sub(killed as i32);
         let player_notice_delivery =
@@ -21594,14 +21373,8 @@ impl CGame {
             } else {
                 None
             };
-        Some(GodsBattleMonsterDeathReport {
-            region_id,
-            monster_id,
-            npc_name: Some(npc_name),
-            killed: Some(killed),
-            total: Some(total),
-            player_notice_delivery,
-        })
+        tracing::debug!(region_id, monster_id, npc_name = %String::from_utf8_lossy(&npc_name), killed, total, ?player_notice_delivery, "учтена смерть стража битвы богов");
+        Some(())
     }
 
     pub(crate) fn enter_gods_battle_contend<Context: GodsBattleNpcContendContext>(
@@ -21611,8 +21384,7 @@ impl CGame {
         npc_id: i32,
         max_time: i32,
         context: &mut Context,
-    ) -> Option<GodsBattleContendEnterReport> {
-        let mut deliveries = Vec::new();
+    ) -> Option<()> {
         let player_facts = self.find_player(player_id).map(|player| {
             (
                 player.can_enter_gods_battle_contend(),
@@ -21631,14 +21403,14 @@ impl CGame {
             .find_npc_by_id(npc_id)
             .map(|npc| npc.name().to_vec());
         let outcome = match (player_facts, npc_name) {
-            (None, _) => GodsBattleContendEnterOutcome::PlayerMissing,
-            (_, None) => GodsBattleContendEnterOutcome::NpcMissing,
-            (Some((false, _, _)), Some(_)) => GodsBattleContendEnterOutcome::PlayerUnavailable,
+            (None, _) => "игрок не найден",
+            (_, None) => "NPC не найден",
+            (Some((false, _, _)), Some(_)) => "игрок недоступен",
             (Some((_, _, gods_faction)), Some(_)) if !matches!(gods_faction, 5 | 6) => {
-                GodsBattleContendEnterOutcome::InvalidPlayerFaction
+                "недопустимая сторона игрока"
             }
             (Some((_, _, _)), Some(_)) if region.npc_faction(npc_id).is_none() => {
-                GodsBattleContendEnterOutcome::InvalidNpcFaction
+                "недопустимая сторона NPC"
             }
             (Some((_, normal_faction, gods_faction)), Some(npc_name)) => {
                 let total = self.gods_battle_mgr.npc_monster_count(&npc_name);
@@ -21650,24 +21422,22 @@ impl CGame {
                         &[LegacyFormatArgument::Bytes(&npc_name)],
                         0xff,
                     );
-                    deliveries.push(
-                        colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
-                            .send_to_player(self.net_server(), player_id),
-                    );
-                    GodsBattleContendEnterOutcome::GuardsRemain { remaining }
+                    let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
+                        .send_to_player(self.net_server(), player_id);
+                    tracing::trace!(region_id, player_id, npc_id, remaining, delivery, "захват битвы богов заблокирован оставшимися стражами");
+                    "остались стражи"
                 } else if region.npc_faction(npc_id) == Some(gods_faction) {
                     let text = format_legacy_mixed(
                         self.get_string_by_id(b"SZLGS7"),
                         &[LegacyFormatArgument::Bytes(&npc_name)],
                         0xff,
                     );
-                    deliveries.push(
-                        colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
-                            .send_to_player(self.net_server(), player_id),
-                    );
-                    GodsBattleContendEnterOutcome::AlreadyOwned
+                    let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
+                        .send_to_player(self.net_server(), player_id);
+                    tracing::trace!(region_id, player_id, npc_id, delivery, "сторона игрока уже владеет NPC битвы богов");
+                    "сторона уже владеет NPC"
                 } else if region.is_player_contending_symbol(player_id, npc_id) {
-                    GodsBattleContendEnterOutcome::AlreadyContending
+                    "игрок уже захватывает NPC"
                 } else {
                     if matches!(
                         region.cancel_contend_by_player_id(player_id),
@@ -21678,9 +21448,10 @@ impl CGame {
                             player_id,
                             false,
                         ) {
-                            deliveries.push(delivery);
+                            tracing::trace!(region_id, player_id, delivery, "сброшено прежнее состояние захвата битвы богов");
                         }
-                        deliveries.push(self.send_gods_battle_contend_time(player_id, 0));
+                        let delivery = self.send_gods_battle_contend_time(player_id, 0);
+                        tracing::trace!(region_id, player_id, delivery, "сброшено прежнее время захвата битвы богов");
                     }
                     let first_for_legacy_faction = region.add_contender(
                         player_id,
@@ -21694,9 +21465,9 @@ impl CGame {
                     if let Some(delivery) =
                         self.set_gods_battle_player_contend_state(&region.war.base, player_id, true)
                     {
-                        deliveries.push(delivery);
+                        tracing::trace!(region_id, player_id, delivery, "опубликовано состояние захвата битвы богов");
                     }
-                    deliveries.push(self.send_gods_battle_contend_time(player_id, 0));
+                    let time_delivery = self.send_gods_battle_contend_time(player_id, 0);
                     if first_for_legacy_faction {
                         let faction_text = match gods_faction {
                             5 => self.get_string_by_id(b"SZLGS1"),
@@ -21705,33 +21476,24 @@ impl CGame {
                         };
                         let text =
                             format_legacy_text_fields(b"%s%s", &[faction_text, &npc_name], 0xff);
-                        deliveries.push(
-                            nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
-                                .send_to_region(Some(&region.war.base), None, self),
-                        );
+                        let delivery = nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
+                            .send_to_region(Some(&region.war.base), None, self);
+                        tracing::trace!(region_id, player_id, npc_id, delivery, "опубликован первый претендент стороны битвы богов");
                     }
-                    deliveries.push(
-                        colored_player_notice_message(
+                    let notice_delivery = colored_player_notice_message(
                             0xffff_ffff,
                             0xffff_0000,
                             self.get_string_by_id(b"SZLGS3"),
                         )
-                        .send_to_player(self.net_server(), player_id),
-                    );
-                    GodsBattleContendEnterOutcome::Entered {
-                        first_for_legacy_faction,
-                    }
+                        .send_to_player(self.net_server(), player_id);
+                    tracing::trace!(region_id, player_id, npc_id, first_for_legacy_faction, time_delivery, notice_delivery, "начат захват NPC битвы богов");
+                    "захват начат"
                 }
             }
         };
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        Some(GodsBattleContendEnterReport {
-            region_id,
-            player_id,
-            npc_id,
-            outcome,
-            deliveries,
-        })
+        tracing::debug!(region_id, player_id, npc_id, outcome, "обработан вход в захват битвы богов");
+        Some(())
     }
 
     pub(crate) fn gods_battle_contend_ai<Runtime: GameMainLoopRuntime>(
