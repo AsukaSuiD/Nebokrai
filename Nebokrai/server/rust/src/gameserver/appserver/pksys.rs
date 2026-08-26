@@ -2,12 +2,13 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/pksys.cpp`. Достигнутый `OnFirstSkill`
-//! вызывается реальным `skillmessage 0x90001` перед постановкой object-target
-//! skill в `CPlayerAI`: сохраняет exact victim/security/faction-war gates,
-//! GodsBattle faction либо country rule, criminal transition и World audit
-//! `0x6020A`. Death-проход также использует перенесённые `GetDiedLostExp`,
-//! `GetDiedLostGoods` и `OnKill`: все три читают один live Globe/player/region
-//! snapshot, а caller сохраняет container и network side effects.
+//! вызывается реальным `skillmessage 0x90001` перед постановкой навыка с
+//! целью-объектом в `CPlayerAI`: сохраняет точные проверки цели, безопасности и войн
+//! фракций, правило стороны битвы богов либо страны, переход преступного
+//! состояния и аудит World
+//! `0x6020A`. Проход смерти также использует перенесённые `GetDiedLostExp`,
+//! `GetDiedLostGoods` и `OnKill`: все три читают один текущий снимок настроек,
+//! игрока и региона, а вызывающая сторона сохраняет эффекты контейнера и сети.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -16,8 +17,6 @@
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\pksys.cpp
 
 use crate::gameserver::appserver::region::RegionSecurity;
-use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
-use crate::nets::netserver::message::SendMessageError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FirstSkillPkFacts {
@@ -38,18 +37,6 @@ pub(crate) enum FirstSkillPkDisposition {
     FactionWarEnemies,
     AllowedCombat,
     EnterCriminalState,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FirstSkillPkReport {
-    pub(crate) attacker_id: i32,
-    pub(crate) victim_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) disposition: FirstSkillPkDisposition,
-    pub(crate) criminal_timestamp_refreshed: bool,
-    pub(crate) criminal_state_started: bool,
-    pub(crate) criminal_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    pub(crate) world_log_delivery: Option<Result<i32, SendMessageError>>,
 }
 
 /// Stateless singleton semantics исходного `CPKSys::OnFirstSkill`.

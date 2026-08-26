@@ -634,7 +634,7 @@ use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
 use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::gameserver::appserver::pksys::{
     CPKSys, DiedLostGoodsDisposition, FirstSkillPkDisposition, FirstSkillPkFacts,
-    FirstSkillPkReport, KillPkDisposition, KillPkFacts,
+    KillPkDisposition, KillPkFacts,
 };
 use crate::gameserver::appserver::player::{
     AuctionSelfGoodsRefresh, BattleFairyCombineEffect,
@@ -30751,7 +30751,7 @@ impl CGame {
         victim_id: i32,
         region_id: Option<i32>,
         context: &mut Context,
-    ) -> Option<FirstSkillPkReport> {
+    ) -> Option<()> {
         let region_id = region_id?;
         let attacker = self.find_player(attacker_id)?;
         let victim = self.find_player(victim_id)?;
@@ -30820,16 +30820,8 @@ impl CGame {
                 message.add_long(victim_y);
                 message.send(self, false)
             });
-        Some(FirstSkillPkReport {
-            attacker_id,
-            victim_id,
-            region_id,
-            disposition,
-            criminal_timestamp_refreshed,
-            criminal_state_started,
-            criminal_delivery,
-            world_log_delivery,
-        })
+        tracing::debug!(attacker_id, victim_id, region_id, ?disposition, criminal_timestamp_refreshed, criminal_state_started, ?criminal_delivery, ?world_log_delivery, "обработан первый удар навыком по игроку");
+        Some(())
     }
 
     fn player_base_attackable(&self, attacker_id: i32, victim_id: i32) -> bool {
