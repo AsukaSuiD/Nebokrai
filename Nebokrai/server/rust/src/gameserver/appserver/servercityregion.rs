@@ -49,6 +49,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::build::{BuildClientUpdate, BuildRuntimeContext};
 use super::citygate::{CCityGate, CityGateInit};
 use super::country::countryparam::CCountryParam;
+use super::legacycodec::LegacyReader;
 use super::organizingsystem::attackcitysys::{AttackCityMembershipBlock, CAttackCitySys};
 use super::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
@@ -681,7 +682,9 @@ fn read_city_gate_build(
         picture_id: city_i32_at(&bytes, 0x04),
         direction: city_i32_at(&bytes, 0x08),
         // `tagBuild` хранит DWORD, но PDB-virtual `SetAction` принимает `ushort`.
-        action: u16::from_le_bytes([bytes[0x0C], bytes[0x0D]]),
+        action: LegacyReader::at(&bytes, 0x0C)
+            .and_then(|mut reader| reader.read_u16())
+            .expect("фиксированный city block содержит action"),
         max_hp: city_i32_at(&bytes, 0x10),
         defence: city_i32_at(&bytes, 0x14),
         width_increment: city_i32_at(&bytes, 0x18),
@@ -699,9 +702,12 @@ fn read_city_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, RegionDecodeInputBlock> {
-    Ok(i32::from_le_bytes(read_region_array(
-        source, cursor, field,
-    )?))
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| {
+        RegionDecodeInputBlock::UnexpectedEnd { field, offset: block.offset, needed: 4, available: block.available }
+    })?;
+    let value = reader.read_i32().map_err(|block| RegionDecodeInputBlock::UnexpectedEnd { field, offset: block.offset, needed: block.needed, available: block.available })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_city_c_string(
@@ -714,17 +720,9 @@ fn read_city_c_string(
     let mut value = Vec::new();
     loop {
         let offset = *cursor;
-        let Some(byte) = source.get(offset).copied() else {
-            // BLOCKED_MISSING_FACT: RVA 0x0007AC80 не знал длину source и
-            // продолжал чтение до NUL; безопасный Rust не читает за payload.
-            return Err(RegionDecodeInputBlock::UnexpectedEnd {
-                field,
-                offset,
-                needed: 1,
-                available: 0,
-            });
-        };
-        *cursor = offset + 1;
+        let mut reader = LegacyReader::at(source, offset).map_err(|block| RegionDecodeInputBlock::UnexpectedEnd { field, offset: block.offset, needed: 1, available: block.available })?;
+        let byte = reader.read_u8().map_err(|block| RegionDecodeInputBlock::UnexpectedEnd { field, offset: block.offset, needed: block.needed, available: block.available })?;
+        *cursor = reader.position();
         if value.len() == LEGACY_CAPACITY {
             // BLOCKED_MISSING_FACT: byte уже потреблён перед первой записью за
             // local `char[256]`; эффект повреждения stack неизвестен.
@@ -741,11 +739,9 @@ fn read_city_c_string(
 }
 
 fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
-    i32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("фиксированный city block содержит поле"),
-    )
+    LegacyReader::at(bytes, offset)
+        .and_then(|mut reader| reader.read_i32())
+        .expect("фиксированный city block содержит поле")
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

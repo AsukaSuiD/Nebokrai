@@ -19,6 +19,7 @@
 //! обязательный old-client codec ветви создания currency goods.
 
 use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::appserver::player::{
     CiQingPacketAddition, CiQingPacketConsumption, PlayerYuanBaoChange,
 };
@@ -125,11 +126,9 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: GameContainerMess
                 "auction billing prefix",
             )));
         }
-        let trade_type = i32::from_le_bytes(
-            unread[20..24]
-                .try_into()
-                .expect("проверенный Billing trade prefix"),
-        );
+        let trade_type = LegacyReader::at(unread, 20)
+            .and_then(|mut reader| reader.read_i32())
+            .expect("проверенный Billing trade prefix");
         if trade_type == 2 {
             return Some(dispatch_player_billing_trade(message, game, context));
         }

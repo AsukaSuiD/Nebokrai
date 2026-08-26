@@ -42,6 +42,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::goods::fairyproperties::{
     FairyExpBlock, FairyExpReport, FairyExpRuntime, FairyExpUpResult,
 };
@@ -1367,7 +1368,7 @@ impl CEquipmentContainer {
     ) where
         Encode: FnMut(&CGoods, bool, &mut Vec<u8>),
     {
-        destination.extend_from_slice(&(self.goods_amount(factory) as i32).to_le_bytes());
+        LegacyWriter::new(destination).write_i32(self.goods_amount(factory) as i32);
         for (column, goods) in &self.equipment {
             if factory
                 .query_goods_base_properties(goods.base_properties_index())
@@ -1375,7 +1376,7 @@ impl CEquipmentContainer {
             {
                 continue;
             }
-            destination.extend_from_slice(&(column.position() as i32).to_le_bytes());
+            LegacyWriter::new(destination).write_i32(column.position() as i32);
             encode_goods(goods, include_ex_data, destination);
         }
     }
@@ -1495,17 +1496,28 @@ impl CEquipmentContainer {
                 available: source.len().saturating_sub(offset),
             });
         };
-        *cursor = end;
-        let Some(bytes) = source.get(offset..end) else {
-            return Err(EquipmentContainerCodecError::UnexpectedEnd {
+        let mut reader = LegacyReader::at(source, offset).map_err(|_| {
+            EquipmentContainerCodecError::UnexpectedEnd {
                 field,
                 offset,
                 available: source.len().saturating_sub(offset),
-            });
-        };
-        Ok(i32::from_le_bytes(
-            bytes.try_into().expect("codec slice имеет четыре байта"),
-        ))
+            }
+        })?;
+        match reader.read_i32() {
+            Ok(value) => {
+                *cursor = reader.position();
+                Ok(value)
+            }
+            Err(_) => {
+                // Исторический владелец сначала продвигал указатель, затем обнаруживал обрыв.
+                *cursor = end;
+                Err(EquipmentContainerCodecError::UnexpectedEnd {
+                    field,
+                    offset,
+                    available: source.len().saturating_sub(offset),
+                })
+            }
+        }
     }
 
     /// Internal self-callback должен быть применён dispatcher-ом перед

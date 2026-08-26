@@ -27,6 +27,7 @@ use std::error::Error;
 use std::fmt;
 
 use super::cgoods::{CGoods, GoodsAddonProperty, GoodsAddonPropertyValue};
+use super::super::legacycodec::LegacyReader;
 use super::cgoodsbaseproperties::{
     CGoodsBaseProperties, GAP_ARMOR_CORRECTION, GAP_ARMOR_UPGRADE, GAP_ATTACK_SPEED_CORRECTION,
     GAP_ATTACK_SPEED_UPGRADE, GAP_BF_ABRAVE_ADDON, GAP_BF_ABRAVE_GROW, GAP_BF_AGILITY_ADDON,
@@ -927,21 +928,20 @@ fn read_factory_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, GoodsFactoryDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
-        return Err(GoodsFactoryDecodeError::UnexpectedEnd {
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| {
+        GoodsFactoryDecodeError::UnexpectedEnd {
             field,
-            offset,
-            available,
-        });
-    };
-    *cursor += 4;
-    Ok(u32::from_le_bytes(
-        bytes
-            .try_into()
-            .expect("goods scalar содержит четыре байта"),
-    ))
+            offset: block.offset,
+            available: block.available,
+        }
+    })?;
+    let value = reader.read_u32().map_err(|block| GoodsFactoryDecodeError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        available: block.available,
+    })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

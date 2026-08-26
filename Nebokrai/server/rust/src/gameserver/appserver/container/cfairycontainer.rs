@@ -30,6 +30,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     EQUIP_PLACE_HEADGEAR, GAP_BF_BATTLE_FAIRY, GAP_PARTICULAR_ATTRIBUTE,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::goods::fairyproperties::{
     FairyExpBlock, FairyExpReport, FairyExpRuntime, FairyExpUpResult,
 };
@@ -378,7 +379,7 @@ impl CFairyContainer {
                 .get_goods(position)
                 .and_then(CGoods::fairy_properties)
                 .map_or(0, |fairy| fairy.hatch_start_time);
-            destination.extend_from_slice(&hatch_start_time.to_le_bytes());
+            LegacyWriter::new(destination).write_u32(hatch_start_time);
         }
         true
     }
@@ -405,17 +406,10 @@ impl CFairyContainer {
         let mut restored = Vec::new();
         for position in HATCHER_POSITIONS {
             let offset = *cursor;
-            let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
-                return Err(FairyContainerCodecError::UnexpectedEnd {
-                    position,
-                    offset,
-                    available: source.len().saturating_sub(offset),
-                });
-            };
-            *cursor += 4;
-            let hatch_start_time = u32::from_le_bytes(
-                bytes.try_into().expect("fairy hatch suffix содержит четыре байта"),
-            );
+            let available = source.len().saturating_sub(offset);
+            let mut reader = LegacyReader::at(source, offset).map_err(|_| FairyContainerCodecError::UnexpectedEnd { position, offset, available })?;
+            let hatch_start_time = reader.read_u32().map_err(|_| FairyContainerCodecError::UnexpectedEnd { position, offset, available })?;
+            *cursor = reader.position();
             if hatch_start_time == 0 {
                 continue;
             }
@@ -1320,7 +1314,7 @@ impl CFairyContainer {
                 .get_goods(position)
                 .and_then(CGoods::fairy_properties)
                 .map_or(0, |fairy| fairy.hatch_start_time);
-            destination.extend_from_slice(&hatch_start_time.to_le_bytes());
+            LegacyWriter::new(destination).write_u32(hatch_start_time);
         }
         result
     }
@@ -1357,22 +1351,35 @@ impl CFairyContainer {
                     report,
                 });
             };
-            *cursor = end;
-            let Some(bytes) = source.get(offset..end) else {
-                return Err(FairyContainerUnserializeFailure {
-                    error: FairyContainerCodecError::UnexpectedEnd {
-                        position,
-                        offset,
-                        available: source.len().saturating_sub(offset),
-                    },
-                    report,
-                });
+            let available = source.len().saturating_sub(offset);
+            let mut reader = match LegacyReader::at(source, offset) {
+                Ok(reader) => reader,
+                Err(_) => {
+                    *cursor = end;
+                    return Err(FairyContainerUnserializeFailure {
+                        error: FairyContainerCodecError::UnexpectedEnd {
+                            position,
+                            offset,
+                            available,
+                        },
+                        report,
+                    });
+                }
             };
-            let hatch_start_time = u32::from_le_bytes(
-                bytes
-                    .try_into()
-                    .expect("fairy hatch suffix содержит четыре байта"),
-            );
+            let hatch_start_time = match reader.read_u32() {
+                Ok(value) => {
+                    *cursor = reader.position();
+                    value
+                }
+                Err(_) => {
+                    // Этот владелец, в отличие от основного кодека, продвигает курсор до ошибки.
+                    *cursor = end;
+                    return Err(FairyContainerUnserializeFailure {
+                        error: FairyContainerCodecError::UnexpectedEnd { position, offset, available },
+                        report,
+                    });
+                }
+            };
             if hatch_start_time == 0 {
                 continue;
             }

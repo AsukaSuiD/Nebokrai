@@ -1,25 +1,26 @@
 //! Реестр runtime-свойств навыков GameServer.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `server/gameserver/appserver/skills/skillfactory.cpp`. `Rebuild` очищает
-//! прежний registry до чтения count, проходит все signed-count slots, пропускает
-//! нулевую длину и публикует decoded record по ключу
+//! прежний реестр до чтения `count`, проходит все ячейки знакового количества, пропускает
+//! нулевую длину и публикует декодированную запись по ключу
 //! `skill_id << 16 | level & 0xffff`; повторный ключ заменяется. Имя остаётся
-//! byte-exact C-string prefix, usage map использует last-write-wins.
+//! точный по байтам префикс C-string, а карта usage использует последнее значение ключа.
 //!
 //! Точный цикл и malformed-record skip подтверждены дизассемблировкой RVA
 //! `0x0006CE10`; WorldServer serializer является парной стороной wire-контракта.
-//! `BTreeMap`, `Vec` и `Drop` заменяют MSVC map/heap plumbing. Старые overflow
-//! и out-of-bounds на повреждённой длине остановлены typed error-ом без
-//! придумывания side effects. Concrete `QuerySkill` ещё остаётся RAW до
-//! восстановления иерархии skill/state owners; registry и все его lookup-ы уже
-//! являются исполняемым Rust.
+//! `BTreeMap`, `Vec` и `Drop` заменяют служебный код MSVC map/heap. Старые
+//! переполнения и выходы за границу при повреждённой длине остановлены
+//! типизированной ошибкой без дополнительных side effects. Конкретный
+//! `QuerySkill` ещё остаётся RAW до восстановления иерархии владельцев
+//! skill/state; реестр и все его операции поиска уже исполняются в Rust.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
 use super::skillbaseproperties::{CSkillBaseProperties, UNKNOWN_SKILL_TYPE};
+use super::super::legacycodec::LegacyReader;
 
 pub(crate) const UNKNOWN_SKILL_ID: u32 = 0x7fff_ffff;
 const MAX_SKILL_NAME_LENGTH: usize = 255;
@@ -204,12 +205,12 @@ fn decode_record(
         });
     }
 
-    let skill_type = u32::from_le_bytes(record[0..4].try_into().expect("checked prefix"));
-    let skill_id = u32::from_le_bytes(record[4..8].try_into().expect("checked prefix"));
-    let level = u32::from_le_bytes(record[8..12].try_into().expect("checked prefix"));
-    let is_target_self = i32::from_le_bytes(record[12..16].try_into().expect("checked prefix"));
-    let name_length =
-        u32::from_le_bytes(record[16..20].try_into().expect("checked prefix")) as usize;
+    let mut reader = LegacyReader::new(record);
+    let skill_type = reader.read_u32().expect("проверен префикс записи");
+    let skill_id = reader.read_u32().expect("проверен префикс записи");
+    let level = reader.read_u32().expect("проверен префикс записи");
+    let is_target_self = reader.read_i32().expect("проверен префикс записи");
+    let name_length = reader.read_u32().expect("проверен префикс записи") as usize;
     if name_length > MAX_SKILL_NAME_LENGTH {
         return Err(SkillFactoryDecodeError::NameTooLong {
             slot,
@@ -240,12 +241,13 @@ fn decode_record(
         });
     }
 
-    let name = visible_c_string(&record[FIXED_PREFIX..usage_count_offset]).to_vec();
-    let usage_count = u32::from_le_bytes(
-        record[usage_count_offset..usage_data_offset]
-            .try_into()
-            .expect("checked usage count"),
-    );
+    let name = visible_c_string(
+        reader
+            .read_bytes(name_length)
+            .expect("проверена длина имени"),
+    )
+    .to_vec();
+    let usage_count = reader.read_u32().expect("проверено число usage-записей");
     if usage_count != 0 && usage_data_offset >= record.len() {
         return Ok(None);
     }
@@ -271,9 +273,9 @@ fn decode_record(
     }
 
     let mut properties = CSkillBaseProperties::new(skill_type, is_target_self, name);
-    for pair in record[usage_data_offset..required].chunks_exact(8) {
-        let usage = u32::from_le_bytes(pair[0..4].try_into().expect("usage pair"));
-        let value = u32::from_le_bytes(pair[4..8].try_into().expect("usage pair"));
+    for _ in 0..usage_count {
+        let usage = reader.read_u32().expect("проверена usage-пара");
+        let value = reader.read_u32().expect("проверена usage-пара");
         properties.set_property(usage, value);
     }
     Ok(Some((skill_key(skill_id, level), properties)))
@@ -295,11 +297,10 @@ fn read_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, SkillFactoryDecodeError> {
-    Ok(i32::from_le_bytes(
-        take_bytes(source, cursor, 4, field)?
-            .try_into()
-            .expect("i32 содержит четыре байта"),
-    ))
+    let mut reader = skill_reader(source, *cursor, field, 4)?;
+    let value = reader.read_i32().map_err(|block| skill_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_u32(
@@ -307,11 +308,10 @@ fn read_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, SkillFactoryDecodeError> {
-    Ok(u32::from_le_bytes(
-        take_bytes(source, cursor, 4, field)?
-            .try_into()
-            .expect("u32 содержит четыре байта"),
-    ))
+    let mut reader = skill_reader(source, *cursor, field, 4)?;
+    let value = reader.read_u32().map_err(|block| skill_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn take_bytes<'a>(
@@ -320,26 +320,38 @@ fn take_bytes<'a>(
     required: usize,
     field: &'static str,
 ) -> Result<&'a [u8], SkillFactoryDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(required) else {
-        return Err(SkillFactoryDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            required,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(SkillFactoryDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            required,
-            available,
-        });
-    };
-    *cursor = end;
+    let mut reader = skill_reader(source, *cursor, field, required)?;
+    let bytes = reader
+        .read_bytes(required)
+        .map_err(|block| skill_read_error(field, block))?;
+    *cursor = reader.position();
     Ok(bytes)
+}
+
+fn skill_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
+    field: &'static str,
+    required: usize,
+) -> Result<LegacyReader<'source>, SkillFactoryDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| SkillFactoryDecodeError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        required,
+        available: block.available,
+    })
+}
+
+fn skill_read_error(
+    field: &'static str,
+    block: super::super::legacycodec::LegacyReadBlock,
+) -> SkillFactoryDecodeError {
+    SkillFactoryDecodeError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        required: block.needed,
+        available: block.available,
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

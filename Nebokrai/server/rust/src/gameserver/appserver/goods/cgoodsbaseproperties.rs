@@ -17,6 +17,8 @@
 use std::error::Error;
 use std::fmt;
 
+use super::super::legacycodec::LegacyReader;
+
 pub(crate) const GOODS_TYPE_USELESS: i32 = 0;
 pub(crate) const GOODS_TYPE_CONSUMABLE: i32 = 1;
 pub(crate) const GOODS_TYPE_EQUIPMENT: i32 = 2;
@@ -546,16 +548,22 @@ fn read_c_string(
 ) -> Result<Vec<u8>, GoodsBasePropertiesDecodeError> {
     let offset = *cursor;
     let available = source.len().saturating_sub(offset);
-    let remaining = source.get(offset..).unwrap_or_default();
-    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
-        return Err(GoodsBasePropertiesDecodeError::MissingStringTerminator {
+    let mut reader = LegacyReader::at(source, offset).map_err(|_| {
+        GoodsBasePropertiesDecodeError::MissingStringTerminator {
             field,
             offset,
             available,
-        });
-    };
-    *cursor = offset + length + 1;
-    Ok(remaining[..length].to_vec())
+        }
+    })?;
+    let value = reader.read_c_string(available).map_err(|_| {
+        GoodsBasePropertiesDecodeError::MissingStringTerminator {
+            field,
+            offset,
+            available,
+        }
+    })?;
+    *cursor = reader.position();
+    Ok(value.to_vec())
 }
 
 fn read_i32(
@@ -563,11 +571,10 @@ fn read_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, GoodsBasePropertiesDecodeError> {
-    Ok(i32::from_le_bytes(
-        take_bytes(source, cursor, 4, field)?
-            .try_into()
-            .expect("i32 содержит четыре байта"),
-    ))
+    let mut reader = goods_reader(source, *cursor, 4, field)?;
+    let value = reader.read_i32().map_err(|block| goods_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_u32(
@@ -575,37 +582,36 @@ fn read_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, GoodsBasePropertiesDecodeError> {
-    Ok(u32::from_le_bytes(
-        take_bytes(source, cursor, 4, field)?
-            .try_into()
-            .expect("u32 содержит четыре байта"),
-    ))
+    let mut reader = goods_reader(source, *cursor, 4, field)?;
+    let value = reader.read_u32().map_err(|block| goods_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
-fn take_bytes<'a>(
-    source: &'a [u8],
-    cursor: &mut usize,
+fn goods_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
     required: usize,
     field: &'static str,
-) -> Result<&'a [u8], GoodsBasePropertiesDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(required) else {
-        return Err(GoodsBasePropertiesDecodeError::UnexpectedEnd {
+) -> Result<LegacyReader<'source>, GoodsBasePropertiesDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| {
+        GoodsBasePropertiesDecodeError::UnexpectedEnd {
             field,
-            offset,
+            offset: block.offset,
             required,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(GoodsBasePropertiesDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            required,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(bytes)
+            available: block.available,
+        }
+    })
+}
+
+fn goods_read_error(
+    field: &'static str,
+    block: super::super::legacycodec::LegacyReadBlock,
+) -> GoodsBasePropertiesDecodeError {
+    GoodsBasePropertiesDecodeError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        required: block.needed,
+        available: block.available,
+    }
 }

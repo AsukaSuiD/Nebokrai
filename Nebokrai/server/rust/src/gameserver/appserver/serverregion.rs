@@ -143,6 +143,7 @@ use super::baseobject::CBaseObject;
 use super::country::countryparam::CCountryParam;
 use super::gameeffectjournal::{GameEffect, SharedGameEffectJournal};
 use super::goods::cgoods::CGoods;
+use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::monster::CMonster;
 use super::moveshape::{
     MoveShapeCommandBlock, MoveShapePositionBlock, MoveShapePositionDispatch,
@@ -1982,10 +1983,9 @@ impl CServerRegion {
                 continue;
             }
             append_server_region_c_string(&mut self.npc_name_list, &npc.name);
-            self.npc_name_list
-                .extend_from_slice(&npc.tile_x.to_le_bytes());
-            self.npc_name_list
-                .extend_from_slice(&npc.tile_y.to_le_bytes());
+            let mut writer = LegacyWriter::new(&mut self.npc_name_list);
+            writer.write_i32(npc.tile_x);
+            writer.write_i32(npc.tile_y);
             self.npc_name_list_count = self.npc_name_list_count.wrapping_add(1);
         }
 
@@ -3043,11 +3043,9 @@ impl CServerRegion {
             });
         };
         let read_i32 = |at: usize| {
-            i32::from_le_bytes(
-                bytes[at..at + 4]
-                    .try_into()
-                    .expect("проверенный 0x20-байтовый setup"),
-            )
+            LegacyReader::at(bytes, at)
+                .and_then(|mut reader| reader.read_i32())
+                .expect("проверенный 0x20-байтовый setup")
         };
         self.return_setup = Some(ServerReturnSetup {
             region_id: read_i32(0x00),
@@ -3232,28 +3230,24 @@ fn read_setup_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, ServerRegionSetupDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(4) else {
-        return Err(ServerRegionSetupDecodeError::UnexpectedEnd {
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| {
+        ServerRegionSetupDecodeError::UnexpectedEnd {
             field,
-            offset,
+            offset: block.offset,
             needed: 4,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(ServerRegionSetupDecodeError::UnexpectedEnd {
+            available: block.available,
+        }
+    })?;
+    let value = reader.read_i32().map_err(|block| {
+        ServerRegionSetupDecodeError::UnexpectedEnd {
             field,
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(i32::from_le_bytes(
-        bytes.try_into().expect("проверены четыре байта"),
-    ))
+            offset: block.offset,
+            needed: block.needed,
+            available: block.available,
+        }
+    })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_setup_c_string(
@@ -3264,15 +3258,23 @@ fn read_setup_c_string(
     let mut value = Vec::new();
     loop {
         let offset = *cursor;
-        let Some(byte) = source.get(offset).copied() else {
-            return Err(ServerRegionSetupDecodeError::UnexpectedEnd {
+        let mut reader = LegacyReader::at(source, offset).map_err(|block| {
+            ServerRegionSetupDecodeError::UnexpectedEnd {
                 field,
-                offset,
+                offset: block.offset,
                 needed: 1,
-                available: 0,
-            });
-        };
-        *cursor = offset + 1;
+                available: block.available,
+            }
+        })?;
+        let byte = reader.read_u8().map_err(|block| {
+            ServerRegionSetupDecodeError::UnexpectedEnd {
+                field,
+                offset: block.offset,
+                needed: block.needed,
+                available: block.available,
+            }
+        })?;
+        *cursor = reader.position();
         if byte == 0 {
             return Ok(value);
         }
@@ -3285,16 +3287,11 @@ fn read_server_region_u8(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u8, ServerRegionDecodeInputBlock> {
-    let offset = *cursor;
-    let Some(value) = source.get(offset).copied() else {
-        return Err(ServerRegionDecodeInputBlock {
-            field,
-            offset,
-            needed: 1,
-            available: source.len().saturating_sub(offset),
-        });
-    };
-    *cursor = offset + 1;
+    let mut reader = server_region_reader(source, *cursor, field, 1)?;
+    let value = reader
+        .read_u8()
+        .map_err(|block| server_region_error(field, block))?;
+    *cursor = reader.position();
     Ok(value)
 }
 
@@ -3303,8 +3300,12 @@ fn read_server_region_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, ServerRegionDecodeInputBlock> {
-    let bytes = read_server_region_bytes(source, cursor, 4, field)?;
-    Ok(read_server_region_i32_at(bytes, 0))
+    let mut reader = server_region_reader(source, *cursor, field, 4)?;
+    let value = reader
+        .read_i32()
+        .map_err(|block| server_region_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_server_region_u32(
@@ -3312,8 +3313,12 @@ fn read_server_region_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, ServerRegionDecodeInputBlock> {
-    let bytes = read_server_region_bytes(source, cursor, 4, field)?;
-    Ok(read_server_region_u32_at(bytes, 0))
+    let mut reader = server_region_reader(source, *cursor, field, 4)?;
+    let value = reader
+        .read_u32()
+        .map_err(|block| server_region_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_server_region_bytes<'a>(
@@ -3322,25 +3327,11 @@ fn read_server_region_bytes<'a>(
     needed: usize,
     field: &'static str,
 ) -> Result<&'a [u8], ServerRegionDecodeInputBlock> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(needed) else {
-        return Err(ServerRegionDecodeInputBlock {
-            field,
-            offset,
-            needed,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(ServerRegionDecodeInputBlock {
-            field,
-            offset,
-            needed,
-            available,
-        });
-    };
-    *cursor = end;
+    let mut reader = server_region_reader(source, *cursor, field, needed)?;
+    let bytes = reader
+        .read_bytes(needed)
+        .map_err(|block| server_region_error(field, block))?;
+    *cursor = reader.position();
     Ok(bytes)
 }
 
@@ -3352,15 +3343,11 @@ fn read_server_region_c_string(
     let mut value = Vec::new();
     loop {
         let offset = *cursor;
-        let Some(byte) = source.get(offset).copied() else {
-            return Err(ServerRegionDecodeInputBlock {
-                field,
-                offset,
-                needed: 1,
-                available: 0,
-            });
-        };
-        *cursor = offset + 1;
+        let mut reader = server_region_reader(source, offset, field, 1)?;
+        let byte = reader
+            .read_u8()
+            .map_err(|block| server_region_error(field, block))?;
+        *cursor = reader.position();
         if byte == 0 {
             return Ok(value);
         }
@@ -3369,36 +3356,51 @@ fn read_server_region_c_string(
 }
 
 fn read_server_region_i32_at(bytes: &[u8], offset: usize) -> i32 {
-    i32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("проверенный region DWORD"),
-    )
+    LegacyReader::at(bytes, offset)
+        .and_then(|mut reader| reader.read_i32())
+        .expect("проверенный region DWORD")
 }
 
 fn read_server_region_u32_at(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("проверенный region DWORD"),
-    )
+    LegacyReader::at(bytes, offset)
+        .and_then(|mut reader| reader.read_u32())
+        .expect("проверенный region DWORD")
 }
 
 fn read_server_region_u16_at(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes(
-        bytes[offset..offset + 2]
-            .try_into()
-            .expect("проверенное region WORD"),
-    )
+    LegacyReader::at(bytes, offset)
+        .and_then(|mut reader| reader.read_u16())
+        .expect("проверенное region WORD")
 }
 
 fn append_server_region_c_string(destination: &mut Vec<u8>, value: &[u8]) {
-    let end = value
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(value.len());
-    destination.extend_from_slice(&value[..end]);
-    destination.push(0);
+    LegacyWriter::new(destination).write_c_string(value);
+}
+
+fn server_region_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
+    field: &'static str,
+    needed: usize,
+) -> Result<LegacyReader<'source>, ServerRegionDecodeInputBlock> {
+    LegacyReader::at(source, cursor).map_err(|block| ServerRegionDecodeInputBlock {
+        field,
+        offset: block.offset,
+        needed,
+        available: block.available,
+    })
+}
+
+fn server_region_error(
+    field: &'static str,
+    block: super::legacycodec::LegacyReadBlock,
+) -> ServerRegionDecodeInputBlock {
+    ServerRegionDecodeInputBlock {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
 
 fn ceil_positive_division(value: i32, divisor: i32) -> i32 {

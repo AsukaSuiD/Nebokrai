@@ -28,6 +28,7 @@
 use std::collections::BTreeMap;
 
 use super::servercountryregion::is_player_contend_symbol;
+use super::legacycodec::LegacyReader;
 use super::serverregion::{
     CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError, ServerRegionMonsterRectBlock,
 };
@@ -541,28 +542,24 @@ pub(crate) fn read_region_array<const N: usize>(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<[u8; N], RegionDecodeInputBlock> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(N) else {
-        return Err(RegionDecodeInputBlock::UnexpectedEnd {
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| {
+        RegionDecodeInputBlock::UnexpectedEnd {
             field,
-            offset,
+            offset: block.offset,
             needed: N,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        // BLOCKED_MISSING_FACT: legacy helper RVA 0x0007AC50 принимал
-        // безразмерный pointer и читал за payload; значение и эффекты UB неизвестны.
-        return Err(RegionDecodeInputBlock::UnexpectedEnd {
+            available: block.available,
+        }
+    })?;
+    let bytes = reader.read_bytes(N).map_err(|block| {
+        RegionDecodeInputBlock::UnexpectedEnd {
             field,
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(bytes.try_into().expect("проверен срез точной длины"))
+            offset: block.offset,
+            needed: block.needed,
+            available: block.available,
+        }
+    })?;
+    *cursor = reader.position();
+    Ok(bytes.try_into().expect("прочитано точное число байт"))
 }
 
 fn read_region_i32(
@@ -570,9 +567,24 @@ fn read_region_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, RegionDecodeInputBlock> {
-    Ok(i32::from_le_bytes(read_region_array(
-        source, cursor, field,
-    )?))
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| {
+        RegionDecodeInputBlock::UnexpectedEnd {
+            field,
+            offset: block.offset,
+            needed: 4,
+            available: block.available,
+        }
+    })?;
+    let value = reader.read_i32().map_err(|block| {
+        RegionDecodeInputBlock::UnexpectedEnd {
+            field,
+            offset: block.offset,
+            needed: block.needed,
+            available: block.available,
+        }
+    })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

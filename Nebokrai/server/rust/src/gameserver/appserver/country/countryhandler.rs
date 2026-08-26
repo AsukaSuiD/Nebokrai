@@ -1,19 +1,20 @@
-//! Ordered owner `CCountryHandler` GameServer, подтверждённый точными
+//! Упорядоченный владелец `CCountryHandler` GameServer, подтверждённый точными
 //! `gameserver.exe + GameServer.pdb`; исходники
 //! `server/gameserver/appserver/country/countryhandler.cpp/.h`.
 //!
-//! Decoder сначала освобождает все прежние `CCountry`, очищает map, читает
+//! Декодер сначала освобождает все прежние `CCountry`, очищает map, читает
 //! signed count и публикует каждый полностью декодированный country по его
-//! unsigned ID. Duplicate ID заменяет прежний pointer через `operator[]`;
-//! Rust освобождает заменённый owner вместо исторической внутренней утечки.
-//! Malformed record сохраняет уже опубликованный префикс. Process singleton и
-//! manual deleting destructors заменены owned-полем `CGame` и обычным `Drop`.
+//! беззнаковому ID. Повторный ID заменяет прежний указатель через `operator[]`;
+//! Rust освобождает заменённого владельца вместо исторической внутренней утечки.
+//! Повреждённая запись сохраняет уже опубликованный префикс. Единственный экземпляр процесса и
+//! ручные удаляющие деструкторы заменены полем-владельцем `CGame` и обычным `Drop`.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
 use super::country::{CCountry, CountryDecodeError};
+use super::super::legacycodec::LegacyReader;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CCountryHandler {
@@ -76,12 +77,12 @@ impl CCountryHandler {
         self.countries.clear();
         let offset = *cursor;
         let available = source.len().saturating_sub(offset);
-        let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
-            return Err(CountryHandlerDecodeError::Count { offset, available });
-        };
-        *cursor += 4;
-        let declared =
-            i32::from_le_bytes(bytes.try_into().expect("CountryHandler count уже проверен"));
+        let mut reader = LegacyReader::at(source, offset)
+            .map_err(|_| CountryHandlerDecodeError::Count { offset, available })?;
+        let declared = reader
+            .read_i32()
+            .map_err(|_| CountryHandlerDecodeError::Count { offset, available })?;
+        *cursor = reader.position();
 
         let mut decoded = 0;
         let mut replaced_duplicates = 0;

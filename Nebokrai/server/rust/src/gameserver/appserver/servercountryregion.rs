@@ -68,6 +68,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::build::{BuildClientUpdate, BuildInit, BuildRuntimeContext, CBuild};
 use super::citygate::{CCityGate, CityGateInit};
 use super::country::countryparam::CCountryParam;
+use super::legacycodec::LegacyReader;
 use super::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
     RegionSecurity,
@@ -1254,7 +1255,9 @@ fn read_country_gate_build(
     Ok(CountryGateBuild {
         picture_id: country_i32_at(&bytes, 0x00),
         direction: country_i32_at(&bytes, 0x04),
-        action: u16::from_le_bytes([bytes[0x08], bytes[0x09]]),
+        action: LegacyReader::at(&bytes, 0x08)
+            .and_then(|mut reader| reader.read_u16())
+            .expect("фиксированный country block содержит action"),
         max_hp: country_i32_at(&bytes, 0x0C),
         defence: country_i32_at(&bytes, 0x10),
         width_increment: country_i32_at(&bytes, 0x14),
@@ -1311,9 +1314,10 @@ fn read_country_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, RegionDecodeInputBlock> {
-    Ok(i32::from_le_bytes(read_region_array(
-        source, cursor, field,
-    )?))
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| RegionDecodeInputBlock::UnexpectedEnd { field, offset: block.offset, needed: 4, available: block.available })?;
+    let value = reader.read_i32().map_err(|block| RegionDecodeInputBlock::UnexpectedEnd { field, offset: block.offset, needed: block.needed, available: block.available })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_country_c_string(
@@ -1326,17 +1330,9 @@ fn read_country_c_string(
     let mut value = Vec::new();
     loop {
         let offset = *cursor;
-        let Some(byte) = source.get(offset).copied() else {
-            // BLOCKED_MISSING_FACT: helper RVA `0x0007AC80` не знал длину
-            // source; безопасный Rust не воспроизводит чтение за payload.
-            return Err(RegionDecodeInputBlock::UnexpectedEnd {
-                field,
-                offset,
-                needed: 1,
-                available: 0,
-            });
-        };
-        *cursor = offset + 1;
+        let mut reader = LegacyReader::at(source, offset).map_err(|block| RegionDecodeInputBlock::UnexpectedEnd { field, offset: block.offset, needed: 1, available: block.available })?;
+        let byte = reader.read_u8().map_err(|block| RegionDecodeInputBlock::UnexpectedEnd { field, offset: block.offset, needed: block.needed, available: block.available })?;
+        *cursor = reader.position();
         if value.len() == LEGACY_CAPACITY {
             // BLOCKED_MISSING_FACT: byte уже потреблён перед первой записью за
             // legacy `char[256]`; эффект повреждения stack неизвестен.
@@ -1353,11 +1349,9 @@ fn read_country_c_string(
 }
 
 fn country_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
-    i32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("фиксированный country gate block содержит поле"),
-    )
+    LegacyReader::at(bytes, offset)
+        .and_then(|mut reader| reader.read_i32())
+        .expect("фиксированный country gate block содержит поле")
 }
 
 fn country_gate_count_field(camp: i32) -> &'static str {

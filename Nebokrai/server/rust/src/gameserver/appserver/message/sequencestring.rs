@@ -1,20 +1,22 @@
-//! Sequence-validation owner GameServer из `message/sequencestring.cpp`.
+//! Владелец проверки последовательности GameServer из `message/sequencestring.cpp`.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает constructor,
-//! `Initialize` и `Serialize`: registry append-ится `count` значениями прямого
+//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает конструктор,
+//! `Initialize` и `Serialize`: в реестр добавляется `count` значений прямого
 //! MSVCRT `rand`, ноль заменяется единицей, а новый player-owner выбирает
-//! стартовый индекс через `rand % len`. Wire содержит signed start position,
-//! signed count и затем все `u32` в little-endian порядке.
+//! стартовый индекс через `rand % len`. Формат содержит знаковые начальную позицию
+//! и `count`, затем все `u32` в little-endian порядке.
 //!
-//! Общий CRT RNG принадлежит `CGame`; этот owner получает только callback
+//! Общий CRT RNG принадлежит `CGame`; этот владелец получает только обратный вызов
 //! следующего 15-битного значения, чтобы не создавать второй поток случайных
-//! чисел. `Vec` заменяет process-static `std::vector`. Advance/check validation
+//! чисел. `Vec` заменяет статический для процесса `std::vector`. Проверка продвижения
 //! после выдачи строки остаются границей `logmessage/player` и не подменяются
 //! догадкой из менее доверенного C++-донора.
 
 use std::collections::TryReserveError;
 use std::error::Error;
 use std::fmt;
+
+use crate::gameserver::appserver::legacycodec::LegacyWriter;
 
 #[derive(Debug)]
 pub(crate) struct SequenceRegistryInitializationError {
@@ -118,10 +120,11 @@ impl CSequenceString {
         };
 
         let mut payload = Vec::with_capacity(8 + registry.elements.len() * 4);
-        payload.extend_from_slice(&position.to_le_bytes());
-        payload.extend_from_slice(&count.to_le_bytes());
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_i32(position);
+        writer.write_i32(count);
         for element in &registry.elements {
-            payload.extend_from_slice(&element.to_le_bytes());
+            writer.write_u32(*element);
         }
         Ok(payload)
     }

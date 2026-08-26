@@ -65,6 +65,7 @@ use crate::gameserver::gameserver::game::{
     CGame, PlayerRegionChangeReport, RealmAppellationScriptContext, ScriptRegionChangeContext,
     ServerRegionOwner,
 };
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use std::mem::size_of;
 
@@ -1656,14 +1657,10 @@ fn read_country_war_byte<SideError>(
     cursor: &mut usize,
 ) -> Result<u8, CountryWarMessageDispatchError<SideError>> {
     let offset = *cursor;
-    let Some(&value) = payload.get(offset) else {
-        return Err(CountryWarMessageDispatchError::UnexpectedEnd {
-            offset,
-            needed: 1,
-            available: 0,
-        });
-    };
-    *cursor += 1;
+    let available = payload.len().saturating_sub(offset);
+    let mut reader = LegacyReader::at(payload, offset).map_err(|_| CountryWarMessageDispatchError::UnexpectedEnd { offset, needed: 1, available })?;
+    let value = reader.read_u8().map_err(|_| CountryWarMessageDispatchError::UnexpectedEnd { offset, needed: 1, available })?;
+    *cursor = reader.position();
     Ok(value)
 }
 
@@ -1673,17 +1670,10 @@ fn read_country_war_long<SideError>(
 ) -> Result<i32, CountryWarMessageDispatchError<SideError>> {
     let offset = *cursor;
     let available = payload.len().saturating_sub(offset);
-    let Some(bytes) = payload.get(offset..offset.saturating_add(4)) else {
-        return Err(CountryWarMessageDispatchError::UnexpectedEnd {
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    *cursor += 4;
-    Ok(i32::from_le_bytes(
-        bytes.try_into().expect("country-war long содержит 4 байта"),
-    ))
+    let mut reader = LegacyReader::at(payload, offset).map_err(|_| CountryWarMessageDispatchError::UnexpectedEnd { offset, needed: 4, available })?;
+    let value = reader.read_i32().map_err(|_| CountryWarMessageDispatchError::UnexpectedEnd { offset, needed: 4, available })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 struct CountryRegionAdapter<'a, Context>(&'a mut Context);

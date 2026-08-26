@@ -29,6 +29,7 @@ use std::fmt;
 
 use crate::public::guid::CGuid;
 
+use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::monster::CMonster;
 use super::npc::CNpc;
 
@@ -167,11 +168,11 @@ impl CBaseObject {
         destination: &mut Vec<u8>,
         _include_child: bool,
     ) -> bool {
-        destination.extend_from_slice(&self.object_type.to_le_bytes());
-        destination.extend_from_slice(&self.id.to_le_bytes());
-        destination.extend_from_slice(&self.graphics_id.to_le_bytes());
-        destination.extend_from_slice(&self.name);
-        destination.push(0);
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(self.object_type);
+        writer.write_i32(self.id);
+        writer.write_i32(self.graphics_id);
+        writer.write_c_string(&self.name);
         true
     }
 
@@ -194,44 +195,43 @@ fn read_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, BaseObjectDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(4) else {
-        return Err(BaseObjectDecodeError::UnexpectedEnd {
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| {
+        BaseObjectDecodeError::UnexpectedEnd {
             field,
-            offset,
+            offset: block.offset,
             needed: 4,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        // BLOCKED_MISSING_FACT: старый pointer-reader не получал длину source.
-        return Err(BaseObjectDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(i32::from_le_bytes(
-        bytes.try_into().expect("проверены четыре байта"),
-    ))
+            available: block.available,
+        }
+    })?;
+    let value = reader.read_i32().map_err(|block| BaseObjectDecodeError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_name(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, BaseObjectDecodeError> {
     let mut name = Vec::new();
     loop {
         let offset = *cursor;
-        let Some(byte) = source.get(offset).copied() else {
-            return Err(BaseObjectDecodeError::UnexpectedEnd {
+        let mut reader = LegacyReader::at(source, offset).map_err(|block| {
+            BaseObjectDecodeError::UnexpectedEnd {
                 field: "m_strName",
-                offset,
+                offset: block.offset,
                 needed: 1,
-                available: 0,
-            });
-        };
-        *cursor = offset + 1;
+                available: block.available,
+            }
+        })?;
+        let byte = reader.read_u8().map_err(|block| BaseObjectDecodeError::UnexpectedEnd {
+            field: "m_strName",
+            offset: block.offset,
+            needed: block.needed,
+            available: block.available,
+        })?;
+        *cursor = reader.position();
         if name.len() == LEGACY_NAME_CAPACITY {
             // BLOCKED_MISSING_FACT: этот байт уже выходил за local char[256].
             return Err(BaseObjectDecodeError::LegacyNameOverflow {

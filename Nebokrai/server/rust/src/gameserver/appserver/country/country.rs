@@ -38,6 +38,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::nets::netserver::message::CMessage;
+use super::super::legacycodec::LegacyReader;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CCountry {
@@ -374,7 +375,10 @@ fn read_country_u8(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u8, CountryDecodeError> {
-    Ok(take_country_bytes(source, cursor, 1, field)?[0])
+    let mut reader = country_reader(source, *cursor, field, 1)?;
+    let value = reader.read_u8().map_err(|block| country_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_country_i32(
@@ -382,39 +386,36 @@ fn read_country_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, CountryDecodeError> {
-    Ok(i32::from_le_bytes(
-        take_country_bytes(source, cursor, 4, field)?
-            .try_into()
-            .expect("country signed long уже проверен"),
-    ))
+    let mut reader = country_reader(source, *cursor, field, 4)?;
+    let value = reader.read_i32().map_err(|block| country_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
-fn take_country_bytes<'a>(
-    source: &'a [u8],
-    cursor: &mut usize,
-    required: usize,
+fn country_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
     field: &'static str,
-) -> Result<&'a [u8], CountryDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(required) else {
-        return Err(CountryDecodeError {
-            field,
-            offset,
-            required,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(CountryDecodeError {
-            field,
-            offset,
-            required,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(bytes)
+    required: usize,
+) -> Result<LegacyReader<'source>, CountryDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| CountryDecodeError {
+        field,
+        offset: block.offset,
+        required,
+        available: block.available,
+    })
+}
+
+fn country_error(
+    field: &'static str,
+    block: super::super::legacycodec::LegacyReadBlock,
+) -> CountryDecodeError {
+    CountryDecodeError {
+        field,
+        offset: block.offset,
+        required: block.needed,
+        available: block.available,
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

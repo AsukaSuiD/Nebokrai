@@ -44,6 +44,7 @@ use super::cgoodsbaseproperties::{
 };
 use super::cgoodsfactory::CGoodsFactory;
 use super::fairyproperties::{CFairyProperties, FairyExpBlock, FairyExpReport, FairyExpRuntime};
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::{CShape, ShapeDecodeError, ShapeIdentity};
 use crate::public::guid::CGuid;
 
@@ -236,21 +237,21 @@ impl CGoods {
         if !self.shape.encode_to_byte_array(destination, include_child) {
             return false;
         }
-        destination.extend_from_slice(&self.base_properties_index.to_le_bytes());
-        destination.extend_from_slice(&self.amount.to_le_bytes());
-        destination.extend_from_slice(&self.price.to_le_bytes());
-        destination.extend_from_slice(&self.description);
-        destination.push(0);
-        destination.extend_from_slice(&(self.addon_properties.len() as u32).to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_u32(self.base_properties_index);
+        writer.write_u32(self.amount);
+        writer.write_u32(self.price);
+        writer.write_c_string(&self.description);
+        writer.write_u32(self.addon_properties.len() as u32);
         for property in &self.addon_properties {
-            destination.extend_from_slice(&property.property_type.to_le_bytes());
-            destination.extend_from_slice(&property.is_enabled.to_le_bytes());
-            destination.extend_from_slice(&property.is_implicit_attribute.to_le_bytes());
-            destination.extend_from_slice(&(property.values.len() as u32).to_le_bytes());
+            writer.write_i32(property.property_type);
+            writer.write_i32(property.is_enabled);
+            writer.write_i32(property.is_implicit_attribute);
+            writer.write_u32(property.values.len() as u32);
             for value in &property.values {
-                destination.extend_from_slice(&value.id.to_le_bytes());
-                destination.extend_from_slice(&value.base_value.to_le_bytes());
-                destination.extend_from_slice(&value.modifier.to_le_bytes());
+                writer.write_u32(value.id);
+                writer.write_i32(value.base_value);
+                writer.write_i32(value.modifier);
             }
         }
         true
@@ -278,32 +279,26 @@ impl CGoods {
             })
             .count();
         let normal_count = self.addon_properties.len().saturating_sub(da_kong_count);
-        destination.extend_from_slice(&(self.base_properties_index as i32).to_le_bytes());
-        destination.extend_from_slice(&self.identity().id.to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(self.base_properties_index as i32);
+        writer.write_i32(self.identity().id);
         let guid = self.identity().ex_id;
         if guid == CGuid::GUID_INVALID {
-            destination.push(0);
+            writer.write_u8(0);
         } else {
-            destination.push(16);
-            destination.extend_from_slice(guid.as_legacy_bytes());
+            writer.write_u8(16);
+            writer.write_bytes(guid.as_legacy_bytes());
         }
-        destination.extend_from_slice(&(self.amount as i32).to_le_bytes());
-        destination.extend_from_slice(self.name());
-        destination.push(0);
-        destination.extend_from_slice(&(self.price as i32).to_le_bytes());
-        destination.extend_from_slice(
-            &base
-                .equip_place()
-                .wrapping_add(base.goods_type().wrapping_sub(GOODS_TYPE_CONSUMABLE))
-                .to_le_bytes(),
+        writer.write_i32(self.amount as i32);
+        writer.write_c_string(self.name());
+        writer.write_i32(self.price as i32);
+        writer.write_i32(
+            base.equip_place()
+                .wrapping_add(base.goods_type().wrapping_sub(GOODS_TYPE_CONSUMABLE)),
         );
-        destination.extend_from_slice(&(base.weight() as i32).to_le_bytes());
-        destination.extend_from_slice(
-            &self
-                .addon_property_value(factory, GAP_GOODS_MAXIMUM_DURABILITY, 2)
-                .to_le_bytes(),
-        );
-        destination.extend_from_slice(&(normal_count as i32).to_le_bytes());
+        writer.write_i32(base.weight() as i32);
+        writer.write_i32(self.addon_property_value(factory, GAP_GOODS_MAXIMUM_DURABILITY, 2));
+        writer.write_i32(normal_count as i32);
         for property in self.addon_properties.iter().take(normal_count) {
             let modifier = |id| {
                 property
@@ -340,38 +335,38 @@ impl CGoods {
             } else {
                 modifier(1)
             };
-            destination.extend_from_slice(&(property.property_type as u16).to_le_bytes());
-            destination.extend_from_slice(&value1.to_le_bytes());
-            destination.extend_from_slice(&modifier(2).to_le_bytes());
+            writer.write_u16(property.property_type as u16);
+            writer.write_i32(value1);
+            writer.write_i32(modifier(2));
         }
         let visible_da_kong_count = if da_kong_enabled { da_kong_count } else { 0 };
-        destination.extend_from_slice(&(self.shape.get_pos_x() as i32).to_le_bytes());
-        destination.extend_from_slice(&(self.shape.get_pos_y() as i32).to_le_bytes());
-        destination.extend_from_slice(&(visible_da_kong_count as i32).to_le_bytes());
+        writer.write_i32(self.shape.get_pos_x() as i32);
+        writer.write_i32(self.shape.get_pos_y() as i32);
+        writer.write_i32(visible_da_kong_count as i32);
         for property in self
             .addon_properties
             .iter()
             .skip(normal_count)
             .take(visible_da_kong_count)
         {
-            destination.extend_from_slice(&(property.property_type as u16).to_le_bytes());
+            writer.write_u16(property.property_type as u16);
             let mut base_value1 = 0;
             let mut base_value2 = 0;
             for value in &property.values {
                 if value.id == 1 {
                     base_value1 = value.base_value;
-                    destination.extend_from_slice(&value.modifier.to_le_bytes());
+                    writer.write_i32(value.modifier);
                 }
                 if value.id == 2 {
                     base_value2 = value.base_value;
-                    destination.extend_from_slice(&value.modifier.to_le_bytes());
+                    writer.write_i32(value.modifier);
                 }
             }
-            destination.push(u8::from(property.is_enabled != 0));
-            destination.push(u8::from(property.is_implicit_attribute != 0));
-            destination.extend_from_slice(&base_value1.to_le_bytes());
-            destination.extend_from_slice(&base_value2.to_le_bytes());
-            destination.extend_from_slice(&10_000u16.to_le_bytes());
+            writer.write_u8(u8::from(property.is_enabled != 0));
+            writer.write_u8(u8::from(property.is_implicit_attribute != 0));
+            writer.write_i32(base_value1);
+            writer.write_i32(base_value2);
+            writer.write_u16(10_000);
         }
         true
     }
@@ -1287,20 +1282,19 @@ fn read_goods_wire_description(
 ) -> Result<Vec<u8>, GoodsDecodeError> {
     let offset = *cursor;
     let available = source.len().saturating_sub(offset);
-    let searchable = available.min(0x404);
-    let Some(bytes) = source.get(offset..offset.saturating_add(searchable)) else {
-        return Err(GoodsDecodeError::UnexpectedEnd {
+    let mut reader = LegacyReader::at(source, offset).map_err(|block| {
+        GoodsDecodeError::UnexpectedEnd {
             field: "m_strDescribe",
-            offset,
+            offset: block.offset,
             needed: 1,
-            available,
-        });
-    };
-    let Some(length) = bytes.iter().position(|byte| *byte == 0) else {
-        return Err(GoodsDecodeError::UnterminatedDescription { offset, available });
-    };
-    *cursor = offset + length + 1;
-    Ok(bytes[..length].to_vec())
+            available: block.available,
+        }
+    })?;
+    let bytes = reader
+        .read_c_string(0x404)
+        .map_err(|_| GoodsDecodeError::UnterminatedDescription { offset, available })?;
+    *cursor = reader.position();
+    Ok(bytes.to_vec())
 }
 
 fn read_goods_wire_i32(
@@ -1308,7 +1302,10 @@ fn read_goods_wire_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, GoodsDecodeError> {
-    Ok(i32::from_le_bytes(read_goods_wire(source, cursor, field)?))
+    let mut reader = goods_reader(source, *cursor, field, 4)?;
+    let value = reader.read_i32().map_err(|block| goods_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_goods_wire_u32(
@@ -1316,7 +1313,10 @@ fn read_goods_wire_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, GoodsDecodeError> {
-    Ok(u32::from_le_bytes(read_goods_wire(source, cursor, field)?))
+    let mut reader = goods_reader(source, *cursor, field, 4)?;
+    let value = reader.read_u32().map_err(|block| goods_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_goods_wire<const N: usize>(
@@ -1324,28 +1324,38 @@ fn read_goods_wire<const N: usize>(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<[u8; N], GoodsDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(N) else {
-        return Err(GoodsDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(GoodsDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(bytes
-        .try_into()
-        .expect("slice содержит ровно запрошенное число байт"))
+    let mut reader = goods_reader(source, *cursor, field, N)?;
+    let bytes = reader
+        .read_bytes(N)
+        .map_err(|block| goods_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(bytes.try_into().expect("прочитано точное число байт"))
+}
+
+fn goods_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
+    field: &'static str,
+    needed: usize,
+) -> Result<LegacyReader<'source>, GoodsDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| GoodsDecodeError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        needed,
+        available: block.available,
+    })
+}
+
+fn goods_read_error(
+    field: &'static str,
+    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+) -> GoodsDecodeError {
+    GoodsDecodeError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

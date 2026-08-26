@@ -1,6 +1,6 @@
 //! Командный разъём `CTeamate`, принадлежащий игроку в GameServer.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/session/cteamate.cpp`. Материализована достигнутая часть
 //! приглашения и входа: идентификатор разъёма, владелец-игрок, снимок региона
 //! и имени, а также `Serialize`, который `OnPlugInserted` вкладывает в
@@ -9,6 +9,8 @@
 //! создают `0xBFD08/09` из типизированных владельцев сессии. Регион, состояние
 //! участника и удалённое восстановление используют тот же типизированный
 //! разъём. `Lose`, `AI` и остальные недостигнутые ветви сохранены ниже как RAW.
+
+use crate::gameserver::appserver::legacycodec::LegacyWriter;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CTeamate {
@@ -70,13 +72,13 @@ impl CTeamate {
     }
 
     pub(crate) fn serialize(&self, output: &mut Vec<u8>) {
-        output.extend_from_slice(&5_i32.to_le_bytes());
-        output.extend_from_slice(&self.owner_type.to_le_bytes());
-        output.extend_from_slice(&self.owner_id.to_le_bytes());
-        output.extend_from_slice(&0_i32.to_le_bytes());
-        output.extend_from_slice(&self.owner_region_id.to_le_bytes());
-        output.extend_from_slice(&self.owner_name);
-        output.push(0);
+        let mut writer = LegacyWriter::new(output);
+        writer.write_i32(5);
+        writer.write_i32(self.owner_type);
+        writer.write_i32(self.owner_id);
+        writer.write_i32(0);
+        writer.write_i32(self.owner_region_id);
+        writer.write_c_string(&self.owner_name);
     }
 }
 

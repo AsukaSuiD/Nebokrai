@@ -25,6 +25,8 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
+use super::super::legacycodec::LegacyReader;
+
 const COUNTRY_PARAMETER_COUNT: usize = 39;
 const MAX_COUNTRY_POWER: usize = 2;
 const MAX_COUNTRY_TREASURY: usize = 4;
@@ -332,7 +334,10 @@ fn read_country_u8(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u8, CountryParamInputBlock> {
-    Ok(take_country_bytes(source, cursor, 1, field)?[0])
+    let mut reader = country_reader(source, *cursor, field, 1)?;
+    let value = reader.read_u8().map_err(|block| country_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_country_i32(
@@ -340,36 +345,34 @@ fn read_country_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, CountryParamInputBlock> {
-    let bytes = take_country_bytes(source, cursor, 4, field)?;
-    Ok(i32::from_le_bytes(
-        bytes.try_into().expect("проверенный 4-байтовый срез"),
-    ))
+    let mut reader = country_reader(source, *cursor, field, 4)?;
+    let value = reader.read_i32().map_err(|block| country_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
-fn take_country_bytes<'a>(
-    source: &'a [u8],
-    cursor: &mut usize,
-    count: usize,
+fn country_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
     field: &'static str,
-) -> Result<&'a [u8], CountryParamInputBlock> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(count) else {
-        return Err(CountryParamInputBlock {
-            field,
-            offset,
-            required: count,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(CountryParamInputBlock {
-            field,
-            offset,
-            required: count,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(bytes)
+    required: usize,
+) -> Result<LegacyReader<'source>, CountryParamInputBlock> {
+    LegacyReader::at(source, cursor).map_err(|block| CountryParamInputBlock {
+        field,
+        offset: block.offset,
+        required,
+        available: block.available,
+    })
+}
+
+fn country_error(
+    field: &'static str,
+    block: super::super::legacycodec::LegacyReadBlock,
+) -> CountryParamInputBlock {
+    CountryParamInputBlock {
+        field,
+        offset: block.offset,
+        required: block.needed,
+        available: block.available,
+    }
 }

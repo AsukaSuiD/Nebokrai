@@ -29,6 +29,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::gameserver::appserver::servernationregion::ServerNationRegion;
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::public::date::TagTime;
 
 const FOUR_NATION_SETUP_WIRE_SIZE: usize = 0xc4;
@@ -473,7 +474,9 @@ fn decode_four_nation_time(bytes: &[u8]) -> TagTime {
     let mut fields = [0u16; 8];
     for (index, field) in fields.iter_mut().enumerate() {
         let offset = index * 2;
-        *field = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+        *field = LegacyReader::at(bytes, offset)
+            .and_then(|mut reader| reader.read_u16())
+            .expect("проверен TagTime");
     }
     TagTime::from_fields(fields)
 }
@@ -483,44 +486,49 @@ fn read_four_nation_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, FourNationGameDecodeError> {
-    let bytes = take_four_nation_bytes(source, cursor, 4, field)?;
-    Ok(i32::from_le_bytes(bytes.try_into().unwrap()))
+    let mut reader = four_nation_reader(source, *cursor, field, 4)?;
+    let value = reader.read_i32().map_err(|block| four_nation_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
-fn take_four_nation_bytes<'a>(
-    source: &'a [u8],
+fn take_four_nation_bytes<'source>(
+    source: &'source [u8],
     cursor: &mut usize,
     required: usize,
     field: &'static str,
-) -> Result<&'a [u8], FourNationGameDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(required) else {
-        return Err(FourNationGameDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            required,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(FourNationGameDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            required,
-            available,
-        });
-    };
-    *cursor = end;
+) -> Result<&'source [u8], FourNationGameDecodeError> {
+    let mut reader = four_nation_reader(source, *cursor, field, required)?;
+    let bytes = reader
+        .read_bytes(required)
+        .map_err(|block| four_nation_error(field, block))?;
+    *cursor = reader.position();
     Ok(bytes)
 }
 
+fn four_nation_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
+    field: &'static str,
+    required: usize,
+) -> Result<LegacyReader<'source>, FourNationGameDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| FourNationGameDecodeError::UnexpectedEnd { field, offset: block.offset, required, available: block.available })
+}
+
+fn four_nation_error(field: &'static str, block: crate::gameserver::appserver::legacycodec::LegacyReadBlock) -> FourNationGameDecodeError {
+    FourNationGameDecodeError::UnexpectedEnd { field, offset: block.offset, required: block.needed, available: block.available }
+}
+
 fn four_nation_i32_at(bytes: &[u8], offset: usize) -> i32 {
-    i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+    LegacyReader::at(bytes, offset)
+        .and_then(|mut reader| reader.read_i32())
+        .expect("проверено поле FourNationWar")
 }
 
 fn four_nation_u32_at(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+    LegacyReader::at(bytes, offset)
+        .and_then(|mut reader| reader.read_u32())
+        .expect("проверено поле FourNationWar")
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

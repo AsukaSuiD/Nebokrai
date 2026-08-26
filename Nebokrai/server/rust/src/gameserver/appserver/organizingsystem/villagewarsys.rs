@@ -60,6 +60,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::public::date::TagTime;
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum VillageWarDecodeError {
@@ -459,7 +460,10 @@ fn read_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, VillageWarDecodeError> {
-    Ok(i32::from_le_bytes(read_exact(source, cursor, field)?))
+    let mut reader = village_reader(source, *cursor, field, 4)?;
+    let value = reader.read_i32().map_err(|block| village_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_u32(
@@ -467,7 +471,10 @@ fn read_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, VillageWarDecodeError> {
-    Ok(u32::from_le_bytes(read_exact(source, cursor, field)?))
+    let mut reader = village_reader(source, *cursor, field, 4)?;
+    let value = reader.read_u32().map_err(|block| village_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_tag_time(
@@ -476,15 +483,16 @@ fn read_tag_time(
     field: &'static str,
 ) -> Result<TagTime, VillageWarDecodeError> {
     let bytes = read_exact::<16>(source, cursor, field)?;
+    let mut reader = LegacyReader::new(&bytes);
     Ok(TagTime {
-        year: u16::from_le_bytes([bytes[0], bytes[1]]),
-        month: u16::from_le_bytes([bytes[2], bytes[3]]),
-        day_of_week: u16::from_le_bytes([bytes[4], bytes[5]]),
-        day: u16::from_le_bytes([bytes[6], bytes[7]]),
-        hour: u16::from_le_bytes([bytes[8], bytes[9]]),
-        minute: u16::from_le_bytes([bytes[10], bytes[11]]),
-        second: u16::from_le_bytes([bytes[12], bytes[13]]),
-        milliseconds: u16::from_le_bytes([bytes[14], bytes[15]]),
+        year: reader.read_u16().expect("проверен TagTime"),
+        month: reader.read_u16().expect("проверен TagTime"),
+        day_of_week: reader.read_u16().expect("проверен TagTime"),
+        day: reader.read_u16().expect("проверен TagTime"),
+        hour: reader.read_u16().expect("проверен TagTime"),
+        minute: reader.read_u16().expect("проверен TagTime"),
+        second: reader.read_u16().expect("проверен TagTime"),
+        milliseconds: reader.read_u16().expect("проверен TagTime"),
     })
 }
 
@@ -493,28 +501,20 @@ fn read_exact<const N: usize>(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<[u8; N], VillageWarDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(N) else {
-        return Err(VillageWarDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        // BLOCKED_MISSING_FACT: исходный безразмерный pointer читал за payload;
-        // безопасный API не назначает неизвестному UB значение или side effect.
-        return Err(VillageWarDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(bytes.try_into().expect("проверен срез точной длины"))
+    let mut reader = village_reader(source, *cursor, field, N)?;
+    let bytes = reader
+        .read_bytes(N)
+        .map_err(|block| village_error(field, block))?;
+    *cursor = reader.position();
+    Ok(bytes.try_into().expect("прочитано точное число байт"))
+}
+
+fn village_reader<'source>(source: &'source [u8], cursor: usize, field: &'static str, needed: usize) -> Result<LegacyReader<'source>, VillageWarDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| VillageWarDecodeError::UnexpectedEnd { field, offset: block.offset, needed, available: block.available })
+}
+
+fn village_error(field: &'static str, block: crate::gameserver::appserver::legacycodec::LegacyReadBlock) -> VillageWarDecodeError {
+    VillageWarDecodeError::UnexpectedEnd { field, offset: block.offset, needed: block.needed, available: block.available }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

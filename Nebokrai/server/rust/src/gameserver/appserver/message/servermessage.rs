@@ -168,6 +168,7 @@ use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyCompos
 use crate::gameserver::appserver::goods::cgoodsfactory::{
     GoodsFactoryDecodeError, GoodsFactoryDecodeReport,
 };
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::appserver::message::logmessage::GamePlayerLostReport;
 use crate::gameserver::appserver::player::{PlayerConfirmedKillReport, PlayerHonorResetReport};
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
@@ -3425,17 +3426,14 @@ fn read_start_long(
 ) -> Result<i32, GameClientServerStartPayloadError> {
     let offset = *cursor;
     let available = wire.len().saturating_sub(offset);
-    let Some(bytes) = wire.get(offset..offset.saturating_add(4)) else {
-        return Err(GameClientServerStartPayloadError {
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    *cursor += 4;
-    Ok(i32::from_le_bytes(
-        bytes.try_into().expect("server ID содержит четыре байта"),
-    ))
+    let mut reader = LegacyReader::at(wire, offset).map_err(|_| {
+        GameClientServerStartPayloadError { offset, needed: 4, available }
+    })?;
+    let value = reader.read_i32().map_err(|_| {
+        GameClientServerStartPayloadError { offset, needed: 4, available }
+    })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 pub(crate) trait InitialRegionStartupContext:
@@ -3575,26 +3573,14 @@ fn read_initial_region_i32(
 ) -> Result<i32, InitialRegionSubtypeInputBlock> {
     let offset = *cursor;
     let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(4) else {
-        return Err(InitialRegionSubtypeInputBlock {
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(InitialRegionSubtypeInputBlock {
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(i32::from_le_bytes(
-        bytes
-            .try_into()
-            .expect("region subtype занимает четыре байта"),
-    ))
+    let mut reader = LegacyReader::at(source, offset).map_err(|_| {
+        InitialRegionSubtypeInputBlock { offset, needed: 4, available }
+    })?;
+    let value = reader.read_i32().map_err(|_| {
+        InitialRegionSubtypeInputBlock { offset, needed: 4, available }
+    })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4536,15 +4522,13 @@ pub(crate) fn dispatch_honor_rank_startup_setup<Context: HonorRankPlayerResetCon
 fn read_honor_reset_mask(source: &[u8], cursor: &mut usize) -> Result<u32, HonorRankStartupError> {
     let offset = *cursor;
     let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
-        return Err(HonorRankStartupError::MissingResetMask { offset, available });
-    };
-    *cursor += 4;
-    Ok(u32::from_le_bytes(
-        bytes
-            .try_into()
-            .expect("total honor reset mask содержит четыре байта"),
-    ))
+    let mut reader = LegacyReader::at(source, offset)
+        .map_err(|_| HonorRankStartupError::MissingResetMask { offset, available })?;
+    let value = reader
+        .read_u32()
+        .map_err(|_| HonorRankStartupError::MissingResetMask { offset, available })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 /// Наблюдаемый итог reconnect-ветви Billing `0x6F904`.
@@ -4577,19 +4561,13 @@ impl Error for JjcRegionLevelDecodeError {}
 fn read_jjc_level_i32(source: &[u8], cursor: &mut usize) -> Result<i32, JjcRegionLevelDecodeError> {
     let offset = *cursor;
     let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
-        return Err(JjcRegionLevelDecodeError {
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    *cursor += 4;
-    Ok(i32::from_le_bytes(
-        bytes
-            .try_into()
-            .expect("размер JJC region-level scalar уже проверен"),
-    ))
+    let mut reader = LegacyReader::at(source, offset)
+        .map_err(|_| JjcRegionLevelDecodeError { offset, needed: 4, available })?;
+    let value = reader
+        .read_i32()
+        .map_err(|_| JjcRegionLevelDecodeError { offset, needed: 4, available })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_script_resource_length(
@@ -4597,12 +4575,12 @@ fn read_script_resource_length(
     cursor: &mut usize,
     resource: &'static str,
 ) -> Result<i32, GameScriptResourceDecodeError> {
-    let bytes = take_script_resource_bytes(source, cursor, 4, "resource length")?;
-    let declared = i32::from_le_bytes(
-        bytes
-            .try_into()
-            .expect("длина script resource содержит ровно четыре байта"),
-    );
+    let offset = *cursor;
+    let mut reader = script_resource_reader(source, offset, "resource length", 4)?;
+    let declared = reader
+        .read_i32()
+        .map_err(|block| script_resource_error("resource length", block))?;
+    *cursor = reader.position();
     if declared < 0 {
         return Err(GameScriptResourceDecodeError::NegativeLength { resource, declared });
     }
@@ -4615,26 +4593,20 @@ fn take_script_resource_bytes<'a>(
     required: usize,
     field: &'static str,
 ) -> Result<&'a [u8], GameScriptResourceDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(required) else {
-        return Err(GameScriptResourceDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            required,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(GameScriptResourceDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            required,
-            available,
-        });
-    };
-    *cursor = end;
+    let mut reader = script_resource_reader(source, *cursor, field, required)?;
+    let bytes = reader
+        .read_bytes(required)
+        .map_err(|block| script_resource_error(field, block))?;
+    *cursor = reader.position();
     Ok(bytes)
+}
+
+fn script_resource_reader<'source>(source: &'source [u8], cursor: usize, field: &'static str, required: usize) -> Result<LegacyReader<'source>, GameScriptResourceDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| GameScriptResourceDecodeError::UnexpectedEnd { field, offset: block.offset, required, available: block.available })
+}
+
+fn script_resource_error(field: &'static str, block: crate::gameserver::appserver::legacycodec::LegacyReadBlock) -> GameScriptResourceDecodeError {
+    GameScriptResourceDecodeError::UnexpectedEnd { field, offset: block.offset, required: block.needed, available: block.available }
 }
 
 fn read_script_resource_path(source: &[u8], cursor: &mut usize, maximum: usize) -> Vec<u8> {

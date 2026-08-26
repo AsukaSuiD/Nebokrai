@@ -14,6 +14,7 @@
 
 use crate::gameserver::appserver::session::csession::CSession;
 use crate::gameserver::appserver::session::cteamate::CTeamate;
+use crate::gameserver::appserver::legacycodec::LegacyWriter;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CTeam {
@@ -69,21 +70,17 @@ impl CTeam {
     ) -> Vec<u8> {
         let teammates: Vec<&CTeamate> = teammates.into_iter().collect();
         let mut output = Vec::new();
-        output.extend_from_slice(&1_i32.to_le_bytes());
-        output.extend_from_slice(&session.minimum_plugs().to_le_bytes());
-        output.extend_from_slice(&session.maximum_plugs().to_le_bytes());
-        output.extend_from_slice(&session.lifetime().to_le_bytes());
-        output.extend_from_slice(&self.team_id.to_le_bytes());
-        output.extend_from_slice(&self.team_name);
-        output.push(0);
-        output.extend_from_slice(&self.password);
-        output.push(0);
-        output.extend_from_slice(&self.leader_id.to_le_bytes());
-        output.extend_from_slice(
-            &u32::try_from(teammates.len())
-                .unwrap_or(u32::MAX)
-                .to_le_bytes(),
-        );
+        let mut writer = LegacyWriter::new(&mut output);
+        writer.write_i32(1);
+        writer.write_u32(session.minimum_plugs());
+        writer.write_u32(session.maximum_plugs());
+        writer.write_u32(session.lifetime());
+        writer.write_u32(self.team_id);
+        writer.write_c_string(&self.team_name);
+        writer.write_c_string(&self.password);
+        writer.write_i32(self.leader_id);
+        writer.write_u32(u32::try_from(teammates.len()).unwrap_or(u32::MAX));
+        drop(writer);
         for teammate in teammates {
             teammate.serialize(&mut output);
         }

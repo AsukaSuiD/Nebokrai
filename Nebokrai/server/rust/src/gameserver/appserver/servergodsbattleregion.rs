@@ -47,6 +47,7 @@ use std::error::Error;
 use std::fmt;
 
 use super::serverregion::ServerRegionDecodeError;
+use super::legacycodec::LegacyReader;
 use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError};
 
 // Точные GBK payload из GameServer .rdata VA `0x00651870` и `0x00651850`.
@@ -309,15 +310,13 @@ fn read_top_ten_i32(
     field: &'static str,
 ) -> Result<i32, GodsBattleTopTenDecodeError> {
     let offset = *cursor;
-    let bytes = source
-        .get(offset..offset.saturating_add(4))
-        .ok_or(GodsBattleTopTenDecodeError::UnexpectedEnd { offset, field })?;
-    *cursor = cursor.wrapping_add(4);
-    Ok(i32::from_le_bytes(
-        bytes
-            .try_into()
-            .expect("проверенный четырёхбайтовый GodsBattle scalar"),
-    ))
+    let mut reader = LegacyReader::at(source, offset)
+        .map_err(|_| GodsBattleTopTenDecodeError::UnexpectedEnd { offset, field })?;
+    let value = reader
+        .read_i32()
+        .map_err(|_| GodsBattleTopTenDecodeError::UnexpectedEnd { offset, field })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 /// Startup-часть concrete GodsBattle region. Constructor подтверждает

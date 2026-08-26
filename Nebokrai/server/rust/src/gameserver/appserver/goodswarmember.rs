@@ -21,6 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 
 const GOODS_WAR_WORLD_MESSAGE: i32 = 0x0006_0139;
@@ -326,9 +327,10 @@ fn read_goods_war_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, GameGoodsWarMessageError> {
-    Ok(i32::from_le_bytes(read_goods_war_array::<4>(
-        source, cursor, field,
-    )?))
+    let mut reader = goods_war_reader(source, *cursor, field, 4)?;
+    let value = reader.read_i32().map_err(|block| goods_war_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_goods_war_array<const N: usize>(
@@ -336,24 +338,38 @@ fn read_goods_war_array<const N: usize>(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<[u8; N], GameGoodsWarMessageError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(N) else {
-        return Err(GameGoodsWarMessageError::Input(GoodsWarMessageInputBlock {
+    let mut reader = goods_war_reader(source, *cursor, field, N)?;
+    let bytes = reader
+        .read_bytes(N)
+        .map_err(|block| goods_war_error(field, block))?;
+    *cursor = reader.position();
+    Ok(bytes.try_into().expect("прочитано точное число байт"))
+}
+
+fn goods_war_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
+    field: &'static str,
+    needed: usize,
+) -> Result<LegacyReader<'source>, GameGoodsWarMessageError> {
+    LegacyReader::at(source, cursor).map_err(|block| {
+        GameGoodsWarMessageError::Input(GoodsWarMessageInputBlock {
             field,
-            offset,
-            needed: N,
-            available,
-        }));
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(GameGoodsWarMessageError::Input(GoodsWarMessageInputBlock {
-            field,
-            offset,
-            needed: N,
-            available,
-        }));
-    };
-    *cursor = end;
-    Ok(bytes.try_into().expect("длина GoodsWar field проверена"))
+            offset: block.offset,
+            needed,
+            available: block.available,
+        })
+    })
+}
+
+fn goods_war_error(
+    field: &'static str,
+    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+) -> GameGoodsWarMessageError {
+    GameGoodsWarMessageError::Input(GoodsWarMessageInputBlock {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }

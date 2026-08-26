@@ -25,6 +25,7 @@ use super::cgoodscontainer::GoodsStackMergeOutcome;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::public::guid::CGuid;
 
 const EXPANSION_BASE_CELL: usize = 48;
@@ -665,14 +666,14 @@ impl CVolumeLimitGoodsContainer {
                     && self.query_goods_position(goods.identity().ex_id).is_some()
             })
             .count() as u32;
-        destination.extend_from_slice(&count.to_le_bytes());
+        LegacyWriter::new(destination).write_u32(count);
         for goods in self.base.traversing_goods() {
             if factory
                 .query_goods_base_properties(goods.base_properties_index())
                 .is_some()
                 && let Some(position) = self.query_goods_position(goods.identity().ex_id)
             {
-                destination.extend_from_slice(&position.to_le_bytes());
+                LegacyWriter::new(destination).write_u32(position);
                 if !goods.serialize(destination, true) {
                     return false;
                 }
@@ -723,28 +724,22 @@ fn read_volume_wire_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, VolumeGoodsCodecError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(4) else {
-        return Err(VolumeGoodsCodecError::UnexpectedEnd {
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| {
+        VolumeGoodsCodecError::UnexpectedEnd {
             field,
-            offset,
+            offset: block.offset,
             needed: 4,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(VolumeGoodsCodecError::UnexpectedEnd {
-            field,
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(u32::from_le_bytes(
-        bytes.try_into().expect("legacy DWORD содержит четыре байта"),
-    ))
+            available: block.available,
+        }
+    })?;
+    let value = reader.read_u32().map_err(|block| VolumeGoodsCodecError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

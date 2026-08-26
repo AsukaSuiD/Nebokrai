@@ -26,6 +26,7 @@ use super::cgoodsbaseproperties::{
 };
 use super::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 
 const COMPOSE_RECORD_SIZE: usize = 0x7c;
 const LEGACY_STRING_SIZE: usize = 0x1c;
@@ -328,19 +329,15 @@ impl CBattleFairyProperty {
                     "strMaterial",
                     0x38,
                 )?,
-                deplete_fetch: u32::from_le_bytes(
-                    record[0x54..0x58].try_into().expect("поле 4 байта"),
-                ),
-                success_rate: f32::from_bits(u32::from_le_bytes(
-                    record[0x58..0x5c].try_into().expect("поле 4 байта"),
-                )),
+                deplete_fetch: read_record_u32(&record, 0x54),
+                success_rate: f32::from_bits(read_record_u32(&record, 0x58)),
                 battle_fairy: decode_legacy_string(
                     &record,
                     record_index as usize,
                     "strBattleFairy",
                     0x5c,
                 )?,
-                index: u32::from_le_bytes(record[0x78..0x7c].try_into().expect("поле 4 байта")),
+                index: read_record_u32(&record, 0x78),
             });
         }
         Ok(self.compose.len())
@@ -394,16 +391,8 @@ fn decode_legacy_string(
     field: &'static str,
     offset: usize,
 ) -> Result<Vec<u8>, BattleFairyComposeDecodeError> {
-    let length = u32::from_le_bytes(
-        record[offset + 0x14..offset + 0x18]
-            .try_into()
-            .expect("MSVC string length содержит четыре байта"),
-    );
-    let capacity = u32::from_le_bytes(
-        record[offset + 0x18..offset + LEGACY_STRING_SIZE]
-            .try_into()
-            .expect("MSVC string capacity содержит четыре байта"),
-    );
+    let length = read_record_u32(record, offset + 0x14);
+    let capacity = read_record_u32(record, offset + 0x18);
     if capacity > LEGACY_STRING_INLINE_CAPACITY || length > LEGACY_STRING_INLINE_CAPACITY {
         return Err(BattleFairyComposeDecodeError::NonPortableString {
             record: record_index,
@@ -417,26 +406,44 @@ fn decode_legacy_string(
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, BattleFairyComposeDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    let mut reader = battle_fairy_reader(source, *cursor, 4)?;
+    let value = reader.read_i32().map_err(battle_fairy_read_error)?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_wire_array<const N: usize>(
     source: &[u8],
     cursor: &mut usize,
 ) -> Result<[u8; N], BattleFairyComposeDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(BattleFairyComposeDecodeError::UnexpectedEnd {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер BattleFairy combine record уже проверен"))
+    let mut reader = battle_fairy_reader(source, *cursor, N)?;
+    let bytes = reader.read_bytes(N).map_err(battle_fairy_read_error)?;
+    *cursor = reader.position();
+    Ok(bytes.try_into().expect("прочитано точное число байт"))
+}
+
+fn battle_fairy_reader(
+    source: &[u8],
+    cursor: usize,
+    needed: usize,
+) -> Result<LegacyReader<'_>, BattleFairyComposeDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| {
+        BattleFairyComposeDecodeError::UnexpectedEnd {
+            offset: block.offset,
+            needed,
+            available: block.available,
+        }
+    })
+}
+
+fn battle_fairy_read_error(
+    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+) -> BattleFairyComposeDecodeError {
+    BattleFairyComposeDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
 
 fn visible_c_bytes(bytes: &[u8]) -> Vec<u8> {
@@ -445,4 +452,10 @@ fn visible_c_bytes(bytes: &[u8]) -> Vec<u8> {
         .position(|byte| *byte == 0)
         .unwrap_or(bytes.len())]
         .to_vec()
+}
+
+fn read_record_u32(record: &[u8], offset: usize) -> u32 {
+    LegacyReader::at(record, offset)
+        .and_then(|mut reader| reader.read_u32())
+        .expect("фиксированная запись содержит поле DWORD")
 }

@@ -53,6 +53,7 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::script::script::legacy_atoi;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, GameKickPlayerReport, GameRegionClearStarted,
     colored_player_notice_message, player_skill_learned_message,
@@ -351,8 +352,7 @@ fn read_string(message: &mut CMessage, maximum: usize) -> Vec<u8> {
 
 fn peek_long(message: &mut CMessage) -> Option<i32> {
     let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-    let end = cursor.checked_add(4)?;
-    Some(i32::from_le_bytes(wire.get(*cursor..end)?.try_into().ok()?))
+    LegacyReader::at(wire, *cursor).ok()?.read_i32().ok()
 }
 
 fn format_legacy_level(template: &[u8], level: i32) -> Vec<u8> {

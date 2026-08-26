@@ -9,6 +9,7 @@
 //! явно названной runtime-границей до материализации state owner-а.
 
 use crate::gameserver::appserver::player::PlayerProgress;
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::region::RegionCellAccessBlock;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
@@ -364,7 +365,7 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                 let goods = personal_shop_goods_list(game, session_id, context);
                 let goods_count = goods
                     .get(..4)
-                    .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("4-byte count")))
+                    .and_then(|bytes| LegacyReader::new(bytes).read_u32().ok())
                     .unwrap_or(0);
                 let mut response = CMessage::new(CLIENT_PLAYER_SHOP_ENTERED_MESSAGE);
                 response.add_long(session_id);
@@ -499,12 +500,13 @@ fn personal_shop_goods_list<Context: GameContainerMessageRuntime>(
         })
         .collect();
     let mut wire = Vec::new();
-    wire.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    LegacyWriter::new(&mut wire).write_u32(entries.len() as u32);
     for (position, goods, price) in entries {
-        wire.extend_from_slice(&position.to_le_bytes());
-        wire.extend_from_slice(&goods);
-        wire.extend_from_slice(&price.price_type.to_le_bytes());
-        wire.extend_from_slice(&price.price.to_le_bytes());
+        let mut writer = LegacyWriter::new(&mut wire);
+        writer.write_u32(position);
+        writer.write_bytes(&goods);
+        writer.write_u32(price.price_type);
+        writer.write_u32(price.price);
     }
     wire
 }

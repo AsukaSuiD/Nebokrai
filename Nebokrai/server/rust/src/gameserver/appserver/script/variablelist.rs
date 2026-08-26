@@ -1,17 +1,19 @@
-//! General-variable storage GameServer.
+//! Хранилище общих переменных GameServer.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `server/gameserver/appserver/script/variablelist.cpp`. Startup сначала
-//! загружает declarations из полученного `VariableList` resource, затем
+//! загружает объявления из полученного ресурса `VariableList`, затем
 //! `DecordFromByteArray` применяет World snapshot: signed count, ignored
-//! payload length, C-string name, signed scalar/string/array tag и values.
+//! длину payload, C-string имени, знаковый tag и значения scalar/string/array.
 //! `CScript::LoadGeneralVariable` передаёт cursor по значению, поэтому decoder
 //! двигает только локальную копию и не меняет позицию внешнего `CMessage`.
 //! `Vec` заменяет ручные union/allocation массивы, сохраняя insertion order,
-//! first exact-name snapshot update и cursor ordering. Runtime `0x7F805`
-//! сохраняет `_stricmp` lookup, scalar/array index rules и string retyping.
-//! Malformed wire возвращает typed ошибку вместо чтения за границей; остальные
-//! expression operations ниже RAW.
+//! первое обновление снимка по точному имени и порядок курсора. Ветка `0x7F805`
+//! сохраняет поиск `_stricmp`, правила индекса scalar/array и смену типа строки.
+//! Повреждённый wire возвращает типизированную ошибку вместо чтения за границей;
+//! остальные операции над выражениями ниже сохранены как RAW.
+
+use super::super::legacycodec::{LegacyReader, LegacyWriter};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameVariableValue {
@@ -218,28 +220,29 @@ impl CVariableList {
         let Ok(count) = i32::try_from(self.variables.len()) else {
             return false;
         };
-        destination.extend_from_slice(&count.to_le_bytes());
+        LegacyWriter::new(destination).write_i32(count);
         let mut payload = Vec::new();
         for variable in &self.variables {
-            payload.extend_from_slice(&variable.name);
-            payload.push(0);
+            LegacyWriter::new(&mut payload).write_c_string(&variable.name);
             match &variable.value {
                 GameVariableValue::Integer(value) => {
-                    payload.extend_from_slice(&0i32.to_le_bytes());
-                    payload.extend_from_slice(&value.to_le_bytes());
+                    let mut writer = LegacyWriter::new(&mut payload);
+                    writer.write_i32(0);
+                    writer.write_i32(*value);
                 }
                 GameVariableValue::String(value) => {
-                    payload.extend_from_slice(&(-1i32).to_le_bytes());
-                    payload.extend_from_slice(value);
-                    payload.push(0);
+                    let mut writer = LegacyWriter::new(&mut payload);
+                    writer.write_i32(-1);
+                    writer.write_c_string(value);
                 }
                 GameVariableValue::IntegerArray(values) => {
                     let Ok(length) = i32::try_from(values.len()) else {
                         return false;
                     };
-                    payload.extend_from_slice(&length.to_le_bytes());
+                    let mut writer = LegacyWriter::new(&mut payload);
+                    writer.write_i32(length);
                     for value in values {
-                        payload.extend_from_slice(&value.to_le_bytes());
+                        writer.write_i32(*value);
                     }
                 }
             }
@@ -247,8 +250,9 @@ impl CVariableList {
         let Ok(payload_length) = i32::try_from(payload.len()) else {
             return false;
         };
-        destination.extend_from_slice(&payload_length.to_le_bytes());
-        destination.extend_from_slice(&payload);
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(payload_length);
+        writer.write_bytes(&payload);
         true
     }
 
@@ -281,32 +285,41 @@ impl CVariableList {
 }
 
 fn read_i32(source: &[u8], cursor: &mut usize) -> Result<i32, GameVariableSnapshotError> {
-    let offset = *cursor;
-    let bytes = source.get(offset..offset.saturating_add(4)).ok_or(
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| {
         GameVariableSnapshotError::UnexpectedEnd {
-            offset,
+            offset: block.offset,
             needed: 4,
-            available: source.len().saturating_sub(offset),
-        },
-    )?;
-    *cursor += 4;
-    Ok(i32::from_le_bytes(
-        bytes.try_into().expect("slice длиной 4"),
-    ))
+            available: block.available,
+        }
+    })?;
+    let value = reader.read_i32().map_err(|block| GameVariableSnapshotError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, GameVariableSnapshotError> {
     let offset = *cursor;
-    let tail = source.get(offset..).unwrap_or_default();
-    let Some(length) = tail.iter().position(|byte| *byte == 0) else {
-        return Err(GameVariableSnapshotError::UnexpectedEnd {
-            offset,
-            needed: tail.len().saturating_add(1),
-            available: tail.len(),
-        });
-    };
-    *cursor += length + 1;
-    Ok(tail[..length].to_vec())
+    let available = source.len().saturating_sub(offset);
+    let mut reader = LegacyReader::at(source, offset).map_err(|block| {
+        GameVariableSnapshotError::UnexpectedEnd {
+            offset: block.offset,
+            needed: 1,
+            available: block.available,
+        }
+    })?;
+    let value = reader
+        .read_c_string(available)
+        .map_err(|block| GameVariableSnapshotError::UnexpectedEnd {
+            offset: block.offset,
+            needed: block.needed,
+            available: block.available,
+        })?;
+    *cursor = reader.position();
+    Ok(value.to_vec())
 }
 
 pub(crate) fn section_records<'a>(source: &'a [u8], section: &[u8]) -> Vec<(&'a [u8], &'a [u8])> {

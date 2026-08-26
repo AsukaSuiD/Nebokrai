@@ -83,6 +83,7 @@ use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::player::PlayerExploitMutationReport;
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, GameWarRegionHandle, OldClientGoodsCodec,
     ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
@@ -1651,17 +1652,10 @@ fn read_control_i32(
 fn read_phase_war_number(payload: &[u8], cursor: &mut usize) -> Result<i32, WarPhaseDispatchError> {
     let offset = *cursor;
     let available = payload.len().saturating_sub(offset);
-    let Some(bytes) = payload.get(offset..offset.saturating_add(4)) else {
-        return Err(WarPhaseDispatchError::UnexpectedEnd {
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    *cursor += 4;
-    Ok(i32::from_le_bytes(
-        bytes.try_into().expect("slice имеет 4 байта"),
-    ))
+    let mut reader = LegacyReader::at(payload, offset).map_err(|_| WarPhaseDispatchError::UnexpectedEnd { offset, needed: 4, available })?;
+    let value = reader.read_i32().map_err(|_| WarPhaseDispatchError::UnexpectedEnd { offset, needed: 4, available })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 struct GameOrganizingWarContext<'a, Runtime> {

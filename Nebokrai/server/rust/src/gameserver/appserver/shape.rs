@@ -40,6 +40,7 @@
 //! quirk: сериализованная position читается, но live `m_lPos` становится нулём.
 
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
+use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::serverregion::CServerRegion;
 use crate::public::guid::CGuid;
@@ -512,20 +513,21 @@ impl CShape {
             return false;
         }
         let ex_id = self.base_object.get_ex_id();
+        let mut writer = LegacyWriter::new(destination);
         if ex_id.is_invalid() {
-            destination.push(0);
+            writer.write_u8(0);
         } else {
-            destination.push(0x10);
-            destination.extend_from_slice(ex_id.as_legacy_bytes());
+            writer.write_u8(0x10);
+            writer.write_bytes(ex_id.as_legacy_bytes());
         }
-        destination.extend_from_slice(&self.region_id.to_le_bytes());
-        destination.extend_from_slice(&self.pos_x_bits.to_le_bytes());
-        destination.extend_from_slice(&self.pos_y_bits.to_le_bytes());
-        destination.extend_from_slice(&self.direction.to_le_bytes());
-        destination.extend_from_slice(&self.position.to_le_bytes());
-        destination.extend_from_slice(&self.speed_bits.to_le_bytes());
-        destination.extend_from_slice(&self.state.to_le_bytes());
-        destination.extend_from_slice(&self.action.to_le_bytes());
+        writer.write_i32(self.region_id);
+        writer.write_u32(self.pos_x_bits);
+        writer.write_u32(self.pos_y_bits);
+        writer.write_i32(self.direction);
+        writer.write_i32(self.position);
+        writer.write_u32(self.speed_bits);
+        writer.write_u16(self.state);
+        writer.write_u16(self.action);
         true
     }
 
@@ -546,15 +548,15 @@ impl CShape {
             CGuid::from_legacy_bytes(read_shape_wire::<16>(source, cursor, "m_guExID")?)
         };
         self.base_object.set_ex_id(ex_id);
-        self.region_id = i32::from_le_bytes(read_shape_wire(source, cursor, "m_lRegionID")?);
-        self.pos_x_bits = u32::from_le_bytes(read_shape_wire(source, cursor, "m_fPosX")?);
-        self.pos_y_bits = u32::from_le_bytes(read_shape_wire(source, cursor, "m_fPosY")?);
-        self.direction = i32::from_le_bytes(read_shape_wire(source, cursor, "m_lDir")?);
-        let _serialized_position = i32::from_le_bytes(read_shape_wire(source, cursor, "m_lPos")?);
+        self.region_id = read_shape_i32(source, cursor, "m_lRegionID")?;
+        self.pos_x_bits = read_shape_u32(source, cursor, "m_fPosX")?;
+        self.pos_y_bits = read_shape_u32(source, cursor, "m_fPosY")?;
+        self.direction = read_shape_i32(source, cursor, "m_lDir")?;
+        let _serialized_position = read_shape_i32(source, cursor, "m_lPos")?;
         self.position = 0;
-        self.speed_bits = u32::from_le_bytes(read_shape_wire(source, cursor, "m_fSpeed")?);
-        self.state = u16::from_le_bytes(read_shape_wire(source, cursor, "m_wState")?);
-        self.action = u16::from_le_bytes(read_shape_wire(source, cursor, "m_wAction")?);
+        self.speed_bits = read_shape_u32(source, cursor, "m_fSpeed")?;
+        self.state = read_shape_u16(source, cursor, "m_wState")?;
+        self.action = read_shape_u16(source, cursor, "m_wAction")?;
         Ok(())
     }
 
@@ -820,28 +822,39 @@ fn read_shape_wire<const N: usize>(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<[u8; N], ShapeDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(N) else {
-        return Err(ShapeDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(ShapeDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(bytes
-        .try_into()
-        .expect("slice содержит ровно запрошенное число байт"))
+    let mut reader = shape_reader(source, *cursor, field, N)?;
+    let bytes = reader.read_bytes(N).map_err(|block| shape_error(field, block))?;
+    *cursor = reader.position();
+    Ok(bytes.try_into().expect("прочитано точное число байт"))
+}
+
+fn read_shape_i32(source: &[u8], cursor: &mut usize, field: &'static str) -> Result<i32, ShapeDecodeError> {
+    let mut reader = shape_reader(source, *cursor, field, 4)?;
+    let value = reader.read_i32().map_err(|block| shape_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
+}
+
+fn read_shape_u32(source: &[u8], cursor: &mut usize, field: &'static str) -> Result<u32, ShapeDecodeError> {
+    let mut reader = shape_reader(source, *cursor, field, 4)?;
+    let value = reader.read_u32().map_err(|block| shape_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
+}
+
+fn read_shape_u16(source: &[u8], cursor: &mut usize, field: &'static str) -> Result<u16, ShapeDecodeError> {
+    let mut reader = shape_reader(source, *cursor, field, 2)?;
+    let value = reader.read_u16().map_err(|block| shape_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
+}
+
+fn shape_reader<'source>(source: &'source [u8], cursor: usize, field: &'static str, needed: usize) -> Result<LegacyReader<'source>, ShapeDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| ShapeDecodeError::UnexpectedEnd { field, offset: block.offset, needed, available: block.available })
+}
+
+fn shape_error(field: &'static str, block: super::legacycodec::LegacyReadBlock) -> ShapeDecodeError {
+    ShapeDecodeError::UnexpectedEnd { field, offset: block.offset, needed: block.needed, available: block.available }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

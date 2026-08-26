@@ -22,6 +22,7 @@ use super::ccontainer::ContainerListenerHandle;
 use super::cgoodscontainer::{CGoodsContainer, GoodsContainerMode, GoodsStackMergeOutcome};
 use crate::gameserver::appserver::goods::cgoods::{CGoods, GoodsDecodeError};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 use indexmap::IndexMap;
@@ -436,7 +437,7 @@ impl CAmountLimitGoodsContainer {
     /// factory goods, затем каждый полный `CGoods` в insertion order.
     pub(crate) fn serialize(&self, destination: &mut Vec<u8>, factory: &CGoodsFactory) -> bool {
         let count = self.goods_amount(factory);
-        destination.extend_from_slice(&count.to_le_bytes());
+        LegacyWriter::new(destination).write_u32(count);
         for goods in self.goods.values() {
             if factory
                 .query_goods_base_properties(goods.base_properties_index())
@@ -497,28 +498,24 @@ fn read_amount_wire_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, AmountLimitGoodsCodecError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(4) else {
-        return Err(AmountLimitGoodsCodecError::UnexpectedEnd {
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| {
+        AmountLimitGoodsCodecError::UnexpectedEnd {
             field,
-            offset,
+            offset: block.offset,
             needed: 4,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(AmountLimitGoodsCodecError::UnexpectedEnd {
+            available: block.available,
+        }
+    })?;
+    let value = reader.read_u32().map_err(|block| {
+        AmountLimitGoodsCodecError::UnexpectedEnd {
             field,
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(u32::from_le_bytes(
-        bytes.try_into().expect("legacy DWORD содержит четыре байта"),
-    ))
+            offset: block.offset,
+            needed: block.needed,
+            available: block.available,
+        }
+    })?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

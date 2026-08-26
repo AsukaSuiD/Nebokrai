@@ -37,6 +37,8 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
+use super::super::legacycodec::LegacyReader;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CountryWarDecodeError {
     UnexpectedEnd {
@@ -158,11 +160,12 @@ impl CountryWarSys {
             let region_id = read_country_war_i32(source, cursor, "CountryWarRegion key")?;
             let bytes =
                 read_country_war_array::<0x0C>(source, cursor, "CountryWarRegion scalar block")?;
+            let mut reader = LegacyReader::new(&bytes);
             self.war_regions.insert(
                 region_id,
                 CountryWarRegion {
-                    defend_country: i32::from_le_bytes(bytes[0..4].try_into().unwrap()),
-                    attack_country: i32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+                    defend_country: reader.read_i32().expect("проверен блок CountryWarRegion"),
+                    attack_country: reader.read_i32().expect("проверен блок CountryWarRegion"),
                     state_clear: bytes[8] != 0,
                     state_clear_padding: bytes[9..12].try_into().unwrap(),
                 },
@@ -408,9 +411,19 @@ fn read_country_war_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, CountryWarDecodeError> {
-    Ok(i32::from_le_bytes(read_country_war_array(
-        source, cursor, field,
-    )?))
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| {
+        CountryWarDecodeError::UnexpectedEnd {
+            field,
+            offset: block.offset,
+            needed: 4,
+            available: block.available,
+        }
+    })?;
+    let value = reader
+        .read_i32()
+        .map_err(|block| country_war_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_country_war_array<const N: usize>(
@@ -418,20 +431,31 @@ fn read_country_war_array<const N: usize>(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<[u8; N], CountryWarDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    if available < N {
-        return Err(CountryWarDecodeError::UnexpectedEnd {
+    let mut reader = LegacyReader::at(source, *cursor).map_err(|block| {
+        CountryWarDecodeError::UnexpectedEnd {
             field,
-            offset,
+            offset: block.offset,
             needed: N,
-            available,
-        });
+            available: block.available,
+        }
+    })?;
+    let bytes = reader
+        .read_bytes(N)
+        .map_err(|block| country_war_error(field, block))?;
+    *cursor = reader.position();
+    Ok(bytes.try_into().expect("прочитано точное число байт"))
+}
+
+fn country_war_error(
+    field: &'static str,
+    block: super::super::legacycodec::LegacyReadBlock,
+) -> CountryWarDecodeError {
+    CountryWarDecodeError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
     }
-    *cursor = offset + N;
-    Ok(source[offset..offset + N]
-        .try_into()
-        .expect("длина проверена до копирования country-war блока"))
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

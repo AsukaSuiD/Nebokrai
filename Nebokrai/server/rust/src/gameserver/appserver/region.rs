@@ -60,6 +60,7 @@
 //! byte-exact cell storage. Monster, loot и player death/PK owners остаются RAW.
 
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
+use super::legacycodec::{LegacyReader, LegacyWriter};
 
 const REGION_RESOURCE_HEADER: &[u8; 7] = b"CLS-RGN";
 const REGION_RESOURCE_VERSION: i32 = 1;
@@ -77,11 +78,9 @@ pub(crate) struct RegionSwitch {
 
 impl RegionSwitch {
     pub(crate) fn state(self) -> i32 {
-        i32::from_le_bytes(
-            self.bytes[..4]
-                .try_into()
-                .expect("switch state занимает четыре байта"),
-        )
+        LegacyReader::new(&self.bytes)
+            .read_i32()
+            .expect("switch state занимает четыре байта")
     }
 }
 
@@ -129,7 +128,9 @@ impl RegionCell {
     }
 
     pub(crate) fn switch_id(self) -> u16 {
-        u16::from_le_bytes([self.bytes[2], self.bytes[3]])
+        LegacyReader::at(&self.bytes, 2)
+            .and_then(|mut reader| reader.read_u16())
+            .expect("switch ID занимает два байта")
     }
 }
 
@@ -325,17 +326,18 @@ impl CRegion {
         let _ = self
             .base_object
             .add_to_byte_array(destination, include_child);
-        destination.extend_from_slice(&self.region_type.to_le_bytes());
-        destination.extend_from_slice(&self.width.to_le_bytes());
-        destination.extend_from_slice(&self.height.to_le_bytes());
-        destination.push(country);
-        destination.extend_from_slice(&notify.to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(self.region_type);
+        writer.write_i32(self.width);
+        writer.write_i32(self.height);
+        writer.write_u8(country);
+        writer.write_i32(notify);
         for cell in &self.cells[..cell_count] {
-            destination.extend_from_slice(&cell.bytes);
+            writer.write_bytes(&cell.bytes);
         }
-        destination.extend_from_slice(&switch_count.to_le_bytes());
+        writer.write_i32(switch_count);
         for switch in &self.switches {
-            destination.extend_from_slice(&switch.bytes[..4]);
+            writer.write_bytes(&switch.bytes[..4]);
         }
         Ok(true)
     }
@@ -390,17 +392,18 @@ impl CRegion {
         })?;
 
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(REGION_RESOURCE_HEADER);
-        bytes.extend_from_slice(&REGION_RESOURCE_VERSION.to_le_bytes());
-        bytes.extend_from_slice(&self.region_type.to_le_bytes());
-        bytes.extend_from_slice(&self.width.to_le_bytes());
-        bytes.extend_from_slice(&self.height.to_le_bytes());
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_bytes(REGION_RESOURCE_HEADER);
+        writer.write_i32(REGION_RESOURCE_VERSION);
+        writer.write_i32(self.region_type);
+        writer.write_i32(self.width);
+        writer.write_i32(self.height);
         for cell in &self.cells[..cell_count] {
-            bytes.extend_from_slice(&cell.bytes);
+            writer.write_bytes(&cell.bytes);
         }
-        bytes.extend_from_slice(&switch_count.to_le_bytes());
+        writer.write_i32(switch_count);
         for switch in &self.switches {
-            bytes.extend_from_slice(&switch.bytes);
+            writer.write_bytes(&switch.bytes);
         }
         Ok(RegionResourceWrite { path, bytes })
     }
@@ -418,16 +421,14 @@ impl CRegion {
             return Ok(false);
         }
         let mut cursor = REGION_RESOURCE_HEADER.len();
-        let Some(version_bytes) = source.get(cursor..cursor + 4) else {
+        let Ok(mut version_reader) = LegacyReader::at(source, cursor) else {
             return Ok(false);
         };
-        cursor += 4;
-        if i32::from_le_bytes(
-            version_bytes
-                .try_into()
-                .expect("version занимает четыре байта"),
-        ) != REGION_RESOURCE_VERSION
-        {
+        let Ok(version) = version_reader.read_i32() else {
+            return Ok(false);
+        };
+        cursor = version_reader.position();
+        if version != REGION_RESOURCE_VERSION {
             return Ok(false);
         }
 
@@ -670,11 +671,10 @@ fn read_region_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, RegionDecodeError> {
-    Ok(i32::from_le_bytes(
-        read_region_bytes(source, cursor, 4, field)?
-            .try_into()
-            .expect("проверены четыре байта"),
-    ))
+    let mut reader = region_reader(source, *cursor, 4, field)?;
+    let value = reader.read_i32().map_err(|block| region_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_region_u32(
@@ -682,11 +682,10 @@ fn read_region_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, RegionDecodeError> {
-    Ok(u32::from_le_bytes(
-        read_region_bytes(source, cursor, 4, field)?
-            .try_into()
-            .expect("проверены четыре байта"),
-    ))
+    let mut reader = region_reader(source, *cursor, 4, field)?;
+    let value = reader.read_u32().map_err(|block| region_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_region_u8(
@@ -694,7 +693,10 @@ fn read_region_u8(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u8, RegionDecodeError> {
-    Ok(read_region_bytes(source, cursor, 1, field)?[0])
+    let mut reader = region_reader(source, *cursor, 1, field)?;
+    let value = reader.read_u8().map_err(|block| region_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_region_bytes<'a>(
@@ -703,28 +705,38 @@ fn read_region_bytes<'a>(
     needed: usize,
     field: &'static str,
 ) -> Result<&'a [u8], RegionDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(needed) else {
-        return Err(RegionDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        // BLOCKED_MISSING_FACT: старые fread/pointer helpers игнорировали
-        // short-read и не получали длину byte-array.
-        return Err(RegionDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed,
-            available,
-        });
-    };
-    *cursor = end;
+    let mut reader = region_reader(source, *cursor, needed, field)?;
+    let bytes = reader
+        .read_bytes(needed)
+        .map_err(|block| region_read_error(field, block))?;
+    *cursor = reader.position();
     Ok(bytes)
+}
+
+fn region_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
+    needed: usize,
+    field: &'static str,
+) -> Result<LegacyReader<'source>, RegionDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| RegionDecodeError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        needed,
+        available: block.available,
+    })
+}
+
+fn region_read_error(
+    field: &'static str,
+    block: super::legacycodec::LegacyReadBlock,
+) -> RegionDecodeError {
+    RegionDecodeError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

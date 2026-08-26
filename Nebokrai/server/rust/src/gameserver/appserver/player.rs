@@ -318,6 +318,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
+use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionFacts,
     MoveShapeSkill,
@@ -2841,11 +2842,11 @@ impl CPlayer {
         append_player_game_save_string(destination, "strAccount", &self.account, 0x100)?;
         append_player_game_save_string(destination, "strTitle", &self.title, 0x100)?;
         destination.extend_from_slice(&self.combat_property_wire);
-        destination.extend_from_slice(&self.team_id.to_le_bytes());
+        LegacyWriter::new(destination).write_i32(self.team_id);
 
         append_player_game_save_count(destination, "m_setCiQingList", self.ci_qing_list.len())?;
         for base_index in &self.ci_qing_list {
-            destination.extend_from_slice(&base_index.to_le_bytes());
+            LegacyWriter::new(destination).write_u32(*base_index);
         }
         let skills: Vec<_> = self
             .move_shape
@@ -2856,7 +2857,7 @@ impl CPlayer {
         append_player_game_save_count(destination, "skill count", skills.len())?;
         for skill in skills {
             let packed = (skill.id() & 0xffff) | ((skill.level() as u32 & 0xffff) << 16);
-            destination.extend_from_slice(&packed.to_le_bytes());
+            LegacyWriter::new(destination).write_u32(packed);
         }
         let ex_states = self.move_shape.serialized_ex_states(now_ms);
         append_player_game_save_count(destination, "m_vExStates length", ex_states.len())?;
@@ -2868,7 +2869,7 @@ impl CPlayer {
         }
         destination.extend_from_slice(&self.encode_lei_ting());
 
-        destination.extend_from_slice(&0i32.to_le_bytes());
+        LegacyWriter::new(destination).write_i32(0);
         let mut equipment_serialized = true;
         self.equipment.serialize_with(
             destination,
@@ -2939,9 +2940,9 @@ impl CPlayer {
                 field: "m_pVariableList",
             });
         }
-        destination.extend_from_slice(&self.silence_minutes.to_le_bytes());
+        LegacyWriter::new(destination).write_i32(self.silence_minutes);
         let murderer_state = self.base_properties.pk_count != 0 && self.murderer_time_stamp_ms != 0;
-        destination.push(u8::from(murderer_state));
+        LegacyWriter::new(destination).write_u8(u8::from(murderer_state));
         let murderer_remain = if self.murderer_time_stamp_ms == 0 {
             0
         } else {
@@ -2950,8 +2951,8 @@ impl CPlayer {
                 .wrapping_sub(now_ms)
                 .min(one_pk_count_time_ms)
         };
-        destination.extend_from_slice(&murderer_remain.to_le_bytes());
-        destination.extend_from_slice(&self.fight_state_count.to_le_bytes());
+        LegacyWriter::new(destination).write_u32(murderer_remain);
+        LegacyWriter::new(destination).write_i32(self.fight_state_count);
         append_player_game_save_count(destination, "m_vUncreatedPets", pets.len())?;
         for pet in pets {
             append_player_game_save_string(
@@ -2960,9 +2961,10 @@ impl CPlayer {
                 &pet.original_name,
                 0x94,
             )?;
-            destination.extend_from_slice(&pet.health.to_le_bytes());
-            destination.extend_from_slice(&pet.level.to_le_bytes());
-            destination.extend_from_slice(&pet.experience.to_le_bytes());
+            let mut writer = LegacyWriter::new(destination);
+            writer.write_u32(pet.health);
+            writer.write_u32(pet.level);
+            writer.write_u32(pet.experience);
         }
         append_player_game_save_string(
             destination,
@@ -2976,17 +2978,19 @@ impl CPlayer {
             &carriage.script,
             0x94,
         )?;
-        destination.extend_from_slice(&carriage.health.to_le_bytes());
-        destination.push(u8::from(recreate_carriage));
-        destination.push(u8::from(self.login));
-        destination.extend_from_slice(&self.city_war_died_state_time_ms.to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_u32(carriage.health);
+        writer.write_u8(u8::from(recreate_carriage));
+        writer.write_u8(u8::from(self.login));
+        writer.write_i32(self.city_war_died_state_time_ms);
         append_player_game_save_count(destination, "m_PlayerQuests", self.quest_states.len())?;
         for (quest_id, state) in &self.quest_states {
-            destination.extend_from_slice(&quest_id.to_le_bytes());
-            destination.push(*state);
+            let mut writer = LegacyWriter::new(destination);
+            writer.write_u16(*quest_id);
+            writer.write_u8(*state);
         }
-        destination.push(self.country);
-        destination.extend_from_slice(&self.contribution.to_le_bytes());
+        LegacyWriter::new(destination).write_u8(self.country);
+        LegacyWriter::new(destination).write_i32(self.contribution);
         destination.extend_from_slice(&self.jjc_data);
         destination.push(u8::from(self.jjc_pk_state));
         append_player_game_save_string(destination, "m_strSessionID", &self.session_id, 0x40)?;
@@ -3944,17 +3948,18 @@ impl CPlayer {
 
     pub(crate) fn encode_lei_ting(&self) -> Vec<u8> {
         let mut payload = Vec::with_capacity(20 + self.lei_ting_things.len() * 8);
-        payload.extend_from_slice(&self.base_properties.fy_enable_flags.to_le_bytes());
-        payload.extend_from_slice(&self.base_properties.fy_energy.to_le_bytes());
-        payload.extend_from_slice(&self.base_properties.lt_60_stamp.to_le_bytes());
-        payload.extend_from_slice(&self.base_properties.lt_up_60_count.to_le_bytes());
-        payload.extend_from_slice(&self.base_properties.remain_jing_li_dan_count.to_le_bytes());
-        payload.extend_from_slice(&(self.lei_ting_things.len() as u32).to_le_bytes());
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_u32(self.base_properties.fy_enable_flags);
+        writer.write_u32(self.base_properties.fy_energy);
+        writer.write_u32(self.base_properties.lt_60_stamp);
+        writer.write_u16(self.base_properties.lt_up_60_count);
+        writer.write_u16(self.base_properties.remain_jing_li_dan_count);
+        writer.write_u32(self.lei_ting_things.len() as u32);
         for thing in &self.lei_ting_things {
-            payload.extend_from_slice(&thing.thing_id.to_le_bytes());
-            payload.extend_from_slice(&thing.count.to_le_bytes());
-            payload.extend_from_slice(&thing.max_count.to_le_bytes());
-            payload.extend_from_slice(&thing.point.to_le_bytes());
+            writer.write_u16(thing.thing_id);
+            writer.write_u16(thing.count);
+            writer.write_u16(thing.max_count);
+            writer.write_u16(thing.point);
         }
         payload
     }
@@ -3964,37 +3969,29 @@ impl CPlayer {
         source: &[u8],
         cursor: &mut usize,
     ) -> Result<(), PlayerLeiTingDecodeBlock> {
-        fn take<const N: usize>(
-            source: &[u8],
-            cursor: &mut usize,
-            field: &'static str,
-        ) -> Result<[u8; N], PlayerLeiTingDecodeBlock> {
-            let offset = *cursor;
-            let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-                return Err(PlayerLeiTingDecodeBlock {
-                    field,
-                    offset,
-                    needed: N,
-                    available: source.len().saturating_sub(offset),
-                });
-            };
-            let value = bytes.try_into().expect("slice length проверена get range");
-            *cursor += N;
-            Ok(value)
-        }
         fn read_u32(
             source: &[u8],
             cursor: &mut usize,
             field: &'static str,
         ) -> Result<u32, PlayerLeiTingDecodeBlock> {
-            take::<4>(source, cursor, field).map(u32::from_le_bytes)
+            let offset = *cursor;
+            let available = source.len().saturating_sub(offset);
+            let mut reader = LegacyReader::at(source, offset).map_err(|_| PlayerLeiTingDecodeBlock { field, offset, needed: 4, available })?;
+            let value = reader.read_u32().map_err(|_| PlayerLeiTingDecodeBlock { field, offset, needed: 4, available })?;
+            *cursor = reader.position();
+            Ok(value)
         }
         fn read_u16(
             source: &[u8],
             cursor: &mut usize,
             field: &'static str,
         ) -> Result<u16, PlayerLeiTingDecodeBlock> {
-            take::<2>(source, cursor, field).map(u16::from_le_bytes)
+            let offset = *cursor;
+            let available = source.len().saturating_sub(offset);
+            let mut reader = LegacyReader::at(source, offset).map_err(|_| PlayerLeiTingDecodeBlock { field, offset, needed: 2, available })?;
+            let value = reader.read_u16().map_err(|_| PlayerLeiTingDecodeBlock { field, offset, needed: 2, available })?;
+            *cursor = reader.position();
+            Ok(value)
         }
 
         self.base_properties.fy_enable_flags = read_u32(source, cursor, "dwfyenFlag")?;
@@ -4200,7 +4197,9 @@ impl CPlayer {
     /// пятнадцати участиях score получает level-dependent award с x87
     /// round-to-nearest-even и cap 1500.
     pub(crate) fn clear_jjc_week(&mut self) {
-        let joined = u16::from_le_bytes([self.jjc_data[0], self.jjc_data[1]]);
+        let joined = LegacyReader::new(&self.jjc_data)
+            .read_u16()
+            .expect("JJC data содержит флаг участия");
         if joined >= 15 {
             let factor = if self.base_properties.jjc_level < 1001 {
                 100.0
@@ -5498,14 +5497,30 @@ impl CPlayer {
             },
         );
         match property_type {
-            0x4a => self.combat_property_wire[0x20..0x24]
-                .copy_from_slice(&self.combat_properties.maximum_attack.to_le_bytes()),
-            0x4b => self.combat_property_wire[0x24..0x26]
-                .copy_from_slice(&self.combat_properties.attack_speed.to_le_bytes()),
-            0x4c => self.combat_property_wire[0x2c..0x30]
-                .copy_from_slice(&self.combat_properties.defense.to_le_bytes()),
-            0x4d => self.combat_property_wire[0x48..0x4c]
-                .copy_from_slice(&self.combat_properties.element_modify.to_le_bytes()),
+            0x4a => LegacyWriter::write_u32_at(
+                &mut self.combat_property_wire,
+                0x20,
+                self.combat_properties.maximum_attack,
+            )
+            .expect("combat wire содержит maximum attack"),
+            0x4b => LegacyWriter::write_u16_at(
+                &mut self.combat_property_wire,
+                0x24,
+                self.combat_properties.attack_speed,
+            )
+            .expect("combat wire содержит attack speed"),
+            0x4c => LegacyWriter::write_u32_at(
+                &mut self.combat_property_wire,
+                0x2c,
+                self.combat_properties.defense,
+            )
+            .expect("combat wire содержит defense"),
+            0x4d => LegacyWriter::write_i32_at(
+                &mut self.combat_property_wire,
+                0x48,
+                self.combat_properties.element_modify,
+            )
+            .expect("combat wire содержит element modify"),
             _ => {}
         }
         match property_type {
@@ -5618,10 +5633,12 @@ impl CPlayer {
     fn sync_combat_property_wire(&mut self) {
         let properties = self.combat_properties;
         let write_u16 = |wire: &mut [u8], offset: usize, value: u16| {
-            wire[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+            LegacyWriter::write_u16_at(wire, offset, value)
+                .expect("combat wire offset проверен layout-константой");
         };
         let write_u32 = |wire: &mut [u8], offset: usize, value: u32| {
-            wire[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            LegacyWriter::write_u32_at(wire, offset, value)
+                .expect("combat wire offset проверен layout-константой");
         };
         write_u32(&mut self.combat_property_wire, 0x00, properties.maximum_hp);
         write_u32(&mut self.combat_property_wire, 0x04, properties.maximum_mp);
@@ -12034,24 +12051,11 @@ fn read_player_game_save_slice<'a>(
     field: &'static str,
     needed: usize,
 ) -> Result<&'a [u8], PlayerGameSaveCodecError> {
-    let offset = *cursor;
-    let Some(end) = offset.checked_add(needed) else {
-        return Err(PlayerGameSaveCodecError::UnexpectedEnd {
-            field,
-            offset,
-            needed,
-            available: source.len().saturating_sub(offset),
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(PlayerGameSaveCodecError::UnexpectedEnd {
-            field,
-            offset,
-            needed,
-            available: source.len().saturating_sub(offset),
-        });
-    };
-    *cursor = end;
+    let mut reader = player_save_reader(source, *cursor, field, needed)?;
+    let bytes = reader
+        .read_bytes(needed)
+        .map_err(|block| player_save_read_error(field, block))?;
+    *cursor = reader.position();
     Ok(bytes)
 }
 
@@ -12070,7 +12074,12 @@ fn read_player_game_save_u8(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u8, PlayerGameSaveCodecError> {
-    Ok(read_player_game_save_slice(source, cursor, field, 1)?[0])
+    let mut reader = player_save_reader(source, *cursor, field, 1)?;
+    let value = reader
+        .read_u8()
+        .map_err(|block| player_save_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_player_game_save_u16(
@@ -12078,9 +12087,12 @@ fn read_player_game_save_u16(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u16, PlayerGameSaveCodecError> {
-    Ok(u16::from_le_bytes(read_player_game_save_array(
-        source, cursor, field,
-    )?))
+    let mut reader = player_save_reader(source, *cursor, field, 2)?;
+    let value = reader
+        .read_u16()
+        .map_err(|block| player_save_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_player_game_save_u32(
@@ -12088,9 +12100,12 @@ fn read_player_game_save_u32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u32, PlayerGameSaveCodecError> {
-    Ok(u32::from_le_bytes(read_player_game_save_array(
-        source, cursor, field,
-    )?))
+    let mut reader = player_save_reader(source, *cursor, field, 4)?;
+    let value = reader
+        .read_u32()
+        .map_err(|block| player_save_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_player_game_save_i32(
@@ -12098,9 +12113,12 @@ fn read_player_game_save_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, PlayerGameSaveCodecError> {
-    Ok(i32::from_le_bytes(read_player_game_save_array(
-        source, cursor, field,
-    )?))
+    let mut reader = player_save_reader(source, *cursor, field, 4)?;
+    let value = reader
+        .read_i32()
+        .map_err(|block| player_save_read_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_player_game_save_count(
@@ -12119,15 +12137,12 @@ fn read_player_game_save_string(
     maximum: usize,
 ) -> Result<Vec<u8>, PlayerGameSaveCodecError> {
     let offset = *cursor;
-    let tail = source.get(offset..).unwrap_or_default();
-    let Some(length) = tail.iter().position(|byte| *byte == 0) else {
-        return Err(PlayerGameSaveCodecError::UnexpectedEnd {
-            field,
-            offset,
-            needed: tail.len().saturating_add(1),
-            available: tail.len(),
-        });
-    };
+    let available = source.len().saturating_sub(offset);
+    let mut reader = player_save_reader(source, offset, field, 1)?;
+    let bytes = reader
+        .read_c_string(available)
+        .map_err(|block| player_save_read_error(field, block))?;
+    let length = bytes.len();
     if length >= maximum {
         return Err(PlayerGameSaveCodecError::StringTooLong {
             field,
@@ -12135,8 +12150,8 @@ fn read_player_game_save_string(
             maximum,
         });
     }
-    *cursor += length + 1;
-    Ok(tail[..length].to_vec())
+    *cursor = reader.position();
+    Ok(bytes.to_vec())
 }
 
 fn append_player_game_save_count(
@@ -12146,7 +12161,7 @@ fn append_player_game_save_count(
 ) -> Result<(), PlayerGameSaveCodecError> {
     let count = i32::try_from(length)
         .map_err(|_| PlayerGameSaveCodecError::CollectionTooLarge { field, length })?;
-    destination.extend_from_slice(&count.to_le_bytes());
+    LegacyWriter::new(destination).write_i32(count);
     Ok(())
 }
 
@@ -12167,33 +12182,56 @@ fn append_player_game_save_string(
             maximum,
         });
     }
-    destination.extend_from_slice(&value[..length]);
-    destination.push(0);
+    LegacyWriter::new(destination).write_c_string(&value[..length]);
     Ok(())
 }
 
+fn player_save_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
+    field: &'static str,
+    needed: usize,
+) -> Result<LegacyReader<'source>, PlayerGameSaveCodecError> {
+    LegacyReader::at(source, cursor).map_err(|block| PlayerGameSaveCodecError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        needed,
+        available: block.available,
+    })
+}
+
+fn player_save_read_error(
+    field: &'static str,
+    block: super::legacycodec::LegacyReadBlock,
+) -> PlayerGameSaveCodecError {
+    PlayerGameSaveCodecError::UnexpectedEnd {
+        field,
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
+}
+
 fn read_player_wire_u16(wire: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes(
-        wire[offset..offset + 2]
-            .try_into()
-            .expect("base/property wire offset проверен layout-константой"),
-    )
+    LegacyReader::at(wire, offset)
+        .and_then(|mut reader| reader.read_u16())
+        .expect("base/property wire offset проверен layout-константой")
 }
 
 fn read_player_wire_u32(wire: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(
-        wire[offset..offset + 4]
-            .try_into()
-            .expect("base/property wire offset проверен layout-константой"),
-    )
+    LegacyReader::at(wire, offset)
+        .and_then(|mut reader| reader.read_u32())
+        .expect("base/property wire offset проверен layout-константой")
 }
 
 fn write_player_wire_u16(wire: &mut [u8], offset: usize, value: u16) {
-    wire[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    LegacyWriter::write_u16_at(wire, offset, value)
+        .expect("base/property wire offset проверен layout-константой");
 }
 
 fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
-    wire[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    LegacyWriter::write_u32_at(wire, offset, value)
+        .expect("base/property wire offset проверен layout-константой");
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

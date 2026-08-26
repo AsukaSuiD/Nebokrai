@@ -11,6 +11,7 @@
 //! Других неизвестных domain-полей этот конкретный wire-owner не читает.
 
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
+use super::legacycodec::LegacyReader;
 use super::serverregion::RegionParamState;
 use std::fmt;
 
@@ -177,16 +178,9 @@ fn read_u8(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<u8, ProxyRegionDecodeError> {
-    let offset = *cursor;
-    let Some(value) = source.get(offset).copied() else {
-        return Err(ProxyRegionDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed: 1,
-            available: source.len().saturating_sub(offset),
-        });
-    };
-    *cursor = offset + 1;
+    let mut reader = proxy_reader(source, *cursor, field, 1)?;
+    let value = reader.read_u8().map_err(|block| proxy_error(field, block))?;
+    *cursor = reader.position();
     Ok(value)
 }
 
@@ -195,10 +189,10 @@ fn read_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, ProxyRegionDecodeError> {
-    let bytes = read_bytes(source, cursor, 4, field)?;
-    Ok(i32::from_le_bytes(
-        bytes.try_into().expect("проверены четыре байта"),
-    ))
+    let mut reader = proxy_reader(source, *cursor, field, 4)?;
+    let value = reader.read_i32().map_err(|block| proxy_error(field, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_bytes<'a>(
@@ -207,40 +201,28 @@ fn read_bytes<'a>(
     needed: usize,
     field: &'static str,
 ) -> Result<&'a [u8], ProxyRegionDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(needed) else {
-        return Err(ProxyRegionDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(ProxyRegionDecodeError::UnexpectedEnd {
-            field,
-            offset,
-            needed,
-            available,
-        });
-    };
-    *cursor = end;
+    let mut reader = proxy_reader(source, *cursor, field, needed)?;
+    let bytes = reader.read_bytes(needed).map_err(|block| proxy_error(field, block))?;
+    *cursor = reader.position();
     Ok(bytes)
 }
 
 fn read_param_i32(bytes: &[u8], offset: usize) -> i32 {
-    i32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("m_Param содержит девять DWORD"),
-    )
+    LegacyReader::at(bytes, offset)
+        .and_then(|mut reader| reader.read_i32())
+        .expect("m_Param содержит девять DWORD")
 }
 
 fn read_param_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("m_Param содержит девять DWORD"),
-    )
+    LegacyReader::at(bytes, offset)
+        .and_then(|mut reader| reader.read_u32())
+        .expect("m_Param содержит девять DWORD")
+}
+
+fn proxy_reader<'source>(source: &'source [u8], cursor: usize, field: &'static str, needed: usize) -> Result<LegacyReader<'source>, ProxyRegionDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| ProxyRegionDecodeError::UnexpectedEnd { field, offset: block.offset, needed, available: block.available })
+}
+
+fn proxy_error(field: &'static str, block: super::legacycodec::LegacyReadBlock) -> ProxyRegionDecodeError {
+    ProxyRegionDecodeError::UnexpectedEnd { field, offset: block.offset, needed: block.needed, available: block.available }
 }
