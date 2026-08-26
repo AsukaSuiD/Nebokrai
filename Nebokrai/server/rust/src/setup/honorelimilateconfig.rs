@@ -1,17 +1,18 @@
 //! Порог honor за убийство `HonorElimilateConfig` из WorldServer/GameServer.
 //! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
-//! `gameserver.exe + GameServer.pdb`; исходный owner
+//! `gameserver.exe + GameServer.pdb`; исходный владелец
 //! `setup/honorelimilateconfig.cpp`.
 //!
-//! Wire содержит два signed `i32`: level difference и minimum level.
-//! После успешного открытия loader позиционно читает две пары label/value и
-//! сохраняет уже присвоенное поле при повреждённом хвосте; missing resource
-//! не меняет state. Honor rank tables отправляются отдельными subtypes.
-//! Game decoder также присваивает поля последовательно; safe short-buffer
+//! Двоичный формат содержит два знаковых `i32`: разницу уровней и минимальный
+//! уровень. После успешного открытия загрузчик позиционно читает две пары метка/значение
+//! и сохраняет уже присвоенное поле при повреждённом хвосте; отсутствующий ресурс
+//! не меняет состояние. Таблицы рангов чести отправляются отдельными подтипами.
+//! Декодер Game также присваивает поля последовательно; безопасная обработка короткого буфера
 //! сохраняет первое поле при обрыве второго.
 
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
+
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct HonorElimilateConfig {
@@ -35,8 +36,9 @@ impl HonorElimilateConfig {
     }
 
     pub(crate) fn add_to_byte_array(&self, destination: &mut Vec<u8>) {
-        destination.extend_from_slice(&self.level_difference.to_le_bytes());
-        destination.extend_from_slice(&self.minimum_level.to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(self.level_difference);
+        writer.write_i32(self.minimum_level);
     }
 
     pub(crate) fn decord_from_byte_array(
@@ -50,45 +52,28 @@ impl HonorElimilateConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("HonorEliminate snapshot обрывается на {offset}: нужно {needed}, доступно {available}")]
 pub(crate) struct HonorEliminateDecodeError {
     pub(crate) offset: usize,
     pub(crate) needed: usize,
     pub(crate) available: usize,
 }
 
-impl fmt::Display for HonorEliminateDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "HonorEliminate snapshot обрывается на {}: нужно {}, доступно {}",
-            self.offset, self.needed, self.available
-        )
-    }
-}
-
-impl Error for HonorEliminateDecodeError {}
-
-/// `operator>>(long)` принимает десятичный token целиком; overflow/failure
-/// не присваивают target, в отличие от `_atol`-семантики других INI owner-ов.
+/// `operator>>(long)` принимает десятичный токен целиком; переполнение и ошибка
+/// не присваивают цель, в отличие от семантики `_atol` других владельцев INI.
 fn parse_legacy_i32(token: &[u8]) -> Option<i32> {
     std::str::from_utf8(token).ok()?.parse().ok()
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, HonorEliminateDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
-        return Err(HonorEliminateDecodeError {
-            offset,
-            needed: 4,
-            available,
-        });
+    let map = |block: LegacyReadBlock| HonorEliminateDecodeError {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
     };
-    *cursor += 4;
-    Ok(i32::from_le_bytes(
-        bytes
-            .try_into()
-            .expect("HonorEliminate scalar содержит четыре байта"),
-    ))
+    let mut reader = LegacyReader::at(source, *cursor).map_err(map)?;
+    let value = reader.read_i32().map_err(map)?;
+    *cursor = reader.position();
+    Ok(value)
 }

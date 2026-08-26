@@ -2,28 +2,29 @@
 //!
 //! Контракт World loader/serializer и Game decoder подтверждён точными
 //! `worldserver.exe + worldserver.pdb` и `gameserver.exe + GameServer.pdb`;
-//! исходный owner `setup/hitlevelsetup.cpp`.
+//! исходный владелец `setup/hitlevelsetup.cpp`.
 //!
 //! Отсутствие
-//! файла явно ставит `AL=0`, любой открытый файл после token-scan — `AL=1`,
+//! файла явно ставит `AL=0`, любой открытый файл после просмотра токенов — `AL=1`,
 //! в том числе файл без единого `*`. Поэтому пустая таблица является успешным
 //! состоянием.
-//! Прежний vector полностью очищается до открытия файла. Value-owner сохраняет
-//! этот clear-first
-//! state transition и при ошибке файла остаётся пустым.
+//! Прежний вектор полностью очищается до открытия файла. Владелец значений сохраняет
+//! этот переход с предварительной очисткой и при ошибке файла остаётся пустым.
 //!
-//! Каждая запись — ровно три consecutive little-endian `u32`; wire состоит
-//! из signed 32-битного count и `count × 0x0C` байт. `Vec` заменяет старый
-//! static vector, `std::fs` — `CRFile`, а общий исходный `read_to` сохраняет
-//! whitespace token-scan, точный `*` и терминатор `<end>`. Повреждённое число
-//! исходно могло протащить неинициализированные stack-байты; Rust вместо этого
-//! возвращает typed format error, оставляя только уже полностью прочитанные
-//! записи. Это устраняет внутренний UB и не назначает ему wire-семантику.
+//! Каждая запись — ровно три последовательных `u32` с младшим байтом первым;
+//! формат состоит из знакового 32-битного счётчика и `count × 0x0C` байт. `Vec`
+//! заменяет старый статический вектор, `std::fs` — `CRFile`, а общий `read_to`
+//! сохраняет просмотр токенов по пробельным символам, точный `*` и терминатор
+//! `<end>`. Повреждённое число исходно могло протащить неинициализированные байты
+//! стека; Rust вместо этого возвращает типизированную ошибку формата, оставляя
+//! только уже полностью прочитанные записи. Это устраняет внутреннее неопределённое
+//! поведение и не назначает ему семантику двоичного формата.
 
-use std::error::Error;
 use std::fmt;
 use std::path::Path;
+use thiserror::Error;
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::public::readwrite::read_to;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -82,16 +83,17 @@ impl CHitLevelSetup {
         let count = i32::try_from(self.entries.len()).map_err(|_| HitLevelSerializeError {
             count: self.entries.len(),
         })?;
-        destination.extend_from_slice(&count.to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(count);
         for entry in &self.entries {
-            destination.extend_from_slice(&entry.level.to_le_bytes());
-            destination.extend_from_slice(&entry.hit.to_le_bytes());
-            destination.extend_from_slice(&entry.experience.to_le_bytes());
+            writer.write_u32(entry.level);
+            writer.write_u32(entry.hit);
+            writer.write_u32(entry.experience);
         }
         Ok(())
     }
 
-    /// Очищает vector до count и сохраняет только полные records.
+    /// Очищает вектор до чтения счётчика и сохраняет только полные записи.
     pub(crate) fn decord_from_byte_array(
         &mut self,
         source: &[u8],
@@ -131,67 +133,29 @@ impl fmt::Display for HitLevelFormatError {
     }
 }
 
-impl Error for HitLevelFormatError {}
+impl std::error::Error for HitLevelFormatError {}
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum HitLevelFileLoadError {
-    Io(std::io::Error),
-    Format(HitLevelFormatError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Format(#[from] HitLevelFormatError),
 }
 
-impl fmt::Display for HitLevelFileLoadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(error) => error.fmt(formatter),
-            Self::Format(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl Error for HitLevelFileLoadError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Io(error) => Some(error),
-            Self::Format(error) => Some(error),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("HitLevelSetup содержит {count} записей вне signed 32-битного диапазона")]
 pub(crate) struct HitLevelSerializeError {
     pub(crate) count: usize,
 }
 
-impl fmt::Display for HitLevelSerializeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "HitLevelSetup содержит {} записей вне signed 32-битного диапазона",
-            self.count
-        )
-    }
-}
-
-impl Error for HitLevelSerializeError {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("HitLevel snapshot обрывается на {offset}: нужно {needed}, доступно {available}")]
 pub(crate) struct HitLevelDecodeError {
     pub(crate) offset: usize,
     pub(crate) needed: usize,
     pub(crate) available: usize,
 }
-
-impl fmt::Display for HitLevelDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "HitLevel snapshot обрывается на {}: нужно {}, доступно {}",
-            self.offset, self.needed, self.available
-        )
-    }
-}
-
-impl Error for HitLevelDecodeError {}
 
 fn read_u32<'a>(
     tokens: &mut impl Iterator<Item = &'a [u8]>,
@@ -213,28 +177,24 @@ fn read_u32<'a>(
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, HitLevelDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    read_wire(source, cursor, |reader| reader.read_i32())
 }
 
 fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, HitLevelDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+    read_wire(source, cursor, |reader| reader.read_u32())
 }
 
-fn read_wire_array<const N: usize>(
+fn read_wire<Value>(
     source: &[u8],
     cursor: &mut usize,
-) -> Result<[u8; N], HitLevelDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(HitLevelDecodeError {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер HitLevel scalar уже проверен"))
+    read: impl FnOnce(&mut LegacyReader<'_>) -> Result<Value, LegacyReadBlock>,
+) -> Result<Value, HitLevelDecodeError> {
+    let mut reader = LegacyReader::at(source, *cursor).map_err(map_read_block)?;
+    let value = read(&mut reader).map_err(map_read_block)?;
+    *cursor = reader.position();
+    Ok(value)
+}
+
+fn map_read_block(block: LegacyReadBlock) -> HitLevelDecodeError {
+    HitLevelDecodeError { offset: block.offset, needed: block.needed, available: block.available }
 }
