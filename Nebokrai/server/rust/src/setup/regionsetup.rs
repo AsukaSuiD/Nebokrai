@@ -2,14 +2,17 @@
 //! Контракт подтверждён точными `worldserver.exe + worldserver.pdb` и
 //! `gameserver.exe + GameServer.pdb`; исходный owner `setup/regionsetup.cpp`.
 //!
-//! Wire — signed count и ordered 12-байтные records: region ID, minimum level
-//! и required contribution. Map key задаёт signed order, но отдельно не идёт.
-//! `BTreeMap<i32, _>` заменяет MSVC tree. Семантика return у file loader не
-//! подтверждена, поэтому этот owner предоставляет только wire.
+//! Двоичный формат содержит знаковый счётчик и упорядоченные 12-байтные записи:
+//! ID региона, минимальный уровень и требуемый вклад. Ключ карты задаёт знаковый
+//! порядок, но отдельно не сериализуется. `BTreeMap<i32, _>` заменяет дерево
+//! MSVC. Семантика результата загрузчика файла не подтверждена, поэтому этот
+//! владелец предоставляет только двоичный формат.
 
 use std::collections::BTreeMap;
-use std::error::Error;
 use std::fmt;
+use thiserror::Error;
+
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RegionSetupEntry {
@@ -80,11 +83,12 @@ impl CRegionSetup {
         let count = i32::try_from(self.entries.len()).map_err(|_| RegionSetupSerializeError {
             count: self.entries.len(),
         })?;
-        destination.extend_from_slice(&count.to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(count);
         for entry in self.entries.values() {
-            destination.extend_from_slice(&entry.id.to_le_bytes());
-            destination.extend_from_slice(&entry.can_enter_level.to_le_bytes());
-            destination.extend_from_slice(&entry.required_contribute.to_le_bytes());
+            writer.write_i32(entry.id);
+            writer.write_i32(entry.can_enter_level);
+            writer.write_i32(entry.required_contribute);
         }
         Ok(())
     }
@@ -108,41 +112,19 @@ impl CRegionSetup {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("RegionSetup содержит {count} записей вне signed 32-битного диапазона")]
 pub(crate) struct RegionSetupSerializeError {
     pub(crate) count: usize,
 }
 
-impl fmt::Display for RegionSetupSerializeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "RegionSetup содержит {} записей вне signed 32-битного диапазона",
-            self.count
-        )
-    }
-}
-
-impl Error for RegionSetupSerializeError {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("RegionSetup snapshot обрывается на {offset}: нужно {needed}, доступно {available}")]
 pub(crate) struct RegionSetupDecodeError {
     pub(crate) offset: usize,
     pub(crate) needed: usize,
     pub(crate) available: usize,
 }
-
-impl fmt::Display for RegionSetupDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "RegionSetup snapshot обрывается на {}: нужно {}, доступно {}",
-            self.offset, self.needed, self.available
-        )
-    }
-}
-
-impl Error for RegionSetupDecodeError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RegionSetupLoadError {
@@ -179,22 +161,19 @@ impl fmt::Display for RegionSetupLoadError {
     }
 }
 
-impl Error for RegionSetupLoadError {}
+impl std::error::Error for RegionSetupLoadError {}
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, RegionSetupDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
-        return Err(RegionSetupDecodeError {
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    *cursor += 4;
-    Ok(i32::from_le_bytes(
-        bytes
-            .try_into()
-            .expect("размер RegionSetup scalar уже проверен"),
-    ))
+    let mut reader = LegacyReader::at(source, *cursor).map_err(map_read_block)?;
+    let value = reader.read_i32().map_err(map_read_block)?;
+    *cursor = reader.position();
+    Ok(value)
+}
+
+fn map_read_block(block: LegacyReadBlock) -> RegionSetupDecodeError {
+    RegionSetupDecodeError {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }

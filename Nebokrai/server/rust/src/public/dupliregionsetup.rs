@@ -2,28 +2,28 @@
 //!
 //! World `CDupliRegionSetup::Load/AddToByteArray/GetRandomRegion` и Game
 //! `DecordFromByteArray` подтверждены точными EXE/PDB обоих компонентов;
-//! исходный owner `public/dupliregionsetup.cpp`.
+//! исходный владелец `public/dupliregionsetup.cpp`.
 //!
-//! Оригинал World/Game serializers подтверждают wire: signed 32-битный count и
-//! insertion-order records по восемь little-endian bytes (`region_id`,
+//! Сериализаторы World/Game подтверждают формат: знаковый 32-битный счётчик и
+//! записи по восемь байт в порядке вставки и с младшим байтом первым (`region_id`,
 //! `duplicate_region_id`). `Vec` заменяет старый `std::list`, поскольку
-//! наблюдаемый контракт требует только порядка и размера. Typed поля исключают
-//! C++ layout/padding, а переполнение count возвращается до изменения buffer-а.
-//! `GetRandomRegion` сначала кладёт исходный signed ID во временный vector,
-//! затем дописывает все его duplicate ID в list-order и ровно один раз вызывает
-//! общий `random(count)`. `Vec` и переданный caller-ом RNG adapter заменяют
-//! только STL/process-global plumbing. Контракт adapter-а исходный: при
-//! положительном bound он возвращает индекс `0..bound`. Поведение повреждённого
-//! ini подтверждено отдельно: оригинал machine вставляла stack-мусор после
-//! неуспешного formatted extraction, но всё равно возвращала success открытого
-//! файла. Rust сохраняет success и уже прочитанный prefix, но не переносит
-//! uninitialized-memory defect и не добавляет неполную запись.
+//! наблюдаемый контракт требует только порядка и размера. Типизированные поля исключают
+//! выравнивание C++, а переполнение счётчика возвращается до изменения буфера.
+//! `GetRandomRegion` сначала кладёт исходный знаковый ID во временный вектор,
+//! затем дописывает все его дублирующие ID в порядке списка и ровно один раз вызывает
+//! общий `random(count)`. `Vec` и переданный вызывающей стороной адаптер RNG заменяют
+//! только инфраструктуру STL и глобального состояния процесса. Исходный контракт
+//! адаптера: при положительной границе он возвращает индекс в её пределах. Поведение
+//! повреждённого ini подтверждено отдельно: исходная машинная реализация вставляла
+//! мусор стека после неуспешного форматного чтения, но всё равно сообщала об успешном
+//! открытии файла. Rust сохраняет успешный результат и уже прочитанный префикс, но не
+//! переносит дефект неинициализированной памяти и не добавляет неполную запись.
 
 use std::collections::TryReserveError;
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use super::readwrite::read_to;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 /// Точный восьмибайтовый `CDupliRegionSetup::tagDupliRegion`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -32,7 +32,7 @@ pub(crate) struct DupliRegionEntry {
     pub(crate) duplicate_region_id: i32,
 }
 
-/// Value-owner вместо process-local `std::list`.
+/// Владелец значений вместо локального для процесса `std::list`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CDupliRegionSetup {
     entries: Vec<DupliRegionEntry>,
@@ -126,10 +126,11 @@ impl CDupliRegionSetup {
         let count = i32::try_from(self.entries.len()).map_err(|_| DupliRegionSerializeError {
             count: self.entries.len(),
         })?;
-        destination.extend_from_slice(&count.to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(count);
         for entry in &self.entries {
-            destination.extend_from_slice(&entry.region_id.to_le_bytes());
-            destination.extend_from_slice(&entry.duplicate_region_id.to_le_bytes());
+            writer.write_i32(entry.region_id);
+            writer.write_i32(entry.duplicate_region_id);
         }
         Ok(())
     }
@@ -140,72 +141,35 @@ fn read_formatted_long<'a>(tokens: &mut impl Iterator<Item = &'a [u8]>) -> Optio
 }
 
 /// Невозможный в исходном 32-битном `std::list` размер.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("DupliRegionSetup содержит {count} записей вне signed 32-битного диапазона")]
 pub(crate) struct DupliRegionSerializeError {
     pub(crate) count: usize,
 }
 
-impl fmt::Display for DupliRegionSerializeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "DupliRegionSetup содержит {} записей вне signed 32-битного диапазона",
-            self.count
-        )
-    }
-}
-
-impl Error for DupliRegionSerializeError {}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum DupliRegionDecodeError {
+    #[error("DupliRegion snapshot обрывается на {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         offset: usize,
         needed: usize,
         available: usize,
     },
-    Allocation(TryReserveError),
-}
-
-impl fmt::Display for DupliRegionDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "DupliRegion snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
-            ),
-            Self::Allocation(_) => formatter.write_str("не удалось выделить DupliRegion snapshot"),
-        }
-    }
-}
-
-impl Error for DupliRegionDecodeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Allocation(source) => Some(source),
-            _ => None,
-        }
-    }
+    #[error("не удалось выделить DupliRegion snapshot")]
+    Allocation(#[source] TryReserveError),
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, DupliRegionDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(4)) else {
-        return Err(DupliRegionDecodeError::UnexpectedEnd {
-            offset,
-            needed: 4,
-            available,
-        });
-    };
-    *cursor += 4;
-    Ok(i32::from_le_bytes(
-        bytes
-            .try_into()
-            .expect("DupliRegion scalar содержит 4 байта"),
-    ))
+    let mut reader = LegacyReader::at(source, *cursor).map_err(map_read_block)?;
+    let value = reader.read_i32().map_err(map_read_block)?;
+    *cursor = reader.position();
+    Ok(value)
+}
+
+fn map_read_block(block: LegacyReadBlock) -> DupliRegionDecodeError {
+    DupliRegionDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
