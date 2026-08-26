@@ -582,23 +582,14 @@ pub(crate) enum BattleFairyFollowEffect {
     },
 }
 
+#[must_use = "план следования содержит пространственное действие и обязательную рассылку движения"]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyFollowDelivery {
-    Around(Option<Result<i32, ShapeCoordinateBlock>>),
-}
-
-#[must_use = "follow report содержит spatial tail и обязательный move broadcast"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyFollowReport {
+pub(crate) struct BattleFairyFollowPlan {
     pub(crate) player_id: i32,
     pub(crate) outcome: BattleFairyFollowOutcome,
     pub(crate) region_id: Option<i32>,
-    pub(crate) visual_x_bits: u32,
-    pub(crate) visual_y_bits: u32,
     pub(crate) spatial_action: Option<BattleFairyWarSoulAction>,
-    pub(crate) spatial_applied: bool,
     pub(crate) effects: Vec<BattleFairyFollowEffect>,
-    pub(crate) deliveries: Vec<BattleFairyFollowDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -607,20 +598,6 @@ pub(crate) enum BattleFairyDeathOutcome {
     NotBattleFairy,
     Alive,
     Died,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyDeathEffect {
-    PropertiesChanged { player_id: i32 },
-}
-
-#[must_use = "death report сохраняет periodic state transition и property effect"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyDeathReport {
-    pub(crate) player_id: i32,
-    pub(crate) outcome: BattleFairyDeathOutcome,
-    pub(crate) effects: Vec<BattleFairyDeathEffect>,
-    pub(crate) property_delivery: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8611,9 +8588,9 @@ impl CPlayer {
         }
     }
 
-    /// Завершает CGame-owned area tail. Recall всегда копирует player point
-    /// после попытки `DelWarSoul`, даже если old area отсутствовала; это
-    /// literal последняя запись `CPlayer::DelWarSoul`.
+    /// Завершает принадлежащий `CGame` хвост области. Отзыв всегда копирует
+    /// точку игрока после попытки `DelWarSoul`, даже если прежняя область
+    /// отсутствовала; это буквальная последняя запись `CPlayer::DelWarSoul`.
     pub(crate) const fn apply_war_soul_action(
         &mut self,
         action: BattleFairyWarSoulAction,
@@ -8632,37 +8609,33 @@ impl CPlayer {
         }
     }
 
-    /// Один живой `ComputeWarSoulXY` tick. `Some(false)` означает найденный
-    /// current war-soul skill с `IsRestored()==0`; `None` точно соответствует
-    /// отсутствующему skill и не блокирует follow.
+    /// Один проход живой ветви `ComputeWarSoulXY`. `Some(false)` означает
+    /// найденный текущий навык боевой феи с `IsRestored()==0`; `None` точно
+    /// соответствует отсутствующему навыку и не блокирует следование.
     pub(crate) fn compute_war_soul_xy(
         &mut self,
         current_war_soul_skill_restored: Option<bool>,
-    ) -> BattleFairyFollowReport {
+    ) -> BattleFairyFollowPlan {
         let player_id = self.player_id();
-        let mut report = BattleFairyFollowReport {
+        let mut plan = BattleFairyFollowPlan {
             player_id,
             outcome: BattleFairyFollowOutcome::NotSummoned,
             region_id: self.server_region_id,
-            visual_x_bits: self.war_soul_visual_x_bits,
-            visual_y_bits: self.war_soul_visual_y_bits,
             spatial_action: None,
-            spatial_applied: false,
             effects: Vec::new(),
-            deliveries: Vec::new(),
         };
         if current_war_soul_skill_restored == Some(false) {
-            report.outcome = BattleFairyFollowOutcome::ActiveSkill;
-            return report;
+            plan.outcome = BattleFairyFollowOutcome::ActiveSkill;
+            return plan;
         }
         if self.war_soul_state != 1 {
-            return report;
+            return plan;
         }
         let (tile_x, tile_y) = match (self.shape().get_tile_x(), self.shape().get_tile_y()) {
             (Ok(x), Ok(y)) => (x, y),
             (Err(error), _) | (_, Err(error)) => {
-                report.outcome = BattleFairyFollowOutcome::CoordinateBlocked(error);
-                return report;
+                plan.outcome = BattleFairyFollowOutcome::CoordinateBlocked(error);
+                return plan;
             }
         };
         let current_x = tile_x as f32;
@@ -8673,12 +8646,12 @@ impl CPlayer {
         let delta_y = current_y - visual_y;
         let distance = (delta_x * delta_x + delta_y * delta_y).sqrt().abs();
         if !distance.is_finite() {
-            report.outcome = BattleFairyFollowOutcome::NonFiniteVisualState;
-            return report;
+            plan.outcome = BattleFairyFollowOutcome::NonFiniteVisualState;
+            return plan;
         }
         if distance < 0.5 {
-            report.outcome = BattleFairyFollowOutcome::InsideDeadZone;
-            return report;
+            plan.outcome = BattleFairyFollowOutcome::InsideDeadZone;
+            return plan;
         }
 
         let (target, outcome) = if distance <= 5.0 {
@@ -8725,43 +8698,37 @@ impl CPlayer {
         };
         self.war_soul_visual_x_bits = visual_x.to_bits();
         self.war_soul_visual_y_bits = visual_y.to_bits();
-        report.visual_x_bits = self.war_soul_visual_x_bits;
-        report.visual_y_bits = self.war_soul_visual_y_bits;
-        report.outcome = outcome;
-        report.spatial_action = Some(BattleFairyWarSoulAction::SetPosition {
+        plan.outcome = outcome;
+        plan.spatial_action = Some(BattleFairyWarSoulAction::SetPosition {
             previous: self.war_soul_point,
             target,
         });
-        report.effects.push(BattleFairyFollowEffect::AroundMove {
+        plan.effects.push(BattleFairyFollowEffect::AroundMove {
             message_type: BATTLE_FAIRY_MOVE_MESSAGE_TYPE,
             player_id,
             object_type: 700,
             x: visual_x.to_bits(),
             y: visual_y.to_bits(),
         });
-        report
+        plan
     }
 
-    /// Мёртвая ветвь сразу после `CMoveShape::AI`: spatial position получает
-    /// exact `(-1,-1)`, обе visual float координаты становятся `-1.0`, но
-    /// around move packet исходник не публикует.
-    pub(crate) fn clear_dead_war_soul_xy(&mut self) -> BattleFairyFollowReport {
+    /// Мёртвая ветвь сразу после `CMoveShape::AI`: пространственная позиция
+    /// получает точное `(-1,-1)`, обе визуальные координаты `float` становятся
+    /// `-1.0`, но исходник не публикует пакет движения вокруг.
+    pub(crate) fn clear_dead_war_soul_xy(&mut self) -> BattleFairyFollowPlan {
         let target = WarSoulPoint { x: -1, y: -1 };
         self.war_soul_visual_x_bits = (-1.0f32).to_bits();
         self.war_soul_visual_y_bits = (-1.0f32).to_bits();
-        BattleFairyFollowReport {
+        BattleFairyFollowPlan {
             player_id: self.player_id(),
             outcome: BattleFairyFollowOutcome::Dead,
             region_id: self.server_region_id,
-            visual_x_bits: self.war_soul_visual_x_bits,
-            visual_y_bits: self.war_soul_visual_y_bits,
             spatial_action: Some(BattleFairyWarSoulAction::SetPosition {
                 previous: self.war_soul_point,
                 target,
             }),
-            spatial_applied: false,
             effects: Vec::new(),
-            deliveries: Vec::new(),
         }
     }
 
@@ -9385,40 +9352,28 @@ impl CPlayer {
         }
     }
 
-    /// Periodic prefix `CPlayer::AI`: нулевой HP equipped battle fairy каждый
-    /// tick повторно нормализует четыре state-поля и вызывает PropertiesChanged.
-    /// Исходник не удаляет stale area-map entry и не посылает status broadcast.
+    /// Периодический префикс `CPlayer::AI`: нулевой HP надетой боевой феи при
+    /// каждом проходе повторно нормализует четыре поля состояния и вызывает
+    /// `PropertiesChanged`. Исходник не удаляет устаревшую запись карты области
+    /// и не рассылает состояние.
     pub(crate) fn refresh_battle_fairy_death(
         &mut self,
         factory: &CGoodsFactory,
-    ) -> BattleFairyDeathReport {
-        let player_id = self.player_id();
-        let mut report = BattleFairyDeathReport {
-            player_id,
-            outcome: BattleFairyDeathOutcome::MissingHeadgear,
-            effects: Vec::new(),
-            property_delivery: None,
-        };
+    ) -> BattleFairyDeathOutcome {
         let Some(goods) = self.equipment.get_goods(10) else {
-            return report;
+            return BattleFairyDeathOutcome::MissingHeadgear;
         };
         if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
-            report.outcome = BattleFairyDeathOutcome::NotBattleFairy;
-            return report;
+            return BattleFairyDeathOutcome::NotBattleFairy;
         }
         if goods.addon_property_value(factory, GAP_BF_HP, 1) != 0 {
-            report.outcome = BattleFairyDeathOutcome::Alive;
-            return report;
+            return BattleFairyDeathOutcome::Alive;
         }
         self.battle_fairy_summoned = false;
         self.war_soul_state = 0;
         self.set_battle_fairy_recall(true);
         self.set_battle_fairy_died(true);
-        report.outcome = BattleFairyDeathOutcome::Died;
-        report
-            .effects
-            .push(BattleFairyDeathEffect::PropertiesChanged { player_id });
-        report
+        BattleFairyDeathOutcome::Died
     }
 
     fn apply_battle_fairy_property(

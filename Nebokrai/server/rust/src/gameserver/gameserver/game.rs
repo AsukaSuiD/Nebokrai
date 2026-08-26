@@ -638,10 +638,10 @@ use crate::gameserver::appserver::pksys::{
 };
 use crate::gameserver::appserver::player::{
     AuctionSelfGoodsRefresh, BattleFairyCombineEffect,
-    BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
+    BattleFairyDeathOutcome, BattleFairyEquipmentMutationDelivery,
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationOutcome,
-    BattleFairyEquipmentMutationReport, BattleFairyFollowDelivery, BattleFairyFollowEffect,
-    BattleFairyFollowReport, BattleFairyObjectMove, BattleFairyObjectMoveOperation,
+    BattleFairyEquipmentMutationReport, BattleFairyFollowEffect,
+    BattleFairyObjectMove, BattleFairyObjectMoveOperation,
     BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetEffect,
     BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestFacts,
     BattleFairySkillResetDelivery, BattleFairySkillResetEffect, BattleFairySkillResetReport,
@@ -36561,15 +36561,16 @@ impl CGame {
         &mut self,
         player_id: i32,
         current_war_soul_skill_restored: Option<bool>,
-    ) -> Option<BattleFairyFollowReport> {
-        let mut report = self
+    ) -> Option<()> {
+        let plan = self
             .players
             .get_mut(&player_id)?
             .compute_war_soul_xy(current_war_soul_skill_restored);
-        let Some(action) = report.spatial_action else {
-            return Some(report);
+        let Some(action) = plan.spatial_action else {
+            tracing::trace!(player_id, outcome = ?plan.outcome, "следование боевой феи не потребовало пространственного действия");
+            return Some(());
         };
-        let spatial_applied = report.region_id.is_some_and(|region_id| {
+        let spatial_applied = plan.region_id.is_some_and(|region_id| {
             let Some(region) = self.regions.get_mut(&region_id) else {
                 return false;
             };
@@ -36580,11 +36581,11 @@ impl CGame {
                 BattleFairyWarSoulAction::Delete { .. } => false,
             }
         });
-        report.spatial_applied = spatial_applied;
         if let Some(player) = self.players.get_mut(&player_id) {
             player.apply_war_soul_action(action, spatial_applied);
         }
-        for effect in report.effects.clone() {
+        let effect_count = plan.effects.len();
+        for effect in plan.effects {
             match effect {
                 BattleFairyFollowEffect::AroundMove {
                     message_type,
@@ -36598,7 +36599,7 @@ impl CGame {
                     message.add_long(object_type);
                     message.add_ulong(x);
                     message.add_ulong(y);
-                    let delivery = report
+                    let delivery = plan
                         .region_id
                         .and_then(|region_id| self.take_region_owner(region_id))
                         .map(|owner| {
@@ -36614,13 +36615,12 @@ impl CGame {
                             delivery
                         })
                         .flatten();
-                    report
-                        .deliveries
-                        .push(BattleFairyFollowDelivery::Around(delivery));
+                    tracing::trace!(player_id, ?delivery, "отправлено движение боевой феи вокруг игрока");
                 }
             }
         }
-        Some(report)
+        tracing::trace!(player_id, outcome = ?plan.outcome, spatial_applied, effect_count, "завершено следование боевой феи");
+        Some(())
     }
 
     /// Мёртвая половина той же ветви `CPlayer::AI`: в отличие от живого
@@ -36628,12 +36628,12 @@ impl CGame {
     pub(crate) fn clear_dead_war_soul_xy(
         &mut self,
         player_id: i32,
-    ) -> Option<BattleFairyFollowReport> {
-        let mut report = self.players.get_mut(&player_id)?.clear_dead_war_soul_xy();
-        let action = report
+    ) -> Option<()> {
+        let plan = self.players.get_mut(&player_id)?.clear_dead_war_soul_xy();
+        let action = plan
             .spatial_action
             .expect("очистка war-soul мёртвого игрока всегда имеет spatial action");
-        let spatial_applied = report.region_id.is_some_and(|region_id| {
+        let spatial_applied = plan.region_id.is_some_and(|region_id| {
             let Some(region) = self.regions.get_mut(&region_id) else {
                 return false;
             };
@@ -36644,11 +36644,11 @@ impl CGame {
                 BattleFairyWarSoulAction::Delete { .. } => false,
             }
         });
-        report.spatial_applied = spatial_applied;
         if let Some(player) = self.players.get_mut(&player_id) {
             player.apply_war_soul_action(action, spatial_applied);
         }
-        Some(report)
+        tracing::trace!(player_id, outcome = ?plan.outcome, spatial_applied, "очищена позиция мёртвой боевой феи");
+        Some(())
     }
 
     fn send_player_owned_goods_deletion(
@@ -37300,18 +37300,21 @@ impl CGame {
     pub(crate) fn refresh_battle_fairy_death(
         &mut self,
         player_id: i32,
-    ) -> Option<BattleFairyDeathReport> {
+    ) -> Option<()> {
         let factory = &self.goods_factory;
-        let mut report = self
+        let outcome = self
             .players
             .get_mut(&player_id)
             .map(|player| player.refresh_battle_fairy_death(factory))?;
-        if report.outcome == crate::gameserver::appserver::player::BattleFairyDeathOutcome::Died {
-            report.property_delivery = self
+        let property_delivery = if outcome == BattleFairyDeathOutcome::Died {
+            self
                 .find_player(player_id)
-                .map(|player| self.send_player_properties_changed(player));
-        }
-        Some(report)
+                .map(|player| self.send_player_properties_changed(player))
+        } else {
+            None
+        };
+        tracing::trace!(player_id, ?outcome, ?property_delivery, "проверено состояние смерти боевой феи");
+        Some(())
     }
 
     fn send_player_properties_changed(&self, player: &CPlayer) -> i32 {
@@ -37922,9 +37925,8 @@ impl CGame {
             let mut player_fight_states = 0usize;
             let mut player_criminal_states = 0usize;
             for player_id in player_ids {
-                if let Some(death) = self.refresh_battle_fairy_death(player_id) {
+                if self.refresh_battle_fairy_death(player_id).is_some() {
                     battle_fairy_deaths = battle_fairy_deaths.wrapping_add(1);
-                    tracing::trace!(player_id, ?death, "проверено состояние смерти боевой феи");
                 }
                 if self.run_player_lost_timeout(player_id, runtime) {
                     player_lost_timeouts = player_lost_timeouts.wrapping_add(1);
@@ -38044,9 +38046,8 @@ impl CGame {
                         Some(true) => self.clear_dead_war_soul_xy(player_id),
                         None => None,
                     };
-                    if let Some(war_soul) = war_soul {
+                    if war_soul.is_some() {
                         battle_fairy_follows = battle_fairy_follows.wrapping_add(1);
-                        tracing::trace!(player_id, ?war_soul, "обновлено следование боевой феи");
                     }
                     if self.run_player_ai_tail(player_id, runtime).is_some() {
                         player_ai_tails = player_ai_tails.wrapping_add(1);
