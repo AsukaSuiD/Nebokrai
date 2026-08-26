@@ -694,7 +694,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             if !game.ci_qing_message_enabled(player_id) {
                 tracing::trace!(player_id, "CiQing недоступен");
             } else {
-                let _ = game.compose_ci_qing_node(player_id, runtime).expect(
+                game.compose_ci_qing_node(player_id, runtime).expect(
                     "resolved message player остаётся в CGame во время synchronous dispatch",
                 );
             }
