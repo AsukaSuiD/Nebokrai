@@ -909,12 +909,6 @@ impl Default for GameSetupEx {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GameSetupLoadReport {
-    pub(crate) parsed_pairs: usize,
-    pub(crate) stopped_at_pair: Option<usize>,
-}
-
 #[derive(Debug, Error)]
 #[error("не удалось прочитать {}: {source}", .path.display())]
 pub(crate) struct GameSetupOpenError {
@@ -939,18 +933,6 @@ impl GameRuntimePaths {
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum GameSetupExLoad {
-    Loaded(GameSetupLoadReport),
-    Unavailable(GameSetupOpenError),
-}
-
-#[derive(Debug)]
-pub(crate) struct GameRuntimeSetupReport {
-    pub(crate) setup: GameSetupLoadReport,
-    pub(crate) setup_ex: GameSetupExLoad,
-}
-
 #[derive(Debug, Error)]
 pub(crate) enum GameRuntimeSetupError {
     #[error(transparent)]
@@ -960,16 +942,16 @@ pub(crate) enum GameRuntimeSetupError {
 }
 
 impl GameSetup {
-    fn parse_positional(&mut self, bytes: &[u8]) -> GameSetupLoadReport {
+    fn parse_positional(&mut self, bytes: &[u8]) {
         let mut tokens = GameSetupTokens::new(bytes);
 
         macro_rules! read_value {
             ($field:ident, $parser:expr) => {{
                 let Some(raw) = tokens.next_value() else {
-                    return tokens.report();
+                    return tokens.finish("setup.ini");
                 };
                 let Some(value) = $parser(raw) else {
-                    return tokens.report();
+                    return tokens.finish("setup.ini");
                 };
                 self.$field = value;
                 tokens.parsed();
@@ -1021,7 +1003,7 @@ impl GameSetup {
         read_number!(enter_time, u32);
         read_number!(message_validate_time_ms, u32);
         read_number!(sequence_count, u32);
-        tokens.report()
+        tokens.finish("setup.ini")
     }
 
     fn network_setup(
@@ -1058,16 +1040,16 @@ impl GameSetup {
 }
 
 impl GameSetupEx {
-    fn parse_positional(&mut self, bytes: &[u8]) -> GameSetupLoadReport {
+    fn parse_positional(&mut self, bytes: &[u8]) {
         let mut tokens = GameSetupTokens::new(bytes);
 
         macro_rules! read_number {
             ($field:ident) => {{
                 let Some(raw) = tokens.next_value() else {
-                    return tokens.report();
+                    return tokens.finish("setupex.ini");
                 };
                 let Some(value) = parse_game_setup_number::<i32>(raw) else {
-                    return tokens.report();
+                    return tokens.finish("setupex.ini");
                 };
                 self.$field = value;
                 tokens.parsed();
@@ -1078,23 +1060,23 @@ impl GameSetupEx {
         read_number!(first_receive_timeout_ms);
 
         let Some(raw) = tokens.next_value() else {
-            return tokens.report();
+            return tokens.finish("setupex.ini");
         };
         let Some(value) = parse_game_setup_number::<i32>(raw) else {
-            return tokens.report();
+            return tokens.finish("setupex.ini");
         };
         self.maximum_yuan_bao = Some(value);
         tokens.parsed();
 
         let Some(raw) = tokens.next_value() else {
-            return tokens.report();
+            return tokens.finish("setupex.ini");
         };
         let Some(value) = parse_game_setup_number::<i32>(raw) else {
-            return tokens.report();
+            return tokens.finish("setupex.ini");
         };
         self.maximum_money = Some(value);
         tokens.parsed();
-        tokens.report()
+        tokens.finish("setupex.ini")
     }
 }
 
@@ -1130,12 +1112,14 @@ impl<'a> GameSetupTokens<'a> {
         self.parsed_pairs += 1;
     }
 
-    fn report(&self) -> GameSetupLoadReport {
-        GameSetupLoadReport {
-            parsed_pairs: self.parsed_pairs,
-            stopped_at_pair: (self.parsed_pairs < self.attempted_pairs)
+    fn finish(&self, source: &'static str) {
+        tracing::debug!(
+            source,
+            parsed_pairs = self.parsed_pairs,
+            stopped_at_pair = ?(self.parsed_pairs < self.attempted_pairs)
                 .then_some(self.attempted_pairs),
-        }
+            "завершён разбор runtime-настроек GameServer"
+        );
     }
 }
 
@@ -4909,7 +4893,7 @@ impl CGame {
     pub(crate) fn load_runtime_setup(
         &mut self,
         paths: &GameRuntimePaths,
-    ) -> Result<GameRuntimeSetupReport, GameRuntimeSetupError> {
+    ) -> Result<(), GameRuntimeSetupError> {
         // Производный plan не должен пережить неуспешную повторную загрузку.
         self.network_setup = None;
         let setup_bytes = fs::read(&paths.setup).map_err(|source| {
@@ -4918,17 +4902,18 @@ impl CGame {
                 source,
             })
         })?;
-        let setup = self.setup.parse_positional(&setup_bytes);
+        self.setup.parse_positional(&setup_bytes);
 
-        let setup_ex = match fs::read(&paths.setup_ex) {
-            Ok(bytes) => GameSetupExLoad::Loaded(self.setup_ex.parse_positional(&bytes)),
-            Err(source) => GameSetupExLoad::Unavailable(GameSetupOpenError {
-                path: paths.setup_ex.clone(),
-                source,
-            }),
-        };
+        match fs::read(&paths.setup_ex) {
+            Ok(bytes) => self.setup_ex.parse_positional(&bytes),
+            Err(source) => tracing::debug!(
+                path = %paths.setup_ex.display(),
+                error = %source,
+                "необязательные расширенные настройки GameServer недоступны"
+            ),
+        }
         self.network_setup = Some(self.setup.network_setup(&self.setup_ex)?);
-        Ok(GameRuntimeSetupReport { setup, setup_ex })
+        Ok(())
     }
 
     /// Выполняет достигнутый `Init` от первого RNG seed до Billing-попытки.
@@ -4948,8 +4933,7 @@ impl CGame {
         self.random_state = wall_time_seconds;
         let _discarded_roll = game_legacy_random(&mut self.random_state, 100);
 
-        let setup = self
-            .load_runtime_setup(paths)
+        self.load_runtime_setup(paths)
             .map_err(GameInitializationThroughBillingError::Setup)?;
         let world = self.init_world_client().await;
         if matches!(&world, GameClientInitialization::Failed { .. }) {
@@ -4968,7 +4952,6 @@ impl CGame {
 
         let billing = self.init_billing_client().await;
         tracing::debug!(
-            setup = ?setup,
             world = ?world,
             sequence_elements,
             billing = ?billing,
