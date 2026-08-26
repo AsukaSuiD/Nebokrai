@@ -684,8 +684,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     Ok(value) => value as u32,
                     Err(error) => return Some(Err(error)),
                 };
-                let _ = game
-                    .make_ci_qing_node(player_id, base_index, amount, runtime)
+                game.make_ci_qing_node(player_id, base_index, amount, runtime)
                     .expect(
                         "resolved message player остаётся в CGame во время synchronous dispatch",
                     );

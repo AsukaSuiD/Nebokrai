@@ -2105,40 +2105,6 @@ pub(crate) struct CiQingLog {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CiQingMakeOutcome {
-    UnknownNode,
-    AmountOutOfRange,
-    MissingRecipe,
-    InsufficientSourceA,
-    InsufficientSourceB,
-    InsufficientPacketSpace,
-    Completed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CiQingMakeDelivery {
-    Audit(Vec<i32>),
-    Consumption(Vec<i32>),
-    Addition(Vec<i32>),
-    Result(i32),
-}
-
-#[must_use = "CiQing make report хранит ресурсы, ownership, аудит и ответ"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CiQingMakeReport {
-    pub(crate) player_id: i32,
-    pub(crate) requested_base_index: u32,
-    pub(crate) requested_amount: u32,
-    pub(crate) result_base_index: u32,
-    pub(crate) outcome: CiQingMakeOutcome,
-    pub(crate) logs: Vec<CiQingLog>,
-    pub(crate) consumptions: Vec<CiQingPacketConsumption>,
-    pub(crate) additions: Vec<CiQingPacketAddition>,
-    pub(crate) rejected_goods: Vec<ShapeIdentity>,
-    pub(crate) deliveries: Vec<CiQingMakeDelivery>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CiQingComposeOutcome {
     MissingSources,
     ResultSlotOccupied,
@@ -21474,26 +21440,17 @@ impl CGame {
         base_index: u32,
         amount: u32,
         context: &mut Context,
-    ) -> Option<CiQingMakeReport> {
-        let mut report = CiQingMakeReport {
-            player_id,
-            requested_base_index: base_index,
-            requested_amount: amount,
-            result_base_index: 0,
-            outcome: CiQingMakeOutcome::UnknownNode,
-            logs: Vec::new(),
-            consumptions: Vec::new(),
-            additions: Vec::new(),
-            rejected_goods: Vec::new(),
-            deliveries: Vec::new(),
-        };
+    ) -> Option<()> {
         let player = self.find_player(player_id)?;
         if !player.ci_qing_list().any(|entry| entry == base_index) {
-            return Some(self.finish_ci_qing_make(report));
+            let delivery = self.finish_ci_qing_make(player_id, 0);
+            tracing::trace!(player_id, base_index, amount, delivery, "узел CiQing не открыт");
+            return Some(());
         }
         if amount >= 10 {
-            report.outcome = CiQingMakeOutcome::AmountOutOfRange;
-            return Some(self.finish_ci_qing_make(report));
+            let delivery = self.finish_ci_qing_make(player_id, 0);
+            tracing::trace!(player_id, base_index, amount, delivery, "количество создаваемых узлов CiQing вне диапазона");
+            return Some(());
         }
         let Some(recipe) = self
             .ci_qing_setup
@@ -21502,22 +21459,26 @@ impl CGame {
             .find(|node| node.destination_base_index == base_index)
             .copied()
         else {
-            report.outcome = CiQingMakeOutcome::MissingRecipe;
-            return Some(self.finish_ci_qing_make(report));
+            let delivery = self.finish_ci_qing_make(player_id, 0);
+            tracing::trace!(player_id, base_index, amount, delivery, "рецепт узла CiQing не найден");
+            return Some(());
         };
         let need_a = recipe.source_a_count.wrapping_mul(amount);
         let need_b = recipe.source_b_count.wrapping_mul(amount);
         if player.check_item_in_packet(recipe.source_a_base_index) < need_a {
-            report.outcome = CiQingMakeOutcome::InsufficientSourceA;
-            return Some(self.finish_ci_qing_make(report));
+            let delivery = self.finish_ci_qing_make(player_id, 0);
+            tracing::trace!(player_id, base_index, amount, delivery, "не хватает первого материала узла CiQing");
+            return Some(());
         }
         if player.check_item_in_packet(recipe.source_b_base_index) < need_b {
-            report.outcome = CiQingMakeOutcome::InsufficientSourceB;
-            return Some(self.finish_ci_qing_make(report));
+            let delivery = self.finish_ci_qing_make(player_id, 0);
+            tracing::trace!(player_id, base_index, amount, delivery, "не хватает второго материала узла CiQing");
+            return Some(());
         }
         if !player.packet().check_space(amount) {
-            report.outcome = CiQingMakeOutcome::InsufficientPacketSpace;
-            return Some(self.finish_ci_qing_make(report));
+            let delivery = self.finish_ci_qing_make(player_id, 0);
+            tracing::trace!(player_id, base_index, amount, delivery, "для узла CiQing не хватает места");
+            return Some(());
         }
 
         for (source_base_index, required) in [
@@ -21531,20 +21492,16 @@ impl CGame {
                 base_index: source_base_index,
                 amount: required,
             };
-            report
-                .deliveries
-                .push(CiQingMakeDelivery::Audit(self.send_ci_qing_log(&log)));
-            report.logs.push(log);
+            let audit_deliveries = self.send_ci_qing_log(&log);
+            tracing::trace!(player_id, source_base_index, required, ?audit_deliveries, "аудит расхода материала CiQing отправлен");
             let consumptions = self
                 .players
                 .get_mut(&player_id)
                 .expect("player проверен до CiQing resource removal")
                 .remove_item_in_packet(source_base_index, required);
             for consumption in consumptions {
-                report.deliveries.push(CiQingMakeDelivery::Consumption(
-                    self.send_player_packet_consumption(&consumption),
-                ));
-                report.consumptions.push(consumption);
+                let deliveries = self.send_player_packet_consumption(&consumption);
+                tracing::trace!(player_id, source_base_index, ?deliveries, "расход материала CiQing отправлен");
             }
         }
 
@@ -21576,13 +21533,10 @@ impl CGame {
         };
         for addition in additions {
             if addition.resulting_amount.is_some() {
-                report.deliveries.push(CiQingMakeDelivery::Addition(
-                    self.send_player_packet_addition(&addition),
-                ));
+                let deliveries = self.send_player_packet_addition(&addition);
+                tracing::trace!(player_id, base_index = recipe.destination_base_index, ?deliveries, "созданный узел CiQing отправлен");
             }
-            report.additions.push(addition);
         }
-        report.rejected_goods = rejected.iter().map(CGoods::identity).collect();
         let log = CiQingLog {
             player_id,
             delta: 1,
@@ -21590,22 +21544,16 @@ impl CGame {
             base_index: recipe.destination_base_index,
             amount: rejected.len() as u32,
         };
-        report
-            .deliveries
-            .push(CiQingMakeDelivery::Audit(self.send_ci_qing_log(&log)));
-        report.logs.push(log);
-        report.result_base_index = recipe.destination_base_index;
-        report.outcome = CiQingMakeOutcome::Completed;
-        Some(self.finish_ci_qing_make(report))
+        let audit_deliveries = self.send_ci_qing_log(&log);
+        let delivery = self.finish_ci_qing_make(player_id, recipe.destination_base_index);
+        tracing::debug!(player_id, base_index, amount, rejected_count = rejected.len(), ?audit_deliveries, delivery, "создание узла CiQing завершено");
+        Some(())
     }
 
-    fn finish_ci_qing_make(&self, mut report: CiQingMakeReport) -> CiQingMakeReport {
+    fn finish_ci_qing_make(&self, player_id: i32, result_base_index: u32) -> i32 {
         let mut message = CMessage::new(0x0b_f932);
-        message.add_ulong(report.result_base_index);
-        report.deliveries.push(CiQingMakeDelivery::Result(
-            message.send_to_player(self.net_server(), report.player_id),
-        ));
-        report
+        message.add_ulong(result_base_index);
+        message.send_to_player(self.net_server(), player_id)
     }
 
     pub(crate) fn compose_ci_qing_node<Context: CiQingComposeContext>(
