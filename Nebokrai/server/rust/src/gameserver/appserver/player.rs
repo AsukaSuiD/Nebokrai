@@ -494,16 +494,6 @@ pub(crate) enum BattleFairyCombineOutcome {
     Created,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyCombineDelivery {
-    Player(i32),
-    FetchPower(i32),
-    ObjectMove(Vec<i32>),
-    SkillAdded(i32),
-    GoodsUpdated(i32),
-    Audit,
-}
-
 #[must_use = "combine report содержит последовательность адресных packet/log effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyCombineReport {
@@ -511,7 +501,6 @@ pub(crate) struct BattleFairyCombineReport {
     pub(crate) outcome: BattleFairyCombineOutcome,
     pub(crate) removed_inputs: Vec<BattleFairyCombineRemovedInput>,
     pub(crate) effects: Vec<BattleFairyCombineEffect>,
-    pub(crate) deliveries: Vec<BattleFairyCombineDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -559,13 +548,6 @@ pub(crate) enum BattleFairySummonEffect {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairySummonDelivery {
-    Player(i32),
-    Around(Option<Result<i32, ShapeCoordinateBlock>>),
-    Properties(i32),
-}
-
 #[must_use = "summon report хранит точный порядок адресных broadcast и property effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairySummonReport {
@@ -575,7 +557,6 @@ pub(crate) struct BattleFairySummonReport {
     pub(crate) spatial_action: Option<BattleFairyWarSoulAction>,
     pub(crate) spatial_applied: bool,
     pub(crate) effects: Vec<BattleFairySummonEffect>,
-    pub(crate) deliveries: Vec<BattleFairySummonDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8367,7 +8348,6 @@ impl CPlayer {
             spatial_action: None,
             spatial_applied: false,
             effects: Vec::new(),
-            deliveries: Vec::new(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairySummonOutcome::FeatureDisabled;
@@ -11520,7 +11500,6 @@ impl CPlayer {
             outcome: BattleFairyCombineOutcome::Rejected,
             removed_inputs: Vec::with_capacity(3),
             effects: Vec::new(),
-            deliveries: Vec::new(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairyCombineOutcome::FeatureDisabled;

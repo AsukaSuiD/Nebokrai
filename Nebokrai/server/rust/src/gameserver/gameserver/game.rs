@@ -639,16 +639,16 @@ use crate::gameserver::appserver::pksys::{
     FirstSkillPkReport, KillPkDisposition, KillPkFacts,
 };
 use crate::gameserver::appserver::player::{
-    AuctionSelfGoodsRefresh, BattleFairyCombineDelivery, BattleFairyCombineEffect,
-    BattleFairyCombineReport, BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
+    AuctionSelfGoodsRefresh, BattleFairyCombineEffect,
+    BattleFairyDeathReport, BattleFairyEquipmentMutationDelivery,
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationOutcome,
     BattleFairyEquipmentMutationReport, BattleFairyFollowDelivery, BattleFairyFollowEffect,
     BattleFairyFollowReport, BattleFairyObjectMove, BattleFairyObjectMoveOperation,
     BattleFairyPotentialAllocationDelivery, BattleFairyPotentialAllocationEffect,
-    BattleFairyPotentialResetDelivery, BattleFairyPotentialResetEffect, BattleFairySkillAdded,
+    BattleFairyPotentialResetDelivery, BattleFairyPotentialResetEffect,
     BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestFacts,
     BattleFairySkillResetDelivery, BattleFairySkillResetEffect, BattleFairySkillResetReport,
-    BattleFairySummonDelivery, BattleFairySummonEffect, BattleFairySummonReport,
+    BattleFairySummonEffect, BattleFairySummonReport,
     BattleFairyUpgradeDelivery, BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer,
     CiQingContainerAddition, CiQingContainerConsumption, CiQingHandConsumption,
     CiQingPacketAddition, CiQingPacketConsumption, EnhancementDeselectionBlock,
@@ -2093,12 +2093,6 @@ pub(crate) enum BattleFairyScriptAction {
         minimum: i32,
         maximum: i32,
     },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyScriptSkillAttachReport {
-    pub(crate) skills: Vec<BattleFairySkillAdded>,
-    pub(crate) deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30819,8 +30813,8 @@ impl CGame {
     /// опубликованным WorldServer selector-ом `SI_BATLLE_FAIRY_COMBINE`.
     /// Отсутствующий player не создаёт уведомления или пакет, как outer
     /// lookup исходного `CheckBattleFairyCombine`.
-    pub(crate) fn check_battle_fairy_combine(&self, player_id: i32) -> BattleFairyCombineCheck {
-        let mut check =
+    pub(crate) fn check_battle_fairy_combine(&self, player_id: i32) {
+        let check =
             self.find_player(player_id)
                 .map_or_else(BattleFairyCombineCheck::default, |player| {
                     player.check_battle_fairy_combine(
@@ -30835,17 +30829,16 @@ impl CGame {
                 self.get_string_by_id(notification.string_id().as_bytes()),
             )
             .send_to_player(self.net_server(), player_id);
-            check.deliveries.push(delivery);
+            tracing::trace!(player_id, delivery, "уведомление проверки соединения боевой феи отправлено");
         }
         if let Some(availability) = check.availability {
             let mut message = CMessage::new(availability.message_type as i32);
             message.add_ulong(availability.deplete_fetch);
             message.add_ulong(availability.truncated_success_rate);
-            check
-                .deliveries
-                .push(message.send_to_player(self.net_server(), player_id));
+            let delivery = message.send_to_player(self.net_server(), player_id);
+            tracing::trace!(player_id, delivery, "доступность соединения боевой феи отправлена");
         }
-        check
+        tracing::trace!(player_id, ?check.result, "проверка соединения боевой феи завершена");
     }
 
     /// Исполняемый caller combine из `goodsmessage` после lookup player-а.
@@ -30856,7 +30849,7 @@ impl CGame {
         &mut self,
         player_id: i32,
         context: &mut Context,
-    ) -> Option<BattleFairyCombineReport> {
+    ) -> Option<()> {
         let battle_fairy_enabled = self.globe_setup.battle_fairy_enabled();
         let maximum_fetch_power = self.globe_setup.maximum_fetch_power();
         let (
@@ -30887,7 +30880,7 @@ impl CGame {
                 |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
             )
         };
-        let mut report = {
+        let report = {
             let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.combine_battle_fairy(
                 battle_fairy_enabled,
@@ -30913,9 +30906,7 @@ impl CGame {
                         self.get_string_by_id(string_id.as_bytes()),
                     )
                     .send_to_player(self.net_server(), player_id);
-                    report
-                        .deliveries
-                        .push(BattleFairyCombineDelivery::Player(delivery));
+                    tracing::trace!(player_id, delivery, "уведомление соединения боевой феи отправлено");
                 }
                 BattleFairyCombineEffect::FetchPowerChanged {
                     message_type,
@@ -30929,17 +30920,12 @@ impl CGame {
                     message.add_long(subject_id);
                     add_legacy_c_string(message.base_mut(), property_name.as_bytes());
                     message.add_ulong(value);
-                    report
-                        .deliveries
-                        .push(BattleFairyCombineDelivery::FetchPower(
-                            message.send_to_player(self.net_server(), player_id),
-                        ));
+                    let delivery = message.send_to_player(self.net_server(), player_id);
+                    tracing::trace!(player_id, delivery, "изменение силы боевой феи отправлено");
                 }
                 BattleFairyCombineEffect::ObjectMove(object_move) => {
                     let delivery = self.send_battle_fairy_container_object_move(&object_move);
-                    report
-                        .deliveries
-                        .push(BattleFairyCombineDelivery::ObjectMove(vec![delivery]));
+                    tracing::trace!(player_id, delivery, "перемещение предмета соединения боевой феи отправлено");
                 }
                 BattleFairyCombineEffect::SkillAdded(skill) => {
                     if let Some(message) = player_skill_learned_message(
@@ -30951,19 +30937,13 @@ impl CGame {
                         &self.skill_factory,
                         false,
                     ) {
-                        report
-                            .deliveries
-                            .push(BattleFairyCombineDelivery::SkillAdded(
-                                message.send_to_player(self.net_server(), skill.player_id),
-                            ));
+                        let delivery = message.send_to_player(self.net_server(), skill.player_id);
+                        tracing::trace!(player_id = skill.player_id, delivery, "навык соединённой боевой феи отправлен");
                     }
                 }
                 BattleFairyCombineEffect::GoodsUpdated(update) => {
-                    report
-                        .deliveries
-                        .push(BattleFairyCombineDelivery::GoodsUpdated(
-                            self.send_battle_fairy_goods_update(&update),
-                        ));
+                    let delivery = self.send_battle_fairy_goods_update(&update);
+                    tracing::trace!(player_id = update.player_id, delivery, "предмет соединённой боевой феи обновлён");
                 }
                 BattleFairyCombineEffect::Audit(audit) => {
                     let template = self.get_string_by_id(audit.string_id.as_bytes());
@@ -30980,11 +30960,12 @@ impl CGame {
                         )
                     };
                     put_string_to_file("BattleFairy", &formatted);
-                    report.deliveries.push(BattleFairyCombineDelivery::Audit);
+                    tracing::trace!(player_id, "аудит соединения боевой феи записан");
                 }
             }
         }
-        Some(report)
+        tracing::debug!(player_id, ?report.outcome, "соединение боевой феи завершено");
+        Some(())
     }
 
     fn send_battle_fairy_container_object_move(&self, object_move: &BattleFairyObjectMove) -> i32 {
@@ -31029,7 +31010,7 @@ impl CGame {
         &mut self,
         player_id: i32,
         mode: i32,
-    ) -> Option<BattleFairySummonReport> {
+    ) -> Option<()> {
         let battle_fairy_enabled = self.globe_setup.battle_fairy_enabled();
         let mut report = {
             let player = self.players.get_mut(&player_id)?;
@@ -31055,7 +31036,8 @@ impl CGame {
             }
         }
         self.deliver_battle_fairy_summon_effects(&mut report);
-        Some(report)
+        tracing::debug!(player_id, mode, ?report.outcome, spatial_applied = report.spatial_applied, "призыв боевой феи обработан");
+        Some(())
     }
 
     /// Reached tail virtual `CPlayer::UpdateProperty`: equipment recompute
@@ -31082,7 +31064,7 @@ impl CGame {
         Some((property_delivery, tao_zhuang_ran))
     }
 
-    fn deliver_battle_fairy_summon_effects(&mut self, report: &mut BattleFairySummonReport) {
+    fn deliver_battle_fairy_summon_effects(&mut self, report: &BattleFairySummonReport) {
         for effect in report.effects.clone() {
             match effect {
                 BattleFairySummonEffect::Notification {
@@ -31093,9 +31075,7 @@ impl CGame {
                     let text = self.get_string_by_id(string_id.as_bytes());
                     let delivery = colored_player_notice_message(color, 0, text)
                         .send_to_player(self.net_server(), player_id);
-                    report
-                        .deliveries
-                        .push(BattleFairySummonDelivery::Player(delivery));
+                    tracing::trace!(player_id, delivery, "уведомление призыва боевой феи отправлено");
                 }
                 BattleFairySummonEffect::AroundMessage {
                     message_type,
@@ -31129,16 +31109,12 @@ impl CGame {
                             delivery
                         })
                         .flatten();
-                    report
-                        .deliveries
-                        .push(BattleFairySummonDelivery::Around(delivery));
+                    tracing::trace!(player_id, ?delivery, "состояние призыва боевой феи отправлено окружению");
                 }
                 BattleFairySummonEffect::PropertiesChanged { player_id } => {
                     if let Some(player) = self.find_player(player_id) {
                         let delivery = self.send_player_properties_changed(player);
-                        report
-                            .deliveries
-                            .push(BattleFairySummonDelivery::Properties(delivery));
+                        tracing::trace!(player_id, delivery, "свойства после призыва боевой феи отправлены");
                     }
                 }
             }
@@ -32018,14 +31994,14 @@ impl CGame {
     pub(crate) fn attach_battle_fairy_script_skills(
         &mut self,
         player_id: i32,
-    ) -> BattleFairyScriptSkillAttachReport {
+    ) {
         let skills = self
             .players
             .get_mut(&player_id)
             .map_or_else(Vec::new, |player| {
                 player.attach_battle_fairy_script_skills(&self.goods_factory, &self.skill_factory)
             });
-        let deliveries = skills
+        let deliveries: Vec<_> = skills
             .iter()
             .filter_map(|skill| {
                 player_skill_learned_message(
@@ -32040,7 +32016,7 @@ impl CGame {
                 .map(|message| message.send_to_player(self.net_server(), skill.player_id))
             })
             .collect();
-        BattleFairyScriptSkillAttachReport { skills, deliveries }
+        tracing::debug!(player_id, skill_count = skills.len(), ?deliveries, "сценарные навыки боевой феи подключены");
     }
 
     /// Script `2249 / FairyExpUp`: enhancement хранит только shadow, поэтому

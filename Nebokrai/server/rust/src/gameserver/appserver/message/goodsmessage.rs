@@ -570,11 +570,10 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             }
         }
         CHECK_BATTLE_FAIRY_COMBINE => {
-            let _ = game.check_battle_fairy_combine(player_id);
+            game.check_battle_fairy_combine(player_id);
         }
         COMBINE_BATTLE_FAIRY => {
-            let _ = game
-                .combine_battle_fairy(player_id, runtime)
+            game.combine_battle_fairy(player_id, runtime)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
         UPGRADE_BATTLE_FAIRY => {
@@ -606,7 +605,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 },
                 runtime,
             );
-            let _ = game.attach_battle_fairy_script_skills(player_id);
+            game.attach_battle_fairy_script_skills(player_id);
             let _ = CMessage::new(0x0b_f931).send(game, player_id != 0);
         }
         ALLOCATE_BATTLE_FAIRY_POTENTIAL => {
@@ -644,7 +643,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             } else {
                 -1
             };
-            let _ = game.summon_battle_fairy(player_id, mode).expect(
+            game.summon_battle_fairy(player_id, mode).expect(
                 "resolved message player остаётся в CGame во время synchronous dispatch",
             );
         }
