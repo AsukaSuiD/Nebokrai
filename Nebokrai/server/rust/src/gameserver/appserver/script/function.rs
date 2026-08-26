@@ -447,8 +447,7 @@ use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, WarContendEntryContext, WarRegionContext,
 };
 use crate::gameserver::appserver::session::cequipmentdakong::{
-    EquipmentDaKongExternalRefreshReport, EquipmentDaKongScriptModifyKind,
-    EquipmentDaKongScriptModifyReport,
+    EquipmentDaKongScriptModifyKind,
 };
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeResolver};
@@ -3551,9 +3550,7 @@ pub(crate) fn run_equipment_session_script_function(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EquipmentDaKongScriptFunctionOutcome {
     DifferentFunction,
-    HandledWithoutCall,
-    Refreshed(EquipmentDaKongExternalRefreshReport),
-    Modified(EquipmentDaKongScriptModifyReport),
+    Handled,
 }
 
 pub(crate) fn run_equipment_da_kong_script_function<Context: EquipmentDaKongContext>(
@@ -3571,19 +3568,17 @@ pub(crate) fn run_equipment_da_kong_script_function<Context: EquipmentDaKongCont
         } else {
             EquipmentDaKongScriptModifyKind::ClampDeluxProperties
         };
-        return EquipmentDaKongScriptFunctionOutcome::Modified(
-            game.modify_script_equipment_da_kong(player_id, kind, context),
-        );
+        game.modify_script_equipment_da_kong(player_id, kind, context);
+        return EquipmentDaKongScriptFunctionOutcome::Handled;
     }
     if function_id != SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY {
         return EquipmentDaKongScriptFunctionOutcome::DifferentFunction;
     }
     let Some(cost_original_name) = evaluated_first_string.filter(|value| !value.is_empty()) else {
-        return EquipmentDaKongScriptFunctionOutcome::HandledWithoutCall;
+        return EquipmentDaKongScriptFunctionOutcome::Handled;
     };
-    EquipmentDaKongScriptFunctionOutcome::Refreshed(
-        game.reflush_equipment_da_kong_external_property(player_id, cost_original_name, context),
-    )
+    game.reflush_equipment_da_kong_external_property(player_id, cost_original_name, context);
+    EquipmentDaKongScriptFunctionOutcome::Handled
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9230,9 +9225,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         EquipmentDaKongScriptFunctionOutcome::DifferentFunction => {
             ScriptFunctionDispatchOutcome::DifferentFunction
         }
-        EquipmentDaKongScriptFunctionOutcome::HandledWithoutCall
-        | EquipmentDaKongScriptFunctionOutcome::Refreshed(_)
-        | EquipmentDaKongScriptFunctionOutcome::Modified(_) => {
+        EquipmentDaKongScriptFunctionOutcome::Handled => {
             ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
         }
     }

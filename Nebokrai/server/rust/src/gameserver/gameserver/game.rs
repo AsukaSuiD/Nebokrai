@@ -718,12 +718,9 @@ use crate::gameserver::appserver::session::cequipmentcompose::{
 };
 use crate::gameserver::appserver::session::cequipmentdakong::{
     CEquipmentDaKong, DA_KONG_USE_SINKER_INDEX, EquipmentDaKongAroundEffect,
-    EquipmentDaKongAuditLog, EquipmentDaKongClientUpdate, EquipmentDaKongCloseOutcome,
-    EquipmentDaKongCloseReport, EquipmentDaKongEnchaseEvent, EquipmentDaKongExternalRefreshOutcome,
-    EquipmentDaKongExternalRefreshReport, EquipmentDaKongGemSnapshot, EquipmentDaKongGoodsSnapshot,
-    EquipmentDaKongOperation, EquipmentDaKongOutcome, EquipmentDaKongReport,
-    EquipmentDaKongScriptModifyKind, EquipmentDaKongScriptModifyOutcome,
-    EquipmentDaKongScriptModifyReport, deal_enchase_gems, deal_with_da_kong_external_attributes,
+    EquipmentDaKongAuditLog, EquipmentDaKongClientUpdate, EquipmentDaKongEnchaseEvent,
+    EquipmentDaKongGemSnapshot, EquipmentDaKongGoodsSnapshot, EquipmentDaKongOperation,
+    EquipmentDaKongScriptModifyKind, deal_enchase_gems, deal_with_da_kong_external_attributes,
     deal_with_da_kong_seven, equipment_da_kong_condition,
 };
 use crate::gameserver::appserver::session::cequipmentupgrade::{
@@ -19830,56 +19827,46 @@ impl CGame {
         session_id: i32,
         requested_plug_id: i32,
         runtime: &mut Runtime,
-    ) -> EquipmentDaKongCloseReport {
-        let mut report = EquipmentDaKongCloseReport {
-            session_id,
-            requested_plug_id,
-            actual_plug_id: None,
-            last_equipment_id: None,
-            outcome: EquipmentDaKongCloseOutcome::MissingSessionOrPlug,
-            session_end: None,
-            previous_progress: None,
-            plug_exit: None,
-            client_update: None,
-            client_update_delivery: None,
-        };
+    ) {
         if self.session_factory.query_session(session_id).is_none() {
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, "закрываемая сессия DaKong не найдена");
+            return;
         }
-        report.actual_plug_id = self
+        let actual_plug_id = self
             .session_factory
             .query_session_plug_by_owner(session_id, 400, player_id)
             .map(|plug| plug.id());
-        let Some(actual_plug_id) = report.actual_plug_id else {
-            return report;
+        let Some(actual_plug_id) = actual_plug_id else {
+            tracing::trace!(player_id, session_id, requested_plug_id, "закрываемый plug DaKong не найден");
+            return;
         };
         if actual_plug_id != requested_plug_id {
-            report.outcome = EquipmentDaKongCloseOutcome::PlugIdMismatch;
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, actual_plug_id, "закрываемый plug DaKong не совпал");
+            return;
         }
         let Some(last_equipment_id) = self
             .session_factory
             .query_equipment_da_kong_plug(actual_plug_id)
             .map(CEquipmentDaKong::last_equipment_id)
         else {
-            return report;
+            tracing::trace!(player_id, session_id, actual_plug_id, "владелец закрываемого plug DaKong не найден");
+            return;
         };
-        report.last_equipment_id = Some(last_equipment_id);
 
-        report.session_end = self.session_factory.end_session(session_id);
-        report.previous_progress = self.find_player_mut(player_id).map(|player| {
+        let session_end = self.session_factory.end_session(session_id);
+        let previous_progress = self.find_player_mut(player_id).map(|player| {
             let previous = player.current_progress();
             player.set_current_progress_snapshot(PlayerProgress::None);
             previous
         });
-        report.plug_exit = Some(self.session_factory.exit_plug(session_id, actual_plug_id));
+        let plug_exit = self.session_factory.exit_plug(session_id, actual_plug_id);
 
         let Some(goods) = self
             .find_player(player_id)
             .and_then(|player| player.get_goods_by_id(last_equipment_id))
         else {
-            report.outcome = EquipmentDaKongCloseOutcome::ClosedWithoutEquipment;
-            return report;
+            tracing::trace!(player_id, session_id, actual_plug_id, ?last_equipment_id, ?session_end, ?previous_progress, ?plug_exit, "сессия DaKong закрыта без оборудования");
+            return;
         };
         let update = EquipmentDaKongClientUpdate {
             player_id,
@@ -19891,11 +19878,8 @@ impl CGame {
         message.base_mut().add_guid(update.goods.ex_id);
         message.add_ulong(update.old_client_payload.len() as u32);
         message.base_mut().add(&update.old_client_payload);
-        report.client_update_delivery =
-            Some(message.send_to_player(self.net_server(), update.player_id));
-        report.client_update = Some(update);
-        report.outcome = EquipmentDaKongCloseOutcome::ClosedAndUpdated;
-        report
+        let client_update_delivery = message.send_to_player(self.net_server(), update.player_id);
+        tracing::trace!(player_id, session_id, actual_plug_id, ?last_equipment_id, ?session_end, ?previous_progress, ?plug_exit, client_update_delivery, "сессия DaKong закрыта с обновлением оборудования");
     }
 
     pub(crate) fn process_equipment_da_kong<Context: ScriptFunctionRuntime>(
@@ -19905,54 +19889,46 @@ impl CGame {
         requested_plug_id: i32,
         operation: EquipmentDaKongOperation,
         context: &mut Context,
-    ) -> EquipmentDaKongReport {
-        let mut report = EquipmentDaKongReport {
-            session_id,
-            requested_plug_id,
-            actual_plug_id: None,
-            operation,
-            outcome: EquipmentDaKongOutcome::MissingSessionOrPlug,
-            return_value: 0,
-            notifications: Vec::new(),
-            packet_consumptions: Vec::new(),
-            packet_consumption_deliveries: Vec::new(),
-            gem_consumptions: Vec::new(),
-            logs: Vec::new(),
-            world_deliveries: Vec::new(),
-            client_updates: Vec::new(),
-            client_update_deliveries: Vec::new(),
-            scripts: Vec::new(),
-        };
+    ) {
         if self.session_factory.query_session(session_id).is_none() {
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, ?operation, "сессия DaKong не найдена");
+            return;
         }
-        report.actual_plug_id = self
+        let actual_plug_id = self
             .session_factory
             .query_session_plug_by_owner(session_id, 400, player_id)
             .map(|plug| plug.id());
-        let Some(actual_plug_id) = report.actual_plug_id else {
-            return report;
+        let Some(actual_plug_id) = actual_plug_id else {
+            tracing::trace!(player_id, session_id, requested_plug_id, ?operation, "plug DaKong не найден");
+            return;
         };
         if actual_plug_id != requested_plug_id {
-            report.outcome = EquipmentDaKongOutcome::PlugIdMismatch;
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, actual_plug_id, ?operation, "plug DaKong не совпал");
+            return;
         }
         let Some(mut plug) = self
             .session_factory
             .take_equipment_da_kong_plug(actual_plug_id)
         else {
-            return report;
+            tracing::trace!(player_id, session_id, actual_plug_id, ?operation, "владелец plug DaKong не найден");
+            return;
         };
         let Some(mut player) = self.players.remove(&player_id) else {
             self.session_factory
                 .register_equipment_da_kong_plug(actual_plug_id, plug);
-            return report;
+            tracing::trace!(player_id, session_id, actual_plug_id, ?operation, "игрок DaKong не найден");
+            return;
         };
-        report = self.process_equipment_da_kong_inner(&mut player, &mut plug, report, context);
+        self.process_equipment_da_kong_inner(
+            &mut player,
+            &mut plug,
+            session_id,
+            operation,
+            context,
+        );
         self.players.insert(player_id, player);
         self.session_factory
             .register_equipment_da_kong_plug(actual_plug_id, plug);
-        report
     }
 
     pub(crate) fn reflush_equipment_da_kong_external_property<Context: EquipmentDaKongContext>(
@@ -19960,40 +19936,25 @@ impl CGame {
         player_id: i32,
         cost_original_name: &[u8],
         context: &mut Context,
-    ) -> EquipmentDaKongExternalRefreshReport {
-        let mut report = EquipmentDaKongExternalRefreshReport {
-            player_id,
-            cost_original_name: cost_original_name.to_vec(),
-            equipment_id: None,
-            outcome: EquipmentDaKongExternalRefreshOutcome::FeatureDisabled,
-            consumption: None,
-            consumption_deliveries: Vec::new(),
-            log: None,
-            log_deliveries: Vec::new(),
-            effect: None,
-            effect_delivery: None,
-            client_update: None,
-            client_update_deliveries: Vec::new(),
-        };
+    ) {
         if !self.da_kong_xiang_qian.key() {
-            return report;
+            tracing::trace!(player_id, "обновление внешнего свойства DaKong отключено");
+            return;
         }
         if cost_original_name.is_empty() {
-            report.outcome = EquipmentDaKongExternalRefreshOutcome::EmptyCostName;
-            return report;
+            tracing::trace!(player_id, "не задан материал обновления внешнего свойства DaKong");
+            return;
         }
         let Some(mut player) = self.players.remove(&player_id) else {
-            report.outcome = EquipmentDaKongExternalRefreshOutcome::MissingSelection;
-            return report;
+            tracing::trace!(player_id, "игрок обновления внешнего свойства DaKong не найден");
+            return;
         };
-        report = self.reflush_equipment_da_kong_external_property_inner(
+        self.reflush_equipment_da_kong_external_property_inner(
             &mut player,
             cost_original_name,
-            report,
             context,
         );
         self.players.insert(player_id, player);
-        report
     }
 
     /// Сценарии `9352/9353` используют выбранный предмет контейнера улучшения и
@@ -20004,21 +19965,11 @@ impl CGame {
         player_id: i32,
         kind: EquipmentDaKongScriptModifyKind,
         context: &mut Context,
-    ) -> EquipmentDaKongScriptModifyReport {
+    ) {
         const COST_ORIGINAL_NAME: &[u8] = b"GMXF18";
-        let mut report = EquipmentDaKongScriptModifyReport {
-            player_id,
-            kind,
-            outcome: EquipmentDaKongScriptModifyOutcome::FeatureDisabled,
-            equipment_id: None,
-            consumption: None,
-            consumption_deliveries: Vec::new(),
-            client_update: None,
-            client_update_delivery: None,
-            notification_delivery: None,
-        };
         if !self.da_kong_xiang_qian.key() {
-            return report;
+            tracing::trace!(player_id, ?kind, "сценарная модификация DaKong отключена");
+            return;
         }
         let cost_base_index = self
             .goods_factory
@@ -20028,33 +19979,30 @@ impl CGame {
             .query_goods_base_properties(cost_base_index)
             .is_none()
         {
-            report.outcome = EquipmentDaKongScriptModifyOutcome::MissingCostDefinition;
-            return report;
+            tracing::trace!(player_id, ?kind, cost_base_index, "описание материала сценарной модификации DaKong не найдено");
+            return;
         }
         let Some(mut player) = self.players.remove(&player_id) else {
-            report.outcome = EquipmentDaKongScriptModifyOutcome::MissingPlayer;
-            return report;
+            tracing::trace!(player_id, ?kind, "игрок сценарной модификации DaKong не найден");
+            return;
         };
         let Some(equipment_id) = player.enhancement_selected_goods_id() else {
-            report.outcome = EquipmentDaKongScriptModifyOutcome::MissingSelection;
+            tracing::trace!(player_id, ?kind, "оборудование сценарной модификации DaKong не выбрано");
             self.players.insert(player_id, player);
-            return report;
+            return;
         };
-        report.equipment_id = Some(equipment_id);
         if player.get_goods_by_id(equipment_id).is_none() {
-            report.outcome = EquipmentDaKongScriptModifyOutcome::MissingEquipment;
+            tracing::trace!(player_id, ?kind, ?equipment_id, "оборудование сценарной модификации DaKong не найдено");
             self.players.insert(player_id, player);
-            return report;
+            return;
         }
         if player.check_item_in_packet(cost_base_index) == 0 {
-            report.outcome = EquipmentDaKongScriptModifyOutcome::MissingCost;
             let text = self.get_string_by_id(b"GS1060");
-            report.notification_delivery = Some(
-                colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
-                    .send_to_player(self.net_server(), player_id),
-            );
+            let notification_delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                .send_to_player(self.net_server(), player_id);
+            tracing::trace!(player_id, ?kind, ?equipment_id, cost_base_index, notification_delivery, "материал сценарной модификации DaKong не найден");
             self.players.insert(player_id, player);
-            return report;
+            return;
         }
 
         let equipment = player
@@ -20074,8 +20022,8 @@ impl CGame {
             .into_iter()
             .next()
         {
-            report.consumption_deliveries = self.send_player_packet_consumption(&consumption);
-            report.consumption = Some(consumption);
+            let consumption_deliveries = self.send_player_packet_consumption(&consumption);
+            tracing::trace!(player_id, ?kind, ?equipment_id, ?consumption_deliveries, "израсходован материал сценарной модификации DaKong");
         }
         let equipment = player
             .get_goods_by_id(equipment_id)
@@ -20085,37 +20033,31 @@ impl CGame {
             goods: equipment.identity(),
             old_client_payload: context.encode_goods_for_old_client(equipment),
         };
-        report.client_update_delivery = Some(self.send_equipment_da_kong_update(&update));
-        report.client_update = Some(update);
+        let client_update_delivery = self.send_equipment_da_kong_update(&update);
         let text = self.get_string_by_id(b"GS1059");
-        report.notification_delivery = Some(
-            colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
-                .send_to_player(self.net_server(), player_id),
-        );
-        report.outcome = EquipmentDaKongScriptModifyOutcome::Completed;
+        let notification_delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+            .send_to_player(self.net_server(), player_id);
+        tracing::trace!(player_id, ?kind, ?equipment_id, client_update_delivery, notification_delivery, "сценарная модификация DaKong завершена");
         self.players.insert(player_id, player);
-        report
     }
 
     fn reflush_equipment_da_kong_external_property_inner<Context: EquipmentDaKongContext>(
         &mut self,
         player: &mut CPlayer,
         cost_original_name: &[u8],
-        mut report: EquipmentDaKongExternalRefreshReport,
         context: &mut Context,
-    ) -> EquipmentDaKongExternalRefreshReport {
+    ) {
         use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
             GAP_DAKONG_1, GAP_DAKONG_EXTERN_1, GAP_DAKONG_EXTERN_2, GAP_DAKONG_EXTERN_3,
         };
 
         let Some(equipment_id) = player.enhancement_selected_goods_id() else {
-            report.outcome = EquipmentDaKongExternalRefreshOutcome::MissingSelection;
-            return report;
+            tracing::trace!(player_id = player.player_id(), "оборудование обновления внешнего свойства DaKong не выбрано");
+            return;
         };
-        report.equipment_id = Some(equipment_id);
         let Some(equipment) = player.get_goods_by_id(equipment_id) else {
-            report.outcome = EquipmentDaKongExternalRefreshOutcome::MissingEquipment;
-            return report;
+            tracing::trace!(player_id = player.player_id(), ?equipment_id, "оборудование обновления внешнего свойства DaKong не найдено");
+            return;
         };
         let old_seven = EquipmentDaKongGemSnapshot::from_catalog(
             equipment.addon_property_value(&self.goods_factory, GAP_DAKONG_1 + 6, 2) as u32,
@@ -20185,19 +20127,16 @@ impl CGame {
                             &self.goods_factory,
                         ),
                     };
-                    report
-                        .log_deliveries
-                        .extend(self.send_equipment_da_kong_log(player, &log));
-                    report.log = Some(log);
+                    let log_deliveries = self.send_equipment_da_kong_log(player, &log);
+                    tracing::trace!(player_id = player.player_id(), ?equipment_id, ?log_deliveries, "отправлен журнал обновления внешнего свойства DaKong");
                 }
                 if let Some(consumption) = player
                     .remove_item_in_packet(cost_base_index, 1)
                     .into_iter()
                     .next()
                 {
-                    report.consumption_deliveries =
-                        self.send_player_packet_consumption(&consumption);
-                    report.consumption = Some(consumption);
+                    let consumption_deliveries = self.send_player_packet_consumption(&consumption);
+                    tracing::trace!(player_id = player.player_id(), ?equipment_id, ?consumption_deliveries, "израсходован материал обновления внешнего свойства DaKong");
                 }
                 if let (Some(region_id), Ok(tile_x), Ok(tile_y)) = (
                     player.server_region_id(),
@@ -20210,9 +20149,8 @@ impl CGame {
                         tile_x,
                         tile_y,
                     };
-                    report.effect_delivery =
-                        Some(self.send_equipment_da_kong_around_effect(&effect));
-                    report.effect = Some(effect);
+                    let effect_delivery = self.send_equipment_da_kong_around_effect(&effect);
+                    tracing::trace!(player_id = player.player_id(), ?equipment_id, ?effect, effect_delivery, "отправлен эффект обновления внешнего свойства DaKong");
                 }
                 refreshed = true;
             }
@@ -20236,62 +20174,45 @@ impl CGame {
             goods: equipment.identity(),
             old_client_payload: context.encode_goods_for_old_client(equipment),
         };
-        report.client_update_deliveries = vec![self.send_equipment_da_kong_update(&update)];
-        report.client_update = Some(update);
-        report.outcome = if refreshed {
-            EquipmentDaKongExternalRefreshOutcome::Refreshed
-        } else {
-            EquipmentDaKongExternalRefreshOutcome::UpdatedWithoutRefresh
-        };
-        report
+        let client_update_delivery = self.send_equipment_da_kong_update(&update);
+        tracing::trace!(player_id = player.player_id(), ?equipment_id, refreshed, client_update_delivery, "обновление внешнего свойства DaKong завершено");
     }
 
     fn process_equipment_da_kong_inner<Context: ScriptFunctionRuntime>(
         &mut self,
         player: &mut CPlayer,
         plug: &mut CEquipmentDaKong,
-        mut report: EquipmentDaKongReport,
+        session_id: i32,
+        operation: EquipmentDaKongOperation,
         context: &mut Context,
-    ) -> EquipmentDaKongReport {
+    ) {
         if player.server_region_id().is_none() {
-            report.outcome = EquipmentDaKongOutcome::MissingRegion;
-            if matches!(
-                report.operation,
-                EquipmentDaKongOperation::EnchaseGem { .. }
-            ) {
-                report.return_value = 1;
-            }
-            return report;
+            tracing::trace!(player_id = player.player_id(), session_id, ?operation, "регион игрока DaKong не найден");
+            return;
         }
-        match report.operation {
+        match operation {
             EquipmentDaKongOperation::DaKong { color_index } => {
                 self.equipment_da_kong_create_socket(
                     player,
                     plug,
                     color_index,
-                    &mut report,
                     context,
                 );
             }
             EquipmentDaKongOperation::ChangeRoleColor { socket } => {
-                self.equipment_da_kong_change_color(player, plug, socket, &mut report, context);
+                self.equipment_da_kong_change_color(player, plug, socket, context);
             }
             EquipmentDaKongOperation::QueryResult => {
-                if self.equipment_da_kong_publish_preview(player, plug, &mut report, context) {
-                    report.return_value = 1;
-                    report.outcome = EquipmentDaKongOutcome::Completed;
-                } else {
-                    report.outcome = EquipmentDaKongOutcome::PreviewRejected;
-                }
+                let published = self.equipment_da_kong_publish_preview(player, plug, context);
+                tracing::trace!(player_id = player.player_id(), session_id, published, "обработан запрос результата DaKong");
             }
             EquipmentDaKongOperation::EnchaseGem { parameter } => {
-                self.equipment_da_kong_enchase(player, plug, parameter, &mut report, context);
+                self.equipment_da_kong_enchase(player, plug, parameter, context);
             }
             EquipmentDaKongOperation::DestroyGem { socket } => {
-                self.equipment_da_kong_destroy_gem(player, plug, socket, &mut report, context);
+                self.equipment_da_kong_destroy_gem(player, plug, socket, context);
             }
         }
-        report
     }
 
     fn equipment_da_kong_equipment_id(plug: &CEquipmentDaKong) -> Option<CGuid> {
@@ -20325,20 +20246,17 @@ impl CGame {
 
     fn equipment_da_kong_notify(
         &self,
-        report: &mut EquipmentDaKongReport,
         player_id: i32,
         string_id: &'static str,
     ) {
         let text = self.get_string_by_id(string_id.as_bytes());
-        report.notifications.push(
-            colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
-                .send_to_player(self.net_server(), player_id),
-        );
+        let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+            .send_to_player(self.net_server(), player_id);
+        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление DaKong");
     }
 
     fn equipment_da_kong_publish_update<Context: EquipmentDaKongContext>(
         &self,
-        report: &mut EquipmentDaKongReport,
         context: &mut Context,
         player_id: i32,
         goods: &CGoods,
@@ -20348,34 +20266,29 @@ impl CGame {
             goods: goods.identity(),
             old_client_payload: context.encode_goods_for_old_client(goods),
         };
-        let deliveries = vec![self.send_equipment_da_kong_update(&update)];
-        report.client_updates.push(update);
-        report.client_update_deliveries.push(deliveries);
+        let delivery = self.send_equipment_da_kong_update(&update);
+        tracing::trace!(player_id, goods = ?update.goods, delivery, "отправлено обновление оборудования DaKong");
     }
 
     fn equipment_da_kong_consume_packet(
         &self,
-        report: &mut EquipmentDaKongReport,
         player: &mut CPlayer,
         base_index: u32,
     ) {
         for consumption in player.remove_item_in_packet(base_index, 1) {
             let deliveries = self.send_player_packet_consumption(&consumption);
-            report.packet_consumptions.push(consumption);
-            report.packet_consumption_deliveries.push(deliveries);
+            tracing::trace!(player_id = player.player_id(), goods = ?consumption.goods, ?deliveries, "израсходован материал DaKong");
         }
     }
 
     fn equipment_da_kong_log(
         &self,
-        report: &mut EquipmentDaKongReport,
         player: &CPlayer,
         reason: u8,
         cost_base_index: u32,
         equipment: &CGoods,
     ) {
         self.equipment_da_kong_log_snapshot(
-            report,
             player,
             reason,
             cost_base_index,
@@ -20385,7 +20298,6 @@ impl CGame {
 
     fn equipment_da_kong_log_snapshot(
         &self,
-        report: &mut EquipmentDaKongReport,
         player: &CPlayer,
         reason: u8,
         cost_base_index: u32,
@@ -20408,10 +20320,8 @@ impl CGame {
             cost_name: cost.name().to_vec(),
             equipment,
         };
-        report
-            .world_deliveries
-            .extend(self.send_equipment_da_kong_log(player, &log));
-        report.logs.push(log);
+        let deliveries = self.send_equipment_da_kong_log(player, &log);
+        tracing::trace!(player_id = player.player_id(), reason, ?deliveries, "отправлен журнал DaKong в World");
     }
 
     fn send_equipment_da_kong_update(&self, update: &EquipmentDaKongClientUpdate) -> i32 {
@@ -21386,7 +21296,6 @@ impl CGame {
 
     fn equipment_da_kong_run_script<Context: ScriptFunctionRuntime>(
         &mut self,
-        report: &mut EquipmentDaKongReport,
         context: &mut Context,
         player: &mut CPlayer,
         script: &'static [u8],
@@ -21416,7 +21325,7 @@ impl CGame {
             .players
             .remove(&player_id)
             .expect("синхронный DaKong script сохраняет canonical player owner");
-        report.scripts.push(script.to_vec());
+        tracing::trace!(player_id, script = ?script, "выполнен сценарий DaKong");
     }
 
     fn equipment_da_kong_create_socket<Context: ScriptFunctionRuntime>(
@@ -21424,7 +21333,6 @@ impl CGame {
         player: &mut CPlayer,
         plug: &CEquipmentDaKong,
         color_index: i32,
-        report: &mut EquipmentDaKongReport,
         context: &mut Context,
     ) {
         const STONES: [&[u8]; 7] = [
@@ -21432,16 +21340,16 @@ impl CGame {
         ];
         let player_id = player.player_id();
         let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
-            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+            tracing::trace!(player_id, "оборудование для создания сокета DaKong не выбрано");
             return;
         };
         let Some(equipment) = player.get_goods_by_id(equipment_id) else {
-            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+            tracing::trace!(player_id, ?equipment_id, "оборудование для создания сокета DaKong не найдено");
             return;
         };
         let socket_count = equipment.da_kong_count(&self.goods_factory) as usize;
         if socket_count > 6 {
-            report.outcome = EquipmentDaKongOutcome::ConditionRejected;
+            tracing::trace!(player_id, ?equipment_id, socket_count, "число сокетов DaKong достигло предела");
             return;
         }
         let stone_index = self
@@ -21455,8 +21363,8 @@ impl CGame {
                 1,
             ) != 1
         {
-            self.equipment_da_kong_notify(report, player_id, "GS1166");
-            report.outcome = EquipmentDaKongOutcome::MissingResource;
+            self.equipment_da_kong_notify(player_id, "GS1166");
+            tracing::trace!(player_id, ?equipment_id, stone_index, socket_count, "материал создания сокета DaKong отсутствует");
             return;
         }
         let succeeded = {
@@ -21492,14 +21400,12 @@ impl CGame {
             };
             if new_count == 6 {
                 self.equipment_da_kong_run_script(
-                    report,
                     context,
                     player,
                     b"scripts/goods/hole06_gonggao.script",
                 );
             } else if new_count == 7 {
                 self.equipment_da_kong_run_script(
-                    report,
                     context,
                     player,
                     b"scripts/goods/hole07_gonggao.script",
@@ -21527,25 +21433,23 @@ impl CGame {
                 let _ = equipment.set_addon_property_value_first_core(property, 1, external_type);
                 let _ = equipment.set_addon_property_modifier_core(property, 2, external_value);
             }
-            self.equipment_da_kong_notify(report, player_id, "GS1164");
+            self.equipment_da_kong_notify(player_id, "GS1164");
         } else {
-            self.equipment_da_kong_notify(report, player_id, "GS1165");
+            self.equipment_da_kong_notify(player_id, "GS1165");
         }
         let equipment = player
             .get_goods_by_id(equipment_id)
             .expect("DaKong equipment сохраняется до audit");
-        self.equipment_da_kong_log(report, player, 1, stone_index, equipment);
-        self.equipment_da_kong_consume_packet(report, player, stone_index);
-        let _ = self.equipment_da_kong_publish_preview(player, plug, report, context);
-        report.return_value = 1;
-        report.outcome = EquipmentDaKongOutcome::Completed;
+        self.equipment_da_kong_log(player, 1, stone_index, equipment);
+        self.equipment_da_kong_consume_packet(player, stone_index);
+        let preview_published = self.equipment_da_kong_publish_preview(player, plug, context);
+        tracing::trace!(player_id, ?equipment_id, socket_count, succeeded, preview_published, "создание сокета DaKong завершено");
     }
 
     fn equipment_da_kong_publish_preview<Context: EquipmentDaKongContext>(
         &self,
         player: &CPlayer,
         plug: &CEquipmentDaKong,
-        report: &mut EquipmentDaKongReport,
         context: &mut Context,
     ) -> bool {
         let goods = Self::equipment_da_kong_equipment_id(plug)
@@ -21556,7 +21460,7 @@ impl CGame {
         };
         let gems = self.equipment_da_kong_gems(player, plug);
         let _ = deal_enchase_gems(&mut preview, &gems, &self.goods_factory, false);
-        self.equipment_da_kong_publish_update(report, context, player.player_id(), &preview);
+        self.equipment_da_kong_publish_update(context, player.player_id(), &preview);
         true
     }
 
@@ -21565,51 +21469,47 @@ impl CGame {
         player: &mut CPlayer,
         plug: &CEquipmentDaKong,
         socket: i32,
-        report: &mut EquipmentDaKongReport,
         context: &mut Context,
     ) {
         if !(1..=7).contains(&socket) {
-            report.outcome = EquipmentDaKongOutcome::InvalidParameter;
+            tracing::trace!(player_id = player.player_id(), socket, "неверный сокет смены цвета DaKong");
             return;
         }
         let player_id = player.player_id();
         let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
-            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+            tracing::trace!(player_id, socket, "оборудование смены цвета DaKong не выбрано");
             return;
         };
         let property =
             crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_DAKONG_1 + socket - 1;
         let Some(equipment) = player.get_goods_by_id(equipment_id) else {
-            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+            tracing::trace!(player_id, ?equipment_id, socket, "оборудование смены цвета DaKong не найдено");
             return;
         };
         let color = equipment.addon_property_value(&self.goods_factory, property, 1);
         let gem_index = equipment.addon_property_value(&self.goods_factory, property, 2);
         if !(2..=8).contains(&color) || gem_index != 0 {
-            self.equipment_da_kong_notify(report, player_id, "GS1170");
-            report.return_value = 1;
-            report.outcome = EquipmentDaKongOutcome::ConditionRejected;
+            self.equipment_da_kong_notify(player_id, "GS1170");
+            tracing::trace!(player_id, ?equipment_id, socket, color, gem_index, "условие смены цвета DaKong отклонено");
             return;
         }
         let stone_index = self
             .goods_factory
             .query_goods_id_by_original_name(Some(b"FZ1049"));
         if player.check_item_in_packet(stone_index) == 0 {
-            self.equipment_da_kong_notify(report, player_id, "GS1171");
-            report.return_value = 1;
-            report.outcome = EquipmentDaKongOutcome::MissingResource;
+            self.equipment_da_kong_notify(player_id, "GS1171");
+            tracing::trace!(player_id, ?equipment_id, socket, stone_index, "материал смены цвета DaKong отсутствует");
             return;
         }
-        self.equipment_da_kong_consume_packet(report, player, stone_index);
+        self.equipment_da_kong_consume_packet(player, stone_index);
         if player
             .get_goods_by_id(equipment_id)
             .is_some_and(|equipment| {
                 equipment.addon_property_value(&self.goods_factory, property, 2) >= 1
             })
         {
-            self.equipment_da_kong_notify(report, player_id, "GS1172");
-            report.return_value = 1;
-            report.outcome = EquipmentDaKongOutcome::ConditionRejected;
+            self.equipment_da_kong_notify(player_id, "GS1172");
+            tracing::trace!(player_id, ?equipment_id, socket, "сокет DaKong уже занят после расхода материала");
             return;
         }
         let mut new_color = {
@@ -21625,19 +21525,17 @@ impl CGame {
             .get_goods_by_id_mut(equipment_id)
             .expect("color equipment проверен до mutation");
         let _ = equipment.set_addon_property_modifier_core(property, 1, new_color.wrapping_add(1));
-        self.equipment_da_kong_notify(report, player_id, "GS1173");
+        self.equipment_da_kong_notify(player_id, "GS1173");
         let equipment = player
             .get_goods_by_id(equipment_id)
             .expect("color equipment сохраняется до audit/update");
-        self.equipment_da_kong_log(report, player, 0, stone_index, equipment);
-        self.equipment_da_kong_publish_update(report, context, player_id, equipment);
-        report.return_value = 1;
-        report.outcome = EquipmentDaKongOutcome::Completed;
+        self.equipment_da_kong_log(player, 0, stone_index, equipment);
+        self.equipment_da_kong_publish_update(context, player_id, equipment);
+        tracing::trace!(player_id, ?equipment_id, socket, new_color, "цвет сокета DaKong изменён");
     }
 
     fn equipment_da_kong_consume_shadow_gems(
         &self,
-        report: &mut EquipmentDaKongReport,
         player: &mut CPlayer,
         plug: &mut CEquipmentDaKong,
     ) {
@@ -21655,10 +21553,6 @@ impl CGame {
             if goods_id == CGuid::GUID_INVALID {
                 continue;
             }
-            let previous = plug
-                .upgrade_container()
-                .original_container_information(goods_id)
-                .unwrap_or_default();
             let identity = player
                 .get_goods_by_id(goods_id)
                 .map(CGoods::identity)
@@ -21667,29 +21561,18 @@ impl CGame {
                     id: 0,
                     ex_id: goods_id,
                 });
-            let mut external_deliveries = Vec::new();
             if let Some(consumption) = player.remove_packet_goods_by_id(goods_id, 1) {
-                external_deliveries = self.send_player_packet_consumption(&consumption);
-                report.packet_consumptions.push(consumption);
-                report
-                    .packet_consumption_deliveries
-                    .push(external_deliveries.clone());
+                let external_deliveries = self.send_player_packet_consumption(&consumption);
                 let _ = plug
                     .upgrade_container_mut()
                     .on_source_removed(Some(goods_id), 1);
+                tracing::trace!(player_id = player.player_id(), ?cell, ?identity, ?external_deliveries, "израсходован shadow-камень DaKong");
             } else {
                 let _ = plug
                     .upgrade_container_mut()
                     .invalidate_equipment_goods(position);
+                tracing::trace!(player_id = player.player_id(), ?cell, ?identity, "shadow-камень DaKong отсутствует в инвентаре");
             }
-            report.gem_consumptions.push(
-                crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongGemConsumption {
-                    cell,
-                    goods: identity,
-                    previous,
-                    external_deliveries,
-                },
-            );
         }
     }
 
@@ -21698,20 +21581,17 @@ impl CGame {
         player: &mut CPlayer,
         plug: &mut CEquipmentDaKong,
         _parameter: i32,
-        report: &mut EquipmentDaKongReport,
         context: &mut Context,
     ) {
         let player_id = player.player_id();
         let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
-            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
-            report.return_value = 1;
+            tracing::trace!(player_id, "оборудование инкрустации DaKong не выбрано");
             return;
         };
         let gems = self.equipment_da_kong_gems(player, plug);
         let effects = {
             let Some(equipment) = player.get_goods_by_id_mut(equipment_id) else {
-                report.outcome = EquipmentDaKongOutcome::MissingEquipment;
-                report.return_value = 1;
+                tracing::trace!(player_id, ?equipment_id, "оборудование инкрустации DaKong не найдено");
                 return;
             };
             deal_enchase_gems(equipment, &gems, &self.goods_factory, true)
@@ -21723,7 +21603,7 @@ impl CGame {
         for event in effects.events {
             match event {
                 EquipmentDaKongEnchaseEvent::Notification(string_id) => {
-                    self.equipment_da_kong_notify(report, player_id, string_id);
+                    self.equipment_da_kong_notify(player_id, string_id);
                 }
                 EquipmentDaKongEnchaseEvent::GemApplied {
                     gem,
@@ -21732,7 +21612,6 @@ impl CGame {
                 } => {
                     if audit {
                         self.equipment_da_kong_log_snapshot(
-                            report,
                             player,
                             2,
                             gem.base_index,
@@ -21741,20 +21620,19 @@ impl CGame {
                     }
                 }
                 EquipmentDaKongEnchaseEvent::Script(script) => {
-                    self.equipment_da_kong_run_script(report, context, player, script);
+                    self.equipment_da_kong_run_script(context, player, script);
                 }
             }
         }
         if changed {
-            self.equipment_da_kong_notify(report, player_id, "GS1167");
+            self.equipment_da_kong_notify(player_id, "GS1167");
         }
-        self.equipment_da_kong_consume_shadow_gems(report, player, plug);
+        self.equipment_da_kong_consume_shadow_gems(player, plug);
         let equipment = player
             .get_goods_by_id(equipment_id)
             .expect("enchase equipment сохраняется после gem consumption");
-        self.equipment_da_kong_publish_update(report, context, player_id, equipment);
-        report.return_value = 1;
-        report.outcome = EquipmentDaKongOutcome::Completed;
+        self.equipment_da_kong_publish_update(context, player_id, equipment);
+        tracing::trace!(player_id, ?equipment_id, changed, "инкрустация DaKong завершена");
     }
 
     fn equipment_da_kong_destroy_gem<Context: EquipmentDaKongContext>(
@@ -21762,17 +21640,16 @@ impl CGame {
         player: &mut CPlayer,
         plug: &CEquipmentDaKong,
         socket: u32,
-        report: &mut EquipmentDaKongReport,
         context: &mut Context,
     ) {
         let player_id = player.player_id();
         let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
-            report.outcome = EquipmentDaKongOutcome::MissingEquipment;
+            tracing::trace!(player_id, socket, "оборудование удаления камня DaKong не выбрано");
             return;
         };
         if player.check_item_in_packet(DA_KONG_USE_SINKER_INDEX) == 0 {
-            self.equipment_da_kong_notify(report, player_id, "GS1174");
-            report.outcome = EquipmentDaKongOutcome::MissingResource;
+            self.equipment_da_kong_notify(player_id, "GS1174");
+            tracing::trace!(player_id, ?equipment_id, socket, "инструмент удаления камня DaKong отсутствует");
             return;
         }
         let gems = self.equipment_da_kong_gems(player, plug);
@@ -21792,7 +21669,7 @@ impl CGame {
                 })
                 .unwrap_or_default();
             if !(2..=8).contains(&socket_color) || gem_index == 0 {
-                self.equipment_da_kong_notify(report, player_id, "GS1175");
+                self.equipment_da_kong_notify(player_id, "GS1175");
             } else {
                 let slot_seven = gems[6].or_else(|| {
                     player.get_goods_by_id(equipment_id).and_then(|equipment| {
@@ -21877,7 +21754,7 @@ impl CGame {
             }
         }
         if removed {
-            self.equipment_da_kong_consume_packet(report, player, DA_KONG_USE_SINKER_INDEX);
+            self.equipment_da_kong_consume_packet(player, DA_KONG_USE_SINKER_INDEX);
             let equipment = player
                 .get_goods_by_id_mut(equipment_id)
                 .expect("destroy equipment сохраняется до extern restore");
@@ -21890,16 +21767,15 @@ impl CGame {
             let equipment = player
                 .get_goods_by_id(equipment_id)
                 .expect("destroy equipment сохраняется до audit");
-            self.equipment_da_kong_log(report, player, 3, DA_KONG_USE_SINKER_INDEX, equipment);
+            self.equipment_da_kong_log(player, 3, DA_KONG_USE_SINKER_INDEX, equipment);
         }
         let mut preview = player
             .get_goods_by_id(equipment_id)
             .expect("destroy equipment сохраняется до preview")
             .clone();
         let _ = deal_enchase_gems(&mut preview, &gems, &self.goods_factory, false);
-        self.equipment_da_kong_publish_update(report, context, player_id, &preview);
-        report.return_value = 1;
-        report.outcome = EquipmentDaKongOutcome::Completed;
+        self.equipment_da_kong_publish_update(context, player_id, &preview);
+        tracing::trace!(player_id, ?equipment_id, socket, removed, "удаление камня DaKong завершено");
     }
 
     pub(crate) const fn words_filter(&self) -> &CWordsFilter {

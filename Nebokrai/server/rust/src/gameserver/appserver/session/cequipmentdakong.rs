@@ -11,22 +11,18 @@
 //! обновление предмета. Уведомления, расход пакета, `0xBF918`, `0xBF50A` и
 //! World `0x60212` исполняются `CGame`; сценарии объявлений проходят через
 //! живой диспетчер `CScript::RunFunction` с временным возвратом игрока в
-//! каноническую карту игры в точной позиции вызова.
+//! каноническую карту игры в точной позиции вызова. Результаты уже выполненных
+//! отправок публикуются через `tracing`, не накапливаясь в отчётах.
 
-use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentdakongcontainer::{
-    CEquipmentDaKongContainer, DaKongCell,
+    CEquipmentDaKongContainer,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BAOSHI_COLOR, GAP_DAKONG_1, GAP_DAKONG_EXTERN_1, GAP_DAKONG_EXTERN_2, GAP_DAKONG_EXTERN_3,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::gameserver::appserver::player::CiQingPacketConsumption;
-use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-
-use super::csessionfactory::{PlugExitReport, SessionEndReport};
 
 pub(crate) const DA_KONG_USE_SINKER_INDEX: u32 = 0x120f_daa7;
 
@@ -37,19 +33,6 @@ pub(crate) enum EquipmentDaKongOperation {
     ChangeRoleColor { socket: i32 },
     QueryResult,
     DestroyGem { socket: u32 },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EquipmentDaKongOutcome {
-    MissingSessionOrPlug,
-    PlugIdMismatch,
-    MissingRegion,
-    MissingEquipment,
-    InvalidParameter,
-    MissingResource,
-    ConditionRejected,
-    PreviewRejected,
-    Completed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -105,14 +88,6 @@ pub(crate) struct EquipmentDaKongAuditLog {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentDaKongGemConsumption {
-    pub(crate) cell: DaKongCell,
-    pub(crate) goods: ShapeIdentity,
-    pub(crate) previous: PreviousContainer,
-    pub(crate) external_deliveries: Vec<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct EquipmentDaKongClientUpdate {
     pub(crate) player_id: i32,
     pub(crate) goods: ShapeIdentity,
@@ -128,106 +103,9 @@ pub(crate) struct EquipmentDaKongAroundEffect {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EquipmentDaKongExternalRefreshOutcome {
-    FeatureDisabled,
-    EmptyCostName,
-    MissingSelection,
-    MissingEquipment,
-    UpdatedWithoutRefresh,
-    Refreshed,
-}
-
-#[must_use = "external refresh report хранит mutation, расход, world log, effect и client update"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentDaKongExternalRefreshReport {
-    pub(crate) player_id: i32,
-    pub(crate) cost_original_name: Vec<u8>,
-    pub(crate) equipment_id: Option<crate::public::guid::CGuid>,
-    pub(crate) outcome: EquipmentDaKongExternalRefreshOutcome,
-    pub(crate) consumption: Option<CiQingPacketConsumption>,
-    pub(crate) consumption_deliveries: Vec<i32>,
-    pub(crate) log: Option<EquipmentDaKongAuditLog>,
-    pub(crate) log_deliveries: Vec<i32>,
-    pub(crate) effect: Option<EquipmentDaKongAroundEffect>,
-    pub(crate) effect_delivery: Option<i32>,
-    pub(crate) client_update: Option<EquipmentDaKongClientUpdate>,
-    pub(crate) client_update_deliveries: Vec<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EquipmentDaKongScriptModifyKind {
     ReapplyGemProperties,
     ClampDeluxProperties,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EquipmentDaKongScriptModifyOutcome {
-    FeatureDisabled,
-    MissingPlayer,
-    MissingCostDefinition,
-    MissingSelection,
-    MissingEquipment,
-    MissingCost,
-    Completed,
-}
-
-/// Итог сценариев `9352/9353`, сохраняющий мутацию выбранного предмета,
-/// расход `GMXF18`, обновление `0xBF918` и уведомление игрока.
-#[must_use = "отчёт сохраняет расход материала и весь клиентский результат"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentDaKongScriptModifyReport {
-    pub(crate) player_id: i32,
-    pub(crate) kind: EquipmentDaKongScriptModifyKind,
-    pub(crate) outcome: EquipmentDaKongScriptModifyOutcome,
-    pub(crate) equipment_id: Option<crate::public::guid::CGuid>,
-    pub(crate) consumption: Option<CiQingPacketConsumption>,
-    pub(crate) consumption_deliveries: Vec<i32>,
-    pub(crate) client_update: Option<EquipmentDaKongClientUpdate>,
-    pub(crate) client_update_delivery: Option<i32>,
-    pub(crate) notification_delivery: Option<i32>,
-}
-
-#[must_use = "DaKong report хранит validation, addon mutations, расход и terminal wire"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentDaKongReport {
-    pub(crate) session_id: i32,
-    pub(crate) requested_plug_id: i32,
-    pub(crate) actual_plug_id: Option<i32>,
-    pub(crate) operation: EquipmentDaKongOperation,
-    pub(crate) outcome: EquipmentDaKongOutcome,
-    pub(crate) return_value: i32,
-    pub(crate) notifications: Vec<i32>,
-    pub(crate) packet_consumptions: Vec<CiQingPacketConsumption>,
-    pub(crate) packet_consumption_deliveries: Vec<Vec<i32>>,
-    pub(crate) gem_consumptions: Vec<EquipmentDaKongGemConsumption>,
-    pub(crate) logs: Vec<EquipmentDaKongAuditLog>,
-    pub(crate) world_deliveries: Vec<i32>,
-    pub(crate) client_updates: Vec<EquipmentDaKongClientUpdate>,
-    pub(crate) client_update_deliveries: Vec<Vec<i32>>,
-    pub(crate) scripts: Vec<Vec<u8>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EquipmentDaKongCloseOutcome {
-    MissingSessionOrPlug,
-    PlugIdMismatch,
-    ClosedWithoutEquipment,
-    ClosedAndUpdated,
-}
-
-#[must_use = "close report сохраняет last-equipment lookup, lifecycle ordering и terminal update"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentDaKongCloseReport {
-    pub(crate) session_id: i32,
-    pub(crate) requested_plug_id: i32,
-    pub(crate) actual_plug_id: Option<i32>,
-    pub(crate) last_equipment_id: Option<crate::public::guid::CGuid>,
-    pub(crate) outcome: EquipmentDaKongCloseOutcome,
-    pub(crate) session_end: Option<SessionEndReport>,
-    pub(crate) previous_progress: Option<PlayerProgress>,
-    pub(crate) plug_exit: Option<PlugExitReport>,
-    pub(crate) client_update: Option<EquipmentDaKongClientUpdate>,
-    pub(crate) client_update_delivery: Option<i32>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
