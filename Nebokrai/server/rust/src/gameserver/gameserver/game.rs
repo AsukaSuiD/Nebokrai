@@ -714,9 +714,7 @@ use crate::gameserver::appserver::serverwarregion::{
 };
 use crate::gameserver::appserver::session::cequipmentcompose::{
     CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
-    EquipmentComposeAuditLog, EquipmentComposeOutcome, EquipmentComposeReport,
-    EquipmentComposeSourceConsumption, EquipmentComposeSourceRemoval,
-    EquipmentComposeSourceSnapshot,
+    EquipmentComposeAuditLog, EquipmentComposeSourceSnapshot,
 };
 use crate::gameserver::appserver::session::cequipmentdakong::{
     CEquipmentDaKong, DA_KONG_USE_SINKER_INDEX, EquipmentDaKongAroundEffect,
@@ -19404,113 +19402,89 @@ impl CGame {
         session_id: i32,
         requested_plug_id: i32,
         context: &mut Context,
-    ) -> EquipmentComposeReport {
-        let mut report = EquipmentComposeReport {
-            session_id,
-            requested_plug_id,
-            actual_plug_id: None,
-            outcome: EquipmentComposeOutcome::MissingSessionOrPlug,
-            result_index: 0,
-            required_level: 0,
-            notifications: Vec::new(),
-            source_consumptions: Vec::new(),
-            stone_consumptions: Vec::new(),
-            stone_deliveries: Vec::new(),
-            packet_additions: Vec::new(),
-            packet_addition_deliveries: Vec::new(),
-            rejected_result: None,
-            result_shadow: None,
-            script_dispatched: false,
-            audit_logs: Vec::new(),
-            world_deliveries: Vec::new(),
-        };
+    ) {
         if self.session_factory.query_session(session_id).is_none() {
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, "сессия соединения оборудования не найдена");
+            return;
         }
-        report.actual_plug_id = self
+        let actual_plug_id = self
             .session_factory
             .query_session_plug_by_owner(session_id, 400, player_id)
             .map(|plug| plug.id());
-        let Some(actual_plug_id) = report.actual_plug_id else {
-            return report;
+        let Some(actual_plug_id) = actual_plug_id else {
+            tracing::trace!(player_id, session_id, requested_plug_id, "plug соединения оборудования не найден");
+            return;
         };
         if actual_plug_id != requested_plug_id {
-            report.outcome = EquipmentComposeOutcome::PlugIdMismatch;
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, actual_plug_id, "plug соединения оборудования не совпал");
+            return;
         }
         let Some(mut plug) = self
             .session_factory
             .take_equipment_compose_plug(actual_plug_id)
         else {
-            return report;
+            tracing::trace!(player_id, session_id, actual_plug_id, "владелец plug соединения оборудования не найден");
+            return;
         };
-        report = self.compose_equipment_inner(player_id, &mut plug, report, context);
+        self.compose_equipment_inner(player_id, session_id, &mut plug, context);
         self.session_factory
             .register_equipment_compose_plug(actual_plug_id, plug);
-        report
     }
 
     fn compose_equipment_inner<Context: EquipmentComposeContext + ScriptFunctionRuntime>(
         &mut self,
         player_id: i32,
+        session_id: i32,
         plug: &mut CEquipmentCompose,
-        mut report: EquipmentComposeReport,
         context: &mut Context,
-    ) -> EquipmentComposeReport {
+    ) {
         let Some(player) = self.find_player(player_id) else {
-            return report;
+            tracing::trace!(player_id, session_id, "игрок соединения оборудования не найден");
+            return;
         };
         if player.server_region_id().is_none() {
-            report.outcome = EquipmentComposeOutcome::MissingRegion;
-            return report;
+            tracing::trace!(player_id, session_id, "регион игрока соединения оборудования не найден");
+            return;
         }
         let Some(base_id) = plug
             .compose_container()
             .goods_id(ComposeEquipmentCell::BaseEquipment)
         else {
-            report.outcome = EquipmentComposeOutcome::MissingBase;
-            report
-                .notifications
-                .push(self.send_equipment_compose_notification(player_id, "GS1156", &[]));
-            return report;
+            self.send_equipment_compose_notification(player_id, "GS1156", &[]);
+            tracing::trace!(player_id, session_id, "основное оборудование для соединения не выбрано");
+            return;
         };
         let Some(sub_id) = plug
             .compose_container()
             .goods_id(ComposeEquipmentCell::SubEquipment)
         else {
-            report.outcome = EquipmentComposeOutcome::MissingSub;
-            report
-                .notifications
-                .push(self.send_equipment_compose_notification(player_id, "GS1157", &[]));
-            return report;
+            self.send_equipment_compose_notification(player_id, "GS1157", &[]);
+            tracing::trace!(player_id, session_id, "дополнительное оборудование для соединения не выбрано");
+            return;
         };
         let Some(base_source) = player
             .get_goods_by_id(base_id)
             .map(|goods| EquipmentComposeSourceSnapshot::capture(goods, &self.goods_factory))
         else {
-            report.outcome = EquipmentComposeOutcome::MissingBase;
-            return report;
+            tracing::trace!(player_id, session_id, ?base_id, "основное оборудование для соединения не найдено");
+            return;
         };
         let Some(sub_source) = player
             .get_goods_by_id(sub_id)
             .map(|goods| EquipmentComposeSourceSnapshot::capture(goods, &self.goods_factory))
         else {
-            report.outcome = EquipmentComposeOutcome::MissingSub;
-            return report;
+            tracing::trace!(player_id, session_id, ?sub_id, "дополнительное оборудование для соединения не найдено");
+            return;
         };
         if player.check_item_in_packet(COMPOSE_STONE_GOODS_INDEX) == 0 {
-            report.outcome = EquipmentComposeOutcome::MissingStone;
-            report
-                .notifications
-                .push(self.send_equipment_compose_notification(player_id, "GS1158", &[]));
-            return report;
+            self.send_equipment_compose_notification(player_id, "GS1158", &[]);
+            tracing::trace!(player_id, session_id, "камень соединения не найден");
+            return;
         }
         if base_source.base_index == 0 || base_source.base_index != sub_source.base_index {
-            report.outcome = EquipmentComposeOutcome::DifferentEquipment;
-            report
-                .notifications
-                .push(self.send_equipment_compose_notification(player_id, "GS1159", &[]));
-            return report;
+            self.send_equipment_compose_notification(player_id, "GS1159", &[]);
+            tracing::trace!(player_id, session_id, base_index = base_source.base_index, sub_index = sub_source.base_index, "оборудование для соединения различается");
+            return;
         }
         let first = self
             .equipment_compose_list
@@ -19523,42 +19497,25 @@ impl CGame {
         } else {
             (first, 1, 15)
         };
-        report.result_index = result_index;
-        report.required_level = required_level;
         if result_index == 0 {
-            report.outcome = EquipmentComposeOutcome::MissingRecipe;
-            report
-                .notifications
-                .push(self.send_equipment_compose_notification(player_id, "GS1160", &[]));
-            return report;
+            self.send_equipment_compose_notification(player_id, "GS1160", &[]);
+            tracing::trace!(player_id, session_id, base_index = base_source.base_index, "рецепт соединения не найден");
+            return;
         }
         if base_source.weapon_level < required_level || sub_source.weapon_level < required_level {
-            report.outcome = EquipmentComposeOutcome::InsufficientLevel {
-                step,
-                required: required_level,
-            };
-            report
-                .notifications
-                .push(self.send_equipment_compose_notification(
-                    player_id,
-                    "GS1161",
-                    &[step, required_level],
-                ));
-            return report;
+            self.send_equipment_compose_notification(player_id, "GS1161", &[step, required_level]);
+            tracing::trace!(player_id, session_id, step, required_level, base_level = base_source.weapon_level, sub_level = sub_source.weapon_level, "уровень оборудования недостаточен для соединения");
+            return;
         }
         if base_source.anima_bind != 1 || sub_source.anima_bind != 1 {
-            report.outcome = EquipmentComposeOutcome::NotBound;
-            report
-                .notifications
-                .push(self.send_equipment_compose_notification(player_id, "GS1162", &[]));
-            return report;
+            self.send_equipment_compose_notification(player_id, "GS1162", &[]);
+            tracing::trace!(player_id, session_id, "оборудование для соединения не привязано");
+            return;
         }
         if base_source.quality != sub_source.quality {
-            report.outcome = EquipmentComposeOutcome::DifferentQuality;
-            report
-                .notifications
-                .push(self.send_equipment_compose_notification(player_id, "GS1163", &[]));
-            return report;
+            self.send_equipment_compose_notification(player_id, "GS1163", &[]);
+            tracing::trace!(player_id, session_id, base_quality = base_source.quality, sub_quality = sub_source.quality, "качество оборудования для соединения различается");
+            return;
         }
 
         let mut created = {
@@ -19578,8 +19535,8 @@ impl CGame {
             )
         };
         let Some(mut result) = created.pop() else {
-            report.outcome = EquipmentComposeOutcome::FactoryRejected;
-            return report;
+            tracing::trace!(player_id, session_id, result_index, "фабрика отклонила результат соединения");
+            return;
         };
 
         for source in [&base_source, &sub_source] {
@@ -19591,7 +19548,7 @@ impl CGame {
                 price: source.price,
                 name: source.name.clone(),
             };
-            self.record_equipment_compose_log(&mut report, &log);
+            self.record_equipment_compose_log(&log);
         }
         for (cell, source) in [
             (ComposeEquipmentCell::BaseEquipment, base_source.clone()),
@@ -19601,29 +19558,17 @@ impl CGame {
                 .compose_container()
                 .original_container_information(source.identity.ex_id)
                 .unwrap_or_default();
-            let mut consumption = EquipmentComposeSourceConsumption {
-                cell,
-                source,
-                previous,
-                removal: EquipmentComposeSourceRemoval::Missing,
-                external_deliveries: Vec::new(),
-            };
-            let (removal, deliveries) =
-                self.consume_equipment_compose_source(player_id, &consumption, context);
-            consumption.removal = removal;
-            consumption.external_deliveries = deliveries;
-            let removed = match &consumption.removal {
-                EquipmentComposeSourceRemoval::Packet(_) => true,
-                EquipmentComposeSourceRemoval::Equipment(removal) => {
-                    matches!(removal.outcome, EquipmentRemoveOutcome::Removed(_))
-                }
-                EquipmentComposeSourceRemoval::Missing => false,
-            };
+            let removed = self.consume_equipment_compose_source(
+                player_id,
+                &source,
+                &previous,
+                context,
+            );
             if removed {
                 plug.compose_container_mut()
-                    .remove_shadow(consumption.source.identity.ex_id);
+                    .remove_shadow(source.identity.ex_id);
             }
-            report.source_consumptions.push(consumption);
+            tracing::trace!(player_id, session_id, ?cell, goods_id = ?source.identity.ex_id, removed, "обработан источник соединения оборудования");
         }
         let stone_consumptions = self
             .find_player_mut(player_id)
@@ -19631,8 +19576,7 @@ impl CGame {
             .remove_item_in_packet(COMPOSE_STONE_GOODS_INDEX, 1);
         for consumption in stone_consumptions {
             let deliveries = self.send_player_packet_consumption(&consumption);
-            report.stone_consumptions.push(consumption);
-            report.stone_deliveries.push(deliveries);
+            tracing::trace!(player_id, session_id, goods_id = ?consumption.goods.ex_id, ?deliveries, "израсходован камень соединения");
         }
 
         let packet_position = self.find_player(player_id).and_then(|player| {
@@ -19641,9 +19585,8 @@ impl CGame {
                 .find_position_for_goods(&result, &self.goods_factory)
         });
         let Some(packet_position) = packet_position else {
-            report.rejected_result = Some(result.identity());
-            report.outcome = EquipmentComposeOutcome::PacketFullAfterConsumption;
-            return report;
+            tracing::trace!(player_id, session_id, result = ?result.identity(), "результат соединения не помещается в инвентарь после расхода источников");
+            return;
         };
         let result_log = EquipmentComposeAuditLog {
             player_id,
@@ -19653,7 +19596,7 @@ impl CGame {
             price: result.price(),
             name: result.name().to_vec(),
         };
-        self.record_equipment_compose_log(&mut report, &result_log);
+        self.record_equipment_compose_log(&result_log);
         for &(property, value_id, value) in &base_source.transferred_addons {
             let _ = result.set_addon_property_value_first_core(property, value_id, value);
         }
@@ -19716,14 +19659,11 @@ impl CGame {
             )
         };
         if let Some(rejected_result) = rejected_result {
-            report.rejected_result = Some(rejected_result);
-            report.packet_additions.push(addition);
-            report.outcome = EquipmentComposeOutcome::PacketAddRejected;
-            return report;
+            tracing::trace!(player_id, session_id, ?rejected_result, ?addition.outcome, "инвентарь отклонил результат соединения после расхода источников");
+            return;
         }
         let addition_deliveries = self.send_player_packet_addition(&addition);
-        report.packet_additions.push(addition);
-        report.packet_addition_deliveries.push(addition_deliveries);
+        tracing::trace!(player_id, session_id, ?addition_deliveries, "результат соединения опубликован в инвентарь");
 
         if let Some(stored) = self
             .find_player(player_id)
@@ -19735,16 +19675,17 @@ impl CGame {
                 container_extend_id: 1,
                 goods_position: packet_position,
             };
-            report.result_shadow = Some(plug.compose_container_mut().insert_shadow(
+            let result_shadow = plug.compose_container_mut().insert_shadow(
                 ComposeEquipmentCell::ComposeEquipment,
                 stored,
                 previous,
-            ));
+            );
+            tracing::trace!(player_id, session_id, ?result_shadow, "результат соединения помещён в shadow");
         }
         let region_id = self
             .find_player(player_id)
             .and_then(CPlayer::server_region_id);
-        report.script_dispatched = self
+        let script_dispatched = self
             .run_script_file(
                 b"scripts/goods/shenbing_gonggao.script",
                 ScriptExecutionContext {
@@ -19755,8 +19696,7 @@ impl CGame {
                 context,
             )
             .is_some();
-        report.outcome = EquipmentComposeOutcome::Completed;
-        report
+        tracing::trace!(player_id, session_id, result_index, required_level, script_dispatched, "соединение оборудования завершено");
     }
 
     fn send_equipment_compose_notification(
@@ -19764,22 +19704,19 @@ impl CGame {
         player_id: i32,
         string_id: &str,
         values: &[i32],
-    ) -> i32 {
+    ) {
         let template = self.get_string_by_id(string_id.as_bytes());
         let text = if let [first, second] = values {
             format_two_legacy_i32(template, *first, *second, 255)
         } else {
             legacy_c_string_prefix(template).to_vec()
         };
-        colored_player_notice_message(0xffff_ffff, 0, &text)
-            .send_to_player(self.net_server(), player_id)
+        let delivery = colored_player_notice_message(0xffff_ffff, 0, &text)
+            .send_to_player(self.net_server(), player_id);
+        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление соединения оборудования");
     }
 
-    fn record_equipment_compose_log(
-        &self,
-        report: &mut EquipmentComposeReport,
-        log: &EquipmentComposeAuditLog,
-    ) {
+    fn record_equipment_compose_log(&self, log: &EquipmentComposeAuditLog) {
         if !self.log_system.equipment_compose_enabled() {
             return;
         }
@@ -19800,28 +19737,29 @@ impl CGame {
         message.add_ulong(player.shape().get_tile_x().unwrap_or_default() as u32);
         message.add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
         message.add_ulong(player.client_ip());
-        report.world_deliveries.extend(message.send(self, false));
-        report.audit_logs.push(log.clone());
+        let deliveries = message.send(self, false);
+        tracing::trace!(player_id = log.player_id, reason = log.reason, ?deliveries, "отправлен журнал соединения оборудования в World");
     }
 
     fn consume_equipment_compose_source<Context: EquipmentComposeContext>(
         &mut self,
         player_id: i32,
-        consumption: &EquipmentComposeSourceConsumption,
+        source: &EquipmentComposeSourceSnapshot,
+        previous: &PreviousContainer,
         context: &mut Context,
-    ) -> (EquipmentComposeSourceRemoval, Vec<i32>) {
+    ) -> bool {
         let Some(mut player) = self.players.remove(&player_id) else {
-            return (EquipmentComposeSourceRemoval::Missing, Vec::new());
+            return false;
         };
-        let goods_id = consumption.source.identity.ex_id;
-        let mut deliveries = Vec::new();
-        let removal = if player.packet().base().find(goods_id).is_some() {
-            match player.remove_packet_goods_by_id(goods_id, consumption.source.amount) {
+        let goods_id = source.identity.ex_id;
+        let removed = if player.packet().base().find(goods_id).is_some() {
+            match player.remove_packet_goods_by_id(goods_id, source.amount) {
                 Some(packet) => {
-                    deliveries = self.send_player_packet_consumption(&packet);
-                    EquipmentComposeSourceRemoval::Packet(packet)
+                    let deliveries = self.send_player_packet_consumption(&packet);
+                    tracing::trace!(player_id, ?goods_id, ?deliveries, "опубликован расход источника соединения из инвентаря");
+                    true
                 }
-                None => EquipmentComposeSourceRemoval::Missing,
+                None => false,
             }
         } else if let Some(goods) = player.equipment().find(goods_id) {
             let facts = context.enhancement_equipment_remove_facts(
@@ -19841,19 +19779,20 @@ impl CGame {
             drop(recompute);
             self.publish_player_equipment_remove_report(&mut equipment);
             if matches!(equipment.outcome, EquipmentRemoveOutcome::Removed(_)) {
-                deliveries.push(self.send_container_object_delete(
+                let delivery = self.send_container_object_delete(
                     player_id,
-                    &consumption.previous,
-                    consumption.source.identity,
-                    consumption.source.amount,
-                ));
+                    previous,
+                    source.identity,
+                    source.amount,
+                );
+                tracing::trace!(player_id, ?goods_id, delivery, "опубликован расход источника соединения из экипировки");
             }
-            EquipmentComposeSourceRemoval::Equipment(equipment)
+            matches!(equipment.outcome, EquipmentRemoveOutcome::Removed(_))
         } else {
-            EquipmentComposeSourceRemoval::Missing
+            false
         };
         self.players.insert(player_id, player);
-        (removal, deliveries)
+        removed
     }
 
     pub(crate) fn send_player_packet_addition(&self, addition: &CiQingPacketAddition) -> Vec<i32> {

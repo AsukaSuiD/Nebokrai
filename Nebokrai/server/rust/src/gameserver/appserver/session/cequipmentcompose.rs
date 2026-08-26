@@ -9,11 +9,12 @@
 //! ordering и ownership результата принадлежат `CGame`. Notice, source/stone
 //! container wire, packet result и gated World audit также исполняются живым
 //! `CGame`; announcement script проходит через живой `CScript::RunFunction`
-//! dispatcher с player/region context и его runtime side effects.
+//! dispatcher с player/region context и его runtime side effects. Результаты
+//! уже выполненных отправок публикуются через `tracing`, а не возвращаются
+//! диагностическим отчётом.
 
-use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentcomposeshadowcontainer::{
-    CEquipmentComposeShadowContainer, ComposeEquipmentCell, ComposeShadowInserted,
+    CEquipmentComposeShadowContainer,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
@@ -21,9 +22,6 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_EQUIP_ACTIVE, GAP_ITEM_QUALITY, GAP_PARTICULAR_ATTRIBUTE, GAP_WEAPON_LEVEL,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::gameserver::appserver::player::{
-    CiQingPacketAddition, CiQingPacketConsumption, PlayerEquipmentRemoveReport,
-};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 
 pub(crate) const COMPOSE_STONE_GOODS_INDEX: u32 = 0x120f_db24;
@@ -90,22 +88,6 @@ impl EquipmentComposeSourceSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentComposeSourceConsumption {
-    pub(crate) cell: ComposeEquipmentCell,
-    pub(crate) source: EquipmentComposeSourceSnapshot,
-    pub(crate) previous: PreviousContainer,
-    pub(crate) removal: EquipmentComposeSourceRemoval,
-    pub(crate) external_deliveries: Vec<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum EquipmentComposeSourceRemoval {
-    Packet(CiQingPacketConsumption),
-    Equipment(PlayerEquipmentRemoveReport),
-    Missing,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct EquipmentComposeAuditLog {
     pub(crate) player_id: i32,
     pub(crate) reason: u8,
@@ -113,47 +95,6 @@ pub(crate) struct EquipmentComposeAuditLog {
     pub(crate) base_index: u32,
     pub(crate) price: u32,
     pub(crate) name: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EquipmentComposeOutcome {
-    MissingSessionOrPlug,
-    PlugIdMismatch,
-    MissingRegion,
-    MissingBase,
-    MissingSub,
-    MissingStone,
-    DifferentEquipment,
-    MissingRecipe,
-    InsufficientLevel { step: i32, required: i32 },
-    NotBound,
-    DifferentQuality,
-    FactoryRejected,
-    PacketFullAfterConsumption,
-    PacketAddRejected,
-    Completed,
-}
-
-#[must_use = "equipment compose report хранит validation, irreversible consumption и result tail"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentComposeReport {
-    pub(crate) session_id: i32,
-    pub(crate) requested_plug_id: i32,
-    pub(crate) actual_plug_id: Option<i32>,
-    pub(crate) outcome: EquipmentComposeOutcome,
-    pub(crate) result_index: u32,
-    pub(crate) required_level: i32,
-    pub(crate) notifications: Vec<i32>,
-    pub(crate) source_consumptions: Vec<EquipmentComposeSourceConsumption>,
-    pub(crate) stone_consumptions: Vec<CiQingPacketConsumption>,
-    pub(crate) stone_deliveries: Vec<Vec<i32>>,
-    pub(crate) packet_additions: Vec<CiQingPacketAddition>,
-    pub(crate) packet_addition_deliveries: Vec<Vec<i32>>,
-    pub(crate) rejected_result: Option<ShapeIdentity>,
-    pub(crate) result_shadow: Option<ComposeShadowInserted>,
-    pub(crate) script_dispatched: bool,
-    pub(crate) audit_logs: Vec<EquipmentComposeAuditLog>,
-    pub(crate) world_deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
