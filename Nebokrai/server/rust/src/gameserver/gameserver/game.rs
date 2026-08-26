@@ -652,7 +652,7 @@ use crate::gameserver::appserver::player::{
     EnhancementDeselectionReport, EnhancementSelectionBlock, EnhancementSelectionReport,
     GoodsDestroyHandConsumption, GoodsSessionPlayerRelease, HotkeyHandTransferOutcome,
     HotkeyHandTransferReport, PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange,
-    PlayerBankCurrencyAddOutcome, PlayerCombatProperties, PlayerCriminalStateEnd,
+    PlayerBankCurrencyAddOutcome, PlayerCombatProperties,
     PlayerDeathGoodsCandidate, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
     PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
     PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
@@ -1559,40 +1559,6 @@ struct PetMonsterKillingBlow {
     pos_x_bits: u32,
     pos_y_bits: u32,
     property: crate::setup::monsterlist::MonsterProperties,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerMurderReport {
-    pub(crate) victim_id: i32,
-    pub(crate) murderer_id: Option<i32>,
-    pub(crate) kill_count: Option<u32>,
-    pub(crate) pk_disposition: Option<KillPkDisposition>,
-    pub(crate) pk_count: Option<u16>,
-    pub(crate) contribution_updates: Vec<(i32, i32)>,
-    pub(crate) client_deliveries: Vec<i32>,
-    pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
-    pub(crate) jjc: Option<GameJjcMutationReport>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerDeathReport {
-    pub(crate) victim_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) murder: GamePlayerMurderReport,
-    pub(crate) nation: Option<NationPlayerDeathReport>,
-    pub(crate) gods_battle: Option<GodsBattleDeathSzlReport>,
-    pub(crate) security: RegionSecurity,
-    pub(crate) lost_experience: u32,
-    pub(crate) exp_delivery: Option<i32>,
-    pub(crate) drops: Vec<Result<GroundGoodsMoveReport, GroundGoodsMoveBlock>>,
-    pub(crate) drop_disposition: Option<DiedLostGoodsDisposition>,
-    pub(crate) peace: Option<GamePlayerFightStateReport>,
-    pub(crate) quest_script_id: Option<i32>,
-    pub(crate) pet_deliveries: Vec<i32>,
-    pub(crate) attacker_notice_delivery: Option<i32>,
-    pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
-    pub(crate) property_delivery: Option<i32>,
-    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
 }
 
 pub(crate) trait EquipmentComposeContext: GameContainerMessageRuntime {}
@@ -3280,14 +3246,6 @@ pub(crate) struct NationPlayerDeathReport {
     pub(crate) died_state_start_time_ms: Option<u32>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationPlayerDiedStatePublication {
-    pub(crate) player_id: i32,
-    pub(crate) state: bool,
-    pub(crate) self_delivery: i32,
-    pub(crate) around_delivery: Result<i32, ShapeCoordinateBlock>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NationMonsterDeathOutcome {
     KillerMissing,
@@ -3355,20 +3313,6 @@ pub(crate) enum GamePlayerExitReturnPoint {
         destination: (i32, i32),
         random_block: Option<RegionCellAccessBlock>,
     },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerFightStateReport {
-    pub(crate) phase: GamePlayerFightStatePhase,
-    pub(crate) transition: PlayerFightStateTransition,
-    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerCriminalStateReport {
-    pub(crate) phase: GamePlayerFightStatePhase,
-    pub(crate) transition: PlayerCriminalStateEnd,
-    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12829,7 +12773,7 @@ impl CGame {
         region: &CServerRegion,
         player_id: i32,
         state: bool,
-    ) -> Option<NationPlayerDiedStatePublication> {
+    ) -> Option<()> {
         self.find_player_mut(player_id)?
             .set_city_war_died_state(state);
         let mut message = CMessage::new(0xbff2a);
@@ -12841,12 +12785,14 @@ impl CGame {
             .expect("player сохранён между self и synchronous around-send");
         let around_delivery =
             self.send_game_shape_around(region, player.shape(), Some(player_id), &message);
-        Some(NationPlayerDiedStatePublication {
+        tracing::trace!(
             player_id,
             state,
             self_delivery,
-            around_delivery,
-        })
+            ?around_delivery,
+            "опубликовано состояние смерти на войне наций"
+        );
+        Some(())
     }
 
     fn set_player_died_state_time(&mut self, player_id: i32, time_ms: i32) -> Option<i32> {
@@ -12934,7 +12880,7 @@ impl CGame {
     pub(crate) fn publish_nation_died_state_after_relive(
         &mut self,
         player_id: i32,
-    ) -> Option<NationPlayerDiedStatePublication> {
+    ) -> Option<()> {
         let player = self.find_player(player_id)?;
         if player.city_war_died_state_time_ms() <= 0 {
             return None;
@@ -13033,12 +12979,11 @@ impl CGame {
         let owner = self.take_region_owner(region_id)?;
         let state_publication = self.publish_player_died_state(owner.base(), player_id, false);
         self.restore_region_owner(owner);
-        let state_publication = state_publication?;
+        state_publication?;
         tracing::trace!(
             player_id,
             elapsed_ms,
             ?time_delivery,
-            ?state_publication,
             "завершено состояние смерти на войне наций"
         );
         Some(())
@@ -22009,9 +21954,8 @@ impl CGame {
 
         if relive_type == 1 {
             let resident_delivery = self.enter_player_resident_state(player_id);
-            let peace = self.enter_player_peace_state(player_id);
+            let peace_entered = self.enter_player_peace_state(player_id).is_some();
             let answer_delivery = self.send_player_relive_answer(player_id);
-            let peace_delivery = peace.and_then(|report| report.around_delivery);
             let region_id = self
                 .find_player(player_id)
                 .and_then(CPlayer::server_region_id);
@@ -22019,8 +21963,7 @@ impl CGame {
                 .find_player(player_id)
                 .is_some_and(|player| player.city_war_died_state_time_ms() > 0)
             {
-                let died_state_deliveries = self.publish_relive_died_state(region_id, player_id);
-                tracing::trace!(player_id, ?died_state_deliveries, "состояние смерти после воскрешения на месте опубликовано");
+                let _ = self.publish_relive_died_state(region_id, player_id);
             }
             let shape_delivery = region_id
                 .and_then(|region_id| self.take_region_owner(region_id))
@@ -22072,7 +22015,7 @@ impl CGame {
                     0,
                 )
             });
-            tracing::debug!(player_id, relive_type, ?mutation, answer_delivery, ?resident_delivery, ?peace_delivery, ?shape_delivery, ?region_change.kind, ?cannot_move_delivery, "игрок воскрешён на месте");
+            tracing::debug!(player_id, relive_type, ?mutation, answer_delivery, ?resident_delivery, peace_entered, ?shape_delivery, ?region_change.kind, ?cannot_move_delivery, "игрок воскрешён на месте");
             return;
         }
 
@@ -22126,7 +22069,7 @@ impl CGame {
             }
         }
         let resident_delivery = self.enter_player_resident_state(player_id);
-        let peace = self.enter_player_peace_state(player_id);
+        let peace_entered = self.enter_player_peace_state(player_id).is_some();
         let region_change = self.change_player_region(
             player_id,
             return_point.region_id,
@@ -22140,7 +22083,6 @@ impl CGame {
         );
         let changed_region = Self::player_region_change_succeeded(&region_change);
         let answer_delivery = changed_region.then(|| self.send_player_relive_answer(player_id));
-        let peace_delivery = peace.and_then(|report| report.around_delivery);
         let died_state_deliveries = if self
             .find_player(player_id)
             .is_some_and(|player| player.city_war_died_state_time_ms() > 0)
@@ -22149,11 +22091,11 @@ impl CGame {
                 .find_player(player_id)
                 .and_then(CPlayer::server_region_id)
                 .or(Some(return_point.region_id));
-            Some(self.publish_relive_died_state(destination_region_id, player_id))
+            self.publish_relive_died_state(destination_region_id, player_id)
         } else {
             None
         };
-        tracing::debug!(player_id, relive_type, ?mutation, ?return_point, x, y, changed_region, ?answer_delivery, ?resident_delivery, ?peace_delivery, ?died_state_deliveries, ?region_change.kind, "игрок воскрешён в точке возврата");
+        tracing::debug!(player_id, relive_type, ?mutation, ?return_point, x, y, changed_region, ?answer_delivery, ?resident_delivery, peace_entered, died_state_published = died_state_deliveries.is_some(), ?region_change.kind, "игрок воскрешён в точке возврата");
     }
 
     fn send_player_relive_answer(&self, player_id: i32) -> i32 {
@@ -22282,7 +22224,7 @@ impl CGame {
         &mut self,
         phase: GamePlayerFightStatePhase,
         transition: PlayerFightStateTransition,
-    ) -> GamePlayerFightStateReport {
+    ) {
         let around_delivery = transition
             .entered_peace
             .then(|| {
@@ -22292,27 +22234,25 @@ impl CGame {
                 self.send_player_shape_around(transition.player_id, None, &message)
             })
             .flatten();
-        GamePlayerFightStateReport {
-            phase,
-            transition,
-            around_delivery,
-        }
+        tracing::trace!(?phase, ?transition, ?around_delivery, "обновлено боевое состояние игрока");
     }
 
-    /// Exact reached `EnterPeaceState`, shared by relive and the
-    /// `UpdateCurrentState` countdown transition.
-    fn enter_player_peace_state(&mut self, player_id: i32) -> Option<GamePlayerFightStateReport> {
+    /// Достигнутый `EnterPeaceState`, общий для воскрешения и перехода
+    /// счётчика `UpdateCurrentState`.
+    fn enter_player_peace_state(&mut self, player_id: i32) -> Option<()> {
         let transition = self.find_player_mut(player_id)?.enter_peace_state();
-        Some(self.publish_player_fight_state(GamePlayerFightStatePhase::Relive, transition))
+        self.publish_player_fight_state(GamePlayerFightStatePhase::Relive, transition);
+        Some(())
     }
 
     fn update_player_current_state(
         &mut self,
         player_id: i32,
         phase: GamePlayerFightStatePhase,
-    ) -> Option<GamePlayerFightStateReport> {
+    ) -> Option<()> {
         let transition = self.find_player_mut(player_id)?.update_fight_state()?;
-        Some(self.publish_player_fight_state(phase, transition))
+        self.publish_player_fight_state(phase, transition);
+        Some(())
     }
 
     /// Exact criminal half `UpdateCurrentState`, вызываемый следом за combat
@@ -22324,7 +22264,7 @@ impl CGame {
         player_id: i32,
         phase: GamePlayerFightStatePhase,
         runtime: &mut Runtime,
-    ) -> Option<GamePlayerCriminalStateReport> {
+    ) -> Option<()> {
         if !self
             .find_player(player_id)
             .is_some_and(CPlayer::criminal_state_active)
@@ -22340,29 +22280,25 @@ impl CGame {
             pk_count_per_kill,
         )?;
         let around_delivery = self.enter_player_resident_state(player_id);
-        Some(GamePlayerCriminalStateReport {
-            phase,
-            transition,
-            around_delivery,
-        })
+        tracing::trace!(?phase, ?transition, ?around_delivery, "завершено преступное состояние игрока");
+        Some(())
     }
 
     fn publish_relive_died_state(
         &mut self,
         region_id: Option<i32>,
         player_id: i32,
-    ) -> Vec<Result<i32, ShapeCoordinateBlock>> {
-        let Some(player) = self.find_player_mut(player_id) else {
-            return Vec::new();
-        };
+    ) -> Option<()> {
+        let player = self.find_player_mut(player_id)?;
         player.set_city_war_died_state(true);
         let mut message = CMessage::new(0xbff2a);
         message.add_long(player_id);
         message.add_byte(1);
-        let mut deliveries = vec![Ok(message.send_to_player(self.net_server(), player_id))];
+        let self_delivery = message.send_to_player(self.net_server(), player_id);
+        let mut around_delivery = None;
         if let Some(owner) = region_id.and_then(|region_id| self.take_region_owner(region_id)) {
             if let Some(player) = self.find_player(player_id) {
-                deliveries.push(self.send_shape_around_in_region(
+                around_delivery = Some(self.send_shape_around_in_region(
                     owner.base(),
                     player.shape(),
                     None,
@@ -22371,7 +22307,8 @@ impl CGame {
             }
             self.restore_region_owner(owner);
         }
-        deliveries
+        tracing::trace!(player_id, self_delivery, ?around_delivery, "опубликовано состояние смерти после воскрешения");
+        Some(())
     }
 
     pub(crate) fn gods_battle_monster_died(
@@ -35203,7 +35140,24 @@ impl CGame {
         &mut self,
         blow: PlayerKillingBlow,
         runtime: &mut Runtime,
-    ) -> Option<GamePlayerMurderReport> {
+    ) -> Option<()> {
+        let mut client_deliveries = 0usize;
+        let mut world_deliveries = 0usize;
+        let mut contribution_updates = 0usize;
+        macro_rules! record_client_delivery {
+            ($delivery:expr) => {{
+                let delivery = $delivery;
+                client_deliveries = client_deliveries.wrapping_add(1);
+                tracing::trace!(delivery, "отправлено клиентское следствие убийства игрока");
+            }};
+        }
+        macro_rules! record_world_delivery {
+            ($delivery:expr) => {{
+                let delivery = $delivery;
+                world_deliveries = world_deliveries.wrapping_add(1);
+                tracing::trace!(?delivery, "отправлено внешнее следствие убийства игрока");
+            }};
+        }
         let (region_id, victim_country, victim_level, victim_badman, victim_faction) =
             self.find_player(blow.victim_id).and_then(|victim| {
                 Some((
@@ -35228,17 +35182,6 @@ impl CGame {
         };
         let murderer_id =
             self.resolve_death_murderer(region_id, blow.attacker_type, blow.attacker_id);
-        let mut report = GamePlayerMurderReport {
-            victim_id: blow.victim_id,
-            murderer_id,
-            kill_count: None,
-            pk_disposition: None,
-            pk_count: None,
-            contribution_updates: Vec::new(),
-            client_deliveries: Vec::new(),
-            world_deliveries: Vec::new(),
-            jjc: None,
-        };
 
         if blow.attacker_type == MONSTER_TYPE && murderer_id.is_none() {
             let non_tamed_monster = self
@@ -35246,20 +35189,21 @@ impl CGame {
                 .and_then(|owner| owner.base().find_monster_by_id(blow.attacker_id))
                 .is_some_and(|monster| !monster.is_tamed());
             if !non_tamed_monster {
-                return Some(report);
+                tracing::trace!(victim_id = blow.victim_id, "убийство игрока прирученным монстром не меняет вклад");
+                return Some(());
             }
-            report
-                .client_deliveries
-                .extend(self.apply_victim_region_contribution_loss(
-                    blow.victim_id,
-                    region_country,
-                    no_contribute,
-                    runtime,
-                ));
-            return Some(report);
+            let deliveries = self.apply_victim_region_contribution_loss(
+                blow.victim_id,
+                region_country,
+                no_contribute,
+                runtime,
+            );
+            tracing::trace!(victim_id = blow.victim_id, deliveries = ?deliveries, "применена потеря вклада от монстра");
+            return Some(());
         }
         let Some(murderer_id) = murderer_id else {
-            return Some(report);
+            tracing::trace!(victim_id = blow.victim_id, "владелец убийства игрока не определён");
+            return Some(());
         };
         let (murderer_country, murderer_level, murderer_faction, murderer_team, same_gods_faction) =
             self.find_player(murderer_id).map(|murderer| {
@@ -35279,7 +35223,7 @@ impl CGame {
         } else {
             2
         };
-        report.kill_count = self
+        let kill_count = self
             .find_player_mut(murderer_id)
             .map(|murderer| murderer.add_murder_kill_count(increment));
 
@@ -35292,7 +35236,7 @@ impl CGame {
             log.add_long(region_id);
             log.add_long(victim.shape().get_tile_x().unwrap_or_default());
             log.add_long(victim.shape().get_tile_y().unwrap_or_default());
-            report.world_deliveries.push(log.send(self, false));
+            record_world_delivery!(log.send(self, false));
         }
         if self.globe_setup.use_appellation_function()
             && murderer_country != victim_country
@@ -35308,18 +35252,18 @@ impl CGame {
             let mut honor = CMessage::new(0x0005_fd0d);
             honor.add_long(murderer_id);
             honor.add_long(blow.victim_id);
-            report.world_deliveries.push(honor.send(self, false));
+            record_world_delivery!(honor.send(self, false));
         }
 
         if murderer_country == victim_country {
-            report
-                .client_deliveries
-                .extend(self.apply_victim_region_contribution_loss(
-                    blow.victim_id,
-                    region_country,
-                    no_contribute,
-                    runtime,
-                ));
+            let deliveries = self.apply_victim_region_contribution_loss(
+                blow.victim_id,
+                region_country,
+                no_contribute,
+                runtime,
+            );
+            client_deliveries = client_deliveries.wrapping_add(deliveries.len());
+            tracing::trace!(victim_id = blow.victim_id, ?deliveries, "применена потеря вклада в своём государстве");
         } else if !no_contribute {
             let (combat_a, combat_b) = self.contribute_setup.combat_levels();
             let lower = combat_a.min(combat_b);
@@ -35335,33 +35279,28 @@ impl CGame {
                 if u32::from(victim_level) <= self.globe_setup.new_soldier_level() {
                     let protected = self.get_string_by_id(protected_string).to_vec();
                     let murderer_notice = self.get_string_by_id(b"GS0164").to_vec();
-                    report
-                        .client_deliveries
-                        .push(self.send_player_other_info(blow.victim_id, &protected));
-                    report
-                        .client_deliveries
-                        .push(self.send_player_other_info(murderer_id, &murderer_notice));
+                    record_client_delivery!(self.send_player_other_info(blow.victim_id, &protected));
+                    record_client_delivery!(self.send_player_other_info(murderer_id, &murderer_notice));
                 } else if region_country == murderer_country {
-                    report
-                        .client_deliveries
-                        .extend(self.apply_victim_region_contribution_loss(
-                            blow.victim_id,
-                            region_country,
-                            no_contribute,
-                            runtime,
-                        ));
+                    let deliveries = self.apply_victim_region_contribution_loss(
+                        blow.victim_id,
+                        region_country,
+                        no_contribute,
+                        runtime,
+                    );
+                    client_deliveries = client_deliveries.wrapping_add(deliveries.len());
+                    tracing::trace!(victim_id = blow.victim_id, ?deliveries, "применена потеря вклада в государстве убийцы");
                     let notice = self.get_string_by_id(b"GS0164").to_vec();
-                    report
-                        .client_deliveries
-                        .push(self.send_player_other_info(murderer_id, &notice));
+                    record_client_delivery!(self.send_player_other_info(murderer_id, &notice));
                 }
                 if region_country != murderer_country {
                     if let Some(murderer) = self.find_player_mut(murderer_id) {
                         let current = murderer.contribution();
                         murderer.set_contribution(current.wrapping_sub(penalty));
-                        report.contribution_updates.push((murderer_id, -penalty));
+                        contribution_updates = contribution_updates.wrapping_add(1);
+                        tracing::trace!(player_id = murderer_id, contribution_change = -penalty, "изменён вклад убийцы");
                         if let Some(delivery) = self.send_player_contribution_update(murderer_id) {
-                            report.client_deliveries.push(delivery);
+                            record_client_delivery!(delivery);
                         }
                     }
                     let murderer_text = format_legacy_mixed(
@@ -35377,18 +35316,12 @@ impl CGame {
                         &[LegacyFormatArgument::Signed(limit)],
                         255,
                     );
-                    report
-                        .client_deliveries
-                        .push(self.send_player_other_info(murderer_id, &murderer_text));
-                    report
-                        .client_deliveries
-                        .push(self.send_player_other_info(blow.victim_id, &victim_text));
+                    record_client_delivery!(self.send_player_other_info(murderer_id, &murderer_text));
+                    record_client_delivery!(self.send_player_other_info(blow.victim_id, &victim_text));
                 }
             } else if u32::from(victim_level) <= self.globe_setup.new_soldier_level() {
                 let text = self.get_string_by_id(b"GS0135").to_vec();
-                report
-                    .client_deliveries
-                    .push(self.send_player_other_info(blow.victim_id, &text));
+                record_client_delivery!(self.send_player_other_info(blow.victim_id, &text));
             } else {
                 let base = self.contribution_base(victim_level);
                 let foreign_city = region_country != 0 && victim_country != region_country;
@@ -35486,10 +35419,11 @@ impl CGame {
                                 maximum_fetch,
                             );
                         }
-                        report.contribution_updates.push((id, share));
+                        contribution_updates = contribution_updates.wrapping_add(1);
+                        tracing::trace!(player_id = id, contribution_change = share, "изменён вклад участника группы");
                     }
                     if let Some(delivery) = self.send_player_contribution_update(id) {
-                        report.client_deliveries.push(delivery);
+                        record_client_delivery!(delivery);
                     }
                     let text = format_legacy_mixed(
                         self.get_string_by_id(if murderer_team == 0 {
@@ -35500,34 +35434,27 @@ impl CGame {
                         &[LegacyFormatArgument::Signed(share)],
                         255,
                     );
-                    report
-                        .client_deliveries
-                        .push(self.send_player_other_info(id, &text));
+                    record_client_delivery!(self.send_player_other_info(id, &text));
                 }
                 if murderer_team == 0 && gain == 0 {
                     let text = self.get_string_by_id(b"GS0172").to_vec();
-                    report
-                        .client_deliveries
-                        .push(self.send_player_other_info(murderer_id, &text));
+                    record_client_delivery!(self.send_player_other_info(murderer_id, &text));
                 }
                 if base != 0 {
                     if let Some(victim) = self.find_player_mut(blow.victim_id) {
                         victim.set_contribution(victim_contribution.wrapping_sub(victim_loss));
-                        report
-                            .contribution_updates
-                            .push((blow.victim_id, -victim_loss));
+                        contribution_updates = contribution_updates.wrapping_add(1);
+                        tracing::trace!(player_id = blow.victim_id, contribution_change = -victim_loss, "изменён вклад погибшего игрока");
                     }
                     if let Some(delivery) = self.send_player_contribution_update(blow.victim_id) {
-                        report.client_deliveries.push(delivery);
+                        record_client_delivery!(delivery);
                     }
                     let text = format_legacy_mixed(
                         self.get_string_by_id(b"GS0173"),
                         &[LegacyFormatArgument::Signed(victim_loss)],
                         255,
                     );
-                    report
-                        .client_deliveries
-                        .push(self.send_player_other_info(blow.victim_id, &text));
+                    record_client_delivery!(self.send_player_other_info(blow.victim_id, &text));
                 }
             }
         }
@@ -35546,17 +35473,13 @@ impl CGame {
                 let applied = murderer.set_exploit(requested, maximum).applied;
                 let mut update = CMessage::new(0x000b_f72e);
                 update.add_ulong(applied);
-                report
-                    .client_deliveries
-                    .push(update.send_to_player(self.net_server(), murderer_id));
+                record_client_delivery!(update.send_to_player(self.net_server(), murderer_id));
                 let text = format_legacy_mixed(
                     self.get_string_by_id(b"GS0174"),
                     &[LegacyFormatArgument::Signed(increment)],
                     255,
                 );
-                report
-                    .client_deliveries
-                    .push(self.send_player_other_info(murderer_id, &text));
+                record_client_delivery!(self.send_player_other_info(murderer_id, &text));
             }
         }
 
@@ -35574,7 +35497,7 @@ impl CGame {
                     })
             });
         let country_identity = self.player_country_identity(murderer_id);
-        let attacker_kill_count = report.kill_count.unwrap_or_default();
+        let attacker_kill_count = kill_count.unwrap_or_default();
         let disposition = CPKSys::on_kill(KillPkFacts {
             victim_is_badman: victim_badman,
             security,
@@ -35586,32 +35509,54 @@ impl CGame {
             attacker_country_identity: country_identity,
             attacker_kill_count,
         });
-        report.pk_disposition = Some(disposition);
+        let mut pk_count = None;
         if disposition == KillPkDisposition::ReportMurderer {
             let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
             let confirmed = self
                 .find_player_mut(murderer_id)?
                 .report_murderer(pk_count_per_kill, || runtime.now_milliseconds());
-            report.pk_count = Some(confirmed.pk_count);
+            pk_count = Some(confirmed.pk_count);
         }
+        let mut jjc = None;
         if self
             .find_player(murderer_id)
             .is_some_and(|player| player.server_region_id() == Some(region_id))
         {
             let (minimum, maximum, _, _) = self.globe_setup.jjc_game_config();
             if minimum <= region_id && region_id <= maximum {
-                report.jjc = Some(self.quit_player_jjc(blow.victim_id));
+                jjc = Some(self.quit_player_jjc(blow.victim_id));
             }
         }
-        Some(report)
+        tracing::debug!(
+            victim_id = blow.victim_id,
+            murderer_id,
+            ?kill_count,
+            ?disposition,
+            ?pk_count,
+            contribution_updates,
+            client_deliveries,
+            world_deliveries,
+            ?jjc,
+            "обработано убийство игрока"
+        );
+        Some(())
     }
 
     fn player_on_death<Runtime: GameMainLoopRuntime>(
         &mut self,
         blow: PlayerKillingBlow,
         runtime: &mut Runtime,
-    ) -> Option<GamePlayerDeathReport> {
-        let murder = self.player_on_been_murdered(blow, runtime)?;
+    ) -> Option<()> {
+        self.player_on_been_murdered(blow, runtime)?;
+        let mut world_deliveries = 0usize;
+        let mut drops = 0usize;
+        macro_rules! record_death_world_delivery {
+            ($delivery:expr) => {{
+                let delivery = $delivery;
+                world_deliveries = world_deliveries.wrapping_add(1);
+                tracing::trace!(?delivery, "отправлено внешнее следствие смерти игрока");
+            }};
+        }
         let (region_id, tile_x, tile_y, level, pk_count, criminal, victim_faction) =
             self.find_player(blow.victim_id).and_then(|player| {
                 Some((
@@ -35634,6 +35579,7 @@ impl CGame {
         }
         self.change_body_after_player_death(blow.victim_id, runtime);
         let nation = self.player_died_in_nation_region(blow.victim_id, runtime);
+        tracing::trace!(victim_id = blow.victim_id, ?nation, "обработана смерть в регионе войны наций");
         let mut owner = self.take_region_owner(region_id)?;
         if owner
             .base_mut()
@@ -35645,8 +35591,6 @@ impl CGame {
             return None;
         }
         self.restore_region_owner(owner);
-
-        let mut world_deliveries = Vec::new();
         if blow.attacker_type == PLAYER_TYPE
             && blow.attacker_id > 0
             && blow.attacker_faction_id > 0
@@ -35658,18 +35602,18 @@ impl CGame {
             let mut message = CMessage::new(0x0006_0101);
             message.add_long(blow.victim_id);
             message.add_long(blow.attacker_id);
-            world_deliveries.push(message.send(self, false));
+            record_death_world_delivery!(message.send(self, false));
         }
         let gods_battle = (blow.attacker_type == PLAYER_TYPE)
             .then(|| self.apply_gods_battle_death_szl(blow.attacker_id, blow.victim_id, runtime))
             .flatten();
+        tracing::trace!(victim_id = blow.victim_id, ?gods_battle, "обработана смерть в битве богов");
 
         let loss_allowed = self.globe_setup.newbie_level_limit() < u32::from(level)
             || self.globe_setup.pk_count_per_kill() < u32::from(pk_count)
             || criminal != 0;
         let mut lost_experience = 0;
         let mut exp_delivery = None;
-        let mut drops = Vec::new();
         let mut drop_disposition = None;
         if loss_allowed {
             let requested = CPKSys::died_lost_experience(&self.globe_setup, security).max(0) as u32;
@@ -35693,7 +35637,7 @@ impl CGame {
                     log.add_long(region_id);
                     log.add_ulong(tile_x as u32);
                     log.add_ulong(tile_y as u32);
-                    world_deliveries.push(log.send(self, false));
+                    record_death_world_delivery!(log.send(self, false));
                 }
             }
 
@@ -35717,7 +35661,7 @@ impl CGame {
                     && candidate.location.extend_id == 3
                     && self.log_system.goods_lost_by_dead_enabled()
                 {
-                    world_deliveries.push(self.send_goods_lost_by_death_log(
+                    record_death_world_delivery!(self.send_goods_lost_by_death_log(
                         blow.victim_id,
                         region_id,
                         tile_x,
@@ -35725,7 +35669,8 @@ impl CGame {
                         candidate,
                     ));
                 }
-                drops.push(result);
+                drops = drops.wrapping_add(1);
+                tracing::trace!(victim_id = blow.victim_id, goods_id = ?candidate.goods_id, ?result, "обработана обязательная потеря предмета при смерти");
             }
 
             let lost_class = if criminal != 0 {
@@ -35790,7 +35735,7 @@ impl CGame {
                                 runtime,
                             );
                             if result.is_ok() && self.log_system.goods_lost_by_dead_enabled() {
-                                world_deliveries.push(self.send_goods_lost_by_death_log(
+                                record_death_world_delivery!(self.send_goods_lost_by_death_log(
                                     blow.victim_id,
                                     region_id,
                                     tile_x,
@@ -35798,7 +35743,8 @@ impl CGame {
                                     candidate,
                                 ));
                             }
-                            drops.push(result);
+                            drops = drops.wrapping_add(1);
+                            tracing::trace!(victim_id = blow.victim_id, goods_id = ?candidate.goods_id, ?result, "обработана случайная потеря предмета при смерти");
                         }
                         let money = self.find_player(blow.victim_id).map_or(0, CPlayer::money);
                         if money != 0
@@ -35839,7 +35785,7 @@ impl CGame {
                                             particular_on_death: false,
                                             table_drop_allowed: true,
                                         };
-                                        world_deliveries.push(self.send_goods_lost_by_death_log(
+                                        record_death_world_delivery!(self.send_goods_lost_by_death_log(
                                             blow.victim_id,
                                             region_id,
                                             tile_x,
@@ -35847,7 +35793,8 @@ impl CGame {
                                             &money_candidate,
                                         ));
                                     }
-                                    drops.push(result);
+                                    drops = drops.wrapping_add(1);
+                                    tracing::trace!(victim_id = blow.victim_id, goods_id = ?money_id, ?result, "обработана потеря денег при смерти");
                                 }
                             }
                         }
@@ -35860,7 +35807,7 @@ impl CGame {
             let _ = self.send_nation_player_notice(blow.victim_id, &text);
         }
 
-        let peace = self.enter_player_peace_state(blow.victim_id);
+        let peace_entered = self.enter_player_peace_state(blow.victim_id).is_some();
         let quest_path = self.quest_system.player_died_script.clone();
         let quest_script_id = self.queue_script_file(
             &quest_path,
@@ -35874,13 +35821,16 @@ impl CGame {
             .find_player(blow.victim_id)
             .map(|player| player.active_pets().to_vec())
             .unwrap_or_default();
-        let mut pet_deliveries = Vec::new();
+        let mut pet_deliveries = 0usize;
         for pet in pets {
             let text = self.get_string_by_id(b"GS0138").to_vec();
-            pet_deliveries.push(self.send_nation_player_notice(blow.victim_id, &text));
+            let notice_delivery = self.send_nation_player_notice(blow.victim_id, &text);
+            pet_deliveries = pet_deliveries.wrapping_add(1);
+            tracing::trace!(victim_id = blow.victim_id, notice_delivery, "отправлено уведомление об отзыве питомца погибшего игрока");
             if let Some(delivery) = self.dismiss_player_pet(blow.victim_id, pet.object_type, pet.id)
             {
-                pet_deliveries.push(delivery);
+                pet_deliveries = pet_deliveries.wrapping_add(1);
+                tracing::trace!(victim_id = blow.victim_id, delivery, "отозван питомец погибшего игрока");
             }
         }
         let attacker_notice_delivery = if blow.attacker_type == PLAYER_TYPE {
@@ -35955,7 +35905,7 @@ impl CGame {
                     victim_world.add_byte(1);
                     victim_world.add_byte(victim_country);
                     add_legacy_c_string(victim_world.base_mut(), &victim_text);
-                    world_deliveries.push(victim_world.send(self, false));
+                    record_death_world_delivery!(victim_world.send(self, false));
 
                     let (template, arguments) = if attacker_faction != 0 {
                         (
@@ -35980,7 +35930,7 @@ impl CGame {
                     attacker_world.add_byte(2);
                     attacker_world.add_byte(attacker_country);
                     add_legacy_c_string(attacker_world.base_mut(), &attacker_text);
-                    world_deliveries.push(attacker_world.send(self, false));
+                    record_death_world_delivery!(attacker_world.send(self, false));
                 }
             }
         }
@@ -35990,7 +35940,7 @@ impl CGame {
             log.add_long(region_id);
             log.add_ulong(tile_x as u32);
             log.add_ulong(tile_y as u32);
-            world_deliveries.push(log.send(self, false));
+            record_death_world_delivery!(log.send(self, false));
         }
         self.find_player_mut(blow.victim_id)?
             .reset_war_soul_after_player_death();
@@ -36001,25 +35951,24 @@ impl CGame {
         changed.add_long(PLAYER_TYPE);
         changed.add_long(blow.victim_id);
         let around_delivery = self.send_player_shape_around(blow.victim_id, None, &changed);
-        Some(GamePlayerDeathReport {
-            victim_id: blow.victim_id,
+        tracing::debug!(
+            victim_id = blow.victim_id,
             region_id,
-            murder,
-            nation,
-            gods_battle,
-            security,
+            ?security,
             lost_experience,
-            exp_delivery,
+            ?exp_delivery,
             drops,
-            drop_disposition,
-            peace,
-            quest_script_id,
+            ?drop_disposition,
+            peace_entered,
+            ?quest_script_id,
             pet_deliveries,
-            attacker_notice_delivery,
+            ?attacker_notice_delivery,
             world_deliveries,
-            property_delivery,
-            around_delivery,
-        })
+            ?property_delivery,
+            ?around_delivery,
+            "обработана смерть игрока"
+        );
+        Some(())
     }
 
     fn send_goods_lost_by_death_log(
