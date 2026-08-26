@@ -99,14 +99,6 @@ pub(crate) struct CVillageWarSys {
     pub(crate) village_wars: BTreeMap<i32, VillageWarSetup>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct VillageWarInitReport {
-    pub(crate) schedules: usize,
-    pub(crate) active_schedules: usize,
-    pub(crate) projected_regions: usize,
-    pub(crate) projected_countries: usize,
-}
-
 pub(crate) trait VillageWarRegionContext {
     type Region: Copy;
 
@@ -161,21 +153,22 @@ impl CVillageWarSys {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<bool, VillageWarDecodeError> {
+    ) -> Result<(), VillageWarDecodeError> {
         self.village_wars.clear();
         let schedule_count = read_i32(source, cursor, "m_VillageWars.size")?;
         for _ in 0..schedule_count.max(0) {
             let setup = decode_setup(source, cursor)?;
             self.village_wars.insert(setup.id, setup);
         }
-        Ok(true)
+        tracing::trace!(schedules = self.village_wars.len(), "расписание деревенской войны декодировано");
+        Ok(())
     }
 
     /// Проецирует active schedule state в найденные server/proxy regions.
     pub(crate) fn init_village_region_state<Context: VillageWarRegionContext>(
         &self,
         context: &mut Context,
-    ) -> VillageWarInitReport {
+    ) {
         self.init_village_region_state_at(TagTime::local_now(), context)
     }
 
@@ -183,31 +176,30 @@ impl CVillageWarSys {
         &self,
         now: TagTime,
         context: &mut Context,
-    ) -> VillageWarInitReport {
-        let mut report = VillageWarInitReport {
-            schedules: self.village_wars.len(),
-            ..VillageWarInitReport::default()
-        };
+    ) {
+        let mut active_schedules = 0usize;
+        let mut projected_regions = 0usize;
+        let mut projected_countries = 0usize;
         for (&war_number, setup) in &self.village_wars {
             if !now.legacy_ge(setup.declare_time) || !now.legacy_le(setup.end_time) {
                 continue;
             }
-            report.active_schedules += 1;
+            active_schedules += 1;
 
             let war_region = context.find_region_then_proxy(setup.war_region_id);
             if let Some(region) = war_region {
                 context.reset_war_state(region, war_number, setup.region_state);
-                report.projected_regions += 1;
+                projected_regions += 1;
             }
 
             let village_region = context.find_region_then_proxy(setup.village_region_id);
             if let (Some(war_region), Some(village_region)) = (war_region, village_region) {
                 let village_country = context.region_country(village_region);
                 context.set_region_country(war_region, village_country);
-                report.projected_countries += 1;
+                projected_countries += 1;
             }
         }
-        report
+        tracing::trace!(schedules = self.village_wars.len(), active_schedules, projected_regions, projected_countries, "состояние регионов деревенской войны инициализировано");
     }
 
     /// Заменяет ordered faction list одного schedule и обновляет contenders региона.

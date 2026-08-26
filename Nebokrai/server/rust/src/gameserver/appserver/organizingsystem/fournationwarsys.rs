@@ -76,20 +76,6 @@ pub(crate) struct CFourNationWarSys {
     player_war_times_ms: BTreeMap<i32, u32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FourNationGameDecodeReport {
-    pub(crate) declared_setups: i32,
-    pub(crate) decoded_setups: usize,
-    pub(crate) declared_rects: i32,
-    pub(crate) decoded_rects: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FourNationGameInitReport {
-    pub(crate) setups: usize,
-    pub(crate) nation_regions: usize,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum FourNationGameDecodeError {
     #[error("FourNationWar snapshot повторно получен при {retained_setups} опубликованных setup")]
@@ -170,7 +156,7 @@ impl CFourNationWarSys {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<FourNationGameDecodeReport, FourNationGameDecodeError> {
+    ) -> Result<(), FourNationGameDecodeError> {
         if !self.setups.is_empty() {
             return Err(FourNationGameDecodeError::AlreadyInitialized {
                 retained_setups: self.setups.len(),
@@ -209,18 +195,14 @@ impl CFourNationWarSys {
             decoded_rects += 1;
         }
 
-        Ok(FourNationGameDecodeReport {
-            declared_setups,
-            decoded_setups,
-            declared_rects,
-            decoded_rects,
-        })
+        tracing::trace!(declared_setups, decoded_setups, declared_rects, decoded_rects, "расписание войны четырёх государств декодировано");
+        Ok(())
     }
 
     pub(crate) fn init_war_state<Context: FourNationGameStartupContext>(
         &self,
         context: &mut Context,
-    ) -> FourNationGameInitReport {
+    ) {
         let mut nation_regions = 0;
         for (index, setup) in self.setups.iter().enumerate() {
             let Some(region) = context.find_nation_region_then_proxy(setup.region_id) else {
@@ -230,10 +212,7 @@ impl CFourNationWarSys {
             context.set_nation_relive_rects(region, self.rects);
             nation_regions += 1;
         }
-        FourNationGameInitReport {
-            setups: self.setups.len(),
-            nation_regions,
-        }
+        tracing::trace!(setups = self.setups.len(), nation_regions, "состояние регионов войны четырёх государств инициализировано");
     }
 
     pub(crate) fn setups(&self) -> &[FourNationGameSetup] {

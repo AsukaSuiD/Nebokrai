@@ -108,13 +108,6 @@ pub(crate) struct CAttackCitySys {
     pub(crate) attacks: BTreeMap<i32, AttackCityTime>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct AttackCityInitReport {
-    pub(crate) schedules: usize,
-    pub(crate) active_schedules: usize,
-    pub(crate) projected_regions: usize,
-}
-
 pub(crate) trait AttackCityRegionContext {
     type Region: Copy;
 
@@ -158,21 +151,22 @@ impl CAttackCitySys {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<bool, AttackCityDecodeError> {
+    ) -> Result<(), AttackCityDecodeError> {
         self.attacks.clear();
         let schedule_count = read_i32(source, cursor, "m_Attacks.size")?;
         for _ in 0..schedule_count.max(0) {
             let setup = decode_setup(source, cursor)?;
             self.attacks.insert(setup.time, setup);
         }
-        Ok(true)
+        tracing::trace!(schedules = self.attacks.len(), "расписание осады города декодировано");
+        Ok(())
     }
 
     /// Проецирует active schedule state в найденные server/proxy regions.
     pub(crate) fn init_city_region_state<Context: AttackCityRegionContext>(
         &self,
         context: &mut Context,
-    ) -> AttackCityInitReport {
+    ) {
         self.init_city_region_state_at(TagTime::local_now(), context)
     }
 
@@ -180,23 +174,21 @@ impl CAttackCitySys {
         &self,
         now: TagTime,
         context: &mut Context,
-    ) -> AttackCityInitReport {
-        let mut report = AttackCityInitReport {
-            schedules: self.attacks.len(),
-            ..AttackCityInitReport::default()
-        };
+    ) {
+        let mut active_schedules = 0usize;
+        let mut projected_regions = 0usize;
         for (&war_number, setup) in &self.attacks {
             if !now.legacy_ge(setup.declare_time) || !now.legacy_le(setup.end_time) {
                 continue;
             }
-            report.active_schedules += 1;
+            active_schedules += 1;
 
             if let Some(region) = context.find_region_then_proxy(setup.city_region_id) {
                 context.reset_war_state(region, war_number, setup.region_state);
-                report.projected_regions += 1;
+                projected_regions += 1;
             }
         }
-        report
+        tracing::trace!(schedules = self.attacks.len(), active_schedules, projected_regions, "состояние регионов осады города инициализировано");
     }
 
     /// Заменяет ordered faction list одного schedule и обновляет contenders региона.

@@ -2814,49 +2814,49 @@ pub(crate) fn dispatch_war_startup_setup<Context: WarScheduleSetupContext>(
             if let Err(error) = attack_city_sys.decord_from_byte_array(payload, cursor) {
                 return Some(Err(WarScheduleSetupError::AttackCity(error)));
             }
-            let initialized = {
+            {
                 let mut adapter = AttackCityContextAdapter(context);
                 attack_city_sys.init_city_region_state(&mut adapter)
-            };
+            }
             add_log_text("Initial SI_ATTACKCITYSYS_SETUP...OK!");
-            tracing::trace!(?initialized, "система осады города загружена");
+            tracing::trace!("система осады города загружена");
             Some(Ok(()))
         }
         VILLAGE_WAR_SELECTOR => {
             if let Err(error) = village_war_sys.decord_from_byte_array(payload, cursor) {
                 return Some(Err(WarScheduleSetupError::Village(error)));
             }
-            let initialized = {
+            {
                 let mut adapter = VillageWarContextAdapter(context);
                 village_war_sys.init_village_region_state(&mut adapter)
-            };
+            }
             add_log_text("Initial SI_VILLAGEWARSYS_SETUP...OK!");
-            tracing::trace!(?initialized, "система деревенской войны загружена");
+            tracing::trace!("система деревенской войны загружена");
             Some(Ok(()))
         }
         COUNTRY_WAR_SELECTOR => {
             if let Err(error) = country_war_sys.decord_from_byte_array(payload, cursor) {
                 return Some(Err(WarScheduleSetupError::Country(error)));
             }
-            let initialized = {
+            {
                 let mut adapter = CountryWarContextAdapter(context);
                 country_war_sys.init_country_region_state(&mut adapter)
-            };
+            }
             add_log_text("Initial SI_COUNTRYWAR...OK!");
-            tracing::trace!(?initialized, "система войны стран загружена");
+            tracing::trace!("система войны стран загружена");
             Some(Ok(()))
         }
         FOUR_NATION_WAR_SELECTOR => {
-            let decoded = match four_nation_war_sys.decord_from_byte_array(payload, cursor) {
-                Ok(decoded) => decoded,
+            match four_nation_war_sys.decord_from_byte_array(payload, cursor) {
+                Ok(()) => {}
                 Err(error) => return Some(Err(WarScheduleSetupError::FourNation(error))),
-            };
-            let initialized = {
+            }
+            {
                 let mut adapter = FourNationWarContextAdapter(context);
                 four_nation_war_sys.init_war_state(&mut adapter)
-            };
+            }
             add_log_text("Initial SI_FOURNATIONWARSYS_SETUP..OK!!");
-            tracing::trace!(?decoded, ?initialized, "система войны четырёх государств загружена");
+            tracing::trace!("система войны четырёх государств загружена");
             Some(Ok(()))
         }
         _ => None,
