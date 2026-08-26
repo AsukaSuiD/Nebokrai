@@ -1876,14 +1876,14 @@ fn decode_lookup_filter_startup(
         DA_KONG_SELECTOR => Some(
             game.da_kong_xiang_qian_mut()
                 .decord_from_byte_array(source, cursor)
-                .map(|report| tracing::trace!(?report, "настройки DaKong загружены"))
+                .map(|()| tracing::trace!("настройки DaKong загружены"))
                 .map_err(GameLookupFilterStartupError::DaKong),
         ),
         WORDS_FILTER_SELECTOR => {
             let result = game
                 .words_filter_mut()
                 .from_byte_array(source, cursor)
-                .map(|report| tracing::trace!(?report, "фильтр слов загружен"))
+                .map(|()| tracing::trace!("фильтр слов загружен"))
                 .map_err(GameLookupFilterStartupError::WordsFilter);
             if result.is_ok() {
                 add_log_text(b"Initial SI_WORDSFILTER...OK!");
@@ -1932,17 +1932,17 @@ fn decode_mutation_rules_startup(
         SYNTHESIS_SELECTOR => game
             .synthesis_mut()
             .decord_from_byte_array(source, cursor)
-            .map(|report| tracing::trace!(?report, "правила синтеза загружены"))
+            .map(|()| tracing::trace!("правила синтеза загружены"))
             .map_err(|error| GameMutationRulesStartupError::Synthesis(Arc::new(error))),
         NEW_SKILL_MONSTER_SELECTOR => game
             .new_skill_monster_conf_mut()
             .decord_from_byte_array(source, cursor)
-            .map(|report| tracing::trace!(?report, "правила новых навыков монстров загружены"))
+            .map(|()| tracing::trace!("правила новых навыков монстров загружены"))
             .map_err(|error| GameMutationRulesStartupError::NewSkillMonsters(Arc::new(error))),
         GOODS_DESTROY_SELECTOR => game
             .goods_destroy_setup_mut()
             .decord_from_byte_array(source, cursor)
-            .map(|report| tracing::trace!(?report, "правила уничтожения предметов загружены"))
+            .map(|()| tracing::trace!("правила уничтожения предметов загружены"))
             .map_err(|error| GameMutationRulesStartupError::GoodsDestruction(Arc::new(error))),
         CHANGE_BODY_SELECTOR => game
             .change_body_conf_mut()
@@ -2145,7 +2145,7 @@ fn decode_player_rule_startup(
             if report.is_ok() {
                 add_log_text(b"Initial SI_EMOTION...OK!");
             }
-            Some(report.map(|report| tracing::trace!(?report, "эмоции загружены")))
+            Some(report.map(|()| tracing::trace!("эмоции загружены")))
         }
         QUEST_SYSTEM_SELECTOR => {
             let report = game
@@ -2155,7 +2155,7 @@ fn decode_player_rule_startup(
             if report.is_ok() {
                 add_log_text(b"Initial SI_QUEST...OK!");
             }
-            Some(report.map(|report| tracing::trace!(?report, "система заданий загружена")))
+            Some(report.map(|()| tracing::trace!("система заданий загружена")))
         }
         _ => None,
     }
@@ -2213,7 +2213,7 @@ fn decode_runtime_configuration_startup(
             if report.is_ok() {
                 add_log_text(b"Initial SI_GMLIST...OK!");
             }
-            Some(report.map(|report| tracing::trace!(?report, "список GM загружен")))
+            Some(report.map(|()| tracing::trace!("список GM загружен")))
         }
         _ => None,
     }

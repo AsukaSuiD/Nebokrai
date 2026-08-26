@@ -190,7 +190,7 @@ impl NewSkillMonsterConf {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<NewSkillMonsterDecodeReport, NewSkillMonsterDecodeError> {
+    ) -> Result<(), NewSkillMonsterDecodeError> {
         self.groups.clear();
         let group_count = read_wire_i32(source, cursor)?;
         for _ in 0..group_count.max(0) {
@@ -205,10 +205,8 @@ impl NewSkillMonsterConf {
             }
             self.groups.insert(skill_id, names);
         }
-        Ok(NewSkillMonsterDecodeReport {
-            groups: self.groups.len(),
-            monster_names: self.groups.values().map(Vec::len).sum(),
-        })
+        tracing::trace!(groups = self.groups.len(), monster_names = self.groups.values().map(Vec::len).sum::<usize>(), "правила новых навыков монстров декодированы");
+        Ok(())
     }
 }
 
@@ -432,12 +430,6 @@ impl fmt::Display for NewSkillMonsterSerializeError {
 }
 
 impl Error for NewSkillMonsterSerializeError {}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct NewSkillMonsterDecodeReport {
-    pub(crate) groups: usize,
-    pub(crate) monster_names: usize,
-}
 
 #[derive(Debug)]
 pub(crate) enum NewSkillMonsterDecodeError {

@@ -406,7 +406,7 @@ impl CSynthesis {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<SynthesisDecodeReport, SynthesisDecodeError> {
+    ) -> Result<(), SynthesisDecodeError> {
         self.clear();
 
         let broadcast_count = read_wire_i32(source, cursor)?;
@@ -462,10 +462,8 @@ impl CSynthesis {
             });
         }
 
-        Ok(SynthesisDecodeReport {
-            broadcasts: self.broadcasts.len(),
-            recipes: self.recipes.len(),
-        })
+        tracing::trace!(broadcasts = self.broadcasts.len(), recipes = self.recipes.len(), "правила синтеза декодированы");
+        Ok(())
     }
 }
 
@@ -699,12 +697,6 @@ impl fmt::Display for SynthesisSerializeError {
 }
 
 impl Error for SynthesisSerializeError {}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct SynthesisDecodeReport {
-    pub(crate) broadcasts: usize,
-    pub(crate) recipes: usize,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SynthesisDecodeField {

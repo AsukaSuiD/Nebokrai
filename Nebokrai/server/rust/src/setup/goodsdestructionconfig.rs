@@ -129,7 +129,7 @@ impl GoodsDestroySetup {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<GoodsDestroyDecodeReport, GoodsDestroyDecodeError> {
+    ) -> Result<(), GoodsDestroyDecodeError> {
         self.clear_lists();
         self.enabled = read_wire_u32(source, cursor)? != 0;
 
@@ -155,11 +155,8 @@ impl GoodsDestroySetup {
             self.original_names
                 .push(read_wire_c_string(source, cursor)?);
         }
-        Ok(GoodsDestroyDecodeReport {
-            enabled: self.enabled,
-            goods_types: self.goods_types.len(),
-            original_names: self.original_names.len(),
-        })
+        tracing::trace!(enabled = self.enabled, goods_types = self.goods_types.len(), original_names = self.original_names.len(), "правила уничтожения предметов декодированы");
+        Ok(())
     }
 }
 
@@ -300,13 +297,6 @@ impl fmt::Display for GoodsDestroySerializeError {
 }
 
 impl Error for GoodsDestroySerializeError {}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct GoodsDestroyDecodeReport {
-    pub(crate) enabled: bool,
-    pub(crate) goods_types: usize,
-    pub(crate) original_names: usize,
-}
 
 #[derive(Debug)]
 pub(crate) enum GoodsDestroyDecodeError {

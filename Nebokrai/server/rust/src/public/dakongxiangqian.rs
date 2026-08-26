@@ -338,7 +338,7 @@ impl CDaKongXiangQian {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<DaKongDecodeReport, DaKongDecodeError> {
+    ) -> Result<(), DaKongDecodeError> {
         self.clear_primary_state();
 
         let info_count = read_wire_i32(source, cursor)?;
@@ -383,16 +383,14 @@ impl CDaKongXiangQian {
             });
         }
 
-        Ok(DaKongDecodeReport {
-            info: self.info.len(),
-            external_attributes: self
-                .external_attributes
-                .iter()
-                .flat_map(BTreeMap::values)
-                .map(Vec::len)
-                .sum(),
-            delux_modify: self.delux_modify.len(),
-        })
+        let external_attributes = self
+            .external_attributes
+            .iter()
+            .flat_map(BTreeMap::values)
+            .map(Vec::len)
+            .sum::<usize>();
+        tracing::trace!(info = self.info.len(), external_attributes, delux_modify = self.delux_modify.len(), "настройки DaKong декодированы");
+        Ok(())
     }
 }
 
@@ -408,13 +406,6 @@ fn choose_random(weights: &[i32], random: &mut impl FnMut(i32) -> i32) -> i32 {
         }
     }
     -1
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct DaKongDecodeReport {
-    pub(crate) info: usize,
-    pub(crate) external_attributes: usize,
-    pub(crate) delux_modify: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

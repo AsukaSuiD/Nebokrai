@@ -163,7 +163,7 @@ impl CWordsFilter {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<WordsFilterDecodeReport, WordsFilterDecodeError> {
+    ) -> Result<(), WordsFilterDecodeError> {
         let start = *cursor;
         let range_count = read_wire_i32(source, cursor, WordsFilterDecodeSection::CharacterRanges)?;
         let mut ranges_added = 0;
@@ -180,11 +180,9 @@ impl CWordsFilter {
             self.filters.push(read_wire_c_string(source, cursor)?);
             filters_added += 1;
         }
-        Ok(WordsFilterDecodeReport {
-            ranges_added,
-            filters_added,
-            consumed: cursor.saturating_sub(start),
-        })
+        let consumed = cursor.saturating_sub(start);
+        tracing::trace!(ranges_added, filters_added, consumed, "фильтр слов декодирован");
+        Ok(())
     }
 
     pub(crate) fn filter_file_name(&self) -> &[u8] {
@@ -235,13 +233,6 @@ impl fmt::Display for WordsFilterSerializeError {
 }
 
 impl Error for WordsFilterSerializeError {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WordsFilterDecodeReport {
-    pub(crate) ranges_added: usize,
-    pub(crate) filters_added: usize,
-    pub(crate) consumed: usize,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WordsFilterDecodeSection {

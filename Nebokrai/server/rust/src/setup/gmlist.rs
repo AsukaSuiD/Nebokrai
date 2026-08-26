@@ -138,7 +138,7 @@ impl CGMList {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<GmListDecodeReport, GmListDecodeError> {
+    ) -> Result<(), GmListDecodeError> {
         self.gm_info.clear();
         decode_gm_map(source, cursor, &mut self.gm_info)?;
 
@@ -146,17 +146,9 @@ impl CGMList {
         decode_gm_map(source, cursor, &mut self.player_gm_info)?;
 
         self.god_passport = read_wire_c_string(source, cursor)?;
-        Ok(GmListDecodeReport {
-            gm: self.gm_info.len(),
-            player_gm: self.player_gm_info.len(),
-        })
+        tracing::trace!(gm = self.gm_info.len(), player_gm = self.player_gm_info.len(), "список GM декодирован");
+        Ok(())
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GmListDecodeReport {
-    pub(crate) gm: usize,
-    pub(crate) player_gm: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

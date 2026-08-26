@@ -29,7 +29,7 @@ impl CEmotion {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<EmotionDecodeReport, EmotionDecodeError> {
+    ) -> Result<(), EmotionDecodeError> {
         let declared = read_wire_i32(source, cursor, "emotion count")?;
         if declared < 0 {
             return Err(EmotionDecodeError::NegativeCount { declared });
@@ -43,11 +43,8 @@ impl CEmotion {
             decoded += 1;
         }
 
-        Ok(EmotionDecodeReport {
-            declared,
-            decoded,
-            retained: self.emotions.len(),
-        })
+        tracing::trace!(declared, decoded, retained = self.emotions.len(), "эмоции декодированы");
+        Ok(())
     }
 
     pub(crate) fn load_from_file(
@@ -88,13 +85,6 @@ impl CEmotion {
         }
         Ok(())
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct EmotionDecodeReport {
-    pub(crate) declared: i32,
-    pub(crate) decoded: usize,
-    pub(crate) retained: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

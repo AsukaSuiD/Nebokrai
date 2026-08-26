@@ -220,7 +220,7 @@ impl CQuestSystem {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<QuestSystemDecodeReport, QuestSystemDecodeError> {
+    ) -> Result<(), QuestSystemDecodeError> {
         self.max_quest_count = read_quest_i32(source, cursor, QuestWireField::MaxQuestCount)?;
         self.level_difference = read_quest_u32(source, cursor, QuestWireField::LevelDifference)?;
         self.player_login_script =
@@ -268,11 +268,8 @@ impl CQuestSystem {
             self.quests.insert(id, quest);
             decoded += 1;
         }
-        Ok(QuestSystemDecodeReport {
-            declared: count,
-            decoded,
-            retained: self.quests.len(),
-        })
+        tracing::trace!(declared = count, decoded, retained = self.quests.len(), "система заданий декодирована");
+        Ok(())
     }
 
     pub(crate) fn add_to_byte_array(
@@ -344,13 +341,6 @@ impl CQuestSystem {
         destination.extend_from_slice(&payload);
         Ok(())
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct QuestSystemDecodeReport {
-    pub(crate) declared: i32,
-    pub(crate) decoded: usize,
-    pub(crate) retained: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
