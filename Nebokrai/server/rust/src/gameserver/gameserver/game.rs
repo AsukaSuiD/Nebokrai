@@ -661,7 +661,7 @@ use crate::gameserver::appserver::player::{
     PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
     PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
     PlayerGoodsAiDeletion, PlayerLoginGoodsLocation,
-    PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation, PlayerReliveOwnedPrelude,
+    PlayerMurdererSignDecrease, PlayerProgress,
     PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestFacts, PlayerTalkChannel,
     PlayerUncreatedCarriage,
     PlayerUncreatedPet, PlayerYuanBaoChange,
@@ -3109,67 +3109,6 @@ pub(crate) struct GodsBattleReturnPointReport {
     pub(crate) faction: i32,
     pub(crate) point: RegionReturnPoint,
     pub(crate) source: GodsBattleReturnPointSource,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerReliveOutcome {
-    PlayerMissing,
-    AlreadyAlive {
-        answer_delivery: i32,
-    },
-    PositionBlocked(ShapeCoordinateBlock),
-    CurrentRegionMissing {
-        mutation: PlayerReliveMutation,
-    },
-    InPlace {
-        mutation: PlayerReliveMutation,
-        answer_delivery: i32,
-        shape_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-        state_deliveries: Vec<Result<i32, ShapeCoordinateBlock>>,
-        region_change: PlayerRegionChangeReport,
-        cannot_move_delivery: Option<i32>,
-    },
-    ReturnPointBlocked(GameReturnPointBlock),
-    RandomPositionBlocked(RegionCellAccessBlock),
-    ReturnPoint {
-        mutation: PlayerReliveMutation,
-        return_point: RegionReturnPoint,
-        x: i32,
-        y: i32,
-        changed_region: bool,
-        answer_delivery: Option<i32>,
-        state_deliveries: Vec<Result<i32, ShapeCoordinateBlock>>,
-        region_change: PlayerRegionChangeReport,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerRelivePreludeReport {
-    pub(crate) owned: PlayerReliveOwnedPrelude,
-    pub(crate) combat_property_delivery: i32,
-    pub(crate) tao_zhuang_ran: bool,
-    pub(crate) states: Option<PlayerStatesPublication>,
-}
-
-#[must_use = "OnChangeStates report сохраняет player и team/world wire"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerStatesPublication {
-    pub(crate) player_id: i32,
-    pub(crate) health: u32,
-    pub(crate) mana: u32,
-    pub(crate) rp: u16,
-    pub(crate) yp: u16,
-    pub(crate) health_ratio_bits: u32,
-    pub(crate) player_delivery: i32,
-    pub(crate) team: Option<GameTeamRemoteMutation>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerReliveReport {
-    pub(crate) player_id: i32,
-    pub(crate) relive_type: i32,
-    pub(crate) prelude: Option<PlayerRelivePreludeReport>,
-    pub(crate) outcome: PlayerReliveOutcome,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -22315,23 +22254,15 @@ impl CGame {
         player_id: i32,
         relive_type: i32,
         context: &mut Context,
-    ) -> PlayerReliveReport {
+    ) {
         let Some(player) = self.find_player(player_id) else {
-            return PlayerReliveReport {
-                player_id,
-                relive_type,
-                prelude: None,
-                outcome: PlayerReliveOutcome::PlayerMissing,
-            };
+            tracing::trace!(player_id, relive_type, "игрок для воскрешения не найден");
+            return;
         };
         if !CMoveShape::is_died(player.health()) {
             let answer_delivery = self.send_player_relive_answer(player_id);
-            return PlayerReliveReport {
-                player_id,
-                relive_type,
-                prelude: None,
-                outcome: PlayerReliveOutcome::AlreadyAlive { answer_delivery },
-            };
+            tracing::trace!(player_id, relive_type, answer_delivery, "игрок уже жив");
+            return;
         }
         let (cleared_uncreated_pets, cleared_uncreated_carriage) = {
             let player = self
@@ -22354,25 +22285,16 @@ impl CGame {
             let mutation = player.apply_relive_scalars();
             (owned, mutation)
         };
-        let states = mutation
+        let states_published = mutation
             .as_ref()
             .ok()
             .and_then(|_| self.publish_player_states(player_id));
-        let prelude = PlayerRelivePreludeReport {
-            owned,
-            combat_property_delivery,
-            tao_zhuang_ran,
-            states,
-        };
+        tracing::trace!(player_id, relive_type, ?owned, combat_property_delivery, tao_zhuang_ran, states_published = states_published.is_some(), "начальная часть воскрешения выполнена");
         let mutation = match mutation {
             Ok(mutation) => mutation,
             Err(block) => {
-                return PlayerReliveReport {
-                    player_id,
-                    relive_type,
-                    prelude: Some(prelude),
-                    outcome: PlayerReliveOutcome::PositionBlocked(block),
-                };
+                tracing::warn!(player_id, relive_type, ?block, "позиция игрока при воскрешении недоступна");
+                return;
             }
         };
 
@@ -22380,10 +22302,7 @@ impl CGame {
             let resident_delivery = self.enter_player_resident_state(player_id);
             let peace = self.enter_player_peace_state(player_id);
             let answer_delivery = self.send_player_relive_answer(player_id);
-            let mut state_deliveries: Vec<_> = resident_delivery
-                .into_iter()
-                .chain(peace.and_then(|report| report.around_delivery).into_iter())
-                .collect();
+            let peace_delivery = peace.and_then(|report| report.around_delivery);
             let region_id = self
                 .find_player(player_id)
                 .and_then(CPlayer::server_region_id);
@@ -22391,7 +22310,8 @@ impl CGame {
                 .find_player(player_id)
                 .is_some_and(|player| player.city_war_died_state_time_ms() > 0)
             {
-                state_deliveries.extend(self.publish_relive_died_state(region_id, player_id));
+                let died_state_deliveries = self.publish_relive_died_state(region_id, player_id);
+                tracing::trace!(player_id, ?died_state_deliveries, "состояние смерти после воскрешения на месте опубликовано");
             }
             let shape_delivery = region_id
                 .and_then(|region_id| self.take_region_owner(region_id))
@@ -22443,19 +22363,8 @@ impl CGame {
                     0,
                 )
             });
-            return PlayerReliveReport {
-                player_id,
-                relive_type,
-                prelude: Some(prelude),
-                outcome: PlayerReliveOutcome::InPlace {
-                    mutation,
-                    answer_delivery,
-                    shape_delivery,
-                    state_deliveries,
-                    region_change,
-                    cannot_move_delivery,
-                },
-            };
+            tracing::debug!(player_id, relive_type, ?mutation, answer_delivery, ?resident_delivery, ?peace_delivery, ?shape_delivery, ?region_change.kind, ?cannot_move_delivery, "игрок воскрешён на месте");
+            return;
         }
 
         let region_id = self
@@ -22469,22 +22378,14 @@ impl CGame {
                 match self.select_player_return_point(region_id, player_id, source_is_gods_battle) {
                     Ok(point) => point,
                     Err(block) => {
-                        return PlayerReliveReport {
-                            player_id,
-                            relive_type,
-                            prelude: Some(prelude),
-                            outcome: PlayerReliveOutcome::ReturnPointBlocked(block),
-                        };
+                        tracing::warn!(player_id, relive_type, ?block, "точка возврата для воскрешения недоступна");
+                        return;
                     }
                 }
             }
             None => {
-                return PlayerReliveReport {
-                    player_id,
-                    relive_type,
-                    prelude: Some(prelude),
-                    outcome: PlayerReliveOutcome::CurrentRegionMissing { mutation },
-                };
+                tracing::warn!(player_id, relive_type, ?mutation, "текущий регион игрока для воскрешения не найден");
+                return;
             }
         };
         let mut x = return_point
@@ -22509,12 +22410,8 @@ impl CGame {
                         y = position.y;
                     }
                     Err(block) => {
-                        return PlayerReliveReport {
-                            player_id,
-                            relive_type,
-                            prelude: Some(prelude),
-                            outcome: PlayerReliveOutcome::RandomPositionBlocked(block),
-                        };
+                        tracing::warn!(player_id, relive_type, ?block, "случайная позиция воскрешения недоступна");
+                        return;
                     }
                 }
             }
@@ -22534,11 +22431,8 @@ impl CGame {
         );
         let changed_region = Self::player_region_change_succeeded(&region_change);
         let answer_delivery = changed_region.then(|| self.send_player_relive_answer(player_id));
-        let mut state_deliveries: Vec<_> = resident_delivery
-            .into_iter()
-            .chain(peace.and_then(|report| report.around_delivery).into_iter())
-            .collect();
-        if self
+        let peace_delivery = peace.and_then(|report| report.around_delivery);
+        let died_state_deliveries = if self
             .find_player(player_id)
             .is_some_and(|player| player.city_war_died_state_time_ms() > 0)
         {
@@ -22546,24 +22440,11 @@ impl CGame {
                 .find_player(player_id)
                 .and_then(CPlayer::server_region_id)
                 .or(Some(return_point.region_id));
-            state_deliveries
-                .extend(self.publish_relive_died_state(destination_region_id, player_id));
-        }
-        PlayerReliveReport {
-            player_id,
-            relive_type,
-            prelude: Some(prelude),
-            outcome: PlayerReliveOutcome::ReturnPoint {
-                mutation,
-                return_point,
-                x,
-                y,
-                changed_region,
-                answer_delivery,
-                state_deliveries,
-                region_change,
-            },
-        }
+            Some(self.publish_relive_died_state(destination_region_id, player_id))
+        } else {
+            None
+        };
+        tracing::debug!(player_id, relive_type, ?mutation, ?return_point, x, y, changed_region, ?answer_delivery, ?resident_delivery, ?peace_delivery, ?died_state_deliveries, ?region_change.kind, "игрок воскрешён в точке возврата");
     }
 
     fn send_player_relive_answer(&self, player_id: i32) -> i32 {
@@ -28968,10 +28849,10 @@ impl CGame {
     }
 
     /// Exact reached `CPlayer::OnChangeStates`: полный player snapshot сначала
-    /// уходит самому игроку, затем state `9` его typed team plug публикует долю
-    /// HP локальным teammates и WorldServer. В report ratio хранится битами,
-    /// чтобы сохранить в том числе legacy NaN при нулевом maximum HP.
-    pub(crate) fn publish_player_states(&self, player_id: i32) -> Option<PlayerStatesPublication> {
+    /// уходит самому игроку, затем состояние `9` его типизированного team plug
+    /// публикует долю HP локальным участникам команды и WorldServer. Вычисление
+    /// сохраняет в том числе унаследованный NaN при нулевом максимальном HP.
+    pub(crate) fn publish_player_states(&self, player_id: i32) -> Option<()> {
         let player = self.find_player(player_id)?;
         let health = player.health();
         let mana = player.mana();
@@ -28992,16 +28873,8 @@ impl CGame {
         let team = (team_id != 0)
             .then(|| self.relay_remote_team_state(team_id as u32, 400, player_id, health_ratio))
             .flatten();
-        Some(PlayerStatesPublication {
-            player_id,
-            health,
-            mana,
-            rp,
-            yp,
-            health_ratio_bits: health_ratio.to_bits(),
-            player_delivery,
-            team,
-        })
+        tracing::trace!(player_id, health, mana, rp, yp, health_ratio_bits = health_ratio.to_bits(), player_delivery, ?team, "состояние игрока опубликовано");
+        Some(())
     }
 
     pub(crate) fn find_player(&self, player_id: i32) -> Option<&CPlayer> {
