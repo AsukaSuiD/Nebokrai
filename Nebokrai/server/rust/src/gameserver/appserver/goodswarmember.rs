@@ -50,39 +50,6 @@ pub(crate) enum GameGoodsWarMessageError {
     Input(GoodsWarMessageInputBlock),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameGoodsWarMutationReport {
-    IgnoredSubtype {
-        subtype: i32,
-    },
-    MembersAdded {
-        subtype: i32,
-        inserted: usize,
-    },
-    MemberDeleted {
-        notification: Option<Result<i32, SendMessageError>>,
-    },
-    FactionMembersDeleted {
-        faction_id: i32,
-    },
-    MembersCleared,
-    FactionIdsReplaced {
-        declared: i32,
-        retained: usize,
-    },
-    CountsReplaced {
-        declared: i32,
-        effective: i32,
-        decoded: usize,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameGoodsWarMessageReport {
-    pub(crate) opcode: u32,
-    pub(crate) mutation: GameGoodsWarMutationReport,
-}
-
 #[derive(Debug, Default)]
 pub(crate) struct CGoodsWarMember {
     members: BTreeMap<i32, i32>,
@@ -210,7 +177,7 @@ impl CGoodsWarMember {
 pub(crate) fn dispatch_game_goods_war_message(
     message: &mut CMessage,
     game: &mut CGame,
-) -> Option<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>> {
+) -> Option<Result<(), GameGoodsWarMessageError>> {
     let opcode = message.message_type() as u32;
     if !matches!(opcode, GOODS_WAR_MEMBER_MESSAGE | GOODS_WAR_COUNT_MESSAGE) {
         return None;
@@ -227,7 +194,7 @@ pub(crate) fn dispatch_game_goods_war_message(
         }
     };
     game.restore_goods_war(owner);
-    Some(result.map(|mutation| GameGoodsWarMessageReport { opcode, mutation }))
+    Some(result)
 }
 
 fn decode_goods_war_members(
@@ -235,7 +202,7 @@ fn decode_goods_war_members(
     cursor: &mut usize,
     owner: &mut CGoodsWarMember,
     game: &CGame,
-) -> Result<GameGoodsWarMutationReport, GameGoodsWarMessageError> {
+) -> Result<(), GameGoodsWarMessageError> {
     let subtype = read_goods_war_i32(source, cursor, "subtype")?;
     match subtype {
         1 => {
@@ -251,18 +218,20 @@ fn decode_goods_war_members(
                     inserted += 1;
                 }
             }
-            Ok(GameGoodsWarMutationReport::MembersAdded { subtype, inserted })
+            tracing::trace!(subtype, inserted, "участники GoodsWar добавлены");
+            Ok(())
         }
         2 => {
             let member_id = read_goods_war_i32(source, cursor, "deleted member ID")?;
-            Ok(GameGoodsWarMutationReport::MemberDeleted {
-                notification: owner.delete_one_member(member_id, game),
-            })
+            let notification = owner.delete_one_member(member_id, game);
+            tracing::trace!(subtype, member_id, ?notification, "участник GoodsWar удалён");
+            Ok(())
         }
         3 => {
             let faction_id = read_goods_war_i32(source, cursor, "deleted faction ID")?;
             owner.delete_members_by_faction_id(faction_id);
-            Ok(GameGoodsWarMutationReport::FactionMembersDeleted { faction_id })
+            tracing::trace!(subtype, faction_id, "участники фракции GoodsWar удалены");
+            Ok(())
         }
         4 => {
             let mut inserted = 0;
@@ -275,11 +244,13 @@ fn decode_goods_war_members(
                 owner.insert_one_member(member_id, faction_id);
                 inserted += 1;
             }
-            Ok(GameGoodsWarMutationReport::MembersAdded { subtype, inserted })
+            tracing::trace!(subtype, inserted, "снимок участников GoodsWar применён");
+            Ok(())
         }
         5 => {
             owner.clear_members();
-            Ok(GameGoodsWarMutationReport::MembersCleared)
+            tracing::trace!(subtype, "участники GoodsWar очищены");
+            Ok(())
         }
         0x10 => {
             owner.clear_all_faction_ids();
@@ -290,12 +261,14 @@ fn decode_goods_war_members(
                     owner.insert_faction_id(faction_id);
                 }
             }
-            Ok(GameGoodsWarMutationReport::FactionIdsReplaced {
-                declared,
-                retained: owner.faction_ids().len(),
-            })
+            let retained = owner.faction_ids().len();
+            tracing::trace!(subtype, declared, retained, "список фракций GoodsWar заменён");
+            Ok(())
         }
-        _ => Ok(GameGoodsWarMutationReport::IgnoredSubtype { subtype }),
+        _ => {
+            tracing::trace!(subtype, "неизвестный подтип GoodsWar проигнорирован");
+            Ok(())
+        }
     }
 }
 
@@ -303,7 +276,7 @@ fn decode_goods_war_counts(
     source: &[u8],
     cursor: &mut usize,
     owner: &mut CGoodsWarMember,
-) -> Result<GameGoodsWarMutationReport, GameGoodsWarMessageError> {
+) -> Result<(), GameGoodsWarMessageError> {
     let declared = read_goods_war_i32(source, cursor, "count size")?;
     let effective = owner.set_max_count(declared);
     let mut decoded = 0;
@@ -315,11 +288,8 @@ fn decode_goods_war_counts(
             decoded += 1;
         }
     }
-    Ok(GameGoodsWarMutationReport::CountsReplaced {
-        declared,
-        effective,
-        decoded,
-    })
+    tracing::trace!(declared, effective, decoded, "счётчики GoodsWar заменены");
+    Ok(())
 }
 
 fn read_goods_war_i32(

@@ -1366,13 +1366,6 @@ pub(crate) enum GameSingleFilePublication {
     RepeatedOwnerFreed,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct MonsterBasePropertyRefreshReport {
-    pub(crate) monsters: usize,
-    pub(crate) resolved: usize,
-    pub(crate) missing: usize,
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct RegionBlockRefreshResolver {
     facts: BTreeMap<ShapeIdentity, (ShapeView, bool)>,
@@ -11447,19 +11440,21 @@ impl CGame {
 
     /// Эквивалент `RefreashAllMonsterBaseProperty`: old raw pointers заменены
     /// key lookup-ами, поэтому проход подтверждает состояние всех live owners.
-    pub(crate) fn refresh_all_monster_base_property(&self) -> MonsterBasePropertyRefreshReport {
-        let mut report = MonsterBasePropertyRefreshReport::default();
+    pub(crate) fn refresh_all_monster_base_property(&self) {
+        let mut monsters = 0usize;
+        let mut resolved = 0usize;
+        let mut missing = 0usize;
         for region in self.regions.values() {
             for key in region.base().monster_base_property_keys() {
-                report.monsters = report.monsters.wrapping_add(1);
+                monsters = monsters.wrapping_add(1);
                 if self.find_monster_property_by_origin_name(key).is_some() {
-                    report.resolved = report.resolved.wrapping_add(1);
+                    resolved = resolved.wrapping_add(1);
                 } else {
-                    report.missing = report.missing.wrapping_add(1);
+                    missing = missing.wrapping_add(1);
                 }
             }
         }
-        report
+        tracing::trace!(monsters, resolved, missing, "ссылки свойств живых монстров проверены");
     }
 
     /// Сохраняет исходный `std::map::operator[] = pointer`: повторный ID

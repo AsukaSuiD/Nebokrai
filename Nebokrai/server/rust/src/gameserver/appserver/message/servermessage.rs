@@ -2289,8 +2289,8 @@ fn decode_combat_registry_startup(
                 Err(error) => return Some(Err(error)),
             };
             add_log_text(b"Initial SI_MONSTERLIST...OK!");
-            let refreshed = game.refresh_all_monster_base_property();
-            tracing::trace!(?decoded, ?refreshed, "реестр монстров загружен");
+            game.refresh_all_monster_base_property();
+            tracing::trace!(?decoded, "реестр монстров загружен");
             Some(Ok(()))
         }
         SKILL_LIST_SELECTOR => {
