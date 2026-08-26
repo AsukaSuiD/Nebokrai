@@ -175,9 +175,11 @@
 //! цепочке GameServer → WorldServer → LoginServer, получает до 256 действующих
 //! блокировок, продолжает только ожидающую функцию `5106` и публикует строки
 //! клиенту; отказ и десятисекундный тайм-аут возвращают `-1`.
-//! Связка `OpenCiQingPage 9628` и `PushItemToCiQing 9629` использует
-//! канонические состояние игрока, фабрику предметов и кодек старого клиента:
-//! открытие отправляет `0xC0112`, а подтверждённый предмет с дополнением `243`
+//! Связка `DeleteGoodsFromCiQing 9627`, `OpenCiQingPage 9628` и
+//! `PushItemToCiQing 9629` использует канонические состояние игрока, фабрику
+//! предметов и кодек старого клиента. Удаление расходует `CQ0008`, записывает
+//! аудит операции `4`, меняет контейнер и пересчитывает свойства; открытие
+//! отправляет `0xC0112`, а подтверждённый предмет с дополнением `243`
 //! сохраняется в списке и публикует весь упорядоченный набор через `0xC010C`.
 //! `AddTimeGoods 9605` создаёт предметы через общую фабрику, последовательно
 //! применяет свойства боевой феи, качества, привязки и экипировки, а пары
@@ -450,7 +452,7 @@ use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlug
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
-    EquipmentDaKongContext, EquipmentSessionOpenReport, GameClockContext,
+    CiQingComposeContext, EquipmentDaKongContext, EquipmentSessionOpenReport, GameClockContext,
     GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
     GodsBattleSzlPlayerUpdate, MonsterDeathContext, NationCarriageReturnReport,
     NationCombatContext, NationContendEnterReport, PlayerReliveContext,
@@ -472,6 +474,7 @@ pub(crate) const SCRIPT_FUNCTION_MODIFY_GOODS_TIME: i32 = 9509;
 pub(crate) const SCRIPT_FUNCTION_MODIFY_AUCTION_SPACE: i32 = 9513;
 pub(crate) const SCRIPT_FUNCTION_AUTO_ADD_AUCTION_GOODS: i32 = 9514;
 pub(crate) const SCRIPT_FUNCTION_ADD_TIME_GOODS: i32 = 9605;
+pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS_FROM_CI_QING: i32 = 9627;
 pub(crate) const SCRIPT_FUNCTION_OPEN_CI_QING_PAGE: i32 = 9628;
 pub(crate) const SCRIPT_FUNCTION_PUSH_ITEM_TO_CI_QING: i32 = 9629;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
@@ -843,6 +846,7 @@ pub(crate) trait ScriptAwardAuthenticationContext {
 pub(crate) trait ScriptFunctionRuntime:
     GameClockContext
     + NationCombatContext
+    + CiQingComposeContext
     + EquipmentDaKongContext
     + GameContainerMessageRuntime
     + BattleFairyDeathContext
@@ -862,6 +866,7 @@ pub(crate) trait ScriptFunctionRuntime:
 impl<T> ScriptFunctionRuntime for T where
     T: GameClockContext
         + NationCombatContext
+        + CiQingComposeContext
         + EquipmentDaKongContext
         + GameContainerMessageRuntime
         + BattleFairyDeathContext
@@ -4078,6 +4083,10 @@ pub(crate) fn script_function_parameter_kind(
         SCRIPT_FUNCTION_PLAY_SOUND => match index {
             0 => String,
             1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_DELETE_GOODS_FROM_CI_QING => match index {
+            0 => Integer,
             _ => Unused,
         },
         SCRIPT_FUNCTION_OPEN_CI_QING_PAGE => Unused,
@@ -7443,6 +7452,16 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 request.add_long(region_id);
                 let _ = request.send(game, false);
             }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_DELETE_GOODS_FROM_CI_QING => {
+            let Some(position) = integer_arguments[0]
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                .map(|value| value as u32)
+            else {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            };
+            let _ = game.delete_goods_from_ci_qing(player_id, position, runtime);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_OPEN_CI_QING_PAGE => {
