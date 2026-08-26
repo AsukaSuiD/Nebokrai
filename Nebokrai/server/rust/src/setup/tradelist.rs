@@ -16,6 +16,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::public::readwrite::read_to;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,7 +168,8 @@ impl CTradeList {
             let goods_count = read_wire_i32(source, cursor)?;
             let mut goods = Vec::new();
             for _ in 0..goods_count.max(0) {
-                let compact = read_wire_array::<4>(source, cursor)?;
+                let compact =
+                    LegacyReader::read_bytes_from(source, cursor, 4).map_err(map_read_block)?;
                 goods.push(TradeGoods {
                     page: compact[0],
                     position_x: compact[1],
@@ -330,44 +332,33 @@ fn truncate_at_nul(value: &[u8]) -> &[u8] {
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, TradeListDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(map_read_block)
 }
 
 fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, TradeListDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_u32_from(source, cursor).map_err(map_read_block)
 }
 
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], TradeListDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(TradeListDecodeError::UnexpectedEnd {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер TradeList scalar уже проверен"))
+fn map_read_block(
+    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+) -> TradeListDecodeError {
+    TradeListDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
 
 fn read_wire_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, TradeListDecodeError> {
     let offset = *cursor;
-    let remaining = source
-        .get(offset..)
-        .ok_or(TradeListDecodeError::UnexpectedEnd {
+    if offset > source.len() {
+        return Err(TradeListDecodeError::UnexpectedEnd {
             offset,
             needed: 1,
             available: 0,
-        })?;
-    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
-        return Err(TradeListDecodeError::MissingStringTerminator { offset });
-    };
-    *cursor += length + 1;
-    Ok(remaining[..length].to_vec())
+        });
+    }
+    LegacyReader::read_c_string_from(source, cursor, source.len() - offset)
+        .map(|value| value.to_vec())
+        .map_err(|_| TradeListDecodeError::MissingStringTerminator { offset })
 }

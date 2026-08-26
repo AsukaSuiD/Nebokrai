@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::public::readwrite::read_to;
 
 const ITEM_WIRE_LENGTH: usize = 0x18;
@@ -311,8 +312,20 @@ impl CIncrementShopList {
         self.release();
         let count = read_wire_i32(source, cursor)?;
         for _ in 0..count.max(0) {
-            let page = read_wire_array::<1>(source, cursor)?[0];
-            let prefix = read_wire_array::<ITEM_WIRE_LENGTH>(source, cursor)?;
+            let page = LegacyReader::read_u8_from(source, cursor).map_err(|block| {
+                IncrementShopDecodeError::UnexpectedEnd {
+                    offset: block.offset,
+                    needed: block.needed,
+                    available: block.available,
+                }
+            })?;
+            let prefix = LegacyReader::read_bytes_from(source, cursor, ITEM_WIRE_LENGTH).map_err(
+                |block| IncrementShopDecodeError::UnexpectedEnd {
+                    offset: block.offset,
+                    needed: block.needed,
+                    available: block.available,
+                },
+            )?;
             let description = read_wire_c_string(source, cursor)?;
             let key = read_wire_c_string(source, cursor)?;
             self.insert(
@@ -468,26 +481,13 @@ fn with_suffix(value: &[u8], suffix: &[u8]) -> Vec<u8> {
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, IncrementShopDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
-}
-
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], IncrementShopDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(IncrementShopDecodeError::UnexpectedEnd {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер IncrementShop scalar уже проверен"))
+    LegacyReader::read_i32_from(source, cursor).map_err(|block| {
+        IncrementShopDecodeError::UnexpectedEnd {
+            offset: block.offset,
+            needed: block.needed,
+            available: block.available,
+        }
+    })
 }
 
 fn read_wire_c_string(
@@ -495,32 +495,26 @@ fn read_wire_c_string(
     cursor: &mut usize,
 ) -> Result<Vec<u8>, IncrementShopDecodeError> {
     let offset = *cursor;
-    let remaining = source
-        .get(offset..)
-        .ok_or(IncrementShopDecodeError::UnexpectedEnd {
+    if offset > source.len() {
+        return Err(IncrementShopDecodeError::UnexpectedEnd {
             offset,
             needed: 1,
             available: 0,
-        })?;
-    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
-        return Err(IncrementShopDecodeError::MissingStringTerminator { offset });
-    };
-    *cursor += length + 1;
-    Ok(remaining[..length].to_vec())
+        });
+    }
+    LegacyReader::read_c_string_from(source, cursor, source.len() - offset)
+        .map(|value| value.to_vec())
+        .map_err(|_| IncrementShopDecodeError::MissingStringTerminator { offset })
 }
 
 fn wire_u32_at(source: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(
-        source[offset..offset + 4]
-            .try_into()
-            .expect("фиксированный IncrementShop u32 входит в prefix"),
-    )
+    LegacyReader::at(source, offset)
+        .and_then(|mut reader| reader.read_u32())
+        .expect("фиксированный IncrementShop u32 входит в prefix")
 }
 
 fn wire_u16_at(source: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes(
-        source[offset..offset + 2]
-            .try_into()
-            .expect("фиксированный IncrementShop u16 входит в prefix"),
-    )
+    LegacyReader::at(source, offset)
+        .and_then(|mut reader| reader.read_u16())
+        .expect("фиксированный IncrementShop u16 входит в prefix")
 }

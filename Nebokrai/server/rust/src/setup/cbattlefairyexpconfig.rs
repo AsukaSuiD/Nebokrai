@@ -23,6 +23,7 @@ use std::path::Path;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CBattleFairyExpConfig {
     exp_lists: BTreeMap<u32, Vec<u32>>,
@@ -247,7 +248,11 @@ impl CBattleFairyExpConfig {
                 self.exp_lists.entry(owner_level).or_default().push(value);
             }
         }
-        tracing::trace!(groups = self.exp_lists.len(), experience_values = self.exp_lists.values().map(Vec::len).sum::<usize>(), "таблица опыта боевых фей декодирована");
+        tracing::trace!(
+            groups = self.exp_lists.len(),
+            experience_values = self.exp_lists.values().map(Vec::len).sum::<usize>(),
+            "таблица опыта боевых фей декодирована"
+        );
         Ok(())
     }
 }
@@ -453,33 +458,22 @@ fn write_count(
 ) -> Result<(), BattleFairyExpSerializeError> {
     let count_i32 =
         i32::try_from(count).map_err(|_| BattleFairyExpSerializeError { owner_level, count })?;
-    destination.extend_from_slice(&count_i32.to_le_bytes());
+    LegacyWriter::new(destination).write_i32(count_i32);
     Ok(())
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, BattleFairyExpDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(|block| BattleFairyExpDecodeError {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }
 
 fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, BattleFairyExpDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
-}
-
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], BattleFairyExpDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(BattleFairyExpDecodeError {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер FairyExp scalar уже проверен"))
+    LegacyReader::read_u32_from(source, cursor).map_err(|block| BattleFairyExpDecodeError {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }

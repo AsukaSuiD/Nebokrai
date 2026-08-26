@@ -22,6 +22,7 @@
 //! `CPlayer::ChangeRegion` читает соседние байты `51..53`, названные
 //! `bChMap0/1/2`, для трёх путей аудита `0x6020C`.
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
@@ -333,13 +334,24 @@ impl CLogSystem {
         source: &[u8],
         cursor: &mut usize,
     ) -> Result<(), LogSystemDecodeError> {
-        self.settings = read_wire_array(source, cursor)?;
+        self.settings = LegacyReader::read_bytes_from(source, cursor, LOG_SETTINGS_LENGTH)
+            .map_err(|block| LogSystemDecodeError {
+                offset: block.offset,
+                needed: block.needed,
+                available: block.available,
+            })?
+            .try_into()
+            .expect("LegacyReader вернул ровно 64 байта настроек");
         self.items.clear();
         let count = read_wire_i32(source, cursor)?;
         for _ in 0..count.max(0) {
             self.items.insert(read_wire_i32(source, cursor)?);
         }
-        tracing::trace!(items = self.items.len(), da_kong_log = self.da_kong_log_enabled(), "настройки журналирования декодированы");
+        tracing::trace!(
+            items = self.items.len(),
+            da_kong_log = self.da_kong_log_enabled(),
+            "настройки журналирования декодированы"
+        );
         Ok(())
     }
 }
@@ -413,24 +425,9 @@ impl fmt::Display for LogSystemLoadError {
 impl Error for LogSystemLoadError {}
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, LogSystemDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
-}
-
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], LogSystemDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(LogSystemDecodeError {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер LogSystem scalar уже проверен"))
+    LegacyReader::read_i32_from(source, cursor).map_err(|block| LogSystemDecodeError {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    })
 }

@@ -14,6 +14,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::public::readwrite::read_to;
 
 const PARAMETER_COUNT: usize = 11;
@@ -315,30 +316,21 @@ fn invalid_long(field: &'static str, token: &[u8]) -> ContributeSetupFormatError
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, ContributeSetupDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(map_read_block)
 }
 
 fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, ContributeSetupDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_u32_from(source, cursor).map_err(map_read_block)
 }
 
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], ContributeSetupDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(ContributeSetupDecodeError::UnexpectedEnd {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер ContributeSetup scalar уже проверен"))
+fn map_read_block(
+    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+) -> ContributeSetupDecodeError {
+    ContributeSetupDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
 
 fn read_wire_c_string(
@@ -346,16 +338,14 @@ fn read_wire_c_string(
     cursor: &mut usize,
 ) -> Result<Vec<u8>, ContributeSetupDecodeError> {
     let offset = *cursor;
-    let remaining = source
-        .get(offset..)
-        .ok_or(ContributeSetupDecodeError::UnexpectedEnd {
+    if offset > source.len() {
+        return Err(ContributeSetupDecodeError::UnexpectedEnd {
             offset,
             needed: 1,
             available: 0,
-        })?;
-    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
-        return Err(ContributeSetupDecodeError::MissingStringTerminator { offset });
-    };
-    *cursor += length + 1;
-    Ok(remaining[..length].to_vec())
+        });
+    }
+    LegacyReader::read_c_string_from(source, cursor, source.len() - offset)
+        .map(|value| value.to_vec())
+        .map_err(|_| ContributeSetupDecodeError::MissingStringTerminator { offset })
 }

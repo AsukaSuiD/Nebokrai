@@ -18,6 +18,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
+use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::public::readwrite::read_to;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -272,32 +273,23 @@ fn invalid_long(field: &'static str, token: &[u8]) -> PrisonConfFormatError {
 }
 
 fn read_wire_i8(source: &[u8], cursor: &mut usize) -> Result<i8, PrisonConfDecodeError> {
-    Ok(i8::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i8_from(source, cursor).map_err(map_read_block)
 }
 
 fn read_wire_i16(source: &[u8], cursor: &mut usize) -> Result<i16, PrisonConfDecodeError> {
-    Ok(i16::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i16_from(source, cursor).map_err(map_read_block)
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, PrisonConfDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(map_read_block)
 }
 
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], PrisonConfDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(PrisonConfDecodeError {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер PrisonConf scalar уже проверен"))
+fn map_read_block(
+    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+) -> PrisonConfDecodeError {
+    PrisonConfDecodeError {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }

@@ -21,6 +21,7 @@ use std::path::Path;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct NewSkillMonsterConf {
     groups: BTreeMap<u32, Vec<Vec<u8>>>,
@@ -205,7 +206,11 @@ impl NewSkillMonsterConf {
             }
             self.groups.insert(skill_id, names);
         }
-        tracing::trace!(groups = self.groups.len(), monster_names = self.groups.values().map(Vec::len).sum::<usize>(), "правила новых навыков монстров декодированы");
+        tracing::trace!(
+            groups = self.groups.len(),
+            monster_names = self.groups.values().map(Vec::len).sum::<usize>(),
+            "правила новых навыков монстров декодированы"
+        );
         Ok(())
     }
 }
@@ -486,35 +491,26 @@ fn write_count(
 ) -> Result<(), NewSkillMonsterSerializeError> {
     let count_i32 = i32::try_from(count)
         .map_err(|_| NewSkillMonsterSerializeError::CountOutOfRange { skill_id, count })?;
-    destination.extend_from_slice(&count_i32.to_le_bytes());
+    LegacyWriter::new(destination).write_i32(count_i32);
     Ok(())
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, NewSkillMonsterDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(map_read_block)
 }
 
 fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, NewSkillMonsterDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_u32_from(source, cursor).map_err(map_read_block)
 }
 
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], NewSkillMonsterDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(NewSkillMonsterDecodeError::UnexpectedEnd {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер NewSkillMonster scalar уже проверен"))
+fn map_read_block(
+    block: crate::gameserver::appserver::legacycodec::LegacyReadBlock,
+) -> NewSkillMonsterDecodeError {
+    NewSkillMonsterDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
 
 fn read_wire_c_string(
@@ -522,19 +518,17 @@ fn read_wire_c_string(
     cursor: &mut usize,
 ) -> Result<Vec<u8>, NewSkillMonsterDecodeError> {
     let offset = *cursor;
-    let tail = source
-        .get(offset..)
-        .ok_or(NewSkillMonsterDecodeError::UnexpectedEnd {
+    if offset > source.len() {
+        return Err(NewSkillMonsterDecodeError::UnexpectedEnd {
             offset,
             needed: 1,
             available: 0,
-        })?;
-    let Some(length) = tail.iter().position(|byte| *byte == 0) else {
-        return Err(NewSkillMonsterDecodeError::UnterminatedString {
-            offset,
-            available: tail.len(),
         });
-    };
-    *cursor = offset + length + 1;
-    Ok(tail[..length].to_vec())
+    }
+    LegacyReader::read_c_string_from(source, cursor, source.len() - offset)
+        .map(|value| value.to_vec())
+        .map_err(|_| NewSkillMonsterDecodeError::UnterminatedString {
+            offset,
+            available: source.len() - offset,
+        })
 }

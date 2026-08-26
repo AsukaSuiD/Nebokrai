@@ -138,6 +138,22 @@ impl<'source> LegacyReader<'source> {
         Self::read_from(source, cursor, Self::read_i64)
     }
 
+    pub(crate) fn read_bytes_from(
+        source: &'source [u8],
+        cursor: &mut usize,
+        length: usize,
+    ) -> Result<&'source [u8], LegacyReadBlock> {
+        Self::read_from(source, cursor, |reader| reader.read_bytes(length))
+    }
+
+    pub(crate) fn read_c_string_from(
+        source: &'source [u8],
+        cursor: &mut usize,
+        maximum: usize,
+    ) -> Result<&'source [u8], LegacyReadBlock> {
+        Self::read_from(source, cursor, |reader| reader.read_c_string(maximum))
+    }
+
     pub(crate) fn read_bytes(&mut self, length: usize) -> Result<&'source [u8], LegacyReadBlock> {
         self.ensure(length)?;
         let start = self.cursor;
