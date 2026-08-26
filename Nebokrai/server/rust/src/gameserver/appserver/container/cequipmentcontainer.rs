@@ -28,7 +28,7 @@
 use std::collections::BTreeMap;
 
 use super::ccontainer::ContainerListenerHandle;
-use super::cgoodscontainer::{CGoodsContainer, GoodsContainerMode};
+use super::cgoodscontainer::CGoodsContainer;
 use crate::gameserver::appserver::goods::cbattlefairyproperty::{
     BattleFairyExpBlock, BattleFairyExpReport, BattleFairyExpUpResult, BattleFairyPlayerFacts,
 };
@@ -113,13 +113,6 @@ pub(crate) struct EquipmentClearedGoods {
     pub(crate) column: EquipmentColumn,
     pub(crate) goods: CGoods,
     pub(crate) listeners: Vec<ContainerListenerHandle>,
-}
-
-#[must_use = "в test-mode detached товары должны получить нового владельца"]
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct EquipmentReleaseReport {
-    pub(crate) garbage_collected: Vec<ShapeIdentity>,
-    pub(crate) detached: Vec<(EquipmentColumn, CGoods)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1554,24 +1547,6 @@ impl CEquipmentContainer {
         reports
     }
 
-    pub(crate) fn release(&mut self) -> EquipmentReleaseReport {
-        let mode = self.base.container_mode();
-        let equipment = std::mem::take(&mut self.equipment);
-        let mut report = EquipmentReleaseReport::default();
-        match mode {
-            GoodsContainerMode::Normal => {
-                report.garbage_collected = equipment
-                    .into_values()
-                    .map(|goods| goods.identity())
-                    .collect();
-            }
-            GoodsContainerMode::Test => {
-                report.detached = equipment.into_iter().collect();
-            }
-        }
-        self.base.release();
-        report
-    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

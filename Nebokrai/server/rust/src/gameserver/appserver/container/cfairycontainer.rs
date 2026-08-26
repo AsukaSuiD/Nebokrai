@@ -85,19 +85,6 @@ pub(crate) enum FairyContainerCodecError {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FairyContainerUnserializeReport {
-    pub(crate) cleared: AmountLimitGoodsCleared,
-    pub(crate) base_result: bool,
-    pub(crate) restored_hatch_positions: Vec<u32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FairyContainerUnserializeFailure {
-    pub(crate) error: FairyContainerCodecError,
-    pub(crate) report: FairyContainerUnserializeReport,
-}
-
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FairyState {
@@ -388,7 +375,7 @@ impl CFairyContainer {
         factory: &CGoodsFactory,
         ordinary_threshold: OrdinaryThreshold,
         battle_threshold: BattleThreshold,
-    ) -> Result<Vec<u32>, FairyContainerCodecError>
+    ) -> Result<(), FairyContainerCodecError>
     where
         OrdinaryThreshold: FnMut(u32, u32) -> u32,
         BattleThreshold: FnMut(u32, u32) -> u32,
@@ -400,7 +387,7 @@ impl CFairyContainer {
             ordinary_threshold,
             battle_threshold,
         )?;
-        let mut restored = Vec::new();
+        let mut restored = 0usize;
         for position in HATCHER_POSITIONS {
             let offset = *cursor;
             let available = source.len().saturating_sub(offset);
@@ -418,9 +405,11 @@ impl CFairyContainer {
                 continue;
             };
             fairy.hatch_start_time = hatch_start_time;
-            restored.push(position);
+            restored = restored.wrapping_add(1);
+            tracing::trace!(position, hatch_start_time, "таймер вылупления феи восстановлен");
         }
-        Ok(restored)
+        tracing::trace!(restored, "таймеры контейнера фей восстановлены");
+        Ok(())
     }
 
     pub(crate) fn new() -> Self {
@@ -1316,82 +1305,6 @@ impl CFairyContainer {
         result
     }
 
-    /// Exact owner очищает container до base decoder-а. Suffix применяет
-    /// ненулевые timer-ы по одному и при обрыве сохраняет уже восстановленный
-    /// prefix state.
-    pub(crate) fn unserialize_with<UnserializeBase>(
-        &mut self,
-        source: &[u8],
-        cursor: &mut usize,
-        include_ex_data: bool,
-        unserialize_base: UnserializeBase,
-    ) -> Result<FairyContainerUnserializeReport, FairyContainerUnserializeFailure>
-    where
-        UnserializeBase: FnOnce(&mut CVolumeLimitGoodsContainer, &[u8], &mut usize, bool) -> bool,
-    {
-        let cleared = self.base.clear_goods();
-        let base_result = unserialize_base(&mut self.base, source, cursor, include_ex_data);
-        let mut report = FairyContainerUnserializeReport {
-            cleared,
-            base_result,
-            restored_hatch_positions: Vec::new(),
-        };
-        for position in HATCHER_POSITIONS {
-            let offset = *cursor;
-            let Some(end) = offset.checked_add(4) else {
-                return Err(FairyContainerUnserializeFailure {
-                    error: FairyContainerCodecError::UnexpectedEnd {
-                        position,
-                        offset,
-                        available: source.len().saturating_sub(offset),
-                    },
-                    report,
-                });
-            };
-            let available = source.len().saturating_sub(offset);
-            let mut reader = match LegacyReader::at(source, offset) {
-                Ok(reader) => reader,
-                Err(_) => {
-                    *cursor = end;
-                    return Err(FairyContainerUnserializeFailure {
-                        error: FairyContainerCodecError::UnexpectedEnd {
-                            position,
-                            offset,
-                            available,
-                        },
-                        report,
-                    });
-                }
-            };
-            let hatch_start_time = match reader.read_u32() {
-                Ok(value) => {
-                    *cursor = reader.position();
-                    value
-                }
-                Err(_) => {
-                    // Этот владелец, в отличие от основного кодека, продвигает курсор до ошибки.
-                    *cursor = end;
-                    return Err(FairyContainerUnserializeFailure {
-                        error: FairyContainerCodecError::UnexpectedEnd { position, offset, available },
-                        report,
-                    });
-                }
-            };
-            if hatch_start_time == 0 {
-                continue;
-            }
-            let Some(fairy) = self
-                .base
-                .get_goods_mut(position)
-                .and_then(CGoods::fairy_properties_mut)
-            else {
-                continue;
-            };
-            fairy.hatch_start_time = hatch_start_time;
-            report.restored_hatch_positions.push(position);
-        }
-        Ok(report)
-    }
 }
 
 fn hatch_stat(value: u32, base: u32) -> u32 {
