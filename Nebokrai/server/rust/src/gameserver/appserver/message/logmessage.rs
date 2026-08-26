@@ -176,7 +176,7 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
         return Err(GameLogMessageError::MissingClientRoute { player_id });
     }
     let now_ms = runtime.now_milliseconds();
-    let login_prelude = game
+    game
         .begin_player_login_validation(player_id, now_ms, game_wall_time_seconds() as u32)
         .map_err(|error| {
             let _delivery = reject_player_login(game, player_id, true);
@@ -202,22 +202,18 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
         }
     };
     let decoded_bytes = codec.consumed_bytes;
-    let login = game
+    game
         .complete_world_player_login(player_id, player, captain, team_id, runtime)
         .map_err(|block| {
             let _delivery = reject_player_login(game, player_id, true);
             GameLogMessageError::PlayerLogin(block)
         })?;
-    let delivery = login.client_deliveries.first().copied().unwrap_or_default();
     tracing::trace!(
         player_id,
         status,
         captain,
         team_id,
         decoded_bytes,
-        delivery,
-        ?login_prelude,
-        ?login,
         "вход игрока завершён"
     );
     Ok(())

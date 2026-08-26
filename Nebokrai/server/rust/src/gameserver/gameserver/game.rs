@@ -658,7 +658,7 @@ use crate::gameserver::appserver::player::{
     PlayerBankCurrencyAddOutcome, PlayerCombatProperties, PlayerCriminalStateEnd,
     PlayerDeathGoodsCandidate, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
     PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
-    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerExitSilenceUpdate,
+    PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
     PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
     PlayerGoodsAiDeletion, PlayerLoginGoodsLocation,
     PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation, PlayerReliveOwnedPrelude,
@@ -2248,7 +2248,7 @@ pub(crate) trait GamePlayerLoginContext:
         game: &mut CGame,
         player_id: i32,
         first_login: bool,
-    ) -> Vec<i32>;
+    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2259,41 +2259,6 @@ pub(crate) enum GamePlayerLoginBlock {
     Membership(RegionMembershipBlock),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerLoginReport {
-    pub(crate) player_id: i32,
-    pub(crate) team_id: i32,
-    pub(crate) captain: bool,
-    pub(crate) region_id: i32,
-    pub(crate) first_login: bool,
-    pub(crate) relocation: Option<(i32, i32)>,
-    pub(crate) login_script_id: Option<i32>,
-    pub(crate) client_deliveries: Vec<i32>,
-    pub(crate) billing_delivery: i32,
-    pub(crate) honor_script_id: Option<i32>,
-    pub(crate) goods_ai_registrations: usize,
-    pub(crate) equipment_state_updates: Vec<PlayerLoginEquipmentStateUpdate>,
-    pub(crate) team_session_found: bool,
-    pub(crate) team_snapshot_queued: bool,
-    pub(crate) pet_restore_notice_delivery: Option<i32>,
-    pub(crate) pet_restorations: Vec<GamePlayerPetRestoration>,
-    pub(crate) carriage_restoration: Option<GamePlayerCarriageRestoration>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerPetRestoration {
-    pub(crate) original_name: Vec<u8>,
-    pub(crate) monster_id: Option<i32>,
-    pub(crate) around_delivery: Option<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerCarriageRestoration {
-    pub(crate) original_name: Vec<u8>,
-    pub(crate) monster_id: Option<i32>,
-    pub(crate) around_delivery: Option<i32>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerLoginValidateTime {
     pub(crate) issued_tick_ms: u32,
@@ -2301,27 +2266,10 @@ pub(crate) struct PlayerLoginValidateTime {
     pub(crate) timeout_ms: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerLoginPreludeReport {
-    pub(crate) player_id: i32,
-    pub(crate) validate_time: Option<PlayerLoginValidateTime>,
-    pub(crate) validate_delivery: Option<i32>,
-    pub(crate) sequence_position: Option<i32>,
-    pub(crate) sequence_elements: usize,
-    pub(crate) sequence_delivery: Option<i32>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GamePlayerLoginPreludeError {
     DuplicateSequenceOwner { player_id: i32 },
     Sequence(SequenceSerializeError),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerLoginEquipmentStateUpdate {
-    pub(crate) location: PlayerLoginGoodsLocation,
-    pub(crate) goods: ShapeIdentity,
-    pub(crate) delivery: i32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4037,26 +3985,6 @@ pub(crate) enum GameReturnPointBlock {
     City(CityReturnPointError),
     Country(CountryReturnPointError),
     GodsBattleMissing,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerLostTimeoutReport {
-    pub(crate) player_id: i32,
-    pub(crate) sampled_at_ms: u32,
-    pub(crate) exit: GamePlayerExitReport,
-    pub(crate) staged_for_delete: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerExitReport {
-    pub(crate) player_id: i32,
-    pub(crate) changing_server: bool,
-    pub(crate) business: Option<GamePlayerBusinessEndReport>,
-    pub(crate) silence: PlayerExitSilenceUpdate,
-    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    pub(crate) return_point: GamePlayerExitReturnPoint,
-    pub(crate) player_snapshot_size: Option<usize>,
-    pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -18146,7 +18074,7 @@ impl CGame {
             return;
         }
 
-        let exit = self.finish_player_exit(player_id, changing_server, runtime);
+        self.finish_player_exit(player_id, changing_server, runtime);
         let departure = self.remove_lost_player(player_id);
         tracing::trace!(
             player_id,
@@ -18156,7 +18084,6 @@ impl CGame {
             jjc_quit,
             nation_timing_finished,
             change_body_states_ended,
-            ?exit,
             ?departure,
             "потерянный игрок удалён"
         );
@@ -18219,7 +18146,7 @@ impl CGame {
         player_id: i32,
         changing_server: bool,
         runtime: &mut Runtime,
-    ) -> GamePlayerExitReport {
+    ) {
         let business = self.finish_player_business(player_id);
         let silence = self
             .find_player_mut(player_id)
@@ -18260,16 +18187,17 @@ impl CGame {
                 world_delivery = Some(save.send(self, false));
             }
         }
-        GamePlayerExitReport {
+        tracing::trace!(
             player_id,
             changing_server,
-            business,
-            silence,
-            around_delivery,
-            return_point,
-            player_snapshot_size,
-            world_delivery,
-        }
+            ?business,
+            ?silence,
+            ?around_delivery,
+            ?return_point,
+            ?player_snapshot_size,
+            ?world_delivery,
+            "выход игрока завершён"
+        );
     }
 
     fn apply_player_exit_return_point<Runtime: GameMainLoopRuntime>(
@@ -27796,7 +27724,7 @@ impl CGame {
         player_id: i32,
         issued_tick_ms: u32,
         issued_wall_seconds: u32,
-    ) -> Result<GamePlayerLoginPreludeReport, GamePlayerLoginPreludeError> {
+    ) -> Result<(), GamePlayerLoginPreludeError> {
         let validate_time =
             (self.setup.message_validate_time_ms != 0).then(|| PlayerLoginValidateTime {
                 issued_tick_ms,
@@ -27834,14 +27762,16 @@ impl CGame {
             sequence_delivery = Some(message.send_to_player(self.net_server(), player_id));
         }
 
-        Ok(GamePlayerLoginPreludeReport {
+        tracing::trace!(
             player_id,
-            validate_time,
-            validate_delivery,
-            sequence_position,
+            ?validate_time,
+            ?validate_delivery,
+            ?sequence_position,
             sequence_elements,
-            sequence_delivery,
-        })
+            ?sequence_delivery,
+            "предварительная проверка входа игрока завершена"
+        );
+        Ok(())
     }
 
     pub(crate) fn clear_player_login_validation(&mut self, player_id: i32) {
@@ -27854,19 +27784,19 @@ impl CGame {
         player_id: i32,
         region_id: i32,
         context: &mut Context,
-    ) -> (Option<i32>, Vec<GamePlayerPetRestoration>) {
+    ) {
         let records = self
             .players
             .get_mut(&player_id)
             .map(CPlayer::take_uncreated_pets)
             .unwrap_or_default();
         if records.is_empty() {
-            return (None, Vec::new());
+            return;
         }
-        let notice_delivery = Some(
+        let notice_delivery =
             colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"GS0156"))
-                .send_to_player(self.net_server(), player_id),
-        );
+                .send_to_player(self.net_server(), player_id);
+        tracing::trace!(player_id, notice_delivery, "уведомление о восстановлении питомцев отправлено");
         let (taming_level, current_pets) = self.players.get(&player_id).map_or((0, 0), |player| {
             (
                 player.learned_skill_level(0xd4),
@@ -27902,20 +27832,16 @@ impl CGame {
             })
             .unwrap_or_default();
         let Some(mut owner) = self.take_region_owner(region_id) else {
-            return (notice_delivery, Vec::new());
+            tracing::warn!(player_id, region_id, "питомцы при входе не восстановлены: регион отсутствует");
+            return;
         };
         let (area_width, area_height) = self.area_dimensions();
-        let mut restorations = Vec::with_capacity(amount);
         for record in records.into_iter().take(amount) {
             let Some(property) = self
                 .find_monster_property_by_origin_name(&record.original_name)
                 .cloned()
             else {
-                restorations.push(GamePlayerPetRestoration {
-                    original_name: record.original_name,
-                    monster_id: None,
-                    around_delivery: None,
-                });
+                tracing::warn!(player_id, original_name_bytes = record.original_name.len(), "питомец при входе не восстановлен: свойства отсутствуют");
                 continue;
             };
             let position = owner
@@ -27941,11 +27867,7 @@ impl CGame {
             ) {
                 Ok(monster_id) => monster_id,
                 Err(_) => {
-                    restorations.push(GamePlayerPetRestoration {
-                        original_name: record.original_name,
-                        monster_id: None,
-                        around_delivery: None,
-                    });
+                    tracing::warn!(player_id, original_name_bytes = record.original_name.len(), "питомец при входе не создан");
                     continue;
                 }
             };
@@ -27991,14 +27913,9 @@ impl CGame {
             let around_delivery = self
                 .send_game_shape_around(owner.base(), &shape, None, &message)
                 .ok();
-            restorations.push(GamePlayerPetRestoration {
-                original_name: record.original_name,
-                monster_id: Some(monster_id),
-                around_delivery,
-            });
+            tracing::trace!(player_id, monster_id, original_name_bytes = record.original_name.len(), ?around_delivery, "питомец при входе восстановлен");
         }
         self.restore_region_owner(owner);
-        (notice_delivery, restorations)
     }
 
     fn restore_player_login_carriage<Context: ServerRegionMonsterContext>(
@@ -28006,7 +27923,7 @@ impl CGame {
         player_id: i32,
         region_id: i32,
         context: &mut Context,
-    ) -> Option<GamePlayerCarriageRestoration> {
+    ) -> Option<()> {
         let (record, recreate, player_name, player_x, player_y, player_direction) =
             self.find_player(player_id).and_then(|player| {
                 let (record, recreate) = player.login_carriage();
@@ -28059,19 +27976,13 @@ impl CGame {
                 .cloned()
             else {
                 self.restore_region_owner(owner);
-                return Some(GamePlayerCarriageRestoration {
-                    original_name: record.original_name,
-                    monster_id: None,
-                    around_delivery: None,
-                });
+                tracing::warn!(player_id, original_name_bytes = record.original_name.len(), "повозка при входе не восстановлена: свойства отсутствуют");
+                return Some(());
             };
             if !(property.tamable == 1 && property.maximum_tame_attempt_count == 0) {
                 self.restore_region_owner(owner);
-                return Some(GamePlayerCarriageRestoration {
-                    original_name: record.original_name,
-                    monster_id: None,
-                    around_delivery: None,
-                });
+                tracing::warn!(player_id, original_name_bytes = record.original_name.len(), "повозка при входе не восстановлена: свойства несовместимы");
+                return Some(());
             }
             let Some(position) = owner
                 .base()
@@ -28080,11 +27991,8 @@ impl CGame {
                 .ok()
             else {
                 self.restore_region_owner(owner);
-                return Some(GamePlayerCarriageRestoration {
-                    original_name: record.original_name,
-                    monster_id: None,
-                    around_delivery: None,
-                });
+                tracing::warn!(player_id, region_id, "повозка при входе не восстановлена: позиция недоступна");
+                return Some(());
             };
             let Some(monster_id) = owner
                 .base_mut()
@@ -28103,11 +28011,8 @@ impl CGame {
                 .ok()
             else {
                 self.restore_region_owner(owner);
-                return Some(GamePlayerCarriageRestoration {
-                    original_name: record.original_name,
-                    monster_id: None,
-                    around_delivery: None,
-                });
+                tracing::warn!(player_id, region_id, "повозка при входе не создана");
+                return Some(());
             };
             let monster = owner
                 .base_mut()
@@ -28170,11 +28075,8 @@ impl CGame {
             );
         }
         self.restore_region_owner(owner);
-        Some(GamePlayerCarriageRestoration {
-            original_name,
-            monster_id: Some(monster_id),
-            around_delivery,
-        })
+        tracing::trace!(player_id, monster_id, original_name_bytes = original_name.len(), ?around_delivery, "повозка при входе восстановлена");
+        Some(())
     }
 
     fn send_carriage_log_snapshot(
@@ -28432,7 +28334,7 @@ impl CGame {
         captain: bool,
         team_id: i32,
         context: &mut Context,
-    ) -> Result<GamePlayerLoginReport, GamePlayerLoginBlock> {
+    ) -> Result<(), GamePlayerLoginBlock> {
         let decoded = player.player_id();
         if decoded != expected_player_id {
             return Err(GamePlayerLoginBlock::PlayerIdMismatch {
@@ -28552,10 +28454,8 @@ impl CGame {
         if let Some(state) = &loaded_ride_state {
             self.send_ride_visual(expected_player_id, state, true);
         }
-        let (pet_restore_notice_delivery, pet_restorations) =
-            self.restore_player_login_pets(expected_player_id, region_id, context);
-        let carriage_restoration =
-            self.restore_player_login_carriage(expected_player_id, region_id, context);
+        self.restore_player_login_pets(expected_player_id, region_id, context);
+        self.restore_player_login_carriage(expected_player_id, region_id, context);
 
         let first_login = self
             .players
@@ -28587,8 +28487,7 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("login property callback не удаляет player owner")
             .apply_change_body_properties(recomputed, coefficients, &goods_factory);
-        let client_deliveries =
-            context.publish_initial_player_client_snapshot(self, expected_player_id, first_login);
+        context.publish_initial_player_client_snapshot(self, expected_player_id, first_login);
         let mut billing = CMessage::new(0x000e_f201);
         add_legacy_c_string(
             billing.base_mut(),
@@ -28668,7 +28567,6 @@ impl CGame {
                 player.record_goods_ai_registration(ticket, goods_id);
             }
         }
-        let mut equipment_state_updates = Vec::new();
         for (location, goods, payload) in pending_equipment_state_updates {
             let mut update = CMessage::new(0x000b_f928);
             update.add_long(expected_player_id);
@@ -28682,32 +28580,25 @@ impl CGame {
             } else {
                 update.send_to_player(self.net_server(), expected_player_id)
             };
-            equipment_state_updates.push(PlayerLoginEquipmentStateUpdate {
-                location,
-                goods,
-                delivery,
-            });
+            tracing::trace!(player_id = expected_player_id, ?location, ?goods, delivery, "состояние снаряжения обновлено при входе");
         }
 
-        Ok(GamePlayerLoginReport {
-            player_id: expected_player_id,
+        tracing::trace!(
+            player_id = expected_player_id,
             team_id,
             captain,
             region_id,
             first_login,
-            relocation,
-            login_script_id,
-            client_deliveries,
+            ?relocation,
+            ?login_script_id,
             billing_delivery,
-            honor_script_id,
+            ?honor_script_id,
             goods_ai_registrations,
-            equipment_state_updates,
             team_session_found,
             team_snapshot_queued,
-            pet_restore_notice_delivery,
-            pet_restorations,
-            carriage_restoration,
-        })
+            "вход игрока завершён владельцем CGame"
+        );
+        Ok(())
     }
 
     /// Exact `s_mapPlayer.size()` для GMA `0x80002`; x86 `size_type` — DWORD.
@@ -39190,12 +39081,12 @@ impl CGame {
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
-    ) -> Option<GamePlayerLostTimeoutReport> {
+    ) -> bool {
         if !self
             .find_player(player_id)
             .is_some_and(CPlayer::has_lost_delay)
         {
-            return None;
+            return false;
         }
         let sampled_at_ms = runtime.now_milliseconds();
         let fight_state_timer_ms = self.globe_setup.fight_state_timer_ms();
@@ -39203,21 +39094,17 @@ impl CGame {
             .find_player(player_id)
             .is_some_and(|player| player.lost_delay_due(sampled_at_ms, fight_state_timer_ms))
         {
-            return None;
+            return false;
         }
-        let exit = self.finish_player_exit(player_id, false, runtime);
+        self.finish_player_exit(player_id, false, runtime);
         let staged_for_delete = self.find_player_mut(player_id).is_some_and(|player| {
             player
                 .movement_shape_mut()
                 .set_change_state(SHAPE_CHANGE_DELETE);
             true
         });
-        Some(GamePlayerLostTimeoutReport {
-            player_id,
-            sampled_at_ms,
-            exit,
-            staged_for_delete,
-        })
+        tracing::trace!(player_id, sampled_at_ms, staged_for_delete, "задержанный выход игрока завершён");
+        true
     }
 
     /// Один exact `CGame::RunAuction` pass. Feature gate не читает часы;
@@ -39754,15 +39641,15 @@ impl CGame {
             let mut player_skill_executions = 0usize;
             let mut player_energy_regenerations = Vec::with_capacity(player_ids.len());
             let mut player_auto_progress = Vec::with_capacity(player_ids.len());
-            let mut player_lost_timeouts = Vec::new();
+            let mut player_lost_timeouts = 0usize;
             let mut player_fight_states = Vec::new();
             let mut player_criminal_states = Vec::new();
             for player_id in player_ids {
                 if let Some(death) = self.refresh_battle_fairy_death(player_id) {
                     battle_fairy_deaths.push(death);
                 }
-                if let Some(timeout) = self.run_player_lost_timeout(player_id, runtime) {
-                    player_lost_timeouts.push(timeout);
+                if self.run_player_lost_timeout(player_id, runtime) {
+                    player_lost_timeouts = player_lost_timeouts.wrapping_add(1);
                 }
                 let mut restored = None;
                 let mut ran_player_body = false;
@@ -40241,7 +40128,7 @@ impl CGame {
                             player_skill_executions,
                             player_energy_regenerations.len(),
                             player_auto_progress.len(),
-                            player_lost_timeouts.len(),
+                            player_lost_timeouts,
                             player_fight_states.len(),
                             player_criminal_states.len(),
                             base_region.is_some(),
@@ -40274,7 +40161,7 @@ impl CGame {
                 player_skill_executions,
                 player_energy_regenerations.len(),
                 player_auto_progress.len(),
-                player_lost_timeouts.len(),
+                player_lost_timeouts,
                 player_fight_states.len(),
                 player_criminal_states.len(),
                 base_region.is_some(),
