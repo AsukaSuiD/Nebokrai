@@ -1,62 +1,25 @@
-//! Достигнутая movement/spatial-transition часть `CMoveShape` GameServer.
+//! Реализованная часть `CMoveShape` исторического GameServer.
 //!
-//! `GetDestDir` RVA `0x000CCF60`, `IsDied` `0x000CCF20` и virtual
-//! `SetPosXY` `0x000CD050`, а также `ForceMove/OnMove/OnSetPosition`
-//! `0x000CD1A0/0x000CD490/0x000CD5C0` имеют статус
-//! `IMPLEMENTED, VERIFIED_DISASSEMBLY`; точная пара
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`, исходники
-//! `server/gameserver/appserver/moveshape.h/.cpp`.
+//! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
+//! исходные владельцы `appserver/moveshape.h/.cpp`. Сохранены точный порядок
+//! смены пространственной принадлежности, двоичные форматы `0xBF603/604/605`,
+//! счётчики запрета движения и боя, а также подтверждённая странность
+//! `ForceMove`, где верхняя граница Y записывает `width - 1`.
 //!
-//! PDB подтверждает наследование `CShape`, `m_pFather +0x40`, area-link
-//! `+0x60`, next-area X/Y `+0x68/+0x6C` и change-state `+0x80`. Exact EXE
-//! фиксирует порядок: при живом region-link сначала virtual `SetBlock` снимает
-//! старую footprint, затем HP virtual `+0xD0` (либо NPC type `500`) разрешает
-//! новую footprint, после чего бит-в-бит пишутся X/Y и только затем через
-//! x87 truncation и `AREA_WIDTH/AREA_HEIGHT` записывается `CS_CHANGEAREA`.
-//! Invalid float и area span останавливаются typed-границей в достигнутой
-//! точке, не откатывая уже доказанные предшествующие эффекты.
+//! Известные состояния смены тела, расширенные состояния, бессмертие,
+//! сценарные состояния и езда принадлежат одному `CanonicalStateStorage`.
+//! Сырой `ex_states` скрыт внутри `LegacyStateCodec` и служит только для
+//! сохранения точного порядка, неизвестных записей и обратного wire-кодека;
+//! игровое поведение читает типизированные состояния. Добавление, замена,
+//! таймеры и удаление обновляют типизированную модель и её кодек в одной
+//! операции с прежними смещениями и порядком.
 //!
-//! Movement commands сохраняют разные wire layouts `0xBF603/604/605`, send до
-//! virtual `SetTileXY`, direction до `0xBF605` и `ASA_STAND` после force
-//! position. Подтверждённая странность `ForceMove`: верхняя граница Y пишет
-//! `width - 1`, хотя сравнивает с height; это наблюдаемое поведение сохранено.
-//! Nullable father/AI выражены `Option`; deep around-send теперь подключён
-//! concrete owner-цепочкой `CMessage -> CServerRegion/CArea -> CGame/player ->
-//! CMyNetServer`, а runtime context сохраняет только ещё не материализованные
-//! concrete derived AI lookup и realtime clock.
-//!
-//! Combat, полный pet AI, общий AI tick и остальные поля/методы ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально). Достигнутый pet-control owner хранит исходный default
-//! passive mode и exact `(type,id,figure)` refs; Game message caller меняет
-//! region-owned monster mode/action/target и удаляет ref при dismiss.
-//! Для battle-fairy combine/reset материализованы `AddSkill`
-//! и оба name/ID overload-а `DelSkill/AddSkill`: factory подтверждает
-//! level/type/name, а `BTreeMap`
-//! хранит identity вместо четырёх raw pointer-vector-ов. При удалении current
-//! skill ID очищается до category lookup, как в EXE. Concrete skill execution,
-//! его virtual параметры остаются у отдельных skill owners. Derived HP/figure
-//! передаются как факты, а не копируются из ещё сырых
-//! player/monster owners.
-//! `GetCurrentSkill` получил только безопасный ID-view для caller-а
-//! `SummonBF`; virtual lifecycle skill остаётся у будущего skill owner-а.
-//! `SetMoveable` RVA `0x000CCEE0` хранит exact nesting counter и derived bool;
-//! goods-session `0x8FC25` снимает один запрет строго между session End и plug Exit.
-//! Reached appellation scripts материализуют `Add/Del/GetUndeadState` RVA
-//! `0x000D1780/0x000CDE80/0x000CDEF0`: свойства берутся из skill `(56, ID)`,
-//! state заменяются по usage type либо ID, сохраняются exact tag `0x38/72`,
-//! wrapping lifetime/item clock и death flag. Property overlay, login restore,
-//! item consumption и `0xBFE03/04` замкнуты concrete player/CGame owner-ами.
-//! Эти и уже собственные расширенные состояния, смена тела и езда теперь
-//! обновляются из реального владельца `CMoveShape::UpdateAbnormality`;
-//! неизвестные конкретные классы состояний остаются узкой границей среды
-//! после материализованного прохода.
-//! Сценарная пара `AddState/GetStatesNum` материализует семь фабричных
-//! состояний предметов и защиты: хранит исходный порядок и дубликаты, включает
-//! их в общий подсчёт известных `CState`, накладывает свойства и множитель
-//! опыта, а `AutoProtect` проходит начало, снятие при бое/предмете/смерти и
-//! сообщения `0xBFE03/0xBFE04`.
+//! Реализованные `AddSkill`, `DelSkill`, `AddState`, `GetStatesNum` и
+//! `UpdateAbnormality` используют это же хранилище. Ещё не восстановленные
+//! классы навыков и AI остаются в сохранённом `UNKNOWN` (исследовательский декомпилят хранится локально) ниже.
 
 use std::collections::BTreeMap;
+use std::ops::{Deref, DerefMut};
 
 use super::ai::baseai::{AiShapeAction, CBaseAI};
 use super::chbystate::{ChangeBodyMutation, ChangeBodyState};
@@ -429,12 +392,7 @@ pub(crate) struct CMoveShape {
     skills: BTreeMap<u32, MoveShapeSkill>,
     current_skill_id: Option<u32>,
     item_skill_ids: Vec<u32>,
-    ex_states: Vec<u8>,
-    change_body_states: Vec<ChangeBodyState>,
-    extended_states: Vec<ExtendedState>,
-    undead_states: Vec<UndeadState>,
-    script_states: Vec<ScriptMoveState>,
-    ride_state: Option<RideState>,
+    state_storage: CanonicalStateStorage,
     moveable_count: i32,
     moveable: bool,
     can_fight_count: i32,
@@ -444,6 +402,55 @@ pub(crate) struct CMoveShape {
     current_pets_mode: i32,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct LegacyStateCodec {
+    payload: Vec<u8>,
+}
+
+impl LegacyStateCodec {
+    fn replace(&mut self, payload: Vec<u8>) {
+        self.payload = payload;
+    }
+}
+
+impl Deref for LegacyStateCodec {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.payload
+    }
+}
+
+impl DerefMut for LegacyStateCodec {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.payload
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CanonicalStateStorage {
+    ex_states: LegacyStateCodec,
+    change_body_states: Vec<ChangeBodyState>,
+    extended_states: Vec<ExtendedState>,
+    undead_states: Vec<UndeadState>,
+    script_states: Vec<ScriptMoveState>,
+    ride_state: Option<RideState>,
+}
+
+impl Deref for CMoveShape {
+    type Target = CanonicalStateStorage;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state_storage
+    }
+}
+
+impl DerefMut for CMoveShape {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state_storage
+    }
+}
+
 impl Default for CMoveShape {
     fn default() -> Self {
         Self {
@@ -451,12 +458,7 @@ impl Default for CMoveShape {
             skills: BTreeMap::new(),
             current_skill_id: None,
             item_skill_ids: Vec::new(),
-            ex_states: Vec::new(),
-            change_body_states: Vec::new(),
-            extended_states: Vec::new(),
-            undead_states: Vec::new(),
-            script_states: Vec::new(),
-            ride_state: None,
+            state_storage: CanonicalStateStorage::default(),
             moveable_count: 0,
             moveable: true,
             can_fight_count: 0,
@@ -554,12 +556,8 @@ impl CMoveShape {
         &self.undead_states
     }
 
-    pub(crate) fn ex_states(&self) -> &[u8] {
-        &self.ex_states
-    }
-
     pub(crate) fn serialized_ex_states(&self, now_ms: u32) -> Vec<u8> {
-        let mut payload = self.ex_states.clone();
+        let mut payload = self.ex_states.to_vec();
         for state in &self.change_body_states {
             state.update_serialized_runtime(&mut payload, now_ms);
         }
@@ -577,7 +575,7 @@ impl CMoveShape {
         self.extended_states = ExtendedState::decode_all(&states, 0);
         self.undead_states = UndeadState::decode_all(&states, 0);
         self.ride_state = RideState::decode(&states);
-        self.ex_states = states;
+        self.ex_states.replace(states);
     }
 
     pub(crate) fn clear_persisted_runtime_state(&mut self) {
@@ -595,22 +593,22 @@ impl CMoveShape {
     }
 
     pub(crate) const fn ride_state(&self) -> Option<&RideState> {
-        self.ride_state.as_ref()
+        self.state_storage.ride_state.as_ref()
     }
 
     pub(crate) const fn ride_state_mut(&mut self) -> Option<&mut RideState> {
-        self.ride_state.as_mut()
+        self.state_storage.ride_state.as_mut()
     }
 
     pub(crate) const fn has_ride_state(&self) -> bool {
-        self.ride_state.is_some()
+        self.state_storage.ride_state.is_some()
     }
 
     pub(crate) const fn has_materialized_abnormality(&self) -> bool {
-        !self.change_body_states.is_empty()
-            || !self.extended_states.is_empty()
-            || !self.undead_states.is_empty()
-            || self.ride_state.is_some()
+        !self.state_storage.change_body_states.is_empty()
+            || !self.state_storage.extended_states.is_empty()
+            || !self.state_storage.undead_states.is_empty()
+            || self.state_storage.ride_state.is_some()
     }
 
     /// Точный фабричный диапазон `CMoveShape::AddState`: остальные ID не
@@ -870,12 +868,13 @@ impl CMoveShape {
     }
 
     pub(crate) fn activate_loaded_undead_states(&mut self, now_ms: u32) -> Vec<UndeadState> {
-        for state in &mut self.undead_states {
+        let storage = &mut self.state_storage;
+        for state in &mut storage.undead_states {
             state.started_ms = now_ms;
             state.last_item_tick_ms = now_ms;
-            state.update_serialized_runtime(&mut self.ex_states, now_ms);
+            state.update_serialized_runtime(&mut storage.ex_states, now_ms);
         }
-        self.undead_states.clone()
+        storage.undead_states.clone()
     }
 
     pub(crate) fn undead_state_tick(
@@ -1026,16 +1025,13 @@ impl CMoveShape {
         &self.extended_states
     }
 
-    pub(crate) fn extended_states_mut(&mut self) -> &mut [ExtendedState] {
-        &mut self.extended_states
-    }
-
     pub(crate) fn activate_loaded_extended_states(&mut self, now_ms: u32) -> Vec<ExtendedState> {
-        for state in &mut self.extended_states {
+        let storage = &mut self.state_storage;
+        for state in &mut storage.extended_states {
             state.activate_loaded(now_ms);
-            state.update_serialized_runtime(&mut self.ex_states, now_ms);
+            state.update_serialized_runtime(&mut storage.ex_states, now_ms);
         }
-        self.extended_states.clone()
+        storage.extended_states.clone()
     }
 
     pub(crate) fn extended_state_tick(
@@ -1159,11 +1155,12 @@ impl CMoveShape {
         &mut self,
         now_ms: u32,
     ) -> Vec<ChangeBodyState> {
-        for state in &mut self.change_body_states {
+        let storage = &mut self.state_storage;
+        for state in &mut storage.change_body_states {
             state.activate_loaded(now_ms);
-            state.update_serialized_runtime(&mut self.ex_states, now_ms);
+            state.update_serialized_runtime(&mut storage.ex_states, now_ms);
         }
-        self.change_body_states.clone()
+        storage.change_body_states.clone()
     }
 
     pub(crate) fn expired_change_body_state_ids(&self, now_ms: u32) -> Vec<u32> {
@@ -1176,11 +1173,12 @@ impl CMoveShape {
 
     pub(crate) fn change_body_region_transition_end_ids(&mut self) -> Vec<u32> {
         let mut ended = Vec::new();
-        for state in &mut self.change_body_states {
+        let storage = &mut self.state_storage;
+        for state in &mut storage.change_body_states {
             if state.on_change_region() {
                 ended.push(state.level);
             } else {
-                state.update_serialized_runtime(&mut self.ex_states, state.started_ms);
+                state.update_serialized_runtime(&mut storage.ex_states, state.started_ms);
             }
         }
         ended
@@ -1188,11 +1186,12 @@ impl CMoveShape {
 
     pub(crate) fn change_body_player_lost_end_ids(&mut self) -> Vec<u32> {
         let mut ended = Vec::new();
-        for state in &mut self.change_body_states {
+        let storage = &mut self.state_storage;
+        for state in &mut storage.change_body_states {
             if state.on_player_lost() {
                 ended.push(state.level);
             } else {
-                state.update_serialized_runtime(&mut self.ex_states, state.started_ms);
+                state.update_serialized_runtime(&mut storage.ex_states, state.started_ms);
             }
         }
         ended

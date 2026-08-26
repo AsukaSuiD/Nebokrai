@@ -1,13 +1,13 @@
 //! Базовая атака GameServer (`SKILL_BASE_ATTACK == 1`).
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
-//! `appserver/skills/baseattack.cpp`. Подтверждённый контракт: первый AI tick
-//! проверяет дальность, поворачивает игрока и публикует action 0; после
-//! `SKILL_USAGE_DELAY_TIME` action 1 до расчёта атаки; dead target завершает
-//! skill action 2, distant target — action `0x0b`. Состояние хранится рядом с
-//! canonical `CPlayerAI`, а не в shadow-map CGame. Конкретный PvP damage и
-//! сетевые hurt/death effects исполняет CGame caller; прочие skill ID сюда не
-//! маршрутизируются.
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/baseattack.cpp`. Первый такт AI проверяет дальность,
+//! поворачивает игрока и публикует действие 0; после
+//! `SKILL_USAGE_DELAY_TIME` действие 1 предшествует расчёту атаки. Мёртвая
+//! цель завершает навык кодом 2, удалённая цель — кодом `0x0b`.
+//! `SkillExecutionKernel` хранится в `CPlayerAI` и переживает задержку между
+//! тактами. Формулы PvP, RNG и сетевые последствия ранения и смерти остаются
+//! у вызывающего `CGame`; другие идентификаторы навыков сюда не направляются.
 
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;

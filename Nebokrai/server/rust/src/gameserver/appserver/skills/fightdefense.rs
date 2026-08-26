@@ -1,15 +1,13 @@
-//! Базовая защита GameServer (`SKILL_BASE_DEFENSE`) для player-target и
-//! monster-target ветвей обычной атаки.
+//! Базовая защита GameServer (`SKILL_BASE_DEFENSE`) для обычной атаки.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
-//! `appserver/skills/fightdefense.cpp`. Этот materialized проход сохраняет
-//! exact hit/full-miss, physical/element/soul, blast/critical, avoid и PvP
-//! factor для player-vs-player, level-adjusted hit и monster
-//! defense/resistance/avoid без PvP factor для player-vs-monster, а также raw
-//! monster hit limits и player/monster defense/resistance/avoid для обратных
-//! monster-vs-player и wild-monster-vs-pet ударов. Активные polymorphic shield state-классы не
-//! подменяются: их owner-ы остаются в unmaterialized state AI, а этот owner
-//! применяется к обычному defense snapshot без таких state.
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/fightdefense.cpp`. Сохранены проверки попадания и полного
+//! промаха, физический, стихийный и духовный урон, критические и усиленные
+//! удары, уклонение и коэффициент PvP. Для монстров сохраняются отдельные
+//! ограничения попадания, защита и сопротивления без коэффициента PvP.
+//! Функции вызываются на стадии `Calculate` общего конвейера и не меняют число
+//! или порядок обращений к RNG. Ещё не восстановленные классы щитов не
+//! подменяются этой обычной защитой.
 
 use crate::gameserver::appserver::monster::MonsterCombatProperties;
 use crate::gameserver::appserver::player::PlayerCombatProperties;

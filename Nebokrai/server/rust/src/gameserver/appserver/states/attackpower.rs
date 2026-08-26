@@ -1,10 +1,11 @@
-//! Attack-value owner GameServer.
+//! Типизированное описание рассчитанной атаки GameServer.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
-//! `appserver/states/attackpower.cpp`. Подтверждённый контракт хранит ordered
-//! damage powers, skill/attacker identity, PK-разрешения и четыре defense-tail
-//! признака. Rust `Vec` заменяет native vector указателей; lifetime и ручное
-//! удаление не переносятся, числовая/wire-семантика полей сохранена.
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/states/attackpower.cpp`. Сохраняются порядок составляющих урона,
+//! идентификаторы навыка и атакующего, сведения PK и признаки завершающей
+//! защиты. `Vec` заменяет исходный вектор указателей без изменения числовой и
+//! сетевой семантики полей. Значение формируется на стадии `Calculate`, а
+//! применяет его конкретный владелец стадии `Attack`.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AttackPowerType {
