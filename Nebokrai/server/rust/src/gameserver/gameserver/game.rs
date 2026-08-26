@@ -688,8 +688,8 @@ use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleCancelByPlayer, GodsBattleContender,
 };
 use crate::gameserver::appserver::servernationregion::{
-    NationCarriageReturnOutcome, NationContend, NationContendArithmeticBlock,
-    NationContendCancelOutcome, NationContendCaptureMutation, NationContendDamageMutation,
+    NationCarriageReturnOutcome, NationContendArithmeticBlock,
+    NationContendCancelOutcome, NationContendDamageMutation,
     NationMonsterDamageNotice, NationMoraleMutation, ServerNationRegion,
     classify_nation_morale_target,
 };
@@ -3143,53 +3143,6 @@ pub(crate) struct NationContendDamageReport {
     pub(crate) player_id: i32,
     pub(crate) mutation: Result<Option<NationContendDamageMutation>, NationContendArithmeticBlock>,
     pub(crate) delivery: Option<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum NationContendCompletionOutcome {
-    PlayerMissing,
-    PlayerUnavailable,
-    CountryOutsideNation,
-    Captured(NationContendCaptureMutation),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NationMagicStoneTransitionOutcome {
-    NpcMissing,
-    NpcNameAmbiguous { matches: usize },
-    NpcCoordinateBlocked(ShapeCoordinateBlock),
-    NpcRemovalBlocked(RegionMembershipBlock),
-    MonsterPropertyMissing,
-    MonsterSpawnBlocked(RegionMembershipBlock),
-    Spawned { monster_id: i32 },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationMagicStoneTransitionReport {
-    pub(crate) country: u8,
-    pub(crate) npc_id: Option<i32>,
-    pub(crate) explosion_delivery: Option<i32>,
-    pub(crate) removal_delivery: Option<i32>,
-    pub(crate) outcome: NationMagicStoneTransitionOutcome,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NationContendAiReport {
-    pub(crate) region_id: i32,
-    pub(crate) magic_stone_transitions: Vec<NationMagicStoneTransitionReport>,
-    pub(crate) progress_deliveries: Vec<(i32, i32, i32)>,
-    pub(crate) completed: Option<NationContend>,
-    pub(crate) completion_outcome: Option<NationContendCompletionOutcome>,
-    pub(crate) completion_deliveries: Vec<i32>,
-    pub(crate) state_deliveries: Vec<(i32, Result<i32, ShapeCoordinateBlock>)>,
-    pub(crate) top_info_delivery: Option<Result<i32, SendMessageError>>,
-    pub(crate) treasure_spawns: Vec<Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NationRegionAiError {
-    Base(ServerRegionMonsterRectBlock),
-    Contend(NationContendArithmeticBlock),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12017,7 +11970,7 @@ impl CGame {
         ai_tick: i32,
         tick_interval_ms: i32,
         runtime: &mut Runtime,
-    ) -> Option<Result<NationContendAiReport, NationRegionAiError>> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Nation(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -12032,89 +11985,79 @@ impl CGame {
             Ok(()) => {},
             Err(error) => {
                 self.restore_region_owner(ServerRegionOwner::Nation(region));
-                return Some(Err(NationRegionAiError::Base(error)));
+                tracing::warn!(region_id, ai_tick, ?error, "базовый проход ИИ войны наций заблокирован");
+                return Some(());
             }
         }
-        let mut magic_stone_transitions = Vec::new();
+        let mut magic_stone_transitions = 0usize;
         for country in region.take_due_magic_stone_transitions() {
-            magic_stone_transitions.push(self.replace_nation_magic_stone(
-                &mut region,
-                country,
-                runtime,
-            ));
+            self.replace_nation_magic_stone(&mut region, country, runtime);
+            magic_stone_transitions = magic_stone_transitions.wrapping_add(1);
         }
         let advance = match region.advance_contenders(runtime.now_milliseconds()) {
             Ok(advance) => advance.unwrap_or_default(),
             Err(error) => {
                 self.restore_region_owner(ServerRegionOwner::Nation(region));
-                return Some(Err(NationRegionAiError::Contend(error)));
+                tracing::warn!(region_id, ai_tick, ?error, "продвижение захвата войны наций заблокировано");
+                return Some(());
             }
         };
-        let mut progress_deliveries = Vec::with_capacity(advance.progress.len());
+        let progress_count = advance.progress.len();
         for (player_id, percentage) in advance.progress {
             let delivery = self.send_nation_contend_time(player_id, percentage);
-            progress_deliveries.push((player_id, percentage, delivery));
+            tracing::trace!(region_id, player_id, percentage, delivery, "отправлено время захвата войны наций");
         }
 
         let completed = advance.completed;
-        let mut completion_outcome = None;
-        let mut completion_deliveries = Vec::new();
-        let mut state_deliveries = Vec::new();
-        let mut top_info_delivery = None;
-        let mut treasure_spawns = Vec::new();
+        let completed_player_id = completed.map(|contender| contender.player_id);
+        let mut completion_deliveries = 0usize;
+        let mut state_deliveries = 0usize;
+        let mut treasure_spawns = 0usize;
         if let Some(contender) = completed {
-            completion_deliveries.push(self.send_nation_contend_time(contender.player_id, 100));
+            let delivery = self.send_nation_contend_time(contender.player_id, 100);
+            completion_deliveries = completion_deliveries.wrapping_add(1);
+            tracing::trace!(region_id, player_id = contender.player_id, delivery, "отправлено завершение захвата войны наций");
             add_game_log_text(self.get_string_by_id(b"GS1072"));
-            completion_outcome = Some(match self.find_player(contender.player_id) {
-                None => NationContendCompletionOutcome::PlayerMissing,
+            match self.find_player(contender.player_id) {
+                None => tracing::warn!(region_id, player_id = contender.player_id, "игрок завершённого захвата войны наций не найден"),
                 Some(player) if !player.can_attack_nation_monster() => {
-                    NationContendCompletionOutcome::PlayerUnavailable
+                    tracing::warn!(region_id, player_id = contender.player_id, "игрок завершённого захвата войны наций недоступен")
                 }
                 Some(player) => {
                     let country = player.country();
                     match region.capture_contend_symbol(country) {
-                        None => NationContendCompletionOutcome::CountryOutsideNation,
+                        None => tracing::warn!(region_id, player_id = contender.player_id, country, "государство игрока не участвует в войне наций"),
                         Some(capture) => {
                             for cancelled_player_id in &capture.cancelled_player_ids {
-                                completion_deliveries
-                                    .push(self.send_nation_contend_time(*cancelled_player_id, 0));
+                                let delivery = self.send_nation_contend_time(*cancelled_player_id, 0);
+                                completion_deliveries = completion_deliveries.wrapping_add(1);
                                 if let Some(delivery) = self.set_nation_player_contend_state(
                                     &region.war.base,
                                     *cancelled_player_id,
                                     false,
                                 ) {
-                                    state_deliveries.push((*cancelled_player_id, delivery));
+                                    state_deliveries = state_deliveries.wrapping_add(1);
+                                    tracing::trace!(region_id, player_id = *cancelled_player_id, ?delivery, "сброшено состояние захвата войны наций");
                                 }
+                                tracing::trace!(region_id, player_id = *cancelled_player_id, delivery, "сброшено время захвата войны наций");
                             }
                             add_game_log_text(self.get_string_by_id(b"GS1073"));
-                            completion_deliveries.push(
-                                self.four_nation_morale_snapshot(
-                                    *region.morale(),
-                                    *region.nation_failed(),
-                                )
-                                .send_to_region(
-                                    Some(&region.war.base),
-                                    None,
-                                    self,
+                            let morale_delivery = self
+                                .four_nation_morale_snapshot(*region.morale(), *region.nation_failed())
+                                .send_to_region(Some(&region.war.base), None, self);
+                            completion_deliveries = completion_deliveries.wrapping_add(1);
+                            let notice_delivery = nation_colored_text_message(
+                                0xbf806,
+                                0xffff_ffff,
+                                0xffff_0000,
+                                &format_legacy_text_fields(
+                                    self.get_string_by_id(b"GS1082"),
+                                    &[region.country_name(country)],
+                                    0xff,
                                 ),
-                            );
-                            completion_deliveries.push(
-                                nation_colored_text_message(
-                                    0xbf806,
-                                    0xffff_ffff,
-                                    0xffff_0000,
-                                    &format_legacy_text_fields(
-                                        self.get_string_by_id(b"GS1082"),
-                                        &[region.country_name(country)],
-                                        0xff,
-                                    ),
-                                )
-                                .send_to_region(
-                                    Some(&region.war.base),
-                                    None,
-                                    self,
-                                ),
-                            );
+                            )
+                            .send_to_region(Some(&region.war.base), None, self);
+                            completion_deliveries = completion_deliveries.wrapping_add(1);
                             let mut top = CMessage::new(0xbf804);
                             top.add_long(0);
                             top.add_long(-1);
@@ -12128,7 +12071,8 @@ impl CGame {
                                     0xff,
                                 ),
                             );
-                            top_info_delivery = Some(top.send_all(self.current_net_server()));
+                            let top_info_delivery = top.send_all(self.current_net_server());
+                            tracing::trace!(region_id, country, morale_delivery, notice_delivery, ?top_info_delivery, "опубликован захват символа войны наций");
                             for (name_id, script, x, y) in [
                                 (
                                     b"GS1025".as_slice(),
@@ -12149,34 +12093,36 @@ impl CGame {
                                     0xf9,
                                 ),
                             ] {
-                                treasure_spawns.push(self.spawn_nation_treasure_box(
+                                let spawn = self.spawn_nation_treasure_box(
                                     &mut region,
                                     name_id,
                                     script,
                                     x,
                                     y,
                                     runtime,
-                                ));
+                                );
+                                treasure_spawns = treasure_spawns.wrapping_add(1);
+                                tracing::trace!(region_id, country, ?spawn, "обработано создание сокровища войны наций");
                             }
-                            NationContendCompletionOutcome::Captured(capture)
+                            tracing::debug!(region_id, player_id = contender.player_id, country, cancelled = capture.cancelled_player_ids.len(), "завершён захват символа войны наций");
                         }
                     }
                 }
-            });
+            }
             region.clear_contenders();
         }
         self.restore_region_owner(ServerRegionOwner::Nation(region));
-        Some(Ok(NationContendAiReport {
+        tracing::trace!(
             region_id,
             magic_stone_transitions,
-            progress_deliveries,
-            completed,
-            completion_outcome,
+            progress_count,
+            ?completed_player_id,
             completion_deliveries,
             state_deliveries,
-            top_info_delivery,
             treasure_spawns,
-        }))
+            "завершён проход захватов войны наций"
+        );
+        Some(())
     }
 
     fn replace_nation_magic_stone<Context: NationContendContext>(
@@ -12184,44 +12130,27 @@ impl CGame {
         region: &mut ServerNationRegion,
         country: u8,
         context: &mut Context,
-    ) -> NationMagicStoneTransitionReport {
+    ) {
         let (npc_name_id, monster_name_id, tile_x, tile_y) = match country {
             1 => (b"GS1084".as_slice(), b"GS1142".as_slice(), 0xfb, 0x35),
             2 => (b"GS1085".as_slice(), b"GS1139".as_slice(), 0xf8, 0x1c1),
             3 => (b"GS1086".as_slice(), b"GS1140".as_slice(), 0x25, 0xfc),
             4 => (b"GS1087".as_slice(), b"GS1141".as_slice(), 0x1dc, 0x105),
             _ => {
-                return NationMagicStoneTransitionReport {
-                    country,
-                    npc_id: None,
-                    explosion_delivery: None,
-                    removal_delivery: None,
-                    outcome: NationMagicStoneTransitionOutcome::NpcMissing,
-                };
+                tracing::warn!(country, "неизвестное государство для замены магического камня");
+                return;
             }
         };
         let npc_name = self.get_string_by_id(npc_name_id);
         let npc = match region.war.base.find_npc_by_name(npc_name) {
             Ok(Some(npc)) => npc,
             Ok(None) => {
-                return NationMagicStoneTransitionReport {
-                    country,
-                    npc_id: None,
-                    explosion_delivery: None,
-                    removal_delivery: None,
-                    outcome: NationMagicStoneTransitionOutcome::NpcMissing,
-                };
+                tracing::warn!(country, "NPC магического камня не найден");
+                return;
             }
             Err(block) => {
-                return NationMagicStoneTransitionReport {
-                    country,
-                    npc_id: None,
-                    explosion_delivery: None,
-                    removal_delivery: None,
-                    outcome: NationMagicStoneTransitionOutcome::NpcNameAmbiguous {
-                        matches: block.matches,
-                    },
-                };
+                tracing::warn!(country, matches = block.matches, "имя NPC магического камня неоднозначно");
+                return;
             }
         };
         let shape = npc.move_shape().shape();
@@ -12229,25 +12158,15 @@ impl CGame {
         let npc_tile_x = match shape.get_tile_x() {
             Ok(tile_x) => tile_x,
             Err(error) => {
-                return NationMagicStoneTransitionReport {
-                    country,
-                    npc_id: Some(npc_id),
-                    explosion_delivery: None,
-                    removal_delivery: None,
-                    outcome: NationMagicStoneTransitionOutcome::NpcCoordinateBlocked(error),
-                };
+                tracing::warn!(country, npc_id, ?error, "координата X магического камня недоступна");
+                return;
             }
         };
         let npc_tile_y = match shape.get_tile_y() {
             Ok(tile_y) => tile_y,
             Err(error) => {
-                return NationMagicStoneTransitionReport {
-                    country,
-                    npc_id: Some(npc_id),
-                    explosion_delivery: None,
-                    removal_delivery: None,
-                    outcome: NationMagicStoneTransitionOutcome::NpcCoordinateBlocked(error),
-                };
+                tracing::warn!(country, npc_id, ?error, "координата Y магического камня недоступна");
+                return;
             }
         };
 
@@ -12275,13 +12194,8 @@ impl CGame {
         );
 
         if let Err(error) = region.war.base.remove_owned_npc_by_id(npc_id) {
-            return NationMagicStoneTransitionReport {
-                country,
-                npc_id: Some(npc_id),
-                explosion_delivery,
-                removal_delivery,
-                outcome: NationMagicStoneTransitionOutcome::NpcRemovalBlocked(error),
-            };
+            tracing::warn!(country, npc_id, ?explosion_delivery, ?removal_delivery, ?error, "удаление NPC магического камня заблокировано");
+            return;
         }
 
         let monster_name = self.get_string_by_id(monster_name_id);
@@ -12289,16 +12203,11 @@ impl CGame {
             .find_monster_property_by_origin_name(monster_name)
             .cloned()
         else {
-            return NationMagicStoneTransitionReport {
-                country,
-                npc_id: Some(npc_id),
-                explosion_delivery,
-                removal_delivery,
-                outcome: NationMagicStoneTransitionOutcome::MonsterPropertyMissing,
-            };
+            tracing::warn!(country, npc_id, ?explosion_delivery, ?removal_delivery, "свойства монстра магического камня не найдены");
+            return;
         };
         let (area_width, area_height) = self.area_dimensions();
-        let outcome = match region.war.base.add_monster(
+        match region.war.base.add_monster(
             &property,
             tile_x,
             tile_y,
@@ -12310,15 +12219,8 @@ impl CGame {
             area_height,
             context,
         ) {
-            Ok(monster_id) => NationMagicStoneTransitionOutcome::Spawned { monster_id },
-            Err(error) => NationMagicStoneTransitionOutcome::MonsterSpawnBlocked(error),
-        };
-        NationMagicStoneTransitionReport {
-            country,
-            npc_id: Some(npc_id),
-            explosion_delivery,
-            removal_delivery,
-            outcome,
+            Ok(monster_id) => tracing::debug!(country, npc_id, monster_id, ?explosion_delivery, ?removal_delivery, "завершена замена магического камня"),
+            Err(error) => tracing::warn!(country, npc_id, ?error, ?explosion_delivery, ?removal_delivery, "создание монстра магического камня заблокировано"),
         }
     }
 
